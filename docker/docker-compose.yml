@@ -1,0 +1,67 @@
+# Local development infrastructure — Postgres and Redis only. No
+# Kubernetes, no application container: `apps/api` runs on the host via
+# `uv run uvicorn main:app --reload` against these two services, so a
+# code change is visible without a rebuild.
+#
+# Values match apps/api/.env.example exactly. Run from the repo root:
+#
+#   docker compose -f docker/docker-compose.yml up -d
+#
+# Host ports are overridable (`POSTGRES_PORT`, `REDIS_PORT`, default 5432
+# and 6379) for the common case of a developer already running a system
+# Postgres or Redis on the standard port for another project:
+#
+#   POSTGRES_PORT=55432 REDIS_PORT=56379 docker compose -f docker/docker-compose.yml up -d
+#
+# One Redis instance, four logical databases (indices 0-3) — AD-03's four
+# role-separated pools (live/bus/broker/cache) share one process in
+# `local`, per architecture.md §4's own note that this is acceptable
+# outside production, where each role gets its own instance, sized and
+# persistence-configured for its own workload.
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: arena64
+      POSTGRES_PASSWORD: arena64
+      POSTGRES_DB: arena64
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - arena64_postgres_data:/var/lib/postgresql/data
+      # Runs once, only against a fresh volume — creates `arena64_test`
+      # alongside the `arena64` (dev) database `POSTGRES_DB` provisions.
+      # tests/contract/ points at the former; nothing under `local` ever
+      # points at it. See tests/contract/conftest.py.
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arena64 -d arena64"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    # AOF persistence: architecture.md §13's live-match-state role (index
+    # 0) is the one Redis role this platform ever wants to survive a
+    # restart, per AD-18. The cache role's disposability (AD-19) does not
+    # require the *instance* to skip persistence, only that nothing
+    # depends on it doing so — running one shared policy in `local` is
+    # simpler and costs nothing a development machine notices.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - arena64_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  arena64_postgres_data:
+  arena64_redis_data:

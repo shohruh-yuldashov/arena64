@@ -11,17 +11,13 @@ Two, deliberately distinct:
              reach either genuinely should be taken out of rotation.
 """
 
-import logging
-
 from fastapi import APIRouter
 from pydantic import BaseModel
-from sqlalchemy import text
 
 from app.api.deps import DbSessionDep, RedisPoolsDep
 from app.api.responses import build_response
 from app.core.responses import ApiResponse
-
-logger = logging.getLogger(__name__)
+from app.database.health import check_database_connection
 
 health_router = APIRouter(prefix="/health", tags=["health"])
 
@@ -45,13 +41,7 @@ async def liveness() -> ApiResponse[LivenessResponse]:
 async def readiness(
     session: DbSessionDep, redis_pools: RedisPoolsDep
 ) -> ApiResponse[ReadinessResponse]:
-    try:
-        await session.execute(text("SELECT 1"))
-        postgres_ok = True
-    except Exception:  # noqa: BLE001 — a readiness probe must not raise
-        logger.warning("readiness_postgres_check_failed", exc_info=True)
-        postgres_ok = False
-
+    postgres_ok = await check_database_connection(session)
     redis_ok = await redis_pools.ping_all()
 
     all_ok = postgres_ok and all(redis_ok.values())

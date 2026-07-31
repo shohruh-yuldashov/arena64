@@ -1,0 +1,88 @@
+"""Database fixtures for contract tests — repositories.md RP-05: "one
+contract suite runs against ... every real adapter." These connect to a
+real PostgreSQL 17 (`docker/docker-compose.yml`'s `postgres` service,
+database `arena64_test` — never `arena64`, which `local` points at) and
+are *skipped*, not failed, when that database is unreachable, so `pytest`
+still runs cleanly for a contributor without Docker running.
+
+**Transaction-rollback-per-test.** Each test runs inside an outer
+transaction that is always rolled back, using SQLAlchemy 2's
+`join_transaction_mode="create_savepoint"`: code under test may call
+`session.commit()` freely — a real service does, and testing it should
+not require pretending otherwise — because `commit()` only releases a
+`SAVEPOINT` nested inside the outer transaction this fixture controls.
+Nothing a test does outlives the test, without needing to `TRUNCATE`
+anything between tests.
+"""
+
+import os
+from collections.abc import AsyncIterator
+
+import pytest
+import pytest_asyncio
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
+
+from app.database.base import Base
+from tests.contract._models import ContractWidget  # noqa: F401 — registers the table on import
+
+_TEST_DSN = os.environ.get(
+    "CONTRACT_TEST_POSTGRES_DSN",
+    "postgresql+asyncpg://arena64:arena64@localhost:5432/arena64_test",
+)
+
+
+@pytest_asyncio.fixture
+async def contract_engine() -> AsyncIterator[AsyncEngine]:
+    """One engine per **test function**, not per session.
+
+    An `AsyncEngine`'s connection pool holds asyncpg connections bound to
+    the event loop they were opened in, and pytest-asyncio gives each
+    async test function its own loop by default. A session-scoped engine
+    is created in the first test's loop and then handed to every
+    subsequent test's *different* loop, which corrupts the pooled
+    connection — observed directly while building this suite as
+    `InterfaceError: cannot perform operation: another operation is in
+    progress` on a plain `SAVEPOINT`, with no code in this file doing
+    anything concurrent. Recreating the engine per test costs one extra
+    connection setup against a local database and removes the entire bug
+    class.
+    """
+    engine = create_async_engine(_TEST_DSN)
+
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+    except Exception as exc:  # noqa: BLE001 — the point is to skip, not fail, when unreachable
+        await engine.dispose()
+        pytest.skip(
+            f"contract tests need a reachable PostgreSQL at {_TEST_DSN!r} "
+            f"(see docker/docker-compose.yml): {exc}"
+        )
+
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    yield engine
+
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def contract_session(contract_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
+    """One `AsyncSession` per test, bound to a connection whose outer
+    transaction this fixture always rolls back on exit."""
+    async with contract_engine.connect() as connection:
+        await connection.begin()
+        session = AsyncSession(
+            bind=connection,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        )
+        try:
+            yield session
+        finally:
+            await session.close()
+            await connection.rollback()

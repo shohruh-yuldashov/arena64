@@ -21,8 +21,8 @@ from app.common.logging import configure_logging
 from app.common.middleware import CorrelationIdMiddleware, RequestIdMiddleware
 from app.config.settings import get_settings
 from app.core.constants import API_PREFIX
-from app.database.engine import create_engine, create_session_factory
 from app.database.redis import create_redis_pools
+from app.database.session_manager import DatabaseSessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +43,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     logger.info("startup_begin", extra={"environment": settings.environment.value})
 
-    engine = create_engine(settings.postgres)
-    session_factory = create_session_factory(engine)
+    db = DatabaseSessionManager(settings.postgres)
     redis_pools = create_redis_pools(settings.redis)
 
     # Everything a route reaches via app/api/deps.py lives here. This is
@@ -52,8 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # a future non-HTTP entrypoint resolves the same singletons through
     # app.core.di.Container instead, since it has no app.state.
     app.state.settings = settings
-    app.state.engine = engine
-    app.state.session_factory = session_factory
+    app.state.db = db
     app.state.redis_pools = redis_pools
 
     logger.info("startup_complete")
@@ -62,7 +60,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         logger.info("shutdown_begin")
         await redis_pools.aclose()
-        await engine.dispose()
+        await db.close()
         logger.info("shutdown_complete")
 
 

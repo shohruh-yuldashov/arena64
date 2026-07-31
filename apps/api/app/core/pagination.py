@@ -8,12 +8,20 @@ rule — this module does not pick a winner, the query that uses it does.
 
 import base64
 import json
+import uuid
+from datetime import datetime
 
 from pydantic import BaseModel, Field
 
 from app.core.constants import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 
-CursorValue = str | int | float | None
+# `datetime` and `uuid.UUID` are here because they are the two ordering-key
+# types every realistic keyset actually uses — `(created_at, id)`, per this
+# module's own worked example and database.md's still-open keyset-key
+# question. Both round-trip through `encode_cursor`'s `default=str` as
+# plain strings; `decode_cursor` intentionally does not try to guess a
+# value back into a `datetime` or `UUID` — see `decode_cursor`'s docstring.
+CursorValue = str | int | float | uuid.UUID | datetime | None
 
 
 def encode_cursor(*values: CursorValue) -> str:
@@ -33,7 +41,7 @@ def encode_cursor(*values: CursorValue) -> str:
     this function is the untyped primitive underneath, not a replacement
     for that decision.
     """
-    raw = json.dumps(list(values), separators=(",", ":"))
+    raw = json.dumps(list(values), separators=(",", ":"), default=str)
     return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
 
 
@@ -42,6 +50,15 @@ def decode_cursor(cursor: str) -> list[CursorValue]:
     cursor; callers translate that into `app.core.exceptions.ValidationError`
     — a client that sends a corrupted cursor sent malformed input, not a
     request for a resource that happens not to exist.
+
+    Returns whatever JSON itself can represent — `str`, `int`, `float`,
+    `None` — never a reconstructed `UUID` or `datetime`, even though
+    `encode_cursor` accepts both: JSON has no native type for either, and
+    guessing which string was originally which is exactly the kind of
+    implicit behaviour CLAUDE.md §2.1 rules out. A caller that needs the
+    original type back (`app.repositories.pagination.paginate_cursor`)
+    binds the decoded string against the target column's own type instead
+    of trying to parse it in Python first.
     """
     try:
         raw = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")

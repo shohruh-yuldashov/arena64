@@ -19,6 +19,19 @@ export const routing = defineRouting({
   // the URL a server component can read synchronously, not a fact that
   // depends on which locale happens to be default this month.
   localePrefix: "always",
+
+  // A64-008's "Persist selected language" requirement, made explicit
+  // rather than left as next-intl's implicit default: a switch made today
+  // must still hold on a return visit next year, not merely for the rest
+  // of the browser session. `sameSite: "lax"` is what lets the cookie
+  // still apply when a player follows a link in from another site — a
+  // stricter setting would silently reset the locale on every such visit.
+  localeCookie: {
+    name: "NEXT_LOCALE",
+    maxAge: 60 * 60 * 24 * 365,
+    sameSite: "lax",
+    path: "/",
+  },
 });
 
 export type AppLocale = (typeof routing.locales)[number];

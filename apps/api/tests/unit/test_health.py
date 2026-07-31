@@ -1,7 +1,12 @@
 """The app must start and answer health checks, and readiness must degrade
 gracefully rather than raise when a dependency is unreachable (CLAUDE.md §9
 rule 8: distinguish expected from exceptional — a down dependency is an
-expected outcome for a readiness probe, not a defect)."""
+expected outcome for a readiness probe, not a defect).
+
+Every success body is asserted against the standard `{data, meta}` envelope
+(app.core.responses.ApiResponse) — health is the first real consumer that
+proves the wrapper works end to end.
+"""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,13 +15,16 @@ from fastapi.testclient import TestClient
 def test_liveness_returns_ok(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    assert body["data"] == {"status": "ok"}
+    assert "request_id" in body["meta"]
+    assert "correlation_id" in body["meta"]
 
 
 def test_liveness_is_also_mounted_under_the_versioned_api(client: TestClient) -> None:
     response = client.get("/api/v1/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert response.json()["data"] == {"status": "ok"}
 
 
 def test_readiness_has_the_documented_shape(client: TestClient) -> None:
@@ -27,10 +35,10 @@ def test_readiness_has_the_documented_shape(client: TestClient) -> None:
     # unreachable-dependency path is exercised deterministically below.
     response = client.get("/api/v1/health/ready")
     assert response.status_code == 200
-    body = response.json()
-    assert body["status"] in {"ok", "degraded"}
-    assert isinstance(body["postgres"], bool)
-    assert set(body["redis"]) == {"live", "bus", "broker", "cache"}
+    data = response.json()["data"]
+    assert data["status"] in {"ok", "degraded"}
+    assert isinstance(data["postgres"], bool)
+    assert set(data["redis"]) == {"live", "bus", "broker", "cache"}
 
 
 def test_readiness_reports_degraded_when_dependencies_are_unreachable(
@@ -52,16 +60,23 @@ def test_readiness_reports_degraded_when_dependencies_are_unreachable(
         response = unreachable_client.get("/api/v1/health/ready")
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "degraded"
-    assert body["postgres"] is False
-    assert body["redis"] == {"live": False, "bus": False, "broker": False, "cache": False}
+    data = response.json()["data"]
+    assert data["status"] == "degraded"
+    assert data["postgres"] is False
+    assert data["redis"] == {"live": False, "bus": False, "broker": False, "cache": False}
 
 
 def test_response_carries_correlation_headers(client: TestClient) -> None:
     response = client.get("/health")
     assert response.headers["X-Request-Id"]
     assert response.headers["X-Correlation-Id"]
+
+
+def test_response_headers_match_the_envelope_meta(client: TestClient) -> None:
+    response = client.get("/health")
+    meta = response.json()["meta"]
+    assert response.headers["X-Request-Id"] == meta["request_id"]
+    assert response.headers["X-Correlation-Id"] == meta["correlation_id"]
 
 
 def test_unknown_route_returns_404(client: TestClient) -> None:

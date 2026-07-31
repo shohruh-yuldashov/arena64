@@ -18,7 +18,7 @@ from app.api.exception_handlers import register_exception_handlers
 from app.api.router import api_router
 from app.api.v1.health import health_router
 from app.common.logging import configure_logging
-from app.common.middleware import CorrelationIdMiddleware
+from app.common.middleware import CorrelationIdMiddleware, RequestIdMiddleware
 from app.config.settings import get_settings
 from app.core.constants import API_PREFIX
 from app.database.engine import create_engine, create_session_factory
@@ -77,7 +77,11 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Order is immaterial: A64-008 decoupled the two middlewares (see
+    # common/middleware.py's docstring), so neither depends on the other
+    # having already run.
     app.add_middleware(CorrelationIdMiddleware)
+    app.add_middleware(RequestIdMiddleware)
     register_exception_handlers(app)
 
     # Unversioned, for load-balancer and orchestrator probes: a liveness

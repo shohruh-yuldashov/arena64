@@ -15,7 +15,8 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app.common.context import current_request_id
+from app.common.context import current_correlation_id, current_request_id
+from app.core.error_codes import ErrorCode
 from app.core.exceptions import (
     Arena64Error,
     ConflictError,
@@ -36,11 +37,20 @@ logger = logging.getLogger(__name__)
 class ErrorResponse(BaseModel):
     """The only shape an Arena64 error takes on the wire: a safe message and
     a stable, machine-readable code (services.md §7.2 rule 4) — never a
-    stack trace, SQL, or an internal identifier."""
+    stack trace, SQL, or an internal identifier.
 
-    code: str
+    Deliberately not `app.core.responses.ApiResponse` — nesting an error
+    under `data` would make a client check "did this succeed" by inspecting
+    the body instead of the HTTP status, the one signal that is never
+    ambiguous. `request_id` and `correlation_id` mirror `ResponseMeta`'s
+    fields directly rather than reusing it, so an error body never implies
+    it carries a `data` field it doesn't have.
+    """
+
+    code: ErrorCode
     message: str
     request_id: str | None = None
+    correlation_id: str | None = None
 
 
 # Ordered by specificity; `_status_for` walks the MRO, so a future subtype
@@ -88,8 +98,13 @@ async def _handle_arena64_error(request: Request, exc: Exception) -> JSONRespons
     if not isinstance(exc, Arena64Error):
         raise TypeError(f"handler registered for Arena64Error, received {type(exc)!r}")
     _log(exc)
-    body = ErrorResponse(code=exc.code, message=exc.message, request_id=current_request_id())
-    return JSONResponse(status_code=_status_for(exc), content=body.model_dump())
+    body = ErrorResponse(
+        code=exc.code,
+        message=exc.message,
+        request_id=current_request_id(),
+        correlation_id=current_correlation_id(),
+    )
+    return JSONResponse(status_code=_status_for(exc), content=body.model_dump(mode="json"))
 
 
 async def _handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
@@ -99,12 +114,14 @@ async def _handle_unexpected_error(request: Request, exc: Exception) -> JSONResp
     traces, SQL, or internal identifiers to a client)."""
     logger.error("unhandled_exception", exc_info=exc)
     body = ErrorResponse(
-        code="internal_error",
+        code=ErrorCode.INTERNAL_ERROR,
         message="An unexpected error occurred.",
         request_id=current_request_id(),
+        correlation_id=current_correlation_id(),
     )
     return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=body.model_dump()
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content=body.model_dump(mode="json"),
     )
 
 

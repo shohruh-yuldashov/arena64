@@ -23,3 +23,11 @@ API_PREFIX: Final[str] = "/api"
 API_V1_PREFIX: Final[str] = "/v1"
 
 HEALTH_PATH: Final[str] = "/health"
+
+# --- pagination — app.core.pagination -----------------------------------
+# RP-03 (repositories.md): keyset pagination is the default; these bounds
+# apply to both the offset and cursor forms so neither can be used to pull
+# an unbounded page (CLAUDE.md §10 rule 5 — "every list endpoint paginates;
+# every query has a limit").
+DEFAULT_PAGE_SIZE: Final[int] = 20
+MAX_PAGE_SIZE: Final[int] = 100

@@ -61,6 +61,7 @@ def test_arena64_error_maps_to_its_documented_status(
     assert body["code"] == expected_code
     assert body["message"] == exc.message
     assert "request_id" in body
+    assert "correlation_id" in body
 
 
 def test_unhandled_exception_returns_500_without_leaking_its_message() -> None:

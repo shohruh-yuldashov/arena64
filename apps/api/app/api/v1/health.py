@@ -18,6 +18,8 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from app.api.deps import DbSessionDep, RedisPoolsDep
+from app.api.responses import build_response
+from app.core.responses import ApiResponse
 
 logger = logging.getLogger(__name__)
 
@@ -34,13 +36,15 @@ class ReadinessResponse(BaseModel):
     redis: dict[str, bool]
 
 
-@health_router.get("", response_model=LivenessResponse)
-async def liveness() -> LivenessResponse:
-    return LivenessResponse()
+@health_router.get("")
+async def liveness() -> ApiResponse[LivenessResponse]:
+    return build_response(LivenessResponse())
 
 
-@health_router.get("/ready", response_model=ReadinessResponse)
-async def readiness(session: DbSessionDep, redis_pools: RedisPoolsDep) -> ReadinessResponse:
+@health_router.get("/ready")
+async def readiness(
+    session: DbSessionDep, redis_pools: RedisPoolsDep
+) -> ApiResponse[ReadinessResponse]:
     try:
         await session.execute(text("SELECT 1"))
         postgres_ok = True
@@ -51,6 +55,8 @@ async def readiness(session: DbSessionDep, redis_pools: RedisPoolsDep) -> Readin
     redis_ok = await redis_pools.ping_all()
 
     all_ok = postgres_ok and all(redis_ok.values())
-    return ReadinessResponse(
-        status="ok" if all_ok else "degraded", postgres=postgres_ok, redis=redis_ok
+    return build_response(
+        ReadinessResponse(
+            status="ok" if all_ok else "degraded", postgres=postgres_ok, redis=redis_ok
+        )
     )

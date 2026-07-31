@@ -5,12 +5,7 @@ import { useTransition, type ChangeEvent } from "react";
 
 import { usePathname, useRouter } from "@/i18n/navigation";
 import { routing, type AppLocale } from "@/i18n/routing";
-
-const LOCALE_LABELS: Record<AppLocale, string> = {
-  en: "English",
-  ru: "Русский",
-  uz: "O'zbekcha",
-};
+import { LOCALE_LABELS } from "@/lib/locale-helpers";
 
 /**
  * A native `<select>` rather than a custom dropdown: it is fully

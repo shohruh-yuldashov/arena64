@@ -14,7 +14,7 @@ fail mysteriously on the ten-thousandth request.
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.config.environment import Environment, current_environment, env_file_for
@@ -84,6 +84,45 @@ class RedisSettings(BaseSettings):
     cache_url: SecretStr = SecretStr(_LOCAL_REDIS_URLS["cache"])
 
 
+class AuthSettings(BaseSettings):
+    """`auth` — Argon2id cost parameters (A64-011.1).
+
+    Configurable rather than hardcoded because database.md §14.2 requires
+    hardening to be raisable over time: "per-row parameters let a sign-in
+    verify against the parameters the hash was made with and transparently
+    rehash at the current settings — a rolling upgrade with no forced
+    reset." A constant in code could only be raised by a deploy, and would
+    silently age.
+
+    Defaults are OWASP's second recommended Argon2id profile
+    (m=19456 KiB, t=2, p=1) rather than argon2-cffi's own
+    (m=65536, t=3, p=4). Two concrete reasons, not preference:
+
+      **p=1** — parallelism inside a single hash competes with the worker
+      threads `Argon2idPasswordHasher` already uses to keep hashing off
+      the event loop. Parallelism *across* requests is what this workload
+      needs; p=4 would multiply thread pressure per registration for no
+      security gain over an equivalent-cost m/t profile.
+
+      **m=19456 (19 MiB)** — memory cost is per concurrent hash. At 64 MiB
+      a burst of 40 simultaneous registrations reserves ~2.5 GB; at 19 MiB
+      the same burst is ~760 MB. Registration is a public, unauthenticated,
+      rate-limit-less endpoint (see the task's recommendations), so the
+      memory a burst can pin is an availability question, not just a
+      security one.
+
+    The `ge=` floors are there so a well-meant "let's speed up
+    registration" cannot quietly drop the platform below a defensible cost.
+    Lowering them is a security decision, not a tuning one.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="AUTH_", frozen=True, extra="forbid")
+
+    argon2_time_cost: int = Field(default=2, ge=1)
+    argon2_memory_cost_kib: int = Field(default=19456, ge=8192)
+    argon2_parallelism: int = Field(default=1, ge=1)
+
+
 class Settings(BaseModel):
     """The composed, immutable configuration for this process."""
 
@@ -93,6 +132,7 @@ class Settings(BaseModel):
     app: AppSettings
     postgres: PostgresSettings
     redis: RedisSettings
+    auth: AuthSettings
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":
@@ -153,4 +193,5 @@ def get_settings() -> Settings:
         app=AppSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         postgres=PostgresSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         redis=RedisSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        auth=AuthSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

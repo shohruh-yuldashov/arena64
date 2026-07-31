@@ -13,6 +13,11 @@ dependencies = [
     "asyncpg>=0.30,<1.0",
     "alembic>=1.14,<2.0",
     "redis>=5.2,<6.0",
+    # Password hashing (A64-011.1). The reference Python binding for the
+    # Argon2 C library — chosen over a pure-Python implementation because
+    # Argon2's security *is* its memory-hardness, and a pure-Python one
+    # cannot deliver the memory cost that makes it worth using.
+    "argon2-cffi>=25.1,<26.0",
 ]
 
 [project.optional-dependencies]

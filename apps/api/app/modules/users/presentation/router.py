@@ -29,45 +29,11 @@ from app.core.pagination import CursorPageParams
 from app.core.responses import ApiResponse
 from app.core.sentinels import UNSET
 from app.modules.users.application.commands import UpdateUserProfile
-from app.modules.users.domain.entities import User
+from app.modules.users.application.mappers import to_user_read, to_user_summary
 from app.modules.users.presentation.dependencies import UserServiceDep
-from app.modules.users.presentation.schemas import UserList, UserRead, UserSummary, UserUpdate
+from app.modules.users.presentation.schemas import UserList, UserRead, UserUpdate
 
 users_router = APIRouter(prefix="/users", tags=["users"])
-
-
-def _to_read(user: User) -> UserRead:
-    """Maps the domain entity to its wire shape.
-
-    Explicit rather than `UserRead.model_validate(user)` because the
-    entity's `username`, `email` and `timezone` are value objects, not
-    strings — an implicit conversion would either fail or silently
-    serialise the wrapper. Being explicit also means adding a field to the
-    entity never leaks it onto the API by accident, which for a model
-    carrying a password hash is worth the extra lines.
-    """
-    return UserRead(
-        id=user.id,
-        username=user.username.value,
-        email=user.email.value,
-        display_name=user.display_name,
-        avatar_url=user.avatar_url,
-        preferred_language=user.preferred_language,
-        timezone=user.timezone.value,
-        is_active=user.is_active,
-        is_verified=user.is_verified,
-        created_at=user.created_at,
-        updated_at=user.updated_at,
-    )
-
-
-def _to_summary(user: User) -> UserSummary:
-    return UserSummary(
-        id=user.id,
-        username=user.username.value,
-        display_name=user.display_name,
-        avatar_url=user.avatar_url,
-    )
 
 
 @users_router.get("/{user_id}", status_code=status.HTTP_200_OK)
@@ -75,7 +41,7 @@ async def get_user(user_id: UUID, service: UserServiceDep) -> ApiResponse[UserRe
     """Fetches one user. `404` if no such user — raised as `UserNotFound`
     by the service and mapped by the platform handler, not here."""
     user = await service.get_user(user_id)
-    return build_response(_to_read(user))
+    return build_response(to_user_read(user))
 
 
 @users_router.get("", status_code=status.HTTP_200_OK)
@@ -94,7 +60,7 @@ async def list_users(
     users, page = await service.list_users(
         CursorPageParams(cursor=cursor, limit=limit), is_active=is_active
     )
-    return build_response(UserList(items=[_to_summary(user) for user in users], page=page))
+    return build_response(UserList(items=[to_user_summary(user) for user in users], page=page))
 
 
 @users_router.patch("/{user_id}", status_code=status.HTTP_200_OK)
@@ -124,4 +90,4 @@ async def update_user(
     )
 
     user = await service.update_profile(user_id, command)
-    return build_response(_to_read(user))
+    return build_response(to_user_read(user))

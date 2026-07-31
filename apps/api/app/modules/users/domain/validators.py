@@ -36,11 +36,23 @@ from app.modules.users.domain.exceptions import (
 # --- username ---------------------------------------------------------------
 
 USERNAME_MIN_LENGTH = 3
-USERNAME_MAX_LENGTH = 32
+# 20, tightened from A64-010's 32 by A64-011.1's explicit specification.
+# The rule changed here rather than only in the registration schema on
+# purpose: a username created through `POST /auth/register` and one
+# created through any other path must be the same kind of thing, and two
+# policies for one concept is exactly the divergence CLAUDE.md §2.1 warns
+# about. The database's own CHECK constraint moves with it (migration
+# `3caf68aa8cfc`), so the authoritative guard and the domain agree.
+USERNAME_MAX_LENGTH = 20
 
-# Starts alphanumeric, then alphanumerics/underscore/hyphen. Leading
-# punctuation is excluded because "_admin" and "-admin" read as `admin` at a
-# glance in most UI fonts — the same impersonation surface UP-1 is about.
+# Starts alphanumeric, then alphanumerics or underscore. Leading
+# punctuation is excluded because "_admin" reads as `admin` at a glance in
+# most UI fonts — the same impersonation surface UP-1 is about.
+#
+# The hyphen A64-010 allowed is gone, per A64-011.1's specification
+# ("letters, numbers, underscore"). Dropping a permitted character is the
+# safe direction for a change like this: it can only invalidate names that
+# do not exist yet, whereas *adding* one later is free.
 #
 # **ASCII-only, and that is a deliberate interim restriction.**
 # domain-model.md §14.6 anticipates non-ASCII handles and names the exact
@@ -53,7 +65,7 @@ USERNAME_MAX_LENGTH = 32
 # vector with nothing defending it — so the restriction stands, and
 # lifting it is gated on implementing the skeleton, not on someone
 # deciding the regex looks unfriendly.
-_USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+_USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_]*$")
 
 # Names that must never belong to a player because the platform itself uses
 # them, or because holding one lets somebody impersonate the platform in a
@@ -132,7 +144,7 @@ def validate_username(value: str) -> str:
     if not _USERNAME_PATTERN.match(value):
         raise InvalidUsername(
             "Username must start with a letter or digit and contain only "
-            "letters, digits, underscores and hyphens."
+            "letters, digits and underscores."
         )
 
     if fold_username(value) in RESERVED_USERNAMES:

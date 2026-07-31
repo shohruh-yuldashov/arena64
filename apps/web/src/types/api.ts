@@ -29,11 +29,15 @@ export type ErrorCode =
   | "transient_infrastructure_error"
   | "permanent_infrastructure_error"
   // Module-specific codes. The backend adds one only where a client must
-  // behave differently and the status alone cannot say — a 409 from a
-  // sign-up form has to name which field collided so the UI knows which
-  // input to highlight.
+  // behave differently and the status alone cannot say — a sign-up form
+  // has to name which field was rejected so the UI knows which input to
+  // focus and annotate. 409s (already taken) and 422s (invalid) both need
+  // that, which is why both kinds appear here.
   | "username_already_exists"
-  | "email_already_exists";
+  | "email_already_exists"
+  | "invalid_username"
+  | "invalid_email"
+  | "weak_password";
 
 /** Mirrors `app.api.exception_handlers.ErrorResponse`. */
 export interface ApiErrorBody {

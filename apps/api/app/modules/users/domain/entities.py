@@ -56,6 +56,18 @@ class User:
     display_name: str | None = None
     avatar_url: str | None = None
 
+    # Sign-in is refused until this instant passes. `None` means unlocked.
+    #
+    # Distinct from `is_active`, and the two are not interchangeable:
+    # deactivation is an indefinite state a player or an administrator
+    # chooses, whereas a lock is temporary and expires on its own without
+    # anything having to run to clear it (domain-model.md's `auth.account`
+    # calls this "throttling, not sanction"). Evaluated on read for the
+    # same reason `Sanction` expiry is — a job that clears locks and fails
+    # leaves people locked out, so the safe direction is for the lock to
+    # lapse by itself.
+    locked_until: datetime | None = None
+
     @classmethod
     def create(
         cls,
@@ -125,6 +137,16 @@ class User:
         reuse this method or this column.
         """
         self.is_active = False
+
+    def is_locked_at(self, instant: datetime) -> bool:
+        """Whether sign-in is refused at `instant`.
+
+        Takes the instant as a parameter rather than reading the clock —
+        AD-07 forbids the domain from doing that, and it is what makes
+        "the lock expires one second from now" a test that runs
+        instantly.
+        """
+        return self.locked_until is not None and instant < self.locked_until
 
     def mark_verified(self) -> None:
         """Records that ownership of the email has been proven.

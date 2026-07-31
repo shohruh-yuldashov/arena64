@@ -14,7 +14,8 @@ import pytest
 from argon2 import PasswordHasher as Argon2PasswordHasher
 
 from app.config.settings import AuthSettings
-from app.modules.auth.infrastructure import Argon2idPasswordHasher
+from app.core.exceptions import PermanentInfrastructureError
+from app.modules.auth.infrastructure import Argon2idPasswordHasher, build_password_hasher
 
 PASSWORD = "CorrectHorse1!"
 
@@ -112,3 +113,131 @@ class TestDoesNotBlockTheEventLoop:
         # that would be flaky on a loaded machine.
         assert elapsed_ms > 5, "hashes finished too fast to be meaningful"
         assert ticks >= 5, f"event loop appears blocked: only {ticks} ticks in {elapsed_ms:.0f}ms"
+
+
+class TestVerify:
+    async def test_accepts_the_password_the_hash_was_made_from(
+        self, hasher: Argon2idPasswordHasher
+    ) -> None:
+        encoded = await hasher.hash(PASSWORD)
+        assert await hasher.verify(encoded, PASSWORD) is True
+
+    async def test_returns_false_for_a_wrong_password(self, hasher: Argon2idPasswordHasher) -> None:
+        """`False`, not an exception.
+
+        A wrong password is the most ordinary outcome this platform has,
+        and `AuthenticationService` must treat it identically to "no such
+        account" — which is a `None`, not an exception. Symmetry in the
+        return type is what keeps the two branches symmetric in the
+        caller.
+        """
+        encoded = await hasher.hash(PASSWORD)
+        assert await hasher.verify(encoded, "WrongHorse1!") is False
+
+    async def test_verifies_a_hash_made_at_older_parameters(
+        self, hasher: Argon2idPasswordHasher
+    ) -> None:
+        """The property that makes raising Argon2's cost possible without a
+        mass password reset: the parameters travel in the encoding, so a
+        hasher configured for today verifies what yesterday wrote."""
+        old = Argon2idPasswordHasher(AuthSettings(argon2_time_cost=1, argon2_memory_cost_kib=8192))
+        encoded = await old.hash(PASSWORD)
+
+        assert await hasher.verify(encoded, PASSWORD) is True
+
+    @pytest.mark.parametrize(
+        "corrupt",
+        [
+            pytest.param("", id="empty"),
+            pytest.param("not-a-hash", id="not-argon2"),
+            pytest.param("$argon2id$v=19$m=19456,t=2,p=1$truncated", id="truncated"),
+            pytest.param("$bcrypt$2b$12$abcdefghijklmnopqrstuv", id="wrong-algorithm"),
+        ],
+    )
+    async def test_a_corrupt_stored_hash_raises_rather_than_failing_the_login(
+        self, hasher: Argon2idPasswordHasher, corrupt: str
+    ) -> None:
+        """A database holding something that is not a credential is a
+        defect, not a wrong password.
+
+        Reported as "invalid credentials" instead, it would leave someone
+        permanently unable to sign in with their correct password while
+        every dashboard showed an ordinary failure rate — the failure mode
+        nobody finds for months.
+        """
+        with pytest.raises(PermanentInfrastructureError):
+            await hasher.verify(corrupt, PASSWORD)
+
+
+class TestNeedsRehash:
+    async def test_false_for_a_hash_at_the_current_parameters(
+        self, hasher: Argon2idPasswordHasher
+    ) -> None:
+        encoded = await hasher.hash(PASSWORD)
+        assert await hasher.needs_rehash(encoded) is False
+
+    async def test_true_for_a_hash_made_at_weaker_parameters(
+        self, hasher: Argon2idPasswordHasher
+    ) -> None:
+        """database.md §14.2's rehash-on-login, in one assertion: without
+        this returning `True`, raising the configured cost would apply to
+        new accounts only and every existing one would stay at the old
+        parameters forever."""
+        old = Argon2idPasswordHasher(AuthSettings(argon2_time_cost=1, argon2_memory_cost_kib=8192))
+        encoded = await old.hash(PASSWORD)
+
+        assert await hasher.needs_rehash(encoded) is True
+
+
+class TestDummyHash:
+    async def test_is_a_real_hash_at_the_current_parameters(
+        self, hasher: Argon2idPasswordHasher
+    ) -> None:
+        """It must cost what a real verification costs, which means it must
+        carry the same parameters — a cheaper dummy would make an unknown
+        address measurably faster than a known one, which is the entire
+        thing it exists to prevent."""
+        settings = AuthSettings()
+        dummy = await hasher.dummy_hash()
+
+        assert dummy.startswith("$argon2id$")
+        assert f"m={settings.argon2_memory_cost_kib}" in dummy
+        assert f"t={settings.argon2_time_cost}" in dummy
+
+    async def test_is_memoised_within_an_instance(self, hasher: Argon2idPasswordHasher) -> None:
+        """Not an optimisation: derived afresh per call, an unknown-address
+        sign-in would spend two Argon2 operations against a known
+        address's one — the same timing leak, doubled and sign-flipped."""
+        assert await hasher.dummy_hash() == await hasher.dummy_hash()
+
+    async def test_differs_between_instances(self) -> None:
+        """Random per instance, so the dummy is not a platform-wide
+        constant an attacker could ever have precomputed against."""
+        first = await Argon2idPasswordHasher(AuthSettings()).dummy_hash()
+        second = await Argon2idPasswordHasher(AuthSettings()).dummy_hash()
+
+        assert first != second
+
+    async def test_nothing_plausible_verifies_against_it(
+        self, hasher: Argon2idPasswordHasher
+    ) -> None:
+        dummy = await hasher.dummy_hash()
+
+        assert await hasher.verify(dummy, PASSWORD) is False
+        assert await hasher.verify(dummy, "") is False
+
+
+class TestBuildPasswordHasher:
+    def test_returns_the_same_instance_for_the_same_parameters(self) -> None:
+        """The memoised dummy hash only works if the instance is shared —
+        see `build_password_hasher`."""
+        settings = AuthSettings()
+        assert build_password_hasher(settings) is build_password_hasher(settings)
+
+    def test_returns_a_different_instance_for_different_parameters(self) -> None:
+        """Otherwise raising the configured cost would silently keep
+        handing out a hasher at the old one."""
+        weak = build_password_hasher(AuthSettings(argon2_time_cost=1, argon2_memory_cost_kib=8192))
+        strong = build_password_hasher(AuthSettings(argon2_time_cost=3))
+
+        assert weak is not strong

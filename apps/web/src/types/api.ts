@@ -19,6 +19,7 @@ export type ErrorCode =
   | "internal_error"
   | "validation_error"
   | "domain_error"
+  | "authentication_failed"
   | "not_found"
   | "conflict"
   | "permission_denied"
@@ -37,7 +38,14 @@ export type ErrorCode =
   | "email_already_exists"
   | "invalid_username"
   | "invalid_email"
-  | "weak_password";
+  | "weak_password"
+  // Login. `invalid_credentials` is deliberately generic — it means
+  // "email or password wrong" and never says which, so it cannot be used
+  // to discover which addresses have accounts. The other two are only
+  // ever returned to a caller who already supplied the correct password.
+  | "invalid_credentials"
+  | "inactive_account"
+  | "account_locked";
 
 /** Mirrors `app.api.exception_handlers.ErrorResponse`. */
 export interface ApiErrorBody {

@@ -20,6 +20,7 @@ from app.common.context import current_correlation_id, current_request_id
 from app.core.error_codes import ErrorCode
 from app.core.exceptions import (
     Arena64Error,
+    AuthenticationFailed,
     ConflictError,
     DomainError,
     NotFoundError,
@@ -59,6 +60,7 @@ class ErrorResponse(BaseModel):
 # instead of falling straight through to 500.
 _STATUS_BY_EXCEPTION: dict[type[Arena64Error], int] = {
     ValidationError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    AuthenticationFailed: status.HTTP_401_UNAUTHORIZED,
     NotFoundError: status.HTTP_404_NOT_FOUND,
     ConflictError: status.HTTP_409_CONFLICT,
     PermissionDeniedError: status.HTTP_403_FORBIDDEN,

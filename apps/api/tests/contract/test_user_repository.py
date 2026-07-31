@@ -252,6 +252,115 @@ class TestUpdate:
             await repository.update(second)
 
 
+# --- locked_until ------------------------------------------------------------
+
+
+class TestLockedUntil:
+    async def test_defaults_to_unlocked(self, repository: UserRepository) -> None:
+        user = await repository.create(make_user())
+        stored = await repository.get_by_id(user.id)
+
+        assert stored is not None
+        assert stored.locked_until is None
+
+    async def test_round_trips_as_an_aware_instant(self, repository: UserRepository) -> None:
+        """A naive value coming back would raise `TypeError` the moment
+        `AuthenticationService` compared it against an aware `now()` —
+        failing the sign-in of everyone with a lock instead of only those
+        actually locked."""
+        user = await repository.create(make_user())
+        expires = _BASE_TIME + timedelta(minutes=15)
+
+        user.locked_until = expires
+        await repository.update(user)
+
+        stored = await repository.get_by_id(user.id)
+        assert stored is not None
+        assert stored.locked_until is not None
+        assert stored.locked_until.tzinfo is not None
+        assert stored.locked_until == expires
+
+    async def test_can_be_cleared(self, repository: UserRepository) -> None:
+        user = await repository.create(make_user())
+        user.locked_until = _BASE_TIME + timedelta(minutes=15)
+        await repository.update(user)
+
+        user.locked_until = None
+        await repository.update(user)
+
+        stored = await repository.get_by_id(user.id)
+        assert stored is not None
+        assert stored.locked_until is None
+
+
+# --- replace_password_hash ---------------------------------------------------
+
+
+class TestReplacePasswordHash:
+    """The compare-and-swap behind rehash-on-login (A64-011.2).
+
+    Run against both adapters because this is precisely the kind of method
+    a fake gets subtly wrong — checking the id and forgetting the hash
+    would make every service test pass while the real `WHERE` clause
+    declined the write.
+    """
+
+    async def test_swaps_the_hash_when_the_expectation_matches(
+        self, repository: UserRepository
+    ) -> None:
+        user = await repository.create(make_user())
+
+        applied = await repository.replace_password_hash(
+            user.id, expected_hash=user.password_hash, new_hash="argon2id$fake$upgraded"
+        )
+
+        assert applied is True
+        stored = await repository.get_by_id(user.id)
+        assert stored is not None
+        assert stored.password_hash == "argon2id$fake$upgraded"
+
+    async def test_declines_when_the_stored_hash_has_moved(
+        self, repository: UserRepository
+    ) -> None:
+        """The race this exists to lose safely: a password changed between
+        the read and the write must not be reverted by an opportunistic
+        rehash computed from the older value."""
+        user = await repository.create(make_user())
+
+        applied = await repository.replace_password_hash(
+            user.id, expected_hash="argon2id$fake$somethingelse", new_hash="argon2id$fake$upgraded"
+        )
+
+        assert applied is False
+        stored = await repository.get_by_id(user.id)
+        assert stored is not None
+        assert stored.password_hash == user.password_hash
+
+    async def test_declines_for_an_unknown_user(self, repository: UserRepository) -> None:
+        applied = await repository.replace_password_hash(
+            uuid4(), expected_hash="argon2id$fake$notarealhash", new_hash="argon2id$fake$upgraded"
+        )
+
+        assert applied is False
+
+    async def test_touches_no_other_field(self, repository: UserRepository) -> None:
+        """A rehash is not a profile edit. Anything else changing here
+        would mean a security upgrade silently rewriting user data."""
+        user = await repository.create(make_user(username="Alice"))
+
+        await repository.replace_password_hash(
+            user.id, expected_hash=user.password_hash, new_hash="argon2id$fake$upgraded"
+        )
+
+        stored = await repository.get_by_id(user.id)
+        assert stored is not None
+        assert stored.username == user.username
+        assert stored.email == user.email
+        assert stored.is_active == user.is_active
+        assert stored.is_verified == user.is_verified
+        assert stored.created_at == user.created_at
+
+
 # --- delete -----------------------------------------------------------------
 
 

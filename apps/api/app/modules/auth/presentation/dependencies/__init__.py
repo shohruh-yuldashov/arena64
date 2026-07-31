@@ -9,16 +9,22 @@ The graph assembled per request:
       -> SessionUnitOfWork        the transaction `users` will commit
       -> UserService              validation + uniqueness + transaction
       -> UserAccountService       adapts it to the published port
+      -> UserCredentialService    adapts it to the *other* published port
     Argon2idPasswordHasher        process-lifetime singleton
+    Clock                         injected, never read directly (AD-07)
       -> RegistrationService
+      -> AuthenticationService
 
-**Everything here is per-request, including the hasher.** An earlier
-version cached `Argon2idPasswordHasher` on the settings object, on the
-theory that a process-lifetime singleton was worth having. Measured, its
-construction costs **1 µs** against the **~19,000 µs** of the hash it
-performs — 0.005% of the operation. The cache was optimising nothing and
-cost a `lru_cache` keyed on a Pydantic model, which is not reliably
-hashable. Per-request construction is simpler and indistinguishable.
+**Everything here is per-request except the hasher.** A64-011.1 built
+that per-request too, having measured construction at **1 µs** against
+the **~19,000 µs** of the hash it performs, and concluded — correctly, on
+cost — that the cache was optimising nothing.
+
+A64-011.2 shares it again for a reason cost does not reach: the hasher
+memoises the dummy hash that makes an unknown-address sign-in take the
+same time as a known one, and a per-request instance memoises nothing.
+See `build_password_hasher`. The key is the three integer cost
+parameters, not the `AuthSettings` model that broke the earlier attempt.
 
 The repository and unit of work must be per-request for a reason that is
 not about cost at all: they hold the request's session
@@ -42,17 +48,18 @@ from app.api.deps import DbSessionDep, SettingsDep
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.auth.application.ports import PasswordHasher
-from app.modules.auth.application.services import RegistrationService
-from app.modules.auth.infrastructure import Argon2idPasswordHasher
+from app.modules.auth.application.services import AuthenticationService, RegistrationService
+from app.modules.auth.infrastructure import build_password_hasher
 from app.modules.users.application.services import UserService
 from app.modules.users.application.services.user_account_service import UserAccountService
+from app.modules.users.application.services.user_credential_service import UserCredentialService
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
 from app.modules.users.presentation.dependencies import ClockDep
-from app.modules.users.public import UserAccountCreator
+from app.modules.users.public import UserAccountCreator, UserCredentialStore
 
 
 def get_password_hasher(settings: SettingsDep) -> PasswordHasher:
-    return Argon2idPasswordHasher(settings.auth)
+    return build_password_hasher(settings.auth)
 
 
 PasswordHasherDep = Annotated[PasswordHasher, Depends(get_password_hasher)]
@@ -86,12 +93,54 @@ def get_registration_service(
 RegistrationServiceDep = Annotated[RegistrationService, Depends(get_registration_service)]
 
 
+def get_user_credential_store(session: DbSessionDep, clock: ClockDep) -> UserCredentialStore:
+    """`users`' side of the login graph, behind its second published port.
+
+    Assembled separately from `get_user_account_creator` rather than
+    returning one object satisfying both: the two ports exist apart so
+    that registering and reading password hashes are separately grantable
+    capabilities, and a single factory handing back something with both
+    would quietly undo that.
+
+    The unit of work is here because the rehash-on-login write needs one.
+    Nothing on the read path opens a transaction.
+    """
+    users = UserService(
+        users=SqlAlchemyUserRepository(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )
+    return UserCredentialService(users)
+
+
+UserCredentialStoreDep = Annotated[UserCredentialStore, Depends(get_user_credential_store)]
+
+
+def get_authentication_service(
+    credentials: UserCredentialStoreDep,
+    password_hasher: PasswordHasherDep,
+    clock: ClockDep,
+) -> AuthenticationService:
+    return AuthenticationService(
+        credentials=credentials,
+        password_hasher=password_hasher,
+        clock=clock,
+    )
+
+
+AuthenticationServiceDep = Annotated[AuthenticationService, Depends(get_authentication_service)]
+
+
 __all__ = [
+    "AuthenticationServiceDep",
     "Clock",
     "PasswordHasherDep",
     "RegistrationServiceDep",
     "UserAccountCreatorDep",
+    "UserCredentialStoreDep",
+    "get_authentication_service",
     "get_password_hasher",
     "get_registration_service",
     "get_user_account_creator",
+    "get_user_credential_store",
 ]

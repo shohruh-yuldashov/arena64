@@ -23,6 +23,7 @@ handler table without a single `except ValueError` anywhere.
 
 import re
 import unicodedata
+from functools import lru_cache
 from zoneinfo import available_timezones
 
 from app.core.enums import Locale
@@ -238,6 +239,35 @@ def validate_language(value: str) -> Locale:
 # --- timezone ---------------------------------------------------------------
 
 
+@lru_cache(maxsize=1)
+def _known_timezones() -> frozenset[str]:
+    """The IANA names this system has, computed once per process.
+
+    `zoneinfo.available_timezones()` walks the whole tzdata tree and
+    rebuilds a ~600-element set on **every** call — measured at **10.4ms**
+    on this platform's development machine.
+
+    That was written off in A64-010 as acceptable because validation "is
+    only ever hit on a write path... never per-render". The assumption was
+    wrong, and A64-011.2 is where it became a security bug rather than a
+    performance one. `SqlAlchemyUserRepository._to_domain` constructs a
+    `Timezone` for every row it maps, so the cost lands on every *read*
+    too — which made a login for an existing address take 11.5ms longer
+    than one for an address that does not exist. That is precisely the
+    account-enumeration oracle `AuthenticationService`'s dummy hash exists
+    to close, reopened one layer down and much larger than the Argon2
+    noise floor: the two verifications agree to within 1%, and this
+    disagreed by 33×.
+
+    Caching means a tzdata package updated underneath a running process is
+    not picked up until it restarts. That is the correct trade: the set
+    changes a handful of times a year, deployments are more frequent than
+    that, and an unrecognised-but-real timezone is a 422 rather than a
+    correctness failure.
+    """
+    return frozenset(available_timezones())
+
+
 def validate_timezone(value: str) -> str:
     """Validates against the IANA database the running system actually has,
     via `zoneinfo` — not a hardcoded list, which would go stale every time
@@ -253,9 +283,7 @@ def validate_timezone(value: str) -> str:
     if not value:
         raise InvalidTimezone("Timezone must not be empty.")
 
-    # `available_timezones()` builds a set on each call; it is only ever hit
-    # on a write path (profile update, user creation), never per-render.
-    if value not in available_timezones():
+    if value not in _known_timezones():
         raise InvalidTimezone(
             f"Unknown timezone {value!r}. Expected an IANA name such as 'Europe/London'."
         )

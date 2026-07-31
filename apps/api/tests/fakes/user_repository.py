@@ -132,5 +132,23 @@ class FakeUserRepository:
         self._users[user.id] = copy.deepcopy(user)
         return copy.deepcopy(user)
 
+    async def replace_password_hash(
+        self,
+        user_id: UUID,
+        *,
+        expected_hash: str,
+        new_hash: str,
+    ) -> bool:
+        user = self._users.get(user_id)
+        # Both halves of the real adapter's `WHERE`: no such row, or the
+        # hash moved underneath us. A fake that checked only the id would
+        # let a service test pass while the production compare-and-swap
+        # declined the write.
+        if user is None or user.password_hash != expected_hash:
+            return False
+
+        user.password_hash = new_hash
+        return True
+
     async def delete(self, user_id: UUID) -> bool:
         return self._users.pop(user_id, None) is not None

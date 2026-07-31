@@ -1,7 +1,9 @@
 """HTTP routes for `auth`.
 
-One endpoint: `POST /auth/register`. No login, no token, no session —
-A64-011.1's explicit boundary, and none of them is stubbed here.
+Two endpoints: `POST /auth/register` and `POST /auth/login`. No token, no
+refresh, no session, no cookie — A64-011.2's explicit boundary, and none
+of them is stubbed here. `login` proves identity and returns the account;
+issuing anything on the strength of that proof is A64-011.3.
 
 Errors need no handling in this file. Every failure below is a typed
 exception on the platform hierarchy, and
@@ -12,9 +14,12 @@ exception on the platform hierarchy, and
     InvalidEmail            -> 422  invalid_email
     UsernameAlreadyExists   -> 409  username_already_exists
     EmailAlreadyExists      -> 409  email_already_exists
+    InvalidCredentials      -> 401  invalid_credentials
+    InactiveAccount         -> 403  inactive_account
+    AccountLocked           -> 403  account_locked
 
-Each carries a distinct code precisely so a sign-up form knows which
-field to mark, which is the rule for earning one
+Each carries a distinct code precisely so a client knows which field to
+mark or which advice to give, which is the rule for earning one
 (`app.core.error_codes.ErrorCode`).
 """
 
@@ -23,9 +28,12 @@ from fastapi import APIRouter, Response, status
 from app.api.responses import build_response
 from app.core.constants import API_PREFIX, API_V1_PREFIX
 from app.core.responses import ApiResponse
-from app.modules.auth.application.commands import RegisterUser
-from app.modules.auth.presentation.dependencies import RegistrationServiceDep
-from app.modules.auth.presentation.schemas import RegisterRequest
+from app.modules.auth.application.commands import AuthenticateUser, RegisterUser
+from app.modules.auth.presentation.dependencies import (
+    AuthenticationServiceDep,
+    RegistrationServiceDep,
+)
+from app.modules.auth.presentation.schemas import LoginRequest, RegisterRequest
 from app.modules.users.public import UserRead
 
 auth_router = APIRouter(prefix="/auth", tags=["auth"])
@@ -66,3 +74,32 @@ async def register(
     # than a path that 404s.
     response.headers["Location"] = f"{API_PREFIX}{API_V1_PREFIX}/users/{created.id}"
     return build_response(created)
+
+
+@auth_router.post("/login")
+async def login(
+    payload: LoginRequest,
+    service: AuthenticationServiceDep,
+) -> ApiResponse[UserRead]:
+    """Verifies credentials and returns the account they belong to.
+
+    `200`, not `201`: nothing is created. That is not pedantry about
+    status codes — it is the honest description of what this endpoint
+    currently does, and it will stay `200` when A64-011.3 adds a token,
+    because a token is not a resource with a URL either.
+
+    The response is `UserRead`. It has no `password_hash` field and no
+    token field, so both absences are properties of the type rather than
+    of remembering to strip them here.
+
+    A failed sign-in returns `401 invalid_credentials` whether the address
+    is unknown or the password is wrong — identically, and in the same
+    elapsed time. See `AuthenticationService` for why that costs a full
+    Argon2 verification against a throwaway hash, and why
+    `inactive_account` / `account_locked` are not the enumeration oracle
+    they appear to be.
+    """
+    account = await service.authenticate(
+        AuthenticateUser(email=payload.email, password=payload.password)
+    )
+    return build_response(account)

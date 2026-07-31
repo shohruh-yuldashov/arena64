@@ -43,6 +43,7 @@ class ErrorCode(StrEnum):
     # DomainError and its children — services.md BE-07: normal outcomes,
     # never logged as errors.
     DOMAIN_ERROR = "domain_error"
+    AUTHENTICATION_FAILED = "authentication_failed"
     NOT_FOUND = "not_found"
     CONFLICT = "conflict"
     PERMISSION_DENIED = "permission_denied"
@@ -69,3 +70,13 @@ class ErrorCode(StrEnum):
     INVALID_USERNAME = "invalid_username"
     INVALID_EMAIL = "invalid_email"
     WEAK_PASSWORD = "weak_password"
+
+    # `auth` (A64-011.2). Three genuinely different client behaviours:
+    # retry the form, contact support, or wait and try later. Note that
+    # `INVALID_CREDENTIALS` is deliberately the *only* one reachable
+    # without already knowing the password — see
+    # `auth/application/services/authentication_service.py` on why the
+    # other two are not an account-enumeration oracle.
+    INVALID_CREDENTIALS = "invalid_credentials"
+    INACTIVE_ACCOUNT = "inactive_account"
+    ACCOUNT_LOCKED = "account_locked"

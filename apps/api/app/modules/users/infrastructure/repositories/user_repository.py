@@ -19,9 +19,10 @@ assigns here explicitly:
 """
 
 import logging
+from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import Select, exists, select
+from sqlalchemy import CursorResult, Select, exists, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -73,6 +74,7 @@ class SqlAlchemyUserRepository:
             updated_at=row.updated_at,
             display_name=row.display_name,
             avatar_url=row.avatar_url,
+            locked_until=row.locked_until,
         )
 
     @staticmethod
@@ -93,6 +95,7 @@ class SqlAlchemyUserRepository:
             updated_at=user.updated_at,
             display_name=user.display_name,
             avatar_url=user.avatar_url,
+            locked_until=user.locked_until,
         )
 
     @staticmethod
@@ -114,6 +117,7 @@ class SqlAlchemyUserRepository:
         row.updated_at = user.updated_at
         row.display_name = user.display_name
         row.avatar_url = user.avatar_url
+        row.locked_until = user.locked_until
 
     # --- error translation --------------------------------------------------
 
@@ -241,6 +245,41 @@ class SqlAlchemyUserRepository:
             raise self._translate_integrity_error(error) from error
 
         return self._to_domain(row)
+
+    async def replace_password_hash(
+        self,
+        user_id: UUID,
+        *,
+        expected_hash: str,
+        new_hash: str,
+    ) -> bool:
+        # A Core `update()` rather than loading the row and assigning:
+        # `WHERE password_hash = :expected` has to be evaluated by
+        # PostgreSQL, in the same statement as the write, or it is not a
+        # compare-and-swap at all (see the port's docstring).
+        #
+        # `updated_at` moves too — `TimestampMixin` declares
+        # `onupdate=func.now()`, which fires for Core statements as well as
+        # ORM flushes. That is correct rather than incidental: the row did
+        # change, and anything syncing on `updated_at` should see it.
+        #
+        # `synchronize_session=False` because nothing in this session holds
+        # the row; there is no identity-map copy to keep consistent.
+        #
+        # The `cast` is a typing accommodation, not a claim: `execute` is
+        # declared to return `Result[Any]`, which has no `rowcount` because
+        # a SELECT has no such notion — a DML statement always returns the
+        # `CursorResult` subtype that does.
+        result = cast(
+            "CursorResult[Any]",
+            await self._session.execute(
+                update(UserModel)
+                .where(UserModel.id == user_id, UserModel.password_hash == expected_hash)
+                .values(password_hash=new_hash)
+                .execution_options(synchronize_session=False)
+            ),
+        )
+        return result.rowcount == 1
 
     async def delete(self, user_id: UUID) -> bool:
         row = await self._session.get(UserModel, user_id)

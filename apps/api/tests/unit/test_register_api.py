@@ -68,6 +68,19 @@ class _StubHasher:
     async def hash(self, plaintext: str) -> str:
         return f"stub-hash${len(plaintext)}"
 
+    # Unused by registration; present so this still satisfies the
+    # `PasswordHasher` protocol after A64-011.2 widened it. Raising rather
+    # than returning a plausible value means a route that quietly started
+    # verifying would fail here instead of passing against a fiction.
+    async def verify(self, encoded_hash: str, plaintext: str) -> bool:
+        raise AssertionError("registration never verifies a password")
+
+    async def needs_rehash(self, encoded_hash: str) -> bool:
+        raise AssertionError("registration never rehashes")
+
+    async def dummy_hash(self) -> str:
+        raise AssertionError("registration has no unknown-account path")
+
 
 @pytest.fixture
 def repository() -> FakeUserRepository:

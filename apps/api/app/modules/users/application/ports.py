@@ -60,6 +60,31 @@ class UserRepository(Protocol):
         """Persists changes to an already-loaded user."""
         ...
 
+    async def replace_password_hash(
+        self,
+        user_id: UUID,
+        *,
+        expected_hash: str,
+        new_hash: str,
+    ) -> bool:
+        """Conditionally swaps one stored hash for another; returns whether
+        a row matched.
+
+        A single conditional statement rather than `get_by_id` → mutate →
+        `update`, because the condition *is* the point: read-then-write
+        across two round trips has a window in which the credential
+        changes, and losing that race means overwriting a new password
+        with an old one. Expressing it as one `UPDATE ... WHERE
+        password_hash = :expected` makes the check and the write atomic in
+        the database, which is the only place they can be.
+
+        Still a single storage operation with no opinion in it
+        (repositories.md §2): *whether* to rehash is the caller's
+        decision, and this port neither computes hashes nor knows what
+        makes one stale.
+        """
+        ...
+
     async def delete(self, user_id: UUID) -> bool:
         """Removes the row. Returns whether anything was deleted, so the
         service can distinguish "gone now" from "was never there" without

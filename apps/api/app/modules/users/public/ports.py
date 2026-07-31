@@ -7,15 +7,21 @@ that first consumer, and `UserAccountCreator` is that narrow port: one
 method, exactly what registration needs, and nothing that would let a
 consumer read or mutate anything else.
 
-Note what is still *not* published. There is no way here to fetch a user,
-list users, change a profile, or reach a `password_hash` — login will need
-the last of those, and A64-011.2 should add a second, equally narrow port
-for it rather than widening this one into a general-purpose user API. The
-value of a published surface is entirely in what it withholds.
+A64-011.2 added the second: `UserCredentialStore`, for login. It is a
+separate protocol rather than two more methods on `UserAccountCreator`
+because registration and sign-in are different consumers with different
+risk — a future component that may create accounts must not automatically
+gain the ability to read password hashes.
+
+Note what is *still* not published: there is no way here to fetch an
+arbitrary user, list users, or change a profile. The value of a published
+surface is entirely in what it withholds.
 """
 
 from typing import Protocol
+from uuid import UUID
 
+from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import UserRead
 
 
@@ -70,3 +76,54 @@ class UserAccountCreator(Protocol):
     """
 
     async def create(self, account: NewUserAccount) -> UserRead: ...
+
+
+class UserCredentialStore(Protocol):
+    """Reads the credential material for a sign-in, and accepts a rehash.
+
+    Two methods, both of which `auth` demonstrably needs and neither of
+    which lets a consumer do anything else — it cannot list accounts,
+    cannot read a hash by user id, and cannot set a hash to an arbitrary
+    value without already knowing the current one.
+    """
+
+    async def find_credentials_by_email(self, email: str) -> UserCredentials | None:
+        """`None` when no account has that address — **not** an exception.
+
+        This is the one place in the module where absence must be an
+        ordinary return value rather than a `UserNotFound`. `auth` has to
+        take exactly the same code path, spending exactly the same time,
+        for a known and an unknown address; an exception here would make
+        "unknown" the cheap branch and hand an attacker an oracle for
+        which addresses have accounts. `UserService.find_by_email` raises
+        and stays as it is — this is a different question with a
+        different answer.
+
+        Matching is case-insensitive (AC-1): the address is normalised the
+        same way registration normalised it before storing.
+        """
+        ...
+
+    async def replace_password_hash(
+        self,
+        user_id: UUID,
+        *,
+        expected_hash: str,
+        new_hash: str,
+    ) -> bool:
+        """Upgrades a stored hash in place, returning whether it applied.
+
+        `expected_hash` makes this a compare-and-swap rather than a blind
+        write, and that matters even before a change-password flow exists:
+        a rehash-on-login is computed from a hash read *earlier* in the
+        request, and an unconditional `UPDATE` would silently revert a
+        credential changed in between — turning a security upgrade into a
+        credential rollback. `False` means the row moved underneath us,
+        which is a no-op, not a failure.
+
+        Never changes what the password *is*: the caller has already
+        verified the same plaintext against `expected_hash`, and
+        `new_hash` encodes that identical plaintext under stronger
+        parameters (database.md §14.2's rehash-on-login).
+        """
+        ...

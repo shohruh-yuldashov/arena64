@@ -20,6 +20,10 @@ What is published, and why only this much:
                          someone is without loading their whole profile
   `UserAccountCreator`   the narrow port `auth` uses to register a user
   `NewUserAccount`       that port's input shape
+  `UserCredentialStore`  the equally narrow port `auth` uses to sign one in
+  `UserCredentials`      that port's output — an account view plus the
+                         stored hash, and nothing that would let a
+                         consumer read or edit a profile
   the four exceptions    so a consumer can branch on the outcome
 
 Deliberately **not** published: the `User` entity (it is mutable, and a
@@ -38,8 +42,13 @@ from app.modules.users.domain.exceptions import (
     UsernameAlreadyExists,
     UserNotFound,
 )
+from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import UserRead, UserSummary
-from app.modules.users.public.ports import NewUserAccount, UserAccountCreator
+from app.modules.users.public.ports import (
+    NewUserAccount,
+    UserAccountCreator,
+    UserCredentialStore,
+)
 
 # The cross-context player identifier. An alias rather than a `NewType`
 # because it crosses a JSON boundary in both directions and every consumer
@@ -53,6 +62,8 @@ __all__ = [
     "InvalidUsername",
     "NewUserAccount",
     "UserAccountCreator",
+    "UserCredentialStore",
+    "UserCredentials",
     "UserId",
     "UserNotFound",
     "UserRead",

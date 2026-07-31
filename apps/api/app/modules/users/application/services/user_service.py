@@ -88,6 +88,21 @@ class UserService:
             raise UserNotFound("No user with that email address.")
         return user
 
+    async def lookup_by_email(self, email: str) -> User | None:
+        """`find_by_email` without the exception.
+
+        Not redundant with it, and not a candidate for merging: the two
+        differ in what absence *means* to the caller. For `find_by_email`
+        the user was named and must exist, so absence is a failure. For a
+        sign-in attempt, absence is an ordinary outcome that must be
+        indistinguishable — in code path, in error, and in elapsed time —
+        from a wrong password. A caller that had to wrap this in
+        `try/except UserNotFound` would be building an exception on the
+        hot path of the most-attacked endpoint on the platform, and
+        raising is not free.
+        """
+        return await self._users.get_by_email(Email(email))
+
     async def list_users(
         self,
         params: CursorPageParams,
@@ -176,6 +191,40 @@ class UserService:
             await self._uow.commit()
 
         return updated
+
+    # --- credentials --------------------------------------------------------
+
+    async def replace_password_hash(
+        self,
+        user_id: UUID,
+        *,
+        expected_hash: str,
+        new_hash: str,
+    ) -> bool:
+        """Stores a re-derived hash for the *same* password.
+
+        This service still never hashes, verifies or inspects a credential
+        — the string arrives already computed by `auth`, exactly as it does
+        on `create_user`. What this owns is only the transaction around the
+        write, which is what `UserService` owns for every other write in
+        the module.
+
+        The return value is honest about the compare-and-swap declining:
+        `False` means the stored hash was not what the caller last read.
+        The caller's correct response is to do nothing (see
+        `AuthenticationService` on why a rehash never fails a sign-in).
+        """
+        async with self._uow:
+            applied = await self._users.replace_password_hash(
+                user_id, expected_hash=expected_hash, new_hash=new_hash
+            )
+            await self._uow.commit()
+
+        if applied:
+            # No hash, no parameters, no email — only that it happened, to
+            # whom, and therefore how far a parameter rollout has reached.
+            logger.info("password_hash_rehashed", extra={"user_id": str(user_id)})
+        return applied
 
     # --- lifecycle ----------------------------------------------------------
 

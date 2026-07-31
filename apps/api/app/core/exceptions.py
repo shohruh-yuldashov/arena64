@@ -10,6 +10,7 @@ the two structures once the first module is built.
     Arena64Error
     +-- ValidationError            the input was malformed
     +-- DomainError                a rule said no — a normal outcome (BE-07)
+    |   +-- AuthenticationFailed    401 — identity not proven
     |   +-- NotFoundError
     |   +-- ConflictError
     |   +-- PermissionDeniedError
@@ -58,6 +59,30 @@ class DomainError(Arena64Error):
     (services.md §7.1)."""
 
     default_code: ClassVar[ErrorCode] = ErrorCode.DOMAIN_ERROR
+
+
+class AuthenticationFailed(DomainError):
+    """The caller did not prove who they are — HTTP 401.
+
+    Distinct from `PermissionDeniedError` (403), and the distinction is not
+    pedantry: 401 means "I do not know who you are, try authenticating",
+    403 means "I know who you are and you may not do this". A client
+    behaves differently on each — 401 sends you to a sign-in form, 403
+    does not, and sending an already-signed-in user back to sign in
+    because the platform conflated the two is a real and common bug.
+
+    Added in A64-011.2 because login is the first thing on the platform
+    that can fail for want of identity. Everything before it either
+    succeeded or failed for a reason 403/404/409 already described.
+
+    Note for A64-011.3: RFC 9110 §11.6.1 says a 401 response *must* carry
+    a `WWW-Authenticate` header naming the scheme. This platform has no
+    scheme yet — bearer tokens arrive with JWT — so the header is
+    deliberately omitted rather than asserting a scheme that does not
+    exist. Adding `WWW-Authenticate: Bearer` belongs with the tokens.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.AUTHENTICATION_FAILED
 
 
 class NotFoundError(DomainError):

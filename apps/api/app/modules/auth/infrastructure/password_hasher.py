@@ -39,23 +39,30 @@ column. No companion columns are needed, and adding them would create a
 second source of truth that could disagree with the string itself.
 """
 
+import secrets
+from functools import lru_cache
+
 from anyio import to_thread
 from argon2 import PasswordHasher as Argon2PasswordHasher
 from argon2 import Type
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
 from app.config.settings import AuthSettings
+from app.core.exceptions import PermanentInfrastructureError
 
 
 class Argon2idPasswordHasher:
     """The production `PasswordHasher`.
 
-    Constructed once per process at the composition root: the underlying
-    `argon2.PasswordHasher` is stateless and thread-safe, and building one
-    per request would be pure waste on the one code path already spending
-    tens of milliseconds.
+    Shared per process — see `build_password_hasher`, which is how the
+    composition root should obtain one. The underlying
+    `argon2.PasswordHasher` is stateless and thread-safe; the only
+    instance state is the memoised dummy hash, and that memo is the
+    reason sharing matters.
     """
 
     def __init__(self, settings: AuthSettings) -> None:
+        self._dummy_hash: str | None = None
         self._hasher = Argon2PasswordHasher(
             time_cost=settings.argon2_time_cost,
             memory_cost=settings.argon2_memory_cost_kib,
@@ -76,3 +83,104 @@ class Argon2idPasswordHasher:
         database cannot be attacked with a precomputed table.
         """
         return await to_thread.run_sync(self._hasher.hash, plaintext)
+
+    async def verify(self, encoded_hash: str, plaintext: str) -> bool:
+        """Verifies off the event loop, for the same reason `hash` does —
+        verification costs the same as hashing by construction.
+
+        The digest comparison itself is argon2-cffi's, which uses the
+        library's constant-time equality. Nothing here ever sees the two
+        digests, let alone compares them with `==`.
+        """
+        try:
+            return await to_thread.run_sync(self._hasher.verify, encoded_hash, plaintext)
+        except VerifyMismatchError:
+            # The ordinary "wrong password". Must be caught before
+            # `VerificationError`, which it subclasses.
+            return False
+        except (InvalidHashError, VerificationError) as error:
+            # The stored string is not a usable Argon2 encoding: truncated
+            # by a bad migration, written by something that was not this
+            # hasher, or corrupted. That is a defect in stored data, not a
+            # failed sign-in — reporting it as "wrong password" would leave
+            # a person permanently unable to log in with the right one
+            # while every dashboard showed a normal failure rate.
+            #
+            # `Permanent`, not `Transient`: retrying reads the same bad
+            # bytes. The message names no user and carries no hash.
+            raise PermanentInfrastructureError(
+                "Stored password hash is not a valid Argon2 encoding."
+            ) from error
+
+    async def needs_rehash(self, encoded_hash: str) -> bool:
+        """Cheap — parses the encoding's parameter header and compares it
+        against this instance's configuration. No key derivation runs, so
+        unlike `hash` and `verify` this needs no worker thread.
+        """
+        return self._hasher.check_needs_rehash(encoded_hash)
+
+    async def dummy_hash(self) -> str:
+        """Hashes an unguessable per-process string, once, and reuses it.
+
+        Computed lazily rather than in `__init__`, which cannot await, and
+        cached because the whole point is to spend *one* verification's
+        time per unknown-address attempt — deriving a fresh dummy on every
+        one would double the cost of exactly the requests an attacker
+        controls the volume of.
+
+        Two concurrent first calls may both compute one. That race is
+        harmless: either value is equally valid, and a lock on the cold
+        path would be more machinery than the duplicated work it saves.
+
+        The plaintext is `secrets.token_urlsafe(32)` — 256 bits from the
+        OS CSPRNG, never persisted, never logged, and different in every
+        process. Nobody can submit a password that verifies against it,
+        which is what makes "verify against the dummy" always fail without
+        being a special case.
+        """
+        if self._dummy_hash is None:
+            self._dummy_hash = await self.hash(secrets.token_urlsafe(32))
+        return self._dummy_hash
+
+
+@lru_cache(maxsize=8)
+def _cached_hasher(
+    time_cost: int,
+    memory_cost_kib: int,
+    parallelism: int,
+) -> Argon2idPasswordHasher:
+    """Keyed on the three cost parameters as plain ints — deliberately not
+    on the `AuthSettings` object, which is a Pydantic model and not
+    reliably hashable (A64-011.1 hit exactly that and removed the cache
+    rather than work around it)."""
+    return Argon2idPasswordHasher(
+        AuthSettings(
+            argon2_time_cost=time_cost,
+            argon2_memory_cost_kib=memory_cost_kib,
+            argon2_parallelism=parallelism,
+        )
+    )
+
+
+def build_password_hasher(settings: AuthSettings) -> Argon2idPasswordHasher:
+    """Returns the process's shared hasher for these parameters.
+
+    A64-011.1 deliberately built one per request, having measured
+    construction at 1 µs against the ~19,000 µs of the hash itself, and
+    concluded the cache was optimising nothing. That reasoning was about
+    cost, and it was right about cost.
+
+    A64-011.2 brings the singleton back for a different reason, which cost
+    does not reach: `dummy_hash` must be computed **once per process**.
+    Derived per request instead, a sign-in for an unknown address would
+    spend two Argon2 operations (build the dummy, then verify against it)
+    where a known address spends one — reintroducing, at double
+    magnitude and with the sign flipped, the very timing difference the
+    dummy exists to erase. Sharing the instance is what makes the memo
+    real.
+    """
+    return _cached_hasher(
+        settings.argon2_time_cost,
+        settings.argon2_memory_cost_kib,
+        settings.argon2_parallelism,
+    )

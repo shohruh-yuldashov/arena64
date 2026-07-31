@@ -47,6 +47,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.enums import Locale
 from app.database.base import Base
 from app.database.mixins import TimestampMixin, UUIDPrimaryKeyMixin
+from app.database.types import UtcDateTime
 from app.modules.users.domain.validators import (
     AVATAR_URL_MAX_LENGTH,
     DISPLAY_NAME_MAX_LENGTH,
@@ -165,6 +166,13 @@ class UserModel(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+
+    # Sign-in is refused until this instant. `NULL` means unlocked, and a
+    # past instant means the lock has lapsed — expiry is evaluated on read,
+    # never by a job that sweeps the column (see `User.locked_until` for
+    # why that direction is the safe one). No index: it is only ever read
+    # for a row already located by email.
+    locked_until: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
     display_name: Mapped[str | None] = mapped_column(String(DISPLAY_NAME_MAX_LENGTH), nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(AVATAR_URL_MAX_LENGTH), nullable=True)

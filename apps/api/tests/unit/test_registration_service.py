@@ -70,6 +70,22 @@ class _RecordingHasher:
         self.hashed.append(plaintext)
         return f"stub-hash-of-{len(plaintext)}-chars"
 
+    # `RegistrationService` calls none of these. They exist because
+    # A64-011.2 widened the `PasswordHasher` port, and a stub that no
+    # longer satisfies its protocol is a stub that stopped proving the
+    # service is wired to a *real* interface. Each raises rather than
+    # returning a plausible value, so a future registration flow that
+    # started verifying passwords would fail loudly here instead of
+    # passing against a fiction.
+    async def verify(self, encoded_hash: str, plaintext: str) -> bool:
+        raise AssertionError("registration never verifies a password")
+
+    async def needs_rehash(self, encoded_hash: str) -> bool:
+        raise AssertionError("registration never rehashes")
+
+    async def dummy_hash(self) -> str:
+        raise AssertionError("registration has no unknown-account path")
+
 
 @pytest.fixture
 def repository() -> FakeUserRepository:

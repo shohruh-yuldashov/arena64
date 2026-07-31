@@ -36,6 +36,22 @@ class RegisterUser:
 
 
 @dataclass(frozen=True, slots=True)
+class AuthenticateUser:
+    """A sign-in attempt.
+
+    `password` is a `SecretStr` for the reason `RegisterUser.password` is
+    — see that docstring. It matters more here, if anything: a failed
+    sign-in is the outcome most likely to be logged, traced, or captured
+    by an error reporter, and it is the one carrying a password somebody
+    typed *and got wrong*, which on the next attempt is very often the
+    right one.
+    """
+
+    email: str
+    password: SecretStr
+
+
+@dataclass(frozen=True, slots=True)
 class NewAccount:
     """What `auth` hands to `users.public.UserAccountCreator`.
 

@@ -49,6 +49,7 @@ from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.auth.application.ports import PasswordHasher
 from app.modules.auth.application.services import (
+<<<<<<< HEAD
     AccessTokenService,
     AuthenticationService,
     RegistrationService,
@@ -63,6 +64,16 @@ from app.modules.auth.presentation.dependencies.current_user import (
     get_current_user_optional,
     get_token_validator,
     require_authentication,
+=======
+    AuthenticationService,
+    RefreshTokenService,
+    RegistrationService,
+    SessionService,
+)
+from app.modules.auth.infrastructure import (
+    SqlAlchemySessionRepository,
+    build_password_hasher,
+>>>>>>> 56a5884 (task_011.4 completed)
 )
 from app.modules.users.application.services import UserService
 from app.modules.users.application.services.user_account_service import UserAccountService
@@ -145,6 +156,7 @@ def get_authentication_service(
 AuthenticationServiceDep = Annotated[AuthenticationService, Depends(get_authentication_service)]
 
 
+<<<<<<< HEAD
 def get_access_token_service(
     settings: SettingsDep,
     clock: ClockDep,
@@ -163,6 +175,44 @@ def get_access_token_service(
 
 
 AccessTokenServiceDep = Annotated[AccessTokenService, Depends(get_access_token_service)]
+=======
+def get_refresh_token_service(settings: SettingsDep) -> RefreshTokenService:
+    """Stateless and cheap — a per-request instance costs one attribute
+    assignment against the SHA-256 it exists to perform."""
+    return RefreshTokenService(settings.session)
+
+
+RefreshTokenServiceDep = Annotated[RefreshTokenService, Depends(get_refresh_token_service)]
+
+
+def get_session_service(
+    session: DbSessionDep,
+    tokens: RefreshTokenServiceDep,
+    clock: ClockDep,
+    settings: SettingsDep,
+) -> SessionService:
+    """Refresh sessions (A64-011.4).
+
+    Not reachable from any route: this task's brief is explicit that no
+    endpoints are exposed. It is assembled here so A64-011.5's refresh and
+    logout endpoints add a handler rather than a dependency graph — and so
+    that the graph itself is exercised now, while it is small.
+
+    The unit of work wraps the *same* session the repository holds;
+    otherwise the service would commit a transaction the repository never
+    wrote to, and a sign-in would be silently lost on teardown.
+    """
+    return SessionService(
+        sessions=SqlAlchemySessionRepository(session),
+        tokens=tokens,
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+        settings=settings.session,
+    )
+
+
+SessionServiceDep = Annotated[SessionService, Depends(get_session_service)]
+>>>>>>> 56a5884 (task_011.4 completed)
 
 
 __all__ = [
@@ -173,8 +223,13 @@ __all__ = [
     "OptionalCurrentUser",
     "RequireAuthentication",
     "PasswordHasherDep",
+    "RefreshTokenServiceDep",
     "RegistrationServiceDep",
+<<<<<<< HEAD
     "TokenValidatorDep",
+=======
+    "SessionServiceDep",
+>>>>>>> 56a5884 (task_011.4 completed)
     "UserAccountCreatorDep",
     "UserCredentialStoreDep",
     "get_access_token_service",
@@ -182,8 +237,13 @@ __all__ = [
     "get_current_user",
     "get_current_user_optional",
     "get_password_hasher",
+    "get_refresh_token_service",
     "get_registration_service",
+<<<<<<< HEAD
     "get_token_validator",
+=======
+    "get_session_service",
+>>>>>>> 56a5884 (task_011.4 completed)
     "get_user_account_creator",
     "get_user_credential_store",
     "require_authentication",

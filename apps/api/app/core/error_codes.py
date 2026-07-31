@@ -81,6 +81,7 @@ class ErrorCode(StrEnum):
     INACTIVE_ACCOUNT = "inactive_account"
     ACCOUNT_LOCKED = "account_locked"
 
+<<<<<<< HEAD
     # `auth` (A64-011.3). Three codes for four exception types, and the
     # arithmetic is the rule in this docstring doing its job:
     #
@@ -101,3 +102,24 @@ class ErrorCode(StrEnum):
     AUTHENTICATION_REQUIRED = "authentication_required"
     INVALID_TOKEN = "invalid_token"
     EXPIRED_TOKEN = "expired_token"
+=======
+    # `auth` (A64-011.4). Two codes for four exception types, and the
+    # arithmetic is the rule in this docstring doing its job.
+    #
+    #   SESSION_EXPIRED     the session aged out or sat idle — the client
+    #                       must sign in again, and can say *why* rather
+    #                       than showing a bare error
+    #   INVALID_SESSION     everything else: an unrecognised token, a
+    #                       revoked session, a session that no longer
+    #                       exists. Same client behaviour — discard the
+    #                       stored token and sign in again
+    #
+    # `RevokedSession` and `SessionNotFound` deliberately share
+    # `INVALID_SESSION`. Distinguishing them would tell whoever presented
+    # the token whether it ever named a real session — which is a
+    # membership oracle over the session table, and would let an attacker
+    # holding a stolen-but-revoked token learn that revocation is what
+    # stopped them rather than a bad guess.
+    INVALID_SESSION = "invalid_session"
+    SESSION_EXPIRED = "session_expired"
+>>>>>>> 56a5884 (task_011.4 completed)

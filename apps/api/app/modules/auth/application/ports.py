@@ -2,10 +2,18 @@
 `application/`, satisfied by `infrastructure/`.
 """
 
+<<<<<<< HEAD
 from collections.abc import Mapping
 from typing import Any, Protocol
 
 from app.modules.auth.domain.tokens import TokenClaims, TokenType
+=======
+from datetime import datetime
+from typing import Protocol
+from uuid import UUID
+
+from app.modules.auth.domain.sessions import RevocationReason, UserSession
+>>>>>>> 56a5884 (task_011.4 completed)
 
 
 class PasswordHasher(Protocol):
@@ -77,6 +85,7 @@ class PasswordHasher(Protocol):
         ...
 
 
+<<<<<<< HEAD
 class TokenProvider(Protocol):
     """Signs and verifies tokens. Knows nothing about *why* one is issued.
 
@@ -141,5 +150,123 @@ class TokenProvider(Protocol):
         Raises `ExpiredToken`, `InvalidSignature`, or `InvalidToken` —
         never a `jwt.*` exception, which would leak the library's
         vocabulary into every caller and make swapping it a rewrite.
+=======
+class SessionRepository(Protocol):
+    """Collection-like access to the `UserSession` aggregate.
+
+    A `Protocol`, not an ABC: the SQLAlchemy adapter and the test fake
+    satisfy it structurally, and one shared contract suite is run against
+    both (repositories.md RP-05) so the fake cannot quietly diverge.
+
+    **Every method here is a single storage operation with no opinion in
+    it** (repositories.md §2 consequence 3). "Is this session still
+    usable" is `SessionService`'s decision, not this port's — which is why
+    `get_session` returns revoked and expired sessions rather than
+    filtering them out. A repository that hid revoked rows
+    would make reuse detection impossible: detecting reuse *requires*
+    finding the revoked session the attacker presented.
+
+    Flushes, never commits. The unit of work owns the transaction
+    (repositories.md §5.1).
+    """
+
+    async def create_session(self, session: UserSession) -> UserSession:
+        """Persists a new session and returns it."""
+        ...
+
+    async def get_session(self, refresh_token_hash: bytes) -> UserSession | None:
+        """The refresh path's lookup: hash the presented token, find its
+        session.
+
+        `None` rather than raising — absence is an ordinary outcome for
+        the port. Returns the row **whatever its state**: revoked,
+        expired, idle. See this class's docstring.
+        """
+        ...
+
+    async def get_by_id(self, session_id: UUID) -> UserSession | None:
+        """Lookup by identity, for revocation of a session a player picked
+        from a list. Deliberately separate from `get_session`: one takes a
+        secret, the other takes an identifier, and conflating them is how
+        a session id ends up being accepted as a credential."""
+        ...
+
+    async def update_last_used(self, session_id: UUID, instant: datetime) -> bool:
+        """Slides the idle window forward. Returns whether a row matched.
+
+        A targeted `UPDATE` of one column rather than a load-mutate-save,
+        because this runs on every refresh and must not read, map and
+        rewrite eleven columns to change one — and because a full-row
+        write would race with a concurrent revocation and could resurrect
+        it.
+        """
+        ...
+
+    async def revoke_session(
+        self, session_id: UUID, *, at: datetime, reason: RevocationReason
+    ) -> bool:
+        """Revokes one session. Returns whether this call was the one that
+        did it.
+
+        `False` for an already-revoked session, so the caller can tell a
+        real revocation from a no-op without a second query — and so the
+        first reason recorded is never overwritten by a later one. That
+        matters: a `reuse_detected` overwritten by a subsequent `player`
+        would erase the only record that an attack was found.
+        """
+        ...
+
+    async def revoke_all_sessions(
+        self,
+        user_id: UUID,
+        *,
+        at: datetime,
+        reason: RevocationReason,
+        except_session_id: UUID | None = None,
+    ) -> int:
+        """Revokes every live session for a user; returns how many.
+
+        `except_session_id` exists for SE-1 — "a password change revokes
+        every session except the one performing it". Without it, changing
+        your password signs you out of the device you changed it on, which
+        users read as a bug and which makes the security action feel like
+        a punishment.
+
+        One statement, not a loop over `revoke_session`: a loop is N round
+        trips at the moment of a suspension or a detected compromise,
+        which is exactly when latency is least affordable.
+        """
+        ...
+
+    async def revoke_family(
+        self, token_family: UUID, *, at: datetime, reason: RevocationReason
+    ) -> int:
+        """Revokes an entire rotation chain — database.md §14.3's reuse
+        response.
+
+        Separate from `revoke_all_sessions` because it is a different
+        blast radius: reuse detection kills the compromised chain, not
+        every device the player owns. Signing someone out of their phone
+        because their laptop's token was replayed is a worse outcome than
+        the attack in most cases.
+        """
+        ...
+
+    async def list_user_sessions(
+        self, user_id: UUID, *, include_revoked: bool = False
+    ) -> list[UserSession]:
+        """Every session for a user, newest first — SE-2's revocation list.
+
+        Not paginated, deliberately, and this is the one place the
+        platform's keyset-by-default rule (RP-03) does not apply: the
+        result set is bounded by how many devices a person owns. A
+        paginated device list would be more machinery than the data
+        justifies. If that assumption ever breaks it breaks visibly, as a
+        slow query on a known-small table.
+
+        `include_revoked` defaults to `False` because the common caller is
+        "show me my active devices". History is available but is never the
+        default.
+>>>>>>> 56a5884 (task_011.4 completed)
         """
         ...

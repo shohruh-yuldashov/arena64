@@ -98,6 +98,7 @@ class AccountLocked(PermissionDeniedError):
     default_code: ClassVar[ErrorCode] = ErrorCode.ACCOUNT_LOCKED
 
 
+<<<<<<< HEAD
 # --- bearer tokens (A64-011.3) ----------------------------------------------
 #
 # All five are `AuthenticationFailed`, so all five are 401 through the
@@ -188,11 +189,92 @@ class InvalidSignature(InvalidToken):
 
     "Any active key" includes `JWTSettings.previous_secret_keys`, so a
     token signed just before a key rotation is not a forgery.
+=======
+# --- refresh sessions (A64-011.4) --------------------------------------------
+#
+# All four are `AuthenticationFailed`, so all four are 401 through the
+# existing MRO walk with no new handler. They form a tree rather than four
+# siblings because callers branch at two granularities: a refresh endpoint
+# only ever asks "may this token be exchanged", while the service and its
+# tests care exactly which check failed.
+#
+#     AuthenticationFailed
+#     +-- InvalidRefreshToken       the token cannot be exchanged
+#         +-- ExpiredRefreshToken     ... it aged out or sat idle
+#         +-- RevokedSession          ... its session was revoked
+#         +-- SessionNotFound         ... no session matches it
+
+
+class InvalidRefreshToken(AuthenticationFailed):
+    """The presented refresh token cannot be exchanged — 401.
+
+    The catch-all, and the parent of the three specific reasons below so
+    that a caller can catch one type and be sure it has covered all of
+    them. A refresh endpoint that caught only `ExpiredRefreshToken` and
+    let a `RevokedSession` escape as a 500 is the bug this hierarchy
+    prevents.
+
+    The message is a fixed string for every case. The server knows which
+    check failed and records it at DEBUG; the caller does not, because a
+    finer answer tells whoever presented the token whether it was ever
+    real — see `app.core.error_codes.ErrorCode` on why that is a
+    membership oracle over the session table.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.INVALID_SESSION
+
+
+class ExpiredRefreshToken(InvalidRefreshToken):
+    """The session aged out — 401.
+
+    Covers both expiries database.md §4.4 requires: the absolute 30-day
+    window and the idle window. They are one exception because the client
+    does the same thing for both — sign in again — and because telling a
+    caller *which* window elapsed reveals when the session was last used,
+    which is information about the legitimate user that only an attacker
+    would need.
+
+    The one refresh failure with its own wire code, because it is the one
+    a UI can explain rather than merely report: "your session expired,
+    please sign in" is actionable, and it is true rather than alarming.
+    Disclosing it is safe for the same reason expiry disclosure is safe
+    generally — the client can observe that it has not used the token in
+    a month without being told.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.SESSION_EXPIRED
+
+
+class RevokedSession(InvalidRefreshToken):
+    """The session was revoked — 401.
+
+    A subclass so the platform can *log* a revoked-token presentation
+    distinctly. That signal matters: a token presented after revocation
+    is either a client that has not noticed it was signed out, or the
+    holder of a stolen credential discovering the session is gone. The
+    rate of these is worth watching even though the response is
+    indistinguishable from any other rejection.
+
+    Carries the parent's `invalid_session` code deliberately — see
+    `InvalidRefreshToken`.
+    """
+
+
+class SessionNotFound(InvalidRefreshToken):
+    """No session matches the presented token — 401.
+
+    Note what this is *not*: it is not a `NotFoundError`, and so it is not
+    a 404. A 404 would confirm that the endpoint looked something up and
+    did not find it, which over a session table is exactly the membership
+    oracle this hierarchy avoids. Every refresh failure is 401 —
+    "I do not know who you are" — regardless of why.
+>>>>>>> 56a5884 (task_011.4 completed)
     """
 
 
 __all__ = [
     "AccountLocked",
+<<<<<<< HEAD
     "AuthenticationRequired",
     "ExpiredToken",
     "InactiveAccount",
@@ -200,5 +282,13 @@ __all__ = [
     "InvalidSignature",
     "InvalidToken",
     "MissingToken",
+=======
+    "ExpiredRefreshToken",
+    "InactiveAccount",
+    "InvalidCredentials",
+    "InvalidRefreshToken",
+    "RevokedSession",
+    "SessionNotFound",
+>>>>>>> 56a5884 (task_011.4 completed)
     "WeakPassword",
 ]

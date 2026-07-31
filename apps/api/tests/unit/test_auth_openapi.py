@@ -25,6 +25,8 @@ AUTH_PATHS = {
     "/api/v1/auth/logout": "post",
     "/api/v1/auth/logout-all": "post",
     "/api/v1/auth/me": "get",
+    "/api/v1/auth/email/verify": "post",
+    "/api/v1/auth/email/resend": "post",
 }
 
 
@@ -43,7 +45,7 @@ class TestEveryEndpointExists:
         assert path in schema["paths"]
         assert AUTH_PATHS[path] in schema["paths"][path]
 
-    def test_all_six_are_tagged_auth(self, schema: dict[str, Any]) -> None:
+    def test_all_of_them_are_tagged_auth(self, schema: dict[str, Any]) -> None:
         """So the rendered docs group them, rather than scattering six
         endpoints through an alphabetical list."""
         for path in AUTH_PATHS:
@@ -85,6 +87,10 @@ class TestStatusCodes:
             ("/api/v1/auth/logout", "204"),
             ("/api/v1/auth/logout-all", "204"),
             ("/api/v1/auth/me", "200"),
+            ("/api/v1/auth/email/verify", "200"),
+            # 202, not 200: the work is handed to a mail provider and
+            # the outcome is not known when the call returns.
+            ("/api/v1/auth/email/resend", "202"),
         ],
     )
     def test_declares_the_documented_success_code(
@@ -128,7 +134,13 @@ class TestErrorResponses:
 
     @pytest.mark.parametrize(
         "path",
-        ["/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/refresh"],
+        [
+            "/api/v1/auth/register",
+            "/api/v1/auth/login",
+            "/api/v1/auth/refresh",
+            "/api/v1/auth/email/verify",
+            "/api/v1/auth/email/resend",
+        ],
     )
     def test_endpoints_with_bodies_document_422(self, schema: dict[str, Any], path: str) -> None:
         assert "422" in operation(schema, path)["responses"]
@@ -185,6 +197,10 @@ class TestSchemas:
         start accepting `user_id` alongside the token."""
         assert schema["components"]["schemas"]["RefreshRequest"]["additionalProperties"] is False
 
+    def test_verification_schemas_carry_examples(self, schema: dict[str, Any]) -> None:
+        for name in ("VerifyEmailRequest", "ResendVerificationRequest"):
+            assert schema["components"]["schemas"][name].get("examples"), name
+
     def test_no_schema_exposes_a_password_or_a_hash(self, schema: dict[str, Any]) -> None:
         """A response model is the one place a credential field reaches
         every client at once. Asserted across the whole document rather
@@ -193,6 +209,7 @@ class TestSchemas:
             fields = set(definition.get("properties", {}))
             assert "password_hash" not in fields, name
             assert "refresh_token_hash" not in fields, name
+            assert "token_hash" not in fields, name
 
 
 class TestSecurityScheme:
@@ -214,7 +231,18 @@ class TestSecurityScheme:
         assert operation(schema, path).get("security")
 
     @pytest.mark.parametrize(
-        "path", ["/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/refresh"]
+        "path",
+        [
+            "/api/v1/auth/register",
+            "/api/v1/auth/login",
+            "/api/v1/auth/refresh",
+            # A64-011.6: both verification endpoints are deliberately
+            # unauthenticated. The person redeeming a link may never
+            # have signed in, and the person who needs a *resend* is by
+            # definition the one who never received the first link.
+            "/api/v1/auth/email/verify",
+            "/api/v1/auth/email/resend",
+        ],
     )
     def test_unauthenticated_operations_declare_none(
         self, schema: dict[str, Any], path: str

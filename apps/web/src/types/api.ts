@@ -58,7 +58,11 @@ export type ErrorCode =
   // and one that never existed both arrive as `invalid_session` on
   // purpose — see the backend enum.
   | "invalid_session"
-  | "session_expired";
+  | "session_expired"
+  // Email verification. Every failure — unknown, used, expired — is this
+  // one code on purpose: the client offers a new link either way, and
+  // separating them would say whether a token was ever real.
+  | "invalid_verification_token";
 
 /** Mirrors `app.api.exception_handlers.ErrorResponse`. */
 export interface ApiErrorBody {

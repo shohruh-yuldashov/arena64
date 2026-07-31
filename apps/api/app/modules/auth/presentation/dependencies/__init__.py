@@ -47,17 +47,22 @@ from fastapi import Depends
 from app.api.deps import DbSessionDep, SettingsDep
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
+from app.modules.auth.application.email import EmailProvider
 from app.modules.auth.application.ports import PasswordHasher
 from app.modules.auth.application.services import (
     AccessTokenService,
     AuthenticationService,
+    EmailVerificationService,
     RefreshTokenService,
     RegistrationService,
     SessionService,
 )
+from app.modules.auth.application.services.opaque_tokens import OpaqueTokenService
 from app.modules.auth.infrastructure import (
+    ConsoleEmailProvider,
     JwtTokenProvider,
     SqlAlchemySessionRepository,
+    SqlAlchemyVerificationTokenRepository,
     build_password_hasher,
 )
 from app.modules.auth.presentation.dependencies.current_user import (
@@ -71,12 +76,16 @@ from app.modules.auth.presentation.dependencies.current_user import (
     require_authentication,
 )
 from app.modules.users.application.services import UserService
+from app.modules.users.application.services.email_verification_writer import (
+    EmailVerificationWriter,
+)
 from app.modules.users.application.services.user_account_service import UserAccountService
 from app.modules.users.application.services.user_credential_service import UserCredentialService
 from app.modules.users.application.services.user_profile_service import UserProfileService
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
 from app.modules.users.presentation.dependencies import ClockDep
 from app.modules.users.public import (
+    EmailVerifier,
     UserAccountCreator,
     UserCredentialStore,
     UserProfileReader,
@@ -235,9 +244,78 @@ def get_user_profile_reader(session: DbSessionDep, clock: ClockDep) -> UserProfi
 UserProfileReaderDep = Annotated[UserProfileReader, Depends(get_user_profile_reader)]
 
 
+def get_email_verifier(session: DbSessionDep, clock: ClockDep) -> EmailVerifier:
+    """`users`' side of email verification, behind its fourth published
+    port — the one write `auth` may make to an account."""
+    users = UserService(
+        users=SqlAlchemyUserRepository(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )
+    return EmailVerificationWriter(users)
+
+
+EmailVerifierDep = Annotated[EmailVerifier, Depends(get_email_verifier)]
+
+
+def get_email_provider(settings: SettingsDep) -> EmailProvider:
+    """The only provider A64-011.6 ships.
+
+    `ConsoleEmailProvider` refuses to construct in a production-like
+    environment, so this factory is also the point at which a deployed
+    tier without a real provider configured fails to start — visibly, at
+    boot, rather than by silently sending nobody anything (DI-06).
+
+    Adding SMTP or a vendor is a branch here plus a class in
+    `infrastructure/`; no service changes.
+    """
+    return ConsoleEmailProvider(settings.environment)
+
+
+EmailProviderDep = Annotated[EmailProvider, Depends(get_email_provider)]
+
+
+def get_email_verification_service(
+    session: DbSessionDep,
+    profiles: UserProfileReaderDep,
+    verifier: EmailVerifierDep,
+    email: EmailProviderDep,
+    clock: ClockDep,
+    settings: SettingsDep,
+) -> EmailVerificationService:
+    """Email verification (A64-011.6).
+
+    The unit of work wraps the *same* session the repository holds —
+    otherwise the service would commit a transaction the repository never
+    wrote to, and an issued token would be silently lost on teardown.
+
+    The `users`-side collaborators arrive as already-resolved ports rather
+    than being assembled inline, so this factory cannot accidentally build
+    a second `UserService` on a different session.
+    """
+    return EmailVerificationService(
+        tokens=SqlAlchemyVerificationTokenRepository(session),
+        token_factory=OpaqueTokenService(settings.email.token_entropy_bytes),
+        profiles=profiles,
+        verifier=verifier,
+        email=email,
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+        settings=settings.email,
+    )
+
+
+EmailVerificationServiceDep = Annotated[
+    EmailVerificationService, Depends(get_email_verification_service)
+]
+
+
 __all__ = [
     "AccessTokenServiceDep",
     "AuthenticationServiceDep",
+    "EmailProviderDep",
+    "EmailVerificationServiceDep",
+    "EmailVerifierDep",
     "Clock",
     "CurrentUser",
     "OptionalCurrentUser",
@@ -252,6 +330,9 @@ __all__ = [
     "UserProfileReaderDep",
     "get_access_token_service",
     "get_authentication_service",
+    "get_email_provider",
+    "get_email_verification_service",
+    "get_email_verifier",
     "get_current_user",
     "get_current_user_optional",
     "get_password_hasher",

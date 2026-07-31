@@ -321,6 +321,70 @@ class SessionSettings(BaseSettings):
         return self
 
 
+class EmailSettings(BaseSettings):
+    """`email` — outbound mail and email-verification tokens (A64-011.6).
+
+    ## Why 24 hours
+
+    A verification link is a bearer credential that grants exactly one
+    thing: marking an address verified. Its window is a trade between two
+    real failures — too short and a link sitting in a spam folder
+    overnight is dead by morning, too long and a link forwarded, logged by
+    a mail gateway or left in a shared inbox stays live for a week.
+
+    Twenty-four hours is the task's figure and is defensible: it survives
+    a night and a time zone, and it is short enough that the resend flow
+    (rather than a long-lived link) is the answer to "I lost it".
+
+    ## Why the URL is a template rather than a base
+
+    The link a person clicks is a **frontend** route, not this API's —
+    `/verify-email?token=...` renders a page that then calls
+    `POST /auth/email/verify`. Making the whole shape configurable rather
+    than assembling it from a host means the frontend can move that route
+    without a backend deploy, and a mobile build can point the same
+    template at a deep link.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="EMAIL_", frozen=True, extra="forbid")
+
+    verification_token_ttl_hours: int = Field(default=24, ge=1, le=168)
+
+    #: Independent of `SessionSettings.token_entropy_bytes`, so a
+    #: verification token can be lengthened without touching refresh
+    #: tokens. Same floor, and for the same DB-24 reason.
+    token_entropy_bytes: int = Field(
+        default=REFRESH_TOKEN_MIN_ENTROPY_BYTES, ge=REFRESH_TOKEN_MIN_ENTROPY_BYTES
+    )
+
+    #: `{token}` is substituted with the raw token. Validated below,
+    #: because a template missing the placeholder produces links that
+    #: cannot possibly work and does so silently.
+    verification_url_template: str = "http://localhost:3000/verify-email?token={token}"
+
+    from_address: str = "no-reply@arena64.local"
+    from_name: str = "Arena64"
+
+    @model_validator(mode="after")
+    def _url_template_must_carry_the_token(self) -> "EmailSettings":
+        if "{token}" not in self.verification_url_template:
+            raise ValueError(
+                "EMAIL_VERIFICATION_URL_TEMPLATE must contain '{token}' — without "
+                "it every verification link is identical and none of them works"
+            )
+        return self
+
+    def verification_url(self, token: str) -> str:
+        """The link to put in the message.
+
+        The only place the raw token is ever interpolated into anything,
+        which is what makes "never log the token" checkable: the value
+        exists here, in the message body, and nowhere else on this side of
+        the wire.
+        """
+        return self.verification_url_template.format(token=token)
+
+
 class Settings(BaseModel):
     """The composed, immutable configuration for this process."""
 
@@ -333,6 +397,7 @@ class Settings(BaseModel):
     auth: AuthSettings
     jwt: JWTSettings
     session: SessionSettings
+    email: EmailSettings
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":
@@ -410,4 +475,5 @@ def get_settings() -> Settings:
         auth=AuthSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         jwt=JWTSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         session=SessionSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        email=EmailSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

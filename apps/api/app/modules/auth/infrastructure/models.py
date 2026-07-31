@@ -46,7 +46,7 @@ there is no column here that could hold a recoverable form of it.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, LargeBinary, String
+from sqlalchemy import CheckConstraint, ForeignKey, Index, LargeBinary, String, text
 from sqlalchemy.dialects.postgresql import ENUM as PgEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -69,6 +69,9 @@ DEVICE_NAME_MAX_LENGTH = 120
 #: accepting anything — a 16-byte value in this column would mean
 #: something other than this platform wrote the row.
 REFRESH_TOKEN_HASH_LENGTH = 32
+
+#: SHA-256 output, as above. Same algorithm, same width, different table.
+VERIFICATION_TOKEN_HASH_LENGTH = 32
 
 
 class UserSessionModel(Base, UUIDPrimaryKeyMixin):
@@ -193,3 +196,90 @@ class UserSessionModel(Base, UUIDPrimaryKeyMixin):
         # in logs and tracebacks, and two of those three are Personal data
         # under database.md §14.1 (services.md §8.5).
         return f"<UserSessionModel id={self.id!r} user_id={self.user_id!r}>"
+
+
+class EmailVerificationTokenModel(Base, UUIDPrimaryKeyMixin):
+    """The `auth.email_verification_tokens` row — database.md §4.5.
+
+    Deliberately **not** composing `TimestampMixin`: that supplies
+    `updated_at`, and this row has exactly one mutation (`used_at`) whose
+    meaning is specific. A generic "row was touched" alongside it would be
+    a second, subtly different answer to the same question.
+
+    The foreign key crosses into `users` for the reasons argued at length
+    on `UserSessionModel` — the boundary is already collapsed by A64-010's
+    documented merge, and `ON DELETE CASCADE` is what stops a deleted
+    account from leaving a live credential behind.
+
+    **These rows are hard-deleted on a schedule** (§4.5): "a consumed
+    reset token has no evidentiary value and retaining it is pure
+    liability". No such job exists yet — it is a recommendation for
+    A64-011.7, which adds the structurally identical
+    `password_reset_token` and should build one sweeper for both.
+    """
+
+    __tablename__ = "email_verification_tokens"
+
+    __table_args__ = (
+        # The lookup every redemption performs, and the constraint that
+        # makes a token identify at most one row. Unique rather than
+        # merely indexed: two rows sharing a digest would mean one link
+        # matching two tokens, and no correct behaviour exists for that.
+        Index("uq_email_verification_tokens__token_hash", "token_hash", unique=True),
+        # Serves `invalidate_active_for_user` and the resend path.
+        Index("ix_email_verification_tokens__user_id", "user_id"),
+        # Serves the future sweeper. Indexed now because adding an index
+        # to a table with millions of rows is a maintenance window, and
+        # adding it to an empty one is free.
+        Index("ix_email_verification_tokens__expires_at", "expires_at"),
+        # §4.5: "a partial unique index on `account_id` covering only rows
+        # where `consumed_at` is null ... keeps at most one live token per
+        # account."
+        #
+        # Enforced by the database rather than by the service, because
+        # BE-06 makes the database authoritative: two concurrent resends
+        # both pass a check-then-act, and only this index is correct under
+        # concurrency. It is what turns "invalidate the previous token"
+        # from an intention into a guarantee.
+        #
+        # Expiry is deliberately *not* in the predicate, though the doc
+        # mentions it: `now()` is not immutable, so PostgreSQL rejects it
+        # in an index predicate outright. The service expires rows by
+        # marking them used, which this index does see.
+        Index(
+            "uq_email_verification_tokens__one_live_per_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("used_at IS NULL"),
+        ),
+        CheckConstraint(
+            f"octet_length(token_hash) = {VERIFICATION_TOKEN_HASH_LENGTH}",
+            name="token_hash_length",
+        ),
+        CheckConstraint("expires_at > created_at", name="expiry_after_creation"),
+        {"schema": AUTH_SCHEMA},
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{USERS_SCHEMA}.user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    token_hash: Mapped[bytes] = mapped_column(
+        LargeBinary(VERIFICATION_TOKEN_HASH_LENGTH), nullable=False
+    )
+
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+    used_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    """Set once, on redemption *or* on being superseded by a newer token.
+    Both mean "cannot be redeemed again", which is exactly what this
+    column says — see the entity's `consume` docstring on why there is no
+    fourth state."""
+
+    id: Mapped[uuid.UUID]
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+    def __repr__(self) -> str:
+        # Never the hash — a repr lands in logs and tracebacks.
+        return f"<EmailVerificationTokenModel id={self.id!r} user_id={self.user_id!r}>"

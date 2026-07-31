@@ -11,6 +11,7 @@ from app.config.settings import (
     SUPPORTED_JWT_ALGORITHMS,
     AppSettings,
     AuthSettings,
+    EmailSettings,
     JWTSettings,
     PostgresSettings,
     RedisSettings,
@@ -86,6 +87,7 @@ class TestSettings:
             auth=AuthSettings(),
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             session=SessionSettings(),
+            email=EmailSettings(),
         )
         assert settings.environment is Environment.TEST
 
@@ -107,6 +109,7 @@ class TestSettings:
                 auth=AuthSettings(),
                 jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
                 session=SessionSettings(),
+                email=EmailSettings(),
             )
 
     def test_production_rejects_a_left_default_redis_role(self) -> None:
@@ -121,6 +124,7 @@ class TestSettings:
                 auth=AuthSettings(),
                 jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
                 session=SessionSettings(),
+                email=EmailSettings(),
             )
 
     def test_production_accepts_fully_explicit_configuration(self) -> None:
@@ -139,6 +143,7 @@ class TestSettings:
             auth=AuthSettings(),
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             session=SessionSettings(),
+            email=EmailSettings(),
         )
         assert settings.environment is Environment.PRODUCTION
 
@@ -151,6 +156,7 @@ class TestSettings:
             auth=AuthSettings(),
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             session=SessionSettings(),
+            email=EmailSettings(),
         )
         with pytest.raises(PydanticValidationError):
             settings.environment = Environment.PRODUCTION  # type: ignore[misc]
@@ -252,6 +258,7 @@ class TestJWTProductionGuard:
             ),
             auth=AuthSettings(),
             session=SessionSettings(),
+            email=EmailSettings(),
             jwt=JWTSettings(**jwt_overrides),  # type: ignore[arg-type]
         )
 
@@ -278,6 +285,7 @@ class TestJWTProductionGuard:
             redis=RedisSettings(),
             auth=AuthSettings(),
             session=SessionSettings(),
+            email=EmailSettings(),
             jwt=JWTSettings(),
         )
 
@@ -326,3 +334,61 @@ class TestSessionSettings:
         settings = SessionSettings(refresh_token_ttl_days=30, idle_timeout_days=30)
 
         assert settings.idle_timeout_days == 30
+
+
+class TestEmailSettings:
+    """A64-011.6."""
+
+    def test_defaults_match_the_specified_policy(self) -> None:
+        settings = EmailSettings()
+
+        assert settings.verification_token_ttl_hours == 24
+        assert settings.token_entropy_bytes == REFRESH_TOKEN_MIN_ENTROPY_BYTES
+
+    def test_entropy_cannot_be_lowered_below_256_bits(self) -> None:
+        """DB-24's premise: below 256 bits, hashing with SHA-256 rather
+        than Argon2id stops being sound."""
+        with pytest.raises(PydanticValidationError):
+            EmailSettings(token_entropy_bytes=REFRESH_TOKEN_MIN_ENTROPY_BYTES - 1)
+
+    def test_the_lifetime_is_bounded(self) -> None:
+        with pytest.raises(PydanticValidationError):
+            EmailSettings(verification_token_ttl_hours=0)
+        with pytest.raises(PydanticValidationError):
+            EmailSettings(verification_token_ttl_hours=169)
+
+    def test_a_url_template_without_the_placeholder_is_refused(self) -> None:
+        """Every link would otherwise be identical and none would work —
+        and nothing would fail until a real person clicked one."""
+        with pytest.raises(PydanticValidationError, match="token"):
+            EmailSettings(verification_url_template="https://arena64.example/verify")
+
+    def test_the_url_carries_the_token(self) -> None:
+        settings = EmailSettings(verification_url_template="https://arena64.example/v?t={token}")
+
+        assert settings.verification_url("abc") == "https://arena64.example/v?t=abc"
+
+
+class TestConsoleEmailProviderGuard:
+    """The provider writes verification links to the log — that is what it
+    is for. The guard is what keeps that from ever happening on a deployed
+    tier."""
+
+    @pytest.mark.parametrize(
+        "environment",
+        [Environment.LOCAL, Environment.TEST, Environment.CI],
+    )
+    def test_constructs_outside_production(self, environment: Environment) -> None:
+        from app.modules.auth.infrastructure import ConsoleEmailProvider
+
+        assert ConsoleEmailProvider(environment)
+
+    @pytest.mark.parametrize("environment", [Environment.STAGING, Environment.PRODUCTION])
+    def test_refuses_to_construct_in_a_deployed_tier(self, environment: Environment) -> None:
+        """A deployed tier wired to this provider would send nobody
+        anything *and* write live links into the log pipeline. Refusing to
+        start is a visible deploy failure; starting is a silent one."""
+        from app.modules.auth.infrastructure import ConsoleEmailProvider
+
+        with pytest.raises(ValueError, match="ConsoleEmailProvider"):
+            ConsoleEmailProvider(environment)

@@ -24,10 +24,12 @@ session redirected into the test's rolled-back transaction. Overriding a
 service here would put the thing under test behind a fake.
 """
 
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
@@ -569,3 +571,240 @@ class TestCredentialsNeverLeak:
             )
         ).scalar()
         assert hit == 0
+
+
+VERIFY_URL = "/api/v1/auth/email/verify"
+RESEND_URL = "/api/v1/auth/email/resend"
+
+
+def link_from_log(caplog: pytest.LogCaptureFixture) -> str:
+    """Reads the verification token out of `ConsoleEmailProvider`'s output.
+
+    That provider logging the link is the whole reason it exists — it is
+    the development transport, and a console provider that redacted the
+    token would print a message nobody can act on. Here it doubles as the
+    only way a test can obtain the token the way a *person* does: out of
+    the delivered message, rather than out of the service's return value.
+    """
+    marker = "token="
+    for record in reversed(caplog.records):
+        text = record.getMessage()
+        if marker in text:
+            return text.split(marker)[1].split()[0]
+    raise AssertionError("no verification link was delivered")
+
+
+class TestEmailVerification:
+    async def test_registration_delivers_a_link(
+        self, client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            await register(client)
+
+        assert link_from_log(caplog)
+
+    async def test_the_delivered_link_verifies_the_account(
+        self, client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """End to end, the way a person does it: register, read the link
+        out of the delivered message, redeem it. Every layer is real —
+        the token was hashed by `OpaqueTokenService`, stored by
+        PostgreSQL, and looked up by digest."""
+        body = credentials()
+        with caplog.at_level(logging.WARNING):
+            created = await register(client, body)
+        token = link_from_log(caplog)
+
+        response = await client.post(VERIFY_URL, json={"token": token})
+
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["id"] == created["id"]
+        assert response.json()["data"]["is_verified"] is True
+
+    async def test_the_account_reads_back_verified(
+        self, client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Through a different endpoint and a different query, so this is
+        asserting the committed row rather than the response the write
+        path happened to build."""
+        body = credentials()
+        with caplog.at_level(logging.WARNING):
+            await register(client, body)
+        await client.post(VERIFY_URL, json={"token": link_from_log(caplog)})
+        tokens = await sign_in(client, body)
+
+        me = await client.get(ME_URL, headers=bearer(tokens))
+
+        assert me.json()["data"]["is_verified"] is True
+
+    async def test_a_replayed_link_is_422(
+        self, client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """One-time use. Clicking the same link twice must not succeed
+        twice."""
+        with caplog.at_level(logging.WARNING):
+            await register(client)
+        token = link_from_log(caplog)
+        await client.post(VERIFY_URL, json={"token": token})
+
+        replay = await client.post(VERIFY_URL, json={"token": token})
+
+        assert replay.status_code == 422
+        assert replay.json()["code"] == "invalid_verification_token"
+
+    async def test_an_unknown_token_is_422(self, client: AsyncClient) -> None:
+        response = await client.post(VERIFY_URL, json={"token": "never-issued"})
+
+        assert response.status_code == 422
+        assert response.json()["code"] == "invalid_verification_token"
+
+    async def test_an_unknown_and_a_used_token_are_indistinguishable(
+        self, client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            await register(client)
+        token = link_from_log(caplog)
+        await client.post(VERIFY_URL, json={"token": token})
+
+        used = await client.post(VERIFY_URL, json={"token": token})
+        unknown = await client.post(VERIFY_URL, json={"token": "never-issued"})
+
+        assert used.status_code == unknown.status_code
+        assert used.json()["code"] == unknown.json()["code"]
+        assert used.json()["message"] == unknown.json()["message"]
+
+    async def test_an_empty_token_is_422(self, client: AsyncClient) -> None:
+        assert (await client.post(VERIFY_URL, json={"token": ""})).status_code == 422
+
+    async def test_the_token_is_not_echoed_in_the_response(
+        self, client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            await register(client)
+        token = link_from_log(caplog)
+
+        response = await client.post(VERIFY_URL, json={"token": token})
+
+        assert token not in response.text
+
+    async def test_the_token_is_not_stored_in_recoverable_form(
+        self,
+        client: AsyncClient,
+        contract_session: AsyncSession,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """§4.5: a database read "must not yield a working" credential."""
+        with caplog.at_level(logging.WARNING):
+            await register(client)
+        token = link_from_log(caplog)
+
+        hit = (
+            await contract_session.execute(
+                text(
+                    "SELECT count(*) FROM auth.email_verification_tokens "
+                    "WHERE encode(token_hash, 'escape') LIKE :fragment"
+                ),
+                {"fragment": f"%{token[:12]}%"},
+            )
+        ).scalar()
+        assert hit == 0
+
+
+class TestResendVerification:
+    async def test_returns_202_for_a_real_address(
+        self, client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        body = credentials()
+        with caplog.at_level(logging.WARNING):
+            await register(client, body)
+
+        response = await client.post(RESEND_URL, json={"email": body["email"]})
+
+        assert response.status_code == 202
+        assert response.json()["data"]["detail"]
+
+    async def test_returns_the_same_202_for_an_unknown_address(self, client: AsyncClient) -> None:
+        """The enumeration guard, through the real endpoint. Nothing about
+        the response distinguishes "sent" from "no such account"."""
+        real = credentials()
+        await register(client, real)
+
+        known = await client.post(RESEND_URL, json={"email": real["email"]})
+        unknown = await client.post(RESEND_URL, json={"email": "nobody@example.com"})
+
+        assert known.status_code == unknown.status_code == 202
+        assert known.json()["data"] == unknown.json()["data"]
+
+    async def test_the_same_202_for_an_already_verified_account(
+        self, client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        body = credentials()
+        with caplog.at_level(logging.WARNING):
+            await register(client, body)
+        await client.post(VERIFY_URL, json={"token": link_from_log(caplog)})
+
+        response = await client.post(RESEND_URL, json={"email": body["email"]})
+
+        assert response.status_code == 202
+
+    async def test_the_resent_link_works(
+        self, client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        body = credentials()
+        await register(client, body)
+
+        with caplog.at_level(logging.WARNING):
+            await client.post(RESEND_URL, json={"email": body["email"]})
+        response = await client.post(VERIFY_URL, json={"token": link_from_log(caplog)})
+
+        assert response.status_code == 200
+        assert response.json()["data"]["is_verified"] is True
+
+    async def test_resending_invalidates_the_previous_link(
+        self, client: AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """§4.5 keeps at most one live token per account — enforced by a
+        partial unique index, so this is the database's guarantee rather
+        than the service's intention."""
+        body = credentials()
+        with caplog.at_level(logging.WARNING):
+            await register(client, body)
+            original = link_from_log(caplog)
+            await client.post(RESEND_URL, json={"email": body["email"]})
+            newest = link_from_log(caplog)
+
+        assert original != newest
+        assert (await client.post(VERIFY_URL, json={"token": original})).status_code == 422
+        assert (await client.post(VERIFY_URL, json={"token": newest})).status_code == 200
+
+    async def test_only_one_token_is_ever_live(
+        self,
+        client: AsyncClient,
+        contract_session: AsyncSession,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        body = credentials()
+        created = await register(client, body)
+        for _ in range(3):
+            await client.post(RESEND_URL, json={"email": body["email"]})
+
+        live = (
+            await contract_session.execute(
+                text(
+                    "SELECT count(*) FROM auth.email_verification_tokens "
+                    "WHERE user_id = :id AND used_at IS NULL"
+                ),
+                {"id": created["id"]},
+            )
+        ).scalar()
+        assert live == 1
+
+    async def test_a_malformed_address_is_422(self, client: AsyncClient) -> None:
+        response = await client.post(RESEND_URL, json={"email": "not-an-email"})
+
+        assert response.status_code == 422
+
+    async def test_does_not_leak_the_address_into_the_response(self, client: AsyncClient) -> None:
+        response = await client.post(RESEND_URL, json={"email": "nobody@example.com"})
+
+        assert "nobody@example.com" not in response.text

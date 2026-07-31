@@ -361,6 +361,81 @@ class TestReplacePasswordHash:
         assert stored.created_at == user.created_at
 
 
+# --- set_password_hash -------------------------------------------------------
+
+
+class TestSetPasswordHash:
+    """The unconditional write behind password reset (A64-011.7).
+
+    Run against both adapters for the reason `TestReplacePasswordHash`
+    gives, plus one specific to this pair: the two methods differ *only* in
+    whether they compare the stored hash, and a fake that implemented this
+    one by delegating to the other would look right, pass its own tests,
+    and make a reset silently decline whenever it raced anything.
+    """
+
+    async def test_replaces_the_hash(self, repository: UserRepository) -> None:
+        user = await repository.create(make_user())
+
+        applied = await repository.set_password_hash(user.id, new_hash="argon2id$fake$reset")
+
+        assert applied is True
+        stored = await repository.get_by_id(user.id)
+        assert stored is not None
+        assert stored.password_hash == "argon2id$fake$reset"
+
+    async def test_does_not_care_what_the_stored_hash_was(self, repository: UserRepository) -> None:
+        """The whole difference from `replace_password_hash`. A recovery
+        flow has already consumed a one-time token and revoked every
+        session by the time it writes; a declined write would leave
+        somebody locked out of their own account with nothing to retry."""
+        user = await repository.create(make_user())
+        await repository.set_password_hash(user.id, new_hash="argon2id$fake$first")
+
+        applied = await repository.set_password_hash(user.id, new_hash="argon2id$fake$second")
+
+        assert applied is True
+        stored = await repository.get_by_id(user.id)
+        assert stored is not None
+        assert stored.password_hash == "argon2id$fake$second"
+
+    async def test_reports_false_for_an_unknown_user(self, repository: UserRepository) -> None:
+        """The one case that is *not* a write. `UserService` turns this
+        into `UserNotFound`, which on the reset flow means the account was
+        deleted between the link being issued and clicked."""
+        assert await repository.set_password_hash(uuid4(), new_hash="argon2id$fake$reset") is False
+
+    async def test_touches_no_other_user(self, repository: UserRepository) -> None:
+        """An `UPDATE` missing its `WHERE id` would set every password on
+        the platform to one value, and would pass a single-user test."""
+        mine = await repository.create(make_user(username="alice", email="alice@example.com"))
+        theirs = await repository.create(make_user(username="bob", email="bob@example.com"))
+
+        await repository.set_password_hash(mine.id, new_hash="argon2id$fake$reset")
+
+        stored = await repository.get_by_id(theirs.id)
+        assert stored is not None
+        assert stored.password_hash == theirs.password_hash
+
+    async def test_touches_no_other_field(self, repository: UserRepository) -> None:
+        """A reset replaces a credential and nothing else. In particular it
+        does **not** verify the address: proving control of an inbox to
+        recover a password is a different claim from confirming the
+        address is yours, and conflating them would let a reset flow do
+        `users`' verification write behind its back."""
+        user = await repository.create(make_user(username="Alice"))
+
+        await repository.set_password_hash(user.id, new_hash="argon2id$fake$reset")
+
+        stored = await repository.get_by_id(user.id)
+        assert stored is not None
+        assert stored.username == user.username
+        assert stored.email == user.email
+        assert stored.is_active == user.is_active
+        assert stored.is_verified == user.is_verified
+        assert stored.created_at == user.created_at
+
+
 # --- delete -----------------------------------------------------------------
 
 

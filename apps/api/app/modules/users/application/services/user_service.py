@@ -226,6 +226,40 @@ class UserService:
             logger.info("password_hash_rehashed", extra={"user_id": str(user_id)})
         return applied
 
+    async def set_password_hash(self, user_id: UUID, *, new_hash: str) -> None:
+        """Replaces the stored credential outright — A64-011.7's reset.
+
+        As with every other credential method here, this service does not
+        hash, verify or inspect anything: the string arrives already
+        computed by `auth`, which owns the algorithm and its parameters.
+        What this owns is the transaction and the `UserNotFound`.
+
+        Unconditional, unlike `replace_password_hash` — see the port on
+        why a recovery flow must win the race rather than lose it.
+
+        Raises `UserNotFound` when no row matched, rather than returning
+        `False`. The caller reached here holding a valid, unexpired,
+        unconsumed reset token for this `user_id`, so a missing row means
+        the account was deleted between the link being issued and being
+        clicked. That is a genuine failure and not an outcome the caller
+        can act on, which is exactly the distinction `get_user` draws.
+
+        Returns `None` for the same reason: with absence raised, `True` is
+        the only value this could ever return, and a `bool` nothing can
+        falsify is a branch waiting to be written on a security path.
+        """
+        async with self._uow:
+            applied = await self._users.set_password_hash(user_id, new_hash=new_hash)
+            await self._uow.commit()
+
+        if not applied:
+            raise UserNotFound(f"No user with id {user_id}.")
+
+        # No hash, no password, no email — only that it happened and to
+        # whom. `users` records the *write*; `auth` records the reset that
+        # caused it, because only `auth` knows a token was involved.
+        logger.info("password_hash_replaced", extra={"user_id": str(user_id)})
+
     async def mark_email_verified(self, user_id: UUID) -> User:
         """Records that ownership of the address has been proven.
 

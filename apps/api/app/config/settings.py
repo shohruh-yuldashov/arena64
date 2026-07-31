@@ -322,7 +322,8 @@ class SessionSettings(BaseSettings):
 
 
 class EmailSettings(BaseSettings):
-    """`email` — outbound mail and email-verification tokens (A64-011.6).
+    """`email` — outbound mail, email-verification tokens (A64-011.6) and
+    password-reset tokens (A64-011.7).
 
     ## Why 24 hours
 
@@ -362,27 +363,79 @@ class EmailSettings(BaseSettings):
     #: cannot possibly work and does so silently.
     verification_url_template: str = "http://localhost:3000/verify-email?token={token}"
 
+    #: **One hour**, against verification's twenty-four, and the asymmetry
+    #: is the decision rather than an inconsistency. Both links sit in the
+    #: same inbox and face the same threats, but they are worth very
+    #: different amounts to whoever finds one: a stolen verification link
+    #: confirms an address its owner was about to confirm anyway, while a
+    #: stolen reset link *is* the account.
+    #:
+    #: An hour survives a slow mail relay and a person who reads the email
+    #: on a phone and resets on a laptop. It does not survive a message
+    #: sitting unread overnight, which is the intended outcome — the
+    #: recovery path for "it expired" is another request to
+    #: `/auth/password/forgot`, which is cheap and audited, whereas the
+    #: recovery path for "somebody else used it" does not exist.
+    #:
+    #: The `le=` bound is a security boundary, not a form nicety: raising
+    #: this to a day would make a reset link as long-lived as a
+    #: verification link while being far more valuable, and that should
+    #: take a code change and this paragraph, not an environment variable.
+    #: See `app/modules/auth/domain/password_reset.py`.
+    password_reset_token_ttl_hours: int = Field(default=1, ge=1, le=24)
+
+    #: Independent of the two above, so a reset token can be lengthened
+    #: without touching verification or refresh tokens. Same floor, and for
+    #: the same DB-24 reason.
+    password_reset_token_entropy_bytes: int = Field(
+        default=REFRESH_TOKEN_MIN_ENTROPY_BYTES, ge=REFRESH_TOKEN_MIN_ENTROPY_BYTES
+    )
+
+    #: A frontend route, exactly as `verification_url_template` is — the
+    #: link opens a page that collects the new password and posts it to
+    #: `POST /auth/password/reset`. The token must never be submitted to
+    #: this API as a query parameter; see `ResetPasswordRequest`.
+    password_reset_url_template: str = "http://localhost:3000/reset-password?token={token}"
+
     from_address: str = "no-reply@arena64.local"
     from_name: str = "Arena64"
 
     @model_validator(mode="after")
-    def _url_template_must_carry_the_token(self) -> "EmailSettings":
-        if "{token}" not in self.verification_url_template:
-            raise ValueError(
-                "EMAIL_VERIFICATION_URL_TEMPLATE must contain '{token}' — without "
-                "it every verification link is identical and none of them works"
-            )
+    def _url_templates_must_carry_the_token(self) -> "EmailSettings":
+        """Both templates, checked together.
+
+        A template missing its placeholder produces links that are all
+        identical and none of which works, and it does so *silently* —
+        nothing raises, the mail sends, and the failure surfaces as
+        "verification is broken in staging" a day later. Checking at
+        construction turns it into a process that refuses to start
+        (DI-06).
+        """
+        templates = {
+            "EMAIL_VERIFICATION_URL_TEMPLATE": self.verification_url_template,
+            "EMAIL_PASSWORD_RESET_URL_TEMPLATE": self.password_reset_url_template,
+        }
+        for name, template in templates.items():
+            if "{token}" not in template:
+                raise ValueError(
+                    f"{name} must contain '{{token}}' — without it every link "
+                    "it generates is identical and none of them works"
+                )
         return self
 
     def verification_url(self, token: str) -> str:
         """The link to put in the message.
 
-        The only place the raw token is ever interpolated into anything,
-        which is what makes "never log the token" checkable: the value
-        exists here, in the message body, and nowhere else on this side of
-        the wire.
+        One of only two places the raw token is ever interpolated into
+        anything, which is what makes "never log the token" checkable: the
+        value exists here, in the message body, and nowhere else on this
+        side of the wire.
         """
         return self.verification_url_template.format(token=token)
+
+    def password_reset_url(self, token: str) -> str:
+        """The link to put in the reset message. See `verification_url`."""
+        return self.password_reset_url_template.format(token=token)
 
 
 class Settings(BaseModel):

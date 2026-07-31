@@ -102,6 +102,10 @@ class UserModel(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         # a keyset without a unique tiebreak silently skips or repeats rows
         # at a page boundary.
         Index("ix_user__created_at_id", "created_at", "id"),
+        # Interpolated from the domain's own constants, so the database's
+        # authoritative bound (BE-06) cannot drift from the validator's.
+        # Changing them is therefore always a migration — see
+        # `3caf68aa8cfc`, which is what that costs.
         CheckConstraint(
             f"char_length(username) BETWEEN {USERNAME_MIN_LENGTH} AND {USERNAME_MAX_LENGTH}",
             name="username_length",

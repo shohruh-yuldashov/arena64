@@ -60,3 +60,12 @@ class ErrorCode(StrEnum):
     # collided to highlight it; a bare `conflict` cannot say.
     USERNAME_ALREADY_EXISTS = "username_already_exists"
     EMAIL_ALREADY_EXISTS = "email_already_exists"
+
+    # `auth` / `users` (A64-011.1): registration submits three fields at
+    # once, and a bare `validation_error` leaves a form with no way to know
+    # which of them to mark. These three are the same rule as above applied
+    # to 422s rather than 409s — the client's behaviour genuinely differs
+    # per code (which input to focus and annotate), which is the test.
+    INVALID_USERNAME = "invalid_username"
+    INVALID_EMAIL = "invalid_email"
+    WEAK_PASSWORD = "weak_password"

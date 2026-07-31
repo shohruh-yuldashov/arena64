@@ -51,9 +51,13 @@ class InvalidUsername(ValidationError):
     """Shape, length, or reserved-name rule violated — see
     `domain/validators.py::validate_username`."""
 
+    default_code: ClassVar[ErrorCode] = ErrorCode.INVALID_USERNAME
+
 
 class InvalidEmail(ValidationError):
     """Structurally not an address — see `domain/validators.py::validate_email`."""
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.INVALID_EMAIL
 
 
 class InvalidLanguage(ValidationError):

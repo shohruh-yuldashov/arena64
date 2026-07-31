@@ -5,7 +5,14 @@ from pydantic import SecretStr
 from pydantic import ValidationError as PydanticValidationError
 
 from app.config.environment import Environment, current_environment, env_file_for
-from app.config.settings import AppSettings, PostgresSettings, RedisSettings, Settings, get_settings
+from app.config.settings import (
+    AppSettings,
+    AuthSettings,
+    PostgresSettings,
+    RedisSettings,
+    Settings,
+    get_settings,
+)
 
 
 class TestEnvironment:
@@ -66,6 +73,7 @@ class TestSettings:
             app=AppSettings(),
             postgres=PostgresSettings(),
             redis=RedisSettings(),
+            auth=AuthSettings(),
         )
         assert settings.environment is Environment.TEST
 
@@ -84,6 +92,7 @@ class TestSettings:
                     broker_url=SecretStr("redis://prod-broker:6379/0"),
                     cache_url=SecretStr("redis://prod-cache:6379/0"),
                 ),
+                auth=AuthSettings(),
             )
 
     def test_production_rejects_a_left_default_redis_role(self) -> None:
@@ -95,6 +104,7 @@ class TestSettings:
                     dsn=SecretStr("postgresql+asyncpg://real:pw@prod-host:5432/arena64")
                 ),
                 redis=RedisSettings(),  # every role left at its local default
+                auth=AuthSettings(),
             )
 
     def test_production_accepts_fully_explicit_configuration(self) -> None:
@@ -110,6 +120,7 @@ class TestSettings:
                 broker_url=SecretStr("redis://prod-broker:6379/0"),
                 cache_url=SecretStr("redis://prod-cache:6379/0"),
             ),
+            auth=AuthSettings(),
         )
         assert settings.environment is Environment.PRODUCTION
 
@@ -119,6 +130,7 @@ class TestSettings:
             app=AppSettings(),
             postgres=PostgresSettings(),
             redis=RedisSettings(),
+            auth=AuthSettings(),
         )
         with pytest.raises(PydanticValidationError):
             settings.environment = Environment.PRODUCTION  # type: ignore[misc]

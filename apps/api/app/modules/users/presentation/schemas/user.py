@@ -7,21 +7,26 @@ the whole platform instead of per module.
 `domain/validators.py` through an `AfterValidator`. That is what makes the
 task's "validation should be reusable" true in the direction that matters:
 a rule change lands in one function and applies to the HTTP boundary, the
-service, and the domain constructor at once. Re-expressing "3 to 32
-characters" as a Pydantic `Field(min_length=3)` would be a second copy
-that drifts the first time the rule changes.
+service, and the domain constructor at once. Re-expressing the length
+bound as a Pydantic `Field(min_length=3)` would be a second copy that
+drifts the first time the rule changes — as it did in A64-011.1, when the
+maximum went from 32 to 20.
+
+The **read** shapes (`UserRead`, `UserSummary`) now live in
+`users/public/dtos.py` and are imported here. They moved when `auth`
+became a second consumer of them across a module boundary — see that
+module for why a published DTO cannot live in a presentation layer. The
+names are unchanged, so nothing that used them had to change.
 
 `password_hash` appears on `UserCreate` and on **no read schema**, which is
 the one thing in this file that must never regress.
 """
 
-from datetime import datetime
 from typing import Annotated
-from uuid import UUID
 
 from pydantic import AfterValidator, Field, model_validator
 
-from app.core.dto import BaseRequestDTO, BaseResponseDTO
+from app.core.dto import BaseRequestDTO
 from app.core.enums import Locale
 from app.core.pagination import CursorPage
 from app.modules.users.domain.exceptions import InvalidLanguage, InvalidTimezone
@@ -32,6 +37,7 @@ from app.modules.users.domain.validators import (
     validate_timezone,
     validate_username,
 )
+from app.modules.users.public.dtos import UserSummary
 
 # The reusable annotated types. Each wraps the single domain validator, so
 # a violation raises this module's typed domain error (`InvalidUsername`,
@@ -111,43 +117,6 @@ class UserUpdate(BaseRequestDTO):
         if "timezone" in self.model_fields_set and self.timezone is None:
             raise InvalidTimezone("timezone cannot be null; omit the field to leave it unchanged.")
         return self
-
-
-class UserRead(BaseResponseDTO):
-    """The full view of a user.
-
-    Carries no `password_hash` and no `email`... except that `email` *is*
-    here: it is the user's own identifying address and there is no
-    authorisation layer yet to distinguish "my profile" from "someone
-    else's". A64-011 must split this — see the task summary. The hash is
-    absent unconditionally and must stay that way.
-    """
-
-    id: UUID
-    username: str
-    email: EmailField
-    display_name: str | None
-    avatar_url: str | None
-    preferred_language: Locale
-    timezone: str
-    is_active: bool
-    is_verified: bool
-    created_at: datetime
-    updated_at: datetime | None
-
-
-class UserSummary(BaseResponseDTO):
-    """The minimal public view — what a list, a search result, or a future
-    match card needs. Deliberately excludes email, verification state and
-    timestamps: a listing is the highest-volume read on any user table, and
-    the fields it omits are the ones that would make it a privacy question
-    rather than a rendering one.
-    """
-
-    id: UUID
-    username: str
-    display_name: str | None
-    avatar_url: str | None
 
 
 # The paginated listing shape. A plain alias over the platform's

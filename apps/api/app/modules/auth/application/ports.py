@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
+from app.modules.auth.domain.password_reset import PasswordResetToken
 from app.modules.auth.domain.sessions import RevocationReason, UserSession
 from app.modules.auth.domain.tokens import TokenClaims, TokenType
 from app.modules.auth.domain.verification import EmailVerificationToken
@@ -319,5 +320,65 @@ class VerificationTokenRepository(Protocol):
         the partial unique index enforces, and for a future resend
         throttle. Takes `at` rather than reading the clock (AD-07) —
         "active" is a question about an instant.
+        """
+        ...
+
+
+class PasswordResetTokenRepository(Protocol):
+    """Collection-like access to the `PasswordResetToken` aggregate.
+
+    Method-for-method identical to `VerificationTokenRepository` above, and
+    declared separately rather than as one generic protocol over
+    `OneTimeToken`. The types are the point: a protocol parameterised on
+    the token type would be satisfied by an adapter reading the *other*
+    table, and "the reset endpoint accepted a verification token" is not a
+    bug worth leaving a shape for. The shared *behaviour* is shared —
+    `OneTimeToken` holds it — and this is where the sharing stops on
+    purpose (see `domain/one_time_tokens.py`).
+
+    **No opinions** (repositories.md §2 consequence 3). `get_by_hash`
+    returns used and expired tokens rather than filtering them out —
+    "is this token still redeemable" is `PasswordResetService`'s decision,
+    and a repository that hid used rows would make replay detection
+    impossible, for the same reason hiding revoked sessions would have made
+    refresh-token reuse detection impossible.
+
+    Flushes, never commits. The unit of work owns the transaction
+    (repositories.md §5.1).
+    """
+
+    async def create(self, token: PasswordResetToken) -> PasswordResetToken:
+        """Persists a newly issued token and returns it."""
+        ...
+
+    async def get_by_hash(self, token_hash: bytes) -> PasswordResetToken | None:
+        """The redemption path's lookup: hash the presented token, find its
+        row. `None` for an unknown digest — an ordinary outcome for the
+        port. Returns the row **whatever its state**."""
+        ...
+
+    async def invalidate_active_for_user(self, user_id: UUID, *, at: datetime) -> int:
+        """Marks every unused token for a user as used; returns how many.
+
+        The mechanism behind two of the task's requirements at once:
+        "invalidate previous tokens" when a new link is issued, and
+        "invalidate all remaining reset tokens" after a successful reset.
+        One statement rather than a loop, so it is atomic with respect to a
+        concurrent forgot-password request.
+
+        `used_at` rather than a deletion, because §4.5's scheduled
+        hard-delete is a separate concern with its own retention window —
+        and because a row that vanishes cannot be distinguished from one
+        that never existed when investigating a replay.
+        """
+        ...
+
+    async def count_active_for_user(self, user_id: UUID, *, at: datetime) -> int:
+        """How many unused, unexpired tokens a user has.
+
+        Exists for the tests that assert the at-most-one-live invariant the
+        partial unique index enforces, and for A64-011.8's throttle. Takes
+        `at` rather than reading the clock (AD-07) — "active" is a question
+        about an instant.
         """
         ...

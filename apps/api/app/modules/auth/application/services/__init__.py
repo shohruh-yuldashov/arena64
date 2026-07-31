@@ -12,6 +12,10 @@ from app.modules.auth.application.services.email_verification_service import (
     IssuedVerificationToken,
 )
 from app.modules.auth.application.services.opaque_tokens import OpaqueTokenService
+from app.modules.auth.application.services.password_reset_service import (
+    IssuedResetToken,
+    PasswordResetService,
+)
 from app.modules.auth.application.services.refresh_token_service import RefreshTokenService
 from app.modules.auth.application.services.registration_service import RegistrationService
 from app.modules.auth.application.services.session_service import (
@@ -29,6 +33,8 @@ __all__ = [
     "OpaqueTokenService",
     "IssuedAccessToken",
     "IssuedRefreshToken",
+    "IssuedResetToken",
+    "PasswordResetService",
     "RefreshTokenService",
     "RegistrationService",
     "SessionService",

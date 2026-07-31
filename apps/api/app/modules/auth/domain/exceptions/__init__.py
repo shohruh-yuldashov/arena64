@@ -296,6 +296,41 @@ class InvalidVerificationToken(ValidationError):
     default_code: ClassVar[ErrorCode] = ErrorCode.INVALID_VERIFICATION_TOKEN
 
 
+# --- password reset (A64-011.7) ----------------------------------------------
+
+
+class InvalidResetToken(ValidationError):
+    """The password-reset link cannot be redeemed — 422.
+
+    Covers every unusable case: no such token, already used, and expired.
+    One exception and one message for all three, deliberately — the
+    client's action is identical (ask for a new link), and telling a caller
+    *which* it was reports on whether a token they hold was ever real. The
+    server records the distinction in its logs, where a caller cannot read
+    it.
+
+    A `ValidationError` (422) rather than an `AuthenticationFailed` (401),
+    for the reason `InvalidVerificationToken` gives and one more. The
+    shared reason: this endpoint is unauthenticated and is not *about*
+    identity, so a 401 would tell a client to prompt for sign-in — which
+    is precisely the wrong instruction for someone who is here because
+    they cannot sign in. The additional one: a 401 on this endpoint would
+    also be the only 401 on the platform that a correct client should
+    respond to by *not* re-authenticating, and that contradiction is how a
+    generic HTTP interceptor ends up bouncing a person out of the recovery
+    flow that was working.
+
+    Note what is deliberately **not** here: no `PasswordResetNotAllowed`,
+    no `AccountNotEligibleForReset`. The forgot-password path decides
+    silently and reveals nothing (see `PasswordResetService`), so there is
+    no caller for such a type — and an exception with no raiser on a
+    security surface reads as "this case is handled" to whoever adds the
+    next endpoint.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.INVALID_RESET_TOKEN
+
+
 __all__ = [
     "AccountLocked",
     "AuthenticationRequired",
@@ -304,6 +339,7 @@ __all__ = [
     "InactiveAccount",
     "InvalidCredentials",
     "InvalidRefreshToken",
+    "InvalidResetToken",
     "InvalidSignature",
     "InvalidToken",
     "InvalidVerificationToken",

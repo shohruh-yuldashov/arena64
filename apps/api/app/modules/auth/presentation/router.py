@@ -1,6 +1,6 @@
 """HTTP routes for `auth` — the authentication API.
 
-Six endpoints, and **no business logic in any of them**. Every handler
+Ten endpoints, and **no business logic in any of them**. Every handler
 below does the same three things: translate a wire schema into a command,
 call one or two existing services, translate the result into a wire
 schema. Validation is the schemas' (which reuse the domain validators);
@@ -29,6 +29,8 @@ Every failure is a typed exception on the platform hierarchy, and
     ExpiredRefreshToken     -> 401  session_expired
     SessionNotFound         -> 401  invalid_session
     RevokedSession          -> 401  invalid_session
+    InvalidVerificationToken-> 422  invalid_verification_token
+    InvalidResetToken       -> 422  invalid_reset_token
 
 `SessionNotFound` is a 401 rather than a 404 on purpose — see its
 docstring: a 404 would confirm the endpoint looked something up and did
@@ -74,15 +76,18 @@ from app.modules.auth.presentation.dependencies import (
     AuthenticationServiceDep,
     CurrentUser,
     EmailVerificationServiceDep,
+    PasswordResetServiceDep,
     RegistrationServiceDep,
     SessionServiceDep,
     UserProfileReaderDep,
 )
 from app.modules.auth.presentation.schemas import (
+    ForgotPasswordRequest,
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
     ResendVerificationRequest,
+    ResetPasswordRequest,
     TokenPair,
     VerificationAccepted,
     VerifyEmailRequest,
@@ -483,3 +488,120 @@ async def resend_verification(
             detail=("If an account exists for that address, a verification link has been sent.")
         )
     )
+
+
+@auth_router.post(
+    "/password/forgot",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Request a password reset link",
+    response_description="Accepted. The reply is identical whether or not an account exists.",
+    responses={**_UNPROCESSABLE},
+)
+async def forgot_password(
+    payload: ForgotPasswordRequest,
+    reset: PasswordResetServiceDep,
+) -> Response:
+    """Sends a password reset link, if there is anything to send.
+
+    **The response is identical in every case** — unknown address,
+    deactivated account, or a link genuinely sent. That is the security
+    property, not an implementation shortcut. This endpoint is
+    unauthenticated by necessity (the person who needs it cannot sign in),
+    which makes it an account-enumeration surface unless it says nothing,
+    and the thing it would disclose is more valuable than most: an
+    attacker probing here is deciding which addresses are worth a phishing
+    campaign that ends in a password.
+
+    So it says nothing. No status code and no body distinguishes the three
+    outcomes. `PasswordResetService` is built so this handler *cannot*
+    leak — `forgot_password` returns `None` in every case, so there is
+    nothing here to branch on.
+
+    `204 No Content` rather than the `202 Accepted` its sibling
+    `/auth/email/resend` returns, and the difference is deliberate rather
+    than an inconsistency. `202` carries a body explaining that a link
+    *may* have been sent, which is useful when the client wants a sentence
+    to render. Here there must be nothing to render that a client could
+    accidentally make conditional, and `204` guarantees that by having no
+    body at all. The screen after this endpoint says "if an account exists
+    for that address, we have sent a link" whatever happened — and that
+    sentence belongs to the frontend, which does not need the server's
+    permission to display it.
+
+    Issuing a new link **invalidates the previous one** — database.md §4.5
+    keeps at most one live token per account, enforced by a partial unique
+    index. Somebody who asks twice and then clicks the older email gets
+    `422` and should use the newest one.
+
+    A malformed address is `422`, which reveals nothing: an address that
+    cannot be valid cannot belong to anyone.
+
+    **Not rate limited.** Nothing here stops an attacker from calling it
+    ten thousand times, which is both a mail-bombing vector aimed at one
+    person's inbox and the enumeration probe the identical response exists
+    to frustrate. That is A64-011.8's task and it is the first
+    recommendation this one makes.
+    """
+    await reset.forgot_password(payload.email)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@auth_router.post(
+    "/password/reset",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Set a new password using a reset link",
+    response_description="The password was replaced and every session was revoked.",
+    responses={**_UNPROCESSABLE},
+)
+async def reset_password(
+    payload: ResetPasswordRequest,
+    reset: PasswordResetServiceDep,
+) -> Response:
+    """Redeems a password reset link and sets a new password.
+
+    The `token` is the query parameter from the link in the email. The link
+    points at a frontend page; that page collects the new password and
+    posts both here, rather than the API reading the token from a query
+    string, so a credential that replaces passwords stays out of access
+    logs and browser history on this side.
+
+    **One-time use.** A redeemed token is dead — submitting the same link
+    twice returns `422`, not a second success. Every other outstanding
+    reset link for the account dies with it.
+
+    **Every session is revoked, including on devices that did nothing
+    wrong.** Refresh tokens stop working, and the person must sign in again
+    everywhere with the new password. That is the point rather than a side
+    effect: the plausible reason somebody is resetting a password is that
+    somebody else knows the old one, and a reset that left the attacker's
+    session alive would have achieved nothing.
+
+    Access tokens already issued keep working for up to their remaining 15
+    minutes — nothing can revoke a stateless JWT, which is the documented
+    cost recorded on `JWTSettings` and the reason the window is short.
+    Closing it needs the `jti` denylist recommended since A64-011.6.
+
+    `204` and no body. Deliberately no token pair: this endpoint has
+    verified control of an *inbox*, not knowledge of a password, and
+    handing back a live session would make an email-account compromise
+    silently equivalent to a sign-in. The client's next call is
+    `POST /auth/login`.
+
+    `422 invalid_reset_token` covers every token failure: unknown, already
+    redeemed, expired. They are deliberately indistinguishable — the
+    client's action is the same in all three (ask for a new link), and
+    telling a caller which it was reports on whether a token they hold was
+    ever real.
+
+    `422 weak_password` means the new password failed the policy, and it is
+    returned **whether or not the token was any good** — the schema checks
+    the password while parsing, before the token is ever looked up. That
+    ordering is what stops this endpoint from becoming a free token
+    oracle; see `PasswordResetService`.
+
+    Not `401` in any case: this endpoint is not about identity and needs no
+    authentication. A `401` would send somebody who clicked a stale link to
+    a sign-in form, which is exactly what they cannot do.
+    """
+    await reset.reset_password(payload.token, payload.plaintext_password())
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

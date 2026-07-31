@@ -202,3 +202,52 @@ class EmailVerifier(Protocol):
         issued and the link being clicked.
         """
         ...
+
+
+class PasswordResetter(Protocol):
+    """Replaces an account's stored password hash.
+
+    The fifth narrow port, added by A64-011.7. The split is the same one
+    the other four make and it lands harder here than anywhere: `auth`
+    owns the *proof* — it issues the reset token, checks the expiry,
+    enforces one-time use, and computes the Argon2id hash — while `users`
+    owns the *column*. Neither can do the other's half.
+
+    **Separate from `UserCredentialStore`, which already has a
+    password-writing method.** That is not an oversight and merging them
+    would be a real loss. `UserCredentialStore` exists to serve sign-in:
+    it can read a password hash, and its write is a compare-and-swap that
+    can only re-encode a password the caller has already verified. This
+    port cannot read anything and its write is unconditional. A component
+    holding both could read a hash and then overwrite it; a component
+    holding only this one can replace a credential but never learn what it
+    was replacing, which is precisely the authority a reset flow needs and
+    the most it should have.
+
+    Deliberately **not** paired with a `get_password_hash`. Nothing about
+    a reset requires knowing the old credential — that is what makes it a
+    *reset* rather than a change — and a reader here would hand the
+    published surface the one capability `UserCredentialStore` keeps
+    behind an email lookup.
+    """
+
+    async def reset_password(self, user_id: UUID, *, new_hash: str) -> None:
+        """Stores `new_hash` as the account's credential, unconditionally.
+
+        No `expected_hash`, unlike `UserCredentialStore`. A recovery flow
+        must win a concurrent write rather than lose it: by the time this
+        is called the caller has consumed a one-time token and is about to
+        revoke every session, and there is nothing useful it could do with
+        a declined compare-and-swap except leave somebody locked out of
+        their own account.
+
+        Raises `UserNotFound` if the account is gone, which on this flow
+        means it was deleted between the link being issued and clicked.
+        Returns `None`: absence is raised, so there is no second outcome
+        for a return value to report.
+
+        **Does not verify, sanitise or inspect `new_hash`.** It is an
+        opaque already-hashed credential, exactly as on `NewUserAccount`.
+        The password policy is `auth`'s, applied before hashing.
+        """
+        ...

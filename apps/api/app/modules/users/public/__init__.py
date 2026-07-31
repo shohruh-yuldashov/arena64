@@ -23,6 +23,8 @@ What is published, and why only this much:
   `UserCredentialStore`  the equally narrow port `auth` uses to sign one in
   `UserProfileReader`    reads one account's own view by id (A64-011.5)
   `EmailVerifier`        marks an address verified (A64-011.6)
+  `PasswordResetter`     replaces a password hash, and can do nothing
+                         else — not even read one (A64-011.7)
   `UserCredentials`      that port's output — an account view plus the
                          stored hash, and nothing that would let a
                          consumer read or edit a profile
@@ -49,6 +51,7 @@ from app.modules.users.public.dtos import UserRead, UserSummary
 from app.modules.users.public.ports import (
     EmailVerifier,
     NewUserAccount,
+    PasswordResetter,
     UserAccountCreator,
     UserCredentialStore,
     UserProfileReader,
@@ -66,6 +69,7 @@ __all__ = [
     "InvalidEmail",
     "InvalidUsername",
     "NewUserAccount",
+    "PasswordResetter",
     "UserAccountCreator",
     "UserCredentialStore",
     "UserCredentials",

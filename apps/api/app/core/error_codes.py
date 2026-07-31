@@ -139,3 +139,25 @@ class ErrorCode(StrEnum):
     # live per account. A wire code nothing can emit is a promise to
     # clients that the server cannot keep.
     INVALID_VERIFICATION_TOKEN = "invalid_verification_token"
+
+    # `auth` (A64-011.7). **One** code, covering every way a password-reset
+    # link fails: unknown, already used, expired. Same reasoning as
+    # `INVALID_VERIFICATION_TOKEN` above — the client's action is identical
+    # for all three, and distinguishing them is a membership oracle over
+    # the token table.
+    #
+    # This one sits at the edge of the rule in this class's docstring, and
+    # it is worth saying so rather than pretending otherwise. Strictly, a
+    # client *can* tell a failed reset from a failed verification by the
+    # endpoint it called, so by the letter of "the HTTP status plus the
+    # endpoint are not enough" this code is not earned.
+    #
+    # It exists anyway because the alternative is worse than the rule it
+    # bends. The remaining option is to return `invalid_verification_token`
+    # from `POST /auth/password/reset`, and a wire code is a *name*: every
+    # client keys a message table on it, every log search greps it, and a
+    # reset failure filed under "verification" makes both wrong in a way
+    # that costs an afternoon to work out. The rule exists to stop this
+    # enum growing a member per exception class; one member per credential
+    # *kind* is not that failure mode.
+    INVALID_RESET_TOKEN = "invalid_reset_token"

@@ -85,6 +85,36 @@ class UserRepository(Protocol):
         """
         ...
 
+    async def set_password_hash(self, user_id: UUID, *, new_hash: str) -> bool:
+        """Unconditionally stores a new hash; returns whether a row matched.
+
+        The deliberate opposite of `replace_password_hash` above, and the
+        two are not a candidate for merging into one method with an
+        optional `expected_hash`. They answer different questions:
+
+          `replace_password_hash`  "upgrade this hash **if** it is still
+                                   the one I read" — a rehash-on-login,
+                                   which must lose a race against a
+                                   genuine credential change
+          `set_password_hash`      "this password is now that one" — a
+                                   reset, which must *win* every race
+
+        A reset that took `expected_hash` would be a reset that can fail
+        because somebody else was writing at the same time, and the caller
+        (A64-011.7's `PasswordResetService`) has by then already consumed
+        a one-time token and revoked every session. There would be nothing
+        it could usefully do with a `False` except leave the account
+        locked out of itself. Last write wins is the correct semantics for
+        a recovery flow, and making that explicit in a separate method is
+        what stops an optional argument from silently defaulting the
+        dangerous way.
+
+        Still a single storage operation with no opinion in it
+        (repositories.md §2): *whether* a reset is permitted is decided by
+        the token, which this module never sees.
+        """
+        ...
+
     async def delete(self, user_id: UUID) -> bool:
         """Removes the row. Returns whether anything was deleted, so the
         service can distinguish "gone now" from "was never there" without

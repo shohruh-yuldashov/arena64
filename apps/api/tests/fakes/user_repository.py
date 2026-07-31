@@ -150,5 +150,17 @@ class FakeUserRepository:
         user.password_hash = new_hash
         return True
 
+    async def set_password_hash(self, user_id: UUID, *, new_hash: str) -> bool:
+        # No hash comparison, mirroring the real adapter's `WHERE id = :id`
+        # with nothing else in it. A fake that reused the compare-and-swap
+        # above would make a reset look like it could decline, and the
+        # service under test would grow a branch production never takes.
+        user = self._users.get(user_id)
+        if user is None:
+            return False
+
+        user.password_hash = new_hash
+        return True
+
     async def delete(self, user_id: UUID) -> bool:
         return self._users.pop(user_id, None) is not None

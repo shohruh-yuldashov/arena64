@@ -16,6 +16,7 @@ from app.modules.auth.infrastructure.password_hasher import (
     build_password_hasher,
 )
 from app.modules.auth.infrastructure.repositories import (
+    SqlAlchemyPasswordResetTokenRepository,
     SqlAlchemySessionRepository,
     SqlAlchemyVerificationTokenRepository,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "Argon2idPasswordHasher",
     "ConsoleEmailProvider",
     "JwtTokenProvider",
+    "SqlAlchemyPasswordResetTokenRepository",
     "SqlAlchemySessionRepository",
     "SqlAlchemyVerificationTokenRepository",
     "build_password_hasher",

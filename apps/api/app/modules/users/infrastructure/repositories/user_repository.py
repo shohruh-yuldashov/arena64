@@ -281,6 +281,27 @@ class SqlAlchemyUserRepository:
         )
         return result.rowcount == 1
 
+    async def set_password_hash(self, user_id: UUID, *, new_hash: str) -> bool:
+        # A Core `update()` for the same reasons as the method above minus
+        # the condition: one statement, no read-modify-write, and
+        # `updated_at` moved by `TimestampMixin`'s `onupdate`.
+        #
+        # No `WHERE password_hash = ...`, deliberately — see the port. A
+        # reset must overwrite whatever is stored, including a hash written
+        # a millisecond ago, because the person holding the token has
+        # proven control of the address and the alternative is an account
+        # that cannot be recovered while somebody else is writing to it.
+        result = cast(
+            "CursorResult[Any]",
+            await self._session.execute(
+                update(UserModel)
+                .where(UserModel.id == user_id)
+                .values(password_hash=new_hash)
+                .execution_options(synchronize_session=False)
+            ),
+        )
+        return result.rowcount == 1
+
     async def delete(self, user_id: UUID) -> bool:
         row = await self._session.get(UserModel, user_id)
         if row is None:

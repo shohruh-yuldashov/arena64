@@ -53,6 +53,7 @@ from app.modules.auth.application.services import (
     AccessTokenService,
     AuthenticationService,
     EmailVerificationService,
+    PasswordResetService,
     RefreshTokenService,
     RegistrationService,
     SessionService,
@@ -61,6 +62,7 @@ from app.modules.auth.application.services.opaque_tokens import OpaqueTokenServi
 from app.modules.auth.infrastructure import (
     ConsoleEmailProvider,
     JwtTokenProvider,
+    SqlAlchemyPasswordResetTokenRepository,
     SqlAlchemySessionRepository,
     SqlAlchemyVerificationTokenRepository,
     build_password_hasher,
@@ -79,6 +81,7 @@ from app.modules.users.application.services import UserService
 from app.modules.users.application.services.email_verification_writer import (
     EmailVerificationWriter,
 )
+from app.modules.users.application.services.password_reset_writer import PasswordResetWriter
 from app.modules.users.application.services.user_account_service import UserAccountService
 from app.modules.users.application.services.user_credential_service import UserCredentialService
 from app.modules.users.application.services.user_profile_service import UserProfileService
@@ -86,6 +89,7 @@ from app.modules.users.infrastructure.repositories import SqlAlchemyUserReposito
 from app.modules.users.presentation.dependencies import ClockDep
 from app.modules.users.public import (
     EmailVerifier,
+    PasswordResetter,
     UserAccountCreator,
     UserCredentialStore,
     UserProfileReader,
@@ -310,6 +314,70 @@ EmailVerificationServiceDep = Annotated[
 ]
 
 
+def get_password_resetter(session: DbSessionDep, clock: ClockDep) -> PasswordResetter:
+    """`users`' side of password reset, behind its fifth published port.
+
+    Assembled separately from `get_user_credential_store`, which also
+    writes passwords, for the reason the ports are separate: that one can
+    *read* a hash and this one cannot, and a single factory returning
+    something with both capabilities would hand the reset flow the ability
+    to read the credential it is replacing.
+    """
+    users = UserService(
+        users=SqlAlchemyUserRepository(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )
+    return PasswordResetWriter(users)
+
+
+PasswordResetterDep = Annotated[PasswordResetter, Depends(get_password_resetter)]
+
+
+def get_password_reset_service(
+    session: DbSessionDep,
+    profiles: UserProfileReaderDep,
+    resetter: PasswordResetterDep,
+    password_hasher: PasswordHasherDep,
+    sessions: SessionServiceDep,
+    email: EmailProviderDep,
+    clock: ClockDep,
+    settings: SettingsDep,
+) -> PasswordResetService:
+    """Password reset (A64-011.7).
+
+    The unit of work wraps the *same* session the repository holds —
+    otherwise the service would commit a transaction the repository never
+    wrote to, and an issued token would be silently lost on teardown.
+
+    Every collaborator that already exists arrives already resolved rather
+    than being assembled inline: `SessionServiceDep` in particular, so that
+    the sessions this flow revokes are read and written through the same
+    session as the token it consumes. Building a second `SessionService`
+    here on a different unit of work is exactly the mistake that would make
+    "the password changed but the sessions survived" a production-only bug.
+
+    `OpaqueTokenService` is constructed with the reset-specific entropy
+    setting rather than the verification one, so the two can be tuned
+    independently — see `EmailSettings`.
+    """
+    return PasswordResetService(
+        tokens=SqlAlchemyPasswordResetTokenRepository(session),
+        token_factory=OpaqueTokenService(settings.email.password_reset_token_entropy_bytes),
+        profiles=profiles,
+        resetter=resetter,
+        password_hasher=password_hasher,
+        sessions=sessions,
+        email=email,
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+        settings=settings.email,
+    )
+
+
+PasswordResetServiceDep = Annotated[PasswordResetService, Depends(get_password_reset_service)]
+
+
 __all__ = [
     "AccessTokenServiceDep",
     "AuthenticationServiceDep",
@@ -321,6 +389,8 @@ __all__ = [
     "OptionalCurrentUser",
     "RequireAuthentication",
     "PasswordHasherDep",
+    "PasswordResetServiceDep",
+    "PasswordResetterDep",
     "RefreshTokenServiceDep",
     "RegistrationServiceDep",
     "TokenValidatorDep",
@@ -336,6 +406,8 @@ __all__ = [
     "get_current_user",
     "get_current_user_optional",
     "get_password_hasher",
+    "get_password_reset_service",
+    "get_password_resetter",
     "get_refresh_token_service",
     "get_registration_service",
     "get_token_validator",

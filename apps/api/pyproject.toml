@@ -59,7 +59,6 @@ python_version = "3.13"
 strict = true
 plugins = ["pydantic.mypy"]
 warn_unused_ignores = true
-exclude = ["alembic/"]
 
 # --- Pytest ------------------------------------------------------------------
 # ENVIRONMENT=test is set in tests/conftest.py before app imports, not here —

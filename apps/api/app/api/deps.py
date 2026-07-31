@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import Settings, get_settings
 from app.database.redis import RedisPools
-from app.database.session import open_session
+from app.database.session_manager import DatabaseSessionManager
 
 
 def get_settings_dependency() -> Settings:
@@ -32,7 +32,8 @@ async def get_db_session(request: Request) -> AsyncIterator[AsyncSession]:
     """One session per request (dependency-injection.md §1.4) — opened
     here, closed here, never held for the life of a connection the way a
     WebSocket's would be (DI-02, once the gateway entrypoint exists)."""
-    async with open_session(request.app.state.session_factory) as session:
+    db: DatabaseSessionManager = request.app.state.db
+    async with db.session() as session:
         yield session
 
 

@@ -53,6 +53,24 @@ ignore = []
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
 
+# --- Pyright -----------------------------------------------------------------
+# A second type checker, not a replacement for mypy. They disagree in both
+# directions and each catches things the other misses — A64-010 found
+# Pyright correctly rejecting a `*args` stand-in for a Protocol method that
+# mypy accepted, while mypy correctly accepts pydantic-settings'
+# `_env_file` that Pyright cannot see. Running both is what makes those
+# disagreements visible instead of arbitrary.
+#
+# `standard` rather than `strict`: mypy already runs in strict mode over
+# the same tree, and a second maximal checker mostly produces duplicate
+# findings plus its own false positives on the same pydantic dynamism.
+[tool.pyright]
+include = ["app", "tests", "main.py", "alembic/env.py"]
+pythonVersion = "3.13"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+
 # --- Mypy ------------------------------------------------------------------
 [tool.mypy]
 python_version = "3.13"

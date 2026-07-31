@@ -12,6 +12,7 @@ lives under `app/api/` and not `app/core/` (dependency-injection.md §3.2:
 import logging
 
 from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -107,6 +108,60 @@ async def _handle_arena64_error(request: Request, exc: Exception) -> JSONRespons
     return JSONResponse(status_code=_status_for(exc), content=body.model_dump(mode="json"))
 
 
+def _describe_validation_failure(exc: RequestValidationError) -> str:
+    """Summarises FastAPI's structured error list into one safe sentence.
+
+    Uses each error's `loc` and `msg` and deliberately drops its `input`
+    and `ctx`: `input` echoes back exactly what the client sent, which on
+    a registration or profile route is personal data that would then land
+    in every error log and browser console (services.md §8.5).
+    """
+    parts: list[str] = []
+    for error in exc.errors():
+        # `loc` begins with the source ("body", "query", "path"); joining
+        # the whole tuple gives "body.timezone", which is what a client
+        # needs to know which field to highlight.
+        location = ".".join(str(item) for item in error.get("loc", ()))
+        message = error.get("msg", "Invalid value")
+        parts.append(f"{location}: {message}" if location else message)
+
+    return "; ".join(parts) or "Request validation failed."
+
+
+async def _handle_request_validation_error(request: Request, exc: Exception) -> JSONResponse:
+    """Maps FastAPI's own request-validation failure into the platform
+    envelope.
+
+    Without this, FastAPI returns its native `{"detail": [...]}` shape,
+    which is the *only* error on the platform that does not carry `code`,
+    `message`, `request_id` and `correlation_id` — so
+    `apps/web/src/services/error-parser.ts` cannot read it, and a client
+    gets "Request failed with status 422" instead of which field was
+    wrong. It went unnoticed until A64-010 because no endpoint before it
+    accepted a request body or a typed path parameter.
+
+    A malformed request is a `ValidationError` in the platform taxonomy
+    (services.md §7.1), so it logs at DEBUG and carries `validation_error`
+    — the same code a domain validator raises, because a client cannot
+    act differently on "the shape was wrong" versus "the value was wrong".
+    """
+    # pragma: no cover — registered for this exact type only
+    if not isinstance(exc, RequestValidationError):
+        raise TypeError(f"handler registered for RequestValidationError, received {type(exc)!r}")
+
+    logger.debug("request_validation_error", extra={"error_count": len(exc.errors())})
+    body = ErrorResponse(
+        code=ErrorCode.VALIDATION_ERROR,
+        message=_describe_validation_failure(exc),
+        request_id=current_request_id(),
+        correlation_id=current_correlation_id(),
+    )
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content=body.model_dump(mode="json"),
+    )
+
+
 async def _handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
     """A defect, not a domain outcome — services.md §7.1: "Unhandled
     exception ... ERROR with stack". The client never sees `str(exc)`, only
@@ -126,5 +181,6 @@ async def _handle_unexpected_error(request: Request, exc: Exception) -> JSONResp
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    app.add_exception_handler(RequestValidationError, _handle_request_validation_error)
     app.add_exception_handler(Arena64Error, _handle_arena64_error)
     app.add_exception_handler(Exception, _handle_unexpected_error)

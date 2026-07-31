@@ -16,6 +16,11 @@ from sqlalchemy import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlalchemy.types import TypeEngine
 
+# Load-bearing: importing the registry is what populates `Base.metadata`
+# with every module's tables. Without it autogenerate compares against an
+# empty metadata and concludes every existing table should be dropped.
+# See `app/database/models.py` for why the list there is explicit.
+import app.database.models  # noqa: F401, E402  — imported for its side effects
 from alembic import context
 from app.config.settings import get_settings
 from app.database.base import Base
@@ -54,10 +59,47 @@ def render_item(type_: str, obj: object, autogen_context: AutogenContext) -> str
     return False
 
 
+def _owned_schemas() -> set[str | None]:
+    """The schemas this application declares, derived from the metadata
+    rather than hardcoded — database.md DB-03 gives every module its own
+    schema, so this set grows by itself as modules are added instead of
+    needing a list here that someone must remember to update.
+
+    `None` is the default (`public`), which holds Alembic's own version
+    table.
+    """
+    schemas: set[str | None] = {None}
+    schemas.update(table.schema for table in target_metadata.tables.values())
+    return schemas
+
+
+def include_name(name: str | None, type_: str, parent_names: dict[str, str | None]) -> bool:
+    """Keeps autogenerate inside the application's own schemas.
+
+    `include_schemas=True` below is required for Alembic to see any
+    non-default schema at all (without it, `users.user` is invisible and
+    autogenerate reports "no changes"). But it makes Alembic compare
+    *every* schema the connection can see — including `information_schema`
+    and any extension's — and conclude that all of them should be dropped,
+    because none is in `target_metadata`. This filter is what stops a
+    generated migration from proposing to delete PostgreSQL's own
+    catalogue.
+    """
+    if type_ == "schema":
+        return name in _owned_schemas()
+    return True
+
+
 def _configure_common() -> dict[str, Any]:
     return {
         "target_metadata": target_metadata,
         "render_item": render_item,
+        # Required for Alembic to see anything outside the default schema —
+        # every module gets its own (DB-03), so without this the entire
+        # application is invisible to autogenerate. Paired with
+        # `include_name` above, which scopes it back to schemas we own.
+        "include_schemas": True,
+        "include_name": include_name,
         # Both default to False in Alembic — deliberately turned on here.
         # Without `compare_type`, changing a column's declared type (an
         # `Integer` becoming a `BigInteger`, e.g.) produces an *empty*

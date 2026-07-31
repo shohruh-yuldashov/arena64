@@ -23,6 +23,7 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
+import app.database.models  # noqa: F401 — registers every module's tables on Base.metadata
 from app.database.base import Base
 from tests.contract._models import ContractWidget  # noqa: F401 — registers the table on import
 
@@ -60,13 +61,29 @@ async def contract_engine() -> AsyncIterator[AsyncEngine]:
             f"(see docker/docker-compose.yml): {exc}"
         )
 
+    schemas = sorted(
+        schema for schema in {table.schema for table in Base.metadata.tables.values()} if schema
+    )
+
     async with engine.begin() as connection:
+        # `create_all` creates tables, never schemas — a module's tables
+        # live in its own schema (database.md DB-03), so without this the
+        # whole suite fails on "schema does not exist".
+        for schema in schemas:
+            await connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
         await connection.run_sync(Base.metadata.create_all)
 
     yield engine
 
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
+        # CASCADE because a schema also holds the enum types SQLAlchemy
+        # created for it, and `drop_all` does not always remove those —
+        # leaving one behind makes the *next* test run fail with "type
+        # already exists". Safe here in a way it would not be in a
+        # migration: this database exists only for tests.
+        for schema in schemas:
+            await connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
     await engine.dispose()
 
 

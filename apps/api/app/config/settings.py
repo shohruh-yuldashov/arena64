@@ -142,9 +142,15 @@ def get_settings() -> Settings:
     environment = current_environment()
     env_file = env_file_for(environment)
 
+    # `_env_file` is a documented pydantic-settings initialiser argument,
+    # but it is absorbed through `**values` rather than declared, so
+    # Pyright cannot see it and reports `reportCallIssue`. mypy accepts it
+    # (and rejects a `type: ignore` here as unused), so the suppression has
+    # to be the Pyright-specific spelling — a `# type: ignore` would make
+    # one checker pass and the other fail.
     return Settings(
         environment=environment,
-        app=AppSettings(_env_file=env_file),
-        postgres=PostgresSettings(_env_file=env_file),
-        redis=RedisSettings(_env_file=env_file),
+        app=AppSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        postgres=PostgresSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        redis=RedisSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

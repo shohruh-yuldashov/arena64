@@ -1,6 +1,7 @@
 """Settings and environment loading — dependency-injection.md §2, DI-06."""
 
 import pytest
+from pydantic import SecretStr
 from pydantic import ValidationError as PydanticValidationError
 
 from app.config.environment import Environment, current_environment, env_file_for
@@ -78,10 +79,10 @@ class TestSettings:
                 app=AppSettings(),
                 postgres=PostgresSettings(),  # left at the local default
                 redis=RedisSettings(
-                    live_url="redis://prod-live:6379/0",
-                    bus_url="redis://prod-bus:6379/0",
-                    broker_url="redis://prod-broker:6379/0",
-                    cache_url="redis://prod-cache:6379/0",
+                    live_url=SecretStr("redis://prod-live:6379/0"),
+                    bus_url=SecretStr("redis://prod-bus:6379/0"),
+                    broker_url=SecretStr("redis://prod-broker:6379/0"),
+                    cache_url=SecretStr("redis://prod-cache:6379/0"),
                 ),
             )
 
@@ -91,7 +92,7 @@ class TestSettings:
                 environment=Environment.PRODUCTION,
                 app=AppSettings(),
                 postgres=PostgresSettings(
-                    dsn="postgresql+asyncpg://real:pw@prod-host:5432/arena64"
+                    dsn=SecretStr("postgresql+asyncpg://real:pw@prod-host:5432/arena64")
                 ),
                 redis=RedisSettings(),  # every role left at its local default
             )
@@ -100,12 +101,14 @@ class TestSettings:
         settings = Settings(
             environment=Environment.PRODUCTION,
             app=AppSettings(),
-            postgres=PostgresSettings(dsn="postgresql+asyncpg://real:pw@prod-host:5432/arena64"),
+            postgres=PostgresSettings(
+                dsn=SecretStr("postgresql+asyncpg://real:pw@prod-host:5432/arena64")
+            ),
             redis=RedisSettings(
-                live_url="redis://prod-live:6379/0",
-                bus_url="redis://prod-bus:6379/0",
-                broker_url="redis://prod-broker:6379/0",
-                cache_url="redis://prod-cache:6379/0",
+                live_url=SecretStr("redis://prod-live:6379/0"),
+                bus_url=SecretStr("redis://prod-bus:6379/0"),
+                broker_url=SecretStr("redis://prod-broker:6379/0"),
+                cache_url=SecretStr("redis://prod-cache:6379/0"),
             ),
         )
         assert settings.environment is Environment.PRODUCTION

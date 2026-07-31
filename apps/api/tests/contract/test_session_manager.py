@@ -4,6 +4,7 @@ PostgreSQL."""
 from collections.abc import AsyncIterator
 
 import pytest_asyncio
+from pydantic import SecretStr
 from sqlalchemy import text
 
 from app.config.settings import PostgresSettings
@@ -14,7 +15,7 @@ from tests.contract.conftest import _TEST_DSN
 
 @pytest_asyncio.fixture
 async def manager() -> AsyncIterator[DatabaseSessionManager]:
-    settings = PostgresSettings(dsn=_TEST_DSN)
+    settings = PostgresSettings(dsn=SecretStr(_TEST_DSN))
     db = DatabaseSessionManager(settings)
     yield db
     await db.close()

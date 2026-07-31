@@ -27,7 +27,13 @@ export type ErrorCode =
   | "rate_limited"
   | "infrastructure_error"
   | "transient_infrastructure_error"
-  | "permanent_infrastructure_error";
+  | "permanent_infrastructure_error"
+  // Module-specific codes. The backend adds one only where a client must
+  // behave differently and the status alone cannot say — a 409 from a
+  // sign-up form has to name which field collided so the UI knows which
+  // input to highlight.
+  | "username_already_exists"
+  | "email_already_exists";
 
 /** Mirrors `app.api.exception_handlers.ErrorResponse`. */
 export interface ApiErrorBody {

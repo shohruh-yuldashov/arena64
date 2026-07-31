@@ -1,9 +1,27 @@
-"""The concrete unit of work — repositories.md §5.1.
+"""The concrete units of work — repositories.md §5.1.
 
-Implements `app.core.unit_of_work.UnitOfWork` over a SQLAlchemy
-`AsyncSession`. The outbox writer will eventually enlist in the same
-session (architecture.md AD-16); no outbox exists yet, so there is nothing
-to enlist — this is the transaction boundary alone.
+Two implementations of `app.core.unit_of_work.UnitOfWork`, differing only
+in who owns the session's lifetime:
+
+  `SqlAlchemyUnitOfWork`   opens its own session from a factory. For a
+                            caller with no ambient session — a script, a
+                            future Celery task, the clock loop.
+  `SessionUnitOfWork`       adapts a session someone else already opened.
+                            For the HTTP entrypoint, where `api/deps.py`
+                            opens exactly one session per request and the
+                            service must own the *transaction* without
+                            owning the *session*.
+
+Both exist because services.md §9.1 puts the transaction boundary at the
+application service method, while dependency-injection.md §1.4 puts the
+session scope at the entrypoint. Those are different boundaries that
+happen to coincide for HTTP; `SessionUnitOfWork` is what lets a service
+commit without ever touching `AsyncSession` itself (services.md §3.3
+prohibits exactly that).
+
+The outbox writer will eventually enlist in the same session
+(architecture.md AD-16); no outbox exists yet, so there is nothing to
+enlist — this is the transaction boundary alone.
 """
 
 from types import TracebackType
@@ -54,3 +72,41 @@ class SqlAlchemyUnitOfWork:
 
     async def rollback(self) -> None:
         await self.session.rollback()
+
+
+class SessionUnitOfWork:
+    """A transaction boundary over a session this object does not own.
+
+    `__aenter__`/`__aexit__` deliberately do **not** open or close the
+    session — whoever opened it (for HTTP, `api/deps.py`'s per-request
+    dependency) closes it, and closing it here would pull the connection
+    out from under a caller still using it. What this class does own is
+    the *outcome*: `commit()` on success, and a rollback on an exception
+    escaping the scope, which is the fail-safe repositories.md §5.1
+    requires ("exiting the scope without an explicit commit rolls back").
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    @property
+    def session(self) -> AsyncSession:
+        return self._session
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        if exc_type is not None:
+            await self._session.rollback()
+
+    async def commit(self) -> None:
+        await self._session.commit()
+
+    async def rollback(self) -> None:
+        await self._session.rollback()

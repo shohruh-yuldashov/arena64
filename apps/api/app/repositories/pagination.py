@@ -8,7 +8,7 @@ paginated query is still just a `Select`, whichever method produced it.
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import Select, func, literal, select, tuple_
+from sqlalchemy import Select, cast, func, literal, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
@@ -68,17 +68,26 @@ async def paginate_cursor[ModelT](
         except ValueError as exc:
             raise ValueError("invalid pagination cursor") from exc
 
-        # `decode_cursor` hands back JSON-native values — a UUID primary
-        # key (DB-07's platform-wide convention) decodes to a plain `str`,
-        # not a `uuid.UUID`. Binding it with `type_=id_column.type` tells
-        # SQLAlchemy to run it through that column's own bind processor
-        # (`Uuid.bind_processor`, `UtcDateTime.process_bind_param`, ...),
-        # so PostgreSQL compares a `uuid`/`timestamptz` column against a
-        # correctly-typed parameter instead of a bare string — which
-        # `uuid_column > 'text'` fails outright, with no implicit cast.
+        # `decode_cursor` hands back JSON-native values, so a `uuid` or a
+        # `timestamptz` key both arrive as plain `str` (its docstring is
+        # explicit that it does not reconstruct types).
+        #
+        # `cast(literal(value), column.type)` — **not** `literal(value,
+        # type_=column.type)`. The latter runs the string through the
+        # column's *Python-side* bind processor, and a processor written
+        # for real values chokes on a string: A64-010's contract suite hit
+        # exactly this, with `UtcDateTime.process_bind_param` raising
+        # `AttributeError: 'str' object has no attribute 'tzinfo'` on a
+        # `(created_at, id)` keyset. It went unnoticed in A64-009 only
+        # because that suite's ordering key was an integer, which needs no
+        # processing, and SQLAlchemy's `Uuid` happens to accept strings.
+        #
+        # A SQL-level `CAST` sidesteps Python bind processing entirely and
+        # lets PostgreSQL parse its own literal formats, which it does for
+        # every type a keyset key could reasonably be.
         last_values = tuple_(
-            literal(last_order_value, type_=order_column.type),
-            literal(last_id_value, type_=id_column.type),
+            cast(literal(last_order_value), order_column.type),
+            cast(literal(last_id_value), id_column.type),
         )
         statement = statement.where(tuple_(order_column, id_column) > last_values)
 

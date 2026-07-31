@@ -131,7 +131,6 @@ class AuthSettings(BaseSettings):
     argon2_parallelism: int = Field(default=1, ge=1)
 
 
-<<<<<<< HEAD
 #: HMAC only, and deliberately a closed list rather than "whatever PyJWT
 #: supports". The classic JWT break is algorithm confusion: a service
 #: configured with a *symmetric* secret but willing to accept an asymmetric
@@ -256,7 +255,7 @@ class JWTSettings(BaseSettings):
         """
         return (self.secret_key, *self.previous_secret_keys)
 
-=======
+
 #: 256 bits, per the task's floor and RFC 4086's guidance for a value
 #: whose only defence is being unguessable. A refresh token is not
 #: stretched — DB-24 hashes it with SHA-256 rather than Argon2id, and that
@@ -321,7 +320,6 @@ class SessionSettings(BaseSettings):
             )
         return self
 
->>>>>>> 56a5884 (task_011.4 completed)
 
 class Settings(BaseModel):
     """The composed, immutable configuration for this process."""
@@ -333,11 +331,8 @@ class Settings(BaseModel):
     postgres: PostgresSettings
     redis: RedisSettings
     auth: AuthSettings
-<<<<<<< HEAD
     jwt: JWTSettings
-=======
     session: SessionSettings
->>>>>>> 56a5884 (task_011.4 completed)
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":
@@ -413,9 +408,6 @@ def get_settings() -> Settings:
         postgres=PostgresSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         redis=RedisSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         auth=AuthSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
-<<<<<<< HEAD
         jwt=JWTSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
-=======
         session=SessionSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
->>>>>>> 56a5884 (task_011.4 completed)
     )

@@ -257,42 +257,72 @@ class SessionService:
     # --- rotation -----------------------------------------------------------
 
     async def rotate_refresh_token(self, refresh_token: str) -> IssuedRefreshToken:
-        """Exchanges a valid refresh token for a fresh one — **not
-        implemented in A64-011.4**.
+        """Exchanges a valid refresh token for a fresh one, invalidating it.
 
-        The task's brief is "prepare interface only", and this is that
-        interface: the signature A64-011.5's refresh endpoint will call,
-        fixed now so the endpoint is written against a stable shape.
+        database.md §14.3's "rotation on every use, with the old token
+        invalidated". A64-011.4 fixed this signature and left the body
+        raising; A64-011.5 implements it because `POST /auth/refresh` is
+        its caller.
 
-        It raises rather than returning something plausible. A method that
-        quietly issued a token *without* invalidating the old one would
-        look like it worked while disabling reuse detection entirely —
-        every old token would stay valid, and the property §14.3 exists to
-        provide would be silently absent. Failing loudly is the only safe
-        placeholder for a security operation.
+        Raises everything `validate_refresh_token` raises, and for the same
+        reasons — including reuse detection, which fires here first and is
+        what makes rotation a security mechanism rather than churn.
 
-        What A64-011.5 must implement here, in one transaction:
+        ## The two details that are silent when wrong
 
-        1. `validate_refresh_token` — including reuse detection.
-        2. Revoke the presented session with a `rotated` reason (a new
-           `RevocationReason` member; the enum needs a migration to add
-           it, which is why it is not pre-declared here).
-        3. Create a successor carrying **the same `token_family`** and the
-           parent's `expires_at` — a rotation must not extend the absolute
-           window, or a chain refreshed daily never expires and the 30-day
-           bound means nothing.
-        4. Return the successor and its raw token.
+        **The successor inherits `token_family`.** A rotation that started
+        a new family would sever the chain, and reuse detection revokes by
+        family — so a captured token would be detected but only the single
+        presented link would be revoked, leaving the attacker's other links
+        live. Rotation without an inherited family is rotation with the
+        security property removed.
 
-        Step 3's two details are the ones that are easy to get wrong and
-        silent when wrong: a new family per rotation disables reuse
-        detection, and a refreshed absolute expiry disables the absolute
-        bound.
+        **The successor inherits `expires_at`.** A rotation must not extend
+        the absolute window: a chain refreshed daily would otherwise never
+        expire, and the 30-day bound — the only thing limiting a captured
+        token whose theft is never detected — would mean nothing. The idle
+        window *does* slide, because `last_used_at` on the successor is
+        now; that is the point of the two-expiry design.
+
+        ## Why the old session is revoked before the new one is created
+
+        Both writes are in one transaction, so ordering does not change
+        the committed outcome. It changes the *uncommitted* one: if
+        creation fails — a hash collision, a constraint, a lost connection
+        — the rollback leaves the original session live rather than
+        leaving the caller with no usable token. Failing closed here would
+        sign a legitimate user out for an infrastructure hiccup.
         """
-        raise NotImplementedError(
-            "Refresh token rotation is A64-011.5. See this method's docstring for "
-            "the contract it must satisfy; issuing a token without invalidating "
-            "its predecessor would disable reuse detection."
+        session = await self.validate_refresh_token(refresh_token)
+
+        now = self._clock.now()
+        raw_token = self._tokens.generate_refresh_token()
+        successor = UserSession.start(
+            user_id=session.user_id,
+            refresh_token_hash=self._tokens.hash_refresh_token(raw_token),
+            issued_at=now,
+            # Deliberately *not* the configured TTL: the successor inherits
+            # what remains of the original absolute window.
+            lifetime=session.expires_at - now,
+            device=session.device,
+            token_family=session.token_family,
         )
+
+        async with self._uow:
+            await self._sessions.revoke_session(session.id, at=now, reason=RevocationReason.ROTATED)
+            created = await self._sessions.create_session(successor)
+            await self._uow.commit()
+
+        logger.info(
+            "session_rotated",
+            extra={
+                "user_id": str(session.user_id),
+                "session_id": str(created.id),
+                "previous_session_id": str(session.id),
+                "token_family": str(created.token_family),
+            },
+        )
+        return IssuedRefreshToken(session=created, refresh_token=raw_token)
 
     # --- revocation ---------------------------------------------------------
 
@@ -330,6 +360,50 @@ class SessionService:
                 },
             )
         return revoked
+
+    async def revoke_by_refresh_token(
+        self,
+        refresh_token: str,
+        *,
+        reason: RevocationReason = RevocationReason.PLAYER,
+    ) -> bool:
+        """Signs one device out, given its refresh token.
+
+        The sign-out counterpart to `rotate_refresh_token`, added by
+        A64-011.5 for `POST /auth/logout`. It takes a token rather than a
+        session id because an access token names a *user*, not a session —
+        there is no `sid` claim — so the refresh token is the only
+        credential that says *which device*.
+
+        **Deliberately not built on `validate_refresh_token`**, and this
+        is the substantive decision. That method treats a revoked session
+        as reuse and burns the whole family; doing so here would mean a
+        client that sends logout twice — a retry, a double-clicked button,
+        a page unload racing a fetch — signs the user out of the successor
+        session too, and logs a security alert for it. Signing out is not
+        an attack, and the endpoint must be idempotent.
+
+        Expiry is likewise not an error. A caller signing out of a session
+        that has already lapsed wanted exactly the state it is now in.
+
+        Returns whether this call was the one that revoked it. `False`
+        means it was already revoked, which the endpoint reports as
+        success.
+
+        Raises `SessionNotFound` when no session matches at all — a
+        garbage or forged token. That is the one case where "you are
+        signed out" would be a lie.
+        """
+        session = await self._sessions.get_session(self._tokens.hash_refresh_token(refresh_token))
+        if session is None:
+            logger.info("logout_rejected", extra={"reason": "no_matching_session"})
+            raise SessionNotFound("The refresh token is not valid.")
+
+        if session.is_revoked:
+            # Already gone. The caller's intent is satisfied.
+            return False
+
+        return await self.revoke_session(session.id, reason=reason)
 
     async def revoke_all_sessions(
         self,

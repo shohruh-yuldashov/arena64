@@ -127,3 +127,37 @@ class UserCredentialStore(Protocol):
         parameters (database.md §14.2's rehash-on-login).
         """
         ...
+
+
+class UserProfileReader(Protocol):
+    """Reads one account's own view by identifier.
+
+    The third narrow port, added by A64-011.5 for `GET /auth/me` and
+    `POST /auth/refresh`. Both need the *profile* behind an identifier the
+    caller has already proven — a token's `sub`, or a session's
+    `user_id` — and neither may reach into `users`' internals to get it
+    (R-1: reach a module through its services, never its storage).
+
+    Separate from `UserAccountCreator` and `UserCredentialStore` for the
+    reason those are separate from each other: creating an account,
+    reading a password hash and reading a profile are three different
+    capabilities, and a component granted one should not thereby hold the
+    others. A single `UserService`-shaped port would hand `auth` the
+    ability to rename people.
+
+    Read-only by construction. There is no way here to change anything,
+    which is what makes it safe to hand to any module that needs to render
+    "who is this".
+    """
+
+    async def get_profile(self, user_id: UUID) -> UserRead:
+        """The account's own view.
+
+        Raises `UserNotFound` rather than returning `None`: every caller
+        holds an identifier it has already authenticated, so absence is a
+        genuine failure — an account deleted while a valid token was still
+        in flight — rather than an ordinary outcome. Making that the
+        exceptional path means no caller writes `if user is None` on a
+        branch that should never be taken.
+        """
+        ...

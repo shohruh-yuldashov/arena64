@@ -6,12 +6,9 @@ from pydantic import ValidationError as PydanticValidationError
 
 from app.config.environment import Environment, current_environment, env_file_for
 from app.config.settings import (
-<<<<<<< HEAD
     JWT_SECRET_MIN_LENGTH,
-    SUPPORTED_JWT_ALGORITHMS,
-=======
     REFRESH_TOKEN_MIN_ENTROPY_BYTES,
->>>>>>> 56a5884 (task_011.4 completed)
+    SUPPORTED_JWT_ALGORITHMS,
     AppSettings,
     AuthSettings,
     JWTSettings,
@@ -87,11 +84,8 @@ class TestSettings:
             postgres=PostgresSettings(),
             redis=RedisSettings(),
             auth=AuthSettings(),
-<<<<<<< HEAD
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
-=======
             session=SessionSettings(),
->>>>>>> 56a5884 (task_011.4 completed)
         )
         assert settings.environment is Environment.TEST
 
@@ -111,11 +105,8 @@ class TestSettings:
                     cache_url=SecretStr("redis://prod-cache:6379/0"),
                 ),
                 auth=AuthSettings(),
-<<<<<<< HEAD
                 jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
-=======
                 session=SessionSettings(),
->>>>>>> 56a5884 (task_011.4 completed)
             )
 
     def test_production_rejects_a_left_default_redis_role(self) -> None:
@@ -128,11 +119,8 @@ class TestSettings:
                 ),
                 redis=RedisSettings(),  # every role left at its local default
                 auth=AuthSettings(),
-<<<<<<< HEAD
                 jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
-=======
                 session=SessionSettings(),
->>>>>>> 56a5884 (task_011.4 completed)
             )
 
     def test_production_accepts_fully_explicit_configuration(self) -> None:
@@ -149,11 +137,8 @@ class TestSettings:
                 cache_url=SecretStr("redis://prod-cache:6379/0"),
             ),
             auth=AuthSettings(),
-<<<<<<< HEAD
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
-=======
             session=SessionSettings(),
->>>>>>> 56a5884 (task_011.4 completed)
         )
         assert settings.environment is Environment.PRODUCTION
 
@@ -164,17 +149,13 @@ class TestSettings:
             postgres=PostgresSettings(),
             redis=RedisSettings(),
             auth=AuthSettings(),
-<<<<<<< HEAD
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
-=======
             session=SessionSettings(),
->>>>>>> 56a5884 (task_011.4 completed)
         )
         with pytest.raises(PydanticValidationError):
             settings.environment = Environment.PRODUCTION  # type: ignore[misc]
 
 
-<<<<<<< HEAD
 class TestJWTSettings:
     """A64-011.3. Every assertion here is a misconfiguration that would be
     invisible at runtime: the service starts, serves traffic, and is
@@ -270,6 +251,7 @@ class TestJWTProductionGuard:
                 cache_url=SecretStr("redis://prod-cache:6379/0"),
             ),
             auth=AuthSettings(),
+            session=SessionSettings(),
             jwt=JWTSettings(**jwt_overrides),  # type: ignore[arg-type]
         )
 
@@ -295,11 +277,13 @@ class TestJWTProductionGuard:
             postgres=PostgresSettings(),
             redis=RedisSettings(),
             auth=AuthSettings(),
+            session=SessionSettings(),
             jwt=JWTSettings(),
         )
 
         assert settings.jwt.secret_key.get_secret_value()
-=======
+
+
 class TestSessionSettings:
     """A64-011.4. Each assertion is a misconfiguration that would weaken
     refresh sessions without failing anywhere at runtime — the class DI-06
@@ -342,4 +326,3 @@ class TestSessionSettings:
         settings = SessionSettings(refresh_token_ttl_days=30, idle_timeout_days=30)
 
         assert settings.idle_timeout_days == 30
->>>>>>> 56a5884 (task_011.4 completed)

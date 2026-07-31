@@ -98,7 +98,6 @@ class AccountLocked(PermissionDeniedError):
     default_code: ClassVar[ErrorCode] = ErrorCode.ACCOUNT_LOCKED
 
 
-<<<<<<< HEAD
 # --- bearer tokens (A64-011.3) ----------------------------------------------
 #
 # All five are `AuthenticationFailed`, so all five are 401 through the
@@ -189,7 +188,9 @@ class InvalidSignature(InvalidToken):
 
     "Any active key" includes `JWTSettings.previous_secret_keys`, so a
     token signed just before a key rotation is not a forgery.
-=======
+    """
+
+
 # --- refresh sessions (A64-011.4) --------------------------------------------
 #
 # All four are `AuthenticationFailed`, so all four are 401 through the
@@ -268,27 +269,21 @@ class SessionNotFound(InvalidRefreshToken):
     did not find it, which over a session table is exactly the membership
     oracle this hierarchy avoids. Every refresh failure is 401 —
     "I do not know who you are" — regardless of why.
->>>>>>> 56a5884 (task_011.4 completed)
     """
 
 
 __all__ = [
     "AccountLocked",
-<<<<<<< HEAD
     "AuthenticationRequired",
+    "ExpiredRefreshToken",
     "ExpiredToken",
     "InactiveAccount",
     "InvalidCredentials",
+    "InvalidRefreshToken",
     "InvalidSignature",
     "InvalidToken",
     "MissingToken",
-=======
-    "ExpiredRefreshToken",
-    "InactiveAccount",
-    "InvalidCredentials",
-    "InvalidRefreshToken",
     "RevokedSession",
     "SessionNotFound",
->>>>>>> 56a5884 (task_011.4 completed)
     "WeakPassword",
 ]

@@ -21,16 +21,23 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.app_factory import create_app
+from app.config.settings import SessionSettings
 from app.core.enums import Locale
-from app.modules.auth.application.services import AuthenticationService
+from app.modules.auth.application.services import (
+    AuthenticationService,
+    RefreshTokenService,
+    SessionService,
+)
 from app.modules.auth.presentation.dependencies import (
     get_authentication_service,
     get_password_hasher,
+    get_session_service,
 )
 from app.modules.users.application.services import UserService
 from app.modules.users.application.services.user_credential_service import UserCredentialService
 from app.modules.users.domain.entities import User
 from app.modules.users.domain.value_objects import Email, Timezone, Username
+from tests.fakes.session_repository import FakeSessionRepository
 from tests.fakes.user_repository import FakeUserRepository
 
 _NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -117,8 +124,21 @@ def client(user: User) -> Iterator[TestClient]:
             clock=_FixedClock(),
         )
 
+    def _session_service() -> SessionService:
+        return SessionService(
+            sessions=FakeSessionRepository(),
+            tokens=RefreshTokenService(SessionSettings()),
+            unit_of_work=_NullUnitOfWork(),
+            clock=_FixedClock(),
+            settings=SessionSettings(),
+        )
+
     app.dependency_overrides[get_authentication_service] = _authentication_service
     app.dependency_overrides[get_password_hasher] = _StubHasher
+    # A64-011.5: login now issues a token pair, so the two services behind
+    # that are part of this endpoint's graph. The access token service is
+    # the real one — HMAC is microseconds and a stub would prove nothing.
+    app.dependency_overrides[get_session_service] = _session_service
 
     with TestClient(app) as test_client:
         yield test_client
@@ -126,17 +146,23 @@ def client(user: User) -> Iterator[TestClient]:
 
 
 class TestSuccessfulLogin:
+    """A64-011.2 asserted this endpoint returned the *account* and no
+    token. A64-011.5 changed that contract deliberately, so these
+    assertions moved with it — the credential-secrecy ones below are the
+    part that did not change, and must not."""
+
     def test_returns_200(self, client: TestClient) -> None:
-        """Not 201. Nothing is created — and it will still be 200 when
-        A64-011.3 adds a token, because a token is not a resource with a
-        URL either."""
+        """Not 201. A session row is created, but what the caller asked
+        for is a credential, not a resource with a URL."""
         assert client.post(LOGIN_URL, json=VALID_BODY).status_code == 200
 
-    def test_returns_the_account_in_the_platform_envelope(self, client: TestClient) -> None:
+    def test_returns_a_token_pair_in_the_platform_envelope(self, client: TestClient) -> None:
         body = client.post(LOGIN_URL, json=VALID_BODY).json()
 
-        assert body["data"]["email"] == EMAIL
-        assert body["data"]["username"] == "player_one"
+        assert body["data"]["access_token"]
+        assert body["data"]["refresh_token"]
+        assert body["data"]["token_type"] == "Bearer"
+        assert body["data"]["expires_in"] == 900
         assert body["meta"]["request_id"]
         assert body["meta"]["correlation_id"]
 
@@ -149,22 +175,31 @@ class TestSuccessfulLogin:
         assert "password" not in response.text
         assert "v2:" not in response.text
 
-    def test_the_response_carries_no_token(self, client: TestClient) -> None:
-        """A64-011.2's boundary, asserted rather than described."""
+    def test_the_response_carries_no_profile(self, client: TestClient) -> None:
+        """The token pair and nothing else. Returning the account here
+        would put an email in every sign-in response body for no caller
+        that asked — `GET /auth/me` is the endpoint for that."""
         body = client.post(LOGIN_URL, json=VALID_BODY).json()
 
-        assert not {"token", "access_token", "refresh_token"} & set(body["data"])
+        assert set(body["data"]) == {
+            "access_token",
+            "refresh_token",
+            "token_type",
+            "expires_in",
+        }
+        assert EMAIL not in body["data"].values()
 
     def test_no_cookie_is_set(self, client: TestClient) -> None:
-        """No session either. A `Set-Cookie` here would be the start of one
-        by any other name."""
+        """The refresh token is returned in the body, so the endpoint works
+        for a native client as well as a browser. Storing it in an
+        `HttpOnly` cookie is the SPA's decision, not this endpoint's."""
         assert client.post(LOGIN_URL, json=VALID_BODY).cookies == {}
 
     def test_accepts_a_differently_cased_address(self, client: TestClient) -> None:
         response = client.post(LOGIN_URL, json={**VALID_BODY, "email": "PLAYER.ONE@Example.com"})
 
         assert response.status_code == 200
-        assert response.json()["data"]["email"] == EMAIL
+        assert response.json()["data"]["access_token"]
 
 
 class TestFailedLogin:

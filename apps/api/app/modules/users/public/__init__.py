@@ -21,6 +21,7 @@ What is published, and why only this much:
   `UserAccountCreator`   the narrow port `auth` uses to register a user
   `NewUserAccount`       that port's input shape
   `UserCredentialStore`  the equally narrow port `auth` uses to sign one in
+  `UserProfileReader`    reads one account's own view by id (A64-011.5)
   `UserCredentials`      that port's output — an account view plus the
                          stored hash, and nothing that would let a
                          consumer read or edit a profile
@@ -48,6 +49,7 @@ from app.modules.users.public.ports import (
     NewUserAccount,
     UserAccountCreator,
     UserCredentialStore,
+    UserProfileReader,
 )
 
 # The cross-context player identifier. An alias rather than a `NewType`
@@ -65,6 +67,7 @@ __all__ = [
     "UserCredentialStore",
     "UserCredentials",
     "UserId",
+    "UserProfileReader",
     "UserNotFound",
     "UserRead",
     "UserSummary",

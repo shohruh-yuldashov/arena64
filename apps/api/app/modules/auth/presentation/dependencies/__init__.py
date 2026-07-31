@@ -49,12 +49,17 @@ from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.auth.application.ports import PasswordHasher
 from app.modules.auth.application.services import (
-<<<<<<< HEAD
     AccessTokenService,
     AuthenticationService,
+    RefreshTokenService,
     RegistrationService,
+    SessionService,
 )
-from app.modules.auth.infrastructure import JwtTokenProvider, build_password_hasher
+from app.modules.auth.infrastructure import (
+    JwtTokenProvider,
+    SqlAlchemySessionRepository,
+    build_password_hasher,
+)
 from app.modules.auth.presentation.dependencies.current_user import (
     CurrentUser,
     OptionalCurrentUser,
@@ -64,23 +69,18 @@ from app.modules.auth.presentation.dependencies.current_user import (
     get_current_user_optional,
     get_token_validator,
     require_authentication,
-=======
-    AuthenticationService,
-    RefreshTokenService,
-    RegistrationService,
-    SessionService,
-)
-from app.modules.auth.infrastructure import (
-    SqlAlchemySessionRepository,
-    build_password_hasher,
->>>>>>> 56a5884 (task_011.4 completed)
 )
 from app.modules.users.application.services import UserService
 from app.modules.users.application.services.user_account_service import UserAccountService
 from app.modules.users.application.services.user_credential_service import UserCredentialService
+from app.modules.users.application.services.user_profile_service import UserProfileService
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
 from app.modules.users.presentation.dependencies import ClockDep
-from app.modules.users.public import UserAccountCreator, UserCredentialStore
+from app.modules.users.public import (
+    UserAccountCreator,
+    UserCredentialStore,
+    UserProfileReader,
+)
 
 
 def get_password_hasher(settings: SettingsDep) -> PasswordHasher:
@@ -156,7 +156,6 @@ def get_authentication_service(
 AuthenticationServiceDep = Annotated[AuthenticationService, Depends(get_authentication_service)]
 
 
-<<<<<<< HEAD
 def get_access_token_service(
     settings: SettingsDep,
     clock: ClockDep,
@@ -175,7 +174,8 @@ def get_access_token_service(
 
 
 AccessTokenServiceDep = Annotated[AccessTokenService, Depends(get_access_token_service)]
-=======
+
+
 def get_refresh_token_service(settings: SettingsDep) -> RefreshTokenService:
     """Stateless and cheap — a per-request instance costs one attribute
     assignment against the SHA-256 it exists to perform."""
@@ -212,7 +212,27 @@ def get_session_service(
 
 
 SessionServiceDep = Annotated[SessionService, Depends(get_session_service)]
->>>>>>> 56a5884 (task_011.4 completed)
+
+
+def get_user_profile_reader(session: DbSessionDep, clock: ClockDep) -> UserProfileReader:
+    """`users`' side of `GET /auth/me` and `POST /auth/refresh`, behind its
+    third published port.
+
+    Assembled separately from the other two `users` factories for the
+    reason they are separate from each other: reading a profile, creating
+    an account and reading a password hash are three capabilities, and a
+    single factory returning something with all three would undo the
+    split the ports exist to make.
+    """
+    users = UserService(
+        users=SqlAlchemyUserRepository(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )
+    return UserProfileService(users)
+
+
+UserProfileReaderDep = Annotated[UserProfileReader, Depends(get_user_profile_reader)]
 
 
 __all__ = [
@@ -225,13 +245,11 @@ __all__ = [
     "PasswordHasherDep",
     "RefreshTokenServiceDep",
     "RegistrationServiceDep",
-<<<<<<< HEAD
     "TokenValidatorDep",
-=======
     "SessionServiceDep",
->>>>>>> 56a5884 (task_011.4 completed)
     "UserAccountCreatorDep",
     "UserCredentialStoreDep",
+    "UserProfileReaderDep",
     "get_access_token_service",
     "get_authentication_service",
     "get_current_user",
@@ -239,12 +257,10 @@ __all__ = [
     "get_password_hasher",
     "get_refresh_token_service",
     "get_registration_service",
-<<<<<<< HEAD
     "get_token_validator",
-=======
     "get_session_service",
->>>>>>> 56a5884 (task_011.4 completed)
     "get_user_account_creator",
     "get_user_credential_store",
+    "get_user_profile_reader",
     "require_authentication",
 ]

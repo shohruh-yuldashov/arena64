@@ -2,18 +2,13 @@
 `application/`, satisfied by `infrastructure/`.
 """
 
-<<<<<<< HEAD
 from collections.abc import Mapping
-from typing import Any, Protocol
-
-from app.modules.auth.domain.tokens import TokenClaims, TokenType
-=======
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 from app.modules.auth.domain.sessions import RevocationReason, UserSession
->>>>>>> 56a5884 (task_011.4 completed)
+from app.modules.auth.domain.tokens import TokenClaims, TokenType
 
 
 class PasswordHasher(Protocol):
@@ -85,7 +80,6 @@ class PasswordHasher(Protocol):
         ...
 
 
-<<<<<<< HEAD
 class TokenProvider(Protocol):
     """Signs and verifies tokens. Knows nothing about *why* one is issued.
 
@@ -150,7 +144,10 @@ class TokenProvider(Protocol):
         Raises `ExpiredToken`, `InvalidSignature`, or `InvalidToken` —
         never a `jwt.*` exception, which would leak the library's
         vocabulary into every caller and make swapping it a rewrite.
-=======
+        """
+        ...
+
+
 class SessionRepository(Protocol):
     """Collection-like access to the `UserSession` aggregate.
 
@@ -267,6 +264,5 @@ class SessionRepository(Protocol):
         `include_revoked` defaults to `False` because the common caller is
         "show me my active devices". History is available but is never the
         default.
->>>>>>> 56a5884 (task_011.4 completed)
         """
         ...

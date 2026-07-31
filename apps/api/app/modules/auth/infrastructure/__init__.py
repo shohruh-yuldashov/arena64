@@ -16,12 +16,9 @@ from app.modules.auth.infrastructure.password_hasher import (
 )
 from app.modules.auth.infrastructure.repositories import SqlAlchemySessionRepository
 
-<<<<<<< HEAD
-__all__ = ["Argon2idPasswordHasher", "JwtTokenProvider", "build_password_hasher"]
-=======
 __all__ = [
     "Argon2idPasswordHasher",
+    "JwtTokenProvider",
     "SqlAlchemySessionRepository",
     "build_password_hasher",
 ]
->>>>>>> 56a5884 (task_011.4 completed)

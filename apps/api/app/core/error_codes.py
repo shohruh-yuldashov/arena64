@@ -81,7 +81,6 @@ class ErrorCode(StrEnum):
     INACTIVE_ACCOUNT = "inactive_account"
     ACCOUNT_LOCKED = "account_locked"
 
-<<<<<<< HEAD
     # `auth` (A64-011.3). Three codes for four exception types, and the
     # arithmetic is the rule in this docstring doing its job:
     #
@@ -102,7 +101,6 @@ class ErrorCode(StrEnum):
     AUTHENTICATION_REQUIRED = "authentication_required"
     INVALID_TOKEN = "invalid_token"
     EXPIRED_TOKEN = "expired_token"
-=======
     # `auth` (A64-011.4). Two codes for four exception types, and the
     # arithmetic is the rule in this docstring doing its job.
     #
@@ -122,4 +120,3 @@ class ErrorCode(StrEnum):
     # stopped them rather than a bad guess.
     INVALID_SESSION = "invalid_session"
     SESSION_EXPIRED = "session_expired"
->>>>>>> 56a5884 (task_011.4 completed)

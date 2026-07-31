@@ -2,7 +2,10 @@
 `application/`, satisfied by `infrastructure/`.
 """
 
-from typing import Protocol
+from collections.abc import Mapping
+from typing import Any, Protocol
+
+from app.modules.auth.domain.tokens import TokenClaims, TokenType
 
 
 class PasswordHasher(Protocol):
@@ -70,5 +73,73 @@ class PasswordHasher(Protocol):
 
         Never a real user's hash, and never derived from any real
         password.
+        """
+        ...
+
+
+class TokenProvider(Protocol):
+    """Signs and verifies tokens. Knows nothing about *why* one is issued.
+
+    The deliberate split from `AccessTokenService` and `TokenValidator`:
+    this port is about cryptography and encoding, those are about use
+    cases. `AccessTokenService` decides that an access token lasts fifteen
+    minutes and speaks for a particular account; this decides only how a
+    claim set becomes a signed string and back. That line is what lets
+    A64-011.4 add refresh tokens, and a later task add WebSocket tickets
+    (AD-09), by writing a new *service* against this same port rather than
+    a second signing implementation — and two independent signing
+    implementations on one platform is how one of them ends up without
+    audience checking.
+
+    A `Protocol`, not an ABC, so a test can substitute a deterministic
+    fake without inheriting from the real thing.
+
+    **Synchronous on purpose.** HMAC-SHA256 over a few hundred bytes is
+    microseconds — four orders of magnitude below the ~20ms Argon2
+    verification that forced `PasswordHasher` onto a worker thread. Making
+    these `async` would buy nothing and would cost an `await` on the hot
+    path of every authenticated request on the platform.
+    """
+
+    def issue(
+        self,
+        *,
+        subject: str,
+        token_type: TokenType,
+        lifetime_seconds: int,
+        custom: Mapping[str, Any] | None = None,
+    ) -> tuple[str, TokenClaims]:
+        """Mints a signed token and returns it alongside the claims it
+        carries.
+
+        Both, rather than just the string, because the caller almost
+        always needs the `exp` it just created — a login response has to
+        tell the client when to refresh, and re-decoding a token to learn
+        what you put in it a microsecond ago is absurd.
+
+        `jti` and `iat` are generated here, not accepted as arguments: a
+        caller that could choose a token's own identifier could mint two
+        tokens with the same one, which would make a `jti` denylist
+        (A64-011.4) silently revoke the wrong token.
+        """
+        ...
+
+    def decode(self, token: str, *, expected_type: TokenType) -> TokenClaims:
+        """Verifies a token completely, or raises.
+
+        Verifies, in the order that matters: the signature (against every
+        active key — see `JWTSettings.previous_secret_keys`), then `exp`,
+        `iss`, `aud`, and finally `expected_type`. There is no partial
+        result and no "skip verification" argument; holding a `TokenClaims`
+        means every one of those passed.
+
+        `expected_type` is required rather than defaulted, because the
+        default anyone would pick is `ACCESS`, and the one call site that
+        forgets to override it is the one that accepts a refresh token
+        where an access token belongs.
+
+        Raises `ExpiredToken`, `InvalidSignature`, or `InvalidToken` —
+        never a `jwt.*` exception, which would leak the library's
+        vocabulary into every caller and make swapping it a rewrite.
         """
         ...

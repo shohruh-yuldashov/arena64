@@ -74,6 +74,56 @@ _STATUS_BY_EXCEPTION: dict[type[Arena64Error], int] = {
 }
 
 
+#: RFC 6750 §3.1's error codes for the `WWW-Authenticate` challenge. A
+#: deliberately smaller vocabulary than the platform's own: the RFC
+#: defines exactly `invalid_request`, `invalid_token` and
+#: `insufficient_scope`, and inventing others here would produce a
+#: challenge that standard HTTP clients cannot parse.
+_BEARER_ERROR_BY_CODE: dict[ErrorCode, str] = {
+    ErrorCode.INVALID_TOKEN: "invalid_token",
+    ErrorCode.EXPIRED_TOKEN: "invalid_token",
+}
+
+
+def _challenge_for(exc: Arena64Error) -> str | None:
+    """The `WWW-Authenticate` value for a 401, if this is one.
+
+    RFC 9110 §11.6.1 requires a 401 to carry a challenge naming an
+    applicable scheme. A64-011.2 deliberately omitted it and said why:
+    the platform had no scheme, and asserting `Bearer` before bearer
+    tokens existed would have advertised something no endpoint accepted.
+    A64-011.3 is the task that made it true, so the header arrives with
+    the tokens rather than as an afterthought.
+
+    Two shapes:
+
+    - A bare ``Bearer`` challenge when no token was presented, or when the
+      401 came from somewhere other than token verification — a failed
+      sign-in at `POST /auth/login` is the current example. There is no
+      token to describe, so RFC 6750's `error` parameter does not apply.
+    - ``Bearer error="invalid_token", error_description="..."`` when a
+      token *was* presented and refused, which is what tells a client
+      library to stop retrying with the credential it holds.
+
+    The description is the exception's own message, which is already the
+    single generic string for every token failure — deliberately, so this
+    header cannot become the oracle the response body refuses to be.
+    """
+    if not isinstance(exc, AuthenticationFailed):
+        return None
+
+    error = _BEARER_ERROR_BY_CODE.get(exc.code)
+    if error is None:
+        return "Bearer"
+
+    # `error_description` is a quoted-string: RFC 6750 §3 excludes `"` and
+    # `\` from it, and every message this platform produces is a fixed
+    # literal, but escaping rather than trusting that keeps a future
+    # message from silently producing a malformed header.
+    description = exc.message.replace("\\", "").replace('"', "")
+    return f'Bearer error="{error}", error_description="{description}"'
+
+
 def _status_for(exc: Arena64Error) -> int:
     for klass in type(exc).__mro__:
         if klass in _STATUS_BY_EXCEPTION:
@@ -107,7 +157,12 @@ async def _handle_arena64_error(request: Request, exc: Exception) -> JSONRespons
         request_id=current_request_id(),
         correlation_id=current_correlation_id(),
     )
-    return JSONResponse(status_code=_status_for(exc), content=body.model_dump(mode="json"))
+    challenge = _challenge_for(exc)
+    return JSONResponse(
+        status_code=_status_for(exc),
+        content=body.model_dump(mode="json"),
+        headers={"WWW-Authenticate": challenge} if challenge else None,
+    )
 
 
 def _describe_validation_failure(exc: RequestValidationError) -> str:

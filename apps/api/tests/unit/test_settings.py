@@ -6,13 +6,21 @@ from pydantic import ValidationError as PydanticValidationError
 
 from app.config.environment import Environment, current_environment, env_file_for
 from app.config.settings import (
+    JWT_SECRET_MIN_LENGTH,
+    SUPPORTED_JWT_ALGORITHMS,
     AppSettings,
     AuthSettings,
+    JWTSettings,
     PostgresSettings,
     RedisSettings,
     Settings,
     get_settings,
 )
+
+#: A key that is explicitly *not* the development default, so the
+#: production tests below fail for the reason each one is about rather
+#: than tripping the JWT guard first.
+EXPLICIT_JWT_SECRET = "a-real-deployment-signing-key-well-over-the-minimum-length"
 
 
 class TestEnvironment:
@@ -74,6 +82,7 @@ class TestSettings:
             postgres=PostgresSettings(),
             redis=RedisSettings(),
             auth=AuthSettings(),
+            jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
         )
         assert settings.environment is Environment.TEST
 
@@ -93,6 +102,7 @@ class TestSettings:
                     cache_url=SecretStr("redis://prod-cache:6379/0"),
                 ),
                 auth=AuthSettings(),
+                jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             )
 
     def test_production_rejects_a_left_default_redis_role(self) -> None:
@@ -105,6 +115,7 @@ class TestSettings:
                 ),
                 redis=RedisSettings(),  # every role left at its local default
                 auth=AuthSettings(),
+                jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             )
 
     def test_production_accepts_fully_explicit_configuration(self) -> None:
@@ -121,6 +132,7 @@ class TestSettings:
                 cache_url=SecretStr("redis://prod-cache:6379/0"),
             ),
             auth=AuthSettings(),
+            jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
         )
         assert settings.environment is Environment.PRODUCTION
 
@@ -131,6 +143,133 @@ class TestSettings:
             postgres=PostgresSettings(),
             redis=RedisSettings(),
             auth=AuthSettings(),
+            jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
         )
         with pytest.raises(PydanticValidationError):
             settings.environment = Environment.PRODUCTION  # type: ignore[misc]
+
+
+class TestJWTSettings:
+    """A64-011.3. Every assertion here is a misconfiguration that would be
+    invisible at runtime: the service starts, serves traffic, and is
+    quietly forgeable. Failing at construction is what turns each one into
+    a deploy that rolls back (DI-06)."""
+
+    def test_defaults_are_usable_without_configuration(self) -> None:
+        settings = JWTSettings()
+
+        assert settings.algorithm == "HS256"
+        assert settings.access_token_ttl_seconds == 900
+        assert settings.issuer and settings.audience
+
+    def test_the_secret_does_not_render_in_a_repr(self) -> None:
+        """dependency-injection.md §2.4 — a settings repr in a traceback is
+        the most common leak path, and this is the one secret that would
+        let a reader mint tokens for any account."""
+        assert "insecure" not in repr(JWTSettings())
+
+    @pytest.mark.parametrize(
+        "algorithm",
+        [
+            pytest.param("none", id="none"),
+            pytest.param("None", id="None-capitalised"),
+            pytest.param("RS256", id="asymmetric"),
+            pytest.param("HS255", id="typo"),
+            pytest.param("", id="empty"),
+        ],
+    )
+    def test_rejects_algorithms_outside_the_allowlist(self, algorithm: str) -> None:
+        """`none` disables signing entirely; an asymmetric `alg` against a
+        symmetric secret is the algorithm-confusion attack. Neither should
+        be reachable by editing an environment variable."""
+        with pytest.raises(PydanticValidationError, match="JWT_ALGORITHM"):
+            JWTSettings(algorithm=algorithm)
+
+    def test_accepts_every_algorithm_in_the_allowlist(self) -> None:
+        for algorithm in SUPPORTED_JWT_ALGORITHMS:
+            assert JWTSettings(algorithm=algorithm).algorithm == algorithm
+
+    def test_rejects_a_secret_shorter_than_the_hash_it_keys(self) -> None:
+        """RFC 7518 §3.2. A 12-character key does not make HS256 weak in an
+        obvious way — it makes it weaker than advertised, silently."""
+        short = SecretStr("x" * (JWT_SECRET_MIN_LENGTH - 1))
+        with pytest.raises(PydanticValidationError, match="at least"):
+            JWTSettings(secret_key=short)
+
+    def test_rejects_a_short_key_among_the_previous_keys(self) -> None:
+        """A rotation is exactly when a weak key gets pasted in by hand."""
+        with pytest.raises(PydanticValidationError, match="PREVIOUS"):
+            JWTSettings(
+                secret_key=SecretStr("n" * 40),
+                previous_secret_keys=(SecretStr("short"),),
+            )
+
+    def test_rejects_a_rotation_that_lists_the_current_key_as_previous(self) -> None:
+        key = SecretStr("k" * 40)
+        with pytest.raises(PydanticValidationError, match="not a rotation"):
+            JWTSettings(secret_key=key, previous_secret_keys=(key,))
+
+    def test_verification_keys_put_the_current_key_first(self) -> None:
+        """So the common case — a token signed by the key in use — verifies
+        on the first HMAC, and a rotation costs an extra one only for
+        tokens that predate it."""
+        current, previous = SecretStr("n" * 40), SecretStr("o" * 40)
+        settings = JWTSettings(secret_key=current, previous_secret_keys=(previous,))
+
+        assert settings.verification_keys == (current, previous)
+
+    def test_the_lifetime_is_bounded_at_both_ends(self) -> None:
+        """The upper bound is the security-relevant one: a stateless token
+        cannot be revoked, so its lifetime *is* the window in which a
+        suspension (SE-3) or a password change (SE-1) does not take
+        effect. An hour is the most this platform will let that be."""
+        with pytest.raises(PydanticValidationError):
+            JWTSettings(access_token_ttl_seconds=3601)
+        with pytest.raises(PydanticValidationError):
+            JWTSettings(access_token_ttl_seconds=59)
+
+
+class TestJWTProductionGuard:
+    def _production(self, **jwt_overrides: object) -> Settings:
+        return Settings(
+            environment=Environment.PRODUCTION,
+            app=AppSettings(),
+            postgres=PostgresSettings(
+                dsn=SecretStr("postgresql+asyncpg://real:pw@prod-host:5432/arena64")
+            ),
+            redis=RedisSettings(
+                live_url=SecretStr("redis://prod-live:6379/0"),
+                bus_url=SecretStr("redis://prod-bus:6379/0"),
+                broker_url=SecretStr("redis://prod-broker:6379/0"),
+                cache_url=SecretStr("redis://prod-cache:6379/0"),
+            ),
+            auth=AuthSettings(),
+            jwt=JWTSettings(**jwt_overrides),  # type: ignore[arg-type]
+        )
+
+    def test_production_refuses_the_development_signing_key(self) -> None:
+        """The most consequential of the three local-default guards. A
+        wrong database URL fails loudly on the first query; this one fails
+        nowhere — the service runs, and anyone with a copy of this
+        repository can mint a valid token for any account on it."""
+        with pytest.raises(PydanticValidationError, match="JWT_SECRET_KEY"):
+            self._production()
+
+    def test_production_accepts_an_explicit_signing_key(self) -> None:
+        settings = self._production(secret_key=SecretStr(EXPLICIT_JWT_SECRET))
+
+        assert settings.environment is Environment.PRODUCTION
+
+    def test_the_development_key_is_still_fine_outside_production(self) -> None:
+        """`local` and `test` must keep running with no configuration —
+        that is the whole reason a default exists."""
+        settings = Settings(
+            environment=Environment.TEST,
+            app=AppSettings(),
+            postgres=PostgresSettings(),
+            redis=RedisSettings(),
+            auth=AuthSettings(),
+            jwt=JWTSettings(),
+        )
+
+        assert settings.jwt.secret_key.get_secret_value()

@@ -80,3 +80,24 @@ class ErrorCode(StrEnum):
     INVALID_CREDENTIALS = "invalid_credentials"
     INACTIVE_ACCOUNT = "inactive_account"
     ACCOUNT_LOCKED = "account_locked"
+
+    # `auth` (A64-011.3). Three codes for four exception types, and the
+    # arithmetic is the rule in this docstring doing its job:
+    #
+    #   AUTHENTICATION_REQUIRED  no credential was presented — prompt for
+    #                            sign-in; there is nothing to discard
+    #   EXPIRED_TOKEN            the credential was ours and has aged out —
+    #                            refresh it (A64-011.4) and retry, do *not*
+    #                            send the user back to a sign-in form
+    #   INVALID_TOKEN            the credential cannot be trusted — discard
+    #                            it and sign in again
+    #
+    # `InvalidSignature` deliberately carries `INVALID_TOKEN` rather than a
+    # code of its own. No client can act differently on "the signature was
+    # forged" versus "the payload was malformed" — both mean *discard and
+    # re-authenticate* — and telling a caller which one it was reports back
+    # on the structural validity of their forgery attempt, which is a free
+    # oracle for anyone probing the token format.
+    AUTHENTICATION_REQUIRED = "authentication_required"
+    INVALID_TOKEN = "invalid_token"
+    EXPIRED_TOKEN = "expired_token"

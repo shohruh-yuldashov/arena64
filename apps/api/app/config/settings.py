@@ -24,6 +24,14 @@ from app.config.environment import Environment, current_environment, env_file_fo
 # Settings._forbid_local_defaults_outside_local below, which is what makes
 # this safe rather than merely convenient.
 _LOCAL_POSTGRES_DSN = "postgresql+asyncpg://arena64:arena64@localhost:5432/arena64"
+_LOCAL_JWT_SECRET_KEY = (
+    # 64 characters, so it clears `JWT_SECRET_MIN_LENGTH` and `local` runs
+    # with no configuration at all. The literal words are load-bearing: if
+    # this ever reaches a deployed tier the guard below names it in the
+    # crash, and anyone reading a leaked token's key sees immediately that
+    # it was never a secret.
+    "insecure-local-development-key-do-not-use-outside-local-0123456"
+)
 _LOCAL_REDIS_URLS = {
     "live": "redis://localhost:6379/0",
     "bus": "redis://localhost:6379/1",
@@ -123,6 +131,131 @@ class AuthSettings(BaseSettings):
     argon2_parallelism: int = Field(default=1, ge=1)
 
 
+#: HMAC only, and deliberately a closed list rather than "whatever PyJWT
+#: supports". The classic JWT break is algorithm confusion: a service
+#: configured with a *symmetric* secret but willing to accept an asymmetric
+#: `alg` lets an attacker sign tokens with the public key — which is
+#: public. Refusing anything but HMAC at configuration time means that
+#: mistake cannot be made by editing an environment variable.
+#:
+#: `none` is absent for the obvious reason and cannot be reintroduced: the
+#: field is validated against this set, and `JwtTokenProvider` passes the
+#: allowlist to PyJWT's `algorithms=` argument, which is what actually
+#: stops a token's own header from choosing its verification algorithm.
+SUPPORTED_JWT_ALGORITHMS = frozenset({"HS256", "HS384", "HS512"})
+
+#: RFC 7518 §3.2: an HMAC key "MUST have a size >= the size of the hash
+#: output". For HS256 that is 32 bytes. 32 is therefore the floor, not a
+#: preference — a shorter key weakens HS256 below its nominal strength.
+JWT_SECRET_MIN_LENGTH = 32
+
+
+class JWTSettings(BaseSettings):
+    """`jwt` — access token signing and verification (A64-011.3).
+
+    ## Why the lifetime default is 15 minutes
+
+    A signed JWT is a *bearer* credential that the server does not store,
+    so between issue and expiry there is nothing to revoke — the token is
+    valid because it verifies, not because a row says so. domain-model.md
+    SE-1 and SE-3 require that a password change and a suspension revoke
+    access *immediately*; a stateless token cannot honour that, and the
+    only lever left is the length of the window in which it is wrong.
+
+    Fifteen minutes is that lever set to a defensible value: short enough
+    that a suspended account's remaining reach is bounded and a stolen
+    token has little resale value, long enough that reissue is not a
+    per-request cost. A64-011.4's refresh tokens are what make it
+    comfortable rather than merely correct — they move the long-lived
+    credential into a *stored* record that genuinely can be revoked.
+
+    Raising this past an hour should be treated as a security decision:
+    it directly extends how long a revoked session keeps working.
+
+    ## Why there are two key fields
+
+    dependency-injection.md §2.4 requires signing keys to be "rotatable
+    without downtime", and makes the argument concretely for the WebSocket
+    ticket key: single-key rotation invalidates every credential in flight
+    at the instant of rotation. The same reasoning applies here and lands
+    harder — rotating a single JWT key signs every user out at once, so
+    rotation becomes an incident and therefore never happens.
+
+    `secret_key` signs; `secret_key` **and** `previous_secret_keys` verify.
+    A rotation is: publish the new key as `secret_key`, move the old one to
+    `previous_secret_keys`, and drop it after one token lifetime. Nobody
+    is signed out, and the window in which the old key still verifies is
+    bounded by `access_token_ttl_seconds` rather than by a deploy.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="JWT_", frozen=True, extra="forbid")
+
+    secret_key: SecretStr = SecretStr(_LOCAL_JWT_SECRET_KEY)
+
+    #: Keys that still verify but no longer sign. Empty in steady state;
+    #: non-empty only during a rotation window.
+    previous_secret_keys: tuple[SecretStr, ...] = ()
+
+    algorithm: str = "HS256"
+
+    #: 15 minutes. See this class's docstring — this is the revocation
+    #: window, not a performance tuning knob.
+    access_token_ttl_seconds: int = Field(default=900, ge=60, le=3600)
+
+    #: `iss` and `aud`. Both are verified on every decode, and both exist
+    #: to stop a token minted for one purpose being replayed at another:
+    #: once `auth` also mints WebSocket tickets (AD-09) and, later, tokens
+    #: for a mobile client, "signed by us" stops being sufficient proof
+    #: that a token was meant for *this* verifier.
+    issuer: str = Field(default="arena64", min_length=1)
+    audience: str = Field(default="arena64-api", min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_algorithm_and_keys(self) -> "JWTSettings":
+        if self.algorithm not in SUPPORTED_JWT_ALGORITHMS:
+            raise ValueError(
+                f"JWT_ALGORITHM must be one of {sorted(SUPPORTED_JWT_ALGORITHMS)}; "
+                f"got {self.algorithm!r}. Asymmetric algorithms are refused "
+                "deliberately — this platform signs with a symmetric secret, and "
+                "accepting an asymmetric `alg` is the algorithm-confusion attack."
+            )
+
+        for label, key in self._all_keys():
+            if len(key.get_secret_value()) < JWT_SECRET_MIN_LENGTH:
+                raise ValueError(
+                    f"{label} must be at least {JWT_SECRET_MIN_LENGTH} characters "
+                    "(RFC 7518 §3.2: an HMAC key must be at least as long as the "
+                    "hash it keys)"
+                )
+
+        # A rotation that lists the current key as a previous one is
+        # harmless but always a mistake — it means the operator believes a
+        # rotation is in progress when it is not.
+        current = self.secret_key.get_secret_value()
+        if any(key.get_secret_value() == current for key in self.previous_secret_keys):
+            raise ValueError(
+                "JWT_PREVIOUS_SECRET_KEYS must not contain JWT_SECRET_KEY — "
+                "a rotation window with the same key on both sides is not a rotation"
+            )
+        return self
+
+    def _all_keys(self) -> list[tuple[str, SecretStr]]:
+        return [("JWT_SECRET_KEY", self.secret_key)] + [
+            (f"JWT_PREVIOUS_SECRET_KEYS[{index}]", key)
+            for index, key in enumerate(self.previous_secret_keys)
+        ]
+
+    @property
+    def verification_keys(self) -> tuple[SecretStr, ...]:
+        """Every key a token may have been signed with, newest first.
+
+        Ordered so the overwhelmingly common case — a token signed by the
+        current key — verifies on the first attempt, and a rotation costs
+        one extra HMAC only for tokens that predate it.
+        """
+        return (self.secret_key, *self.previous_secret_keys)
+
+
 class Settings(BaseModel):
     """The composed, immutable configuration for this process."""
 
@@ -133,6 +266,7 @@ class Settings(BaseModel):
     postgres: PostgresSettings
     redis: RedisSettings
     auth: AuthSettings
+    jwt: JWTSettings
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":
@@ -170,6 +304,20 @@ class Settings(BaseModel):
                 f"{', '.join(unset)} must be set explicitly in {self.environment} "
                 "— refusing the local default"
             )
+
+        # The most consequential of the three. A deployed tier running on
+        # the development signing key does not merely leak — it lets
+        # anyone holding this repository mint a valid token for any
+        # account on the platform, because the key is right there in the
+        # source. Unlike a wrong database URL, nothing about it fails
+        # visibly: the service starts, serves traffic, and is silently
+        # unauthenticated.
+        if self.jwt.secret_key.get_secret_value() == _LOCAL_JWT_SECRET_KEY:
+            raise ValueError(
+                f"JWT_SECRET_KEY must be set explicitly in {self.environment} "
+                "— refusing the development default, which is published in the "
+                "repository and would let anyone forge tokens for any account"
+            )
         return self
 
 
@@ -194,4 +342,5 @@ def get_settings() -> Settings:
         postgres=PostgresSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         redis=RedisSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         auth=AuthSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        jwt=JWTSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

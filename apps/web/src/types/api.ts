@@ -45,7 +45,14 @@ export type ErrorCode =
   // ever returned to a caller who already supplied the correct password.
   | "invalid_credentials"
   | "inactive_account"
-  | "account_locked";
+  | "account_locked"
+  // Bearer tokens. The three map to three different client behaviours:
+  // prompt for sign-in, silently refresh and retry, discard the stored
+  // token and sign in again. A forged signature and a malformed payload
+  // both arrive as `invalid_token` on purpose — see the backend enum.
+  | "authentication_required"
+  | "invalid_token"
+  | "expired_token";
 
 /** Mirrors `app.api.exception_handlers.ErrorResponse`. */
 export interface ApiErrorBody {

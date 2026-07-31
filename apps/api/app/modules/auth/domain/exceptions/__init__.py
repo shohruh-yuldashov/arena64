@@ -272,6 +272,30 @@ class SessionNotFound(InvalidRefreshToken):
     """
 
 
+# --- email verification (A64-011.6) ------------------------------------------
+
+
+class InvalidVerificationToken(ValidationError):
+    """The verification link cannot be redeemed — 422.
+
+    Covers every unusable case: no such token, already used, and expired.
+    One exception and one message for all three, deliberately — the
+    client's action is identical (request a new link), and telling a
+    caller *which* it was reports on whether a token they hold was ever
+    real. The server records the distinction at DEBUG, where a caller
+    cannot read it.
+
+    A `ValidationError` (422) rather than an `AuthenticationFailed` (401),
+    and the distinction is not cosmetic: this endpoint is not
+    authenticated and is not *about* identity. A 401 would tell a client
+    to prompt for sign-in, which is exactly the wrong instruction for
+    someone who clicked a stale link in an email — the fix is a new link,
+    not a password.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.INVALID_VERIFICATION_TOKEN
+
+
 __all__ = [
     "AccountLocked",
     "AuthenticationRequired",
@@ -282,6 +306,7 @@ __all__ = [
     "InvalidRefreshToken",
     "InvalidSignature",
     "InvalidToken",
+    "InvalidVerificationToken",
     "MissingToken",
     "RevokedSession",
     "SessionNotFound",

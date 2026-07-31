@@ -22,3 +22,10 @@ class UserProfileService:
 
     async def get_profile(self, user_id: UUID) -> UserRead:
         return to_user_read(await self._users.get_user(user_id))
+
+    async def find_by_email(self, email: str) -> UserRead | None:
+        """Non-raising by design — see the port. Delegates to
+        `UserService.lookup_by_email`, which A64-011.2 added for exactly
+        this shape of question."""
+        user = await self._users.lookup_by_email(email)
+        return to_user_read(user) if user is not None else None

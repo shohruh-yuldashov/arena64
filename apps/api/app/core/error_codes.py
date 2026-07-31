@@ -120,3 +120,22 @@ class ErrorCode(StrEnum):
     # stopped them rather than a bad guess.
     INVALID_SESSION = "invalid_session"
     SESSION_EXPIRED = "session_expired"
+
+    # `auth` (A64-011.6). **One** code, covering every way a verification
+    # link fails: unknown, already used, expired.
+    #
+    # Expiry deliberately does not get its own code, unlike
+    # `SESSION_EXPIRED`. The client's action is identical for all three —
+    # request a new link — and distinguishing "expired" from "unknown"
+    # tells whoever is probing whether a token they hold was ever real,
+    # which is a membership oracle over the token table. `SESSION_EXPIRED`
+    # earns its own code because *there* the actions genuinely differ
+    # (refresh versus sign in again).
+    #
+    # There is deliberately no `email_already_verified`. It was written
+    # and removed: the resend endpoint is unauthenticated and must not
+    # disclose verification state, and a valid token for an
+    # already-verified account is unreachable while at most one token is
+    # live per account. A wire code nothing can emit is a promise to
+    # clients that the server cannot keep.
+    INVALID_VERIFICATION_TOKEN = "invalid_verification_token"

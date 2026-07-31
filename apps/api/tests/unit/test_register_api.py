@@ -20,12 +20,14 @@ from fastapi.testclient import TestClient
 from app.app_factory import create_app
 from app.modules.auth.application.services import RegistrationService
 from app.modules.auth.presentation.dependencies import (
+    get_email_verification_service,
     get_password_hasher,
     get_registration_service,
 )
 from app.modules.users.application.services import UserService
 from app.modules.users.application.services.user_account_service import UserAccountService
 from app.modules.users.presentation.dependencies import get_user_service
+from app.modules.users.public import UserRead
 from tests.fakes.user_repository import FakeUserRepository
 
 _NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -82,13 +84,37 @@ class _StubHasher:
         raise AssertionError("registration has no unknown-account path")
 
 
+class _RecordingVerification:
+    """Stands in for `EmailVerificationService`.
+
+    A64-011.6 made registration send a verification link, so this
+    endpoint's graph gained a collaborator. Recording rather than
+    no-op'ing, so the tests below can assert the link *was* requested —
+    a registration that silently stopped sending would otherwise leave
+    every new account unverifiable with nothing failing.
+    """
+
+    def __init__(self) -> None:
+        self.sent_to: list[str] = []
+
+    async def send_verification(self, account: UserRead) -> None:
+        self.sent_to.append(account.email)
+
+
+@pytest.fixture
+def verification() -> _RecordingVerification:
+    return _RecordingVerification()
+
+
 @pytest.fixture
 def repository() -> FakeUserRepository:
     return FakeUserRepository()
 
 
 @pytest.fixture
-def client(repository: FakeUserRepository) -> Iterator[TestClient]:
+def client(
+    repository: FakeUserRepository, verification: _RecordingVerification
+) -> Iterator[TestClient]:
     app = create_app()
 
     def _users_service() -> UserService:
@@ -100,6 +126,7 @@ def client(repository: FakeUserRepository) -> Iterator[TestClient]:
         )
 
     app.dependency_overrides[get_registration_service] = _registration_service
+    app.dependency_overrides[get_email_verification_service] = lambda: verification
     app.dependency_overrides[get_password_hasher] = _StubHasher
     # `GET /users/{id}` is overridden too, onto the *same* repository, so a
     # test can follow the `Location` header a registration returns and
@@ -322,3 +349,33 @@ class TestRequestShape:
     def test_cannot_self_grant_verification(self, client: TestClient) -> None:
         response = client.post("/api/v1/auth/register", json=VALID_BODY | {"is_verified": True})
         assert response.status_code == 422
+
+
+class TestVerificationEmail:
+    """A64-011.6 made registration the trigger for the first link."""
+
+    def test_a_verification_link_is_requested(
+        self, client: TestClient, verification: _RecordingVerification
+    ) -> None:
+        client.post("/api/v1/auth/register", json=VALID_BODY)
+
+        assert verification.sent_to == ["player.one@example.com"]
+
+    def test_the_account_starts_unverified(self, client: TestClient) -> None:
+        """The link is sent; nothing is verified until it is redeemed."""
+        body = client.post("/api/v1/auth/register", json=VALID_BODY).json()
+
+        assert body["data"]["is_verified"] is False
+
+    def test_a_failed_registration_sends_nothing(
+        self, client: TestClient, verification: _RecordingVerification
+    ) -> None:
+        """Otherwise a duplicate sign-up would mail the existing account
+        holder a verification link they did not ask for — a spam vector
+        keyed on any address an attacker knows."""
+        client.post("/api/v1/auth/register", json=VALID_BODY)
+        verification.sent_to.clear()
+
+        client.post("/api/v1/auth/register", json=VALID_BODY)
+
+        assert verification.sent_to == []

@@ -73,6 +73,7 @@ from app.modules.auth.presentation.dependencies import (
     AccessTokenServiceDep,
     AuthenticationServiceDep,
     CurrentUser,
+    EmailVerificationServiceDep,
     RegistrationServiceDep,
     SessionServiceDep,
     UserProfileReaderDep,
@@ -81,7 +82,10 @@ from app.modules.auth.presentation.schemas import (
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
+    ResendVerificationRequest,
     TokenPair,
+    VerificationAccepted,
+    VerifyEmailRequest,
 )
 from app.modules.users.public import UserRead
 
@@ -162,6 +166,7 @@ def _device_of(request: Request) -> SessionDevice:
 async def register(
     payload: RegisterRequest,
     service: RegistrationServiceDep,
+    verification: EmailVerificationServiceDep,
     response: Response,
 ) -> ApiResponse[UserRead]:
     """Registers a new account and returns it.
@@ -175,9 +180,13 @@ async def register(
     session here would also mean an unverified account holding a 30-day
     credential before A64-011.6 has had a chance to verify anything.
 
+    A verification link is sent to the address (A64-011.6). Delivery
+    failure does not fail the request — the account exists and the person
+    can ask for another link.
+
     The body carries no `password_hash`: `UserRead` has no such field, so
     that is a property of the type rather than of remembering to exclude
-    it. `is_verified` is `false` until A64-011.6's flow runs.
+    it. `is_verified` is `false` until the link is redeemed.
     """
     created = await service.register(
         RegisterUser(
@@ -189,6 +198,13 @@ async def register(
             display_name=payload.display_name,
         )
     )
+
+    # A64-011.6: the first verification link. `send_verification` never
+    # raises for a delivery failure — see `EmailVerificationService` — so
+    # a mail provider being briefly unreachable cannot turn a successful
+    # registration into a 500. The account exists either way and the
+    # person can ask for a new link.
+    await verification.send_verification(created)
 
     # Both prefixes: `API_V1_PREFIX` alone is "/v1", and the mount point
     # adds "/api" on top of it (`app_factory`). Composing them here is
@@ -383,3 +399,87 @@ async def me(user: CurrentUser, profiles: UserProfileReaderDep) -> ApiResponse[U
     cryptographically valid for its remaining minutes regardless.
     """
     return build_response(await profiles.get_profile(user.id))
+
+
+@auth_router.post(
+    "/email/verify",
+    summary="Confirm an email address",
+    response_description="The account, now verified.",
+    responses={**_UNPROCESSABLE},
+)
+async def verify_email(
+    payload: VerifyEmailRequest,
+    verification: EmailVerificationServiceDep,
+) -> ApiResponse[UserRead]:
+    """Redeems a verification link.
+
+    The `token` is the query parameter from the link in the email. The
+    link points at a frontend page; that page posts the value here rather
+    than the API reading it from a query string, so the token stays out of
+    access logs and browser history on this side.
+
+    **One-time use.** A redeemed token is dead — clicking the same link
+    twice returns `422`, not a second success. Every other outstanding
+    link for the account dies with it, so a resend chain cannot leave a
+    stale link alive behind a used one.
+
+    `422 invalid_verification_token` covers every failure: unknown token,
+    already redeemed, expired. They are deliberately indistinguishable —
+    the client's action is the same in all three (offer a new link), and
+    telling a caller which it was reports on whether a token they hold was
+    ever real.
+
+    Not `401`: this endpoint is not about identity and needs no
+    authentication. A `401` would send someone who clicked a stale link to
+    a sign-in form, which does not fix anything.
+
+    Returns the account with `is_verified` now `true`. Idempotent at the
+    account level — an account that was somehow already verified is
+    returned unchanged rather than erroring.
+    """
+    return build_response(await verification.verify_email(payload.token))
+
+
+@auth_router.post(
+    "/email/resend",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Request a new verification link",
+    response_description="Accepted. The reply is identical whether or not an account exists.",
+    responses={**_UNPROCESSABLE},
+)
+async def resend_verification(
+    payload: ResendVerificationRequest,
+    verification: EmailVerificationServiceDep,
+) -> ApiResponse[VerificationAccepted]:
+    """Sends a fresh verification link, if there is anything to send.
+
+    **The response is identical in every case** — unknown address,
+    already-verified account, or a link genuinely sent. That is the
+    security property, not an implementation shortcut: this endpoint is
+    unauthenticated by necessity (the person who needs it never received
+    the first link and may never have signed in), which makes it an
+    account-enumeration surface unless it says nothing.
+
+    So it says nothing. No status code, body, or timing distinguishes the
+    three outcomes, and the reply is the deliberately vague "if an account
+    exists for that address, a verification link has been sent".
+
+    `202 Accepted`, not `200`: the work is handed to a mail provider and
+    the outcome is not known when this returns. `202` is the honest code
+    for "we have taken this and will act on it".
+
+    Issuing a new link **invalidates the previous one** — database.md §4.5
+    keeps at most one live token per account, enforced by a partial unique
+    index. A user who clicks an older link after requesting a new one gets
+    `422` and should use the newest email.
+
+    A malformed address is `422`, which reveals nothing: an address that
+    cannot be valid cannot belong to anyone.
+    """
+    await verification.resend_verification(payload.email)
+
+    return build_response(
+        VerificationAccepted(
+            detail=("If an account exists for that address, a verification link has been sent.")
+        )
+    )

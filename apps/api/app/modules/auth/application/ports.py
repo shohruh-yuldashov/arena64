@@ -9,6 +9,7 @@ from uuid import UUID
 
 from app.modules.auth.domain.sessions import RevocationReason, UserSession
 from app.modules.auth.domain.tokens import TokenClaims, TokenType
+from app.modules.auth.domain.verification import EmailVerificationToken
 
 
 class PasswordHasher(Protocol):
@@ -264,5 +265,59 @@ class SessionRepository(Protocol):
         `include_revoked` defaults to `False` because the common caller is
         "show me my active devices". History is available but is never the
         default.
+        """
+        ...
+
+
+class VerificationTokenRepository(Protocol):
+    """Collection-like access to the `EmailVerificationToken` aggregate.
+
+    A `Protocol`, not an ABC: the SQLAlchemy adapter and the test fake
+    satisfy it structurally and one shared contract suite runs against
+    both (repositories.md RP-05).
+
+    **No opinions** (repositories.md §2 consequence 3). `get_by_hash`
+    returns used and expired tokens rather than filtering them out —
+    "is this token still redeemable" is `EmailVerificationService`'s
+    decision, and a repository that hid used rows would make replay
+    detection impossible for the same reason hiding revoked sessions would
+    have made refresh-token reuse detection impossible.
+
+    Flushes, never commits. The unit of work owns the transaction
+    (repositories.md §5.1).
+    """
+
+    async def create(self, token: EmailVerificationToken) -> EmailVerificationToken:
+        """Persists a newly issued token and returns it."""
+        ...
+
+    async def get_by_hash(self, token_hash: bytes) -> EmailVerificationToken | None:
+        """The redemption path's lookup: hash the presented token, find its
+        row. `None` for an unknown digest — an ordinary outcome for the
+        port. Returns the row **whatever its state**."""
+        ...
+
+    async def invalidate_active_for_user(self, user_id: UUID, *, at: datetime) -> int:
+        """Marks every unused token for a user as used; returns how many.
+
+        The mechanism behind two requirements at once: "invalidate
+        previous tokens" on resend, and "invalidate remaining active
+        tokens" after a successful verification. One statement rather than
+        a loop, so it is atomic with respect to a concurrent resend.
+
+        `used_at` rather than a deletion, because §4.5's scheduled
+        hard-delete is a separate concern with its own retention window —
+        and because a row that vanishes cannot be distinguished from one
+        that never existed when investigating a replay.
+        """
+        ...
+
+    async def count_active_for_user(self, user_id: UUID, *, at: datetime) -> int:
+        """How many unused, unexpired tokens a user has.
+
+        Exists for the tests that assert the at-most-one-live invariant
+        the partial unique index enforces, and for a future resend
+        throttle. Takes `at` rather than reading the clock (AD-07) —
+        "active" is a question about an instant.
         """
         ...

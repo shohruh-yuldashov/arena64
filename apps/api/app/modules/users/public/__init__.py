@@ -22,6 +22,7 @@ What is published, and why only this much:
   `NewUserAccount`       that port's input shape
   `UserCredentialStore`  the equally narrow port `auth` uses to sign one in
   `UserProfileReader`    reads one account's own view by id (A64-011.5)
+  `EmailVerifier`        marks an address verified (A64-011.6)
   `UserCredentials`      that port's output — an account view plus the
                          stored hash, and nothing that would let a
                          consumer read or edit a profile
@@ -46,6 +47,7 @@ from app.modules.users.domain.exceptions import (
 from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import UserRead, UserSummary
 from app.modules.users.public.ports import (
+    EmailVerifier,
     NewUserAccount,
     UserAccountCreator,
     UserCredentialStore,
@@ -60,6 +62,7 @@ type UserId = UUID
 
 __all__ = [
     "EmailAlreadyExists",
+    "EmailVerifier",
     "InvalidEmail",
     "InvalidUsername",
     "NewUserAccount",

@@ -226,6 +226,35 @@ class UserService:
             logger.info("password_hash_rehashed", extra={"user_id": str(user_id)})
         return applied
 
+    async def mark_email_verified(self, user_id: UUID) -> User:
+        """Records that ownership of the address has been proven.
+
+        The transition domain-model.md §6.1 draws as `PendingVerification
+        -> Active`. The *decision* that verification happened belongs to
+        `auth`, which holds the token; the invariant that nothing else
+        flips the flag stays here, which is why this method exists rather
+        than `auth` writing the column.
+
+        Idempotent: verifying an already-verified account is a no-op that
+        still succeeds and skips the write. A caller retrying after a
+        dropped response must not get an error for the retry (CLAUDE.md §3
+        rule 8) — and on this flow the retry is a person double-clicking a
+        link in an email, which is the common case rather than the edge.
+        """
+        user = await self.get_user(user_id)
+        if user.is_verified:
+            return user
+
+        user.mark_verified()
+        user.updated_at = self._clock.now()
+
+        async with self._uow:
+            updated = await self._users.update(user)
+            await self._uow.commit()
+
+        logger.info("email_verified", extra={"user_id": str(user_id)})
+        return updated
+
     # --- lifecycle ----------------------------------------------------------
 
     async def activate(self, user_id: UUID) -> User:

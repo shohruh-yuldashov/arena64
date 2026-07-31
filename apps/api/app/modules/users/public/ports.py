@@ -161,3 +161,44 @@ class UserProfileReader(Protocol):
         branch that should never be taken.
         """
         ...
+
+    async def find_by_email(self, email: str) -> UserRead | None:
+        """The same view, by address, **returning `None` when absent.**
+
+        The opposite convention to `get_profile` above, and deliberately
+        so — the difference is what the caller knows. `get_profile` takes
+        an identifier the caller already authenticated, so absence is a
+        failure. This takes an address a *stranger* typed into a resend
+        form, where absence is the most ordinary outcome there is.
+
+        Raising here would be the leak rather than a nicety:
+        `EmailVerificationService.resend_verification` must behave
+        identically for a known and an unknown address, and an exception
+        is a branch. Matching is case-insensitive (AC-1).
+        """
+        ...
+
+
+class EmailVerifier(Protocol):
+    """Marks an account's address verified.
+
+    The fourth narrow port, added by A64-011.6. `auth` owns the *proof* —
+    it issues the token, checks the expiry and enforces one-time use —
+    and `users` owns the *column*. This port is the seam between them,
+    and it is one method wide for the reason the other three are: a
+    component that may confirm an email must not thereby gain the ability
+    to rename people or read password hashes.
+
+    Deliberately **not** paired with an `unverify`. Nothing on the
+    platform un-proves ownership of an address; an email *change* is a
+    different transition that A64-011.7 or later will model as verifying
+    a new address, not as reverting this one.
+    """
+
+    async def mark_email_verified(self, user_id: UUID) -> UserRead:
+        """Idempotent — verifying an already-verified account succeeds and
+        writes nothing. Raises `UserNotFound` if the account is gone,
+        which on this flow means it was deleted between the token being
+        issued and the link being clicked.
+        """
+        ...

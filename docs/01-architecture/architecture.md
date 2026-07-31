@@ -197,7 +197,7 @@ flowchart TB
         PGR[("PostgreSQL read replicas")]
         RL[("Redis — live match state")]
         RB[("Redis — pub/sub bus")]
-        RQ[("Redis — queues and streams")]
+        RQ[("Redis — Celery broker and task queues")]
         RC[("Redis — cache and read models")]
     end
 
@@ -257,16 +257,15 @@ Each backend module is a bounded context with its own domain vocabulary. The map
 flowchart TB
     subgraph gameplay["Gameplay core"]
         ENGINE["engine — pure rules kernel"]
-        MATCH["match — lifecycle, clock, authoritative state"]
+        GAME["game — lifecycle, clock, authoritative state"]
         MM["matchmaking — queues, pairing, challenges"]
         SPEC["spectator — observation and fan-out"]
     end
 
     subgraph player["Player domain"]
-        IDENT["identity — auth, sessions, credentials"]
-        PROF["profile — public identity"]
-        SET["settings — preferences"]
-        SOCIAL["social — friends, blocks, presence"]
+        AUTH["auth — credentials, sessions, tickets"]
+        USERS["users — profile and preferences"]
+        FRIENDS["friends — requests, friendships, blocks"]
         CHAT["chat — messaging and moderation"]
         NOTIF["notifications — delivery"]
     end
@@ -275,6 +274,8 @@ flowchart TB
         RATE["rating — skill calculation"]
         LEAD["leaderboard — ranked read models"]
         STAT["statistics — aggregates and history"]
+        ACH["achievements — milestone awards"]
+        REP["replay — archived match playback"]
     end
 
     subgraph ops["Operations"]
@@ -290,20 +291,33 @@ flowchart TB
 | Module | Bounded context | Spec | Aggregate roots |
 | --- | --- | --- | --- |
 | `engine` | Rules of checkers | `specs/game-engine.md` | *(none — pure functions and value objects)* |
-| `match` | A single contest between two players | `specs/game-engine.md` | `Match` |
+| `game` | A single contest between two players | `specs/game-engine.md` | `Match` |
 | `matchmaking` | Finding an opponent | `specs/matchmaking.md` | `QueueTicket`, `Challenge` |
-| `spectator` | Watching a match | `specs/spectator.md` | *(none — read model over `match`)* |
-| `identity` | Who a player is, and proof of it | `specs/authentication.md` | `Account`, `Session` |
-| `profile` | How a player presents publicly | `specs/profile.md` | `Profile` |
-| `settings` | Per-player preferences | `specs/settings.md` | `PlayerSettings` |
-| `social` | Relationships between players | `specs/friends.md` | `Friendship`, `Block` |
+| `spectator` | Watching a match | `specs/spectator.md` | *(none — read model over `game`)* |
+| `auth` | Who a player is, and proof of it | `specs/authentication.md` | `Account`, `Session` |
+| `users` | Public identity and preferences | `specs/profile.md`, `specs/settings.md` | `UserProfile` |
+| `friends` | Relationships between players | `specs/friends.md` | `FriendRequest`, `Friendship`, `Block` |
 | `chat` | Conversation | `specs/chat.md` | `ChatThread` |
 | `notifications` | Reaching a player out-of-band | `specs/notifications.md` | `Notification` |
 | `rating` | Measured skill | `specs/rating.md` | `PlayerRating` |
 | `leaderboard` | Ranked standing | `specs/leaderboard.md` | *(none — projection)* |
 | `statistics` | Aggregated performance | `specs/statistics.md` | *(none — projection)* |
+| `achievements` | Milestone awards | *(no spec yet — see §18)* | `PlayerAchievement` |
+| `replay` | Playback of archived matches | *(no spec yet — see §18)* | *(none — read side over `game`)* |
 | `admin` | Platform intervention | `specs/admin.md` | `ModerationCase` |
 | `fairplay` | Integrity of results | *(no spec yet — see §18)* | `IntegritySignal` |
+
+**Why `settings` is folded into `users` rather than kept separate:** profile and preferences
+are written only by their owner, share one lifecycle, are created and deleted together, and
+are read together on every profile render. Two modules with one small aggregate each would
+produce a permanent cross-module call on the platform's most-rendered page in exchange for
+no isolation benefit.
+
+**Why `replay` is a module rather than a feature of `game`:** playback reads archived
+matches, generates notation and exports, and drives analysis playback — all read-only,
+latency-tolerant work over cold data. Keeping it inside `game` would put non-critical
+read paths in the module that owns the 5,000-moves-per-second hot path, and would make
+`game` harder to reason about for the one thing it must get right.
 
 ### AD-05 — `fairplay` is a module from day one, even though no spec exists
 
@@ -323,49 +337,57 @@ flowchart TB
     GW["gateway — transport only"]
     HTTP["HTTP interface layer"]
 
-    MATCH["match"]
+    GAME["game"]
     ENGINE["engine"]
     MM["matchmaking"]
     SPEC["spectator"]
-    IDENT["identity"]
-    PROF["profile"]
-    SOCIAL["social"]
+    AUTH["auth"]
+    USERS["users"]
+    FRIENDS["friends"]
     CHAT["chat"]
     NOTIF["notifications"]
     RATE["rating"]
     LEAD["leaderboard"]
     STAT["statistics"]
+    ACH["achievements"]
+    REP["replay"]
     FAIR["fairplay"]
     ADMIN["admin"]
-    BUS(["Event bus"])
+    BUS(["Event bus — outbox to Celery"])
 
-    GW -->|"commands"| MATCH
+    GW -->|"commands"| GAME
     GW -->|"commands"| CHAT
     GW -->|"subscribe"| SPEC
     HTTP --> MM
-    HTTP --> IDENT
-    HTTP --> PROF
-    HTTP --> SOCIAL
+    HTTP --> AUTH
+    HTTP --> USERS
+    HTTP --> FRIENDS
     HTTP --> LEAD
     HTTP --> STAT
+    HTTP --> REP
     HTTP --> ADMIN
 
-    MATCH -->|"only importer"| ENGINE
-    MM -->|"creates match"| MATCH
-    SPEC -->|"read-only port"| MATCH
-    ADMIN -->|"adjudication port"| MATCH
+    GAME -->|"mutating use"| ENGINE
+    REP -->|"replay only"| ENGINE
+    FAIR -->|"analysis only"| ENGINE
+    MM -->|"creates match"| GAME
+    SPEC -->|"read-only port"| GAME
+    REP -->|"history read port"| GAME
+    FAIR -->|"history read port"| GAME
+    ADMIN -->|"adjudication port"| GAME
 
-    MATCH -.->|"match.completed"| BUS
-    MATCH -.->|"move.applied"| BUS
+    GAME -.->|"match.completed"| BUS
+    GAME -.->|"move.applied"| BUS
     BUS -.-> RATE
     BUS -.-> STAT
+    BUS -.-> ACH
     BUS -.-> FAIR
     BUS -.-> NOTIF
     RATE -.->|"rating.updated"| BUS
     BUS -.-> LEAD
 
-    MATCH -.-> IDENT
-    CHAT -.-> SOCIAL
+    GAME -.-> AUTH
+    CHAT -.-> FRIENDS
 ```
 
 Solid arrows are **synchronous in-process calls through a published port**. Dashed arrows
@@ -379,22 +401,25 @@ violation, even though the Python import would succeed. *Why:* the import graph 
 thing standing between a modular monolith and a big ball of mud; nothing about a monolith
 enforces boundaries except discipline and CI.
 
-**R-2 — Only `match` may import `engine`.**
-*Why:* see §11. The engine's guarantee is that it is pure. If `chat` or `statistics` could
-import it, someone would eventually add a database lookup to a rules function to satisfy a
-reporting requirement, and the engine's testability — the thing protecting competitive
-integrity — would be gone.
+**R-2 — Only `game`, `replay`, and `fairplay` may import `engine`, and only `game` may use
+it to mutate state.**
+The other two replay finished games; they never write. *Why:* see §11. The engine's
+guarantee is that it is pure. If `chat` or `statistics` could import it, someone would
+eventually add a database lookup to a rules function to satisfy a reporting requirement, and
+the engine's testability — the thing protecting competitive integrity — would be gone. The
+two read-only exceptions are the whole reason the engine is a peer module rather than a
+private package inside `game`.
 
-**R-3 — Only `match` may mutate match state.**
-Rating, statistics, leaderboard, notifications, fairplay and spectator **never call into
-`match` to change anything**; they subscribe to its events. *Why:* two independent
+**R-3 — Only `game` may mutate match state.**
+Rating, statistics, achievements, leaderboard, notifications, replay, fairplay and spectator
+**never call into `game` to change anything**; they subscribe to its events. *Why:* two independent
 benefits. It keeps the move hot path free of their latency, and it makes them
 *non-critical* — a rating outage degrades a scoreboard, it does not stop people from
-playing checkers. Inverting this (having `match` call `rating` on completion) would couple
+playing checkers. Inverting this (having `game` call `rating` on completion) would couple
 the platform's core loop to its least critical subsystem.
 
 **R-4 — Downstream competitive modules form a one-way chain.**
-`match` → `rating` → `leaderboard`, and `match` → `statistics`. No back-edges. *Why:*
+`game` → `rating` → `leaderboard`, and `game` → `statistics` → `achievements`. No back-edges. *Why:*
 ratings must never depend on leaderboard state, or a leaderboard rebuild could alter
 historical ratings.
 
@@ -441,7 +466,7 @@ flowchart TB
 
 | Layer | Contains | May import | Must never import |
 | --- | --- | --- | --- |
-| `domain/` | Entities, value objects, domain services, domain events, invariants | Shared kernel, `engine` *(in `match` only)* | Anything else — no framework, no ORM, no Redis, no clock, no logging framework |
+| `domain/` | Entities, value objects, domain services, domain events, invariants | Shared kernel, `engine` *(in `game`, `replay`, `fairplay` only)* | Anything else — no framework, no ORM, no Redis, no clock, no logging framework |
 | `application/` | Use cases, **repository interfaces**, unit-of-work contract, DTO mapping | `domain/`, other modules' published ports | Concrete infrastructure, HTTP types |
 | `infrastructure/` | SQLAlchemy repositories, Redis adapters, email and push clients | `application/`, `domain/` | Other modules' internals, `interface/` |
 | `interface/` | FastAPI routers, WebSocket message handlers, request and response schemas | `application/` | `domain/` entities directly, `infrastructure/` |
@@ -668,19 +693,32 @@ update is a permanent corruption of the competitive record.
 **Consequence:** delivery is at-least-once, so **every consumer must be idempotent**, keyed
 on event id. This is a hard requirement, not a recommendation — see `system-design.md §7`.
 
-### AD-17 — Redis Streams as the initial event transport
+### AD-17 — Celery over Redis as the event transport
 
-**Why:** Redis is already a required dependency, so this adds no new operational surface.
-Consumer groups provide at-least-once delivery, per-consumer acknowledgement, and replay
-from a retained window — the three properties the outbox pattern needs from a broker.
-Kafka's advantages (long retention, high partition counts, independent consumer teams) buy
-nothing at current scale and cost a cluster to operate.
+The outbox relay dispatches **one Celery task per (event, subscriber) pair**, routed to that
+subscriber's queue. Celery is the platform's only asynchronous execution framework.
 
-**Revisit when** any of: required retention exceeds what memory can hold; a consumer needs
-to replay months of history for a rebuild; sustained event throughput exceeds roughly a
-tenth of the Redis instance's capacity; or independent teams begin owning consumers with
-conflicting delivery guarantees. At that point the outbox is unchanged and only the relay's
-publish adapter is replaced — the migration cost was pre-paid by AD-16.
+**Why:** the backend stack already mandates Celery for background work, and running Celery
+*and* a second event bus would mean two retry models, two dead-letter mechanisms, two sets
+of operational dashboards, and two places to look during an incident — for one platform
+whose entire asynchronous workload is "react to a completed match." Celery supplies the
+three properties the outbox actually needs from a transport: durable hand-off, per-consumer
+retry with backoff, and queue-level isolation between SLO classes (AD-20).
+
+**What this deliberately gives up:** stream replay and consumer offsets. Arena64 does not
+need them, because the outbox table *is* the durable event log — retained and re-dispatchable
+— and every event-driven consumer (`leaderboard`, `statistics`, `achievements`) is a
+projection rebuildable from PostgreSQL by design (AD-19). Replay is a rebuild, not a
+transport feature.
+
+**Revisit when** any of: a consumer requires ordered replay of months of history that cannot
+be reconstructed from PostgreSQL; sustained event throughput exceeds roughly a tenth of the
+broker instance's capacity; or independent teams begin owning consumers with conflicting
+delivery guarantees. At that point the outbox is unchanged and only the relay's dispatch
+adapter is replaced — the migration cost was pre-paid by AD-16.
+
+**Note:** the clock worker (AD-21) is *not* a Celery task. Its rationale is in
+`docs/03-backend/services.md §1`.
 
 Event catalogue, envelope schema, and versioning are delegated to [`events.md`](./events.md).
 
@@ -878,7 +916,7 @@ pre-cut. A module becomes a candidate for extraction when **all four** hold:
 4. Its failure is tolerable without stopping gameplay
 
 Measured against those criteria today: `fairplay` qualifies on all four, `statistics` on
-three, `chat` on three. `match` fails all four by design and must never be extracted — it
+three, `chat` on three. `game` fails all four by design and must never be extracted — it
 *is* the core.
 
 ```mermaid
@@ -931,7 +969,7 @@ All decisions above are **Proposed**. Each should be promoted to a numbered ADR 
 | AD-14 | Shared conformance corpus, not shared code | §11 |
 | AD-15 | Engine version recorded per match | §11 |
 | AD-16 | Transactional outbox for all domain events | §12 |
-| AD-17 | Redis Streams as initial event transport | §12 |
+| AD-17 | Celery over Redis as the event transport | §12 |
 | AD-18 | Redis authoritative for live state, PostgreSQL for the durable log | §13 |
 | AD-19 | Nothing competitive lives only in Redis | §13 |
 | AD-20 | Workers separated by SLO | §14 |

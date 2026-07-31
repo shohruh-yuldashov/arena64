@@ -46,22 +46,19 @@ export type ErrorCode =
   | "invalid_credentials"
   | "inactive_account"
   | "account_locked"
-<<<<<<< HEAD
   // Bearer tokens. The three map to three different client behaviours:
   // prompt for sign-in, silently refresh and retry, discard the stored
   // token and sign in again. A forged signature and a malformed payload
   // both arrive as `invalid_token` on purpose — see the backend enum.
   | "authentication_required"
   | "invalid_token"
-  | "expired_token";
-=======
+  | "expired_token"
   // Refresh sessions. Both mean "sign in again"; `session_expired` lets
   // the UI say why instead of showing a bare failure. A revoked session
   // and one that never existed both arrive as `invalid_session` on
   // purpose — see the backend enum.
   | "invalid_session"
   | "session_expired";
->>>>>>> 56a5884 (task_011.4 completed)
 
 /** Mirrors `app.api.exception_handlers.ErrorResponse`. */
 export interface ApiErrorBody {

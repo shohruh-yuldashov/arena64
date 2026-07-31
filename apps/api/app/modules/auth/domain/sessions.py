@@ -77,6 +77,21 @@ class RevocationReason(StrEnum):
     with a working credential.
     """
 
+    ROTATED = "rotated"
+    """The session was exchanged for a successor — database.md §14.3's
+    "rotation on every use, with the old token invalidated".
+
+    Not a security event and not a sign-out: the player is still signed in,
+    on the successor. It is nonetheless a *revocation*, because that is
+    precisely what makes reuse detection work — presenting a rotated
+    token means the token was captured, and the only way to notice is for
+    the old link to be recorded as no longer valid.
+
+    Distinct from `PLAYER` so the revocation list can tell an ordinary
+    refresh from a sign-out, and so an operator reading a chain of twenty
+    rotated links does not mistake them for twenty sign-outs.
+    """
+
     EXPIRED = "expired"
     """Swept by a future cleanup job rather than by a live request.
 

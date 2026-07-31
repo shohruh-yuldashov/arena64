@@ -408,17 +408,18 @@ class TestPrincipalShape:
             user.id = uuid4()  # type: ignore[misc]
 
 
-class TestAccessTokenServiceIsWiredButUnused:
-    def test_a64_011_3_adds_no_endpoints(self) -> None:
-        """The task's explicit boundary. `AccessTokenService` exists and is
-        assembled in `auth.presentation.dependencies`, but `POST
-        /auth/login` still returns only the account — issuing the token
-        there is A64-011.4's line to add."""
+class TestAccessTokenServiceIsWired:
+    def test_login_now_issues_the_token(self) -> None:
+        """A64-011.3 asserted the *opposite* — that `POST /auth/login`
+        returned only the account, because issuing there was a later
+        task's line to add. A64-011.5 is that task, so the assertion is
+        inverted rather than deleted: the boundary moved, and the test
+        that guarded it should say where it moved to."""
         schema = create_app().openapi()
         login = schema["paths"]["/api/v1/auth/login"]["post"]
         response_schema = login["responses"]["200"]["content"]["application/json"]["schema"]
 
-        assert "token" not in str(response_schema).lower()
+        assert "TokenPair" in str(response_schema)
 
     def test_the_service_is_constructible_from_the_composition_root(self) -> None:
         service = get_access_token_service(get_settings(), SystemClock())

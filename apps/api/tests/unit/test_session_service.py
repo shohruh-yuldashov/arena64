@@ -565,25 +565,164 @@ class TestListUserSessions:
         assert await service.list_user_sessions(uuid4()) == []
 
 
-class TestRotationIsPreparedNotImplemented:
-    async def test_raises_rather_than_silently_not_rotating(self, service: SessionService) -> None:
-        """A64-011.4's brief is "prepare interface only". A method that
-        quietly issued a token *without* invalidating the old one would
-        look like it worked while disabling reuse detection entirely —
-        every old token would stay valid, silently."""
+class TestRotateRefreshToken:
+    """database.md §14.3's "rotation on every use, with the old token
+    invalidated". A64-011.4 left this raising; A64-011.5 implements it."""
+
+    async def test_returns_a_working_successor(self, service: SessionService) -> None:
         issued = await service.create_session(USER_ID)
 
-        with pytest.raises(NotImplementedError, match="A64-011.5"):
+        rotated = await service.rotate_refresh_token(issued.refresh_token)
+
+        assert rotated.refresh_token != issued.refresh_token
+        assert (
+            await service.validate_refresh_token(rotated.refresh_token)
+        ).id == rotated.session.id
+
+    async def test_the_presented_token_stops_working(self, service: SessionService) -> None:
+        """The half that makes rotation a security mechanism rather than
+        churn. A successor issued *without* invalidating its predecessor
+        would leave every old token valid forever."""
+        issued = await service.create_session(USER_ID)
+
+        await service.rotate_refresh_token(issued.refresh_token)
+
+        with pytest.raises(RevokedSession):
+            await service.validate_refresh_token(issued.refresh_token)
+
+    async def test_the_predecessor_is_recorded_as_rotated(
+        self, service: SessionService, repository: FakeSessionRepository
+    ) -> None:
+        """Not `player`. An operator reading a chain of twenty links must
+        be able to tell twenty refreshes from twenty sign-outs."""
+        issued = await service.create_session(USER_ID)
+
+        await service.rotate_refresh_token(issued.refresh_token)
+
+        stored = await repository.get_by_id(issued.session.id)
+        assert stored is not None
+        assert stored.revoked_reason is RevocationReason.ROTATED
+
+    async def test_the_successor_inherits_the_family(self, service: SessionService) -> None:
+        """A new family per rotation would sever the chain — and reuse
+        detection revokes *by family*, so a captured token would be
+        detected while the attacker's other links stayed live."""
+        issued = await service.create_session(USER_ID)
+
+        rotated = await service.rotate_refresh_token(issued.refresh_token)
+
+        assert rotated.session.token_family == issued.session.token_family
+
+    async def test_the_successor_does_not_extend_the_absolute_window(
+        self, service: SessionService, clock: MovableClock
+    ) -> None:
+        """The bound that limits a captured token whose theft is never
+        detected. A chain refreshed daily must still expire on the
+        original schedule."""
+        issued = await service.create_session(USER_ID)
+        clock.instant = NOW + timedelta(days=5)
+
+        rotated = await service.rotate_refresh_token(issued.refresh_token)
+
+        assert rotated.session.expires_at == issued.session.expires_at
+
+    async def test_a_chain_of_rotations_still_expires_on_schedule(
+        self, service: SessionService, clock: MovableClock, settings: SessionSettings
+    ) -> None:
+        """Rotating every few days for a month must not produce an
+        immortal session — the failure the previous test guards against,
+        asserted end to end."""
+        token = (await service.create_session(USER_ID)).refresh_token
+        for day in range(5, 30, 5):
+            clock.instant = NOW + timedelta(days=day)
+            token = (await service.rotate_refresh_token(token)).refresh_token
+
+        clock.instant = NOW + timedelta(days=settings.refresh_token_ttl_days)
+
+        with pytest.raises(ExpiredRefreshToken):
+            await service.validate_refresh_token(token)
+
+    async def test_the_idle_window_does_slide(
+        self, service: SessionService, clock: MovableClock, settings: SessionSettings
+    ) -> None:
+        """The other half of the two-expiry design: an actively refreshed
+        session must not die of idleness."""
+        issued = await service.create_session(USER_ID)
+        clock.instant = NOW + timedelta(days=settings.idle_timeout_days - 1)
+        rotated = await service.rotate_refresh_token(issued.refresh_token)
+
+        clock.instant = clock.instant + timedelta(days=settings.idle_timeout_days - 1)
+
+        assert await service.validate_refresh_token(rotated.refresh_token)
+
+    async def test_the_successor_keeps_the_device(self, service: SessionService) -> None:
+        """SE-2's revocation list must not turn every refreshed session
+        into an unlabelled row."""
+        device = SessionDevice(device_name="Chrome on macOS", ip_address="203.0.113.7")
+        issued = await service.create_session(USER_ID, device=device)
+
+        rotated = await service.rotate_refresh_token(issued.refresh_token)
+
+        assert rotated.session.device == device
+
+    async def test_rotating_an_unknown_token_raises(self, service: SessionService) -> None:
+        with pytest.raises(SessionNotFound):
+            await service.rotate_refresh_token("never-issued")
+
+    async def test_rotating_an_expired_session_raises(
+        self, service: SessionService, clock: MovableClock, settings: SessionSettings
+    ) -> None:
+        issued = await service.create_session(USER_ID)
+        clock.instant = NOW + timedelta(days=settings.refresh_token_ttl_days)
+
+        with pytest.raises(ExpiredRefreshToken):
             await service.rotate_refresh_token(issued.refresh_token)
 
-    async def test_the_interface_a64_011_5_will_call_is_fixed(
-        self, service: SessionService
+    async def test_replaying_a_rotated_token_burns_the_whole_chain(
+        self, service: SessionService, repository: FakeSessionRepository
     ) -> None:
-        import inspect
+        """§14.3's reason for rotating at all. Presenting an
+        already-rotated token means it was captured, so the family goes —
+        including the successor the legitimate user is holding."""
+        issued = await service.create_session(USER_ID)
+        rotated = await service.rotate_refresh_token(issued.refresh_token)
 
-        signature = inspect.signature(service.rotate_refresh_token)
+        with pytest.raises(RevokedSession):
+            await service.validate_refresh_token(issued.refresh_token)
 
-        assert set(signature.parameters) == {"refresh_token"}
+        successor = await repository.get_by_id(rotated.session.id)
+        assert successor is not None
+        assert successor.revoked_reason is RevocationReason.REUSE_DETECTED
+        with pytest.raises(RevokedSession):
+            await service.validate_refresh_token(rotated.refresh_token)
+
+    async def test_only_one_live_session_remains_per_chain(self, service: SessionService) -> None:
+        """A rotation replaces rather than accumulates. Ten refreshes must
+        not leave ten live sessions in the device list."""
+        token = (await service.create_session(USER_ID)).refresh_token
+        for _ in range(5):
+            token = (await service.rotate_refresh_token(token)).refresh_token
+
+        assert len(await service.list_user_sessions(USER_ID)) == 1
+
+    async def test_other_devices_are_untouched(self, service: SessionService) -> None:
+        laptop = await service.create_session(USER_ID)
+        phone = await service.create_session(USER_ID)
+
+        await service.rotate_refresh_token(laptop.refresh_token)
+
+        assert (await service.validate_refresh_token(phone.refresh_token)).id == phone.session.id
+
+    async def test_never_logs_either_token(
+        self, service: SessionService, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        issued = await service.create_session(USER_ID)
+
+        with caplog.at_level(logging.DEBUG):
+            rotated = await service.rotate_refresh_token(issued.refresh_token)
+
+        assert issued.refresh_token not in caplog.text
+        assert rotated.refresh_token not in caplog.text
 
 
 async def _sibling_in_family(

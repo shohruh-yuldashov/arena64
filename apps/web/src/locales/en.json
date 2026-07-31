@@ -1,0 +1,30 @@
+{
+  "common": {
+    "loading": "Loading…",
+    "retry": "Try again",
+    "goHome": "Go home"
+  },
+  "layout": {
+    "title": "Arena64",
+    "description": "Competitive online checkers — realtime matches, ratings, and leaderboards.",
+    "openMenu": "Open menu",
+    "closeMenu": "Close menu"
+  },
+  "error": {
+    "title": "Something went wrong",
+    "description": "An unexpected error occurred. You can try again or return home."
+  },
+  "notFound": {
+    "title": "Page not found",
+    "description": "The page you're looking for doesn't exist or has moved."
+  },
+  "theme": {
+    "toggle": "Toggle theme",
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
+  },
+  "locale": {
+    "label": "Language"
+  }
+}

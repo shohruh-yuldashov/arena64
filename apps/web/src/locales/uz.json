@@ -1,0 +1,30 @@
+{
+  "common": {
+    "loading": "Yuklanmoqda…",
+    "retry": "Qayta urinish",
+    "goHome": "Bosh sahifaga"
+  },
+  "layout": {
+    "title": "Arena64",
+    "description": "Onlayn musobaqa shashkalari — real vaqt rejimidagi o'yinlar, reyting va liderlar jadvali.",
+    "openMenu": "Menyuni ochish",
+    "closeMenu": "Menyuni yopish"
+  },
+  "error": {
+    "title": "Nimadir xato ketdi",
+    "description": "Kutilmagan xatolik yuz berdi. Qayta urinib ko'rishingiz yoki bosh sahifaga qaytishingiz mumkin."
+  },
+  "notFound": {
+    "title": "Sahifa topilmadi",
+    "description": "Siz qidirayotgan sahifa mavjud emas yoki ko'chirilgan."
+  },
+  "theme": {
+    "toggle": "Mavzuni almashtirish",
+    "light": "Yorug'",
+    "dark": "Qorong'i",
+    "system": "Tizim"
+  },
+  "locale": {
+    "label": "Til"
+  }
+}

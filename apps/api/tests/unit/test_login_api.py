@@ -205,15 +205,30 @@ class TestFailedLogin:
 
         assert WRONG_PASSWORD not in response.text
 
-    def test_no_www_authenticate_header_is_sent(self, client: TestClient) -> None:
-        """RFC 9110 §11.6.1 says a 401 should name an authentication
-        scheme. This platform has none yet — bearer tokens arrive with
-        A64-011.3 — so the header is deliberately absent rather than
-        asserting a scheme that does not exist. Asserted so that adding
-        tokens has to revisit this decision."""
+    def test_a_bare_bearer_challenge_is_sent(self, client: TestClient) -> None:
+        """RFC 9110 §11.6.1: a 401 must name an applicable scheme.
+
+        A64-011.2 asserted this header was *absent*, because the platform
+        had no scheme and advertising `Bearer` before bearer tokens
+        existed would have named something no endpoint accepted. That test
+        existed to force the decision to be revisited when tokens arrived;
+        A64-011.3 is that task, and this is the revisit.
+
+        Bare `Bearer`, with no RFC 6750 `error` parameter: those describe
+        what was wrong with a *presented* token, and a failed sign-in
+        presented none.
+        """
         response = client.post(LOGIN_URL, json={**VALID_BODY, "password": WRONG_PASSWORD})
 
-        assert "WWW-Authenticate" not in response.headers
+        assert response.headers["WWW-Authenticate"] == "Bearer"
+
+    def test_the_challenge_does_not_describe_a_token(self, client: TestClient) -> None:
+        """The header must not become the oracle the body refuses to be —
+        an `error_description` here would say more about the failure than
+        the generic `invalid_credentials` message does."""
+        response = client.post(LOGIN_URL, json={**VALID_BODY, "password": WRONG_PASSWORD})
+
+        assert "error=" not in response.headers["WWW-Authenticate"]
 
 
 class TestInactiveAccount:

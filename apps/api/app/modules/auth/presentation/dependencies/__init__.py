@@ -48,8 +48,22 @@ from app.api.deps import DbSessionDep, SettingsDep
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.auth.application.ports import PasswordHasher
-from app.modules.auth.application.services import AuthenticationService, RegistrationService
-from app.modules.auth.infrastructure import build_password_hasher
+from app.modules.auth.application.services import (
+    AccessTokenService,
+    AuthenticationService,
+    RegistrationService,
+)
+from app.modules.auth.infrastructure import JwtTokenProvider, build_password_hasher
+from app.modules.auth.presentation.dependencies.current_user import (
+    CurrentUser,
+    OptionalCurrentUser,
+    RequireAuthentication,
+    TokenValidatorDep,
+    get_current_user,
+    get_current_user_optional,
+    get_token_validator,
+    require_authentication,
+)
 from app.modules.users.application.services import UserService
 from app.modules.users.application.services.user_account_service import UserAccountService
 from app.modules.users.application.services.user_credential_service import UserCredentialService
@@ -131,16 +145,46 @@ def get_authentication_service(
 AuthenticationServiceDep = Annotated[AuthenticationService, Depends(get_authentication_service)]
 
 
+def get_access_token_service(
+    settings: SettingsDep,
+    clock: ClockDep,
+) -> AccessTokenService:
+    """Token issuance (A64-011.3).
+
+    Not wired into any route: `POST /auth/login` still returns only the
+    account, and A64-011.3's brief is infrastructure, not endpoints. It is
+    assembled here so that A64-011.4 adds one line to the login handler
+    rather than a dependency graph.
+    """
+    return AccessTokenService(
+        tokens=JwtTokenProvider(settings.jwt, clock),
+        settings=settings.jwt,
+    )
+
+
+AccessTokenServiceDep = Annotated[AccessTokenService, Depends(get_access_token_service)]
+
+
 __all__ = [
+    "AccessTokenServiceDep",
     "AuthenticationServiceDep",
     "Clock",
+    "CurrentUser",
+    "OptionalCurrentUser",
+    "RequireAuthentication",
     "PasswordHasherDep",
     "RegistrationServiceDep",
+    "TokenValidatorDep",
     "UserAccountCreatorDep",
     "UserCredentialStoreDep",
+    "get_access_token_service",
     "get_authentication_service",
+    "get_current_user",
+    "get_current_user_optional",
     "get_password_hasher",
     "get_registration_service",
+    "get_token_validator",
     "get_user_account_creator",
     "get_user_credential_store",
+    "require_authentication",
 ]

@@ -18,6 +18,11 @@ dependencies = [
     # Argon2's security *is* its memory-hardness, and a pure-Python one
     # cannot deliver the memory cost that makes it worth using.
     "argon2-cffi>=25.1,<26.0",
+    # JWT (A64-011.3). PyJWT rather than python-jose: it is the reference
+    # implementation, it requires `algorithms=` on every decode (making the
+    # algorithm-confusion attack awkward to write by accident rather than
+    # easy), and python-jose has a history of CVEs in exactly that area.
+    "pyjwt>=2.10,<3.0",
 ]
 
 [project.optional-dependencies]

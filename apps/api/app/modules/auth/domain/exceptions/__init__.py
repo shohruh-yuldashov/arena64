@@ -98,9 +98,107 @@ class AccountLocked(PermissionDeniedError):
     default_code: ClassVar[ErrorCode] = ErrorCode.ACCOUNT_LOCKED
 
 
+# --- bearer tokens (A64-011.3) ----------------------------------------------
+#
+# All five are `AuthenticationFailed`, so all five are 401 through the
+# existing MRO walk with no new handler. They form a small tree rather
+# than five siblings, because callers genuinely branch at two different
+# granularities: a route only ever cares "was a usable identity proven",
+# while the token plumbing and its tests care exactly which check failed.
+#
+#     AuthenticationFailed
+#     +-- AuthenticationRequired    no usable credential was presented
+#     |   +-- MissingToken           ... specifically, none at all
+#     +-- InvalidToken             a credential was presented and refused
+#         +-- ExpiredToken           ... because it aged out
+#         +-- InvalidSignature       ... because it was not signed by us
+
+
+class AuthenticationRequired(AuthenticationFailed):
+    """This endpoint needs a proven identity and does not have one — 401.
+
+    The general case: `get_current_user` reached the end without a
+    principal. Distinct from `InvalidToken` in the one way a client acts
+    on: there is nothing stored to discard, so the correct response is to
+    prompt for sign-in rather than to clear a token and *then* prompt.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.AUTHENTICATION_REQUIRED
+
+
+class MissingToken(AuthenticationRequired):
+    """No `Authorization: Bearer` header was sent at all — 401.
+
+    A subclass rather than a sibling because it is the specific reason for
+    the general condition above, and because a route guard written against
+    `AuthenticationRequired` must keep catching it if a later task adds a
+    second way to be unauthenticated (a cookie, a WebSocket ticket).
+
+    Carries the same wire code as its parent on purpose: a client that
+    sent no credential learns nothing from being told which of the several
+    places it could have sent one were checked.
+    """
+
+
+class InvalidToken(AuthenticationFailed):
+    """A token was presented and cannot be trusted — 401.
+
+    The catch-all for every structural failure: not three dot-separated
+    segments, not valid base64, not valid JSON, missing a required claim,
+    a claim of the wrong type, the wrong `iss`, the wrong `aud`, or the
+    wrong `type`.
+
+    **Every one of those produces this same exception and the same
+    message.** Reporting *which* check failed would hand anyone probing
+    the token format a step-by-step oracle: change one field, see whether
+    the complaint moves on to the next check, and learn the exact shape of
+    a token the platform would accept. The server knows precisely what
+    went wrong and says so in its logs, at DEBUG, where the caller cannot
+    read it.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.INVALID_TOKEN
+
+
+class ExpiredToken(InvalidToken):
+    """The token was ours, was well-formed, and has passed its `exp` — 401.
+
+    The one token failure that gets its own wire code, because it is the
+    one a client must handle differently: an expired access token means
+    *refresh and retry* (A64-011.4), not *sign in again*. Treating it like
+    any other invalid token would sign a user out every fifteen minutes,
+    which is the failure mode refresh tokens exist to prevent.
+
+    Disclosing expiry is not a leak in the way the other cases would be.
+    The client already holds the token and can read its `exp` itself —
+    the payload is base64, not encrypted — so the server is confirming
+    something the caller can compute, not revealing something it cannot.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.EXPIRED_TOKEN
+
+
+class InvalidSignature(InvalidToken):
+    """The token did not verify under any active signing key — 401.
+
+    A subclass so that the platform can *log* a forgery distinctly (this
+    is the one token failure that is never an accident, and its rate is
+    worth alerting on) while returning the parent's `invalid_token` code,
+    which tells a forger nothing about how close they got.
+
+    "Any active key" includes `JWTSettings.previous_secret_keys`, so a
+    token signed just before a key rotation is not a forgery.
+    """
+
+
 __all__ = [
     "AccountLocked",
+    "AuthenticationRequired",
+    "ExpiredToken",
     "InactiveAccount",
     "InvalidCredentials",
+    "InvalidSignature",
+    "InvalidToken",
+    "MissingToken",
     "WeakPassword",
 ]

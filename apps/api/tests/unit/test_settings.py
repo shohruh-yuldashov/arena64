@@ -6,13 +6,18 @@ from pydantic import ValidationError as PydanticValidationError
 
 from app.config.environment import Environment, current_environment, env_file_for
 from app.config.settings import (
+<<<<<<< HEAD
     JWT_SECRET_MIN_LENGTH,
     SUPPORTED_JWT_ALGORITHMS,
+=======
+    REFRESH_TOKEN_MIN_ENTROPY_BYTES,
+>>>>>>> 56a5884 (task_011.4 completed)
     AppSettings,
     AuthSettings,
     JWTSettings,
     PostgresSettings,
     RedisSettings,
+    SessionSettings,
     Settings,
     get_settings,
 )
@@ -82,7 +87,11 @@ class TestSettings:
             postgres=PostgresSettings(),
             redis=RedisSettings(),
             auth=AuthSettings(),
+<<<<<<< HEAD
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
+=======
+            session=SessionSettings(),
+>>>>>>> 56a5884 (task_011.4 completed)
         )
         assert settings.environment is Environment.TEST
 
@@ -102,7 +111,11 @@ class TestSettings:
                     cache_url=SecretStr("redis://prod-cache:6379/0"),
                 ),
                 auth=AuthSettings(),
+<<<<<<< HEAD
                 jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
+=======
+                session=SessionSettings(),
+>>>>>>> 56a5884 (task_011.4 completed)
             )
 
     def test_production_rejects_a_left_default_redis_role(self) -> None:
@@ -115,7 +128,11 @@ class TestSettings:
                 ),
                 redis=RedisSettings(),  # every role left at its local default
                 auth=AuthSettings(),
+<<<<<<< HEAD
                 jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
+=======
+                session=SessionSettings(),
+>>>>>>> 56a5884 (task_011.4 completed)
             )
 
     def test_production_accepts_fully_explicit_configuration(self) -> None:
@@ -132,7 +149,11 @@ class TestSettings:
                 cache_url=SecretStr("redis://prod-cache:6379/0"),
             ),
             auth=AuthSettings(),
+<<<<<<< HEAD
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
+=======
+            session=SessionSettings(),
+>>>>>>> 56a5884 (task_011.4 completed)
         )
         assert settings.environment is Environment.PRODUCTION
 
@@ -143,12 +164,17 @@ class TestSettings:
             postgres=PostgresSettings(),
             redis=RedisSettings(),
             auth=AuthSettings(),
+<<<<<<< HEAD
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
+=======
+            session=SessionSettings(),
+>>>>>>> 56a5884 (task_011.4 completed)
         )
         with pytest.raises(PydanticValidationError):
             settings.environment = Environment.PRODUCTION  # type: ignore[misc]
 
 
+<<<<<<< HEAD
 class TestJWTSettings:
     """A64-011.3. Every assertion here is a misconfiguration that would be
     invisible at runtime: the service starts, serves traffic, and is
@@ -273,3 +299,47 @@ class TestJWTProductionGuard:
         )
 
         assert settings.jwt.secret_key.get_secret_value()
+=======
+class TestSessionSettings:
+    """A64-011.4. Each assertion is a misconfiguration that would weaken
+    refresh sessions without failing anywhere at runtime — the class DI-06
+    exists to turn into a deploy that rolls back."""
+
+    def test_defaults_match_the_specified_policy(self) -> None:
+        settings = SessionSettings()
+
+        assert settings.refresh_token_ttl_days == 30
+        assert settings.token_entropy_bytes == REFRESH_TOKEN_MIN_ENTROPY_BYTES
+
+    def test_entropy_cannot_be_lowered_below_256_bits(self) -> None:
+        """DB-24's whole argument for hashing refresh tokens with SHA-256
+        rather than Argon2id is that a 256-bit random token has no
+        guessable space. Below that the argument stops holding, and the
+        hashing choice silently becomes wrong."""
+        with pytest.raises(PydanticValidationError):
+            SessionSettings(token_entropy_bytes=REFRESH_TOKEN_MIN_ENTROPY_BYTES - 1)
+
+    def test_entropy_may_be_raised(self) -> None:
+        assert SessionSettings(token_entropy_bytes=64).token_entropy_bytes == 64
+
+    def test_the_absolute_lifetime_is_bounded(self) -> None:
+        """The upper bound is the security-relevant one: this is how long
+        a captured token stays useful if reuse detection never fires."""
+        with pytest.raises(PydanticValidationError):
+            SessionSettings(refresh_token_ttl_days=91)
+        with pytest.raises(PydanticValidationError):
+            SessionSettings(refresh_token_ttl_days=0)
+
+    def test_an_idle_window_longer_than_the_absolute_one_is_refused(self) -> None:
+        """It could never be the binding constraint, so configuring it that
+        way does not add a second guard — it silently removes one."""
+        with pytest.raises(PydanticValidationError, match="silently disables"):
+            SessionSettings(refresh_token_ttl_days=30, idle_timeout_days=31)
+
+    def test_equal_windows_are_allowed(self) -> None:
+        """Degenerate but coherent: the idle guard simply never binds
+        before the absolute one. Refusing it would be arbitrary."""
+        settings = SessionSettings(refresh_token_ttl_days=30, idle_timeout_days=30)
+
+        assert settings.idle_timeout_days == 30
+>>>>>>> 56a5884 (task_011.4 completed)

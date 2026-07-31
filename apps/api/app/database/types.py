@@ -7,6 +7,7 @@ body versus a database row).
 from datetime import UTC, datetime
 
 from sqlalchemy import DateTime
+from sqlalchemy.dialects.postgresql import INET
 from sqlalchemy.engine import Dialect
 from sqlalchemy.types import TypeDecorator
 
@@ -47,3 +48,40 @@ class UtcDateTime(TypeDecorator[datetime]):
             # would otherwise hand back a naive value silently.
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
+
+
+class IpAddress(TypeDecorator[str]):
+    """PostgreSQL `inet` that hands Python a plain `str`, both ways.
+
+    `inet` is the right storage type — it validates the value, stores IPv6
+    without a 45-character column, and makes the subnet queries SE-2's
+    anomaly detection will want. What it also does is hand asyncpg's
+    `ipaddress.IPv4Address` / `IPv6Address` back on read, and that object
+    would travel straight into the domain entity.
+
+    Caught by `tests/contract/test_session_repository.py` running the same
+    contract against the fake and the real adapter: the fake stored the
+    `"203.0.113.7"` it was given, PostgreSQL returned
+    `IPv4Address('203.0.113.7')`, and the two compared unequal. Exactly the
+    divergence RP-05 exists to surface — and left alone it would have meant
+    a domain object whose field type depended on which adapter loaded it.
+
+    Normalising here rather than in the repository's mapper keeps it true
+    for every future table with an address column, and keeps the model's
+    `Mapped[str | None]` annotation honest rather than aspirational.
+    """
+
+    impl = INET
+    cache_ok = True
+
+    def process_bind_param(self, value: str | None, dialect: Dialect) -> str | None:
+        # Passed through unchanged: PostgreSQL parses and validates the
+        # text form, so a malformed address is rejected by the database
+        # rather than by a second, driftable check here.
+        return value
+
+    def process_result_value(self, value: object, dialect: Dialect) -> str | None:
+        if value is None:
+            return None
+        # `IPv4Address`/`IPv6Address` and `str` both render correctly.
+        return str(value)

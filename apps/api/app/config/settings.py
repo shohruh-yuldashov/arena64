@@ -131,6 +131,7 @@ class AuthSettings(BaseSettings):
     argon2_parallelism: int = Field(default=1, ge=1)
 
 
+<<<<<<< HEAD
 #: HMAC only, and deliberately a closed list rather than "whatever PyJWT
 #: supports". The classic JWT break is algorithm confusion: a service
 #: configured with a *symmetric* secret but willing to accept an asymmetric
@@ -255,6 +256,72 @@ class JWTSettings(BaseSettings):
         """
         return (self.secret_key, *self.previous_secret_keys)
 
+=======
+#: 256 bits, per the task's floor and RFC 4086's guidance for a value
+#: whose only defence is being unguessable. A refresh token is not
+#: stretched — DB-24 hashes it with SHA-256 rather than Argon2id, and that
+#: is only sound because the token has no guessable space to defend. The
+#: entropy *is* the security, so the floor is not negotiable downward.
+REFRESH_TOKEN_MIN_ENTROPY_BYTES = 32
+
+
+class SessionSettings(BaseSettings):
+    """`session` — refresh token lifetime and entropy (A64-011.4).
+
+    ## Why two expiries rather than one
+
+    database.md §14.3 requires "absolute and idle expiry both", and §4.4
+    gives the reason plainly: an idle expiry alone lets a stolen token be
+    kept alive indefinitely by using it, while an absolute expiry alone
+    logs out a daily player mid-session. Together they bound the damage of
+    theft without punishing normal use.
+
+    The task specifies one `expires_at` column and a 30-day lifetime, so
+    that is the absolute expiry and it is the column. Idle expiry needs no
+    column of its own — it is `last_used_at + idle_timeout_days`, and
+    `last_used_at` is already in the table. One stored value, both
+    guarantees.
+
+    ## Why 30 days is a real decision
+
+    This is the outer bound on how long a captured refresh token remains
+    useful if reuse detection never fires — that is, if the attacker
+    captures a token the legitimate user never presents again. Thirty days
+    is the task's figure and is defensible for a game where a lapsed
+    player returning after three weeks should not have to re-authenticate.
+    It is also long, and it is why rotation and reuse detection are not
+    optional extras here: they are what actually bounds the exposure.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="SESSION_", frozen=True, extra="forbid")
+
+    refresh_token_ttl_days: int = Field(default=30, ge=1, le=90)
+
+    #: How long a session may sit unused before it stops being valid,
+    #: independent of `refresh_token_ttl_days`. Shorter than the absolute
+    #: window by construction — a validator below enforces that, because
+    #: an idle window longer than the absolute one is not a second guard,
+    #: it is a disabled one.
+    idle_timeout_days: int = Field(default=14, ge=1, le=90)
+
+    #: Bytes drawn from the OS CSPRNG per token. The floor is a security
+    #: boundary, not a tuning knob — see `REFRESH_TOKEN_MIN_ENTROPY_BYTES`.
+    token_entropy_bytes: int = Field(
+        default=REFRESH_TOKEN_MIN_ENTROPY_BYTES, ge=REFRESH_TOKEN_MIN_ENTROPY_BYTES
+    )
+
+    @model_validator(mode="after")
+    def _idle_must_be_shorter_than_absolute(self) -> "SessionSettings":
+        if self.idle_timeout_days > self.refresh_token_ttl_days:
+            raise ValueError(
+                "SESSION_IDLE_TIMEOUT_DAYS must not exceed "
+                "SESSION_REFRESH_TOKEN_TTL_DAYS — an idle window longer than the "
+                "absolute one can never be the binding constraint, so configuring "
+                "it that way silently disables the idle guard"
+            )
+        return self
+
+>>>>>>> 56a5884 (task_011.4 completed)
 
 class Settings(BaseModel):
     """The composed, immutable configuration for this process."""
@@ -266,7 +333,11 @@ class Settings(BaseModel):
     postgres: PostgresSettings
     redis: RedisSettings
     auth: AuthSettings
+<<<<<<< HEAD
     jwt: JWTSettings
+=======
+    session: SessionSettings
+>>>>>>> 56a5884 (task_011.4 completed)
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":
@@ -342,5 +413,9 @@ def get_settings() -> Settings:
         postgres=PostgresSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         redis=RedisSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         auth=AuthSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+<<<<<<< HEAD
         jwt=JWTSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+=======
+        session=SessionSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+>>>>>>> 56a5884 (task_011.4 completed)
     )

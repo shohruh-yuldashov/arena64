@@ -28,6 +28,7 @@ from app.modules.engine import (
     PieceRank,
     PlayerSide,
     Position,
+    TerminalReason,
 )
 
 CORPUS_ROOT = Path(__file__).resolve().parents[3] / "specs" / "game-engine" / "corpus"
@@ -102,6 +103,27 @@ class RejectionCase:
         return _move(self.raw_move)
 
 
+@dataclass(frozen=True, slots=True)
+class TerminalCase:
+    """One position and the terminal verdict it must produce.
+
+    `winner` and `reason` are `None` together, for a position that is not
+    terminal — the same shape `TerminalStateEvaluator.evaluate` answers
+    with, so a reader compares one value rather than three flags.
+    """
+
+    id: str
+    description: str
+    position: Position
+    terminal: bool
+    winner: PlayerSide | None
+    reason: TerminalReason | None
+    source: str
+
+    def __str__(self) -> str:
+        return self.source
+
+
 def load_cases(through: int = LATEST_VERSION) -> tuple[CorpusCase, ...]:
     """Every legal-move case still in force, v1 through `through`.
 
@@ -115,6 +137,17 @@ def load_cases(through: int = LATEST_VERSION) -> tuple[CorpusCase, ...]:
 def load_rejections(through: int = LATEST_VERSION) -> tuple[RejectionCase, ...]:
     """Every rejection case still in force, in the same order."""
     return tuple(_rejection(entry, name) for entry, name in _entries(through, "rejections"))
+
+
+def load_terminal_positions(through: int = LATEST_VERSION) -> tuple[TerminalCase, ...]:
+    """Every terminal-state case still in force.
+
+    A third top-level key beside `cases` and `rejections`, added by v2:
+    "these are the legal moves" and "this position has ended" are
+    different claims, and bending one shape into the other would make a
+    reader guess which it was looking at.
+    """
+    return tuple(_terminal(entry, name) for entry, name in _entries(through, "terminal_positions"))
 
 
 def superseded_ids(through: int = LATEST_VERSION) -> frozenset[str]:
@@ -180,6 +213,19 @@ def _rejection(entry: Mapping[str, Any], file_name: str) -> RejectionCase:
         rejection=RejectionCategory(entry["rejection"]),
         source=f"{file_name}#{entry['id']}",
         raw_move=entry["move"],
+    )
+
+
+def _terminal(entry: Mapping[str, Any], file_name: str) -> TerminalCase:
+    winner, reason = entry["winner"], entry["reason"]
+    return TerminalCase(
+        id=entry["id"],
+        description=entry["description"],
+        position=_position(entry),
+        terminal=entry["terminal"],
+        winner=None if winner is None else PlayerSide(winner),
+        reason=None if reason is None else TerminalReason(reason),
+        source=f"{file_name}#{entry['id']}",
     )
 
 

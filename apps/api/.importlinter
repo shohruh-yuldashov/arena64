@@ -86,6 +86,7 @@ forbidden_modules =
 name = users internals are reachable only through users.public
 type = forbidden
 source_modules =
+    app.modules.game.domain
     app.modules.auth.domain
     app.modules.auth.application
     app.modules.avatars.domain
@@ -131,6 +132,7 @@ allow_indirect_imports = True
 name = friends internals are reachable only through friends.public
 type = forbidden
 source_modules =
+    app.modules.game.domain
     app.modules.auth.domain
     app.modules.auth.application
     app.modules.auth.infrastructure
@@ -153,6 +155,7 @@ allow_indirect_imports = True
 name = profiles internals are reachable only through profiles.public
 type = forbidden
 source_modules =
+    app.modules.game.domain
     app.modules.auth
     app.modules.avatars
     app.modules.friends.domain
@@ -173,6 +176,7 @@ allow_indirect_imports = True
 name = statistics internals are reachable only through statistics.public
 type = forbidden
 source_modules =
+    app.modules.game.domain
     app.modules.auth
     app.modules.avatars
     app.modules.friends.domain
@@ -312,6 +316,7 @@ forbidden_modules =
     app.modules.auth
     app.modules.avatars
     app.modules.friends
+    app.modules.game
     app.modules.notifications
     app.modules.profiles
     app.modules.statistics
@@ -338,11 +343,14 @@ forbidden_modules =
 # exceptions are the whole reason the engine is a peer module rather than a
 # private package inside `game`."
 #
-# None of the three exists yet, so this contract names every module that does
-# and forbids all of them. Each new module joins this list unless it is one of
-# those three — which is the point: a module that wants the rules of checkers
-# has to argue for it in a diff, and the argument is architecture.md §7's
-# import diagram, where "any edge not drawn is forbidden".
+# `game` exists as of A64-014.6 and is one of the three, so it is absent from
+# the source list below — that absence is the permission. `replay` and
+# `fairplay` do not exist yet.
+#
+# Each new module joins this list unless it is one of those three, which is the
+# point: a module that wants the rules of checkers has to argue for it in a
+# diff, and the argument is architecture.md §7's import diagram, where "any
+# edge not drawn is forbidden".
 [importlinter:contract:engine-has-three-permitted-consumers]
 name = only game, replay and fairplay may import engine
 type = forbidden
@@ -356,6 +364,22 @@ source_modules =
     app.modules.users
 forbidden_modules =
     app.modules.engine
+
+
+[importlinter:contract:game-internals-are-private]
+name = game internals are reachable only through game.public
+type = forbidden
+source_modules =
+    app.modules.auth
+    app.modules.avatars
+    app.modules.friends
+    app.modules.notifications
+    app.modules.profiles
+    app.modules.statistics
+    app.modules.users
+forbidden_modules =
+    app.modules.game.domain
+allow_indirect_imports = True
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +403,7 @@ source_modules =
     app.modules.auth.domain
     app.modules.avatars.domain
     app.modules.friends.domain
+    app.modules.game.domain
     app.modules.notifications.domain
     app.modules.profiles.domain
     app.modules.statistics.domain

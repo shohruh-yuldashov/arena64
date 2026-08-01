@@ -20,6 +20,12 @@ versioned corpus in `specs/game-engine/corpus/v1/`.
 **A64-014.3 — validation and application.** `MoveValidator` (which holds no
 rules of its own — it asks the generator), `MoveApplier` and `IllegalMove`.
 
+**A64-014.6 — terminal states and versioning.** `EngineVersion`,
+`CURRENT_ENGINE_VERSION`, `TerminalState`, `TerminalReason` and
+`TerminalStateEvaluator`. The evaluator is pure over a single position and
+can only report a *loss*; every draw in draughts is a property of the
+game's history, which belongs to `game.Match` (A64-014.7).
+
 **A64-014.5 — kings.** Flying and short king quiet moves and captures,
 kings starting a ply, `BoardVariant.ENGLISH_8X8`, and the corpus's second
 version. `UnsupportedPieceMovement` is **removed**: it was A64-014.3's
@@ -82,6 +88,7 @@ from app.modules.engine.move_generation import MoveGenerator
 from app.modules.engine.move_validation import MoveValidator
 from app.modules.engine.piece import Piece, PieceRank, PlayerSide
 from app.modules.engine.position import Position
+from app.modules.engine.terminal import TerminalReason, TerminalState, TerminalStateEvaluator
 from app.modules.engine.variant import (
     BoardGeometry,
     BoardVariant,
@@ -89,8 +96,10 @@ from app.modules.engine.variant import (
     MidSequencePromotion,
     geometry_of,
 )
+from app.modules.engine.version import CURRENT_ENGINE_VERSION, EngineVersion
 
 __all__ = [
+    "CURRENT_ENGINE_VERSION",
     "DIAGONAL_DIRECTIONS",
     "MAX_BOARD_DIMENSION",
     "Board",
@@ -100,6 +109,7 @@ __all__ = [
     "CaptureObligation",
     "DestinationOccupied",
     "Direction",
+    "EngineVersion",
     "GameDomainError",
     "IllegalMove",
     "InvalidBoardState",
@@ -115,6 +125,9 @@ __all__ = [
     "PieceRank",
     "PlayerSide",
     "Position",
+    "TerminalReason",
+    "TerminalState",
+    "TerminalStateEvaluator",
     "geometry_of",
     "initial_board",
 ]

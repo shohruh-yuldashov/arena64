@@ -126,10 +126,6 @@ class DrawRules:
     """Whether a man's move restarts it. True everywhere: a man only
     advances, so its move cannot be undone either."""
 
-    @property
-    def repetition_is_enabled(self) -> bool:
-        return self.repetition_threshold is not None
-
     def __post_init__(self) -> None:
         if self.repetition_threshold is not None and self.repetition_threshold < 2:
             # One occurrence is the position itself. A threshold of 1 would

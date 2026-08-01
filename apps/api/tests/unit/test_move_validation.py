@@ -11,6 +11,8 @@ suite that the validator exists to avoid in the code — and it would pass
 while the delegation was broken.
 """
 
+import inspect
+
 import pytest
 
 from app.core.exceptions import RuleViolationError
@@ -29,6 +31,7 @@ from app.modules.engine import (
     PlayerSide,
     Position,
 )
+from app.modules.engine import move_validation as validation_module
 
 RUSSIAN = BoardVariant.RUSSIAN_8X8
 
@@ -139,6 +142,44 @@ class TestPromotionMetadata:
     def test_promotion_omitted_on_the_crownhead_is_refused(self) -> None:
         with pytest.raises(IllegalMove):
             validator.validate(position({"g7": LIGHT_MAN}, PlayerSide.LIGHT), move("g7", "h8"))
+
+
+class TestTheValidatorHoldsNoRules:
+    """GE-25, asserted against the source — A64-014.10.
+
+    Every other test here shows the validator *agreeing* with the
+    generator, which a second implementation of the rules could also do
+    for a while. This shows it has no rules to disagree with: the module
+    names no geometry, no direction, no piece rank and no variant, so
+    mandatory capture and every rule added later are enforced by
+    construction rather than by two implementations happening to match.
+
+    It is the one property a behavioural test cannot show, and the audit
+    found it was the only GE rule with no evidence behind it.
+    """
+
+    FORBIDDEN = (
+        "BoardGeometry",
+        "geometry_of",
+        "DIAGONAL_DIRECTIONS",
+        "Direction",
+        "BoardVariant",
+        "PieceRank",
+        "is_playable",
+    )
+
+    def test_the_validator_names_nothing_it_would_need_to_re_derive_a_rule(self) -> None:
+        source = inspect.getsource(validation_module)
+
+        for name in self.FORBIDDEN:
+            assert name not in source, f"{name} suggests a rule was re-implemented here"
+
+    def test_it_reaches_the_rules_only_through_the_generator(self) -> None:
+        """One collaborator, and it is the generator. A validator that had
+        acquired a second would have somewhere else to get an answer."""
+        parameters = list(inspect.signature(MoveValidator.__init__).parameters)
+
+        assert parameters == ["self", "move_generator"]
 
 
 class TestMalformedIsNotIllegal:

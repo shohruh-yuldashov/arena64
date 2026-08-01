@@ -8,6 +8,7 @@ same contract as the real adapter in `tests/contract/test_user_repository.py`,
 so "passes here" means something.
 """
 
+from dataclasses import fields as fields_of
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
 from typing import Self
@@ -244,11 +245,9 @@ class TestUpdateProfile:
         await service.update_profile(created.id, UpdateUserProfile(display_name="Keep Me"))
 
         # Update something else entirely; display_name must survive.
-        updated = await service.update_profile(
-            created.id, UpdateUserProfile(timezone="Europe/London")
-        )
+        updated = await service.update_profile(created.id, UpdateUserProfile(bio="Elsewhere"))
         assert updated.display_name is not None and updated.display_name.value == "Keep Me"
-        assert updated.timezone.value == "Europe/London"
+        assert updated.bio is not None and updated.bio.value == "Elsewhere"
 
     async def test_an_explicit_null_clears_the_field(self, service: UserService) -> None:
         # The distinction `UNSET` exists for: absent leaves alone (above),
@@ -268,11 +267,16 @@ class TestUpdateProfile:
         updated = await service.update_profile(created.id, UpdateUserProfile(display_name="Later"))
         assert updated.updated_at == _NOW + timedelta(hours=3)
 
-    async def test_validates_a_timezone(self, service: UserService) -> None:
-        created = await service.create_user(create_command())
+    async def test_a_profile_update_cannot_reach_the_locale_preferences(self) -> None:
+        """A64-012.5 moved `preferred_language` and `timezone` out of this
+        command and into `UpdatePreferences`, so that a language has one
+        writable path rather than two. Asserted on the type rather than
+        through a call, because the point is that the call does not
+        compile — a `TypeError` at construction is the strongest form of
+        "this endpoint cannot change that field"."""
+        fields = {field.name for field in fields_of(UpdateUserProfile)}
 
-        with pytest.raises(InvalidTimezone):
-            await service.update_profile(created.id, UpdateUserProfile(timezone="Mars/Olympus"))
+        assert fields == {"display_name", "bio", "country"}
 
     async def test_raises_when_the_user_is_absent(self, service: UserService) -> None:
         with pytest.raises(UserNotFound):

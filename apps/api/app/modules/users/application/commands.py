@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from app.core.enums import Locale
 from app.core.sentinels import UNSET, UnsetType
+from app.modules.users.domain.preferences import AnimationSpeed, BoardTheme, PieceSet
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,12 +61,17 @@ class UpdateUserProfile:
     and stores — a client-supplied key would point an avatar at any object
     in the bucket.
 
-    Three of the five fields are nullable (`display_name`, `bio`,
-    `country`) and two are not (`preferred_language`, `timezone`). That is
-    the difference between a decoration a player may remove and a setting
-    that must always have a value — the schema enforces it at the boundary
-    so an explicit `null` on the latter two is a 422 rather than a silent
-    no-op.
+    **Since A64-012.5 it also excludes `preferred_language` and
+    `timezone`.** Both were here, and both are preferences by every
+    definition domain-model.md §7.1 uses — leaving them writable from a
+    profile edit *and* from a preferences update would be the duplicated
+    writable field that task set out to remove. They live on
+    `UpdatePreferences` now, and a profile edit cannot reach them.
+
+    All three remaining fields are nullable, which is the shape that made
+    `UNSET` necessary in the first place: each is a decoration a player may
+    legitimately remove, so "leave it alone" and "clear it" have to stay
+    distinguishable.
 
     **Raw strings, not value objects.** The command is the boundary
     between a caller and the service, and a caller that had to construct
@@ -77,8 +83,6 @@ class UpdateUserProfile:
     display_name: str | None | UnsetType = UNSET
     bio: str | None | UnsetType = UNSET
     country: str | None | UnsetType = UNSET
-    preferred_language: Locale | UnsetType = UNSET
-    timezone: str | UnsetType = UNSET
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,3 +111,55 @@ class UpdatePrivacySettings:
     show_statistics: bool | UnsetType = UNSET
     show_online_status: bool | UnsetType = UNSET
     show_activity: bool | UnsetType = UNSET
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateGameplayPreferences:
+    """The gameplay group of a partial preferences update — A64-012.5."""
+
+    board_theme: BoardTheme | UnsetType = UNSET
+    piece_set: PieceSet | UnsetType = UNSET
+    confirm_move: bool | UnsetType = UNSET
+    show_coordinates: bool | UnsetType = UNSET
+    animation_speed: AnimationSpeed | UnsetType = UNSET
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateLocalePreferences:
+    """The locale group of a partial preferences update — A64-012.5.
+
+    `timezone` is a raw string for the reason `UpdateUserProfile`'s fields
+    are: the command is the boundary, and a caller that had to construct a
+    `Timezone` would be performing the IANA check this service exists to
+    guarantee. `preferred_language` is already a closed enum, so there is
+    nothing left for a value object to validate.
+    """
+
+    preferred_language: Locale | UnsetType = UNSET
+    timezone: str | UnsetType = UNSET
+
+
+@dataclass(frozen=True, slots=True)
+class UpdatePreferences:
+    """Partial preferences update — A64-012.5.
+
+    **Nested, not flat**, and the nesting is the design rather than
+    decoration. A group is the unit the API patches, the unit the log
+    records ("updated groups"), and the unit `notifications` and `ui` are
+    added as. A flat command would make "was any gameplay setting touched"
+    a question answered by a hand-maintained list of field names.
+
+    It is also three-state at *two* levels, which a flat shape could not
+    express: an absent group is untouched, and inside a present group an
+    absent field is untouched. `{"gameplay": {"board_theme": "wood"}}`
+    changes one setting and leaves a language alone; `{}` changes nothing
+    at all.
+
+    Deliberately excludes privacy, which domain-model.md §7.1 does list as
+    a preference group. It has its own command, port and endpoint already —
+    see `users.domain.preferences` for why a control over what *strangers*
+    see does not belong on the same write as a board theme.
+    """
+
+    gameplay: UpdateGameplayPreferences | UnsetType = UNSET
+    locale: UpdateLocalePreferences | UnsetType = UNSET

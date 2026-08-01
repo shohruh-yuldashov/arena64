@@ -95,8 +95,6 @@ class TestSuccessfulUpdate:
                 "display_name": "Жанибек Алиев",
                 "bio": "Blitz player.",
                 "country": "UZ",
-                "preferred_language": "uz",
-                "timezone": "Asia/Tashkent",
             },
         )
 
@@ -105,8 +103,6 @@ class TestSuccessfulUpdate:
         assert data["display_name"] == "Жанибек Алиев"
         assert data["bio"] == "Blitz player."
         assert data["country"] == "UZ"
-        assert data["language"] == "uz"
-        assert data["timezone"] == "Asia/Tashkent"
 
     async def test_the_change_persists(self, client: AsyncClient, auth: dict[str, str]) -> None:
         await patch(client, auth, {"bio": "Persisted."})
@@ -130,11 +126,11 @@ class TestSuccessfulUpdate:
     ) -> None:
         await patch(client, auth, {"display_name": "Keep Me"})
 
-        await patch(client, auth, {"timezone": "Europe/London"})
+        await patch(client, auth, {"country": "GB"})
 
         data = (await client.get(ME_URL, headers=auth)).json()["data"]
         assert data["display_name"] == "Keep Me"
-        assert data["timezone"] == "Europe/London"
+        assert data["country"] == "GB"
 
     async def test_an_explicit_null_clears_a_nullable_field(
         self, client: AsyncClient, auth: dict[str, str]
@@ -195,28 +191,49 @@ class TestInvalidCountry:
         assert (await client.get(ME_URL, headers=auth)).json()["data"]["country"] == "GB"
 
 
-class TestInvalidLanguage:
-    @pytest.mark.parametrize("language", ["de", "fr", "EN", "english", ""])
-    async def test_an_unsupported_language_is_rejected(
-        self, client: AsyncClient, auth: dict[str, str], language: str
+class TestLocaleMovedToPreferences:
+    """A64-012.5 moved `preferred_language` and `timezone` off this
+    endpoint, so that a language has one writable path rather than two.
+
+    The positive coverage — every supported language accepted, an
+    unsupported one rejected, a bad timezone rejected — moved with them and
+    lives in `tests/contract/test_preferences_api.py`. What stays here is
+    the assertion that this endpoint no longer accepts either, because a
+    field that quietly returned to a second writable surface is precisely
+    the regression the move exists to prevent.
+    """
+
+    @pytest.mark.parametrize("field", ["preferred_language", "timezone"])
+    async def test_the_locale_fields_are_rejected_here(
+        self, client: AsyncClient, auth: dict[str, str], field: str
     ) -> None:
-        assert (await patch(client, auth, {"preferred_language": language})).status_code == 422
+        value = "uz" if field == "preferred_language" else "Asia/Tashkent"
 
-    @pytest.mark.parametrize("language", ["en", "ru", "uz"])
-    async def test_every_supported_language_is_accepted(
-        self, client: AsyncClient, auth: dict[str, str], language: str
-    ) -> None:
-        response = await patch(client, auth, {"preferred_language": language})
+        response = await patch(client, auth, {field: value})
 
-        assert response.status_code == 200
-        assert response.json()["data"]["language"] == language
+        # Rejected, not ignored. A silently dropped timezone would look
+        # like a successful change to a client that had not noticed the
+        # move.
+        assert response.status_code == 422
+        assert field in response.text
 
-    async def test_language_cannot_be_cleared(
+    async def test_the_preferences_endpoint_accepts_them(
         self, client: AsyncClient, auth: dict[str, str]
     ) -> None:
-        """An account has no "no language" state, so an explicit null is a
-        client error rather than a silent no-op."""
-        assert (await patch(client, auth, {"preferred_language": None})).status_code == 422
+        """The other half of the move: rejected here, accepted there. A
+        test that only asserted the rejection would pass just as well if
+        the fields had been dropped from the platform entirely."""
+        response = await client.patch(
+            "/api/v1/profile/preferences",
+            headers=auth,
+            json={"locale": {"preferred_language": "uz", "timezone": "Asia/Tashkent"}},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["locale"] == {
+            "preferred_language": "uz",
+            "timezone": "Asia/Tashkent",
+        }
 
 
 class TestBioLengthValidation:
@@ -384,30 +401,41 @@ class TestReadOwnProfile:
     async def test_returns_the_owner_view(self, client: AsyncClient, auth: dict[str, str]) -> None:
         data = (await client.get(ME_URL, headers=auth)).json()["data"]
 
+        # No `language` and no `timezone` since A64-012.5: this response
+        # reports the fields `PATCH /profile` can change, and it can no
+        # longer change those two. `GET /profile/preferences` has them.
         assert set(data) == {
             "id",
             "username",
             "display_name",
             "bio",
             "country",
-            "language",
-            "timezone",
             "avatar_url",
             "thumbnail_url",
             "joined_at",
         }
 
-    async def test_includes_the_timezone_the_public_view_withholds(
+    async def test_no_view_of_a_profile_publishes_a_timezone(
         self, client: AsyncClient, auth: dict[str, str]
     ) -> None:
-        await patch(client, auth, {"timezone": "Asia/Tashkent"})
+        """Publishing a timezone narrows a player's physical location to
+        anyone who asks, so no profile endpoint carries one — and since
+        A64-012.5 not even the owner's, which reads it from
+        `GET /profile/preferences` instead."""
+        await client.patch(
+            "/api/v1/profile/preferences",
+            headers=auth,
+            json={"locale": {"timezone": "Asia/Tashkent"}},
+        )
         username = (await client.get("/api/v1/auth/me", headers=auth)).json()["data"]["username"]
 
         mine = (await client.get(ME_URL, headers=auth)).json()["data"]
         public = (await client.get(f"/api/v1/profiles/{username}")).json()["data"]
+        preferences = (await client.get("/api/v1/profile/preferences", headers=auth)).json()["data"]
 
-        assert mine["timezone"] == "Asia/Tashkent"
+        assert "timezone" not in mine
         assert "timezone" not in public
+        assert preferences["locale"]["timezone"] == "Asia/Tashkent"
 
     async def test_carries_no_email_or_account_state(
         self, client: AsyncClient, auth: dict[str, str]
@@ -438,13 +466,7 @@ class TestOpenApi:
         spec = (await client.get("/openapi.json")).json()
         schema = spec["components"]["schemas"]["ProfileUpdateRequest"]
 
-        assert set(schema["properties"]) == {
-            "display_name",
-            "bio",
-            "country",
-            "preferred_language",
-            "timezone",
-        }
+        assert set(schema["properties"]) == {"display_name", "bio", "country"}
         assert schema.get("additionalProperties") is False
         assert schema.get("examples")
 

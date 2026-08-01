@@ -35,6 +35,20 @@ not every rule. Six headers describing two rules would require a client to
 implement its own "which one bites first" logic, and would tell an
 attacker exactly which dimensions an endpoint counts.
 
+## Where the authenticated identity comes from
+
+`RateLimitScope.USER` (A64-012.5) counts the account making the request,
+and this module deliberately cannot resolve that. It never reads a header
+or a body for it — that would make the dimension spoofable — and it never
+imports `auth`'s `CurrentUser`, because `app/api/` importing a module's
+presentation layer is the boundary this file's location exists to keep.
+
+Instead the *caller* supplies it: `RateLimit.enforce` takes a `principal`,
+and a module's own `rate_limits.py` — which may import `CurrentUser` — is
+where the two meet. `__call__` stays the unauthenticated path, so a
+`USER`-scoped guard attached with a bare `Depends` fails loudly rather
+than counting nothing.
+
 ## What is deliberately not here
 
 No `X-RateLimit-Policy`, no rule names on the wire. Naming the dimension
@@ -53,6 +67,7 @@ from app.config.settings import RateLimitSettings
 from app.core.exceptions import TooManyRequests
 from app.core.rate_limiting import (
     RateLimitDecision,
+    RateLimiter,
     RateLimitRule,
     RateLimitScope,
     RateLimitSubject,
@@ -139,6 +154,7 @@ async def resolve_subjects(
     rules: Sequence[RateLimitRule],
     *,
     settings: RateLimitSettings,
+    principal: str | None = None,
 ) -> list[RateLimitSubject]:
     """Binds each rule to the value it counts, dropping the ones that have
     nothing to count.
@@ -147,6 +163,30 @@ async def resolve_subjects(
     the body has no per-email subject, and the request is about to 422 —
     but its per-IP rule still applies and still consumes, which is what
     keeps a flood of malformed bodies from being free.
+
+    ## `principal` — why the authenticated identity is passed in
+
+    A `USER`-scoped rule counts the account making the request, and this
+    module cannot resolve that itself. Reading it from a header or a body
+    would make the dimension spoofable, and importing `auth`'s
+    `CurrentUser` dependency would make `app/api/` depend on a module's
+    presentation layer, which dependency-injection.md §3.2 forbids — the
+    whole reason this file sits under `app/api/` rather than `app/core/` is
+    to keep that boundary legible.
+
+    So the *caller* supplies it. A module's own `rate_limits.py` may import
+    `CurrentUser` legitimately, resolves the principal there, and hands it
+    to `RateLimit.enforce`. This function stays a pure function of a
+    request plus what it was told.
+
+    **A `USER` rule with no principal raises.** Unlike a missing email,
+    this is never an ordinary request: a `USER`-scoped rule can only be
+    attached to an authenticated route, whose auth dependency has already
+    returned a principal or raised a 401. Reaching here without one means
+    the guard was wired without one, and the alternative to raising is an
+    endpoint that looks rate limited and is not (DI-06's argument, applied
+    one layer later than startup because that is where the fact is
+    knowable).
     """
     subjects: list[RateLimitSubject] = []
     email: str | None = None
@@ -168,6 +208,13 @@ async def resolve_subjects(
                     email_loaded = True
                 if email is not None:
                     subjects.append(RateLimitSubject(rule, email))
+            case RateLimitScope.USER:
+                if principal is None:
+                    raise RuntimeError(
+                        f"rate limit rule {rule.name!r} is USER-scoped but no authenticated "
+                        "principal was supplied; attach it with RateLimit.enforce(...)"
+                    )
+                subjects.append(RateLimitSubject(rule, principal))
 
     return subjects
 
@@ -248,7 +295,40 @@ class RateLimit:
         limiter: RateLimiterDep,
         settings: RateLimitSettingsDep,
     ) -> None:
-        subjects = await resolve_subjects(request, self.rules(settings), settings=settings)
+        """The unauthenticated path — usable directly as `Depends(guard)`.
+
+        Supplies no principal, so a guard whose rules include a
+        `USER`-scoped one cannot be attached this way: `resolve_subjects`
+        raises rather than silently counting nothing. An authenticated
+        endpoint goes through `enforce` below.
+        """
+        await self.enforce(request, response, limiter=limiter, settings=settings)
+
+    async def enforce(
+        self,
+        request: Request,
+        response: Response,
+        *,
+        limiter: RateLimiter,
+        settings: RateLimitSettings,
+        principal: str | None = None,
+    ) -> None:
+        """The whole check, with the authenticated identity passed in.
+
+        Split out of `__call__` by A64-012.5 so a module can supply a
+        principal that this layer must not resolve for itself. A module's
+        `rate_limits.py` wraps this in a dependency of its own that takes
+        `CurrentUser`, which is an import that layer is allowed to make and
+        this one is not — see `resolve_subjects` on why.
+
+        Everything else is identical for both paths: the same all-or-
+        nothing acquire, the same headers on success, the same WARNING on a
+        block, the same `TooManyRequests`. There is deliberately no second
+        copy of any of that.
+        """
+        subjects = await resolve_subjects(
+            request, self.rules(settings), settings=settings, principal=principal
+        )
         decision = await limiter.acquire(subjects)
 
         if decision.allowed:

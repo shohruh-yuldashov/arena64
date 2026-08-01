@@ -105,6 +105,31 @@ class RateLimitScope(StrEnum):
     from — which is exactly the property per-IP limiting lacks, and exactly
     what credential stuffing needs to defeat."""
 
+    USER = "user"
+    """The **authenticated** account's identifier — A64-012.5.
+
+    The right dimension for any endpoint behind a token, and the one this
+    enum lacked until now. On an authenticated route the platform knows
+    precisely whose account is being written, which is strictly better than
+    a network address: an office, a university or a mobile carrier NAT is
+    one IP shared by thousands of people, so a per-IP limit on a settings
+    endpoint throttles a crowd for one member's behaviour.
+
+    **Never derived from a request body or header**, unlike `EMAIL`. The
+    subject is the principal an authentication dependency already resolved
+    and proved, which is what makes this dimension unspoofable — an
+    attacker cannot rotate it without stealing another account's
+    credentials, and at that point the limit is not the failure. See
+    `app/api/rate_limiting.py` on how the value reaches the limiter without
+    `app/api/` learning that `auth` exists.
+
+    Distinct from `EMAIL` even though both identify an account: that one
+    counts a *claimed* address on unauthenticated endpoints, where the
+    whole point is to bound guessing at an account nobody has proved they
+    own. This one counts a proven identity. Sharing a scope would put a
+    sign-in attempt and a settings change in the same bucket.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class RateLimitRule:

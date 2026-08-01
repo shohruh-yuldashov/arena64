@@ -22,12 +22,13 @@ from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 if TYPE_CHECKING:
-    from app.modules.users.public.edits import PrivacyEdits, ProfileEdits
+    from app.modules.users.public.edits import PreferenceEdits, PrivacyEdits, ProfileEdits
 
 from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import (
     AvatarReference,
     OwnUserProfile,
+    PreferencesView,
     PrivacySettingsView,
     PublicUserProfile,
     UserRead,
@@ -512,5 +513,71 @@ class PrivacySettingsEditor(Protocol):
         is no invalid combination of five independent booleans, so there is
         no validation error this can produce. A malformed *body* is
         rejected at the HTTP boundary before reaching here.
+        """
+        ...
+
+
+class PreferencesEditor(Protocol):
+    """Reads and updates the account holder's own personal settings.
+
+    The tenth narrow port, added by A64-012.5, and the one that finally
+    gives `preferred_language` and `timezone` a single owner. Both were
+    writable through `ProfileEditor` until this task; they are not any
+    more, so there is exactly one published way to change a language and it
+    is the same one that changes a board theme.
+
+    **Separate from `ProfileEditor` and from `PrivacySettingsEditor`**, and
+    the three-way split is the same argument each pair already makes.
+    A profile edit changes what a player *says about themselves*; a privacy
+    flag changes what *strangers may see*; a preference changes what
+    *they themselves see*. A component granted the last has no claim to the
+    first two, and vice versa — a settings screen that could rename people
+    because it may set a board theme would be the widest published surface
+    on the platform for the least reason.
+
+    Nothing here is public. `PreferencesView` appears on no anonymous read
+    path, and `PublicUserProfile` carries none of its fields — A64-012.5's
+    "preferences are never exposed publicly" is a property of the published
+    types rather than a filter somebody applies.
+    """
+
+    async def get_preferences(self, user_id: UUID) -> PreferencesView:
+        """The owner's own settings, every group, always.
+
+        Raises `UserNotFound` rather than returning `None`, for the reason
+        every other read on this surface does: the caller holds an
+        identifier it has already authenticated, so absence means the
+        account was deleted while a valid token was in flight.
+
+        Never partial. Every group is present and every setting inside it
+        has a value — an account that has never opened a settings screen
+        reports the platform defaults rather than an empty object, so a
+        client renders every control from one response and never has to
+        know what the defaults are.
+        """
+        ...
+
+    async def update_preferences(self, user_id: UUID, edits: "PreferenceEdits") -> PreferencesView:
+        """Applies a partial update and returns every group.
+
+        **Partial at two levels.** An omitted group is untouched; inside a
+        present group, an omitted setting is untouched. Sending
+        `{"gameplay": {"board_theme": "wood"}}` does not reset a timezone
+        and does not reset the other four gameplay settings.
+
+        Returns the complete settings rather than an acknowledgement, so a
+        client renders every control from the response instead of applying
+        an optimistic update and drifting from what was stored.
+
+        Raises `InvalidTimezone` — published from this package — when a
+        timezone is not an IANA name this system knows, and `UserNotFound`
+        if the account is gone. Nothing is written when any value is
+        rejected: the timezone is constructed before the entity is touched,
+        so a request with a good board theme and a bad timezone changes
+        neither.
+
+        The enum-valued settings cannot fail here at all; they arrive
+        already narrowed to a member, and a request carrying an unknown
+        board theme was rejected at the HTTP boundary with a 422 naming it.
         """
         ...

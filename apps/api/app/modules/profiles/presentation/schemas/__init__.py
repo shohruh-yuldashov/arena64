@@ -4,6 +4,14 @@ from app.modules.profiles.presentation.schemas.my_profile import (
     MyProfileResponse,
     ProfileUpdateRequest,
 )
+from app.modules.profiles.presentation.schemas.preferences import (
+    GameplayPreferencesResponse,
+    GameplayPreferencesUpdate,
+    LocalePreferencesResponse,
+    LocalePreferencesUpdate,
+    PreferencesResponse,
+    PreferencesUpdateRequest,
+)
 from app.modules.profiles.presentation.schemas.privacy import (
     PrivacySettingsResponse,
     PrivacySettingsUpdateRequest,
@@ -16,7 +24,13 @@ from app.modules.profiles.presentation.schemas.profile import (
 )
 
 __all__ = [
+    "GameplayPreferencesResponse",
+    "GameplayPreferencesUpdate",
+    "LocalePreferencesResponse",
+    "LocalePreferencesUpdate",
     "MyProfileResponse",
+    "PreferencesResponse",
+    "PreferencesUpdateRequest",
     "PrivacySettingsResponse",
     "PrivacySettingsUpdateRequest",
     "ProfileResponse",

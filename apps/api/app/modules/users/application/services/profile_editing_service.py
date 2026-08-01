@@ -7,8 +7,9 @@ with no rule of its own. See `user_account_service.py` on why the
 translation is not skippable.
 
 What is specific to this one is the *narrowing* it performs. It accepts
-`ProfileEdits` — five fields — and hands `UserService` an
-`UpdateUserProfile` built from exactly those five. `UpdateUserProfile` is
+`ProfileEdits` — three fields since A64-012.5 moved `preferred_language`
+and `timezone` to `PreferencesEditor` — and hands `UserService` an
+`UpdateUserProfile` built from exactly those three. `UpdateUserProfile` is
 this module's internal command and could grow a sixth field tomorrow
 without any consumer noticing; the published shape could not. Translating
 between them here rather than publishing the internal command is what
@@ -44,7 +45,5 @@ class ProfileEditingService:
             display_name=edits.display_name,
             bio=edits.bio,
             country=edits.country,
-            preferred_language=edits.preferred_language,
-            timezone=edits.timezone,
         )
         return to_own_profile(await self._users.update_profile(user_id, command))

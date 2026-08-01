@@ -39,6 +39,7 @@ page render.
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     CHAR,
@@ -51,6 +52,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import ENUM as PgEnum
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.enums import Locale
@@ -308,6 +310,56 @@ class UserModel(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     show_activity: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text(_sql_bool(DEFAULT_SHOW_ACTIVITY))
+    )
+
+    # --- gameplay preferences (A64-012.5) -----------------------------------
+    #
+    # **Two documented deviations from database.md, both required by the
+    # task and both worth stating rather than absorbing.**
+    #
+    # 1. §4.8 specifies a separate `users.player_preference` relation, 1:1
+    #    with the profile, and gives a good reason: the profile row is read
+    #    by *other players* on every profile render and match card, while
+    #    preferences are read only by the owner — so keeping them together
+    #    widens the hottest read on the platform and makes every preference
+    #    toggle invalidate a row other people are reading.
+    #
+    # 2. §4.9 argues against `jsonb` for preference data, because a blob has
+    #    no per-key constraint and cannot be probed by index.
+    #
+    # A64-012.5 specifies `jsonb` on the profile, and per CLAUDE.md's
+    # precedence rule the task wins. The costs are real and bounded here:
+    # the document is five keys and `{}` for any account that has never
+    # opened the settings screen, so the widening is bytes rather than the
+    # fifteen columns §4.8 was arguing about; and §4.9's index-probe
+    # argument is about the *notification* dispatcher, which this column
+    # deliberately does not serve — notification preferences stay out of
+    # scope precisely because they are the case that needs a relation.
+    #
+    # What §4.9's "no per-key constraint" costs is answered in the
+    # application instead: `extra="forbid"` at the HTTP boundary rejects an
+    # unknown key, and `GameplayPreferences.from_document` refuses a
+    # malformed value on read (database.md RK-9's "consumers validate on
+    # read"). That is weaker than a CHECK and it is the trade the task
+    # chose.
+    #
+    # The extraction path, if the profile read ever becomes hot enough to
+    # care: this column and the two locale columns move together into
+    # `users.player_preference`, which is exactly the grouping
+    # `User.preferences` already has — so the entity would not change.
+    gameplay_preferences: Mapped[dict[str, Any]] = mapped_column(
+        # `JSONB`, not `JSON`: binary storage, so PostgreSQL parses on write
+        # once rather than on every read, and a GIN index becomes possible
+        # if a preference ever has to be queried across players.
+        JSONB,
+        nullable=False,
+        # `{}` rather than the full default document. A row that has never
+        # been touched carries no opinion, so a later change to a platform
+        # default reaches everyone who has not chosen otherwise — and
+        # `from_document` fills every absent key, so an empty object and a
+        # complete one are the same thing to a reader. It is also what makes
+        # adding a sixth preference a code change with no backfill.
+        server_default=text("'{}'::jsonb"),
     )
 
     # Explicit re-declarations so the reader sees the full row shape here

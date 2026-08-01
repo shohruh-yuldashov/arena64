@@ -22,6 +22,7 @@ from uuid import UUID
 
 from app.core.dto import BaseResponseDTO
 from app.core.enums import Locale
+from app.modules.users.domain.preferences import AnimationSpeed, BoardTheme, PieceSet
 
 
 class AvatarReference(BaseResponseDTO):
@@ -267,15 +268,23 @@ class OwnUserProfile(BaseResponseDTO):
         PublicUserProfile  what a *stranger* sees — no timezone, no email
 
     An edit form needs every field it can write plus enough identity to
-    render a header, and it needs `timezone`, which `PublicUserProfile`
-    deliberately omits because publishing it narrows a player's physical
-    location to anyone who asks. Widening the public shape to serve the
-    owner would leak that to everybody; reusing `UserRead` would put an
-    email address in the response to every profile edit, which nothing in
-    an edit form needs.
+    render a header. Reusing `UserRead` would put an email address in the
+    response to every profile edit, which nothing in an edit form needs.
 
-    So: exactly the five editable fields, plus the identity and avatar a
-    header renders, plus nothing else.
+    So: exactly the editable fields, plus the identity and avatar a header
+    renders, plus nothing else.
+
+    ## What A64-012.5 removed, and why
+
+    `preferred_language` and `timezone` were here. They moved to
+    `PreferencesView`, because they moved out of `ProfileEdits` — and a
+    shape whose whole justification is "every field this endpoint can
+    write" must not keep returning two it no longer can. Leaving them would
+    have made this the second read of a value with one writer, which is the
+    drift `PATCH /profile/preferences` exists to prevent.
+
+    `GET /auth/me` still reports both on `UserRead`; that is the account
+    view and a different question.
 
     **No `email`, no `is_verified`, no `is_active`, no `locked_until`.**
     Account state and credentials belong to `auth` and are already served
@@ -293,8 +302,6 @@ class OwnUserProfile(BaseResponseDTO):
     display_name: str | None
     bio: str | None
     country: str | None
-    preferred_language: Locale
-    timezone: str
 
     avatar: AvatarReference
     created_at: datetime
@@ -329,3 +336,67 @@ class PrivacySettingsView(BaseResponseDTO):
     show_statistics: bool
     show_online_status: bool
     show_activity: bool
+
+
+class GameplayPreferencesView(BaseResponseDTO):
+    """How the board looks and behaves for one player — A64-012.5.
+
+    Carries the domain enums themselves rather than plain strings, which is
+    what makes a consumer's `preferences.gameplay.board_theme is
+    BoardTheme.WOOD` a type-checked comparison instead of a spelling
+    contest. The enums are published from `users.public` alongside this, as
+    BR-2 requires of anything a published DTO is defined in terms of.
+    """
+
+    board_theme: BoardTheme
+    piece_set: PieceSet
+    confirm_move: bool
+    show_coordinates: bool
+    animation_speed: AnimationSpeed
+
+
+class LocalePreferencesView(BaseResponseDTO):
+    """The language a player reads and the timezone they see times in —
+    A64-012.5.
+
+    Both were fields on `UserRead` and `OwnUserProfile` before this task
+    and are still on `UserRead`, which is `auth`'s account view. What
+    changed is that this is now the only shape they can be *written*
+    through: `ProfileEdits` no longer carries them, so there is one
+    writable path rather than two.
+    """
+
+    preferred_language: Locale
+    timezone: str
+    """The IANA name, already validated by the `Timezone` value object —
+    a plain `str` on the wire because that is what an IANA name is."""
+
+
+class PreferencesView(BaseResponseDTO):
+    """One player's personal settings, grouped — A64-012.5.
+
+    ## Why the groups are nested rather than flattened
+
+    The nesting is the contract, not presentation. A group is the unit the
+    API patches, the unit the audit log records, and the unit `ui` and
+    `notifications` arrive as — a flat shape would make each of those a
+    convention maintained by hand, and adding `notifications` would mean
+    prefixing a dozen field names and hoping nobody forgets.
+
+    ## Why privacy is not one of the groups
+
+    domain-model.md §7.1 lists privacy as a fourth preference group, and it
+    is deliberately absent here. `PrivacySettingsView` is its own published
+    shape behind its own port, because a preference decides what *you* see
+    and a privacy flag decides what *strangers* see — merging them would
+    let a component that may change a board theme also publish an account's
+    activity. The design document is describing what a profile owns; this
+    is describing what one write may reach.
+
+    **Never public.** No anonymous read path returns this type or any part
+    of it, and `PublicUserProfile` carries none of these fields. A64-012.5:
+    "preferences are never exposed publicly."
+    """
+
+    gameplay: GameplayPreferencesView
+    locale: LocalePreferencesView

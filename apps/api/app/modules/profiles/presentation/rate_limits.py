@@ -53,9 +53,13 @@ from collections.abc import Sequence
 from datetime import timedelta
 from functools import lru_cache
 
+from fastapi import Request, Response
+
+from app.api.deps import RateLimiterDep, RateLimitSettingsDep
 from app.api.rate_limiting import RateLimit
 from app.config.settings import RateLimitSettings
 from app.core.rate_limiting import RateLimitRule, RateLimitScope
+from app.modules.auth.presentation.dependencies import CurrentUser
 
 
 @lru_cache(maxsize=8)
@@ -79,6 +83,14 @@ def build_rules(settings: RateLimitSettings) -> dict[str, tuple[RateLimitRule, .
                 window=timedelta(seconds=settings.privacy_update_window_seconds),
             ),
         ),
+        "preferences_update": (
+            RateLimitRule(
+                name="preferences_update_user",
+                scope=RateLimitScope.USER,
+                limit=settings.preferences_update_user_limit,
+                window=timedelta(seconds=settings.preferences_update_window_seconds),
+            ),
+        ),
     }
 
 
@@ -99,3 +111,54 @@ def _guard(endpoint: str) -> RateLimit:
 
 #: Attached in `self_router.py` as `dependencies=[Depends(...)]`.
 PRIVACY_UPDATE_RATE_LIMIT = _guard("privacy_update")
+
+
+# --- PATCH /profile/preferences (A64-012.5) ---------------------------------
+#
+# The first USER-scoped limit on the platform, and the endpoint that made
+# the scope worth building. Everything above about per-IP being the only
+# dimension available to an authenticated route stops being true here.
+
+PREFERENCES_UPDATE_RATE_LIMIT = _guard("preferences_update")
+
+
+async def enforce_preferences_update_limit(
+    request: Request,
+    response: Response,
+    user: CurrentUser,
+    limiter: RateLimiterDep,
+    settings: RateLimitSettingsDep,
+) -> None:
+    """The `PATCH /profile/preferences` guard, counting per account.
+
+    A dependency of this module's own rather than a bare
+    `Depends(PREFERENCES_UPDATE_RATE_LIMIT)`, and the indirection is the
+    whole mechanism rather than ceremony.
+
+    A `USER`-scoped rule needs the authenticated principal, and
+    `app/api/rate_limiting.py` must not resolve one: reading an identity
+    from a header would make the dimension spoofable, and importing
+    `auth`'s `CurrentUser` there would make `app/api/` depend on a module's
+    presentation layer (dependency-injection.md §3.2). **This** file is a
+    module presentation layer, so it may import `CurrentUser` — and that is
+    the only reason this function exists. It resolves the principal and
+    hands it to `RateLimit.enforce`, which does every part of the check:
+    the same all-or-nothing acquire, the same headers, the same WARNING on
+    a block, the same `TooManyRequests`. Nothing is reimplemented here.
+
+    **The 401 comes first**, which is the ordering to want. `CurrentUser`
+    is resolved before this body runs, so an unauthenticated request is
+    refused without spending anybody's allowance — and, more importantly,
+    without a principal there is nothing to spend it against.
+
+    `user.id`, not the username: a handle can be changed (UP-2, once that
+    exists) and an id cannot, so counting the handle would make a rename a
+    way to reset a limit.
+    """
+    await PREFERENCES_UPDATE_RATE_LIMIT.enforce(
+        request,
+        response,
+        limiter=limiter,
+        settings=settings,
+        principal=str(user.id),
+    )

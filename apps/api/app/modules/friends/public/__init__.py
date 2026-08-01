@@ -13,6 +13,18 @@ What is published, and why only this much:
                        friends with" (A64-013.3) and "who can this player
                        not interact with" (A64-013.5), and can do nothing
                        else
+  `PresenceAudience`   answers "who may be told this player's presence
+                       changed" — friends minus blocked, resolved at
+                       delivery (A64-013.7). Published so a fan-out can
+                       live outside this module while BL-1's subtraction
+                       stays inside it
+  the four social      `FriendRequestAccepted`, `FriendRemoved`,
+  domain events        `PlayerBlocked`, `PlayerUnblocked` — the facts this
+                       context makes durable through the outbox (AD-16).
+                       Published because a consumer subscribes by importing
+                       the class rather than by retyping its type string,
+                       and because the payload's shape is this context's
+                       contract in the way a DTO is
 
 Deliberately **not** published: the `Friendship` and `Block` aggregates (a
 consumer holding one could end a relationship or lift a block this module is
@@ -31,6 +43,19 @@ highest-volume public read the ability to rewrite the social graph.
 The narrowing is the same one `users.public` makes twelve times over.
 """
 
-from app.modules.friends.public.ports import SocialGraphReader
+from app.modules.friends.domain.events import (
+    FriendRemoved,
+    FriendRequestAccepted,
+    PlayerBlocked,
+    PlayerUnblocked,
+)
+from app.modules.friends.public.ports import PresenceAudience, SocialGraphReader
 
-__all__ = ["SocialGraphReader"]
+__all__ = [
+    "FriendRemoved",
+    "FriendRequestAccepted",
+    "PlayerBlocked",
+    "PlayerUnblocked",
+    "PresenceAudience",
+    "SocialGraphReader",
+]

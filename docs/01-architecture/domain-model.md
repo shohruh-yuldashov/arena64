@@ -1042,6 +1042,19 @@ payload, occurred-at instant, correlation and causation ids, publication state.
 at-least-once; marked published only after acknowledgement; retained after publication as the
 durable event log that makes projection rebuilds possible (AD-17).
 
+**Realised by A64-013.7**, whose six social events are the first producers:
+`FriendRequestAccepted`, `FriendRemoved`, `PlayerBlocked`, `PlayerUnblocked`
+(context `friends`) and `PresenceOnline`, `PresenceOffline` (context `users`).
+Each is owned by the context that owns the fact and published through that
+context's `public/` surface — a central event catalogue would make every module
+import a file every other module writes to.
+
+**A payload carries identity and nothing derived from it.** Not usernames, not
+avatars, not the recipient list. Everything relationship-dependent is re-read at
+delivery, because the interval between recording an event and delivering it is
+exactly where a block is placed or a friendship ends — see
+`SocialNotificationDispatcher`.
+
 ### 13.6 `ProcessedEvent` — entity, platform
 
 The consumer-side idempotency ledger keyed by `(consumer, event id)`. Exists because at-least-once

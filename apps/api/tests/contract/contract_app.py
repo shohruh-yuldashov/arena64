@@ -16,6 +16,11 @@ hand in every suite that touched it:
     get_presence_service   `app.state.redis_pools`  -> `NoPresenceProvider`
     get_social_graph_cache `app.state.redis_pools`  -> `NoSocialGraphCache`
 
+`get_event_publisher` (A64-013.7) needs no override: it reads the request's
+session, which is already the test's, so a contract suite writes real outbox
+rows inside the transaction that is rolled back at the end of the test. That
+is what makes "the accept wrote an event" assertable without a worker.
+
 Before this module that was seven near-identical fixtures, and the third
 arrived in A64-012.7 by editing six files at once. This is the shape that
 does not repeat: a module that adds an `app.state` dependency adds one
@@ -61,12 +66,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
     get_db_session,
+    get_presence_settings,
     get_rate_limit_settings,
     get_rate_limiter,
     get_statistics_settings,
 )
+from app.api.outbox_deps import get_event_publisher
 from app.app_factory import create_app
-from app.config.settings import RateLimitSettings, StatisticsSettings
+from app.config.settings import PresenceSettings, RateLimitSettings, StatisticsSettings
 from app.core.rate_limiting import RateLimiter
 from app.modules.friends.application.ports import SocialGraphCache
 from app.modules.friends.infrastructure.cache import NoSocialGraphCache
@@ -76,6 +83,7 @@ from app.modules.users.application.services.presence_service import PresenceServ
 from app.modules.users.infrastructure.presence import NoPresenceProvider
 from app.modules.users.presentation.dependencies import get_presence_service
 from app.modules.users.public import PresenceProvider, PresenceRecorder
+from app.platform.outbox import NoEventPublisher
 from tests.fakes.rate_limiter import AllowAllRateLimiter
 
 #: The base URL every contract client uses. A constant so that a test
@@ -93,6 +101,7 @@ def build_contract_app(
     presence: PresenceProvider | None = None,
     presence_recorder: PresenceRecorder | None = None,
     social_graph_cache: SocialGraphCache | None = None,
+    outbox_enabled: bool = True,
     statistics_settings: StatisticsSettings | None = None,
 ) -> FastAPI:
     """The production application, with `lifespan`'s state stood in for.
@@ -128,6 +137,10 @@ def build_contract_app(
                               rate limiting is: a cache is shared state
                               across tests, and a suite that is not
                               testing the cache must not be coupled to one
+        outbox_enabled        `True`, which is `OUTBOX_ENABLED`'s default
+                              and its production value. A suite passes
+                              `False` only to assert what the kill switch
+                              does — see `get_event_publisher`
         statistics_settings   left at the environment's, i.e. enabled and
                               reading the real projection
 
@@ -150,6 +163,26 @@ def build_contract_app(
     application.dependency_overrides[get_presence_provider] = lambda: presence_provider
     application.dependency_overrides[get_presence_service] = lambda: presence_service
     application.dependency_overrides[get_social_graph_cache] = lambda: cache
+
+    # A64-013.7. Overridden only to turn the outbox *off*: the enabled path
+    # is the real factory over the test's session, which is exactly what a
+    # contract test should exercise.
+    if not outbox_enabled:
+        application.dependency_overrides[get_event_publisher] = NoEventPublisher
+
+    # A64-013.7. **`PRESENCE_ENABLED=false` follows the inert recorder.**
+    #
+    # Without this the app would be internally inconsistent in a way that
+    # produces real, wrong behaviour rather than merely odd wiring: the
+    # recorder discards every write, so the transition check reads "nobody
+    # is present" before *every* sign-in and every refresh — and emits an
+    # `offline -> online` edge for all of them.
+    #
+    # A suite that passes a working recorder is testing presence and gets
+    # the enabled configuration; every other suite gets the one that matches
+    # what it was actually given.
+    if presence_recorder is None:
+        application.dependency_overrides[get_presence_settings] = _disabled_presence
 
     # The two settings sections are overridden only when a test is varying
     # them. Registering an override that returns the same value the real
@@ -186,3 +219,13 @@ async def contract_client(app: FastAPI) -> AsyncIterator[AsyncClient]:
     async with AsyncClient(transport=transport, base_url=BASE_URL) as client:
         yield client
     app.dependency_overrides.clear()
+
+
+def _disabled_presence() -> PresenceSettings:
+    """`PRESENCE_ENABLED=false` — see `build_contract_app`.
+
+    A module-level function rather than a lambda so the same object is
+    returned for every app built in a process, and so the override reads as
+    a named configuration rather than an inline literal.
+    """
+    return PresenceSettings(enabled=False)

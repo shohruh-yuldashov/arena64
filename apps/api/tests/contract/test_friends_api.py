@@ -37,6 +37,7 @@ from app.modules.friends.domain.friendship import FriendshipEndReason
 from app.modules.friends.infrastructure.cache import NoSocialGraphCache
 from app.modules.friends.infrastructure.models import FriendRequestModel, FriendshipModel
 from app.modules.friends.infrastructure.repositories import SqlAlchemyFriendshipRepository
+from app.platform.outbox import NoEventPublisher
 from tests.contract.contract_app import build_contract_app, contract_client
 
 FRIENDS_URL = "/api/v1/friends"
@@ -105,6 +106,11 @@ def _friendship_service(session: AsyncSession) -> FriendshipService:
         # what it cached, and the mutual-friend count is not a cached
         # entry in any case (see `friends.infrastructure.cache.keys`).
         cache=NoSocialGraphCache(),
+        # A64-013.7. `NoEventPublisher` for the same reason: nothing drains
+        # the outbox in this suite, and the mutual-friend count emits no
+        # event — the removal path that does has its own coverage in
+        # `test_social_notifications_api.py`.
+        events=NoEventPublisher(),
         unit_of_work=SessionUnitOfWork(session),
         clock=SystemClock(),
     )

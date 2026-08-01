@@ -50,6 +50,7 @@ import logging
 from typing import Annotated
 
 from fastapi import Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
     ClockDep,
@@ -59,7 +60,11 @@ from app.api.deps import (
     RedisPoolsDep,
     StatisticsSettingsDep,
 )
+from app.config.settings import Settings
+from app.core.clock import Clock
+from app.database.redis import RedisPools
 from app.database.unit_of_work import SessionUnitOfWork
+from app.modules.friends.application.ports import SocialGraphCache
 from app.modules.friends.application.services import (
     CachedSocialGraphReader,
     SocialGraphReaderService,
@@ -81,6 +86,7 @@ from app.modules.profiles.application.services.profile_composer import PublicPro
 from app.modules.profiles.application.services.profile_directory_service import (
     ProfileDirectoryService,
 )
+from app.modules.profiles.application.services.profile_renderer import BatchProfileRenderer
 from app.modules.profiles.application.services.profile_search_service import ProfileSearchService
 from app.modules.profiles.infrastructure import (
     DatabaseStatisticsProvider,
@@ -463,6 +469,45 @@ def get_profile_composer(
 
 
 ProfileComposerDep = Annotated[PublicProfileComposer, Depends(get_profile_composer)]
+
+
+def build_profile_renderer(
+    session: AsyncSession,
+    *,
+    pools: RedisPools,
+    settings: Settings,
+    cache: SocialGraphCache,
+    clock: Clock,
+) -> BatchProfileRenderer:
+    """`profiles.public.ProfileRenderer`, assembled outside a request —
+    A64-013.7.
+
+    The outbox relay has no `Request`, so it cannot resolve the `Depends`
+    graph above; this walks the same graph by calling those factories
+    directly. They are plain functions — `Depends` wraps them, it does not
+    own them — so the worker gets **the same composer the API gets**,
+    including every provider selection and every fallback.
+
+    That identity is the point rather than a convenience. A worker with its
+    own hand-rolled composer would apply privacy correctly on the day it was
+    written and would drift the first time a provider was added to the real
+    one, and the drift would be invisible: notifications would simply start
+    publishing a field the API withholds.
+
+    Takes the session as a positional argument and everything else as
+    keywords, matching `build_social_notification_dispatcher` — both are
+    "build this over one session", and the session is the parameter that
+    changes per call.
+    """
+    composer = get_profile_composer(
+        ratings=get_rating_provider(),
+        statistics=get_statistics_provider(session, settings.statistics),
+        presence=get_presence_provider(pools, settings.presence, clock),
+        relationships=get_relationship_provider(session, settings.friends, cache),
+    )
+    return BatchProfileRenderer(
+        players=get_public_profile_reader(session, clock), composer=composer
+    )
 
 
 def get_public_profile_searcher(session: DbSessionDep, clock: ClockDep) -> PublicProfileSearcher:

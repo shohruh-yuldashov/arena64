@@ -25,8 +25,13 @@ from app.config.settings import Settings, get_settings
 from app.core.clock import SystemClock
 from app.core.constants import API_PREFIX
 from app.database.rate_limiter import RedisRateLimiter
-from app.database.redis import create_redis_pools
+from app.database.redis import RedisPools, create_redis_pools
 from app.database.session_manager import DatabaseSessionManager
+from app.modules.notifications.infrastructure import (
+    LoggingNotificationSink,
+    SessionScopedNotificationHandler,
+)
+from app.platform.outbox import OutboxWorker
 from app.storage import LocalStorageProvider
 
 logger = logging.getLogger(__name__)
@@ -207,6 +212,49 @@ OPENAPI_TAGS: list[dict[str, Any]] = [
 ]
 
 
+def build_outbox_worker(
+    db: DatabaseSessionManager, redis_pools: RedisPools, settings: Settings
+) -> OutboxWorker | None:
+    """The relay worker for this process, or `None` if it does not run one.
+
+    Assembled here rather than in `notifications` because it composes three
+    modules — the social graph and the audience from `friends`, the renderer
+    from `profiles`, the sink from `notifications` — and composing modules is
+    the composition root's job (BR-6 forbids a *module* reaching for the
+    container, not the root wiring modules together).
+
+    The dispatcher is built **per tick**, inside the handler wrapper below,
+    for the reason every service is built per request: it holds repositories,
+    repositories hold a session, and a session must not outlive the unit of
+    work it serves. What is long-lived here is the worker and its session
+    factory, which is the same lifetime `app.state.db` has.
+    """
+    if not settings.outbox.worker_enabled:
+        return None
+
+    clock = SystemClock()
+    handler = SessionScopedNotificationHandler(
+        session_factory=db.session_factory,
+        pools=redis_pools,
+        settings=settings,
+        clock=clock,
+        # `LoggingNotificationSink` is the terminal adapter until AD-09's
+        # gateway exists — A64-013.7 excludes every delivery channel. See
+        # that class on why it is a seam rather than a stub.
+        sink=LoggingNotificationSink(),
+    )
+    return OutboxWorker(
+        session_factory=db.session_factory,
+        # One handler today. The list is the extension point: a second
+        # consumer — moderation, audit, statistics — is an entry here and
+        # its own `processed_event` partition, with nothing above it
+        # changing.
+        handlers=[handler],
+        settings=settings.outbox,
+        clock=clock,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup and shutdown, in one place and in a defined order."""
@@ -258,11 +306,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.redis_pools = redis_pools
     app.state.rate_limiter = rate_limiter
 
+    # A64-013.7. The outbox relay, started **after** everything it needs is
+    # on `app.state` and stopped **before** any of it is torn down — a tick
+    # holding a session while the engine closes underneath it is the shape
+    # that turns every shutdown into a confusing error.
+    #
+    # Started in this process only when `OUTBOX_WORKER_ENABLED` says so. The
+    # intended deployment is one API tier with it off and one small worker
+    # tier with it on, running the same image; the default is `true` because
+    # a single-node development environment has no second tier and a feature
+    # that silently never delivers is worse than one that competes for the
+    # event loop. See `OutboxWorker`.
+    outbox_worker = build_outbox_worker(db, redis_pools, settings)
+    if outbox_worker is not None:
+        await outbox_worker.start()
+    else:
+        logger.info("outbox_worker_disabled", extra={"reason": "configuration"})
+    app.state.outbox_worker = outbox_worker
+
     logger.info("startup_complete")
     try:
         yield
     finally:
         logger.info("shutdown_begin")
+        if outbox_worker is not None:
+            await outbox_worker.stop()
         await redis_pools.aclose()
         await db.close()
         logger.info("shutdown_complete")

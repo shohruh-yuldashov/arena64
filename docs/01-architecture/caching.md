@@ -217,7 +217,17 @@ transaction commits opens a window in which a concurrent read repopulates it
 from the pre-commit state, and that stale value then survives for a whole
 TTL. After the commit the window is the microseconds between `COMMIT` and
 `DEL`, and closing it entirely needs the transactional outbox (AD-16) rather
-than a cleverer ordering. Invalidating after a *rollback* is harmless: the
+than a cleverer ordering.
+
+**The outbox now exists** (A64-013.7) and closing that window is a
+*candidate*, not a completed migration: a `friends.cache_invalidated` consumer
+would drop the keys as part of the same durable event chain, so a process that
+died between `COMMIT` and `DEL` would still invalidate on retry. It is not
+done, because the change trades microseconds of staleness for the relay's poll
+interval of it — seconds — on every social write. That is worse for the common
+case and better only for the crash, and which one matters more is a measurement
+nobody has taken. Recorded here as the reason the four in-request triggers stay
+where they are. Invalidating after a *rollback* is harmless: the
 next read repopulates from the unchanged database.
 
 *Future expansion:* the version segment is already there. If the friend-id

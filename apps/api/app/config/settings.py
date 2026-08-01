@@ -1052,6 +1052,83 @@ class FriendsSettings(BaseSettings):
     """
 
 
+class OutboxSettings(BaseSettings):
+    """`outbox` — the transactional event log and its relay (A64-013.7).
+
+    AD-16 makes the outbox non-negotiable, so unlike presence or the social
+    graph cache there is **no setting here that turns correctness off**.
+    `enabled` exists and is an emergency switch, not a feature flag: with it
+    off, state changes still commit and their consequences stop being
+    recorded, which loses information rather than degrading performance. It
+    is documented as such in `.env.example` and logs at `WARNING` per event.
+
+    Everything else is the relay's operating envelope, and the defaults are
+    chosen for the deployment this build actually has — one API process,
+    one in-process worker, a social event rate measured in events per
+    minute rather than per second.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="OUTBOX_", frozen=True, extra="forbid")
+
+    enabled: bool = True
+    """Whether domain events are made durable at all. See the class docstring
+    on why this is an emergency switch rather than a feature flag."""
+
+    worker_enabled: bool = True
+    """Whether *this process* runs the relay loop.
+
+    Per-process rather than per-deployment, which is the whole point: the
+    intended shape is one API tier with this off and one worker tier with it
+    on, running the same image. It defaults to `true` so that a single-node
+    development environment delivers events without a second process — the
+    configuration a contributor has, not the one a production tier has.
+    """
+
+    poll_interval_seconds: float = Field(default=1.0, ge=0.05, le=60.0)
+    """How long the relay sleeps between ticks when there is nothing to do.
+
+    system-design.md §801 budgets the relay at "low seconds", because delay
+    here delays every downstream effect on the platform. One second is well
+    inside that and costs one indexed query per second against an index that
+    is empty when the relay is healthy (§12.5).
+
+    The floor of 50ms is not a tuning range — it is a guard against a
+    configuration that turns the relay into a busy loop against PostgreSQL.
+    """
+
+    batch_size: int = Field(default=50, ge=1, le=500)
+    """How many entries one tick claims.
+
+    Bounded on both sides for different reasons. Too small and a backlog
+    drains at `batch_size / poll_interval` events per second, which is a
+    ceiling somebody discovers during an incident. Too large and one tick
+    holds a claim — and a handler's I/O — over hundreds of rows, which turns
+    a slow consumer into a long transaction (CLAUDE.md §10.5: bound
+    everything unbounded).
+    """
+
+    max_attempts: int = Field(default=5, ge=1, le=20)
+    """How many times an entry may be claimed before it stops being claimed.
+
+    With the default backoff this is roughly eighty seconds of retrying,
+    after which the row stays unpublished and shows up in the backlog metric
+    — see `OutboxEntry` on why an exhausted event must stay visible rather
+    than move to a dead-letter table nobody watches.
+    """
+
+    retry_base_seconds: int = Field(default=5, ge=1, le=300)
+    """The first retry delay. Doubles per attempt, capped below."""
+
+    retry_max_seconds: int = Field(default=300, ge=1, le=3600)
+    """The backoff ceiling.
+
+    Five minutes rather than an hour: every consumer on this platform today
+    delivers a *social* notification, and one that arrives an hour after the
+    fact is worse than one that never arrives — it is a notification about
+    somebody who came online and has since gone.
+    """
+
+
 class Settings(BaseModel):
     """The composed, immutable configuration for this process."""
 
@@ -1070,6 +1147,7 @@ class Settings(BaseModel):
     statistics: StatisticsSettings
     presence: PresenceSettings
     friends: FriendsSettings
+    outbox: OutboxSettings
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":
@@ -1154,4 +1232,5 @@ def get_settings() -> Settings:
         statistics=StatisticsSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         presence=PresenceSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         friends=FriendsSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        outbox=OutboxSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

@@ -693,6 +693,23 @@ update is a permanent corruption of the competitive record.
 **Consequence:** delivery is at-least-once, so **every consumer must be idempotent**, keyed
 on event id. This is a hard requirement, not a recommendation — see `system-design.md §7`.
 
+**Implemented by A64-013.7**, in `apps/api/app/platform/outbox/`. Three notes on
+what the first implementation settled:
+
+- **The producer cannot deliver.** `EventPublisher` stages an `INSERT` into the
+  caller's transaction and has no other method, so "did this service fan out
+  during the request" is answered by a constructor's type rather than by review.
+- **The consumer ledger is `platform.processed_event`**, keyed `(consumer,
+  event_id)` and filtered in one batched read per relay tick — the idempotency
+  check must not itself become the N+1 the batch avoids.
+- **Presence is the documented exception.** `users.PresenceOnline` and
+  `PresenceOffline` describe a fact that lives in Redis, which cannot enlist in
+  a PostgreSQL transaction, so their outbox row is committed *after* the Redis
+  write rather than with it. A crash in between loses the event, not the
+  presence — chosen over the reverse because a phantom "online" is worse than a
+  missed one for a fact whose next transition re-establishes the truth. See
+  `PresenceNotificationService`.
+
 ### AD-17 — Celery over Redis as the event transport
 
 The outbox relay dispatches **one Celery task per (event, subscriber) pair**, routed to that
@@ -716,6 +733,17 @@ be reconstructed from PostgreSQL; sustained event throughput exceeds roughly a t
 broker instance's capacity; or independent teams begin owning consumers with conflicting
 delivery guarantees. At that point the outbox is unchanged and only the relay's dispatch
 adapter is replaced — the migration cost was pre-paid by AD-16.
+
+**Status (A64-013.7):** the outbox and its relay exist; the Celery dispatch does
+not, and Celery is not yet a dependency of the build. The relay's single
+subscriber is in-process, so its transport today is a function call.
+
+That is the migration AD-17 pre-paid for rather than a departure from it: what
+would have been expensive to retrofit is already in place — a claim that is safe
+for N workers (`SELECT ... FOR UPDATE SKIP LOCKED`), a per-consumer idempotency
+ledger, and bounded retry recorded on the row rather than in a broker. When
+dispatch becomes `task.apply_async(...)`, the table and everything above it are
+unchanged.
 
 **Note:** the clock worker (AD-21) is *not* a Celery task. Its rationale is in
 `docs/03-backend/services.md §1`.

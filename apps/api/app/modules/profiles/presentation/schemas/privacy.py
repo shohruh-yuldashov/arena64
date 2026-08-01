@@ -157,7 +157,10 @@ class PrivacySettingsResponse(BaseResponseDTO):
     )
     show_last_seen: bool = Field(
         description=(
-            "Whether the time you were last online is shown. `false` unless you turned it on."
+            "Whether the time you were last online is shown, as `last_seen` on your "
+            "public profile. `false` unless you turned it on — the one setting here "
+            "that is off by default, because a published timestamp is a sleep "
+            "schedule while 'online now' is momentary."
         ),
         examples=[False],
     )
@@ -169,11 +172,21 @@ class PrivacySettingsResponse(BaseResponseDTO):
         examples=[True],
     )
     show_online_status: bool = Field(
-        description="Whether other players can see that you are online.",
+        description=(
+            "Whether other players can see that you are online, as `is_online` on "
+            "your public profile. Governs the indicator only — `show_last_seen` "
+            "governs the timestamp beside it, separately."
+        ),
         examples=[True],
     )
     show_activity: bool = Field(
-        description="Whether your recent activity is shown.",
+        description=(
+            "Whether your recent activity is shown. **Stored but not yet applied "
+            "anywhere** — no endpoint publishes activity, so changing this has no "
+            "visible effect until a match history exists. Settable now so that the "
+            "release which adds one is not also the release that decides whether it "
+            "is public."
+        ),
         examples=[True],
     )
 

@@ -30,14 +30,11 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db_session, get_rate_limiter
-from app.app_factory import create_app
 from app.modules.users.domain.validators import BIO_MAX_LENGTH, DISPLAY_NAME_MAX_LENGTH
-from tests.contract.conftest import with_presence_switched_off
-from tests.fakes.rate_limiter import AllowAllRateLimiter
+from tests.contract.contract_app import build_contract_app, contract_client
 
 PROFILE_URL = "/api/v1/profile"
 ME_URL = "/api/v1/profile/me"
@@ -48,22 +45,13 @@ PASSWORD = "CorrectHorse1!"
 
 @pytest_asyncio.fixture
 async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
-    """The production app with only the session and the rate limiter
-    redirected. No `dependency_overrides` on any profile service — the
-    graph under test is the one that ships."""
-    app = create_app()
+    """The production app over the test's rolled-back transaction.
 
-    async def _session() -> AsyncIterator[AsyncSession]:
-        yield contract_session
-
-    app.dependency_overrides[get_db_session] = _session
-    app.dependency_overrides[get_rate_limiter] = lambda: AllowAllRateLimiter()
-    with_presence_switched_off(app)
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as http:
+    No override on any profile service, mapper or schema — the graph under
+    test is the one that ships. Only `lifespan`'s state is stood in for
+    (`tests/contract/contract_app.py`)."""
+    async with contract_client(build_contract_app(contract_session)) as http:
         yield http
-    app.dependency_overrides.clear()
 
 
 @pytest_asyncio.fixture

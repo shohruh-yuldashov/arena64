@@ -34,11 +34,11 @@ include it. The recommendations say so; it is one dependency away, since
 endpoints use.
 """
 
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Path, status
 
-from app.api.exception_handlers import ErrorResponse
+from app.api.openapi import Responses, error_response
 from app.api.responses import build_response
 from app.core.responses import ApiResponse
 from app.modules.avatars.presentation.dependencies import AvatarLinkBuilderDep
@@ -48,30 +48,22 @@ from app.modules.users.domain.validators import USERNAME_MAX_LENGTH, USERNAME_MI
 
 profiles_router = APIRouter(prefix="/profiles", tags=["profiles"])
 
-#: FastAPI's own annotation for `responses=`. Spelled once rather than
-#: inferred, for the reason `auth`'s router gives: what Python infers from
-#: the literal is not assignable to what FastAPI declares.
-type _Responses = dict[int | str, dict[str, Any]]
 
-_NOT_FOUND: _Responses = {
-    404: {
-        "description": (
-            "No visible profile for that username. Returned identically "
-            "whether the username was never registered or belongs to a "
-            "deactivated account."
-        ),
-        "model": ErrorResponse,
-    }
-}
-_UNPROCESSABLE: _Responses = {
-    422: {
-        "description": (
-            "The username is not a possible handle — wrong length, or "
-            "characters a username may not contain."
-        ),
-        "model": ErrorResponse,
-    }
-}
+_NOT_FOUND: Responses = error_response(
+    404,
+    (
+        "No visible profile for that username. Returned identically "
+        "whether the username was never registered or belongs to a "
+        "deactivated account."
+    ),
+)
+_UNPROCESSABLE: Responses = error_response(
+    422,
+    (
+        "The username is not a possible handle — wrong length, or "
+        "characters a username may not contain."
+    ),
+)
 
 
 @profiles_router.get(

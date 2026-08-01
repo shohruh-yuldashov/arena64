@@ -192,7 +192,7 @@ def get_rating_provider() -> RatingProvider:
     """Ratings — **placeholder until the `rating` module exists.**
 
     Returns every player as unrated: the starting value in each category,
-    each marked provisional. See `infrastructure/unrated_providers.py`.
+    each marked provisional. See `infrastructure/rating_providers.py`.
 
     Stateless, so a per-request instance costs one attribute assignment.
     """

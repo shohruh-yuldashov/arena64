@@ -202,18 +202,46 @@ class TestListUsers:
         assert len(second["items"]) == 1
         assert second["page"]["has_more"] is False
 
-    async def test_filters_by_is_active(
+    async def test_a_deactivated_account_is_absent_from_the_roster(
         self, client: TestClient, repository: FakeUserRepository
     ) -> None:
+        """A64-012.8's security fix.
+
+        Until this task the roster returned active and deactivated accounts
+        mixed together, and `?is_active=false` returned *exactly* the
+        withdrawn ones — the list an impersonator wants before adopting a
+        handle. The rest of the epic refuses to publish it:
+        `GET /profiles/{username}` answers 404 for a deactivated account,
+        identically to a username nobody ever registered.
+        """
         await repository.create(make_user(username="active_one", email="a@example.com"))
+        inactive = make_user(username="inactive_one", email="b@example.com")
+        inactive.deactivate()
+        await repository.create(inactive)
+
+        items = client.get("/api/v1/users").json()["data"]["items"]
+
+        assert [item["username"] for item in items] == ["active_one"]
+
+    async def test_the_withdrawn_accounts_cannot_be_selected_by_a_query_parameter(
+        self, client: TestClient, repository: FakeUserRepository
+    ) -> None:
+        """The filter was **removed**, not defaulted.
+
+        A default of `is_active=True` would have left `?is_active=false`
+        reachable, which is the whole problem. Asserted against the
+        parameter a client might still be sending, because "the code no
+        longer reads it" and "the value is no longer obtainable" are
+        different claims and only the second one matters.
+        """
         inactive = make_user(username="inactive_one", email="b@example.com")
         inactive.deactivate()
         await repository.create(inactive)
 
         response = client.get("/api/v1/users?is_active=false")
 
-        items = response.json()["data"]["items"]
-        assert [item["username"] for item in items] == ["inactive_one"]
+        assert response.status_code == 200
+        assert response.json()["data"]["items"] == []
 
     def test_422_for_a_limit_beyond_the_maximum(self, client: TestClient) -> None:
         response = client.get("/api/v1/users?limit=101")

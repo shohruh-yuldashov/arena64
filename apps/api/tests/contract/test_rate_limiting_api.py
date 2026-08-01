@@ -35,15 +35,14 @@ from typing import Any
 from uuid import uuid4
 
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db_session, get_rate_limit_settings, get_rate_limiter
-from app.app_factory import create_app
 from app.config.settings import RateLimitSettings
 from app.core.clock import SystemClock
 from app.database.rate_limiter import RedisRateLimiter
+from tests.contract.contract_app import build_contract_app, contract_client
 
 REGISTER_URL = "/api/v1/auth/register"
 LOGIN_URL = "/api/v1/auth/login"
@@ -59,6 +58,25 @@ PASSWORD = "CorrectHorse1!"
 #: than one so "the limit is not simply zero" is visible in the results.
 TEST_SETTINGS = RateLimitSettings(
     enabled=True,
+    # **A64-012.8: this is what makes the suite deterministic.**
+    #
+    # The production default is 100ms, and it is correct there — see
+    # `RateLimitSettings.redis_timeout_ms` on why a *slow* Redis has to be
+    # cut off as fast as a dead one. Under a full-suite run on a loaded
+    # machine that budget is genuinely reachable: the limiter then logs
+    # `rate_limit_unavailable`, fails **open** per `fail_open=True`, and the
+    # request a test expected to be refused succeeds.
+    #
+    # Observed exactly that way — a `TimeoutError` inside
+    # `RedisRateLimiter.acquire`, one failure in a full run and none when
+    # the file was run alone, which is the signature of a test that depends
+    # on the host rather than on the code.
+    #
+    # Two seconds is far above any healthy local round trip, so these tests
+    # assert the limiter's *logic*. The fail-open path is not left untested
+    # by raising it: `tests/fakes/rate_limiter.BrokenRateLimiter` covers it
+    # deterministically, without needing Redis to be slow on cue.
+    redis_timeout_ms=2_000,
     # One trusted proxy, so a test can present a distinct caller address
     # through `X-Forwarded-For` — which is also the only way to prove the
     # per-IP rules are per *IP* rather than per process.
@@ -82,28 +100,21 @@ TEST_SETTINGS = RateLimitSettings(
 async def client(
     contract_session: AsyncSession, contract_redis: Redis
 ) -> AsyncIterator[AsyncClient]:
-    """The production app with a real limiter on a flushed Redis.
+    """The production app with a **real** limiter on a flushed Redis.
 
-    The ASGI transport does not run `lifespan`, so the limiter that
-    lifespan builds is supplied here instead — pointed at
-    `contract_redis`, which the fixture flushes on both sides so no test
-    inherits another's counters.
+    The one suite that overrides the limiter with something other than a
+    permissive double, because it is the suite testing limiting. It is
+    pointed at `contract_redis`, which the fixture flushes on both sides so
+    no test inherits another's counters, and at `TEST_SETTINGS`, whose
+    limits are low enough to reach in a handful of requests.
     """
-    app = create_app()
-
-    async def _session() -> AsyncIterator[AsyncSession]:
-        yield contract_session
-
-    limiter = RedisRateLimiter(contract_redis, settings=TEST_SETTINGS, clock=SystemClock())
-
-    app.dependency_overrides[get_db_session] = _session
-    app.dependency_overrides[get_rate_limiter] = lambda: limiter
-    app.dependency_overrides[get_rate_limit_settings] = lambda: TEST_SETTINGS
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as http:
+    app = build_contract_app(
+        contract_session,
+        rate_limiter=RedisRateLimiter(contract_redis, settings=TEST_SETTINGS, clock=SystemClock()),
+        rate_limit_settings=TEST_SETTINGS,
+    )
+    async with contract_client(app) as http:
         yield http
-    app.dependency_overrides.clear()
 
 
 def caller(address: str) -> dict[str, str]:

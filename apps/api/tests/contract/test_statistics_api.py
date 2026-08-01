@@ -26,20 +26,17 @@ Skipped, not failed, when PostgreSQL is unreachable (see `conftest.py`).
 """
 
 from collections.abc import AsyncIterator
-from typing import Any
 from uuid import UUID, uuid4
 
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db_session, get_rate_limiter, get_statistics_settings
 from app.app_factory import create_app
 from app.config.settings import StatisticsSettings
 from app.modules.statistics.infrastructure.models import PlayerStatisticsModel
-from tests.contract.conftest import with_presence_switched_off
-from tests.fakes.rate_limiter import AllowAllRateLimiter
+from tests.contract.contract_app import build_contract_app, contract_client
 
 PROFILES_URL = "/api/v1/profiles"
 ME_URL = "/api/v1/profile/me"
@@ -79,47 +76,34 @@ A_REAL_RECORD = {
 A_REAL_RECORD_RESPONSE = {**A_REAL_RECORD, "win_rate": 0.6}
 
 
-def _app(session: AsyncSession, *, statistics_enabled: bool = True) -> Any:
-    """The production app with the session, the rate limiter and — only
-    where a test needs it — the statistics kill switch redirected.
-
-    No `dependency_overrides` on any provider or service: the graph under
-    test is the one that ships, including the real
-    `DatabaseStatisticsProvider` reading the real table.
-    """
-    app = create_app()
-
-    async def _session() -> AsyncIterator[AsyncSession]:
-        yield session
-
-    app.dependency_overrides[get_db_session] = _session
-    app.dependency_overrides[get_rate_limiter] = lambda: AllowAllRateLimiter()
-    with_presence_switched_off(app)
-    if not statistics_enabled:
-        app.dependency_overrides[get_statistics_settings] = lambda: StatisticsSettings(
-            enabled=False
-        )
-    return app
-
-
 @pytest_asyncio.fixture
 async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
-    app = _app(contract_session)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as http:
+    """The production app over the test's rolled-back transaction.
+
+    No override on any provider or service: the graph under test is the one
+    that ships, including the real `DatabaseStatisticsProvider` reading the
+    real table. Only `lifespan`'s state is stood in for
+    (`tests/contract/contract_app.py`).
+    """
+    async with contract_client(build_contract_app(contract_session)) as http:
         yield http
-    app.dependency_overrides.clear()
 
 
 @pytest_asyncio.fixture
 async def fallback_client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     """The same app with `STATISTICS_ENABLED=false`, which wires
-    `NoMatchesStatisticsProvider` instead of the database one."""
-    app = _app(contract_session, statistics_enabled=False)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as http:
+    `NoMatchesStatisticsProvider` instead of the database one.
+
+    The kill switch is a *deliberate variation* rather than a stand-in, and
+    the factory keeps the distinction visible: this is the only parameter
+    this suite passes, so the only thing that differs between the two
+    clients is the thing under test.
+    """
+    app = build_contract_app(
+        contract_session, statistics_settings=StatisticsSettings(enabled=False)
+    )
+    async with contract_client(app) as http:
         yield http
-    app.dependency_overrides.clear()
 
 
 async def register(client: AsyncClient) -> tuple[str, UUID, dict[str, str]]:

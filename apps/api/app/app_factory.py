@@ -64,10 +64,18 @@ OPENAPI_TAGS: list[dict[str, Any]] = [
     {
         "name": "users",
         "description": (
-            "Player identity and profile — who someone *appears to be*, as opposed "
-            "to `auth`, which owns proving who they *are*. A player can exist "
-            "without an account (a bot seat, a guest), which is why the two are "
-            "separate contexts rather than one aggregate."
+            "Resolving a player **id** to a public identity — who someone *appears "
+            "to be*, as opposed to `auth`, which owns proving who they *are*. A "
+            "player can exist without an account (a bot seat, a guest), which is why "
+            "the two are separate contexts rather than one aggregate.\n\n"
+            "Deliberately thin: a handle, a display name and two avatar URLs. "
+            "Everything a privacy setting governs — country, statistics, presence — "
+            "is on `GET /profiles/{username}` instead, so these two routes have "
+            "nothing to gate and cannot drift from the rules that profile applies.\n\n"
+            "Listings cover **active accounts only**. A deactivated account does not "
+            "appear in any page, which matches `GET /profiles/{username}` answering "
+            "`404` for one: which handles belong to withdrawn accounts is exactly "
+            "what an impersonator wants to know."
         ),
     },
     {
@@ -92,15 +100,23 @@ OPENAPI_TAGS: list[dict[str, Any]] = [
     {
         "name": "profile",
         "description": (
-            "Your own profile — reading it and editing it. Every endpoint acts on the "
-            "account behind your access token; there is no path segment or body field "
-            "naming an account, so another player's profile cannot be addressed "
-            "here.\n\n"
-            "Editable: display name, biography, country, interface language and "
-            "timezone. **Username and email are not** — changing either has "
+            "Your own profile, privacy settings and preferences — reading them and "
+            "changing them. Every endpoint acts on the account behind your access "
+            "token; there is no path segment or body field naming an account, so "
+            "another player's profile cannot be addressed here.\n\n"
+            "Three groups, three endpoints, deliberately not merged. `PATCH /profile` "
+            "changes what you *say about yourself* — display name, biography, "
+            "country. `PATCH /profile/privacy` changes what *strangers may see*. "
+            "`PATCH /profile/preferences` changes what *you* see, and is the only "
+            "place your interface language and timezone can be set.\n\n"
+            "**Username and email are not editable anywhere** — changing either has "
             "consequences a profile edit does not (a rename must reserve the old "
             "handle; an email change must re-prove ownership), so each gets its own "
-            "flow. Read anyone else's profile at `GET /profiles/{username}`."
+            "flow. Your avatar is at `/profile/avatar`.\n\n"
+            "**Nothing here is ever redacted.** Privacy settings govern what "
+            "`GET /profiles/{username}` shows a stranger, never what you see of "
+            "yourself — a control that hid a value from the person who set it would "
+            "be one nobody could verify they had applied."
         ),
     },
     {

@@ -31,7 +31,7 @@ replay payloads — are serialized in `game.domain.serialization`, which is
 where they belong.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 
 from app.modules.engine.board import Board
@@ -170,10 +170,6 @@ def move_from_primitive(entry: Primitive) -> Move:
     )
 
 
-def moves_from_primitive(entries: Sequence[Primitive]) -> tuple[Move, ...]:
-    return tuple(move_from_primitive(entry) for entry in entries)
-
-
 __all__ = [
     "board_from_primitive",
     "board_to_primitive",
@@ -183,7 +179,6 @@ __all__ = [
     "engine_version_to_primitive",
     "move_from_primitive",
     "move_to_primitive",
-    "moves_from_primitive",
     "piece_from_primitive",
     "piece_to_primitive",
     "position_from_primitive",

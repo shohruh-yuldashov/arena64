@@ -1,10 +1,12 @@
 # Game Engine
 
-> **Status:** Partial — **the rules of play are complete** (A64-014.1 – A64-014.7), games
-> serialize and replay (A64-014.8), and the engine is verified against a published perft series
-> (A64-014.9). Outstanding: three of the four draw thresholds are **undecided product rules**
-> (§7.7), and **differential testing awaits the TypeScript engine** (§9.6). Clocks and PDN
-> notation are not yet specified
+> **Status:** Audited and stabilized — A64-014.10 closes the Game Engine Epic with
+> **READY WITH DOCUMENTED LIMITATIONS**. See `specs/game-engine/audit.md` for the evidence and
+> `specs/game-engine/traceability.md` for GE-1 – GE-101 rule by rule.
+>
+> Outstanding: three of the four draw thresholds are **undecided product rules** (§7.7), and
+> **differential testing awaits the TypeScript engine** (§9.6). Clocks and PDN notation are not
+> yet specified.
 > **Owner:** _Unassigned_
 > **Related:** `templates/feature-spec.md`, `docs/01-architecture/architecture.md` §11,
 > `docs/01-architecture/domain-model.md` §2.1 and §16.1
@@ -912,6 +914,11 @@ needed (CLAUDE.md §10.1).
 
 ### 9.6 Differential testing is deferred
 
+> **A64-014.10 sized this.** `specs/game-engine/audit.md` §1 lists what a TypeScript engine must
+> implement, which corpus versions it consumes, how agreement is compared, and where the risk is
+> — the capture walk and the move ordering.
+
+
 AD-14's contract is that "the Python engine and the TypeScript client engine
 are two implementations governed by one versioned corpus… executed by both in
 CI". **There is no TypeScript engine.** Until there is, the corpus proves
@@ -940,6 +947,7 @@ is configured for move generation and is offered nowhere.
 ## TODO
 
 - [ ] Assign a document owner
+- [ ] Enforce GE-57 (engine version immutable after creation) at the repository boundary
 - [ ] **Decide the three undecided draw thresholds, and International's in full (§7.7)**
 - [ ] Decide whether `TerminationReason` should distinguish the three move-limit draws (§7.7)
 - [ ] Decide whether `english_8x8` is a product variant or stays a configuration fixture

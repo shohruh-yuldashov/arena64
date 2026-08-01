@@ -644,18 +644,24 @@ and position hashing for repetition rules.
 | A64-014.1 | `BoardCoordinate`, `PlayerSide`, `PieceRank`, `Piece`, `BoardVariant`, `BoardGeometry`, `Board`, the opening position, and the failure taxonomy |
 | A64-014.2 | `Position`, `Move` (a path, not a from/to pair), `Direction`, `CaptureObligation`, `MoveGenerator`, the rule axes on `BoardGeometry`, and the first corpus version |
 | A64-014.3 | `MoveValidator`, `MoveApplier`, `IllegalMove`, `UnsupportedPieceMovement`, and the corpus's rejection cases |
-| A64-014.4 | Complete capture sequences of any length, the taken-once rule, maximum-capture filtering, and both configured mid-sequence promotion rules |
+| A64-014.4 | Complete capture sequences of any length, the taken-once rule, maximum-capture filtering, and the configured mid-sequence promotion rules |
+| A64-014.5 | Kings — flying and short, quiet slides and captures, starting a ply. `BoardVariant.ENGLISH_8X8`, corpus v2, and the removal of `UnsupportedPieceMovement` |
 
-Move generation covers **men**: quiet moves, complete multi-jump sequences, mandatory-capture
-priority, the largest-capture obligation where a variant has one, promotion on arrival and
-mid-sequence, one deterministic order. Terminal-state and draw detection do not exist.
+**The rules of movement are complete.** Men and kings, quiet moves and complete multi-jump
+sequences, mandatory capture, the largest-capture obligation where a variant has one, and every
+configured answer to crowning mid-jump. What the engine still lacks is everything *around* a
+move: terminal-state detection, draws, repetition — none of which is generation.
 
-**Kings are refused, not ignored.** A king belonging to the side to move raises
-`UnsupportedPieceMovement`; a king belonging to the opponent is evaluated normally, because a man
-may jump it, and a king a man *becomes* mid-sequence carries on jumping under king rules. That
-boundary is temporary and is deleted by A64-014.5, which has king quiet moves left to build. It
-exists because the alternative — returning what the men could do — made "this player has no legal
-moves", which is a loss under the full rules, indistinguishable from "this build cannot answer".
+Men and kings share one pipeline. A king differs in three answers — how far it travels, which
+diagonals it slides along, which it jumps along — and everything else is written once. `kings_fly`
+is read as a *reach* rather than as a branch, so a short king is a flying king that cannot see
+past its neighbour and both use the same loop.
+
+A64-014.3's `UnsupportedPieceMovement` is **deleted** with this task. It existed to stop an empty
+move set meaning two things at once while kings were unimplemented — "this player has lost" and
+"this build cannot answer" — and was documented as temporary from the day it was written. An
+empty move set now means the first, unconditionally, which is what terminal-state detection
+needs.
 
 `MoveValidator` holds **no rules**: legality is membership in the generated move set, so mandatory
 capture and every rule added later are enforced without a second implementation to disagree with
@@ -701,6 +707,13 @@ implementation's test suite, and the point is that neither owns it.
 The Python engine executes it (`apps/api/tests/unit/test_engine_corpus.py`). There is no
 TypeScript engine yet, so the corpus currently proves conformance to a contract rather than
 agreement between two implementations — the second half of AD-14 arrives with the client.
+
+**v2 (A64-014.5)** adds king cases and the mechanism for retiring one that a rules change
+invalidates: a file may carry a `supersedes` array naming ids from earlier versions, and a reader
+loads every version and drops those ids. Supersession is data rather than prose, so a second
+implementation derives the same active set from the same files. v1 stays byte-for-byte what it
+was; the one case it retires is the assertion that the engine refused a position containing a
+king.
 
 ### AD-15 — Every match records the engine version it was played under
 

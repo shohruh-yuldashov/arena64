@@ -61,9 +61,7 @@ class MoveApplier:
     def apply(self, position: Position, move: Move) -> Position:
         """The position reached by playing `move`.
 
-        Raises `IllegalMove` if the move is not playable here, and
-        `UnsupportedPieceMovement` if the engine cannot answer for the
-        position at all (a king of the side to move — A64-014.5).
+        Raises `IllegalMove` if the move is not playable here.
 
         Neither `position` nor its board is modified. Every intermediate
         board below is a new value, which means a failure part-way through

@@ -27,21 +27,31 @@ from app.modules.engine import (
     MoveValidator,
     PlayerSide,
     Position,
-    UnsupportedPieceMovement,
     initial_board,
 )
-from tests.corpus import CorpusCase, RejectionCase, RejectionCategory, load_cases, load_rejections
+from tests.corpus import (
+    CorpusCase,
+    RejectionCase,
+    RejectionCategory,
+    load_cases,
+    load_rejections,
+    superseded_ids,
+)
 
 CASES = load_cases()
 REJECTIONS = load_rejections()
+SUPERSEDED = superseded_ids()
 
 REFUSAL_FOR = {
     RejectionCategory.ILLEGAL_MOVE: IllegalMove,
     RejectionCategory.MALFORMED_MOVE: InvalidMove,
-    RejectionCategory.UNSUPPORTED_PIECE: UnsupportedPieceMovement,
 }
-"""Each category's exception. Exhaustive over `RejectionCategory` by a test
-below, so a category added to the corpus cannot be silently unhandled."""
+"""Each **active** category's exception.
+
+`UNSUPPORTED_PIECE` is deliberately absent: v2 superseded the only case
+that used it and A64-014.5 deleted the exception it mapped to. The
+category itself survives in the corpus format because v1's files are kept
+verbatim — a test below asserts no case in force still carries it."""
 
 REQUIRED_REJECTIONS = {
     "quiet-move-refused-while-a-capture-is-available",
@@ -49,10 +59,13 @@ REQUIRED_REJECTIONS = {
     "a-move-from-an-empty-square-is-refused",
     "a-move-onto-an-occupied-square-is-refused",
     "a-path-that-steps-nowhere-is-malformed",
-    "a-king-of-the-side-to-move-cannot-be-evaluated",
     "promotion-claimed-away-from-the-crownhead-is-refused",
 }
-"""The rejection cases A64-014.3 names."""
+"""The rejection cases A64-014.3 names that are still in force.
+
+`a-king-of-the-side-to-move-cannot-be-evaluated` was one of them and is
+not any more: A64-014.5 implements kings, and v2 supersedes it. It is
+asserted below as *superseded* rather than dropped silently."""
 
 REQUIRED_CASES = {
     "russian-initial-position-light-to-move",
@@ -70,10 +83,21 @@ REQUIRED_CASES = {
     "russian-man-crowns-mid-sequence-and-continues",
     "international-man-passes-through-the-crownhead",
     "international-man-crowned-when-the-sequence-ends-there",
+    "king-quiet-moves-along-open-diagonals",
+    "an-opponent-stops-a-king-slide",
+    "a-friendly-piece-stops-a-king-slide",
+    "a-flying-king-capture-offers-every-square-beyond-the-victim",
+    "a-king-capture-changes-direction",
+    "a-king-cannot-take-the-same-piece-twice",
+    "a-king-capture-suppresses-every-quiet-move",
+    "maximum-capture-filters-king-sequences",
+    "a-promoted-man-carries-on-as-a-flying-king",
+    "promotion-ends-the-ply-when-the-variant-says-so",
+    "a-man-and-a-king-share-one-move-list",
 }
-"""The cases A64-014.2 and A64-014.4 name. Asserted by id rather than by
-count, so that adding a case never quietly satisfies a requirement a
-deleted one covered."""
+"""The cases A64-014.2, A64-014.4 and A64-014.5 name. Asserted by id rather
+than by count, so that adding a case never quietly satisfies a requirement
+a deleted one covered."""
 
 generator = MoveGenerator()
 validator = MoveValidator(generator)
@@ -135,15 +159,16 @@ class TestCorpusIntegrity:
 
         assert len(set(identifiers)) == len(identifiers)
 
-    def test_every_rejection_category_has_an_expected_exception(self) -> None:
-        """Exhaustiveness over the enum, so a category added to the corpus
-        format cannot reach the parametrised test above as a `KeyError`
-        that reads like a corpus typo."""
-        assert set(REFUSAL_FOR) == set(RejectionCategory)
+    def test_every_category_in_force_has_an_expected_exception(self) -> None:
+        """So a category added to the corpus format cannot reach the
+        parametrised test above as a `KeyError` that reads like a corpus
+        typo."""
+        assert {case.rejection for case in REJECTIONS} <= set(REFUSAL_FOR)
 
-    def test_every_rejection_category_is_exercised(self) -> None:
-        """A category nothing uses is a claim the corpus is not making."""
-        assert {case.rejection for case in REJECTIONS} == set(RejectionCategory)
+    def test_every_expected_exception_is_exercised(self) -> None:
+        """A mapping entry nothing uses is a claim the corpus is not
+        making."""
+        assert {case.rejection for case in REJECTIONS} == set(REFUSAL_FOR)
 
     def test_expected_moves_are_written_in_the_contracted_order(self) -> None:
         """The README states ascending `(path, captured)`. A case written
@@ -153,16 +178,30 @@ class TestCorpusIntegrity:
             expected = list(case.expected_moves)
             assert expected == sorted(expected, key=lambda move: move.sort_key), case.source
 
-    def test_no_case_gives_the_side_to_move_a_king(self) -> None:
-        """Kings do not move until A64-014.5, so a case with one would
-        claim a complete move list it cannot have — see the README."""
-        for case in CASES:
-            movable = [
-                piece
-                for piece in case.position.board.occupied_squares.values()
-                if piece.side is case.position.side_to_move
-            ]
-            assert all(piece.rank.value == "man" for piece in movable), case.source
+
+class TestSupersession:
+    """v2 retires v1's king-rejection case. The mechanism is data — a
+    `supersedes` array in the newer version — so v1's files stay
+    byte-for-byte what they were and a TypeScript reader derives the same
+    active set without reading any prose."""
+
+    def test_the_king_rejection_case_is_superseded(self) -> None:
+        assert "a-king-of-the-side-to-move-cannot-be-evaluated" in SUPERSEDED
+
+    def test_a_superseded_case_is_not_in_force(self) -> None:
+        assert not {case.id for case in REJECTIONS} & SUPERSEDED
+
+    def test_the_historical_category_is_used_by_nothing_in_force(self) -> None:
+        """`unsupported_piece` still parses, because v1 is kept and
+        unreadable history is no history. Nothing active carries it."""
+        assert RejectionCategory.UNSUPPORTED_PIECE not in {case.rejection for case in REJECTIONS}
+
+    def test_the_superseded_case_still_exists_on_disk(self) -> None:
+        """Superseded, not deleted. Loading v1 alone must still find it —
+        that is what makes the change explainable a year from now."""
+        assert "a-king-of-the-side-to-move-cannot-be-evaluated" in {
+            case.id for case in load_rejections(through=1)
+        }
 
 
 class TestOpeningPosition:

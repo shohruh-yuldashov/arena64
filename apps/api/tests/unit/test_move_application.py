@@ -27,7 +27,6 @@ from app.modules.engine import (
     PieceRank,
     PlayerSide,
     Position,
-    UnsupportedPieceMovement,
     initial_board,
 )
 
@@ -202,10 +201,6 @@ class TestRefusals:
 
         with pytest.raises(IllegalMove):
             applier.apply(both, move("f6", "e5"))
-
-    def test_an_unsupported_position_is_refused_before_anything_is_applied(self) -> None:
-        with pytest.raises(UnsupportedPieceMovement):
-            applier.apply(position({"c3": LIGHT_KING}, PlayerSide.LIGHT), move("c3", "b4"))
 
 
 class TestDeterminism:

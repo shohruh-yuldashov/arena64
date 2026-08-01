@@ -32,7 +32,7 @@ from app.modules.engine import (
 
 CORPUS_ROOT = Path(__file__).resolve().parents[3] / "specs" / "game-engine" / "corpus"
 
-LATEST_VERSION = 1
+LATEST_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,8 +66,15 @@ class RejectionCategory(StrEnum):
     """The move's shape is broken; it cannot be constructed at all."""
 
     UNSUPPORTED_PIECE = "unsupported_piece"
-    """The engine cannot evaluate the position. Temporary — today it means
-    a king belonging to the side to move (A64-014.5)."""
+    """**Historical.** The engine could not evaluate the position at all.
+
+    v1 used it for a king belonging to the side to move, which A64-014.3
+    refused because kings did not move yet. A64-014.5 implements them, so
+    v2 supersedes that case and no active case carries this category — but
+    the member stays, because v1's files are kept verbatim and a reader
+    that could not parse them would make the history unreadable, which is
+    the whole point of keeping it.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,37 +102,64 @@ class RejectionCase:
         return _move(self.raw_move)
 
 
-def load_cases(version: int = LATEST_VERSION) -> tuple[CorpusCase, ...]:
-    """Every legal-move case in a corpus version.
+def load_cases(through: int = LATEST_VERSION) -> tuple[CorpusCase, ...]:
+    """Every legal-move case still in force, v1 through `through`.
 
-    Files are read in sorted name order and cases keep the order they are
-    written in, so a parametrised test reports them the same way twice.
+    Files are read version by version and then in sorted name order, and
+    cases keep the order they are written in, so a parametrised test
+    reports them the same way twice.
     """
-    return tuple(_case(entry, name) for entry, name in _entries(version, "cases"))
+    return tuple(_case(entry, name) for entry, name in _entries(through, "cases"))
 
 
-def load_rejections(version: int = LATEST_VERSION) -> tuple[RejectionCase, ...]:
-    """Every rejection case in a corpus version, in the same order."""
-    return tuple(_rejection(entry, name) for entry, name in _entries(version, "rejections"))
+def load_rejections(through: int = LATEST_VERSION) -> tuple[RejectionCase, ...]:
+    """Every rejection case still in force, in the same order."""
+    return tuple(_rejection(entry, name) for entry, name in _entries(through, "rejections"))
 
 
-def _entries(version: int, key: str) -> Iterator[tuple[Mapping[str, Any], str]]:
-    """Every entry under `key`, across the version's files.
+def superseded_ids(through: int = LATEST_VERSION) -> frozenset[str]:
+    """The case ids a later version has retired."""
+    return frozenset(entry["id"] for entry, _ in _supersessions(through))
 
-    A file carries one of the top-level keys and is skipped by the loader
-    for the other — which is what lets a third kind of case be an append
-    rather than a migration of every reader.
+
+def _entries(through: int, key: str) -> Iterator[tuple[Mapping[str, Any], str]]:
+    """Every entry under `key` that has not been superseded.
+
+    A file carries one of the top-level case keys and is skipped by the
+    loader for the other — which is what lets a new kind of case be an
+    append rather than a migration of every reader.
+
+    **Supersession is data, not prose.** A version that changes a rule
+    lists the ids it retires in its own files, and this filters them out
+    of the earlier versions rather than editing them. That is what keeps
+    the append-only promise honest: v1 on disk is byte-for-byte what it
+    was, and the reason a case stopped applying is recorded beside the
+    rule that replaced it.
     """
-    directory = CORPUS_ROOT / f"v{version}"
-    for path in sorted(directory.glob("*.json")):
-        document = json.loads(path.read_text(encoding="utf-8"))
-        if document["corpus_version"] != version:
-            raise ValueError(
-                f"{path.name} declares corpus_version {document['corpus_version']} "
-                f"but sits in v{version}."
-            )
+    retired = superseded_ids(through)
+    for document, name in _documents(through):
         for entry in document.get(key, ()):
-            yield entry, path.name
+            if entry["id"] not in retired:
+                yield entry, name
+
+
+def _supersessions(through: int) -> Iterator[tuple[Mapping[str, Any], str]]:
+    for document, name in _documents(through):
+        for entry in document.get("supersedes", ()):
+            yield entry, name
+
+
+def _documents(through: int) -> Iterator[tuple[Mapping[str, Any], str]]:
+    for version in range(1, through + 1):
+        directory = CORPUS_ROOT / f"v{version}"
+        for path in sorted(directory.glob("*.json")):
+            document = json.loads(path.read_text(encoding="utf-8"))
+            if document["corpus_version"] != version:
+                raise ValueError(
+                    f"{path.name} declares corpus_version {document['corpus_version']} "
+                    f"but sits in v{version}."
+                )
+            yield document, f"v{version}/{path.name}"
 
 
 def _case(entry: Mapping[str, Any], file_name: str) -> CorpusCase:

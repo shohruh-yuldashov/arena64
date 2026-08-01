@@ -36,7 +36,7 @@ from uuid import UUID
 
 from app.modules.profiles.application.services.profile_composer import PublicProfileComposer
 from app.modules.profiles.domain.profile import PublicProfile
-from app.modules.users.public import PublicProfileReader
+from app.modules.users.public import PublicProfileReader, ViewerRelationship
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,7 @@ class ProfileDirectoryService:
         player_ids: Sequence[UUID],
         *,
         viewer_id: UUID | None = None,
+        known_relationship: ViewerRelationship | None = None,
     ) -> Mapping[UUID, PublicProfile]:
         """Composed public profiles for a page of ids, keyed by id.
 
@@ -83,6 +84,12 @@ class ProfileDirectoryService:
         It is also the seam A64-013.5 extends: a `BLOCKED` relationship is a
         third value the same resolution produces, and nothing above or below
         this line changes to accommodate it.
+
+        `known_relationship` skips that resolution for a caller whose page
+        *defines* the relationship — the friend list, where every player is
+        a friend by construction. Passing it anywhere the page mixes
+        relationships would publish a friends-only field to a stranger, so
+        it is an assertion rather than a hint; see `compose_many`.
         """
         if not player_ids:
             return {}
@@ -94,7 +101,9 @@ class ProfileDirectoryService:
         # stable order and the result can be zipped back deterministically.
         ordered = [identities[player_id] for player_id in player_ids if player_id in identities]
 
-        composed = await self._composer.compose_many(ordered, viewer_id=viewer_id)
+        composed = await self._composer.compose_many(
+            ordered, viewer_id=viewer_id, known_relationship=known_relationship
+        )
 
         # Counts only. Which players a caller looked up is a social-graph
         # read — on the friend-request path it is literally who asked whom —

@@ -30,8 +30,12 @@ from httpx import AsyncClient
 from sqlalchemy import event, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.clock import SystemClock
+from app.database.unit_of_work import SessionUnitOfWork
+from app.modules.friends.application.services import FriendshipService
 from app.modules.friends.domain.friendship import FriendshipEndReason
 from app.modules.friends.infrastructure.models import FriendRequestModel, FriendshipModel
+from app.modules.friends.infrastructure.repositories import SqlAlchemyFriendshipRepository
 from tests.contract.contract_app import build_contract_app, contract_client
 
 FRIENDS_URL = "/api/v1/friends"
@@ -81,6 +85,22 @@ async def register(client: AsyncClient) -> Player:
         UUID(created.json()["data"]["id"]),
         username,
         {"Authorization": f"Bearer {signed_in.json()['data']['access_token']}"},
+    )
+
+
+def _friendship_service(session: AsyncSession) -> FriendshipService:
+    """The real service over the test's session.
+
+    Constructed directly rather than reached through a route, because the
+    mutual-friend count is deliberately unpublished — A64-013.4 scopes it to
+    "repository/service only", so there is no endpoint to drive it from and
+    inventing one to make it testable would be shipping the thing the brief
+    withheld.
+    """
+    return FriendshipService(
+        friendships=SqlAlchemyFriendshipRepository(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=SystemClock(),
     )
 
 
@@ -362,23 +382,65 @@ class TestRemove:
     async def test_a_stranger_cannot_remove_somebody_elses_friendship(
         self, client: AsyncClient, alice: Player, bob: Player
     ) -> None:
-        """The ownership rule. A third party is not part of the pair, so
-        there is no friendship between *them and the caller* to remove —
-        which is why the answer is `404` rather than `403`."""
+        """The ownership rule, and the assertion that matters is the second
+        one.
+
+        Since A64-013.4 the removal is idempotent, so a third party gets
+        `204` — the same answer they would get for any pair they are not in.
+        That is *not* the interesting part: what makes this a security test
+        is that Alice and Bob are still friends afterwards. The stranger
+        changed nothing, and could not have, because the lookup is keyed on
+        (caller, target) and there is no friendship between them and Bob.
+        """
         stranger = await register(client)
         await befriend(client, alice, bob)
 
         response = await client.delete(f"{FRIENDS_URL}/{bob.id}", headers=stranger.auth)
 
-        assert response.status_code == 404
+        assert response.status_code == 204
         assert (await client.get(COUNT_URL, headers=alice.auth)).json()["data"]["total"] == 1
+        assert (await client.get(COUNT_URL, headers=bob.auth)).json()["data"]["total"] == 1
 
-    async def test_removing_a_non_friend_is_404(
+    async def test_removing_a_non_friend_succeeds_and_changes_nothing(
         self, client: AsyncClient, alice: Player, bob: Player
     ) -> None:
+        """A64-013.4: removal is idempotent.
+
+        `204` rather than `404`, which is both the HTTP contract for
+        `DELETE` and the answer that stops this endpoint being a
+        relationship oracle — a `404` here beside a `204` for a real
+        friendship would let anybody probe their own relationship state, and
+        once blocking voids friendships would let them detect having been
+        blocked.
+        """
         response = await client.delete(f"{FRIENDS_URL}/{bob.id}", headers=alice.auth)
 
-        assert response.status_code == 404
+        assert response.status_code == 204
+        assert (await client.get(COUNT_URL, headers=alice.auth)).json()["data"]["total"] == 0
+
+    async def test_removing_twice_is_safe(
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player, bob: Player
+    ) -> None:
+        """The required case, and the reason idempotency is not cosmetic: a
+        client retrying after a dropped response must not be told the
+        resource is gone when its own first attempt is what removed it.
+
+        The row assertion is the other half — a second removal must not
+        overwrite `ended_at` with a later instant, which would make the
+        history claim the friendship lasted longer than it did.
+        """
+        await befriend(client, alice, bob)
+
+        first = await client.delete(f"{FRIENDS_URL}/{bob.id}", headers=alice.auth)
+        row = await contract_session.scalar(select(FriendshipModel))
+        assert row is not None
+        ended_at = row.ended_at
+
+        second = await client.delete(f"{FRIENDS_URL}/{bob.id}", headers=bob.auth)
+
+        assert first.status_code == second.status_code == 204
+        await contract_session.refresh(row)
+        assert row.ended_at == ended_at
 
     async def test_the_row_is_kept(
         self, client: AsyncClient, contract_session: AsyncSession, alice: Player, bob: Player
@@ -405,6 +467,162 @@ class TestRemove:
         await befriend(client, alice, bob)
 
         assert (await client.get(COUNT_URL, headers=alice.auth)).json()["data"]["total"] == 1
+
+
+class TestFriendshipDetails:
+    """A64-013.4's inspection endpoint."""
+
+    async def test_it_returns_the_friendship_and_the_other_player(
+        self, client: AsyncClient, alice: Player, bob: Player
+    ) -> None:
+        await befriend(client, alice, bob)
+
+        response = await client.get(f"{FRIENDS_URL}/{bob.id}", headers=alice.auth)
+
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["player"]["id"] == str(bob.id)
+        assert data["friends_since"]
+
+    async def test_both_sides_can_inspect_it(
+        self, client: AsyncClient, alice: Player, bob: Player
+    ) -> None:
+        """One row, read from either side — and each sees the *other*
+        person, which is the half that a mirrored implementation would get
+        right by accident and a canonical one has to compute."""
+        await befriend(client, alice, bob)
+
+        from_alice = await client.get(f"{FRIENDS_URL}/{bob.id}", headers=alice.auth)
+        from_bob = await client.get(f"{FRIENDS_URL}/{alice.id}", headers=bob.auth)
+
+        assert from_alice.json()["data"]["player"]["id"] == str(bob.id)
+        assert from_bob.json()["data"]["player"]["id"] == str(alice.id)
+        # The same friendship, so the same start date on both readings.
+        assert (
+            from_alice.json()["data"]["friends_since"] == from_bob.json()["data"]["friends_since"]
+        )
+
+    async def test_a_stranger_cannot_inspect_a_friendship(
+        self, client: AsyncClient, alice: Player, bob: Player
+    ) -> None:
+        """Ownership is structural: the lookup is keyed on (caller, target),
+        so a third party asking about Bob finds no friendship *of theirs*.
+
+        The `404` is the same one Alice would get before befriending Bob,
+        which is the point — it says nothing about whether Alice and Bob are
+        friends.
+        """
+        stranger = await register(client)
+        await befriend(client, alice, bob)
+
+        response = await client.get(f"{FRIENDS_URL}/{bob.id}", headers=stranger.auth)
+
+        assert response.status_code == 404
+
+    async def test_inspecting_a_non_friend_is_404(
+        self, client: AsyncClient, alice: Player, bob: Player
+    ) -> None:
+        """A `GET` for a resource that does not exist has no other honest
+        answer — the opposite decision from `DELETE`, which must be
+        idempotent and therefore cannot signal absence."""
+        response = await client.get(f"{FRIENDS_URL}/{bob.id}", headers=alice.auth)
+
+        assert response.status_code == 404
+
+    async def test_a_removed_friendship_can_no_longer_be_inspected(
+        self, client: AsyncClient, alice: Player, bob: Player
+    ) -> None:
+        """ "Never were friends" and "the friendship ended" are the same
+        answer — whether two people were *ever* friends is not a question an
+        inspection endpoint should answer."""
+        await befriend(client, alice, bob)
+        await client.delete(f"{FRIENDS_URL}/{bob.id}", headers=alice.auth)
+
+        assert (await client.get(f"{FRIENDS_URL}/{bob.id}", headers=alice.auth)).status_code == 404
+
+    async def test_no_internal_database_field_reaches_the_response(
+        self, client: AsyncClient, alice: Player, bob: Player
+    ) -> None:
+        """A64-013.4: "do NOT expose internal database fields."
+
+        Asserted against the raw text, because a canonical-ordering column
+        leaking through `meta` or an error field would be just as much of a
+        disclosure — and `player_low_id` in particular would invite a client
+        to depend on a storage decision.
+        """
+        await befriend(client, alice, bob)
+
+        response = await client.get(f"{FRIENDS_URL}/{bob.id}", headers=alice.auth)
+
+        assert set(response.json()["data"]) == {"player", "friends_since"}
+        for forbidden in ("player_low_id", "player_high_id", "ended_at", "source_request_id"):
+            assert forbidden not in response.text, f"{forbidden!r} leaked"
+
+
+class TestMutualFriends:
+    """A64-013.4's mutual-friend count.
+
+    **Reachable from no endpoint** — the brief scopes it to
+    "repository/service only" — so it is exercised through the service, on
+    a graph built entirely through the API.
+    """
+
+    async def test_it_counts_only_friends_both_players_share(
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player, bob: Player
+    ) -> None:
+        shared_one = await register(client)
+        shared_two = await register(client)
+        alice_only = await register(client)
+
+        await befriend(client, alice, bob)
+        for other in (shared_one, shared_two, alice_only):
+            await befriend(client, alice, other)
+        for other in (shared_one, shared_two):
+            await befriend(client, bob, other)
+
+        service = _friendship_service(contract_session)
+
+        assert await service.mutual_friend_count(player_id=alice.id, other_id=bob.id) == 2
+        # Symmetric, because the two legs use one predicate.
+        assert await service.mutual_friend_count(player_id=bob.id, other_id=alice.id) == 2
+
+    async def test_two_players_with_nobody_in_common_have_none(
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player, bob: Player
+    ) -> None:
+        await befriend(client, alice, await register(client))
+        await befriend(client, bob, await register(client))
+
+        service = _friendship_service(contract_session)
+
+        assert await service.mutual_friend_count(player_id=alice.id, other_id=bob.id) == 0
+
+    async def test_strangers_have_a_well_defined_count(
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player, bob: Player
+    ) -> None:
+        """A count of shared friends is a fact about two friend lists, so it
+        does not require the two to be friends and does not raise."""
+        shared = await register(client)
+        await befriend(client, alice, shared)
+        await befriend(client, bob, shared)
+
+        service = _friendship_service(contract_session)
+
+        assert await service.mutual_friend_count(player_id=alice.id, other_id=bob.id) == 1
+
+    async def test_a_removed_friendship_stops_counting(
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player, bob: Player
+    ) -> None:
+        """`ended_at` is the one thing every friend query must agree about —
+        a mutual count that included ended rows would disagree with the
+        friend list beside it."""
+        shared = await register(client)
+        await befriend(client, alice, shared)
+        await befriend(client, bob, shared)
+        await client.delete(f"{FRIENDS_URL}/{shared.id}", headers=alice.auth)
+
+        service = _friendship_service(contract_session)
+
+        assert await service.mutual_friend_count(player_id=alice.id, other_id=bob.id) == 0
 
 
 class TestFriendVisibility:
@@ -492,10 +710,64 @@ class TestBatchComposition:
         assert len(response.json()["data"]["items"]) == 6
 
         selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
-        # The token's account, the friendships, the six identities, their
-        # statistics, and the relationship batch. A loop would issue at
-        # least one identity read *per row* on top of that.
-        assert len(selects) <= 7, "\n".join(selects)
+        # The token's account, the friendships, the six identities and their
+        # statistics. A loop would issue at least one identity read *per
+        # row* on top of that.
+        assert len(selects) <= 6, "\n".join(selects)
+
+    async def test_the_friend_list_does_not_re_derive_what_it_already_knows(
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player
+    ) -> None:
+        """A64-013.4: "`friend_ids_among()` is now a hot path. Avoid
+        unnecessary queries."
+
+        Every player in a friend list is a friend *by construction*, so
+        asking the social graph to confirm it is a query whose answer
+        building the page already produced. The router states the
+        relationship instead, and this asserts the query is genuinely gone
+        rather than merely intended — a `known_relationship` that were
+        ignored would still return the right rows.
+
+        Matched on the relation name, because that is the only part of the
+        statement that identifies which read was issued.
+        """
+        for _ in range(3):
+            await befriend(client, alice, await register(client))
+
+        statements: list[str] = []
+
+        def record(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+            statements.append(statement)
+
+        engine = contract_session.get_bind().engine  # type: ignore[union-attr]
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            listed = await client.get(FRIENDS_URL, headers=alice.auth)
+            # The contrast: search composes the same profiles and *must*
+            # resolve, because its page mixes friends and strangers.
+            await client.get("/api/v1/users/search", headers=alice.auth, params={"q": "player"})
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+
+        assert len(listed.json()["data"]["items"]) == 3
+
+        # `friend_ids_among` is the only read that projects both pair
+        # columns; the friend *list* selects whole rows, so this counts the
+        # relationship resolution and nothing else.
+        resolutions = [
+            statement
+            for statement in statements
+            if "player_low_id" in statement
+            and "player_high_id" in statement
+            and "count" not in statement.lower()
+            and "friendship.id" not in statement
+        ]
+
+        assert resolutions, "search should still resolve relationships"
+        assert len(resolutions) == 1, (
+            "the friend list re-derived a relationship its own page defines:\n"
+            + "\n".join(resolutions)
+        )
 
 
 class TestAuthentication:

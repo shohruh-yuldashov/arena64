@@ -274,3 +274,44 @@ def canonical_pair(player_a: UUID, player_b: UUID) -> tuple[UUID, UUID]:
     differently.
     """
     return (player_a, player_b) if player_a < player_b else (player_b, player_a)
+
+
+@dataclass(frozen=True, slots=True)
+class FriendshipMetadata:
+    """What one player may learn about their friendship with another —
+    A64-013.4.
+
+    A **read model**, not the aggregate. `Friendship` exists to be
+    *transitioned*: it carries both participants in canonical order, a
+    version of its own lifecycle, and the ability to end itself. This
+    carries what a caller inspecting a relationship is entitled to see, and
+    nothing it could act on.
+
+    The split matters for a reason that is easy to miss. `friendship_by_players`
+    returns the aggregate because removal needs to check participation and
+    record a reason; `friendship_metadata` returns this because the read
+    endpoint needs derived counts the aggregate has no business computing —
+    and computing them would mean the aggregate holding a repository.
+
+    Frozen, and deliberately carrying **no identifiers at all**: not the
+    friendship id, not `player_low_id`, not `player_high_id`. A64-013.4:
+    "do NOT expose internal database fields." The canonical ordering is a
+    storage concern (DB-12) that means nothing to a client, and a friendship
+    id is a second name for a relationship the caller can already address by
+    the other player's id.
+    """
+
+    friends_since: datetime
+    """When the friendship began — the instant the request was accepted."""
+
+    mutual_friend_count: int
+    """How many friends the two have in common.
+
+    Computed by the repository in the same statement that finds the
+    friendship, so inspecting a relationship costs one round trip rather
+    than two. **Not currently published**: A64-013.4 scopes mutual counts to
+    "repository/service only", so no response schema carries this. It is
+    here because the read model is where it belongs the day a UX surface
+    asks for it, and because computing it separately later would mean a
+    second query for a number this one already has.
+    """

@@ -34,7 +34,7 @@ from datetime import datetime
 from pydantic import Field
 
 from app.core.dto import BaseResponseDTO
-from app.modules.friends.domain.friendship import Friendship
+from app.modules.friends.domain.friendship import Friendship, FriendshipMetadata
 from app.modules.profiles.presentation.schemas import ProfileResponse
 
 
@@ -137,3 +137,108 @@ class FriendCountResponse(BaseResponseDTO):
     )
 
     model_config = {"json_schema_extra": {"examples": [{"total": 7}]}}
+
+
+class FriendshipDetailsResponse(BaseResponseDTO):
+    """One friendship, inspected — A64-013.4's `GET /friends/{player_id}`.
+
+    Deliberately the **same two fields** as `FriendResponse` above, and not
+    merged with it. They answer different questions and will diverge: a list
+    item is what a row renders, while this is what a relationship page
+    shows, and the first field to arrive on one and not the other is
+    whatever A64-013.4's successors add — a mutual-friend count, shared
+    match history, a "friends for 3 months" badge.
+
+    Merging them now would save five lines and would make the first
+    divergence a breaking change to the list.
+
+    ## What is deliberately absent
+
+    No friendship id, no `player_low_id`, no `player_high_id`, no
+    `ended_at`. A64-013.4: "do NOT expose internal database fields." The
+    canonical ordering is a storage concern (DB-12) that means nothing to a
+    client; a friendship id is a second name for a relationship already
+    addressed by the other player's id; and this endpoint only ever
+    describes a live friendship, so an end date would be `null` on every
+    response.
+
+    **No mutual friend count**, which the read model behind this *does*
+    carry. A64-013.4 scopes mutual counts to "repository/service only", so
+    the number is computed, tested and unpublished — the field appears here
+    the day a UX surface asks for it, additively.
+    """
+
+    player: ProfileResponse = Field(
+        description=(
+            "Your friend's public profile — identical in shape to "
+            "`GET /profiles/{username}`. Fields they have restricted to friends **are "
+            "visible here**, because you are one."
+        ),
+    )
+    friends_since: datetime = Field(
+        description=(
+            "When the friendship began, UTC — the instant the friend request was "
+            "accepted, and the same instant that request records as its response."
+        ),
+        examples=["2026-08-01T12:00:00Z"],
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "player": {
+                        "id": "019fb9ea-0a0c-7cec-9c5f-402727c31a96",
+                        "username": "player_one",
+                        "display_name": "Player One",
+                        "avatar_url": None,
+                        "thumbnail_url": None,
+                        "country": "GB",
+                        "language": "en",
+                        "bio": None,
+                        "joined_at": "2026-07-01T09:30:00Z",
+                        "is_online": True,
+                        "last_seen": "2026-08-01T15:44:00Z",
+                        "ratings": {
+                            "classic": {
+                                "rating": 1500,
+                                "is_provisional": True,
+                                "games_played": 0,
+                            },
+                            "rapid": {"rating": 1500, "is_provisional": True, "games_played": 0},
+                            "blitz": {"rating": 1500, "is_provisional": True, "games_played": 0},
+                        },
+                        "statistics": {
+                            "games_played": 0,
+                            "wins": 0,
+                            "losses": 0,
+                            "draws": 0,
+                            "win_rate": 0.0,
+                            "current_rating": 1500,
+                            "highest_rating": 1500,
+                            "current_streak": 0,
+                            "best_win_streak": 0,
+                        },
+                    },
+                    "friends_since": "2026-08-01T12:00:00Z",
+                }
+            ]
+        }
+    }
+
+    @classmethod
+    def of(
+        cls, metadata: FriendshipMetadata, player: ProfileResponse
+    ) -> "FriendshipDetailsResponse":
+        """Renders the read model beside an already-composed profile.
+
+        `player` arrives **rendered**: this schema holds no provider and
+        cannot compose anything — the structure every response schema on
+        this platform has, and what keeps composition in the router.
+
+        `metadata.mutual_friend_count` is **not mapped**, deliberately. It
+        is computed and available; publishing it is a later task's decision,
+        and a field that is not in this constructor cannot leak by
+        accident.
+        """
+        return cls(player=player, friends_since=metadata.friends_since)

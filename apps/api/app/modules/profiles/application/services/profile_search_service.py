@@ -113,7 +113,21 @@ class ProfileSearchService:
             )
         )
 
-        profiles = await self._composer.compose_many(page.identities)
+        # **`viewer_id`, not the default.** A64-013.4 fixed this: search
+        # composed as an anonymous viewer, so a player searching for a
+        # *friend* saw that friend's `friends`-scoped fields hidden — the
+        # opposite of what the setting says, and inconsistent with the
+        # friend list, which showed them.
+        #
+        # It was invisible until A64-013.3 made `FRIENDS` reachable, because
+        # before that every viewer resolved to `STRANGER` anyway. This is
+        # the query A64-013.4 means by "`friend_ids_among()` is now a hot
+        # path": one per search page, and correct.
+        #
+        # No `known_relationship` here, deliberately — a search page mixes
+        # friends and strangers, so it is the one list that must genuinely
+        # resolve.
+        profiles = await self._composer.compose_many(page.identities, viewer_id=viewer_id)
 
         elapsed_ms = (time.perf_counter() - started) * 1000
 

@@ -151,6 +151,7 @@ class PublicProfileComposer:
         identities: Sequence[PublicUserProfile],
         *,
         viewer_id: UUID | None = None,
+        known_relationship: ViewerRelationship | None = None,
     ) -> list[PublicProfile]:
         """A page of players, in a fixed number of round trips.
 
@@ -172,6 +173,20 @@ class PublicProfileComposer:
         friends. That resolution happens first, because the presence filter
         below depends on it.
 
+        `known_relationship` is the A64-013.4 short circuit: a caller that
+        already knows what every player on the page is to the viewer passes
+        it and the resolution query is skipped entirely. The friend list is
+        the case — every player in it is, by definition, a friend — and
+        resolving that from the social graph would be asking a question the
+        caller answered in order to build the page.
+
+        It is an **assertion by the caller**, not a hint, so it is only ever
+        correct where the page's membership *defines* the relationship.
+        Search results and request lists must not pass it: those pages mix
+        friends and strangers, and one relationship applied to all of them
+        would either publish a friends-only field to a stranger or hide it
+        from a friend.
+
         Order is preserved: the ranking is the caller's and must survive
         composition unchanged.
         """
@@ -182,7 +197,9 @@ class PublicProfileComposer:
             # than for correctness.
             return []
 
-        relationships = await self._relationships_to(viewer_id, [one.id for one in identities])
+        relationships = await self._relationships_to(
+            viewer_id, [one.id for one in identities], known=known_relationship
+        )
 
         statistics_ids = [one.id for one in identities if one.visibility.statistics]
         presence_ids = [one.id for one in identities if _wants_presence(one, relationships[one.id])]
@@ -237,16 +254,34 @@ class PublicProfileComposer:
         return relationships[player_id]
 
     async def _relationships_to(
-        self, viewer_id: UUID | None, player_ids: Sequence[UUID]
+        self,
+        viewer_id: UUID | None,
+        player_ids: Sequence[UUID],
+        *,
+        known: ViewerRelationship | None = None,
     ) -> Mapping[UUID, ViewerRelationship]:
         """What `viewer_id` is to each player, defaulting to `STRANGER`.
 
-        **An anonymous viewer costs no query.** `None` means signed out,
-        which has no relationships by definition — so this returns the total
-        stranger mapping directly rather than asking a provider a question
-        whose answer is already known. That matters: the anonymous path is
-        `GET /profiles/{username}`, the platform's highest-volume read.
+        Two short circuits, and both exist because the answer is already
+        known rather than to make anything faster in the abstract:
+
+          **An anonymous viewer costs no query.** `None` means signed out,
+          which has no relationships by definition. That matters most: the
+          anonymous path is `GET /profiles/{username}`, the platform's
+          highest-volume read.
+
+          **A stated relationship costs no query** (A64-013.4). The friend
+          list already knows every player on the page is a friend, and
+          `friend_ids_among` is now on the composition path for every render
+          — so asking it to confirm what the page's own membership
+          guarantees is the "unnecessary query" that requirement names.
+
+        `known` is checked before `viewer_id`, which is not arbitrary: a
+        caller stating a relationship has, by stating it, told us there is a
+        viewer.
         """
+        if known is not None:
+            return dict.fromkeys(player_ids, known)
         if viewer_id is None:
             return dict.fromkeys(player_ids, ViewerRelationship.STRANGER)
         return await self._relationships.relationships_for(viewer_id, player_ids)

@@ -20,6 +20,11 @@ versioned corpus in `specs/game-engine/corpus/v1/`.
 **A64-014.3 — validation and application.** `MoveValidator` (which holds no
 rules of its own — it asks the generator), `MoveApplier` and `IllegalMove`.
 
+**A64-014.8 — serialization.** `engine.serialization` projects every
+kernel value to and from JSON-shaped primitives, in the same encoding the
+conformance corpus is written in. Reachable from `replay` and `fairplay`,
+which may import `engine` and not `game` (R-2).
+
 **A64-014.7 — draw configuration.** `DrawRules` and `MaterialPlyLimit`, a
 variant axis like every other. The *evaluation* is not here: a draw is a
 property of a game's history (MT-12) and the kernel has none, so

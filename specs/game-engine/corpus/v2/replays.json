@@ -1,0 +1,711 @@
+{
+  "corpus_version": 2,
+  "scope": "Replay reconstruction (A64-014.8): a stored game, replayed through the live rules, must reach the same positions, the same history and the same result \u2014 and a record that cannot be true must be refused. No case exercises a no-progress draw, because no variant configures a move limit (specs/game-engine.md \u00a77.7).",
+  "replays": [
+    {
+      "id": "a-quiet-move-replay",
+      "description": "Two ordinary steps. The simplest thing a replay has to reproduce, and the case that fails if the log records moves the engine cannot re-apply.",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "opening_position": {
+        "variant": "russian_8x8",
+        "side_to_move": "light",
+        "pieces": [
+          {
+            "square": "c3",
+            "side": "light",
+            "rank": "man"
+          },
+          {
+            "square": "f6",
+            "side": "dark",
+            "rank": "man"
+          }
+        ]
+      },
+      "records": [
+        {
+          "ply_number": 1,
+          "move": {
+            "path": [
+              "c3",
+              "d4"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/dark/d4=light:man,f6=dark:man",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        },
+        {
+          "ply_number": 2,
+          "move": {
+            "path": [
+              "f6",
+              "e5"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/light/d4=light:man,e5=dark:man",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        }
+      ],
+      "expected_rejection": null,
+      "expected_final_position_hash": "russian_8x8/light/d4=light:man,e5=dark:man",
+      "expected_status": "active",
+      "expected_result": null,
+      "expected_position_occurrences": 1,
+      "expected_plies_since_progress": 0
+    },
+    {
+      "id": "a-capture-replay",
+      "description": "One jump that takes the last dark piece. The replay reaches the same win, by the same rule, rather than merely the same board.",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "opening_position": {
+        "variant": "russian_8x8",
+        "side_to_move": "light",
+        "pieces": [
+          {
+            "square": "c3",
+            "side": "light",
+            "rank": "man"
+          },
+          {
+            "square": "d4",
+            "side": "dark",
+            "rank": "man"
+          }
+        ]
+      },
+      "records": [
+        {
+          "ply_number": 1,
+          "move": {
+            "path": [
+              "c3",
+              "e5"
+            ],
+            "captured": [
+              "d4"
+            ],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/dark/e5=light:man",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        }
+      ],
+      "expected_rejection": null,
+      "expected_final_position_hash": "russian_8x8/dark/e5=light:man",
+      "expected_status": "completed",
+      "expected_result": {
+        "outcome": "win",
+        "reason": "all_pieces_captured",
+        "winner": "light"
+      },
+      "expected_position_occurrences": 1,
+      "expected_plies_since_progress": 0
+    },
+    {
+      "id": "a-multi-capture-replay",
+      "description": "A two-jump sequence stored as its complete path. A from/to record could not distinguish it from a different sequence reaching g7, which is why moves are serialized as paths.",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "opening_position": {
+        "variant": "russian_8x8",
+        "side_to_move": "light",
+        "pieces": [
+          {
+            "square": "c3",
+            "side": "light",
+            "rank": "man"
+          },
+          {
+            "square": "d4",
+            "side": "dark",
+            "rank": "man"
+          },
+          {
+            "square": "f6",
+            "side": "dark",
+            "rank": "man"
+          }
+        ]
+      },
+      "records": [
+        {
+          "ply_number": 1,
+          "move": {
+            "path": [
+              "c3",
+              "e5",
+              "g7"
+            ],
+            "captured": [
+              "d4",
+              "f6"
+            ],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/dark/g7=light:man",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        }
+      ],
+      "expected_rejection": null,
+      "expected_final_position_hash": "russian_8x8/dark/g7=light:man",
+      "expected_status": "completed",
+      "expected_result": {
+        "outcome": "win",
+        "reason": "all_pieces_captured",
+        "winner": "light"
+      },
+      "expected_position_occurrences": 1,
+      "expected_plies_since_progress": 0
+    },
+    {
+      "id": "a-promotion-replay",
+      "description": "A man crowning on h8. The recorded promotion is part of the move's identity, so a replay that dropped it would rebuild a man and diverge on the next ply.",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "opening_position": {
+        "variant": "russian_8x8",
+        "side_to_move": "light",
+        "pieces": [
+          {
+            "square": "a1",
+            "side": "dark",
+            "rank": "king"
+          },
+          {
+            "square": "g7",
+            "side": "light",
+            "rank": "man"
+          }
+        ]
+      },
+      "records": [
+        {
+          "ply_number": 1,
+          "move": {
+            "path": [
+              "g7",
+              "h8"
+            ],
+            "captured": [],
+            "promotes_to": "king"
+          },
+          "resulting_position_hash": "russian_8x8/dark/a1=dark:king,h8=light:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        }
+      ],
+      "expected_rejection": null,
+      "expected_final_position_hash": "russian_8x8/dark/a1=dark:king,h8=light:king",
+      "expected_status": "active",
+      "expected_result": null,
+      "expected_position_occurrences": 1,
+      "expected_plies_since_progress": 0
+    },
+    {
+      "id": "a-king-replay",
+      "description": "Two flying king slides. The no-progress counter reaches two, rebuilt by replaying rather than restored from the record.",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "opening_position": {
+        "variant": "russian_8x8",
+        "side_to_move": "light",
+        "pieces": [
+          {
+            "square": "a1",
+            "side": "light",
+            "rank": "king"
+          },
+          {
+            "square": "h2",
+            "side": "dark",
+            "rank": "king"
+          }
+        ]
+      },
+      "records": [
+        {
+          "ply_number": 1,
+          "move": {
+            "path": [
+              "a1",
+              "b2"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/dark/b2=light:king,h2=dark:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        },
+        {
+          "ply_number": 2,
+          "move": {
+            "path": [
+              "h2",
+              "g1"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/light/g1=dark:king,b2=light:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        }
+      ],
+      "expected_rejection": null,
+      "expected_final_position_hash": "russian_8x8/light/g1=dark:king,b2=light:king",
+      "expected_status": "active",
+      "expected_result": null,
+      "expected_position_occurrences": 1,
+      "expected_plies_since_progress": 2
+    },
+    {
+      "id": "a-threefold-repetition-draw-replay",
+      "description": "Eight plies that return to the opening twice. The replay reproduces *why* the game ended: the position counts are recomputed by applying the log, never restored from a stored counter.",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "opening_position": {
+        "variant": "russian_8x8",
+        "side_to_move": "light",
+        "pieces": [
+          {
+            "square": "a1",
+            "side": "light",
+            "rank": "king"
+          },
+          {
+            "square": "h2",
+            "side": "dark",
+            "rank": "king"
+          }
+        ]
+      },
+      "records": [
+        {
+          "ply_number": 1,
+          "move": {
+            "path": [
+              "a1",
+              "b2"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/dark/b2=light:king,h2=dark:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        },
+        {
+          "ply_number": 2,
+          "move": {
+            "path": [
+              "h2",
+              "g1"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/light/g1=dark:king,b2=light:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        },
+        {
+          "ply_number": 3,
+          "move": {
+            "path": [
+              "b2",
+              "a1"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/dark/a1=light:king,g1=dark:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        },
+        {
+          "ply_number": 4,
+          "move": {
+            "path": [
+              "g1",
+              "h2"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/light/a1=light:king,h2=dark:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        },
+        {
+          "ply_number": 5,
+          "move": {
+            "path": [
+              "a1",
+              "b2"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/dark/b2=light:king,h2=dark:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        },
+        {
+          "ply_number": 6,
+          "move": {
+            "path": [
+              "h2",
+              "g1"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/light/g1=dark:king,b2=light:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        },
+        {
+          "ply_number": 7,
+          "move": {
+            "path": [
+              "b2",
+              "a1"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/dark/a1=light:king,g1=dark:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        },
+        {
+          "ply_number": 8,
+          "move": {
+            "path": [
+              "g1",
+              "h2"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/light/a1=light:king,h2=dark:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        }
+      ],
+      "expected_rejection": null,
+      "expected_final_position_hash": "russian_8x8/light/a1=light:king,h2=dark:king",
+      "expected_status": "completed",
+      "expected_result": {
+        "outcome": "draw",
+        "reason": "repetition",
+        "winner": null
+      },
+      "expected_position_occurrences": 3,
+      "expected_plies_since_progress": 8
+    },
+    {
+      "id": "a-mismatched-position-hash-is-rejected",
+      "description": "The second record claims a position the rules do not produce from the first. Caught on the ply that caused it, so the failure names the move whose semantics changed rather than the game.",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "opening_position": {
+        "variant": "russian_8x8",
+        "side_to_move": "light",
+        "pieces": [
+          {
+            "square": "a1",
+            "side": "light",
+            "rank": "king"
+          },
+          {
+            "square": "h2",
+            "side": "dark",
+            "rank": "king"
+          }
+        ]
+      },
+      "records": [
+        {
+          "ply_number": 1,
+          "move": {
+            "path": [
+              "a1",
+              "b2"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/dark/b2=light:king,h2=dark:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        },
+        {
+          "ply_number": 2,
+          "move": {
+            "path": [
+              "h2",
+              "g1"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/light/a1=light:king,h2=dark:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        }
+      ],
+      "expected_rejection": "position_hash_mismatch",
+      "expected_final_position_hash": null,
+      "expected_status": null,
+      "expected_result": null,
+      "expected_position_occurrences": null,
+      "expected_plies_since_progress": null
+    },
+    {
+      "id": "a-ply-gap-is-rejected",
+      "description": "Ply 2 is missing. MT-5: a gap makes the game unreplayable, which invalidates the result, the analysis and the fair-play record at once \u2014 so the log is refused whole, before a move is applied.",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "opening_position": {
+        "variant": "russian_8x8",
+        "side_to_move": "light",
+        "pieces": [
+          {
+            "square": "a1",
+            "side": "light",
+            "rank": "king"
+          },
+          {
+            "square": "h2",
+            "side": "dark",
+            "rank": "king"
+          }
+        ]
+      },
+      "records": [
+        {
+          "ply_number": 1,
+          "move": {
+            "path": [
+              "a1",
+              "b2"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/dark/b2=light:king,h2=dark:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        },
+        {
+          "ply_number": 3,
+          "move": {
+            "path": [
+              "h2",
+              "g1"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/light/g1=dark:king,b2=light:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        }
+      ],
+      "expected_rejection": "malformed_move_log",
+      "expected_final_position_hash": null,
+      "expected_status": null,
+      "expected_result": null,
+      "expected_position_occurrences": null,
+      "expected_plies_since_progress": null
+    },
+    {
+      "id": "an-illegal-move-is-rejected",
+      "description": "A recorded move the rules do not allow. In a replay that means the record is wrong, not that a player was told no.",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "opening_position": {
+        "variant": "russian_8x8",
+        "side_to_move": "light",
+        "pieces": [
+          {
+            "square": "a1",
+            "side": "light",
+            "rank": "king"
+          },
+          {
+            "square": "h2",
+            "side": "dark",
+            "rank": "king"
+          }
+        ]
+      },
+      "records": [
+        {
+          "ply_number": 1,
+          "move": {
+            "path": [
+              "a1",
+              "b2"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/dark/b2=light:king,h2=dark:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        },
+        {
+          "ply_number": 2,
+          "move": {
+            "path": [
+              "h2",
+              "a8"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/light/g1=dark:king,b2=light:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        }
+      ],
+      "expected_rejection": "corrupt_move_log",
+      "expected_final_position_hash": null,
+      "expected_status": null,
+      "expected_result": null,
+      "expected_position_occurrences": null,
+      "expected_plies_since_progress": null
+    },
+    {
+      "id": "a-move-recorded-after-the-game-ended-is-rejected",
+      "description": "The first ply takes the last dark piece and completes the match; the second could not have been played. A log that continues past the end is a corrupt log.",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "opening_position": {
+        "variant": "russian_8x8",
+        "side_to_move": "light",
+        "pieces": [
+          {
+            "square": "c3",
+            "side": "light",
+            "rank": "man"
+          },
+          {
+            "square": "d4",
+            "side": "dark",
+            "rank": "man"
+          }
+        ]
+      },
+      "records": [
+        {
+          "ply_number": 1,
+          "move": {
+            "path": [
+              "c3",
+              "e5"
+            ],
+            "captured": [
+              "d4"
+            ],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/dark/e5=light:man",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        },
+        {
+          "ply_number": 2,
+          "move": {
+            "path": [
+              "e5",
+              "f6"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/dark/f6=light:man",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        }
+      ],
+      "expected_rejection": "corrupt_move_log",
+      "expected_final_position_hash": null,
+      "expected_status": null,
+      "expected_result": null,
+      "expected_position_occurrences": null,
+      "expected_plies_since_progress": null
+    },
+    {
+      "id": "engine-version-1-is-refused-rather-than-approximated",
+      "description": "Version 1 had no draw rules, so replaying it under version 2 could end a game earlier than it really ended. AD-15's case exactly: the replay is refused rather than quietly run under today's rules.",
+      "engine_version": 1,
+      "variant": "russian_8x8",
+      "opening_position": {
+        "variant": "russian_8x8",
+        "side_to_move": "light",
+        "pieces": [
+          {
+            "square": "a1",
+            "side": "light",
+            "rank": "king"
+          },
+          {
+            "square": "h2",
+            "side": "dark",
+            "rank": "king"
+          }
+        ]
+      },
+      "records": [
+        {
+          "ply_number": 1,
+          "move": {
+            "path": [
+              "a1",
+              "b2"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/dark/b2=light:king,h2=dark:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        },
+        {
+          "ply_number": 2,
+          "move": {
+            "path": [
+              "h2",
+              "g1"
+            ],
+            "captured": [],
+            "promotes_to": null
+          },
+          "resulting_position_hash": "russian_8x8/light/g1=dark:king,b2=light:king",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        }
+      ],
+      "expected_rejection": "unsupported_engine_version",
+      "expected_final_position_hash": null,
+      "expected_status": null,
+      "expected_result": null,
+      "expected_position_occurrences": null,
+      "expected_plies_since_progress": null
+    }
+  ]
+}

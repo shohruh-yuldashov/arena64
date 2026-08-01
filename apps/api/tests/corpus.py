@@ -20,15 +20,25 @@ from pathlib import Path
 from typing import Any
 
 from app.modules.engine import (
-    Board,
     BoardCoordinate,
     BoardVariant,
+    EngineVersion,
     Move,
     Piece,
-    PieceRank,
     PlayerSide,
     Position,
     TerminalReason,
+)
+from app.modules.engine.serialization import (
+    board_from_primitive,
+    move_from_primitive,
+    piece_from_primitive,
+    position_from_primitive,
+)
+from app.modules.game.domain import MatchResult, ReplayData
+from app.modules.game.domain.serialization import (
+    match_result_from_primitive,
+    move_records_from_primitive,
 )
 
 CORPUS_ROOT = Path(__file__).resolve().parents[3] / "specs" / "game-engine" / "corpus"
@@ -101,6 +111,31 @@ class RejectionCase:
     def build_move(self) -> Move:
         """The case's move, or `InvalidMove` for a malformed one."""
         return _move(self.raw_move)
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayCase:
+    """A stored game and what replaying it must produce — or refuse.
+
+    The **fifth** expectation shape. `expected_rejection` names a failure
+    category for a record that cannot be true; every other expectation is
+    `None` in that case, because a replay that is refused reaches no state
+    to compare.
+    """
+
+    id: str
+    description: str
+    replay: ReplayData
+    expected_rejection: str | None
+    expected_final_position_hash: str | None
+    expected_status: str | None
+    expected_result: MatchResult | None
+    expected_position_occurrences: int | None
+    expected_plies_since_progress: int | None
+    source: str
+
+    def __str__(self) -> str:
+        return self.source
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +217,11 @@ def load_terminal_positions(through: int = LATEST_VERSION) -> tuple[TerminalCase
     reader guess which it was looking at.
     """
     return tuple(_terminal(entry, name) for entry, name in _entries(through, "terminal_positions"))
+
+
+def load_replays(through: int = LATEST_VERSION) -> tuple[ReplayCase, ...]:
+    """Every replay case still in force."""
+    return tuple(_replay(entry, name) for entry, name in _entries(through, "replays"))
 
 
 def load_draw_sequences(through: int = LATEST_VERSION) -> tuple[DrawSequenceCase, ...]:
@@ -288,24 +328,51 @@ def _draw_sequence(entry: Mapping[str, Any], file_name: str) -> DrawSequenceCase
     )
 
 
+def _replay(entry: Mapping[str, Any], file_name: str) -> ReplayCase:
+    """Build a case **without** validating the engine version.
+
+    `ReplayData` holds an `EngineVersion`, and one of the cases states
+    version 1 on purpose — refusing it is the expectation. So the loader
+    constructs the value and leaves the judgement to `ReplayEngine`, which
+    is the thing under test.
+    """
+    result = entry["expected_result"]
+    return ReplayCase(
+        id=entry["id"],
+        description=entry["description"],
+        replay=ReplayData(
+            engine_version=EngineVersion(number=entry["engine_version"]),
+            variant=BoardVariant(entry["variant"]),
+            opening_position=position_from_primitive(entry["opening_position"]),
+            records=move_records_from_primitive(entry["records"]),
+        ),
+        expected_rejection=entry["expected_rejection"],
+        expected_final_position_hash=entry["expected_final_position_hash"],
+        expected_status=entry["expected_status"],
+        expected_result=None if result is None else match_result_from_primitive(result),
+        expected_position_occurrences=entry["expected_position_occurrences"],
+        expected_plies_since_progress=entry["expected_plies_since_progress"],
+        source=f"{file_name}#{entry['id']}",
+    )
+
+
 def _pieces(entry: Mapping[str, Any]) -> Mapping[BoardCoordinate, Piece]:
-    return {
-        BoardCoordinate.parse(piece["square"]): Piece(
-            side=PlayerSide(piece["side"]), rank=PieceRank(piece["rank"])
-        )
-        for piece in entry["pieces"]
-    }
+    return dict(piece_from_primitive(piece) for piece in entry["pieces"])
 
 
 def _position(entry: Mapping[str, Any]) -> Position:
-    board = Board(BoardVariant(entry["variant"]), _pieces(entry))
-    return Position(board=board, side_to_move=PlayerSide(entry["side_to_move"]))
+    """One encoding, not two.
+
+    A64-014.8 gave the engine a canonical primitive projection, and the
+    corpus is written in exactly that shape — so the loader reads through
+    it rather than parsing the same JSON a second way. A corpus that
+    drifted from the serializer would be a contract nothing enforced.
+    """
+    return Position(
+        board=board_from_primitive(entry),
+        side_to_move=PlayerSide(entry["side_to_move"]),
+    )
 
 
 def _move(entry: Mapping[str, Any]) -> Move:
-    promotes_to = entry["promotes_to"]
-    return Move(
-        path=tuple(BoardCoordinate.parse(square) for square in entry["path"]),
-        captured=tuple(BoardCoordinate.parse(square) for square in entry["captured"]),
-        promotes_to=None if promotes_to is None else PieceRank(promotes_to),
-    )
+    return move_from_primitive(entry)

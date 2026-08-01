@@ -63,6 +63,7 @@ from app.modules.engine import (
 )
 from app.modules.game.domain.draws import DrawReason, DrawRuleSet, MatchHistory
 from app.modules.game.domain.exceptions import InvalidMatchTransition
+from app.modules.game.domain.move_log import MoveRecord
 from app.modules.game.domain.result import MatchOutcome, MatchResult, TerminationReason
 
 
@@ -127,7 +128,6 @@ class Match:
     """Plies played. MT-5 numbers them contiguously from 1, so this is the
     number of the ply just played and `0` means none has been."""
 
-    last_move: Move | None = None
     result: MatchResult | None = None
     """Absent until the match ends — DM-08. A sentinel "pending" result
     invites the code that computes ratings to forget to check."""
@@ -143,6 +143,14 @@ class Match:
     id: UUID = field(default_factory=generate_uuid7)
     """UUIDv7, application-generated (DB-07). Last so every other field can
     be passed positionally by a future repository's rehydration."""
+
+    _move_log: list[MoveRecord] = field(default_factory=list, repr=False)
+    """Every ply played, in order — MT-5's append-only, gap-free log.
+
+    Private, and handed out as a tuple. A caller holding the list could
+    edit a recorded ply while the sequence looked untouched, which is the
+    one thing "append-only" has to rule out.
+    """
 
     _position_counts: dict[Position, int] = field(default_factory=dict, repr=False)
     """How often each position has occurred, this match.
@@ -188,6 +196,26 @@ class Match:
     @property
     def side_to_move(self) -> PlayerSide:
         return self.position.side_to_move
+
+    @property
+    def move_log(self) -> tuple[MoveRecord, ...]:
+        """Every ply played, in order.
+
+        A tuple, so the log a caller reads cannot become a log the match
+        did not write.
+        """
+        return tuple(self._move_log)
+
+    @property
+    def last_move(self) -> Move | None:
+        """The move just played, or `None` before the first.
+
+        Read off the log rather than stored beside it. A64-014.6 kept it as
+        a field; once the log exists that field is a second history, and
+        two histories of one game are two answers to "what was played" —
+        the failure MT-5 spends a rule on.
+        """
+        return self._move_log[-1].move if self._move_log else None
 
     @property
     def termination_reason(self) -> TerminationReason | None:
@@ -289,7 +317,7 @@ class Match:
         moved = self._moving_rank(move)
         self.position = applier.apply(self.position, move)
         self.ply_number += 1
-        self.last_move = move
+        self._append(move)
         self._record(self.position)
         self.plies_since_progress = (
             0 if is_progress(move, moved, rules) else self.plies_since_progress + 1
@@ -349,6 +377,22 @@ class Match:
             outcome=MatchOutcome.WIN,
             reason=_TERMINATION_FOR[terminal.reason],
             winner=terminal.winner,
+        )
+
+    def _append(self, move: Move) -> None:
+        """Add one record for the move just applied.
+
+        Called only after the applier has succeeded, so a refused move
+        leaves no entry — a log with a gap or a phantom ply in it is
+        exactly what MT-5 forbids, and a rejected move must be
+        indistinguishable from one nobody sent.
+        """
+        self._move_log.append(
+            MoveRecord(
+                ply_number=self.ply_number,
+                move=move,
+                resulting_position_hash=self.position.fingerprint,
+            )
         )
 
     def _record(self, position: Position) -> None:

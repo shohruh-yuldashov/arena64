@@ -38,7 +38,7 @@ this rides the generic `conflict` code and the task that gives it one can
 judge otherwise.
 """
 
-from app.core.exceptions import ConflictError
+from app.core.exceptions import ConflictError, DomainError
 
 
 class InvalidMatchTransition(ConflictError):
@@ -50,4 +50,78 @@ class InvalidMatchTransition(ConflictError):
     """
 
 
-__all__ = ["InvalidMatchTransition"]
+class ReplayError(DomainError):
+    """A stored game could not be reconstructed — A64-014.8.
+
+    Root of the replay failures, and deliberately its own family rather
+    than a set of transitions under `InvalidMatchTransition`. The two mean
+    different things to whoever is reading: a lifecycle refusal is a caller
+    asking for something the match cannot do *now*, and one of these is a
+    **record that cannot be true** — a log with a gap, a position the rules
+    do not produce, a version this build cannot honour.
+
+    One is a stale view. The other is data integrity, and `replay` and
+    `fairplay` will want to page on it.
+    """
+
+
+class UnsupportedEngineVersion(ReplayError):
+    """The game was played under rules this build cannot reproduce.
+
+    Refused rather than replayed under the current rules. AD-15 exists
+    because "replaying a 2025 game under the new engine could yield a
+    different outcome than the one that was rated and displayed" — quietly
+    substituting today's rules is the exact failure it names, and it would
+    produce a plausible, wrong, permanent-looking answer.
+    """
+
+
+class MalformedMoveLog(ReplayError):
+    """The log is not a contiguous sequence of plies from 1 — MT-5.
+
+    "A gap makes the game unreplayable, which invalidates the result, the
+    analysis, and the fair-play record simultaneously." Checked before a
+    single move is applied, so a truncated or duplicated log is refused as
+    a whole rather than half-replayed.
+    """
+
+
+class CorruptMoveLog(ReplayError):
+    """A recorded move is not one the rules allow at the point it appears.
+
+    Raised when the engine refuses a move the log claims was played, or
+    when the log continues past the ply that ended the game. The original
+    refusal is chained as the cause, because *which* rule refused it is the
+    diagnostic — and in a replay it means the record is wrong rather than
+    that a player was told no.
+    """
+
+
+class PositionHashMismatch(ReplayError):
+    """A recorded position and the one the rules produce disagree.
+
+    The most valuable failure here. It is caught on the ply that caused it
+    rather than at the end, so it names the move whose semantics changed —
+    which is the difference between "a rules fix moved this game" and "this
+    game is wrong somewhere".
+    """
+
+
+class ReplayResultMismatch(ReplayError):
+    """The reconstructed match ended differently from the record.
+
+    Only raised when a replay states an expected result. A game that ended
+    by a draw rule this build no longer applies fails here rather than
+    being reported as a different game.
+    """
+
+
+__all__ = [
+    "CorruptMoveLog",
+    "InvalidMatchTransition",
+    "MalformedMoveLog",
+    "PositionHashMismatch",
+    "ReplayError",
+    "ReplayResultMismatch",
+    "UnsupportedEngineVersion",
+]

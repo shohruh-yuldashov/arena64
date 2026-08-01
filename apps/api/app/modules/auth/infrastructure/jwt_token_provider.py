@@ -187,8 +187,10 @@ class JwtTokenProvider:
         direction. PyJWT's version rejects a token whose `iat` is in the
         future, which with one signing service can only mean skew between
         our own instances — turning a routine NTP wobble into signed-out
-        users. `iat` is retained because it is audit data and because
-        A64-011.4's refresh rotation will want it; it is not a guard.
+        users. `iat` is retained because it is audit data, not because
+        anything reads it — A64-011.3 expected refresh rotation to, and
+        A64-011.4 did not, because refresh tokens turned out to be opaque
+        rows rather than JWTs. It is not a guard.
 
         The signature, `iss`, `aud` and the presence of every required
         claim remain PyJWT's, because none of them involve time.

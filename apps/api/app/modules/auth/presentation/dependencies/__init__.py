@@ -2,18 +2,29 @@
 DI-01: `Depends` is used only at the routing layer, to hand a route an
 already-resolved service. It is not the container.
 
-The graph assembled per request:
+The graph assembled per request. `users`' side is built five times over,
+once per published port, because the ports exist to be separately
+grantable capabilities and a single factory returning something that
+satisfied all five would quietly undo that:
 
     AsyncSession                  one per request (`app.api.deps`)
       -> SqlAlchemyUserRepository
       -> SessionUnitOfWork        the transaction `users` will commit
       -> UserService              validation + uniqueness + transaction
-      -> UserAccountService       adapts it to the published port
-      -> UserCredentialService    adapts it to the *other* published port
+           -> UserAccountService      creates accounts
+           -> UserCredentialService   reads hashes, compare-and-swaps them
+           -> UserProfileService      reads one profile
+           -> EmailVerificationWriter marks an address verified
+           -> PasswordResetWriter     replaces a hash, cannot read one
+      -> SqlAlchemySessionRepository            auth's own tables
+      -> SqlAlchemyVerificationTokenRepository
+      -> SqlAlchemyPasswordResetTokenRepository
     Argon2idPasswordHasher        process-lifetime singleton
+    RedisRateLimiter              process-lifetime singleton (`app.state`)
     Clock                         injected, never read directly (AD-07)
-      -> RegistrationService
-      -> AuthenticationService
+      -> RegistrationService      AuthenticationService
+      -> AccessTokenService       SessionService
+      -> EmailVerificationService PasswordResetService
 
 **Everything here is per-request except the hasher.** A64-011.1 built
 that per-request too, having measured construction at **1 µs** against
@@ -44,7 +55,7 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from app.api.deps import DbSessionDep, SettingsDep
+from app.api.deps import ClockDep, DbSessionDep, SettingsDep
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.auth.application.email import EmailProvider
@@ -75,7 +86,6 @@ from app.modules.auth.presentation.dependencies.current_user import (
     get_current_user,
     get_current_user_optional,
     get_token_validator,
-    require_authentication,
 )
 from app.modules.users.application.services import UserService
 from app.modules.users.application.services.email_verification_writer import (
@@ -86,7 +96,6 @@ from app.modules.users.application.services.user_account_service import UserAcco
 from app.modules.users.application.services.user_credential_service import UserCredentialService
 from app.modules.users.application.services.user_profile_service import UserProfileService
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
-from app.modules.users.presentation.dependencies import ClockDep
 from app.modules.users.public import (
     EmailVerifier,
     PasswordResetter,
@@ -175,10 +184,11 @@ def get_access_token_service(
 ) -> AccessTokenService:
     """Token issuance (A64-011.3).
 
-    Not wired into any route: `POST /auth/login` still returns only the
-    account, and A64-011.3's brief is infrastructure, not endpoints. It is
-    assembled here so that A64-011.4 adds one line to the login handler
-    rather than a dependency graph.
+    Wired into `POST /auth/login` and `POST /auth/refresh`, both of which
+    return the access token alongside a refresh token (A64-011.5).
+    A64-011.3 assembled it here before either endpoint existed, precisely
+    so that adding them was one line in a handler rather than a dependency
+    graph.
     """
     return AccessTokenService(
         tokens=JwtTokenProvider(settings.jwt, clock),
@@ -206,10 +216,13 @@ def get_session_service(
 ) -> SessionService:
     """Refresh sessions (A64-011.4).
 
-    Not reachable from any route: this task's brief is explicit that no
-    endpoints are exposed. It is assembled here so A64-011.5's refresh and
-    logout endpoints add a handler rather than a dependency graph — and so
-    that the graph itself is exercised now, while it is small.
+    Reached by four routes: `login` starts a session, `refresh` rotates
+    one, `logout` revokes one, `logout-all` revokes every session for an
+    account. A64-011.8's password reset reaches it too, through
+    `PasswordResetService`, which is why that factory takes the *resolved*
+    `SessionServiceDep` rather than building a second instance — see it
+    below on why a second one would revoke into a transaction nobody
+    commits.
 
     The unit of work wraps the *same* session the repository holds;
     otherwise the service would commit a transaction the repository never
@@ -415,5 +428,4 @@ __all__ = [
     "get_user_account_creator",
     "get_user_credential_store",
     "get_user_profile_reader",
-    "require_authentication",
 ]

@@ -16,12 +16,16 @@ Today it is nearly that, and the wrapper still earns its place:
   so nobody can forget it; `validate_access_token` is the one place that
   answers "access", so no route, dependency or future gateway handler
   gets to choose.
-- It is where the checks that are *not* cryptographic will go. A64-011.4
-  adds a `jti` denylist lookup for revocation, and SE-1/SE-3 require that
-  a password change and a suspension take effect immediately — meaning
-  the check cannot live in the signature. When that arrives it lands
-  here, behind an interface every caller already uses, rather than being
-  retrofitted into every call site of `decode`.
+- It is where the checks that are *not* cryptographic will go. The
+  `jti` denylist is the outstanding one, and it is worth being precise
+  that it has **not** shipped: A64-011.3 anticipated it for A64-011.4,
+  A64-011.4 through .8 did not add it, and SE-1/SE-3 still require that a
+  password change and a suspension take effect immediately. Today they do
+  not — a revoked session's *access* token keeps verifying until it
+  expires, which is the documented cost of a stateless credential
+  (`JWTSettings`) and the reason its window is fifteen minutes. When the
+  denylist arrives it lands here, behind an interface every caller already
+  uses, rather than being retrofitted into every call site of `decode`.
 
 ## What it deliberately does not do
 

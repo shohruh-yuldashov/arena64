@@ -184,16 +184,28 @@ class EmailVerificationService:
 
     # --- redeeming -----------------------------------------------------------
 
-    async def verify_email(self, raw_token: str) -> UserRead:
-        """Redeems a verification link and marks the address verified.
+    async def validate_verification_token(self, raw_token: str) -> EmailVerificationToken:
+        """Resolves a raw token to a usable one, or raises.
 
         Raises `InvalidVerificationToken` for every unusable case —
         unknown, already used, expired — with one message. The client
         offers a new link in all three, and distinguishing them would say
         whether a token the caller holds was ever real.
 
-        Returns the verified account, so the endpoint can confirm *which*
-        address was confirmed without a second round trip.
+        **Read-only. Consumes nothing.**
+
+        Extracted from `verify_email` by A64-011.9's audit, which found
+        this sequence inlined here and named `validate_reset_token` in
+        `PasswordResetService` — the same four checks, in the same order,
+        expressed two different ways. That asymmetry is worth removing for
+        a reason beyond tidiness: this is the security-critical part of
+        both flows, and a reviewer comparing "how does a one-time token
+        get validated on this platform" had to read one method's body
+        against another method's signature. Now they are the same shape
+        and can be read side by side.
+
+        No behaviour changed in the extraction — same checks, same order,
+        same log lines, same exception.
         """
         presented_hash = self._factory.hash(raw_token)
         token = await self._tokens.get_by_hash(presented_hash)
@@ -211,8 +223,7 @@ class EmailVerificationService:
             logger.error("verification_token_hash_mismatch", extra={"token_id": str(token.id)})
             raise InvalidVerificationToken(_GENERIC_REJECTION)
 
-        now = self._clock.now()
-        if not token.is_usable_at(now):
+        if not token.is_usable_at(self._clock.now()):
             # One branch for used and expired. The *reason* goes to the
             # log, where a caller cannot read it — a replayed link and a
             # stale one are worth telling apart operationally.
@@ -225,6 +236,20 @@ class EmailVerificationService:
                 },
             )
             raise InvalidVerificationToken(_GENERIC_REJECTION)
+
+        return token
+
+    async def verify_email(self, raw_token: str) -> UserRead:
+        """Redeems a verification link and marks the address verified.
+
+        Raises `InvalidVerificationToken` for every unusable token — see
+        `validate_verification_token`, which performs the checks.
+
+        Returns the verified account, so the endpoint can confirm *which*
+        address was confirmed without a second round trip.
+        """
+        token = await self.validate_verification_token(raw_token)
+        now = self._clock.now()
 
         token.consume(now)
 

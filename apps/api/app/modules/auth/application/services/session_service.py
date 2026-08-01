@@ -42,9 +42,10 @@ This is deliberately aggressive: it signs a real user out of that device.
 The alternative is leaving an attacker holding a working credential for
 up to thirty days, which is not a trade this platform should make.
 
-A single sign-in's family contains one session today. It becomes a chain
-when A64-011.5 wires rotation — see `rotate_refresh_token`, which is
-prepared but not implemented, per this task's brief.
+A single sign-in's family is one session until the first refresh; from
+then on it is a chain, because `rotate_refresh_token` (A64-011.5) revokes
+the presented link with reason `ROTATED` and issues its successor into the
+same family.
 
 ## Why revocation and validation are separate transactions
 
@@ -82,9 +83,10 @@ class IssuedRefreshToken:
     A plain frozen dataclass, not a Pydantic model, for the reason
     `users.public.credentials.UserCredentials` is: a Pydantic model is one
     keystroke from being a FastAPI `response_model`, and a type whose
-    whole purpose is to carry a live credential must not be that. When
-    A64-011.5 adds the refresh endpoint it will declare its own wire
-    schema and copy the token across deliberately.
+    whole purpose is to carry a live credential must not be that.
+    `presentation/schemas/tokens.py::TokenPair` is the wire schema that
+    copies the token across deliberately — see its docstring on why the
+    duplication is the point rather than an oversight.
 
     `repr=False` on the token is not decoration — a dataclass repr lands
     in tracebacks and in every error reporter that walks frame locals, and

@@ -89,12 +89,16 @@ class TokenProvider(Protocol):
     this port is about cryptography and encoding, those are about use
     cases. `AccessTokenService` decides that an access token lasts fifteen
     minutes and speaks for a particular account; this decides only how a
-    claim set becomes a signed string and back. That line is what lets
-    A64-011.4 add refresh tokens, and a later task add WebSocket tickets
-    (AD-09), by writing a new *service* against this same port rather than
-    a second signing implementation — and two independent signing
-    implementations on one platform is how one of them ends up without
-    audience checking.
+    claim set becomes a signed string and back. That line is what lets a
+    later task add WebSocket tickets (AD-09) by writing a new *service*
+    against this same port rather than a second signing implementation —
+    and two independent signing implementations on one platform is how one
+    of them ends up without audience checking.
+
+    A64-011.4's refresh tokens did not need it in the end, and the reason
+    is worth recording: they are opaque stored values rather than signed
+    ones, so they have no `TokenProvider` at all. This port has exactly one
+    implementation and one consumer today.
 
     A `Protocol`, not an ABC, so a test can substitute a deterministic
     fake without inheriting from the real thing.

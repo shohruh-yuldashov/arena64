@@ -57,3 +57,19 @@ class LoginRequest(BaseRequestDTO):
 
     email: EmailField
     password: LoginPasswordField
+
+    model_config = {
+        "extra": "forbid",
+        "json_schema_extra": {
+            # A64-011.9: the only two body schemas on the module without an
+            # example were this one and `RegisterRequest` — the two most
+            # likely to be the first thing anyone tries in the docs page.
+            #
+            # The example password satisfies the registration policy even
+            # though *this* endpoint does not enforce it, so that someone
+            # working through the docs top to bottom can register with it
+            # and then sign in with it. An example that registration would
+            # reject is an example that teaches the wrong shape.
+            "examples": [{"email": "player@example.com", "password": "CorrectHorse1!"}]
+        },
+    }

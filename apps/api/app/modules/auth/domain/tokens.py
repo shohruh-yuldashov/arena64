@@ -55,19 +55,22 @@ class TokenType(StrEnum):
     """What a token is *for*.
 
     The reason this claim exists at all: without it, every token signed by
-    this platform is interchangeable with every other, and the refresh
-    token that A64-011.4 will deliberately give a long lifetime becomes an
-    access token that lasts for weeks. `TokenValidator` requires the type
-    it expects and rejects anything else, so a token can only be redeemed
-    at the endpoint it was minted for.
+    this platform is interchangeable with every other, and any long-lived
+    token this platform ever signs becomes an access token that lasts as
+    long. `TokenValidator` requires the type it expects and rejects
+    anything else, so a token can only be redeemed at the endpoint it was
+    minted for.
 
-    **Only `ACCESS` exists today, on purpose.** `REFRESH` and the
-    WebSocket ticket type are named in this docstring rather than added as
-    members, for the reason `PasswordHasher` published `hash` alone in
-    A64-011.1: an unused member on a security interface reads as "this is
-    wired up" to whoever adds the next task, and a `TokenType.REFRESH`
-    that nothing issues and nothing rejects is worse than absent. They
-    arrive with their issuers.
+    **Only `ACCESS` exists, and after nine slices that is still correct.**
+    A64-011.4's refresh tokens turned out not to be JWTs at all — they are
+    opaque, stored, and revocable precisely because they are rows
+    (database.md §14.3) — so there was never a `TokenType.REFRESH` to add.
+    The WebSocket ticket (AD-09) is the one plausible future member, and
+    it is named here rather than declared, for the reason `PasswordHasher`
+    published `hash` alone in A64-011.1: an unused member on a security
+    interface reads as "this is wired up" to whoever adds the next task,
+    and a type that nothing issues and nothing rejects is worse than
+    absent. It arrives with its issuer.
     """
 
     ACCESS = "access"
@@ -97,12 +100,15 @@ class TokenClaims:
     token_id: UUID
     """`jti` — this token's own identity, unique per issuance.
 
-    Nothing reads it yet, and it is not decoration: it is what a denylist
-    keys on. A64-011.4 needs exactly this to revoke one token without
-    rotating a signing key and signing everyone out, and a token minted
-    today without a `jti` could never be revoked individually — the claim
-    has to be there *before* there is something to revoke, because tokens
-    already in circulation cannot be given one retroactively.
+    Read into `auth.public.AuthenticatedUser`, so a route's log line can
+    be joined to the `access_token_issued` line that minted the
+    credential. Nothing *enforces* on it yet: it is what a denylist would
+    key on, and that denylist is still unbuilt as of A64-011.9.
+
+    The claim is nonetheless carried from day one on purpose. A token
+    minted without a `jti` could never be revoked individually, and tokens
+    already in circulation cannot be given one retroactively — so the
+    claim has to exist before there is something to revoke.
     """
 
     token_type: TokenType

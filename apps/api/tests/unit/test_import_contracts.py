@@ -1,15 +1,9 @@
-"""The architecture gate, run as a test.
+"""Run the repository's import-linter architecture contracts as a test.
 
-`lint-imports` is already a CI gate in its own right
-(`docs/02-development/testing.md`). Running it here as well is deliberate:
-the engine's whole guarantee is that it imports nothing (AD-13), and a
-contributor who runs `pytest` and sees green should not have to know that a
-separate command is what would have caught the `import datetime` they just
-added to a rules function.
-
-The subprocess costs a couple of seconds and reads the real import graph —
-there is no way to assert this property from inside the interpreter that
-has already imported everything.
+`lint-imports` is also a standalone CI gate, but keeping this test means a
+contributor who runs `pytest` receives the same architecture feedback before
+pushing. The subprocess intentionally exercises the real command, config
+lookup, and import graph rather than a separate library code path.
 """
 
 import shutil
@@ -19,39 +13,51 @@ from pathlib import Path
 
 import pytest
 
-API_ROOT = Path(__file__).resolve().parents[2]
+
+#: API project root, where ``.importlinter`` lives.
+_API_ROOT = Path(__file__).resolve().parents[2]
+
+#: Import graph construction can be slow on a cold CI filesystem, but it must
+#: not hang indefinitely.
+_TIMEOUT_SECONDS = 300
 
 
-def _locate_lint_imports() -> str | None:
-    """The `lint-imports` executable, whether or not the virtualenv is on
-    `PATH`.
+def _locate_lint_imports() -> str:
+    """Return the project's ``lint-imports`` executable when available.
 
-    `shutil.which` alone finds it only in an activated shell, so a
-    contributor running `.venv/bin/pytest` would get a skip — and a gate
-    that silently skips is worse than no gate, because the green is
-    indistinguishable from a pass.
+    Prefer the executable beside the running Python interpreter, which keeps
+    ``.venv/bin/pytest`` and ``.venv/bin/lint-imports`` on the same environment.
+    Fall back to the repository-local virtualenv and finally ``PATH``.
     """
     beside_interpreter = Path(sys.executable).parent / "lint-imports"
     if beside_interpreter.exists():
         return str(beside_interpreter)
-    return shutil.which("lint-imports")
+
+    repository_virtualenv = _API_ROOT / ".venv" / "bin" / "lint-imports"
+    if repository_virtualenv.exists():
+        return str(repository_virtualenv)
+
+    found = shutil.which("lint-imports")
+    if found is None:
+        pytest.skip(
+            "import-linter is not installed (it is a development dependency); "
+            "CI runs the standalone architecture gate"
+        )
+    return found
 
 
-lint_imports = _locate_lint_imports()
-
-
-@pytest.mark.skipif(lint_imports is None, reason="import-linter is not installed")
 def test_every_architecture_contract_holds() -> None:
-    """Including `engine-is-a-dependency-free-kernel`, which is what keeps
-    the rules kernel testable, mirrorable in TypeScript (AD-14) and movable
-    to a worker (AD-13.3)."""
-    assert lint_imports is not None
+    """Fail with import-linter's complete diagnostic when any contract breaks."""
     result = subprocess.run(
-        [lint_imports],
-        cwd=API_ROOT,
+        [_locate_lint_imports()],
+        cwd=_API_ROOT,
         capture_output=True,
         text=True,
+        timeout=_TIMEOUT_SECONDS,
         check=False,
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode == 0, (
+        "architecture contracts are broken; see apps/api/.importlinter\n\n"
+        f"{result.stdout}\n{result.stderr}"
+    )

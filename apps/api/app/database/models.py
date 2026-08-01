@@ -24,6 +24,7 @@ first table, is a cost of exactly one line.
 # `app.database.base.Base.metadata` as a side effect of class definition.
 from app.modules.auth.infrastructure import models as _auth_models  # noqa: F401
 from app.modules.friends.infrastructure import models as _friends_models  # noqa: F401
+from app.modules.matchmaking.infrastructure import models as _matchmaking_models  # noqa: F401
 from app.modules.statistics.infrastructure import models as _statistics_models  # noqa: F401
 from app.modules.users.infrastructure import models as _users_models  # noqa: F401
 from app.modules.users.infrastructure.search_ddl import register_search_ddl

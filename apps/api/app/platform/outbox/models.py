@@ -112,6 +112,24 @@ class OutboxModel(UUIDPrimaryKeyMixin, Base):
             "id",
             postgresql_where=text("published_at IS NULL"),
         ),
+        # A64-014.1's retention scan: "the oldest rows past the horizon".
+        #
+        # **Unconditional, unlike the index above**, and the asymmetry is
+        # the decision rather than an oversight. A partial index on
+        # `published_at IS NOT NULL` would match the prune's predicate more
+        # closely and would cover nearly the whole table anyway — but it
+        # would put `published_at` in a *second* index's definition, and the
+        # column's one `UPDATE` is the mark-published write DB-18's
+        # fillfactor exists to keep cheap. One index already pays that
+        # price; a second would double it for a row-count saving of roughly
+        # nothing.
+        #
+        # `occurred_at` alone, and it is the partition key: when DB-18's
+        # range partitioning arrives this index becomes local to each
+        # partition and the prune becomes a `DETACH`. Both changes are then
+        # confined to the storage layer, which is what "prepare for
+        # partitioning" is worth.
+        Index("ix_outbox__occurred_at", "occurred_at"),
         {"schema": PLATFORM_SCHEMA},
     )
 
@@ -164,7 +182,21 @@ class ProcessedEventModel(Base):
     """
 
     __tablename__ = "processed_event"
-    __table_args__ = ({"schema": PLATFORM_SCHEMA},)
+    __table_args__ = (
+        # A64-014.1. §12.5 said this relation "needs no secondary index",
+        # and that was true while the only question asked of it was "has
+        # this consumer seen this event" — both halves of the key are
+        # always known. Retention asks a second question the key cannot
+        # answer: *which rows are old*. Without this the prune degrades to
+        # a sequential scan of the whole ledger, on exactly the schedule
+        # that exists to stop the ledger being whole-scan-sized.
+        #
+        # Insert-only and pruned by the same column, so the index has the
+        # append-at-the-edge access pattern a timestamp gives and none of
+        # the churn `ix_outbox__unpublished` carries.
+        Index("ix_processed_event__processed_at", "processed_at"),
+        {"schema": PLATFORM_SCHEMA},
+    )
 
     consumer: Mapped[str] = mapped_column(String(64), primary_key=True)
     event_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)

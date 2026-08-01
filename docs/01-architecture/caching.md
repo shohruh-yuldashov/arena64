@@ -134,6 +134,17 @@ recorded because the keyspace must have room for them from the first release —
 adding a field to a live keyspace means every key written before the change
 decodes short — and they reach no response schema.
 
+**A second reader since A64-014.1.** `matchmaking` consults `presence:v1:`
+when a player joins a queue, through `users.public.PresenceProvider` — the
+same port `profiles` holds, over the same adapter and the same instance.
+It holds the *reader* and not `PresenceRecorder`, so it cannot become a
+second writer and C-8 is preserved structurally rather than by review. The
+rule it applies is one-sided for the reason this section's `On failure` row
+gives: only a record that positively says `online: false` refuses a join,
+because unknown collapses an expired window, an unrecorded player and an
+unreachable Redis, and refusing on that would turn a cache blip into an
+outage of matchmaking (C-7).
+
 ### 3.2a `presence:v1:roster` — who is due to lapse (A64-013.8)
 
 | | |
@@ -280,7 +291,7 @@ rather than inventing one, and so nobody assumes a missing key means a bug.
 | --- | --- | --- | --- |
 | Live match position | `game` | `live` | Hash per match. AD-18: authoritative for in-flight state. |
 | Clock deadlines | `game` | `live` | Sorted set, score = flag timestamp. |
-| Matchmaking queues | `matchmaking` | `live` | Sorted set per time control, score = rating. |
+| Matchmaking queue **index** | `matchmaking` | `live` | Sorted set per pool, score = rating. **Not the ticket** — since A64-014.1 `QueueTicket` is a row in `matchmaking.queue_ticket` (database.md §8.1a), because QT-1 and QT-4 are constraints under concurrency. What belongs here is a *derived* ordering for QT-5's widening scan, rebuildable from that table (AD-19), and it is not allocated until a measurement asks for it. |
 | Connection registry | `gateway` | `live` | Hash: player → node. Written beside presence, by the same process, but a different fact — see below. |
 | Match update replay window | `game` | `live` | Bounded stream, backs AD-12's gap-fill. |
 | Leaderboard read models | `leaderboard` | `cache` | Sorted set. |

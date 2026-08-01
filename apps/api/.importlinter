@@ -95,6 +95,9 @@ source_modules =
     app.modules.friends.domain
     app.modules.friends.application
     app.modules.friends.infrastructure
+    app.modules.matchmaking.domain
+    app.modules.matchmaking.application
+    app.modules.matchmaking.infrastructure
     app.modules.notifications.domain
     app.modules.notifications.application
     app.modules.notifications.infrastructure
@@ -137,6 +140,9 @@ source_modules =
     app.modules.auth.application
     app.modules.auth.infrastructure
     app.modules.avatars
+    app.modules.matchmaking.domain
+    app.modules.matchmaking.application
+    app.modules.matchmaking.infrastructure
     app.modules.notifications.domain
     app.modules.notifications.application
     app.modules.notifications.infrastructure
@@ -161,6 +167,9 @@ source_modules =
     app.modules.friends.domain
     app.modules.friends.application
     app.modules.friends.infrastructure
+    app.modules.matchmaking.domain
+    app.modules.matchmaking.application
+    app.modules.matchmaking.infrastructure
     app.modules.notifications.domain
     app.modules.notifications.application
     app.modules.notifications.infrastructure
@@ -182,6 +191,9 @@ source_modules =
     app.modules.friends.domain
     app.modules.friends.application
     app.modules.friends.infrastructure
+    app.modules.matchmaking.domain
+    app.modules.matchmaking.application
+    app.modules.matchmaking.infrastructure
     app.modules.notifications
     app.modules.profiles.domain
     app.modules.profiles.application
@@ -192,6 +204,68 @@ forbidden_modules =
     app.modules.statistics.application
     app.modules.statistics.infrastructure
 allow_indirect_imports = True
+
+# A64-014.1 required this contract to exist "from the first commit", and
+# there is a real difference between adding one now and adding one later:
+# the four above were written after their modules had consumers, so each had
+# to be checked against imports that already existed. This one is written
+# before `matchmaking` has any, which means the first import that would
+# violate it fails on the pull request that introduces it rather than being
+# discovered in an audit.
+[importlinter:contract:matchmaking-internals-are-private]
+name = matchmaking internals are reachable only through matchmaking.public
+type = forbidden
+source_modules =
+    app.modules.auth
+    app.modules.avatars
+    app.modules.friends
+    app.modules.notifications
+    app.modules.profiles
+    app.modules.statistics
+    app.modules.users
+forbidden_modules =
+    app.modules.matchmaking.domain
+    app.modules.matchmaking.application
+    app.modules.matchmaking.infrastructure
+allow_indirect_imports = True
+
+# ---------------------------------------------------------------------------
+# 2b. No cycles through matchmaking — A64-014.1
+# ---------------------------------------------------------------------------
+# R-6 forbids cyclic dependencies "including through events", and
+# import-linter has no general cycle detector: a `layers` contract orders
+# layers, and an `independence` contract between every pair of modules would
+# forbid the composition roots that already wire them together.
+#
+# What *can* be checked is the strongest available statement about the new
+# module, and it happens to be exactly the one that makes a cycle through it
+# unconstructible: nothing outside `matchmaking` may import any part of it,
+# including its `public/` package.
+#
+# That is stricter than the contract above and it is deliberate. Combined
+# with `matchmaking-internals-are-private`, the module's whole import
+# surface is one-directional — matchmaking may depend on `users.public` and
+# on `app.platform`, and no module may depend on matchmaking at all — so
+# there is no pair of edges a cycle could be built from.
+#
+# **This contract is expected to be relaxed, not deleted.** The first real
+# consumer (architecture.md §7 draws `matchmaking -> game`, so `game` is the
+# likelier direction) removes itself from the source list and adds a port to
+# `matchmaking.public`. The relaxation is then a visible, argued diff rather
+# than an import somebody happened to write.
+[importlinter:contract:matchmaking-is-not-a-dependency]
+name = no module depends on matchmaking
+type = forbidden
+source_modules =
+    app.modules.auth
+    app.modules.avatars
+    app.modules.friends
+    app.modules.notifications
+    app.modules.profiles
+    app.modules.statistics
+    app.modules.users
+forbidden_modules =
+    app.modules.matchmaking
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +317,15 @@ layers =
     app.modules.profiles.infrastructure
     app.modules.profiles.application
     app.modules.profiles.domain
+
+[importlinter:contract:layers-matchmaking]
+name = matchmaking layers point inward
+type = layers
+layers =
+    app.modules.matchmaking.presentation
+    app.modules.matchmaking.infrastructure
+    app.modules.matchmaking.application
+    app.modules.matchmaking.domain
 
 [importlinter:contract:layers-notifications]
 name = notifications layers point inward
@@ -396,6 +479,19 @@ allow_indirect_imports = True
 # header: import-linter only builds edges to third-party packages when asked,
 # and a contract naming `sqlalchemy` would otherwise pass by finding no edges
 # at all — the worst kind of green.
+#
+# ## Why `app.platform.tasks` is a source here — A64-014.1
+#
+# It joins `app.platform.events` rather than the module domains' list, and
+# for the same reason that one is here: it is the *contract* half of AD-17's
+# seam. A `TaskRequest` must be constructible in a unit test with no
+# framework and encodable by a broker that knows none, so the moment it
+# could hold a SQLAlchemy object the Celery migration would be blocked by a
+# payload nobody can serialise — and the failure would surface on the day of
+# the migration rather than on the pull request that caused it.
+#
+# The handlers are deliberately *not* covered: `OutboxRetentionTask` and
+# `QueueExpiryTask` hold session factories and belong to the layers that may.
 [importlinter:contract:domain-is-framework-free]
 name = domain layers import no framework
 type = forbidden
@@ -404,11 +500,13 @@ source_modules =
     app.modules.avatars.domain
     app.modules.friends.domain
     app.modules.game.domain
+    app.modules.matchmaking.domain
     app.modules.notifications.domain
     app.modules.profiles.domain
     app.modules.statistics.domain
     app.modules.users.domain
     app.platform.events
+    app.platform.tasks
 forbidden_modules =
     sqlalchemy
     fastapi

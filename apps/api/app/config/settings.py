@@ -828,6 +828,24 @@ class RateLimitSettings(BaseSettings):
     avatar_upload_user_limit: int = Field(default=10, ge=1)
     avatar_upload_window_seconds: int = Field(default=60 * 60, ge=1)
 
+    # --- matchmaking queue (A64-014.1) ---------------------------------------
+    # **Per authenticated user**, one budget shared by joining and leaving.
+    # See `matchmaking.presentation.rate_limits` on why the two share a
+    # counter and why the read of your own ticket carries none.
+    #
+    # 30 per 5 minutes is chosen rather than given, and is set against the
+    # legitimate pattern: a player queues, waits, gives up, queues in a
+    # different pool, plays. That is a handful of calls in a sitting, and
+    # thirty absorbs a client that retries a dropped response or a person
+    # who cannot decide between ranked and casual.
+    #
+    # What it bounds is pool churn — repeatedly re-queueing to influence who
+    # you are paired with, which is a rating-manipulation vector rather than
+    # a load problem. Reaching this limit is itself a signal worth alerting
+    # on, which is why it is not looser.
+    matchmaking_queue_user_limit: int = Field(default=30, ge=1)
+    matchmaking_queue_window_seconds: int = Field(default=5 * 60, ge=1)
+
 
 class StatisticsSettings(BaseSettings):
     """`statistics` — the competitive-record projection (A64-012.6).
@@ -1165,6 +1183,156 @@ class OutboxSettings(BaseSettings):
     somebody who came online and has since gone.
     """
 
+    # --- retention (A64-014.1) ----------------------------------------------
+    # The bound A64-013.7 shipped without. See
+    # `app/platform/outbox/retention.py` for what a horizon buys and costs;
+    # these are the numbers, and they are settings rather than constants
+    # because a platform that discovers it needs ninety days should raise a
+    # value, not write a migration.
+
+    retention_enabled: bool = True
+    """Whether *this process* prunes the outbox.
+
+    Per-process, exactly like `worker_enabled` and
+    `PresenceSettings.sweeper_enabled`, and for the same deployment shape:
+    one API tier with it off, one maintenance tier with it on, running the
+    same image. Setting it to `false` everywhere is how an operator stops
+    deletion during an investigation — the table then grows, loudly and
+    visibly, which is the correct direction for a switch that governs
+    destruction.
+    """
+
+    retention_days: int = Field(default=14, ge=1, le=3650)
+    """How long a **published** entry is kept, measured on `occurred_at`.
+
+    Fourteen days is chosen rather than given, and it is set against what
+    the log is actually used for. An operator asking "why did this player
+    not get that notification" is asking about something that happened
+    within a shift or two; a projection rebuild does not read this table at
+    all (AD-19 requires every projection to be rebuildable from PostgreSQL,
+    which is what let AD-17 give up stream replay).
+
+    What it is *not* set against is disk. Two weeks of the current event
+    rate is negligible, and the number would be the same at ten times the
+    volume — the reason for a horizon is that "no horizon" is not a policy,
+    not that fourteen days is the affordable one.
+
+    An unpublished entry is never pruned, whatever this says.
+    """
+
+    ledger_retention_days: int = Field(default=30, ge=1, le=3650)
+    """How long a `processed_event` row is kept.
+
+    **At or beyond `retention_days`**, and `RetentionPolicy` refuses to
+    construct otherwise. It is an ordering invariant rather than a
+    preference: dropping a ledger row while its outbox entry can still be
+    claimed lets that entry be redelivered *and* re-handled, which is the
+    double effect the ledger exists to prevent.
+
+    Thirty against fourteen leaves a fortnight of margin, so a clock skew,
+    a paused pruner or a raised `retention_days` cannot invert the pair
+    between two deploys.
+    """
+
+    prune_interval_seconds: float = Field(default=3600.0, ge=60.0, le=86400.0)
+    """How often a prune runs.
+
+    Hourly. Retention is a *floor*, not a deadline — nothing is wrong if a
+    row survives an extra hour past its horizon — so the interval is chosen
+    to keep each run small rather than to keep the horizon sharp. The floor
+    of a minute is a guard against a configuration that turns a `DELETE`
+    loop into a busy one.
+    """
+
+    prune_batch_size: int = Field(default=1000, ge=1, le=10000)
+    """Rows per `DELETE`. Bounds the lock one statement takes on the
+    platform's highest-churn relation."""
+
+    prune_max_batches: int = Field(default=20, ge=1, le=1000)
+    """Batches per run. Bounds the job.
+
+    The two together cap one run at 20,000 rows per relation, which is
+    ~5.5 hours of drain per day at the hourly interval — far above any
+    plausible steady-state rate, and low enough that the *first* run after
+    this ships does not try to delete a year of history in one job.
+    """
+
+
+class MatchmakingSettings(BaseSettings):
+    """`matchmaking` — the queue domain (A64-014.1).
+
+    Nothing here tunes *pairing*, because no pairing exists. What these
+    govern is how long a player may wait before the platform stops
+    asserting they are waiting, and which process is responsible for
+    noticing.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="MATCHMAKING_", frozen=True, extra="forbid")
+
+    ticket_ttl_seconds: int = Field(default=600, ge=30, le=86400)
+    """How long a queue ticket stays `waiting` before it expires.
+
+    **Ten minutes**, chosen rather than given, and set against what a
+    stale ticket costs. A ticket outliving the player's attention is worse
+    than a short one: the first thing A64-014.2's pairing worker will do
+    with a waiting ticket is create a match, and a match created for
+    somebody who left ten minutes ago is a game the opponent has to sit
+    through the join deadline of.
+
+    Shorter would make a player who queued and walked to the kitchen have
+    to re-queue, which is the ordinary case this must not punish. The two
+    together put the number in minutes rather than in seconds or hours.
+
+    It is deliberately **not** coupled to `PRESENCE_TTL_SECONDS`. A closed
+    tab is a presence question and is answered by that window; this one is
+    about attention, and a player watching a queue spinner is present the
+    whole time.
+    """
+
+    expiry_enabled: bool = True
+    """Whether *this process* expires due tickets.
+
+    Per-process, exactly like `OUTBOX_WORKER_ENABLED` and
+    `PRESENCE_SWEEPER_ENABLED` — one API tier with it off, one worker tier
+    with it on, running the same image.
+
+    With it off everywhere, `expires_at` still governs what a player sees:
+    `active_ticket` treats a due ticket as absent, so a stale row cannot
+    block a re-queue. What stops happening is the *transition* — no
+    `expired` status, no event, no log line — which is a loss of the record
+    rather than of the rule.
+    """
+
+    expiry_interval_seconds: float = Field(default=15.0, ge=1.0, le=600.0)
+    """How often due tickets are swept.
+
+    This is the worst-case delay between a ticket falling due and the
+    platform recording it as expired. Fifteen seconds against a ten-minute
+    window is a rounding error on the ticket's life, and matches
+    `PRESENCE_SWEEP_INTERVAL_SECONDS` — the two are the same kind of job
+    and there is no reason for an operator to hold two numbers.
+    """
+
+    expiry_batch_size: int = Field(default=200, ge=1, le=2000)
+    """How many tickets one sweep may expire.
+
+    Bounded for the reason every batch on this platform is (CLAUDE.md
+    §10.5). The interesting case is a queue that filled while the sweeper
+    was down: two hundred per tick drains it in seconds without one
+    transaction holding hundreds of row locks and as many outbox inserts.
+    """
+
+    snapshot_limit: int = Field(default=200, ge=1, le=1000)
+    """How many waiting tickets one queue snapshot reads.
+
+    The snapshot is the read A64-014.2's pairing scan will run, so it is
+    bounded from the first release rather than when a pool first gets
+    large. Two hundred is well past the point where a pairing pass has
+    found a match, and the depth reported beside it is a count over the
+    same predicate rather than the length of this page — so a bounded read
+    never turns into a wrong number.
+    """
+
 
 class Settings(BaseModel):
     """The composed, immutable configuration for this process."""
@@ -1185,6 +1353,7 @@ class Settings(BaseModel):
     presence: PresenceSettings
     friends: FriendsSettings
     outbox: OutboxSettings
+    matchmaking: MatchmakingSettings
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":
@@ -1270,4 +1439,5 @@ def get_settings() -> Settings:
         presence=PresenceSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         friends=FriendsSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         outbox=OutboxSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        matchmaking=MatchmakingSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

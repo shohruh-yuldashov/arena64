@@ -1,0 +1,372 @@
+"""`QueueService` — enter a pool, leave one, read your own ticket, and
+expire the ones nobody is waiting on any more.
+
+Orchestrates; does not compute (services.md §3.2). The state machine is
+`QueueTicket`'s, uniqueness is the partial unique index's, the atomic claim
+is the repository's, and what is left here is the four use cases and the
+transaction boundary around each.
+
+**No pairing.** A64-014.1 excludes match creation, rating expansion,
+acceptance and realtime updates, and nothing in this class approaches any of
+them: there is no method that reads two tickets, and `queue_snapshot` is a
+read that returns a value rather than a scan that decides anything.
+
+## Why `join` checks presence, and why it almost never refuses
+
+A64-014.1 requires the queue to depend on the existing presence abstraction
+rather than a new online index, and the only place a presence question
+belongs in this task is at entry: a pool of people who are not there is a
+pool whose matches are abandoned at the join deadline.
+
+The rule is one-sided on purpose. `PresenceProvider.presence_for` collapses
+three situations into `None` — the window expired, nothing was ever
+recorded, Redis was unreachable — and its own docstring says a caller "must
+not try" to tell them apart. So `None` is permitted, and the only refusal is
+a record that positively says `online: false`, which is a *recorded* sign-out
+and the platform's only evidence of absence. Refusing on `None` would mean a
+Redis blip stopped anybody queueing, which is the self-inflicted outage
+system-design.md T-2 warns about, in exchange for excluding players the
+platform never observed in the first place.
+
+## Where the transactions are
+
+    join           one — the ticket and its event
+    leave          one — the resolution and its event
+    active_ticket  none — a read
+    expire_due     two — the claim, then the resolutions (see `expire_due`)
+
+Every write publishes inside its own unit of work, which is AD-16 exactly:
+the event is as durable as the ticket, and a rollback takes both.
+"""
+
+import logging
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
+from uuid import UUID
+
+from app.core.clock import Clock
+from app.core.unit_of_work import UnitOfWork
+from app.modules.matchmaking.application.ports import QueueRepository, RatingSnapshotProvider
+from app.modules.matchmaking.domain.events import (
+    QueueTicketCancelled,
+    QueueTicketEnqueued,
+    QueueTicketExpired,
+)
+from app.modules.matchmaking.domain.exceptions import AlreadyQueued, PlayerNotPresent
+from app.modules.matchmaking.domain.queue_ticket import (
+    QueueSnapshot,
+    QueueTicket,
+    QueueType,
+    Region,
+)
+from app.modules.users.public import PresenceProvider
+from app.platform.outbox import EventPublisher
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ExpirySweep:
+    """What one `expire_due` did. Returned rather than only logged, so a
+    test asserts on the outcome and the worker logs it once — the shape
+    `RelayTick` and `SweepResult` already use."""
+
+    claimed: int
+    expired: int
+    """Of those claimed, the ones this sweep actually resolved. Fewer when
+    somebody cancelled a ticket between the claim and the write."""
+
+    @property
+    def is_idle(self) -> bool:
+        return self.claimed == 0
+
+
+class QueueService:
+    """The four queue use cases.
+
+    Holds ports only — a repository, a rating provider, a presence reader, a
+    publisher, a unit of work and a clock — so every rule below is testable
+    with no database, no Redis and no timer.
+
+    Notably **not** a `PresenceRecorder`: this service must not be able to
+    write presence, and the port it does not hold is what guarantees it.
+    """
+
+    def __init__(
+        self,
+        *,
+        tickets: QueueRepository,
+        ratings: RatingSnapshotProvider,
+        presence: PresenceProvider,
+        events: EventPublisher,
+        unit_of_work: UnitOfWork,
+        clock: Clock,
+        ticket_ttl_seconds: float,
+        snapshot_limit: int,
+    ) -> None:
+        self._tickets = tickets
+        self._ratings = ratings
+        self._presence = presence
+        self._events = events
+        self._unit_of_work = unit_of_work
+        self._clock = clock
+        self._ticket_ttl_seconds = ticket_ttl_seconds
+        self._snapshot_limit = snapshot_limit
+
+    async def join(self, *, player_id: UUID, queue_type: QueueType, region: Region) -> QueueTicket:
+        """Enters `player_id` into a pool and returns their ticket.
+
+        Raises `AlreadyQueued` (409) when they already hold a live one —
+        **in any pool**, per QT-1 — and `PlayerNotPresent` (422) when
+        presence positively says they are offline.
+
+        The duplicate check runs before any write so the common rejection
+        costs one indexed read, and the partial unique index is what
+        actually enforces it under concurrency (BE-06). Both paths raise the
+        same type, so a caller cannot tell which caught it — and must not,
+        because the answer changes with timing rather than with anything the
+        caller did.
+
+        The rating is read *before* the transaction opens. It is a
+        cross-context read (QT-2's snapshot), and services.md BE-05 forbids
+        one inside an open transaction: the lock-acquisition order becomes
+        something nobody can reason about, and a partial failure would leave
+        one side committed with no record that reconciliation is owed.
+        """
+        await self._ensure_present(player_id)
+
+        if await self._tickets.active_ticket(player_id, now=self._clock.now()) is not None:
+            raise AlreadyQueued("You are already in a matchmaking queue.")
+
+        rating = await self._ratings.rating_for(player_id, queue_type=queue_type)
+        at = self._clock.now()
+        ticket = QueueTicket.enter(
+            player_id=player_id,
+            queue_type=queue_type,
+            region=region,
+            rating_snapshot=rating,
+            at=at,
+            ttl=self._ticket_ttl_seconds,
+        )
+
+        async with self._unit_of_work:
+            stored = await self._tickets.enqueue(ticket)
+            await self._events.publish(
+                QueueTicketEnqueued(
+                    occurred_at=stored.entered_at,
+                    ticket_id=stored.id,
+                    player_id=stored.player_id,
+                    queue_type=stored.queue_type,
+                    region=stored.region,
+                    rating_snapshot=stored.rating_snapshot,
+                    expires_at=stored.expires_at,
+                )
+            )
+            await self._unit_of_work.commit()
+
+        # A64-014.1's "queue joined". Ids, pool and the recorded rating —
+        # no username and no display name (services.md §8.5). The rating is
+        # here because it is the one input to pairing that a later "why was
+        # I matched with them" question cannot be answered without.
+        logger.info(
+            "queue_joined",
+            extra={
+                "ticket_id": str(stored.id),
+                "player_id": str(stored.player_id),
+                "queue_type": stored.queue_type.value,
+                "region": stored.region.value,
+                "rating_snapshot": stored.rating_snapshot,
+            },
+        )
+        return stored
+
+    async def leave(self, *, player_id: UUID) -> bool:
+        """Withdraws the player's live ticket. Returns whether there was one.
+
+        **Idempotent**, and never raises for "you were not queued". Two
+        reasons, the second of which is the one that matters:
+
+          - `DELETE` is idempotent by HTTP semantics, so a client retrying
+            after a dropped response must not be told the resource is gone
+            when its own first attempt removed it.
+          - A `404` for "not queued" beside a `204` for "was queued" is a
+            state oracle on a write. It is a mild one here — a player can
+            already read their own ticket — but the platform answers this
+            question the same way for friend removal and unblocking, and
+            three endpoints with one convention is worth more than a
+            marginally more informative status.
+
+        The compare-and-set in `cancel` is what makes the concurrent case
+        correct: a ticket the expiry sweep resolved a millisecond earlier
+        returns `False` here and is reported as "you were not queued",
+        which is true.
+        """
+        at = self._clock.now()
+        ticket = await self._tickets.active_ticket(player_id, now=at)
+        if ticket is None:
+            logger.debug("queue_leave_noop", extra={"player_id": str(player_id)})
+            return False
+
+        cancelled = ticket.cancelled(at)
+
+        async with self._unit_of_work:
+            applied = await self._tickets.cancel(cancelled)
+            if not applied:
+                # Somebody resolved it between the read and the write. No
+                # event, because nothing changed — publishing one here is
+                # how a cancelled-and-expired ticket ends up announced
+                # twice, under two different verbs.
+                await self._unit_of_work.rollback()
+                logger.debug("queue_leave_lost_race", extra={"player_id": str(player_id)})
+                return False
+
+            await self._events.publish(
+                QueueTicketCancelled(
+                    occurred_at=at,
+                    ticket_id=cancelled.id,
+                    player_id=cancelled.player_id,
+                    queue_type=cancelled.queue_type,
+                    region=cancelled.region,
+                    waited_for_seconds=_waited(cancelled, at),
+                )
+            )
+            await self._unit_of_work.commit()
+
+        logger.info(
+            "queue_cancelled",
+            extra={
+                "ticket_id": str(cancelled.id),
+                "player_id": str(cancelled.player_id),
+                "queue_type": cancelled.queue_type.value,
+                "waited_for_seconds": _waited(cancelled, at),
+            },
+        )
+        return True
+
+    async def active_ticket(self, *, player_id: UUID) -> QueueTicket | None:
+        """The player's live ticket, or `None`.
+
+        Read-only; opens no transaction. Scoped to the caller by
+        construction — there is no parameter that could name another
+        player's ticket, which is why this needs no ownership check.
+
+        A ticket past its `expires_at` reads as `None` even before the
+        sweeper reaches it. See `QueueRepository.active_ticket`: the
+        deadline is the rule, and a worker being a few seconds behind must
+        not be something a player can observe.
+        """
+        return await self._tickets.active_ticket(player_id, now=self._clock.now())
+
+    async def snapshot(self, *, queue_type: QueueType, region: Region) -> QueueSnapshot:
+        """One pool as it stands — its depth and its oldest live tickets.
+
+        Bounded by `MATCHMAKING_SNAPSHOT_LIMIT`. Used today to tell a
+        waiting player how many others are in their pool, and declared in
+        the shape A64-014.2's pairing scan needs so that the scan is a new
+        caller rather than a new query.
+        """
+        return await self._tickets.queue_snapshot(
+            queue_type=queue_type,
+            region=region,
+            now=self._clock.now(),
+            limit=self._snapshot_limit,
+        )
+
+    async def expire_due(self, *, limit: int, claimed_by: str) -> ExpirySweep:
+        """Expires one bounded batch of tickets whose window has closed.
+
+        Never raises: this runs from a scheduled task, and a sweep that
+        propagated an exception would stop the schedule — the same argument
+        `OutboxRelay.run_once` and `PresenceSweeper.sweep_once` both make.
+
+        ## Two transactions, deliberately
+
+        The claim commits on its own, so the rows this worker took are
+        visibly locked before anything else happens; a second sweeper
+        polling mid-batch skips them, which it can only do if the claim's
+        transaction is still open — and `SKIP LOCKED` is what makes that a
+        skip rather than a wait. The resolutions and their events then
+        commit together, so an event exists exactly when the transition it
+        announces does.
+
+        The cost is that a worker dying between the two leaves tickets
+        claimed-but-unresolved. That is the correct failure: the rows are
+        still `waiting` and still due, so the next sweep claims them again.
+        Nothing is lost, and nothing is expired twice — `expire` carries
+        `status = 'waiting'` in its predicate.
+        """
+        now = self._clock.now()
+        claimed = await self._claim(now=now, limit=limit, claimed_by=claimed_by)
+        if not claimed:
+            return ExpirySweep(claimed=0, expired=0)
+
+        try:
+            async with self._unit_of_work:
+                resolved = await self._tickets.expire([ticket.id for ticket in claimed], at=now)
+                for ticket in claimed:
+                    await self._events.publish(
+                        QueueTicketExpired(
+                            # The ticket's own deadline, not the sweep's
+                            # instant — see `QueueTicketExpired` on why the
+                            # outbox's ordering depends on it.
+                            occurred_at=ticket.expires_at,
+                            ticket_id=ticket.id,
+                            player_id=ticket.player_id,
+                            queue_type=ticket.queue_type,
+                            region=ticket.region,
+                            waited_for_seconds=_waited(ticket, ticket.expires_at),
+                        )
+                    )
+                await self._unit_of_work.commit()
+        except Exception as error:  # noqa: BLE001 — a background sweep must not escalate
+            # Nothing is lost: the tickets are still `waiting` and still
+            # due, so the next tick claims them again. `ERROR` because a
+            # sweep that cannot record means the queue's terminal state is
+            # silently not being written.
+            logger.error(
+                "queue_expiry_failed",
+                extra={"claimed": len(claimed), "error": type(error).__name__},
+                exc_info=error,
+            )
+            return ExpirySweep(claimed=len(claimed), expired=0)
+
+        # A64-014.1's "queue expired". One line for the batch rather than
+        # one per ticket: a deploy that leaves two hundred tickets due would
+        # otherwise emit two hundred identical records and bury whatever
+        # else was happening (CLAUDE.md §8.8).
+        logger.info(
+            "queue_expired",
+            extra={"claimed": len(claimed), "expired": resolved, "worker_id": claimed_by},
+        )
+        return ExpirySweep(claimed=len(claimed), expired=resolved)
+
+    async def _claim(self, *, now: datetime, limit: int, claimed_by: str) -> Sequence[QueueTicket]:
+        """The claim's own transaction, committed immediately so the lock is
+        visible to every other sweeper before any event is written."""
+        async with self._unit_of_work:
+            claimed = await self._tickets.claim_due(now=now, limit=limit, claimed_by=claimed_by)
+            await self._unit_of_work.commit()
+        return claimed
+
+    async def _ensure_present(self, player_id: UUID) -> None:
+        """Refuses a player the platform has positively recorded as offline.
+
+        See this module's docstring on why unknown presence is permitted.
+        The read never raises (`PresenceProvider.presence_for`), so this
+        cannot be the thing that fails a join.
+        """
+        presence = await self._presence.presence_for(player_id)
+        if presence is not None and not presence.is_online:
+            raise PlayerNotPresent("You appear to be signed out. Reconnect before joining a queue.")
+
+
+def _waited(ticket: QueueTicket, until: datetime) -> float:
+    """How long the ticket was in the pool, in seconds.
+
+    Computed here rather than on the aggregate: it is a *reporting* figure
+    for an event payload and a log line, and `QueueTicket` has no business
+    knowing what a consumer wants to plot. Seconds as a float, because the
+    interesting range spans a fast cancel and a ten-minute expiry.
+    """
+    return (until - ticket.entered_at).total_seconds()

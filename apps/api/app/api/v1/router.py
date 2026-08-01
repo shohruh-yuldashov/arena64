@@ -30,6 +30,7 @@ from app.core.constants import API_V1_PREFIX
 from app.modules.auth.presentation.router import auth_router
 from app.modules.avatars.presentation.router import avatar_router
 from app.modules.friends.presentation.router import blocks_router, friends_router
+from app.modules.matchmaking.presentation.router import matchmaking_router
 from app.modules.profiles.presentation.router import profiles_router
 from app.modules.profiles.presentation.search_router import user_search_router
 from app.modules.profiles.presentation.self_router import my_profile_router
@@ -55,3 +56,8 @@ v1_router.include_router(my_profile_router)
 v1_router.include_router(avatar_router)
 v1_router.include_router(friends_router)
 v1_router.include_router(blocks_router)
+
+# A64-014.1. Registration order is immaterial here: `/matchmaking/queue` and
+# `/matchmaking/queue/me` differ in segment count and neither is
+# parameterised, so there is no path a caller can send that both would match.
+v1_router.include_router(matchmaking_router)

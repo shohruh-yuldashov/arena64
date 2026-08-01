@@ -16,7 +16,7 @@ hash is worth the extra lines.
 """
 
 from app.modules.users.domain.entities import User
-from app.modules.users.public.dtos import UserRead, UserSummary
+from app.modules.users.public.dtos import PublicUserProfile, UserRead, UserSummary
 
 
 def to_user_read(user: User) -> UserRead:
@@ -41,4 +41,29 @@ def to_user_summary(user: User) -> UserSummary:
         username=user.username.value,
         display_name=user.display_name,
         avatar_url=user.avatar_url,
+    )
+
+
+def to_public_profile(user: User) -> PublicUserProfile:
+    """The stranger's view — A64-012.1.
+
+    Field by field like the two above, and here the discipline stops being
+    a style preference and becomes the control: this is the mapping that
+    would leak an email address if it were written as
+    `PublicUserProfile.model_validate(user)` and the DTO later gained a
+    field. Naming every field means adding one to `User` can never publish
+    it to anonymous callers by accident.
+
+    `bio` and `country` unwrap their value objects to plain strings, and
+    `None` stays `None` — absence is one state, not an empty string.
+    """
+    return PublicUserProfile(
+        id=user.id,
+        username=user.username.value,
+        display_name=user.display_name,
+        avatar_url=user.avatar_url,
+        country=user.country.value if user.country else None,
+        preferred_language=user.preferred_language,
+        bio=user.bio.value if user.bio else None,
+        created_at=user.created_at,
     )

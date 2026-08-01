@@ -33,7 +33,7 @@ from app.modules.users.domain.exceptions import (
     UsernameAlreadyExists,
     UserNotFound,
 )
-from app.modules.users.domain.value_objects import Email, Timezone, Username
+from app.modules.users.domain.value_objects import Bio, CountryCode, Email, Timezone, Username
 from app.modules.users.infrastructure.models import UserModel
 from app.repositories.pagination import paginate_cursor
 
@@ -74,6 +74,12 @@ class SqlAlchemyUserRepository:
             updated_at=row.updated_at,
             display_name=row.display_name,
             avatar_url=row.avatar_url,
+            # Reconstructed through the value objects rather than assigned
+            # raw, so a row written before a rule tightened fails loudly
+            # here instead of flowing into a response. `None` stays `None`:
+            # absence is one state, not an empty `Bio`.
+            bio=Bio(row.bio) if row.bio else None,
+            country=CountryCode(row.country_code) if row.country_code else None,
             locked_until=row.locked_until,
         )
 
@@ -95,6 +101,8 @@ class SqlAlchemyUserRepository:
             updated_at=user.updated_at,
             display_name=user.display_name,
             avatar_url=user.avatar_url,
+            bio=user.bio.value if user.bio else None,
+            country_code=user.country.value if user.country else None,
             locked_until=user.locked_until,
         )
 
@@ -117,6 +125,8 @@ class SqlAlchemyUserRepository:
         row.updated_at = user.updated_at
         row.display_name = user.display_name
         row.avatar_url = user.avatar_url
+        row.bio = user.bio.value if user.bio else None
+        row.country_code = user.country.value if user.country else None
         row.locked_until = user.locked_until
 
     # --- error translation --------------------------------------------------

@@ -178,6 +178,17 @@ def _enum(python_type: type, name: str) -> PgEnum:
     )
 
 
+#: The SQL spelling of `QueueStatus.is_live`, used by three predicates
+#: below.
+#:
+#: Derived from the enum rather than typed out, so adding a sixth status
+#: cannot leave one of the three saying something different from the other
+#: two — which would be a constraint and an index disagreeing about whether
+#: a player is queued.
+_LIVE_PREDICATE = "status IN ({})".format(
+    ", ".join(f"'{status.value}'" for status in QueueStatus if status.is_live)
+)
+
 _VARIANT_ENUM = _enum(ProductVariant, "queue_variant")
 _QUEUE_TYPE_ENUM = _enum(QueueType, "queue_type")
 _REGION_ENUM = _enum(Region, "queue_region")
@@ -210,6 +221,12 @@ class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
         # unique on `player_id` would mean a player could queue once ever.
         # The constraint is on the *live* state, which is what QT-1 says.
         #
+        # A64-015.3 widened "live" from `waiting` to `waiting, reserved`.
+        # A reserved player is mid-pairing, and letting them join a second
+        # pool while a worker creates their match is precisely the
+        # multi-queueing this index exists to prevent — the ticket has left
+        # `waiting` without leaving the queue.
+        #
         # This is the authoritative check (BE-06). `QueueService.join` reads
         # first to produce a good error cheaply, and two concurrent joins
         # both pass that read — only this index is correct under
@@ -219,7 +236,7 @@ class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
             "uq_queue_ticket__one_live_per_player",
             "player_id",
             unique=True,
-            postgresql_where=text("status = 'waiting'"),
+            postgresql_where=text(_LIVE_PREDICATE),
         ),
         # The pairing scan's index, and the snapshot's — leading with the
         # pool because every read of this relation names one, and carrying
@@ -241,23 +258,35 @@ class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
             "id",
             postgresql_where=text("status = 'waiting'"),
         ),
-        # The expiry sweep's claim: "waiting tickets whose deadline has
+        # The expiry sweep's claim: "live tickets whose deadline has
         # passed, oldest first". Its own index rather than a reuse of the
         # pool index above, because the sweep is deliberately **pool-blind**
         # — one worker drains every pool, and a scan that had to lead with
         # `queue_type` would need one pass per pool per tick.
+        #
+        # Covers `reserved` as well as `waiting` (A64-015.3), which is the
+        # one place the sweep sees the pairing states. A worker that dies
+        # between reserving a pair and settling it leaves two reserved
+        # tickets, and a reserved ticket is *live* — so without this it
+        # would occupy QT-1's index forever and lock its player out of the
+        # queue permanently. Once its own window closes it is abandoned by
+        # any measure, and the sweep expires it.
         Index(
             "ix_queue_ticket__due",
             "expires_at",
-            postgresql_where=text("status = 'waiting'"),
+            postgresql_where=text(_LIVE_PREDICATE),
         ),
-        # `resolved_at` is set exactly when the ticket has left `waiting` —
+        # `resolved_at` is set exactly when the ticket is no longer live —
         # the same shape as `ck_friend_request__responded_iff_resolved`, and
         # enforced here as well as in `QueueTicket.__post_init__` so a row
         # written by a repair script cannot claim an outcome without its
         # instant (BE-06).
+        #
+        # `reserved` is on the live side of this: a reservation is not an
+        # outcome, and stamping one would make a ticket that goes back to
+        # `waiting` carry the instant of a match that never happened.
         CheckConstraint(
-            "(status = 'waiting') = (resolved_at IS NULL)",
+            f"({_LIVE_PREDICATE}) = (resolved_at IS NULL)",
             name="ck_queue_ticket__resolved_iff_terminal",
         ),
         # A ticket that expired before it was entered is not a short

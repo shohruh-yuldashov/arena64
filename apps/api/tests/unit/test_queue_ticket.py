@@ -187,14 +187,22 @@ class TestTransitions:
         assert expired.resolved_at == ticket.expires_at
 
     def test_matching_produces_a_resolved_ticket(self) -> None:
-        """`matched` has no caller yet — see `QueueTicket.matched` on why a
-        status the database can hold must have a transition that reaches
-        it."""
-        ticket = _ticket()
+        """A64-015.3 narrowed the guard: `matched` is now reachable only
+        from `reserved`. §8 forbids marking a ticket matched before `game`
+        has accepted the request, and requiring the reservation is how that
+        is enforced rather than remembered."""
+        ticket = _ticket().reserved()
 
         matched = ticket.matched(NOW + timedelta(seconds=5))
 
         assert matched.status is QueueStatus.MATCHED
+        assert matched.resolved_at == NOW + timedelta(seconds=5)
+
+    def test_a_waiting_ticket_cannot_be_matched(self) -> None:
+        """The guard that makes "no match before `game` accepts" a property
+        of the aggregate rather than a convention in the service."""
+        with pytest.raises(TicketNotWaiting):
+            _ticket().matched(NOW + timedelta(seconds=5))
 
     def test_a_transition_leaves_the_original_untouched(self) -> None:
         """Frozen, and it matters: the repository's compare-and-set needs

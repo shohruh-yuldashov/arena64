@@ -9,6 +9,9 @@ from app.modules.friends.application.services.friend_request_service import (
     FriendRequestService,
 )
 from app.modules.friends.application.services.friendship_service import FriendshipService
+from app.modules.friends.application.services.pairing_exclusion_service import (
+    PairingExclusionService,
+)
 from app.modules.friends.application.services.presence_audience_service import (
     PresenceAudienceService,
 )
@@ -21,6 +24,7 @@ __all__ = [
     "CachedSocialGraphReader",
     "FriendRequestService",
     "FriendshipService",
+    "PairingExclusionService",
     "PresenceAudienceService",
     "SocialGraphReaderService",
 ]

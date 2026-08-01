@@ -14,9 +14,20 @@ The graph assembled per request:
 
     GameEngineServices                  one per **process**, not per request
 
-One factory, because there is one service. A64-014.2 adds a second for
-pairing rather than widening this one — see
-`application/services/__init__.py` on why the split is the capability.
+    AsyncSession                        one per **task run**, not a request
+      -> SqlAlchemyQueueRepository
+      -> PairingEngine                   pure, from RatingWindowPolicy
+      -> PairingExclusionService         `friends`' BL-2 read
+      -> NoRecentOpponents               until `game` has match history
+      -> MatchCreationUseCase            `game`'s command port
+      -> OutboxEventPublisher / SessionUnitOfWork
+      -> PairingService
+
+Two factories, because there are two services and they differ in
+capability rather than in wiring — see `application/services/__init__.py`.
+`build_pairing_service` has **no `Depends` wrapper**: nothing HTTP calls a
+pairing scan, so a route-layer accessor for it would be an entry point
+nobody should have.
 
 ## The presence adapter is built here, not imported from `users`
 
@@ -56,13 +67,24 @@ from app.api.outbox_deps import EventPublisherDep
 from app.config.settings import MatchmakingSettings
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
-from app.modules.game.public import GameEngineServices, engine_services
+from app.modules.friends.application.services import PairingExclusionService
+from app.modules.friends.infrastructure.repositories import SqlAlchemyBlockedPlayerRepository
+from app.modules.friends.public import PairingExclusions
+from app.modules.game.public import (
+    GameEngineServices,
+    MatchCreationUseCase,
+    UnavailableMatchCreation,
+    engine_services,
+)
 from app.modules.matchmaking.application.eligibility import (
     PresenceEligibilityPolicy,
     QueueEligibilityPolicy,
 )
-from app.modules.matchmaking.application.services import QueueService
+from app.modules.matchmaking.application.ports import RecentOpponentProvider
+from app.modules.matchmaking.application.services import PairingService, QueueService
+from app.modules.matchmaking.domain.pairing import PairingEngine, RatingWindowPolicy
 from app.modules.matchmaking.infrastructure import (
+    NoRecentOpponents,
     ProvisionalRatingProvider,
     SqlAlchemyQueueRepository,
 )
@@ -195,13 +217,99 @@ def get_queue_service(
 QueueServiceDep = Annotated[QueueService, Depends(get_queue_service)]
 
 
+def build_rating_window(settings: MatchmakingSettings) -> RatingWindowPolicy:
+    """QT-5's widening window, from configuration — A64-015.3.
+
+    Built from settings rather than hard-coded so a thin pool is widened by
+    an operator rather than by a deploy, and so a test states a policy in
+    one line instead of moving a clock four minutes.
+    """
+    return RatingWindowPolicy(
+        initial_points=settings.rating_window_initial,
+        widen_every_seconds=settings.rating_window_widen_every_seconds,
+        widen_by_points=settings.rating_window_widen_by,
+        maximum_points=settings.rating_window_maximum,
+    )
+
+
+def build_pairing_exclusions(session: AsyncSession) -> PairingExclusions:
+    """`friends`' BL-2 read, over this run's session.
+
+    Named concretely here — `SqlAlchemyBlockedPlayerRepository`,
+    `PairingExclusionService` — which is what a composition root is for. The
+    *service* holds only `friends.public.PairingExclusions` and so cannot
+    reach anything else in that module.
+    """
+    return PairingExclusionService(SqlAlchemyBlockedPlayerRepository(session))
+
+
+def build_match_creation() -> MatchCreationUseCase:
+    """`game`'s side of the pairing handshake.
+
+    One implementation today, and it refuses every request — see
+    `game.public.UnavailableMatchCreation` on why that ships instead of a
+    stub that fabricates a match id. A64-015.4 replaces this one line.
+    """
+    return UnavailableMatchCreation()
+
+
+def build_recent_opponents() -> RecentOpponentProvider:
+    """The rematch guard. Excludes nobody until `game` has match history —
+    `matchmaking.infrastructure.opponent_providers`."""
+    return NoRecentOpponents()
+
+
+def build_pairing_service(
+    session: AsyncSession,
+    *,
+    exclusions: PairingExclusions,
+    opponents: RecentOpponentProvider,
+    matches: MatchCreationUseCase,
+    events: EventPublisher,
+    settings: MatchmakingSettings,
+    clock: Clock,
+) -> PairingService:
+    """One pairing scan's object graph, over one session.
+
+    Plain arguments rather than `Depends`, for the reason
+    `build_queue_service` takes them: the only caller is a background task,
+    which has no request to resolve against. The difference is that this one
+    has *no* `Depends` wrapper at all — a route that could trigger a pairing
+    scan is an entry point nothing on this platform should have.
+
+    The engine is constructed per call and that is deliberate rather than an
+    oversight: it is a pure object over a frozen policy, so it costs nothing,
+    and hoisting it to the process would make an operator's settings change
+    require a restart for no benefit.
+    """
+    return PairingService(
+        tickets=SqlAlchemyQueueRepository(session),
+        engine=PairingEngine(build_rating_window(settings)),
+        exclusions=exclusions,
+        opponents=opponents,
+        matches=matches,
+        # Built over the **same** session as the repository, which is what
+        # puts `PlayersPaired` in the transaction that marks both tickets
+        # matched (AD-16).
+        events=events,
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+        candidate_batch_size=settings.candidate_batch_size,
+    )
+
+
 __all__ = [
     "EligibilityPolicyDep",
     "EngineServicesDep",
     "PresenceReaderDep",
     "QueueServiceDep",
     "build_eligibility_policy",
+    "build_match_creation",
+    "build_pairing_exclusions",
+    "build_pairing_service",
     "build_queue_service",
+    "build_rating_window",
+    "build_recent_opponents",
     "get_eligibility_policy",
     "get_engine_services",
     "get_presence_reader",

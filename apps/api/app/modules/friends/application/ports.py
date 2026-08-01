@@ -20,7 +20,7 @@ must not be able to resolve a request. Merging them would hand the
 composition path the ability to accept requests.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
@@ -366,6 +366,19 @@ class BlockedPlayerRepository(Protocol):
         signature.** `friends:v1:` remains unwritten (caching.md C-1 wants
         the invalidation trigger first, and here it is `block` and
         `unblock` — both in `BlockingService`).
+        """
+        ...
+
+    async def blocked_pairs_among(
+        self, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, frozenset[UUID]]:
+        """Which of `player_ids` may not be paired with which — A64-015.3.
+
+        The batch, all-pairs form of `blocked_ids_for`, for the one consumer
+        that holds a whole pool at once. Symmetric, confined to the batch,
+        and **one query** — see
+        `friends.public.ports.PairingExclusions.blocked_pairs_among` for the
+        contract this satisfies and why it is a published port of its own.
         """
         ...
 

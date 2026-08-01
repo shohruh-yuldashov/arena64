@@ -163,3 +163,79 @@ class QueueTicketExpired(_QueueTicketEvent):
 
     def payload(self) -> dict[str, Any]:
         return {**self._ticket_payload(), "waited_for_seconds": self.waited_for_seconds}
+
+
+@dataclass(frozen=True)
+class PlayersPaired(DomainEvent):
+    """A scan turned two tickets into a match — A64-015.3.
+
+    ## Why one event and not two `queue_ticket_matched`
+
+    A pairing is one fact about two tickets, and every consumer of it needs
+    both halves: a notification tells two players, a metric records one
+    match, a fair-play signal looks at who was paired with whom. Two
+    per-ticket events would make every consumer join them back together,
+    and the first one to act on a half-delivered pair would announce a
+    match to one player.
+
+    That is the opposite of the argument the three events above make, and
+    the difference is real: enqueued, cancelled and expired are each one
+    ticket's whole story. This one is not.
+
+    ## Its aggregate is the match, not a ticket
+
+    `aggregate_id` is the `match_id`, because that is the subject an
+    operator querying the outbox is looking for and the identifier every
+    downstream context (rating, statistics, replay) will key on. The two
+    ticket ids are payload — provenance rather than identity.
+
+    Published **after** `game` accepted the match request, in the same
+    transaction as the two `matched` transitions (AD-16). A pairing that
+    was compensated emits nothing: nothing durable happened, and an event
+    announcing a match that was rolled back is worse than silence.
+    """
+
+    event_type: ClassVar[str] = "matchmaking.players_paired"
+    aggregate_type: ClassVar[str] = "match"
+
+    match_id: UUID
+    pairing_id: UUID
+    """The idempotency key the match was created under. On the payload so a
+    consumer that sees this event twice — a relay redelivery — can tell it
+    is one pairing rather than two."""
+
+    variant: ProductVariant
+    queue_type: QueueType
+    region: Region
+
+    light_player_id: UUID
+    dark_player_id: UUID
+    light_ticket_id: UUID
+    dark_ticket_id: UUID
+
+    waited_for_seconds: float
+    """How long the **longer-waiting** of the two had been in the pool.
+
+    One number rather than two, because the question it answers is about
+    the pool rather than about a player: how long did this pool take to
+    produce a match. The longer of the pair is the honest figure — the
+    match could not have happened before it.
+    """
+
+    @property
+    def aggregate_id(self) -> UUID:
+        return self.match_id
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "match_id": str(self.match_id),
+            "pairing_id": str(self.pairing_id),
+            "variant": self.variant.value,
+            "queue_type": self.queue_type.value,
+            "region": self.region.value,
+            "light_player_id": str(self.light_player_id),
+            "dark_player_id": str(self.dark_player_id),
+            "light_ticket_id": str(self.light_ticket_id),
+            "dark_ticket_id": str(self.dark_ticket_id),
+            "waited_for_seconds": self.waited_for_seconds,
+        }

@@ -126,6 +126,8 @@ class TestStatelessCollaboratorsAreSharedOnce:
 
 class TestTheSurfaceIsDeliberate:
     PUBLISHED = {
+        # A64-015.2 — which rule sets a player may choose, and the shared
+        # engine collaborators.
         "GameEngineServices",
         "ProductVariant",
         "VariantNotOffered",
@@ -135,6 +137,17 @@ class TestTheSurfaceIsDeliberate:
         "is_offered",
         "require_offered",
         "variant_catalogue",
+        # A64-015.3 — the "creates match" command architecture.md §7 draws
+        # from `matchmaking`. A command `game` accepts, never a type it
+        # hands out, which is how the edge coexists with R-3.
+        "CreateMatchRequest",
+        "CreateMatchResult",
+        "MatchCreationRefused",
+        "MatchCreationUnavailable",
+        "MatchCreationUseCase",
+        "MatchParticipant",
+        "PlayerSide",
+        "UnavailableMatchCreation",
     }
 
     def test_nothing_is_published_by_accident(self) -> None:

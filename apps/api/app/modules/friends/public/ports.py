@@ -30,9 +30,28 @@ Handing `notifications` the reader instead would mean handing it the job of
 combining the two sets correctly, forever, in every future fan-out. The
 first one to forget the subtraction would deliver a presence frame to
 somebody who had been blocked, and it would look exactly like working code.
+
+## `PairingExclusions` is a third port, split by *question* again
+
+A64-015.3 gave `friends` a consumer that asks a third thing: not "what is
+this pair to each other" and not "who may be told about this player", but
+"among these fifty candidates, which pairs must never be formed". BL-2
+makes a blocked pair unpairable, and matchmaking is where that rule is
+finally enforced.
+
+It could have been a third method on `SocialGraphReader`, and it is not,
+for the reason the split above gives: `profiles` needs neither of the other
+two questions answered and should not see a method whose cost is quadratic
+in a candidate batch. A port is a contract with a consumer, and these are
+three consumers asking three things.
+
+`blocked_ids_for` in a loop would have answered it too, at one query per
+candidate — the N+1 CLAUDE.md §10.4 names, on the platform's most
+latency-sensitive background scan. One query is the whole point of the
+port.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 from uuid import UUID
 
@@ -125,5 +144,52 @@ class PresenceAudience(Protocol):
         "unfiltered" would broadcast a player's comings and goings to the
         platform, which is why this returns the audience rather than a
         predicate to filter with.
+        """
+        ...
+
+
+class PairingExclusions(Protocol):
+    """Which of these players must never be paired with which — A64-015.3.
+
+    BL-2's half of the block rule, published for the one consumer that
+    enforces it. See this module's docstring on why it is a third port.
+
+    **Not an eligibility check.** Whether a player may queue at all is a
+    fact about one player, answered by
+    `matchmaking.application.eligibility`. This is a fact about a *pair*,
+    and it can only be answered where both are in hand — which is the
+    pairing scan, and nowhere earlier.
+    """
+
+    async def blocked_pairs_among(
+        self, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, frozenset[UUID]]:
+        """For each of `player_ids`, which **others in the same batch** they
+        must not be paired with.
+
+        **Symmetric**, exactly as `blocked_ids_for` is and for the same
+        reason: BL-1 makes a block one-directional and invisible, but a
+        blocker paired with the person they blocked would have gained
+        nothing from blocking them. If either has blocked the other, the
+        pair is excluded and both sides of the mapping say so.
+
+        **One query for the whole batch.** A pairing scan reads up to
+        `MATCHMAKING_CANDIDATE_BATCH_SIZE` tickets at a time, and a
+        per-candidate form would put that many round trips inside a
+        background job that runs continuously.
+
+        Confined to the batch: a block against somebody who is not in
+        `player_ids` is irrelevant to this scan and is not returned.
+        Players with no exclusions are **omitted** rather than mapped to an
+        empty set, so the common case — nobody in the pool has blocked
+        anybody — is an empty mapping and no allocation per candidate.
+
+        Never raises, and an empty or single-element `player_ids` returns an
+        empty mapping without touching the database: one player cannot be a
+        pair.
+
+        **Reveals nothing to a player.** The caller uses it to skip a
+        candidate, and the skipped pairing is indistinguishable from a pool
+        that simply had nobody suitable — which is what BL-1 requires.
         """
         ...

@@ -148,8 +148,62 @@ class QueuePool:
         """
         return f"{self.variant.value}:{self.queue_type.value}:{self.region.value}"
 
+    @classmethod
+    def from_identifier(cls, identifier: str) -> "QueuePool":
+        """The pool `identifier()` produced — A64-015.3.
+
+        A pairing task carries a pool as one primitive string (§13 forbids
+        serialising a repository or a framework object into a payload), and
+        this is the other half of that round trip. `identifier()` is
+        therefore not merely a label any more; it is a wire format, which
+        is why the two are defined next to each other.
+
+        Raises `ValueError` on anything that is not one — a wrong field
+        count, an unknown mode or region — and `VariantNotOffered` on a
+        variant that is no longer on the menu. A malformed payload is a bug
+        in the dispatcher rather than user input, so it fails loudly at the
+        boundary instead of scanning some default pool.
+        """
+        parts = identifier.split(":")
+        if len(parts) != 3:
+            raise ValueError(f"{identifier!r} is not a queue pool identifier")
+
+        variant, queue_type, region = parts
+        return cls(
+            variant=require_offered(variant),
+            queue_type=QueueType(queue_type),
+            region=Region(region),
+        )
+
     def __str__(self) -> str:
         return self.identifier()
 
 
-__all__ = ["QueuePool", "QueueType", "Region"]
+def every_pool() -> tuple[QueuePool, ...]:
+    """Every pool the platform currently offers, in a stable order.
+
+    The product of the three axes — one variant, two modes, seven regions —
+    which is fourteen today. Ordered variant, then mode, then region, so
+    the list reads the way `identifier()` sorts.
+
+    Its one caller is the composition root, which needs a scheduler per
+    pool (`app_factory.build_task_schedulers`). It lives here rather than
+    there because the axes are this module's and a second place that
+    enumerated them would drift the day a variant ships.
+
+    **It will not scale, and the replacement is known.** Fourteen pools is
+    fourteen cheap indexed reads a second; four variants and three time
+    controls would be a few hundred, most of them empty. The fix is to scan
+    only pools that have waiting tickets — one `DISTINCT` over
+    `ix_queue_ticket__pool` — and it is not built now because a query to
+    avoid work costs more than the work at this size.
+    """
+    return tuple(
+        QueuePool(variant=variant, queue_type=queue_type, region=region)
+        for variant in ProductVariant
+        for queue_type in QueueType
+        for region in Region
+    )
+
+
+__all__ = ["QueuePool", "QueueType", "Region", "every_pool"]

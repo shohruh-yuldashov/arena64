@@ -14,6 +14,7 @@ from app.config.settings import (
     EmailSettings,
     FriendsSettings,
     JWTSettings,
+    MatchmakingSettings,
     OutboxSettings,
     PostgresSettings,
     PresenceSettings,
@@ -100,6 +101,7 @@ class TestSettings:
             presence=PresenceSettings(),
             friends=FriendsSettings(),
             outbox=OutboxSettings(),
+            matchmaking=MatchmakingSettings(),
         )
         assert settings.environment is Environment.TEST
 
@@ -129,6 +131,7 @@ class TestSettings:
                 presence=PresenceSettings(),
                 friends=FriendsSettings(),
                 outbox=OutboxSettings(),
+                matchmaking=MatchmakingSettings(),
             )
 
     def test_production_rejects_a_left_default_redis_role(self) -> None:
@@ -150,6 +153,7 @@ class TestSettings:
                 presence=PresenceSettings(),
                 friends=FriendsSettings(),
                 outbox=OutboxSettings(),
+                matchmaking=MatchmakingSettings(),
             )
 
     def test_production_accepts_fully_explicit_configuration(self) -> None:
@@ -176,6 +180,7 @@ class TestSettings:
             presence=PresenceSettings(),
             friends=FriendsSettings(),
             outbox=OutboxSettings(),
+            matchmaking=MatchmakingSettings(),
         )
         assert settings.environment is Environment.PRODUCTION
 
@@ -195,6 +200,7 @@ class TestSettings:
             presence=PresenceSettings(),
             friends=FriendsSettings(),
             outbox=OutboxSettings(),
+            matchmaking=MatchmakingSettings(),
         )
         with pytest.raises(PydanticValidationError):
             settings.environment = Environment.PRODUCTION  # type: ignore[misc]
@@ -304,6 +310,7 @@ class TestJWTProductionGuard:
             presence=PresenceSettings(),
             friends=FriendsSettings(),
             outbox=OutboxSettings(),
+            matchmaking=MatchmakingSettings(),
             jwt=JWTSettings(**jwt_overrides),  # type: ignore[arg-type]
         )
 
@@ -337,6 +344,7 @@ class TestJWTProductionGuard:
             presence=PresenceSettings(),
             friends=FriendsSettings(),
             outbox=OutboxSettings(),
+            matchmaking=MatchmakingSettings(),
             jwt=JWTSettings(),
         )
 

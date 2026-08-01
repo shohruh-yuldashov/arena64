@@ -220,7 +220,7 @@ variant were governed by different rules — the exact class of corruption AD-15
 | `auth` | `auth` | `account`, `credential`, `email_verification`, `password_reset_token`, `session` | Most sensitive schema on the platform |
 | `users` | `users` | `player_profile`, `handle_assignment`, `player_preference`, `notification_preference` | `player_id` originates here |
 | `friends` | `friends` | `friend_request`, `friendship`, `block` | |
-| `matchmaking` | `matchmaking` | `challenge` | Queue tickets are Redis-only |
+| `matchmaking` | `matchmaking` | `queue_ticket`, `challenge` | `queue_ticket` exists since A64-014.1 and **is PostgreSQL-authoritative** — see §8.1, which this reverses. `challenge` is not built yet |
 | `game` | `game` | `match`, `match_participant`, `move`, `match_player_index` | Partitioned; the largest schema |
 | `rating` | `rating` | `player_rating`, `rating_adjustment`, `rating_period` | Holds the platform's hardest invariant |
 | `achievements` | `achievements` | `achievement_definition`, `achievement_definition_text`, `player_achievement`, `achievement_progress` | |
@@ -689,10 +689,69 @@ when `status` is `accepted`; partial unique on `(challenger_id, opponent_id, var
 time_control_id)` covering only `offered` rows, so re-sending a challenge does not create a
 duplicate the recipient must resolve twice.
 
-**Queue tickets are absent from PostgreSQL entirely.** They are Redis-authoritative (AD-18) and
-their lifetime is seconds. A durable ticket would need sweeping, would survive a closed tab, and
-would put a PostgreSQL write on the queue-entry path for state that is meaningless the moment the
-player disconnects.
+### 8.1a `matchmaking.queue_ticket` — A64-014.1
+
+> **This section reverses what §8.1 said until 2026-08-01.** It read: "Queue tickets are absent
+> from PostgreSQL entirely. They are Redis-authoritative (AD-18) and their lifetime is seconds. A
+> durable ticket would need sweeping, would survive a closed tab, and would put a PostgreSQL write
+> on the queue-entry path for state that is meaningless the moment the player disconnects."
+> domain-model.md row 17 said the same. Both are changed as of A64-014.1 (CLAUDE.md §3.11), and
+> the reversal is argued rather than asserted below.
+
+`id`, `player_id` (opaque — cross-schema, no FK, DM-06), `queue_type` (`ranked`, `casual`),
+`region` (`global`, `europe`, `north_america`, `south_america`, `asia`, `africa`, `oceania`),
+`rating_snapshot integer`, `entered_at`, `expires_at`, `status` (`waiting`, `matched`,
+`cancelled`, `expired`), `resolved_at`.
+
+| Name | Kind | Rule | Source |
+| --- | --- | --- | --- |
+| `uq_queue_ticket__one_live_per_player` | Unique, **partial** on `(player_id)` covering only `waiting` rows | One live ticket per player, **across all pools** | QT-1 |
+| `ck_queue_ticket__resolved_iff_terminal` | Check | `resolved_at` is non-null **exactly when** `status` is not `waiting` | |
+| `ck_queue_ticket__window_positive` | Check | `expires_at > entered_at` | |
+| `ck_queue_ticket__rating_non_negative` | Check | `rating_snapshot >= 0` | |
+| `ix_queue_ticket__pool` | Index, partial on `waiting` | `(queue_type, region, entered_at, id)` — the pairing scan and the snapshot | |
+| `ix_queue_ticket__due` | Index, partial on `waiting` | `(expires_at)` — the expiry claim, deliberately pool-blind so one worker drains every pool | |
+
+**Why the reversal.** The three objections §8.1 raised are answered, and one argument it did not
+consider decides it:
+
+| §8.1's objection | Answer |
+| --- | --- |
+| "A durable ticket would need sweeping" | It does, and it is `QueueService.expire_due`. That is not a cost the Redis design avoided: a `ZADD`ed member does not expire — only whole keys do — so a sorted set would have needed either a key per ticket (losing the score-range query that was its whole point) or the identical sweeper against Redis |
+| "It would survive a closed tab" | For at most `MATCHMAKING_TICKET_TTL_SECONDS`, which is a feature: a player whose connection drops for forty seconds keeps their place, and `expires_at` bounds how long a genuinely departed one occupies a pool |
+| "A PostgreSQL write on the queue-entry path" | One indexed insert, on an endpoint a human pressed. The comparison is not "write versus no write" but "write versus what the alternative costs", below |
+
+**The argument that decides it, in two parts.**
+
+- **QT-4's atomic claim is unimplementable in Redis without inventing a concurrency mechanism.**
+  "Claiming both tickets is atomic" over a sorted set means a Lua script reimplementing row
+  locking, an optimistic retry loop, or a distributed lock. `SELECT ... FOR UPDATE SKIP LOCKED` is
+  the platform's proven answer to exactly this problem — it already carries the outbox (§10.5) —
+  and it exists only here.
+- **A-4 makes double-pairing a permanent corruption.** QT-1 is a *constraint under concurrency*.
+  In PostgreSQL it is a partial unique index the database checks; in Redis it is a check-then-act
+  in application code, correct until two joins race, and the consequence of losing that race is a
+  player in two simultaneous matches with one to be abandoned.
+
+**What is not claimed:** that this is cheaper. It is one write where there would have been none,
+and ten thousand waiting players are ten thousand rows rather than one sorted set. Both are
+affordable at the target concurrency, and neither buys back the two properties above.
+
+**Redis is not gone from matchmaking.** caching.md's `matchmaking` allocation now describes what
+it keeps: a sorted set per pool scored by rating remains the right *index* for a widening-window
+scan — derived from this table and rebuildable from it (AD-19), never authoritative. It arrives
+when a measurement asks for it.
+
+**No `fillfactor`, unlike `platform.outbox`.** The churn shape is identical — written once,
+updated once, then dead — so DB-18 looks like it applies. It does not: `fillfactor` buys HOT
+updates, an update is HOT only when no *indexed* column changes, and all three indexes above are
+predicated on `status`, which is the one column the one update writes.
+
+**Known gap: no retention.** Resolved tickets accumulate. Every index is partial on `waiting`, so
+no read degrades — but storage grows with matches attempted, forever. The fix is
+`platform.outbox.retention`'s policy applied to this relation, and it is deferred to A64-014.2
+because the horizon is a product decision (how long is "why was I matched with them" answerable?)
+that pairing has not been built to ask yet.
 
 ### 8.2 `game.match`
 

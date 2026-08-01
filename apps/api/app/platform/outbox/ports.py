@@ -145,6 +145,75 @@ class ProcessedEventStore(Protocol):
         ...
 
 
+class OutboxRetentionStore(Protocol):
+    """Deleting what the outbox no longer owes anybody — A64-014.1.
+
+    **A fifth protocol rather than three more methods on
+    `OutboxRepository`**, and the split is the one every port pair on this
+    platform makes: what differs is the capability. The relay can claim,
+    publish and fail an entry; it must not be able to *delete* one, because
+    a bug in the delivery path that reached a `DELETE` would destroy the
+    durable event log AD-17 says projections rebuild from.
+
+    Satisfied by `SqlAlchemyOutboxRetentionStore`, which is constructed only
+    by the pruner's own session — nothing on the HTTP path holds it.
+
+    ## Why retention exists at all
+
+    AD-16 makes the outbox as durable as the fact that caused it, and
+    A64-013.7 shipped it with rows retained forever. That is correct for
+    replay and wrong for capacity: CLAUDE.md §10.5 requires everything
+    unbounded to be bounded, and DB-18 already calls this the platform's
+    highest-churn relation. An unbounded log is an outage waiting for enough
+    traffic.
+
+    ## Why the cutoff is `occurred_at` and not `published_at`
+
+    Because DB-18 makes range partitioning by `occurred_at` the *eventual*
+    retention mechanism, and a prune expressed in a different column is one
+    that has to be rewritten on the day partitions arrive. Expressed this
+    way, `prune_published` and `DETACH PARTITION` select the same rows, so
+    the migration replaces an implementation rather than a policy.
+    """
+
+    async def prune_published(self, *, before: datetime, batch_size: int) -> int:
+        """Deletes up to `batch_size` published entries older than `before`.
+
+        Returns how many rows went. **Never touches an unpublished row**,
+        whatever its age — an entry that has exhausted its attempts is
+        still owed to somebody, and `OutboxEntry` is explicit that it must
+        stay visible in the backlog rather than be tidied away.
+
+        Bounded by `batch_size` and safe for more than one pruner, by the
+        same `FOR UPDATE SKIP LOCKED` the relay's claim uses. A retention
+        job that took an unbounded `DELETE` lock on the highest-churn
+        relation would be an incident of its own.
+        """
+        ...
+
+    async def prune_processed_events(self, *, before: datetime, batch_size: int) -> int:
+        """Deletes up to `batch_size` ledger rows processed before `before`.
+
+        Returns how many rows went. The ledger exists to stop a redelivery
+        being re-handled (§13.6), so a row may only be dropped once the
+        entry it names can no longer be redelivered — which is why the
+        caller prunes the outbox first and holds this horizon at or beyond
+        the outbox's. See `RetentionPolicy`.
+        """
+        ...
+
+    async def unpublished_before(self, instant: datetime) -> int:
+        """How many entries older than `instant` are still unpublished.
+
+        Not used to decide anything — it is the number that says *why* an
+        old partition could not be detached, which is the question DB-18's
+        future `DETACH` raises and nothing else can answer. Served by
+        `ix_outbox__unpublished`, whose predicate matches exactly, so it
+        counts the backlog rather than the table.
+        """
+        ...
+
+
 class EventHandler(Protocol):
     """A consumer, from the relay's point of view.
 

@@ -34,6 +34,9 @@ from app.modules.friends.infrastructure.cache import (
     NoSocialGraphCache,
     RedisSocialGraphCache,
 )
+from app.modules.matchmaking.application.services import QueueService
+from app.modules.matchmaking.infrastructure import QueueExpiryTask, expiry_request
+from app.modules.matchmaking.presentation.dependencies import build_queue_service
 from app.modules.notifications.application.services import (
     CONSUMER_NAME,
     SUBSCRIBED_EVENT_TYPES,
@@ -55,8 +58,16 @@ from app.modules.users.infrastructure.presence import (
 )
 from app.platform.outbox import (
     OutboxEventPublisher,
+    OutboxRetentionTask,
     OutboxWorker,
     SqlAlchemyOutboxRepository,
+    prune_request,
+    retention_policy,
+)
+from app.platform.tasks import (
+    InlineTaskDispatcher,
+    PeriodicTaskScheduler,
+    TaskHandler,
 )
 from app.storage import LocalStorageProvider
 
@@ -228,6 +239,35 @@ OPENAPI_TAGS: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "matchmaking",
+        "description": (
+            "Waiting for an opponent — the queue, and only the queue (A64-014.1).\n\n"
+            "**No match is created yet.** Joining puts a ticket in a pool and nothing "
+            "consumes it: your ticket waits until you leave or it expires. Pairing, "
+            "rating-window expansion, acceptance and game creation are later tasks, and "
+            "each is a consumer of the ticket rather than a change to it — a client "
+            "written against these three endpoints needs no change when they land.\n\n"
+            "**One ticket per player, across every pool.** Joining `casual` while "
+            "waiting in `ranked` is a `409`, not a second ticket: being paired into two "
+            "simultaneous matches means abandoning one, which looks to that opponent "
+            "exactly like a stolen win.\n\n"
+            "**Every endpoint acts as the account behind your access token.** No path, "
+            "query or body field names who is joining, leaving or being read, so "
+            "queueing as somebody else is not something this API can express — and "
+            "there is deliberately no endpoint that reads another player's ticket, "
+            "because who is queueing right now is what would let somebody wait for a "
+            "favourable pool.\n\n"
+            "**Your rating is not yours to send.** A ticket records the rating the "
+            "platform holds for you at the moment you join, and it is fixed for that "
+            "ticket's life — a rating that changes while you wait does not move your "
+            "place. Every rating is provisional today, because no game has been played "
+            "here yet.\n\n"
+            "Tickets expire. `expires_at` is an instant rather than a countdown, and a "
+            "ticket past it reads as absent immediately — even in the moment before a "
+            "background worker records it."
+        ),
+    },
+    {
         "name": "health",
         "description": (
             "Liveness and readiness probes for load balancers and orchestrators. "
@@ -355,6 +395,129 @@ def build_presence_sweeper(
     )
 
 
+def build_task_schedulers(
+    db: DatabaseSessionManager, redis_pools: RedisPools, settings: Settings
+) -> list[PeriodicTaskScheduler]:
+    """This process's periodic background work — A64-014.1.
+
+    Two jobs today, both dispatched through `InlineTaskDispatcher` rather
+    than called directly:
+
+        platform.outbox.prune      the retention horizon A64-013.7 shipped
+                                   without
+        matchmaking.queue.expire   the background half of `expires_at`
+
+    Assembled here rather than in either owner because building a
+    `QueueService` means naming a repository, a rating provider, a presence
+    adapter, a publisher and a unit of work — composing across module lines
+    is the composition root's job (BR-6 forbids a *module* reaching for the
+    container, not the root wiring modules together).
+
+    ## Why a dispatcher sits between the schedule and the work
+
+    AD-17's claim is that moving to Celery replaces "only the dispatch
+    adapter". Until A64-014.1 nothing on the platform dispatched anything,
+    so the claim was untestable. With this shape, the migration is: swap
+    `InlineTaskDispatcher` for a Celery one and these schedulers for beat
+    entries. `OutboxRetentionTask` and `QueueExpiryTask` become task bodies
+    unchanged, and neither `OutboxPruner` nor `QueueService` is touched.
+
+    Each job is its own scheduler rather than a list on one, because they
+    have different intervals and different SLO classes (AD-20) — a slow
+    prune must not be able to delay an expiry sweep, which is precisely the
+    interference separate queues exist to prevent.
+
+    Returns an empty list when both are switched off, which is the intended
+    shape of an API tier: the same image, with the maintenance work running
+    on a worker tier instead.
+    """
+    clock = SystemClock()
+    handlers: list[TaskHandler] = []
+    schedulers: list[PeriodicTaskScheduler] = []
+
+    if settings.outbox.retention_enabled:
+        handlers.append(
+            OutboxRetentionTask(
+                session_factory=db.session_factory,
+                policy=retention_policy(
+                    published_retention_days=settings.outbox.retention_days,
+                    ledger_retention_days=settings.outbox.ledger_retention_days,
+                    batch_size=settings.outbox.prune_batch_size,
+                    max_batches=settings.outbox.prune_max_batches,
+                ),
+                clock=clock,
+            )
+        )
+    else:
+        # `WARNING`, not `INFO`, and it is the one switch here that deserves
+        # it: with retention off the outbox grows without bound, and the
+        # symptom arrives weeks later as a relay whose index no longer fits
+        # in cache. An operator turning it off during an investigation
+        # should see the reminder on every restart until they turn it back
+        # on.
+        logger.warning("outbox_retention_disabled", extra={"reason": "configuration"})
+
+    if settings.matchmaking.expiry_enabled:
+        handlers.append(
+            QueueExpiryTask(
+                session_factory=db.session_factory,
+                service_factory=lambda session: _queue_service_for(
+                    session, redis_pools, settings, clock
+                ),
+                batch_size=settings.matchmaking.expiry_batch_size,
+            )
+        )
+    else:
+        logger.info("queue_expiry_disabled", extra={"reason": "configuration"})
+
+    if not handlers:
+        return schedulers
+
+    dispatcher = InlineTaskDispatcher(handlers)
+    logger.info("task_dispatcher_ready", extra={"tasks": sorted(dispatcher.registered)})
+
+    if settings.outbox.retention_enabled:
+        schedulers.append(
+            PeriodicTaskScheduler(
+                dispatcher=dispatcher,
+                request=prune_request(),
+                interval_seconds=settings.outbox.prune_interval_seconds,
+            )
+        )
+    if settings.matchmaking.expiry_enabled:
+        schedulers.append(
+            PeriodicTaskScheduler(
+                dispatcher=dispatcher,
+                request=expiry_request(),
+                interval_seconds=settings.matchmaking.expiry_interval_seconds,
+            )
+        )
+    return schedulers
+
+
+def _queue_service_for(
+    session: AsyncSession, redis_pools: RedisPools, settings: Settings, clock: SystemClock
+) -> QueueService:
+    """A `QueueService` over one task run's session.
+
+    Goes through `matchmaking`'s own `build_queue_service` rather than
+    assembling the graph a second time here, so the background path and the
+    HTTP path are provably the same object graph — a hand-built copy would
+    drift the first time either gained a collaborator.
+
+    The publisher is built over this same session, which is what puts each
+    `QueueTicketExpired` row in the transaction that resolves its ticket
+    (AD-16).
+    """
+    return build_queue_service(
+        session,
+        presence=_presence_adapter(redis_pools, settings, clock),
+        events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
+        settings=settings.matchmaking,
+        clock=clock,
+    )
+
+
 def _presence_adapter(
     redis_pools: RedisPools, settings: Settings, clock: SystemClock
 ) -> RedisPresenceProvider | NoPresenceProvider:
@@ -450,11 +613,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("presence_sweeper_disabled", extra={"reason": "configuration"})
     app.state.presence_sweeper = presence_sweeper
 
+    # A64-014.1. The periodic dispatched work — outbox retention and queue
+    # expiry — started last and stopped first, for the same producer-before-
+    # consumer reason the sweeper is: the expiry sweep *writes* outbox rows
+    # the relay reads, so on the way down every producer is quiesced before
+    # the relay is given its final tick.
+    task_schedulers = build_task_schedulers(db, redis_pools, settings)
+    for scheduler in task_schedulers:
+        await scheduler.start()
+    app.state.task_schedulers = task_schedulers
+
     logger.info("startup_complete")
     try:
         yield
     finally:
         logger.info("shutdown_begin")
+        for scheduler in task_schedulers:
+            await scheduler.stop()
         if presence_sweeper is not None:
             await presence_sweeper.stop()
         if outbox_worker is not None:

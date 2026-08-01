@@ -44,7 +44,7 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, delete, func, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -269,3 +269,106 @@ class SqlAlchemyProcessedEventStore:
         await self._session.execute(
             statement.on_conflict_do_nothing(index_elements=["consumer", "event_id"])
         )
+
+
+class SqlAlchemyOutboxRetentionStore:
+    """The delete side — `ports.OutboxRetentionStore`, A64-014.1.
+
+    A class of its own rather than three methods on
+    `SqlAlchemyOutboxRepository`, so that the object the relay holds has no
+    way to remove a row. See the port for the argument.
+
+    ## Both prunes are the relay's claim with a different verb
+
+    A64-014.1 requires that nothing invent a second concurrent-claiming
+    mechanism, and neither statement below does: each selects its batch with
+    `FOR UPDATE SKIP LOCKED` and deletes exactly what it locked. Two pruners
+    therefore take disjoint batches instead of blocking on each other, which
+    is the same property `claim` has and for the same reason.
+
+    The alternative — a bare `DELETE ... WHERE occurred_at < :cutoff` — is
+    one statement and is worse in both directions: it is unbounded, so a
+    first run against a year of history takes a lock proportional to the
+    backlog on the platform's highest-churn relation, and two pruners
+    running it serialise behind each other's row locks.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def prune_published(self, *, before: datetime, batch_size: int) -> int:
+        """One bounded batch of expired, delivered entries.
+
+        The predicate is two conditions and dropping either would be a
+        defect rather than a widening:
+
+            occurred_at < before        past the retention horizon, and
+                                        expressed in the *partition key*
+                                        so this and a future `DETACH
+                                        PARTITION` select alike (DB-18)
+            published_at IS NOT NULL    still owed to nobody. An exhausted
+                                        entry is unpublished and stays,
+                                        however old — see `OutboxEntry`
+
+        Ordered by `occurred_at` so a backlog drains oldest-first and the
+        table's floor rises monotonically, which is what makes the "oldest
+        retained row" metric mean anything.
+        """
+        doomed = (
+            select(OutboxModel.id)
+            .where(
+                OutboxModel.occurred_at < before,
+                OutboxModel.published_at.is_not(None),
+            )
+            .order_by(OutboxModel.occurred_at)
+            .limit(batch_size)
+            .with_for_update(skip_locked=True)
+        )
+
+        result = cast(
+            "CursorResult[Any]",
+            await self._session.execute(
+                delete(OutboxModel).where(OutboxModel.id.in_(doomed.scalar_subquery()))
+            ),
+        )
+        return int(result.rowcount)
+
+    async def prune_processed_events(self, *, before: datetime, batch_size: int) -> int:
+        """One bounded batch of ledger rows whose entries are already gone.
+
+        Matched on the composite primary key rather than on `processed_at`
+        directly, so the `DELETE` removes exactly the rows the bounded
+        select locked — a second `WHERE processed_at < before` on the delete
+        would be unbounded again and the limit would be decorative.
+        """
+        doomed = (
+            select(ProcessedEventModel.consumer, ProcessedEventModel.event_id)
+            .where(ProcessedEventModel.processed_at < before)
+            .order_by(ProcessedEventModel.processed_at)
+            .limit(batch_size)
+            .with_for_update(skip_locked=True)
+        )
+
+        result = cast(
+            "CursorResult[Any]",
+            await self._session.execute(
+                delete(ProcessedEventModel).where(
+                    tuple_(ProcessedEventModel.consumer, ProcessedEventModel.event_id).in_(doomed)
+                )
+            ),
+        )
+        return int(result.rowcount)
+
+    async def unpublished_before(self, instant: datetime) -> int:
+        """The rows that are older than the horizon and still owed.
+
+        Served by `ix_outbox__unpublished`, so this counts the backlog and
+        never the retained majority — which is what makes it cheap enough to
+        run on every prune rather than only when somebody asks.
+        """
+        count = await self._session.scalar(
+            select(func.count())
+            .select_from(OutboxModel)
+            .where(OutboxModel.published_at.is_(None), OutboxModel.occurred_at < instant)
+        )
+        return int(count or 0)

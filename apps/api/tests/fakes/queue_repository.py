@@ -1,0 +1,230 @@
+"""In-memory stand-ins for `matchmaking`'s ports — A64-014.1.
+
+What is faked here is **storage**, never the thing under test.
+`QueueService` runs for real against these, so the presence rule, the
+duplicate check, the transaction sequencing and the expiry arithmetic are
+all genuinely exercised.
+
+## The one deliberate simplification
+
+`InMemoryQueueRepository.claim_due` returns due tickets in deadline order
+and does not model `SKIP LOCKED`'s behaviour under two workers. That
+property belongs to PostgreSQL rather than to this code, so it is asserted
+where it can be — `tests/contract/test_queue_repository.py`, with two real
+sessions and two real transactions — for the same reason
+`tests/fakes/outbox.py` declines to reimplement the same thing.
+
+The uniqueness rule is modelled, because it is the one storage behaviour
+`QueueService`'s correctness depends on: QT-1 is enforced by a partial
+unique index, and a fake that let a second live ticket through would leave
+`AlreadyQueued` untested on the path that actually raises it.
+"""
+
+from collections.abc import Sequence
+from datetime import datetime
+from uuid import UUID
+
+from app.modules.matchmaking.domain.exceptions import AlreadyQueued
+from app.modules.matchmaking.domain.queue_ticket import (
+    PROVISIONAL_RATING,
+    QueueSnapshot,
+    QueueStatus,
+    QueueTicket,
+    QueueType,
+    Region,
+)
+from app.modules.users.domain.presence import DeviceType, Presence
+from app.platform.events import DomainEvent
+from app.platform.outbox import OutboxEntry
+
+
+class InMemoryQueueRepository:
+    """The `matchmaking.queue_ticket` relation, as a dict.
+
+    Tickets are stored as the frozen `QueueTicket` values the repository
+    returns, and every transition replaces one — so a test holding a
+    reference keeps seeing what it read, exactly as it would with the real
+    adapter's mapped-and-detached values.
+    """
+
+    def __init__(self) -> None:
+        self.tickets: dict[UUID, QueueTicket] = {}
+        #: Every `claim_due` call's `claimed_by`, in order. Asserted by the
+        #: tests that care whether the sweep claimed at all.
+        self.claims: list[str] = []
+
+    async def enqueue(self, ticket: QueueTicket) -> QueueTicket:
+        """Refuses a second live ticket, as the partial unique index does.
+
+        The check is on `waiting` alone and ignores `expires_at`, which is
+        what the index does: a due-but-unresolved ticket still occupies the
+        constraint. That asymmetry with `active_ticket` below is real
+        behaviour rather than fake sloppiness — it is why
+        `QueueService.join` reads through `active_ticket` first and why a
+        player whose sweep is behind can still be refused.
+        """
+        if any(
+            stored.player_id == ticket.player_id and stored.is_waiting
+            for stored in self.tickets.values()
+        ):
+            raise AlreadyQueued("You are already in a matchmaking queue.")
+
+        self.tickets[ticket.id] = ticket
+        return ticket
+
+    async def cancel(self, ticket: QueueTicket) -> bool:
+        stored = self.tickets.get(ticket.id)
+        if stored is None or not stored.is_waiting:
+            return False
+        self.tickets[ticket.id] = ticket
+        return True
+
+    async def active_ticket(self, player_id: UUID, *, now: datetime) -> QueueTicket | None:
+        for ticket in self.tickets.values():
+            if ticket.player_id == player_id and ticket.is_waiting and not ticket.is_due(now):
+                return ticket
+        return None
+
+    async def queue_snapshot(
+        self,
+        *,
+        queue_type: QueueType,
+        region: Region,
+        now: datetime,
+        limit: int,
+    ) -> QueueSnapshot:
+        live = sorted(
+            (
+                ticket
+                for ticket in self.tickets.values()
+                if ticket.queue_type is queue_type
+                and ticket.region is region
+                and ticket.is_waiting
+                and not ticket.is_due(now)
+            ),
+            key=lambda ticket: (ticket.entered_at, ticket.id),
+        )
+        return QueueSnapshot(
+            queue_type=queue_type,
+            region=region,
+            taken_at=now,
+            # The count is over the whole predicate and the page is bounded —
+            # the real adapter's two statements, modelled so a test can
+            # catch a `len(tickets)` that was meant to be `waiting`.
+            waiting=len(live),
+            tickets=tuple(live[:limit]),
+        )
+
+    async def claim_due(
+        self, *, now: datetime, limit: int, claimed_by: str
+    ) -> Sequence[QueueTicket]:
+        self.claims.append(claimed_by)
+        return sorted(
+            (
+                ticket
+                for ticket in self.tickets.values()
+                if ticket.is_waiting and ticket.is_due(now)
+            ),
+            key=lambda ticket: (ticket.expires_at, ticket.id),
+        )[:limit]
+
+    async def expire(self, ticket_ids: Sequence[UUID], *, at: datetime) -> int:
+        expired = 0
+        for ticket_id in ticket_ids:
+            ticket = self.tickets.get(ticket_id)
+            # `status = 'waiting'` in the predicate, exactly as the real
+            # `UPDATE` carries it — a ticket cancelled between the claim and
+            # this write must not be re-stamped as expired.
+            if ticket is None or not ticket.is_waiting:
+                continue
+            self.tickets[ticket_id] = ticket.expired(at)
+            expired += 1
+        return expired
+
+
+class FixedRatingProvider:
+    """Every player rates at one number, which the test chooses.
+
+    Configurable where `ProvisionalRatingProvider` is a constant, so a test
+    can assert that the ticket recorded *what the provider said* rather than
+    what the domain's fallback happens to be — which is the difference
+    between QT-2 being implemented and 1500 being hardcoded twice.
+    """
+
+    def __init__(self, rating: int = PROVISIONAL_RATING) -> None:
+        self.rating = rating
+        self.calls: list[tuple[UUID, QueueType]] = []
+
+    async def rating_for(self, player_id: UUID, *, queue_type: QueueType) -> int:
+        self.calls.append((player_id, queue_type))
+        return self.rating
+
+
+class StubPresence:
+    """A `PresenceProvider` a test dictates the answers of.
+
+    Three states, because `QueueService.join` treats them differently and
+    getting that wrong is the failure mode worth a fake: a *recorded*
+    offline refuses, and unknown does not.
+
+        online(player)    a live record saying `is_online=True`
+        offline(player)   a live record saying `is_online=False`
+        (default)         `None` — unknown, which is also what an
+                          unreachable Redis produces
+    """
+
+    def __init__(self) -> None:
+        self.records: dict[UUID, Presence] = {}
+
+    def online(self, player_id: UUID, *, at: datetime) -> None:
+        self.records[player_id] = Presence(
+            is_online=True, last_seen=at, session_id=None, device_type=DeviceType.WEB
+        )
+
+    def offline(self, player_id: UUID, *, at: datetime) -> None:
+        self.records[player_id] = Presence(
+            is_online=False, last_seen=at, session_id=None, device_type=DeviceType.WEB
+        )
+
+    async def presence_for(self, player_id: UUID) -> Presence | None:
+        return self.records.get(player_id)
+
+    async def presence_for_many(self, player_ids: Sequence[UUID]) -> dict[UUID, Presence]:
+        return {
+            player_id: self.records[player_id]
+            for player_id in player_ids
+            if player_id in self.records
+        }
+
+
+class RecordingPublisher:
+    """An `EventPublisher` that keeps what it was given.
+
+    Not an `InMemoryOutbox`: what these tests assert is *which events a use
+    case emitted and in what transaction*, and the outbox's own storage
+    behaviour is covered by its own suites. Keeping the published events
+    themselves rather than their payloads means a test asserts on a type and
+    a field instead of on a dict of strings.
+    """
+
+    def __init__(self) -> None:
+        self.published: list[DomainEvent] = []
+
+    async def publish(self, event: DomainEvent) -> OutboxEntry:
+        self.published.append(event)
+        # A real entry, so a producer's logging and return type behave
+        # exactly as they do against `OutboxEventPublisher` — the same
+        # reason `NoEventPublisher` returns one rather than `None`.
+        return OutboxEntry.of(event)
+
+    def types(self) -> list[str]:
+        return [type(event).event_type for event in self.published]
+
+
+def waiting_ids(repository: InMemoryQueueRepository) -> set[UUID]:
+    """Every ticket still in `waiting`. A helper because three tests assert
+    on it and `{t.id for t in ... if t.status is QueueStatus.WAITING}` at
+    each site is the kind of expression a typo hides in."""
+    return {
+        ticket.id for ticket in repository.tickets.values() if ticket.status is QueueStatus.WAITING
+    }

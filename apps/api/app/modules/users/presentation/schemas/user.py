@@ -35,7 +35,7 @@ from app.modules.users.domain.validators import (
     validate_timezone,
     validate_username,
 )
-from app.modules.users.public.dtos import UserSummary
+from app.modules.users.presentation.schemas.public_user import PublicUserResponse
 
 # The reusable annotated types. Each wraps the single domain validator, so
 # a violation raises this module's typed domain error (`InvalidUsername`,
@@ -92,4 +92,11 @@ class UserCreate(BaseRequestDTO):
 # `CursorPage` (A64-008) rather than a new class: the envelope is already
 # the platform's contract, and redeclaring `items`/`page` here would be
 # the duplication CLAUDE.md §2.1 warns about. Keyset-paginated per RP-03.
-UserList = CursorPage[UserSummary]
+#
+# Carries `PublicUserResponse` since A64-012.6, not `UserSummary`.
+# `UserSummary` is a *published DTO* holding an `AvatarReference` — an
+# object key, a version and a timestamp — and rendering it straight onto
+# the wire published a storage key per row. The wire schema renders URLs
+# instead, and the published DTO goes back to being what it was designed
+# for: a shape modules pass to each other.
+UserList = CursorPage[PublicUserResponse]

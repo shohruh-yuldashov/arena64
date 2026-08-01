@@ -705,22 +705,22 @@ class RateLimitSettings(BaseSettings):
     password_reset_window_seconds: int = Field(default=60 * 60, ge=1)
 
     # --- PATCH /profile/privacy ---------------------------------------------
-    # **A64-012.4 requires this endpoint to be rate limited and specifies no
-    # figure**, so both the number and the dimension are chosen rather than
-    # given, and are flagged as such.
+    # **A64-012.4 required this endpoint to be rate limited and specified no
+    # figure**, so the number is chosen rather than given.
     #
-    # Per IP, because it is the only dimension the limiter can express for
-    # an authenticated endpoint: `RateLimitScope` has `IP` and `EMAIL`, and
-    # an email does not appear in this request. Per *user* would be the
-    # right dimension and is a recommendation for A64-012.5 rather than an
-    # extension invented here — see `profiles.presentation.rate_limits` for
-    # what it would take and what per-IP costs behind a corporate NAT.
+    # Per **user** since A64-012.6, which asked for the migration
+    # explicitly. A64-012.4 shipped it per IP because `RateLimitScope` had
+    # only `IP` and `EMAIL`, neither of which fits an authenticated endpoint
+    # carrying no address; A64-012.5 added `USER` for the preferences
+    # endpoint, and leaving this one on the inferior dimension afterwards
+    # would have meant one settings screen throttling a whole office NAT
+    # while the screen beside it did not.
     #
     # 20 per 5 minutes is generous against the legitimate pattern (a person
     # working through a settings screen, toggling five switches and
     # changing their mind) and still bounds what the endpoint actually
     # risks: an unbounded authenticated write to the account row.
-    privacy_update_ip_limit: int = Field(default=20, ge=1)
+    privacy_update_user_limit: int = Field(default=20, ge=1)
     privacy_update_window_seconds: int = Field(default=5 * 60, ge=1)
 
     # --- PATCH /profile/preferences -----------------------------------------
@@ -747,6 +747,39 @@ class RateLimitSettings(BaseSettings):
     preferences_update_window_seconds: int = Field(default=5 * 60, ge=1)
 
 
+class StatisticsSettings(BaseSettings):
+    """`statistics` — the competitive-record projection (A64-012.6).
+
+    One setting, and it is a kill switch rather than a feature flag.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="STATISTICS_", frozen=True, extra="forbid")
+
+    enabled: bool = True
+    """Whether profiles read a player's real record.
+
+    **`True` (default): `DatabaseStatisticsProvider` is wired.** Setting it
+    to `False` wires `NoMatchesStatisticsProvider` instead, and every
+    profile then reports a blank record.
+
+    Present for the same reason `RateLimitSettings.enabled` is: the
+    alternative to a documented switch is somebody commenting out a
+    dependency under pressure and forgetting to restore it. What it is
+    actually for is a store being rebuilt or a store that is unhealthy —
+    `player_statistics` is a projection and rebuildable by definition
+    (database.md C5), so the sane failure mode is a profile page without
+    numbers rather than no profile page at all, which is the platform's
+    highest-volume public read (§1436).
+
+    **The degradation is not transparent**, and that is worth stating
+    rather than glossing: while this is off, a player with a real record is
+    indistinguishable from a brand-new account, on their own profile as
+    well as on a stranger's. The composition root logs the choice at
+    `WARNING` on every request so "we are currently serving blank
+    statistics" is an alertable condition rather than a quiet one.
+    """
+
+
 class Settings(BaseModel):
     """The composed, immutable configuration for this process."""
 
@@ -762,6 +795,7 @@ class Settings(BaseModel):
     email: EmailSettings
     storage: StorageSettings
     rate_limit: RateLimitSettings
+    statistics: StatisticsSettings
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":
@@ -843,4 +877,5 @@ def get_settings() -> Settings:
         email=EmailSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         storage=StorageSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         rate_limit=RateLimitSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        statistics=StatisticsSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

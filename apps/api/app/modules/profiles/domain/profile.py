@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.modules.profiles.domain.ratings import PlayerRatings
-from app.modules.profiles.domain.statistics import PlayerStatistics
+from app.modules.statistics.public import PlayerStatistics
 from app.modules.users.public import PublicUserProfile
 
 

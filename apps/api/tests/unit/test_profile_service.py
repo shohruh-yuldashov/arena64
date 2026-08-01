@@ -29,11 +29,11 @@ from app.core.enums import Locale
 from app.modules.profiles.application.services import ProfileService
 from app.modules.profiles.domain.exceptions import ProfileNotFound
 from app.modules.profiles.domain.ratings import STARTING_RATING, PlayerRatings, RatingCategory
-from app.modules.profiles.domain.statistics import PlayerStatistics
 from app.modules.profiles.infrastructure import (
     NoMatchesStatisticsProvider,
     UnratedRatingProvider,
 )
+from app.modules.statistics.public import PlayerStatistics
 from app.modules.users.application.services import UserService
 from app.modules.users.application.services.public_profile_service import PublicProfileService
 from app.modules.users.domain.entities import User

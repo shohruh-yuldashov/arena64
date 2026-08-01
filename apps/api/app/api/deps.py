@@ -16,7 +16,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config.settings import RateLimitSettings, Settings, get_settings
+from app.config.settings import RateLimitSettings, Settings, StatisticsSettings, get_settings
 from app.core.clock import Clock, SystemClock
 from app.core.rate_limiting import RateLimiter
 from app.core.storage import StorageProvider
@@ -137,3 +137,17 @@ def get_rate_limit_settings(settings: SettingsDep) -> RateLimitSettings:
 
 
 RateLimitSettingsDep = Annotated[RateLimitSettings, Depends(get_rate_limit_settings)]
+
+
+def get_statistics_settings(settings: SettingsDep) -> StatisticsSettings:
+    """The statistics section alone — A64-012.6.
+
+    The same narrowing `get_rate_limit_settings` makes, for the same
+    reason: `profiles`' composition root needs to know whether the
+    statistics store is switched on, and nothing else about the platform's
+    configuration.
+    """
+    return settings.statistics
+
+
+StatisticsSettingsDep = Annotated[StatisticsSettings, Depends(get_statistics_settings)]

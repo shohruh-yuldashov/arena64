@@ -42,7 +42,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.modules.profiles.domain.ratings import PlayerRatings
-from app.modules.profiles.domain.statistics import PlayerStatistics
+from app.modules.statistics.public import PlayerStatistics
 
 
 class RatingProvider(Protocol):

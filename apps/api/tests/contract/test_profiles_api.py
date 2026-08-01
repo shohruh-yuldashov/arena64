@@ -142,12 +142,20 @@ class TestSuccessfulLookup:
         for category in data["ratings"].values():
             assert category == {"rating": 1500, "is_provisional": True, "games_played": 0}
 
+        # Nine fields since A64-012.6, which replaced the placeholder
+        # provider with a real read of `statistics.player_statistics`. A
+        # player with no row still reports the empty record, which is what
+        # this asserts: absence is a value, not an error.
         assert data["statistics"] == {
             "games_played": 0,
             "wins": 0,
             "losses": 0,
             "draws": 0,
             "win_rate": 0.0,
+            "current_rating": 1500,
+            "highest_rating": 1500,
+            "current_streak": 0,
+            "best_win_streak": 0,
         }
 
     async def test_last_seen_is_null(self, client: AsyncClient, player: User) -> None:

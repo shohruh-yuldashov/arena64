@@ -248,5 +248,9 @@ class TestOpenApi:
         a future field added to `UserRead` would show up here."""
         schemas = client.get("/openapi.json").json()["components"]["schemas"]
 
-        for name in ("UserRead", "UserSummary"):
+        # `UserSummary` is no longer rendered onto any response —
+        # A64-012.6 replaced it with `PublicUserResponse` on both `users`
+        # routes, so it is a published *DTO* again rather than a wire
+        # shape and does not appear in the OpenAPI components.
+        for name in ("UserRead", "PublicUserResponse"):
             assert "password_hash" not in schemas[name]["properties"]

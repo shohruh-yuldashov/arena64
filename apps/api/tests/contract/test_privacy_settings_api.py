@@ -44,7 +44,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db_session, get_rate_limiter
 from app.app_factory import create_app
 from app.core.rate_limiting import RateLimitScope
-from app.modules.profiles.presentation.rate_limits import PRIVACY_UPDATE_RATE_LIMIT
+from app.modules.profiles.presentation.rate_limits import (
+    PRIVACY_UPDATE_RATE_LIMIT,
+    enforce_privacy_update_limit,
+)
 from app.modules.profiles.presentation.self_router import my_profile_router
 from tests.fakes.rate_limiter import AllowAllRateLimiter
 
@@ -391,16 +394,22 @@ class TestValidation:
 
 
 class TestRateLimiting:
-    def test_the_update_carries_a_guard(self) -> None:
+    def test_the_update_is_limited_per_user(self) -> None:
         """Asserted here rather than by sending twenty-one requests: the
         limiter's own behaviour has its own suite, and what this endpoint
-        can get wrong is having no guard at all."""
+        can get wrong is having no guard at all — or having one on the
+        wrong dimension.
+
+        A64-012.4 shipped this per IP because `RateLimitScope` had nothing
+        better; A64-012.5 added `USER` and A64-012.6 migrated it, so a
+        shared office or carrier NAT no longer throttles one player for
+        another's behaviour."""
         from app.config.settings import RateLimitSettings
 
         rules = PRIVACY_UPDATE_RATE_LIMIT.rules(RateLimitSettings())
 
-        assert [rule.scope for rule in rules] == [RateLimitScope.IP]
-        assert rules[0].name == "privacy_update_ip"
+        assert [rule.scope for rule in rules] == [RateLimitScope.USER]
+        assert rules[0].name == "privacy_update_user"
 
     def test_the_route_declares_it(self) -> None:
         """A guard that exists but is not attached protects nothing.
@@ -423,7 +432,10 @@ class TestRateLimiting:
             dependency.dependency
             for dependency in patches[0].dependencies  # type: ignore[attr-defined]
         ]
-        assert PRIVACY_UPDATE_RATE_LIMIT in guards
+        # The wrapper, not the guard itself: a USER-scoped rule needs the
+        # authenticated principal, which only a module presentation layer
+        # may resolve. See `profiles.presentation.rate_limits`.
+        assert enforce_privacy_update_limit in guards
 
     def test_the_read_carries_no_guard(self) -> None:
         """Deliberate: a settings screen loads this on every visit, and it

@@ -644,16 +644,18 @@ and position hashing for repetition rules.
 | A64-014.1 | `BoardCoordinate`, `PlayerSide`, `PieceRank`, `Piece`, `BoardVariant`, `BoardGeometry`, `Board`, the opening position, and the failure taxonomy |
 | A64-014.2 | `Position`, `Move` (a path, not a from/to pair), `Direction`, `CaptureObligation`, `MoveGenerator`, the rule axes on `BoardGeometry`, and the first corpus version |
 | A64-014.3 | `MoveValidator`, `MoveApplier`, `IllegalMove`, `UnsupportedPieceMovement`, and the corpus's rejection cases |
+| A64-014.4 | Complete capture sequences of any length, the taken-once rule, maximum-capture filtering, and both configured mid-sequence promotion rules |
 
-Move generation covers **men only**: quiet moves, single jumps, mandatory-capture priority,
-promotion detected on arrival, one deterministic order. Capture sequences stop at one jump, and
-terminal-state and draw detection do not exist.
+Move generation covers **men**: quiet moves, complete multi-jump sequences, mandatory-capture
+priority, the largest-capture obligation where a variant has one, promotion on arrival and
+mid-sequence, one deterministic order. Terminal-state and draw detection do not exist.
 
 **Kings are refused, not ignored.** A king belonging to the side to move raises
 `UnsupportedPieceMovement`; a king belonging to the opponent is evaluated normally, because a man
-may jump it. That boundary is temporary and is deleted by A64-014.5. It exists because the
-alternative — returning what the men could do — made "this player has no legal moves", which is a
-loss under the full rules, indistinguishable from "this build cannot answer".
+may jump it, and a king a man *becomes* mid-sequence carries on jumping under king rules. That
+boundary is temporary and is deleted by A64-014.5, which has king quiet moves left to build. It
+exists because the alternative — returning what the men could do — made "this player has no legal
+moves", which is a loss under the full rules, indistinguishable from "this build cannot answer".
 
 `MoveValidator` holds **no rules**: legality is membership in the generated move set, so mandatory
 capture and every rule added later are enforced without a second implementation to disagree with

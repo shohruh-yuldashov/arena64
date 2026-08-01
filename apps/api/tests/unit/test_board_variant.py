@@ -18,6 +18,7 @@ from app.modules.engine import (
     BoardVariant,
     CaptureObligation,
     InvalidBoardState,
+    MidSequencePromotion,
     PlayerSide,
     geometry_of,
 )
@@ -26,11 +27,17 @@ RUSSIAN = geometry_of(BoardVariant.RUSSIAN_8X8)
 INTERNATIONAL = geometry_of(BoardVariant.INTERNATIONAL_10X10)
 
 
-def _geometry(*, rows: int = 8, columns: int = 8, setup_rows_per_side: int = 3) -> BoardGeometry:
-    """A geometry differing from Russian draughts only in its shape.
+def _geometry(
+    *,
+    rows: int = 8,
+    columns: int = 8,
+    setup_rows_per_side: int = 3,
+    kings_fly: bool = True,
+) -> BoardGeometry:
+    """A geometry differing from Russian draughts only where a test says so.
 
-    The rule axes are held fixed so that a refusal test below is visibly
-    about the dimension it varies and nothing else.
+    The rule axes are held fixed by default so that a refusal test below is
+    visibly about the dimension it varies and nothing else.
     """
     return BoardGeometry(
         rows=rows,
@@ -39,8 +46,8 @@ def _geometry(*, rows: int = 8, columns: int = 8, setup_rows_per_side: int = 3) 
         capture_is_mandatory=True,
         capture_obligation=CaptureObligation.ANY,
         men_may_capture_backward=True,
-        kings_fly=True,
-        promotion_ends_ply=False,
+        kings_fly=kings_fly,
+        mid_sequence_promotion=MidSequencePromotion.CROWNS_AND_CONTINUES,
     )
 
 
@@ -157,6 +164,25 @@ class TestRuleAxes:
 
     def test_men_jump_along_all_four_diagonals_when_backward_capture_is_allowed(self) -> None:
         assert RUSSIAN.man_capture_directions(PlayerSide.LIGHT) == DIAGONAL_DIRECTIONS
+
+    def test_a_russian_man_crowns_mid_capture_and_carries_on(self) -> None:
+        assert RUSSIAN.mid_sequence_promotion is MidSequencePromotion.CROWNS_AND_CONTINUES
+
+    def test_an_international_man_crosses_the_crownhead_uncrowned(self) -> None:
+        """The axis A64-014.2 recorded as a provisional boolean and
+        A64-014.4 had to widen: neither variant takes either of that
+        boolean's values."""
+        assert INTERNATIONAL.mid_sequence_promotion is MidSequencePromotion.PASSES_THROUGH
+
+    def test_a_flying_king_reaches_the_far_side_of_the_board(self) -> None:
+        assert RUSSIAN.king_reach == 8
+        assert INTERNATIONAL.king_reach == 10
+
+    def test_a_short_king_reaches_one_square(self) -> None:
+        """No variant configures a short king, but the jump scan is written
+        as one loop parameterised by this rather than two code paths — so
+        the axis is worth holding to its meaning."""
+        assert _geometry(kings_fly=False).king_reach == 1
 
 
 class TestStep:

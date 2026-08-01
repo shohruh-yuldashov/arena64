@@ -1,0 +1,133 @@
+{
+  "corpus_version": 1,
+  "scope": "Complete multi-jump capture sequences for men (A64-014.4): terminal sequences only, the Turkish-strike rule that a taken piece stays standing and cannot be taken again, path revisits, maximum-capture filtering, and both configured mid-sequence promotion rules. Standalone king movement is still absent; the only king here is one a man became mid-sequence.",
+  "cases": [
+    {
+      "id": "forced-two-jump-sequence",
+      "description": "Landing on e5 puts the man beside a second victim, so the ply is not over: only the complete c3xe5xg7 is offered, never the c3xe5 prefix.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c3", "side": "light", "rank": "man" },
+        { "square": "d4", "side": "dark", "rank": "man" },
+        { "square": "f6", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        { "path": ["c3", "e5", "g7"], "captured": ["d4", "f6"], "promotes_to": null }
+      ]
+    },
+    {
+      "id": "incomplete-prefix-is-not-offered",
+      "description": "Three jumps in one ply. Neither the one-jump nor the two-jump prefix appears, which is what makes every generated capture safe to hand straight to MoveApplier as a whole ply.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c3", "side": "light", "rank": "man" },
+        { "square": "d4", "side": "dark", "rank": "man" },
+        { "square": "d6", "side": "dark", "rank": "man" },
+        { "square": "b6", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        { "path": ["c3", "e5", "c7", "a5"], "captured": ["d4", "d6", "b6"], "promotes_to": null }
+      ]
+    },
+    {
+      "id": "two-alternative-complete-sequences",
+      "description": "Russian draughts obliges a capture but lets the player choose which, so a one-piece sequence stands beside a two-piece one. The maximum-capture filter is disabled here; the same position under international rules is the next case.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c3", "side": "light", "rank": "man" },
+        { "square": "b4", "side": "dark", "rank": "man" },
+        { "square": "d4", "side": "dark", "rank": "man" },
+        { "square": "f6", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        { "path": ["c3", "a5"], "captured": ["b4"], "promotes_to": null },
+        { "path": ["c3", "e5", "g7"], "captured": ["d4", "f6"], "promotes_to": null }
+      ]
+    },
+    {
+      "id": "maximum-capture-keeps-only-the-longest",
+      "description": "The same four pieces on a 10x10 board. International draughts obliges the largest capture, so the one-piece sequence is filtered out after the search — never pruned during it, since a branch that opens small can finish largest.",
+      "variant": "international_10x10",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c3", "side": "light", "rank": "man" },
+        { "square": "b4", "side": "dark", "rank": "man" },
+        { "square": "d4", "side": "dark", "rank": "man" },
+        { "square": "f6", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        { "path": ["c3", "e5", "g7"], "captured": ["d4", "f6"], "promotes_to": null }
+      ]
+    },
+    {
+      "id": "a-taken-piece-blocks-and-is-never-taken-again",
+      "description": "A ring of four victims. The man goes round it either way, ends back on the square it started from — c3 appears twice in the path — and stops because every remaining neighbour is a piece it has already taken. Without the taken-once rule the walk would circle forever. The two sequences are the same length, so this also pins the order between equals.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c3", "side": "light", "rank": "man" },
+        { "square": "b4", "side": "dark", "rank": "man" },
+        { "square": "d4", "side": "dark", "rank": "man" },
+        { "square": "b6", "side": "dark", "rank": "man" },
+        { "square": "d6", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        {
+          "path": ["c3", "a5", "c7", "e5", "c3"],
+          "captured": ["b4", "b6", "d6", "d4"],
+          "promotes_to": null
+        },
+        {
+          "path": ["c3", "e5", "c7", "a5", "c3"],
+          "captured": ["d4", "d6", "b6", "b4"],
+          "promotes_to": null
+        }
+      ]
+    },
+    {
+      "id": "russian-man-crowns-mid-sequence-and-continues",
+      "description": "Landing on d8 crowns the man, and it carries on jumping as a flying king — reaching e7 from d8 and coming down on f6, which the light man on g5 stops it passing. A man could not have made the second jump, so this fails outright if crowning waits until the ply ends.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "b6", "side": "light", "rank": "man" },
+        { "square": "g5", "side": "light", "rank": "man" },
+        { "square": "c7", "side": "dark", "rank": "man" },
+        { "square": "e7", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        { "path": ["b6", "d8", "f6"], "captured": ["c7", "e7"], "promotes_to": "king" }
+      ]
+    },
+    {
+      "id": "international-man-passes-through-the-crownhead",
+      "description": "The same shape under international rules: f10 is the crownhead and the man crosses it without being crowned, finishing on h8 as a man. The contrast with the Russian case above is configuration, not a variant check in the walker.",
+      "variant": "international_10x10",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "d8", "side": "light", "rank": "man" },
+        { "square": "e9", "side": "dark", "rank": "man" },
+        { "square": "g9", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        { "path": ["d8", "f10", "h8"], "captured": ["e9", "g9"], "promotes_to": null }
+      ]
+    },
+    {
+      "id": "international-man-crowned-when-the-sequence-ends-there",
+      "description": "The other half of the international rule. Passing over the crownhead is not promotion; stopping on it is.",
+      "variant": "international_10x10",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "h8", "side": "light", "rank": "man" },
+        { "square": "i9", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        { "path": ["h8", "j10"], "captured": ["i9"], "promotes_to": "king" }
+      ]
+    }
+  ]
+}

@@ -1,8 +1,9 @@
 # Game Engine
 
-> **Status:** Partial — the board foundation (A64-014.1), men's move generation (A64-014.2) and
-> move validation and application (A64-014.3) are specified and implemented; kings, capture
-> sequences, termination and notation are not yet specified
+> **Status:** Partial — the board foundation (A64-014.1), men's move generation (A64-014.2),
+> move validation and application (A64-014.3) and complete capture sequences (A64-014.4) are
+> specified and implemented; standalone king movement, termination and notation are not yet
+> specified
 > **Owner:** _Unassigned_
 > **Related:** `templates/feature-spec.md`, `docs/01-architecture/architecture.md` §11,
 > `docs/01-architecture/domain-model.md` §2.1 and §16.1
@@ -134,8 +135,8 @@ variant table and is how a second variant becomes unshippable.
 | `capture_is_mandatory` | field | `True` | `True` | A64-014.2 |
 | `capture_obligation` | field | `ANY` | `MAXIMUM` | A64-014.4 |
 | `men_may_capture_backward` | field | `True` | `True` | A64-014.2 |
-| `kings_fly` | field | `True` | `True` | A64-014.5 |
-| `promotion_ends_ply` | field | `False` | `True` *(provisional)* | A64-014.4 |
+| `kings_fly` | field, read via `king_reach` | `True` | `True` | A64-014.4 |
+| `mid_sequence_promotion` | field | `CROWNS_AND_CONTINUES` | `PASSES_THROUGH` | A64-014.4 |
 | `forward_step(side)` | derived | `+1` / `-1` | same | A64-014.2 |
 | `promotion_row(side)` | derived | `7` / `0` | `9` / `0` | A64-014.2 |
 | `step(origin, direction, distance)` | derived | — | — | A64-014.2 |
@@ -146,20 +147,21 @@ catch that.
 
 ### 2.5 Generation flow
 
-1. Generate captures.
-2. If any exist and `capture_is_mandatory`, **that is the answer** — quiet moves are never
+1. Generate every complete capture sequence (§4).
+2. Narrow to the longest where `maximum_capture_is_mandatory`.
+3. If any survive and `capture_is_mandatory`, **that is the answer** — quiet moves are never
    generated.
-3. Otherwise generate quiet moves.
-4. Return them in ascending `sort_key` order, as a tuple.
+4. Otherwise generate quiet moves.
+5. Return them in ascending `sort_key` order, as a tuple.
 
 | Rule | Statement |
 | --- | --- |
 | GE-17 | Mandatory capture binds the **player**, not the piece: one man's available jump suppresses every other man's quiet moves |
 | GE-18 | Captures are generated first, never generated-then-filtered. Under `MAXIMUM` the survivors must be compared by length, and a pool that has already mixed quiet moves in has to re-identify which were captures |
 | GE-19 | A man steps one square forward diagonally onto an empty playable square. It never steps backward in any configured variant |
-| GE-20 | A man jumps an adjacent opponent onto the empty playable square directly beyond, along the directions `man_capture_directions` gives — all four where `men_may_capture_backward` |
+| GE-20 | A man jumps an adjacent opponent onto the empty playable square directly beyond, along the directions `man_capture_directions` gives — all four where `men_may_capture_backward`. Whether it must then continue is §4 |
 | GE-21 | Only pieces of `side_to_move` generate moves |
-| GE-22 | A move landing on the mover's promotion row carries `promotes_to = KING` |
+| GE-22 | A **quiet** move landing on the mover's promotion row carries `promotes_to = KING`. A capture's answer depends on `mid_sequence_promotion` — §4.4 |
 | GE-23 | The same position produces the same ordered tuple on every machine and in every process |
 
 ### 2.6 Corpus
@@ -171,11 +173,8 @@ directory's `README.md`. A version is append-only.
 
 ### 2.7 Deliberate scope boundary
 
-`MoveGenerator` skips kings — a king belonging to the side to move contributes **no** moves, and
-is not refused. Until A64-014.5 its answer is complete only for positions with no king of the
-side to move, and the corpus asserts that every case satisfies that. Every generated capture is a
-single jump; A64-014.4 replaces one private method with a recursive walk without changing a
-signature, an ordering, or the flow above.
+Superseded: kings are **refused**, not skipped (§3.4), and captures are complete sequences, not
+single jumps (§4).
 
 ---
 
@@ -272,20 +271,117 @@ at different moments by different code. Format in the corpus `README.md`.
 
 ---
 
-## 4. Not yet specified
+## 4. Complete capture sequences — A64-014.4
 
-Capture sequences longer than one jump, maximum-capture selection, king mobility (flying versus
-short), promotion in the middle of a sequence, move undo, repetition hashing as an incremental
-`PositionHash`, draw rules, terminal-state detection, PDN notation and serialization, the
-TypeScript implementation of the corpus (AD-14), and the engine version recorded per match
-(AD-15).
+No new public type. The change is inside `MoveGenerator`'s capture generation, plus one axis on
+`BoardGeometry` and one correctness fix in `MoveApplier` (§4.6).
+
+### 4.1 Terminal sequences only
+
+| Rule | Statement |
+| --- | --- |
+| GE-36 | A capture `Move` is a **complete** sequence: it appears only if the piece cannot jump again from where it ends. Prefixes are never offered, because a player who can continue must |
+| GE-37 | The search is a depth-first walk over the jumps available from the piece's current square. It terminates because every step consumes one victim, a victim is never taken twice, and victims are finite |
+| GE-38 | `path` records every landing in order; `captured` records every victim in the order it was jumped |
+| GE-39 | Nothing is mutated. The walk runs against a board derived from the position, and the position is unchanged afterwards |
+
+Terminal-only generation is also what keeps `MoveApplier` correct without it knowing anything
+about sequences: every move it is handed is a whole ply.
+
+### 4.2 The board the walk sees
+
+Two adjustments, both made once per piece, both by deriving a new immutable board:
+
+| Adjustment | Why |
+| --- | --- |
+| **The moving piece is lifted off its origin** | Otherwise a sequence that circles back to a square it has already stood on would find itself in the way. This is what makes GE-41 work |
+| **Victims are left standing** | A taken piece leaves the board when the ply ends, not when it is jumped — the "Turkish strike" rule. Until then it blocks |
+
+`captured` is carried down the recursion and records which of the standing pieces have already
+been taken.
+
+### 4.3 Captured-piece semantics
+
+| Rule | Statement |
+| --- | --- |
+| GE-40 | A piece already taken this ply can be neither jumped again nor passed through. It is an obstacle, and the diagonal it stands on is closed |
+| GE-41 | A path may revisit a square, including the origin. `Move` refuses only *adjacent* duplicates, which is a malformed step rather than a legal loop |
+
+GE-40 is what makes the walk terminate at all: without it a man between two victims would jump
+back and forth forever. It is enforced once, in the jump scan — `Move.__post_init__`'s
+uniqueness check is a shape invariant, not a second implementation of this rule.
+
+### 4.4 Promotion during a capture
+
+`BoardGeometry.mid_sequence_promotion` decides, and the walker never names a variant.
+
+| Value | Variant | Behaviour |
+| --- | --- | --- |
+| `CROWNS_AND_CONTINUES` | Russian 8x8 | Crowned on arrival, and carries on jumping **as a king** in the same ply |
+| `PASSES_THROUGH` | International 10x10 | Crosses the crownhead uncrowned and carries on as a man; crowned only if the sequence *ends* there |
+
+| Rule | Statement |
+| --- | --- |
+| GE-42 | A sequence's `promotes_to` is `KING` when the piece is a king by the end — crowned along the way — or when it is still a man and stopped on the crownhead |
+| GE-43 | Crowning mid-sequence means the rest of the ply uses **king** jump rules: all four diagonals, and a reach of `king_reach` |
+
+This replaces A64-014.2's `promotion_ends_ply` boolean, which was recorded as provisional
+because it had no observable meaning until sequences existed. Given one, it turned out neither
+configured variant took either of its values: the boolean describes English draughts, where
+crowning ends the ply, and that is the enum's absent third member.
+
+### 4.5 King jumps, and what is still deferred
+
+A crowned man has to keep jumping, so king *capture* generation exists: it scans a diagonal for
+the first obstruction within `king_reach`, and if that is an untaken opponent, every empty square
+beyond it is a distinct landing. `king_reach` is the board's long side where `kings_fly` and one
+square where it does not, which is why a short king needs no second code path.
+
+Still deferred to **A64-014.5**: king *quiet* moves, and starting a ply from a king that was
+already on the board — `UnsupportedPieceMovement` (§3.4) still refuses that. The scan above would
+answer correctly for such a king; nothing calls it with one.
+
+### 4.6 Maximum capture
+
+| Rule | Statement |
+| --- | --- |
+| GE-44 | Under `MAXIMUM`, only the sequences taking the most pieces survive. Under `ANY` the player chooses, so all of them do |
+| GE-45 | The filter runs **after** the search, over finished sequences — never as pruning inside it |
+
+GE-45 is the one that matters. A branch that opens by taking a single piece can end up the
+longest on the board, so a walker that preferred the wider first jump would return the wrong move
+— and only in positions rare enough to reach production. The corpus pins this with one position
+generated under both variants: Russian offers a one-piece and a two-piece sequence, international
+keeps only the two-piece one.
+
+### 4.7 Ordering
+
+Unchanged: ascending `Move.sort_key` = `(path, captured)`. Longer paths compare against shorter
+ones lexicographically, so a prefix sorts first — though a prefix is never present beside its
+extension. Two sequences of equal length are separated by their first differing landing, which
+the corpus pins with a ring position offering two four-capture loops in opposite directions.
+
+### 4.8 One fix in `MoveApplier`
+
+`Board.move` refuses to relocate a piece onto the square it already stands on — correct where it
+lives, since a bare self-relocation is a caller with a bug (A64-014.1). GE-41 makes
+`origin == destination` an ordinary legal ply, so step 3 of application now lifts the piece and
+places it rather than calling `Board.move`. Every guarantee is kept: `remove` refuses an empty
+origin, `place` refuses an occupied or unplayable destination, and `Board` is unchanged.
+
+---
+
+## 5. Not yet specified
+
+Standalone king movement — king quiet moves, and starting a ply from a king already on the board
+— move undo, repetition hashing as an incremental `PositionHash`, draw rules, terminal-state
+detection, PDN notation and serialization, the TypeScript implementation of the corpus (AD-14),
+and the engine version recorded per match (AD-15).
 
 ## TODO
 
 - [ ] Assign a document owner
-- [ ] Specify recursive capture sequences and maximum-capture selection (A64-014.4)
-- [ ] Confirm `promotion_ends_ply` for international draughts against corpus cases
-- [ ] Specify king mobility (A64-014.5)
+- [ ] Specify standalone king movement and remove the `UnsupportedPieceMovement` boundary (A64-014.5)
 - [ ] Specify the repetition hash, termination and draw detection
 - [ ] Add the TypeScript implementation that executes the same corpus (AD-14)
 - [ ] Review and promote status from Partial to Approved

@@ -70,6 +70,18 @@ class BoardVariant(StrEnum):
 
     RUSSIAN_8X8 = "russian_8x8"
     INTERNATIONAL_10X10 = "international_10x10"
+    ENGLISH_8X8 = "english_8x8"
+    """Added by A64-014.5, and **configuration only** — one row in the table
+    below, no algorithm anywhere reads its name.
+
+    It is here because it is the variant that gives three axes a second
+    value. `kings_fly`, `men_may_capture_backward` and
+    `mid_sequence_promotion` were each single-valued across the two
+    variants that existed, which made them settings nothing could tell
+    apart from constants. English draughts is the rule set they were
+    written for, and adding it costs six fields and no branches — which is
+    itself the strongest evidence the configuration-driven design works.
+    """
 
 
 class CaptureObligation(StrEnum):
@@ -110,22 +122,26 @@ class MidSequencePromotion(StrEnum):
     | International 10x10 | Passes over without crowning and carries on as a man |
     | English *(not configured)* | Crowns on arrival and the ply ends there |
 
-    Three distinct rules, so the axis is an enum. The third member is
-    absent rather than unconfigured: no variant here has that rule, and a
-    branch in the walker that nothing reaches is a branch nothing tests.
-    Adding English means adding `CROWNS_AND_ENDS_PLY` here and one stop
-    condition in `_sequences` — recorded so the next person does not have
-    to rediscover which of the three axes moved.
+    Three distinct rules, so the axis is an enum. A64-014.4 left the third
+    member out because no variant then configured had it; A64-014.5 adds
+    English draughts and with it `CROWNS_AND_ENDS_PLY`, so all three are
+    now reachable, configured and covered by a corpus case.
     """
 
     CROWNS_AND_CONTINUES = "crowns_and_continues"
     """Russian draughts. The crowned man continues the same sequence under
-    king capture rules, which is why king jumps exist at all in
-    A64-014.4."""
+    king capture rules, which is why king jumps existed before kings could
+    start a ply."""
 
     PASSES_THROUGH = "passes_through"
     """International draughts. Crossing the crownhead mid-sequence is not
     a promotion; the piece is crowned only if the sequence *ends* there."""
+
+    CROWNS_AND_ENDS_PLY = "crowns_and_ends_ply"
+    """English draughts, and the rule domain-model.md §2.1 describes: "a
+    man reaching the crownhead becomes a king; in most variants this ends
+    the ply even if further jumps exist". The sequence stops on the
+    crownhead whether or not another jump was available."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,6 +358,16 @@ _GEOMETRIES: Mapping[BoardVariant, BoardGeometry] = MappingProxyType(
             men_may_capture_backward=True,
             kings_fly=True,
             mid_sequence_promotion=MidSequencePromotion.PASSES_THROUGH,
+        ),
+        BoardVariant.ENGLISH_8X8: BoardGeometry(
+            rows=8,
+            columns=8,
+            setup_rows_per_side=3,
+            capture_is_mandatory=True,
+            capture_obligation=CaptureObligation.ANY,
+            men_may_capture_backward=False,
+            kings_fly=False,
+            mid_sequence_promotion=MidSequencePromotion.CROWNS_AND_ENDS_PLY,
         ),
     }
 )

@@ -1,0 +1,235 @@
+{
+  "corpus_version": 2,
+  "scope": "King movement — quiet slides, captures begun by a king, multiple landing squares beyond one victim, direction changes mid-sequence, and promotion continuation under all three configured variant rules (A64-014.5). Every case is a complete legal move set.",
+  "supersedes": [
+    {
+      "version": 1,
+      "id": "a-king-of-the-side-to-move-cannot-be-evaluated",
+      "replaced_by": "king-quiet-moves-along-open-diagonals",
+      "reason": "A64-014.3 refused any position holding a king of the side to move, because kings had no moves to generate and an incomplete move set presented as complete would have told terminal-state detection that the player had lost. A64-014.5 implements king movement, so the refusal is gone and the exception with it. The replacement case uses the identical position — one light king on c3, light to move — and asserts the eleven moves it now has."
+    }
+  ],
+  "cases": [
+    {
+      "id": "king-quiet-moves-along-open-diagonals",
+      "description": "A flying king slides to every empty square along all four diagonals, and each square it could stop on is a move of its own. Eleven from c3 on an empty board. The order is pinned: ascending by destination, row-major.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [{ "square": "c3", "side": "light", "rank": "king" }],
+      "expected_moves": [
+        { "path": ["c3", "a1"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "e1"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "b2"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "d2"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "b4"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "d4"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "a5"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "e5"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "f6"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "g7"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "h8"], "captured": [], "promotes_to": null }
+      ]
+    },
+    {
+      "id": "an-opponent-stops-a-king-slide",
+      "description": "The long diagonal ends at f6: g7 holds an opponent the king cannot jump, because h8 behind it is occupied too. A quiet move passes over nothing, so the scan stops at the first piece whoever owns it.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c3", "side": "light", "rank": "king" },
+        { "square": "g7", "side": "dark", "rank": "man" },
+        { "square": "h8", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        { "path": ["c3", "a1"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "e1"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "b2"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "d2"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "b4"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "d4"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "a5"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "e5"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "f6"], "captured": [], "promotes_to": null }
+      ]
+    },
+    {
+      "id": "a-friendly-piece-stops-a-king-slide",
+      "description": "The king reaches d4 and no further; its own man on e5 blocks the diagonal exactly as an opponent would, and cannot be jumped. That man's own two moves complete the set.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c3", "side": "light", "rank": "king" },
+        { "square": "e5", "side": "light", "rank": "man" }
+      ],
+      "expected_moves": [
+        { "path": ["c3", "a1"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "e1"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "b2"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "d2"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "b4"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "d4"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "a5"], "captured": [], "promotes_to": null },
+        { "path": ["e5", "d6"], "captured": [], "promotes_to": null },
+        { "path": ["e5", "f6"], "captured": [], "promotes_to": null }
+      ]
+    },
+    {
+      "id": "a-flying-king-capture-offers-every-square-beyond-the-victim",
+      "description": "The king takes f6 from three squares away and may come down on g7 or h8. Two moves, not two spellings of one: where it stops decides what it can do next ply.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c3", "side": "light", "rank": "king" },
+        { "square": "f6", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        { "path": ["c3", "g7"], "captured": ["f6"], "promotes_to": null },
+        { "path": ["c3", "h8"], "captured": ["f6"], "promotes_to": null }
+      ]
+    },
+    {
+      "id": "a-king-capture-changes-direction",
+      "description": "The king takes c3 travelling up-right, is forced to stop on d4 by its own man on e5, and then takes c5 travelling up-left. Two landings beyond the second victim give two complete sequences.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "a1", "side": "light", "rank": "king" },
+        { "square": "e5", "side": "light", "rank": "man" },
+        { "square": "c3", "side": "dark", "rank": "man" },
+        { "square": "c5", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        {
+          "path": ["a1", "d4", "b6"],
+          "captured": ["c3", "c5"],
+          "promotes_to": null
+        },
+        {
+          "path": ["a1", "d4", "a7"],
+          "captured": ["c3", "c5"],
+          "promotes_to": null
+        }
+      ]
+    },
+    {
+      "id": "a-king-cannot-take-the-same-piece-twice",
+      "description": "After taking c3 and e5 the king stands on f6, g7 or h8 with both victims behind it on the same diagonal — still standing, and already taken. Without the taken-once rule it would jump back and forth forever. The three landings also pin the order between equal-length sequences.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "a1", "side": "light", "rank": "king" },
+        { "square": "c3", "side": "dark", "rank": "man" },
+        { "square": "e5", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        {
+          "path": ["a1", "d4", "f6"],
+          "captured": ["c3", "e5"],
+          "promotes_to": null
+        },
+        {
+          "path": ["a1", "d4", "g7"],
+          "captured": ["c3", "e5"],
+          "promotes_to": null
+        },
+        {
+          "path": ["a1", "d4", "h8"],
+          "captured": ["c3", "e5"],
+          "promotes_to": null
+        }
+      ]
+    },
+    {
+      "id": "a-king-capture-suppresses-every-quiet-move",
+      "description": "Mandatory capture binds the player, not the piece: the man on a1 loses its step because the king can jump. The same rule as for men, applied by the same code.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "a1", "side": "light", "rank": "man" },
+        { "square": "c3", "side": "light", "rank": "king" },
+        { "square": "f6", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        { "path": ["c3", "g7"], "captured": ["f6"], "promotes_to": null },
+        { "path": ["c3", "h8"], "captured": ["f6"], "promotes_to": null }
+      ]
+    },
+    {
+      "id": "maximum-capture-filters-king-sequences",
+      "description": "International rules. The king may stop on d4 after taking c3 and go on to take c5, or run past to e5, f6, g7, h8 and stop at one piece. Only the two-piece sequences survive the largest-capture obligation — under Russian rules the same position offers all six.",
+      "variant": "international_10x10",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "a1", "side": "light", "rank": "king" },
+        { "square": "c3", "side": "dark", "rank": "man" },
+        { "square": "c5", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        {
+          "path": ["a1", "d4", "b6"],
+          "captured": ["c3", "c5"],
+          "promotes_to": null
+        },
+        {
+          "path": ["a1", "d4", "a7"],
+          "captured": ["c3", "c5"],
+          "promotes_to": null
+        }
+      ]
+    },
+    {
+      "id": "a-promoted-man-carries-on-as-a-flying-king",
+      "description": "Russian rules. The man crowns on d8 and immediately takes f6 from two squares away, landing on h4 or g5 — neither of which a man could have reached. This is the case that fails outright if the crowned piece keeps moving like a man.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "b6", "side": "light", "rank": "man" },
+        { "square": "c7", "side": "dark", "rank": "man" },
+        { "square": "f6", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        {
+          "path": ["b6", "d8", "h4"],
+          "captured": ["c7", "f6"],
+          "promotes_to": "king"
+        },
+        {
+          "path": ["b6", "d8", "g5"],
+          "captured": ["c7", "f6"],
+          "promotes_to": "king"
+        }
+      ]
+    },
+    {
+      "id": "promotion-ends-the-ply-when-the-variant-says-so",
+      "description": "English rules. The man crowns on d8 with e7 sitting there to be taken and f6 empty behind it — and stops anyway, because crowning ends the turn. The identical position under Russian rules continues.",
+      "variant": "english_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "b6", "side": "light", "rank": "man" },
+        { "square": "c7", "side": "dark", "rank": "man" },
+        { "square": "e7", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        { "path": ["b6", "d8"], "captured": ["c7"], "promotes_to": "king" }
+      ]
+    },
+    {
+      "id": "a-man-and-a-king-share-one-move-list",
+      "description": "Both ranks in one position, generated by one pipeline and ordered together by origin: the king on c1 first, then the man on e3. The king's up-right diagonal stops at d2, blocked by that man.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c1", "side": "light", "rank": "king" },
+        { "square": "e3", "side": "light", "rank": "man" }
+      ],
+      "expected_moves": [
+        { "path": ["c1", "b2"], "captured": [], "promotes_to": null },
+        { "path": ["c1", "d2"], "captured": [], "promotes_to": null },
+        { "path": ["c1", "a3"], "captured": [], "promotes_to": null },
+        { "path": ["e3", "d4"], "captured": [], "promotes_to": null },
+        { "path": ["e3", "f4"], "captured": [], "promotes_to": null }
+      ]
+    }
+  ]
+}

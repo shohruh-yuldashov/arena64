@@ -18,8 +18,14 @@ promotion detected on arrival, one deterministic move order, and the first
 versioned corpus in `specs/game-engine/corpus/v1/`.
 
 **A64-014.3 — validation and application.** `MoveValidator` (which holds no
-rules of its own — it asks the generator), `MoveApplier`, `IllegalMove`,
-and `UnsupportedPieceMovement`.
+rules of its own — it asks the generator), `MoveApplier` and `IllegalMove`.
+
+**A64-014.5 — kings.** Flying and short king quiet moves and captures,
+kings starting a ply, `BoardVariant.ENGLISH_8X8`, and the corpus's second
+version. `UnsupportedPieceMovement` is **removed**: it was A64-014.3's
+temporary refusal for a position containing a king of the side to move, and
+there is no such position any more. A consumer that caught it can delete
+the handler — nothing raises it, and nothing replaced it.
 
 Absent, by the tasks' constraints: **king movement** — a king of the side
 to move is now *refused* rather than ignored, so that an empty move set
@@ -68,7 +74,6 @@ from app.modules.engine.exceptions import (
     InvalidCoordinate,
     InvalidMove,
     PieceNotFound,
-    UnsupportedPieceMovement,
 )
 from app.modules.engine.initial_position import initial_board
 from app.modules.engine.move import Move
@@ -110,7 +115,6 @@ __all__ = [
     "PieceRank",
     "PlayerSide",
     "Position",
-    "UnsupportedPieceMovement",
     "geometry_of",
     "initial_board",
 ]

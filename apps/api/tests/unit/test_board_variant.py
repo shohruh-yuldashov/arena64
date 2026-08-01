@@ -25,6 +25,7 @@ from app.modules.engine import (
 
 RUSSIAN = geometry_of(BoardVariant.RUSSIAN_8X8)
 INTERNATIONAL = geometry_of(BoardVariant.INTERNATIONAL_10X10)
+ENGLISH = geometry_of(BoardVariant.ENGLISH_8X8)
 
 
 def _geometry(
@@ -32,7 +33,6 @@ def _geometry(
     rows: int = 8,
     columns: int = 8,
     setup_rows_per_side: int = 3,
-    kings_fly: bool = True,
 ) -> BoardGeometry:
     """A geometry differing from Russian draughts only where a test says so.
 
@@ -46,7 +46,7 @@ def _geometry(
         capture_is_mandatory=True,
         capture_obligation=CaptureObligation.ANY,
         men_may_capture_backward=True,
-        kings_fly=kings_fly,
+        kings_fly=True,
         mid_sequence_promotion=MidSequencePromotion.CROWNS_AND_CONTINUES,
     )
 
@@ -121,7 +121,7 @@ class TestRuleAxes:
     why a variant check inside a rules algorithm is the defect that makes a
     second variant unshippable."""
 
-    def test_both_variants_oblige_a_capture(self) -> None:
+    def test_every_variant_obliges_a_capture(self) -> None:
         for variant in BoardVariant:
             assert geometry_of(variant).capture_is_mandatory
 
@@ -134,9 +134,14 @@ class TestRuleAxes:
         which arrive with A64-014.4."""
         assert INTERNATIONAL.maximum_capture_is_mandatory
 
-    def test_both_variants_let_men_capture_backward(self) -> None:
-        for variant in BoardVariant:
-            assert geometry_of(variant).men_may_capture_backward
+    def test_the_8x8_and_10x10_variants_let_men_capture_backward(self) -> None:
+        assert RUSSIAN.men_may_capture_backward
+        assert INTERNATIONAL.men_may_capture_backward
+
+    def test_english_men_capture_forward_only(self) -> None:
+        """A64-014.5 added English draughts, and this axis stopped being a
+        constant dressed as a setting."""
+        assert not ENGLISH.men_may_capture_backward
 
     def test_light_advances_up_the_board_and_dark_down_it(self) -> None:
         assert RUSSIAN.forward_step(PlayerSide.LIGHT) == 1
@@ -179,10 +184,20 @@ class TestRuleAxes:
         assert INTERNATIONAL.king_reach == 10
 
     def test_a_short_king_reaches_one_square(self) -> None:
-        """No variant configures a short king, but the jump scan is written
-        as one loop parameterised by this rather than two code paths — so
-        the axis is worth holding to its meaning."""
-        assert _geometry(kings_fly=False).king_reach == 1
+        """English draughts. The scan is one loop parameterised by this
+        rather than two code paths, which is why a short king needs no
+        branch of its own."""
+        assert ENGLISH.king_reach == 1
+
+    def test_english_crowning_ends_the_ply(self) -> None:
+        assert ENGLISH.mid_sequence_promotion is MidSequencePromotion.CROWNS_AND_ENDS_PLY
+
+    def test_every_mid_sequence_promotion_rule_is_configured_by_some_variant(self) -> None:
+        """All three, since A64-014.5. A member no variant selects is a
+        branch in the walker that no test can reach."""
+        assert {geometry_of(variant).mid_sequence_promotion for variant in BoardVariant} == set(
+            MidSequencePromotion
+        )
 
 
 class TestStep:

@@ -28,15 +28,12 @@ from app.modules.engine import (
     PieceRank,
     PlayerSide,
     Position,
-    UnsupportedPieceMovement,
 )
 
 RUSSIAN = BoardVariant.RUSSIAN_8X8
 
 LIGHT_MAN = Piece(side=PlayerSide.LIGHT, rank=PieceRank.MAN)
 DARK_MAN = Piece(side=PlayerSide.DARK, rank=PieceRank.MAN)
-LIGHT_KING = Piece(side=PlayerSide.LIGHT, rank=PieceRank.KING)
-DARK_KING = Piece(side=PlayerSide.DARK, rank=PieceRank.KING)
 
 generator = MoveGenerator()
 validator = MoveValidator(generator)
@@ -174,40 +171,5 @@ class TestMalformedIsNotIllegal:
         assert issubclass(IllegalMove, RuleViolationError)
         assert not issubclass(IllegalMove, GameDomainError)
 
-    def test_every_other_engine_failure_is_a_kernel_bug(self) -> None:
-        for failure in (InvalidMove, UnsupportedPieceMovement):
-            assert issubclass(failure, GameDomainError)
-
-
-class TestKingBoundary:
-    """A64-014.3's explicit boundary, deleted by A64-014.5."""
-
-    def test_a_king_of_the_side_to_move_is_refused_by_the_generator(self) -> None:
-        with pytest.raises(UnsupportedPieceMovement):
-            generator.legal_moves(position({"c3": LIGHT_KING}, PlayerSide.LIGHT))
-
-    def test_validating_against_such_a_position_raises_the_same_thing(self) -> None:
-        """Not `IllegalMove`, and not `False`: "this engine cannot tell" is
-        a different answer from "no", and collapsing them would let a
-        caller record a refusal the rules never made."""
-        with pytest.raises(UnsupportedPieceMovement):
-            validator.validate(position({"c3": LIGHT_KING}, PlayerSide.LIGHT), move("c3", "b4"))
-
-    def test_is_legal_raises_rather_than_answering_false(self) -> None:
-        with pytest.raises(UnsupportedPieceMovement):
-            validator.is_legal(position({"c3": LIGHT_KING}, PlayerSide.LIGHT), move("c3", "b4"))
-
-    def test_a_king_belonging_to_the_opponent_is_evaluated_normally(self) -> None:
-        """It is a piece a man may jump, which this build handles — so
-        refusing it would reject positions the engine answers for."""
-        moves = generator.legal_moves(
-            position({"c3": LIGHT_MAN, "d4": DARK_KING}, PlayerSide.LIGHT)
-        )
-
-        assert [str(generated) for generated in moves] == ["c3xe5"]
-
-    def test_a_king_of_the_other_side_does_not_block_that_side_later(self) -> None:
-        """The same board, DARK to move, is what raises — the guard is on
-        the side to move, not on the board."""
-        with pytest.raises(UnsupportedPieceMovement):
-            generator.legal_moves(position({"c3": LIGHT_MAN, "d4": DARK_KING}, PlayerSide.DARK))
+    def test_a_malformed_move_is_a_kernel_bug(self) -> None:
+        assert issubclass(InvalidMove, GameDomainError)

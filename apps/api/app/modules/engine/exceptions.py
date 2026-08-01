@@ -124,30 +124,6 @@ class DestinationOccupied(GameDomainError):
     """
 
 
-class UnsupportedPieceMovement(GameDomainError):
-    """The engine cannot answer for this position — A64-014.3.
-
-    **A temporary boundary, and it is deleted by A64-014.5.** Move
-    generation covers men; a king belonging to the side to move has moves
-    this build does not know how to produce, so any answer it gave would be
-    an incomplete legal move set presented as a complete one.
-
-    That is worse than it sounds. An empty move set means "this player has
-    lost" under the full rules, so a generator that silently returned
-    nothing for a king-only position would hand terminal-state detection a
-    resignation the rules never called for. Refusing loudly is the only
-    honest option until kings move.
-
-    A king belonging to the *opponent* raises nothing: it is a piece a man
-    may jump, which this build handles correctly, and refusing it would
-    reject positions the engine actually answers for.
-
-    Not an `IllegalMove` — nobody did anything wrong. It is a caller
-    reaching past what this build implements, which is why it sits under
-    `GameDomainError` with the other caller bugs.
-    """
-
-
 class IllegalMove(RuleViolationError):
     """A well-formed move that the rules do not allow here — A64-014.3.
 
@@ -186,5 +162,4 @@ __all__ = [
     "InvalidCoordinate",
     "InvalidMove",
     "PieceNotFound",
-    "UnsupportedPieceMovement",
 ]

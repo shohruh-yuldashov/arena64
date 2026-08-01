@@ -60,10 +60,9 @@ class MoveValidator:
     def is_legal(self, position: Position, move: Move) -> bool:
         """Whether `move` is among the moves available in `position`.
 
-        Raises `UnsupportedPieceMovement` — it does not answer `False` —
-        when the position contains a king of the side to move. "This engine
-        cannot tell" is not the same answer as "no", and collapsing them
-        would let a caller record a refusal the rules never made.
+        Total since A64-014.5: there is no position the generator declines
+        to answer for, so this is always a `True` or a `False` about the
+        rules rather than about the engine.
         """
         return move in self._move_generator.legal_moves(position)
 

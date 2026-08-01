@@ -8,21 +8,34 @@ corpus tests and the property a rated result rests on.
 
 ## Scope
 
-Present: quiet moves for men, **complete capture sequences** of any length,
-mandatory-capture priority, maximum-capture filtering where the variant
-obliges it, promotion on arrival and mid-sequence, one deterministic order.
+The rules of movement are complete as of A64-014.5: men and kings, quiet
+moves and complete capture sequences of any length, mandatory capture,
+maximum capture where the variant obliges it, and every configured answer
+to crowning mid-jump. What the engine still lacks is everything *around* a
+move — terminal states, draws, repetition — none of which is generation.
 
-Absent: **standalone king movement**. A king belonging to the side to move
-is refused with `UnsupportedPieceMovement`; a king that appears *during* a
-sequence, because a man crowned mid-jump, keeps jumping under the king
-rules below. A64-014.5 removes the refusal, and what it has left to build
-is king *quiet* moves — flying steps along a diagonal — plus starting a
-walk from a king that was already on the board. The jump scan here already
-handles a king correctly; nothing calls it with one on move one.
+A64-014.3's `UnsupportedPieceMovement` guard is gone with this task, along
+with the exception itself. It existed to stop an empty move set meaning two
+things at once while kings were unimplemented; kings are implemented, so
+the guard is not a safety net any more, it is a lie about what the engine
+can do.
 
-An opponent's king raises nothing. It is a piece a man may jump, which this
-build handles, and refusing it would reject positions the engine answers
-for.
+## Men and kings share one pipeline
+
+A king is not a special case with its own generator. It differs from a man
+in exactly three answers, each of which the piece's rank selects:
+
+| Question | Man | King |
+| --- | --- | --- |
+| How far does it travel in one leg? | one square | `geometry.king_reach` |
+| Which diagonals may it move quietly along? | forward only | all four |
+| Which diagonals may it jump along? | what the variant allows | all four |
+
+Everything else — the capture walk, the taken-once rule, mandatory
+capture, the maximum filter, the ordering — is written once and does not
+know which it is looking at. That is why `kings_fly` is read as a *reach*
+rather than as an `if`: a short king is a flying king that cannot see past
+its neighbour, and one loop is correct for both.
 
 ## Complete sequences, and why prefixes never escape
 
@@ -87,9 +100,8 @@ from collections.abc import Iterator
 
 from app.modules.engine.board import Board
 from app.modules.engine.coordinate import DIAGONAL_DIRECTIONS, BoardCoordinate, Direction
-from app.modules.engine.exceptions import UnsupportedPieceMovement
 from app.modules.engine.move import Move
-from app.modules.engine.piece import Piece, PieceRank, PlayerSide
+from app.modules.engine.piece import Piece, PieceRank
 from app.modules.engine.position import Position
 from app.modules.engine.variant import BoardGeometry, MidSequencePromotion
 
@@ -101,16 +113,14 @@ class MoveGenerator:
         """The moves available in `position`, ordered and immutable.
 
         Empty means exactly one thing: **the side to move has nothing to
-        play**, which under the full rules is a loss for that side. It no
-        longer also means "the engine could not tell" — a king of the side
-        to move raises `UnsupportedPieceMovement` instead (A64-014.3).
+        play**, which under the full rules is a loss for that side. Since
+        A64-014.5 that is unconditional — there is no piece the generator
+        declines to answer for.
 
         Drawing the losing conclusion is still not this method's; terminal
-        state is a later task. What this guarantees is that the conclusion
-        will be safe to draw.
+        state is A64-014.6's. What this guarantees is that the conclusion
+        is safe to draw.
         """
-        _reject_unsupported_pieces(position)
-
         geometry = position.board.geometry
         captures = _obliged(self._captures(position, geometry), geometry)
         if captures and geometry.capture_is_mandatory:
@@ -130,48 +140,57 @@ class MoveGenerator:
         victim still standing — see the module docstring on why those two
         adjustments are what make revisits and the Turkish strike fall out
         rather than needing rules of their own.
+
+        Men and kings both. The piece that starts the ply is carried
+        through the recursion unchanged as `started_as`, because whether a
+        move *promotes* depends on what it began as, not on what it is by
+        the end.
         """
         sequences: list[Move] = []
-        for square, man in _men_to_move(position):
+        for square, piece in _pieces_to_move(position):
             sequences.extend(
-                _sequences(position.board.remove(square), geometry, man, (square,), ())
+                _sequences(position.board.remove(square), geometry, piece, piece, (square,), ())
             )
         return tuple(sequences)
 
     def _quiet_moves(self, position: Position, geometry: BoardGeometry) -> tuple[Move, ...]:
         """Every non-capturing move available to the side to move.
 
-        Forward only, one square. A man never steps backward in any variant
-        configured here, which is why `forward_directions` is asked
-        unconditionally while captures consult `men_may_capture_backward`.
+        A man steps one square forward. A king slides along any of the four
+        diagonals, and **every empty square it passes is a move of its
+        own** — where a king stops is a real choice, and it decides what it
+        can do next ply. It stops at the first piece of either colour: a
+        quiet move jumps nothing.
         """
         moves: list[Move] = []
-        for square, man in _men_to_move(position):
-            for direction in geometry.forward_directions(position.side_to_move):
-                target = geometry.step(square, direction)
-                if target is None or position.board.piece_at(target) is not None:
-                    continue
-                moves.append(
-                    Move(
-                        path=(square, target),
-                        promotes_to=_promotion(geometry, man.side, target),
+        for square, piece in _pieces_to_move(position):
+            for direction in _quiet_directions(geometry, piece):
+                for target in _open_squares(
+                    position.board, geometry, square, direction, _reach(geometry, piece)
+                ):
+                    moves.append(
+                        Move(
+                            path=(square, target),
+                            promotes_to=_promotion(geometry, piece, target),
+                        )
                     )
-                )
         return tuple(moves)
 
 
 def _sequences(
     board: Board,
     geometry: BoardGeometry,
+    started_as: Piece,
     mover: Piece,
     path: tuple[BoardCoordinate, ...],
     captured: tuple[BoardCoordinate, ...],
 ) -> list[Move]:
     """Every complete sequence that carries on from `path[-1]`.
 
-    `mover` is the piece as it stands *now* — a man, or the king it became
-    when it crossed the crownhead — and `board` has it lifted off with
-    every victim, taken or not, still in place.
+    `started_as` is the piece that began the ply and never changes; `mover`
+    is the piece as it stands *now*, which differs from it only when a man
+    has crowned along the way. `board` has the mover lifted off its origin,
+    with every victim — taken or not — still in place.
 
     Empty when nothing can be jumped from here, which is how a caller one
     level up learns that the sequence it built is terminal and should be
@@ -179,11 +198,16 @@ def _sequences(
     """
     complete: list[Move] = []
     for victim, landing in _jumps_from(board, geometry, mover, path[-1], captured):
-        arriving = mover.promote() if _crowns_on_arrival(geometry, mover, landing) else mover
+        crowns = _crowns_on_arrival(geometry, mover, landing)
+        arriving = mover.promote() if crowns else mover
         extended = (*path, landing)
         taken = (*captured, victim)
 
-        continuations = _sequences(board, geometry, arriving, extended, taken)
+        continuations = (
+            []
+            if crowns and geometry.mid_sequence_promotion is _ENDS_PLY
+            else _sequences(board, geometry, started_as, arriving, extended, taken)
+        )
         if continuations:
             complete.extend(continuations)
         else:
@@ -191,7 +215,7 @@ def _sequences(
                 Move(
                     path=extended,
                     captured=taken,
-                    promotes_to=_sequence_promotion(geometry, arriving, landing),
+                    promotes_to=_sequence_promotion(geometry, started_as, arriving, landing),
                 )
             )
     return complete
@@ -209,11 +233,12 @@ def _jumps_from(
     Ordered by direction and then by landing distance, so the walk itself
     is reproducible before `_ordered` ever sees the result.
 
-    A man reaches exactly one square; a king reaches `king_reach`, which is
-    the far side of the board where kings fly and one square where they do
-    not. That single number is why there is no separate short-king branch.
+    A flying king may come down on **any** empty square beyond its victim,
+    and each is a separate move: where it stops decides what it can take
+    next, so two landings after one capture are two different plies, not
+    two spellings of one.
     """
-    reach = 1 if mover.rank is PieceRank.MAN else geometry.king_reach
+    reach = _reach(geometry, mover)
     for direction in _capture_directions(geometry, mover):
         obstruction = _first_obstruction(board, geometry, origin, direction, reach)
         if obstruction is None:
@@ -268,10 +293,58 @@ def _landings(
         yield square
 
 
+def _open_squares(
+    board: Board,
+    geometry: BoardGeometry,
+    origin: BoardCoordinate,
+    direction: Direction,
+    reach: int,
+) -> Iterator[BoardCoordinate]:
+    """The empty squares `origin` can slide to along `direction`, nearest
+    first, stopping at the first piece of either colour.
+
+    A quiet move passes over nothing, so the *first* occupant ends the
+    scan whoever owns it — a friendly piece and an enemy piece block a
+    king's slide identically, and the difference between them only matters
+    to `_jumps_from`.
+    """
+    for distance in range(1, reach + 1):
+        square = geometry.step(origin, direction, distance)
+        if square is None or board.piece_at(square) is not None:
+            return
+        yield square
+
+
+def _reach(geometry: BoardGeometry, mover: Piece) -> int:
+    """How far `mover` travels in one leg — of a slide or of a jump.
+
+    One square for a man. For a king, whatever the variant says: the far
+    side of the board where kings fly, one square where they do not. The
+    same number governs both kinds of movement, which is what lets a short
+    king and a flying king share every loop in this module.
+    """
+    if mover.rank is PieceRank.MAN:
+        return 1
+    return geometry.king_reach
+
+
+def _quiet_directions(geometry: BoardGeometry, mover: Piece) -> tuple[Direction, ...]:
+    """The diagonals `mover` may slide along without capturing.
+
+    A man advances only — no variant configured here lets one step
+    backward, which is why this asks the geometry for its forward pair
+    rather than for an axis. A king slides all four ways.
+    """
+    if mover.rank is PieceRank.MAN:
+        return geometry.forward_directions(mover.side)
+    return DIAGONAL_DIRECTIONS
+
+
 def _capture_directions(geometry: BoardGeometry, mover: Piece) -> tuple[Direction, ...]:
     """The diagonals `mover` may jump along.
 
-    A man asks the variant, which may or may not let it take backward. A
+    A man asks the variant, which may or may not let it take backward — it
+    does in Russian and international draughts, it does not in English. A
     king takes along all four in every rule set there is.
     """
     if mover.rank is PieceRank.MAN:
@@ -279,34 +352,52 @@ def _capture_directions(geometry: BoardGeometry, mover: Piece) -> tuple[Directio
     return DIAGONAL_DIRECTIONS
 
 
+_CROWNS_IMMEDIATELY = frozenset(
+    {
+        MidSequencePromotion.CROWNS_AND_CONTINUES,
+        MidSequencePromotion.CROWNS_AND_ENDS_PLY,
+    }
+)
+"""The two rules under which reaching the crownhead crowns a man *there*,
+mid-sequence. They differ in what happens next, not in whether it happens —
+see `_sequences`, where one of them stops the ply."""
+
+_ENDS_PLY = MidSequencePromotion.CROWNS_AND_ENDS_PLY
+
+
 def _crowns_on_arrival(geometry: BoardGeometry, mover: Piece, landing: BoardCoordinate) -> bool:
     """Whether landing here crowns the mover *mid-sequence*.
 
-    Only under `CROWNS_AND_CONTINUES`. Where the variant passes a man
-    through the crownhead instead, it stays a man for the rest of the ply
-    and is crowned — or not — by where the sequence ends.
+    Not under `PASSES_THROUGH`, where a man crosses its crownhead unchanged
+    and is crowned — or not — by where the sequence finally ends.
     """
     return (
-        geometry.mid_sequence_promotion is MidSequencePromotion.CROWNS_AND_CONTINUES
+        geometry.mid_sequence_promotion in _CROWNS_IMMEDIATELY
         and mover.rank is PieceRank.MAN
         and geometry.is_promotion_square(mover.side, landing)
     )
 
 
 def _sequence_promotion(
-    geometry: BoardGeometry, mover: Piece, destination: BoardCoordinate
+    geometry: BoardGeometry,
+    started_as: Piece,
+    mover: Piece,
+    destination: BoardCoordinate,
 ) -> PieceRank | None:
     """The rank a finished sequence leaves its piece with, or `None`.
 
-    Every sequence starts with a man — a king of the side to move is
-    refused before any of this runs — so a mover that is a king by the end
-    was crowned along the way, and a mover that is still a man is crowned
-    only if it stopped on the crownhead. When A64-014.5 lets a king start a
-    ply, this takes the starting rank so it can tell the two apart.
+    Three questions in order, and the first is the one A64-014.5 had to
+    add: **a king that began the ply as a king is not promoted by
+    anything.** Before kings could start a move, "the mover is a king" was
+    sufficient evidence that it had been crowned along the way; it is not
+    any more, and reading it that way would have every king move claim a
+    promotion.
     """
+    if started_as.rank is PieceRank.KING:
+        return None
     if mover.rank is PieceRank.KING:
         return PieceRank.KING
-    if geometry.is_promotion_square(mover.side, destination):
+    if geometry.is_promotion_square(started_as.side, destination):
         return PieceRank.KING
     return None
 
@@ -326,29 +417,8 @@ def _obliged(captures: tuple[Move, ...], geometry: BoardGeometry) -> tuple[Move,
     return tuple(capture for capture in captures if len(capture.captured) == longest)
 
 
-def _reject_unsupported_pieces(position: Position) -> None:
-    """Refuse a position this build cannot answer for — see
-    `UnsupportedPieceMovement`.
-
-    The check is on the side to move only, and it runs before any
-    generation so that no half-built answer can escape.
-    """
-    for square, piece in position.board.occupied_squares.items():
-        if piece.side is position.side_to_move and piece.rank is PieceRank.KING:
-            raise UnsupportedPieceMovement(
-                f"King movement is not implemented; the {piece.side.value} king on "
-                f"{square} has moves this engine cannot generate."
-            )
-
-
-def _men_to_move(position: Position) -> list[tuple[BoardCoordinate, Piece]]:
-    """The side to move's pieces, in ascending square order.
-
-    Every one of them is a man: `_reject_unsupported_pieces` has already
-    run, so a king of this side would have raised rather than reached here.
-    Re-filtering on rank would be a second statement of that invariant,
-    which is the kind of duplication that stays behind after the first one
-    is deleted in A64-014.5.
+def _pieces_to_move(position: Position) -> list[tuple[BoardCoordinate, Piece]]:
+    """The side to move's pieces, of either rank, in ascending square order.
 
     Sorted here as well as in `_ordered`, so that the walk itself is
     reproducible: a bug that made two moves compare equal would otherwise
@@ -367,16 +437,21 @@ def _men_to_move(position: Position) -> list[tuple[BoardCoordinate, Piece]]:
 
 
 def _promotion(
-    geometry: BoardGeometry, side: PlayerSide, destination: BoardCoordinate
+    geometry: BoardGeometry, mover: Piece, destination: BoardCoordinate
 ) -> PieceRank | None:
-    """`KING` when a **quiet** move to `destination` crowns a man of `side`.
+    """`KING` when a **quiet** move to `destination` crowns `mover`.
 
-    Unconditional, because a quiet move is one square and is always the
-    whole ply: a man that steps onto the crownhead has nowhere left to go.
-    Captures are the case with a choice in it, and `_sequence_promotion`
-    is where the variant's answer lands.
+    Unconditional for a man, because a quiet move is always the whole ply:
+    one that steps onto the crownhead has nowhere left to go, so there is
+    no variant to consult. A king sliding across its own crownhead is not
+    promoted by anything, which is the case A64-014.5 had to add.
+
+    Captures are where the choice lives, and `_sequence_promotion` is where
+    the variant answers it.
     """
-    if not geometry.is_promotion_square(side, destination):
+    if mover.rank is PieceRank.KING:
+        return None
+    if not geometry.is_promotion_square(mover.side, destination):
         return None
     return PieceRank.KING
 

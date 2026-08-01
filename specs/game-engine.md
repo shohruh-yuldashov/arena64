@@ -1,9 +1,8 @@
 # Game Engine
 
-> **Status:** Partial — the board foundation (A64-014.1), men's move generation (A64-014.2),
-> move validation and application (A64-014.3) and complete capture sequences (A64-014.4) are
-> specified and implemented; standalone king movement, termination and notation are not yet
-> specified
+> **Status:** Partial — **the rules of movement are complete** (A64-014.1 – A64-014.5: board,
+> men, validation and application, capture sequences, kings). Terminal states, draws, repetition
+> and notation are not yet specified
 > **Owner:** _Unassigned_
 > **Related:** `templates/feature-spec.md`, `docs/01-architecture/architecture.md` §11,
 > `docs/01-architecture/domain-model.md` §2.1 and §16.1
@@ -28,7 +27,7 @@ contracts enforce that and the rule that only `game`, `replay` and `fairplay` ma
 | `PlayerSide` | Enum | `LIGHT`, `DARK`. `opponent()` is total and its own inverse |
 | `PieceRank` | Enum | `MAN`, `KING` |
 | `Piece` | Frozen value object | `(side, rank)`. `promote()` returns a king of the same side and is idempotent |
-| `BoardVariant` | Enum | `RUSSIAN_8X8`, `INTERNATIONAL_10X10` |
+| `BoardVariant` | Enum | `RUSSIAN_8X8`, `INTERNATIONAL_10X10`, `ENGLISH_8X8` |
 | `BoardGeometry` | Frozen value object | `rows`, `columns`, `setup_rows_per_side`, and the derived `men_per_side`. One instance per variant, reached through `geometry_of` |
 | `Board` | Immutable, compares by value | Placement of pieces for one variant |
 | `initial_board(variant)` | Function | The opening position |
@@ -38,7 +37,7 @@ contracts enforce that and the rule that only `game`, `replay` and `fairplay` ma
 | Rule | Statement |
 | --- | --- |
 | GE-1 | Row 0 is LIGHT's back rank; rows increase away from LIGHT. Column 0 is LIGHT's left |
-| GE-2 | A square is playable when `(row + column)` is even, which puts a playable square at `a1` on both variants |
+| GE-2 | A square is playable when `(row + column)` is even, which puts a playable square at `a1` on every variant |
 | GE-3 | A geometry with an odd file count, no filled rank, or starting ranks that meet is refused with `InvalidBoardState` |
 | GE-4 | No variant may exceed `MAX_BOARD_DIMENSION` (10), the bound `BoardCoordinate` validates against |
 
@@ -73,9 +72,10 @@ is `MoveValidator`'s answer (§3), and `MoveApplier` is the only thing that shou
 ### 1.5 Failures
 
 `GameDomainError` roots the kernel's taxonomy under `app.core.exceptions.DomainError`, with
-`InvalidCoordinate`, `InvalidBoardState`, `PieceNotFound`, `DestinationOccupied`, `InvalidMove`
-and `UnsupportedPieceMovement` below it. `IllegalMove` is the one deliberate exception and sits
-under `RuleViolationError` instead — see §3.3.
+`InvalidCoordinate`, `InvalidBoardState`, `PieceNotFound`, `DestinationOccupied` and
+`InvalidMove` below it. `IllegalMove` is the one deliberate exception and sits under
+`RuleViolationError` instead — see §3.3. `UnsupportedPieceMovement` existed between A64-014.3
+and A64-014.5 and is **removed** — see §5.6.
 
 None carries a wire code of its own: the engine has no HTTP surface, and the task that gives
 `game` an endpoint is the one that can judge which of them a client must distinguish.
@@ -92,6 +92,7 @@ None carries a wire code of its own: the engine has no HTTP surface, and the tas
 | `Move` | Frozen value object | `(path, captured, promotes_to)` |
 | `Direction` | Frozen value object, ordered | One diagonal step. The four are `DIAGONAL_DIRECTIONS` |
 | `CaptureObligation` | Enum | `ANY`, `MAXIMUM` |
+| `MidSequencePromotion` | Enum | `CROWNS_AND_CONTINUES`, `PASSES_THROUGH`, `CROWNS_AND_ENDS_PLY` |
 | `MoveGenerator` | Stateless service | `legal_moves(position) -> tuple[Move, ...]` |
 
 ### 2.2 `Position`
@@ -127,19 +128,20 @@ The generator reads the geometry and **never** the variant. A `BoardVariant` val
 `geometry_of` and goes no further; a variant check inside a rules algorithm is invisible from the
 variant table and is how a second variant becomes unshippable.
 
-| Axis | Kind | Russian 8x8 | International 10x10 | Read by |
-| --- | --- | --- | --- | --- |
-| `rows`, `columns` | field | 8, 8 | 10, 10 | A64-014.1 |
-| `setup_rows_per_side` | field | 3 | 4 | A64-014.1 |
-| `is_playable` | derived | `(row + column)` even | same | A64-014.1 |
-| `capture_is_mandatory` | field | `True` | `True` | A64-014.2 |
-| `capture_obligation` | field | `ANY` | `MAXIMUM` | A64-014.4 |
-| `men_may_capture_backward` | field | `True` | `True` | A64-014.2 |
-| `kings_fly` | field, read via `king_reach` | `True` | `True` | A64-014.4 |
-| `mid_sequence_promotion` | field | `CROWNS_AND_CONTINUES` | `PASSES_THROUGH` | A64-014.4 |
-| `forward_step(side)` | derived | `+1` / `-1` | same | A64-014.2 |
-| `promotion_row(side)` | derived | `7` / `0` | `9` / `0` | A64-014.2 |
-| `step(origin, direction, distance)` | derived | — | — | A64-014.2 |
+| Axis | Kind | Russian 8x8 | International 10x10 | English 8x8 | Read by |
+| --- | --- | --- | --- | --- | --- |
+| `rows`, `columns` | field | 8, 8 | 10, 10 | 8, 8 | A64-014.1 |
+| `setup_rows_per_side` | field | 3 | 4 | 3 | A64-014.1 |
+| `is_playable` | derived | `(row + column)` even | same | same | A64-014.1 |
+| `capture_is_mandatory` | field | `True` | `True` | `True` | A64-014.2 |
+| `capture_obligation` | field | `ANY` | `MAXIMUM` | `ANY` | A64-014.4 |
+| `men_may_capture_backward` | field | `True` | `True` | `False` | A64-014.2 |
+| `kings_fly` | field, read via `king_reach` | `True` | `True` | `False` | A64-014.4 |
+| `mid_sequence_promotion` | field | `CROWNS_AND_CONTINUES` | `PASSES_THROUGH` | `CROWNS_AND_ENDS_PLY` | A64-014.4 |
+| `king_reach` | derived | `8` | `10` | `1` | A64-014.5 |
+| `forward_step(side)` | derived | `+1` / `-1` | same | same | A64-014.2 |
+| `promotion_row(side)` | derived | `7` / `0` | `9` / `0` | `7` / `0` | A64-014.2 |
+| `step(origin, direction, distance)` | derived | — | — | — | A64-014.2 |
 
 `forward_step` and `promotion_row` are derived rather than stored because `BoardCoordinate`
 already fixes the orientation (GE-1); a stored direction could contradict it and nothing would
@@ -187,7 +189,6 @@ single jumps (§4).
 | `MoveValidator` | Stateless service over `MoveGenerator` | `is_legal(position, move) -> bool`, `validate(position, move) -> None` |
 | `MoveApplier` | Stateless service over `MoveValidator` | `apply(position, move) -> Position` |
 | `IllegalMove` | `app.core.exceptions.RuleViolationError` | A well-formed move the rules do not allow here |
-| `UnsupportedPieceMovement` | `GameDomainError` | The engine cannot evaluate the position — temporary |
 
 ### 3.2 Validation by generation
 
@@ -196,7 +197,7 @@ single jumps (§4).
 | GE-24 | Legality is `move in move_generator.legal_moves(position)`. The validator holds **no** rules of its own |
 | GE-25 | Nothing about quiet moves, captures, the capture obligation, promotion geometry or the side to move is re-derived. Every rule added later is enforced here by construction, without this type knowing it |
 | GE-26 | Equality is exact and includes `promotes_to`, so a move that omits a required promotion or claims one the rules do not is refused. A caller echoes the generated move; it does not rebuild one from an origin and a destination |
-| GE-27 | `is_legal` answers a boolean; `validate` raises `IllegalMove`. Neither converts `UnsupportedPieceMovement` into a refusal |
+| GE-27 | `is_legal` answers a boolean and `validate` raises `IllegalMove`. Both are total: since A64-014.5 there is no position the generator declines to answer for |
 
 The cost is generating the full move set to check one move. For a validator called
 once per ply against a board of at most 50 squares that is not measurable; if a profile ever
@@ -223,18 +224,22 @@ it checked set membership — and inventing a reason would mean re-deriving the 
 built to avoid that. A player-facing explanation belongs in `game`, which already holds the legal
 move set: "you must capture" is `any(move.is_capture for move in legal)`.
 
-### 3.4 The king boundary — temporary, removed by A64-014.5
+### 3.4 The king boundary — superseded by A64-014.5
+
+**Historical.** GE-28 and GE-29 said a king belonging to the side to move raised
+`UnsupportedPieceMovement`, and one belonging to the opponent did not. Kings move now (§5), so
+neither applies and the exception is deleted; the rule that survives is the one they existed to
+guarantee.
 
 | Rule | Statement |
 | --- | --- |
-| GE-28 | A king belonging to the **side to move** raises `UnsupportedPieceMovement` from `MoveGenerator.legal_moves`, and therefore from validation and application |
-| GE-29 | A king belonging to the **opponent** raises nothing. It is a piece a man may jump, which this build handles correctly |
-| GE-30 | Consequently an empty move set means exactly one thing: the side to move has nothing to play |
+| GE-30 | An empty move set means exactly one thing: the side to move has nothing to play |
 
 A64-014.2 skipped kings and returned whatever the men could do, which made two very different
 situations identical: "this player has no legal moves" — a loss under the full rules — and "this
 build cannot answer". Terminal-state detection reads an empty set as a statement about the game,
-so the ambiguity had to go before anything was built on it.
+so the ambiguity had to go before anything was built on it. A64-014.3 removed it with a refusal;
+A64-014.5 removes it by answering.
 
 ### 3.5 Move application
 
@@ -337,9 +342,8 @@ the first obstruction within `king_reach`, and if that is an untaken opponent, e
 beyond it is a distinct landing. `king_reach` is the board's long side where `kings_fly` and one
 square where it does not, which is why a short king needs no second code path.
 
-Still deferred to **A64-014.5**: king *quiet* moves, and starting a ply from a king that was
-already on the board — `UnsupportedPieceMovement` (§3.4) still refuses that. The scan above would
-answer correctly for such a king; nothing calls it with one.
+A64-014.5 calls that same scan with a king that started the ply, and adds the quiet slide beside
+it. Nothing in §4 changed.
 
 ### 4.6 Maximum capture
 
@@ -371,17 +375,130 @@ origin, `place` refuses an occupied or unplayable destination, and `Board` is un
 
 ---
 
-## 5. Not yet specified
+## 5. Kings — A64-014.5
 
-Standalone king movement — king quiet moves, and starting a ply from a king already on the board
-— move undo, repetition hashing as an incremental `PositionHash`, draw rules, terminal-state
-detection, PDN notation and serialization, the TypeScript implementation of the corpus (AD-14),
-and the engine version recorded per match (AD-15).
+No new public type. Kings move through the same `MoveGenerator`, are validated by the same
+`MoveValidator` and applied by the same `MoveApplier`, none of which changed.
+
+### 5.1 One pipeline, three answers
+
+A king is not a special case with its own generator. It differs from a man in exactly three
+answers, each selected by the piece's rank:
+
+| Question | Man | King |
+| --- | --- | --- |
+| How far does it travel in one leg? | one square | `geometry.king_reach` |
+| Which diagonals may it slide along? | forward only | all four |
+| Which diagonals may it jump along? | what the variant allows | all four |
+
+Everything else — the capture walk, the taken-once rule, mandatory capture, the maximum filter,
+the ordering — is written once and does not know which it is looking at.
+
+| Rule | Statement |
+| --- | --- |
+| GE-46 | `king_reach` is the board's long side where `kings_fly`, and one square where it does not. A short king is a flying king that cannot see past its neighbour, so both use one loop |
+
+### 5.2 Quiet slides
+
+| Rule | Statement |
+| --- | --- |
+| GE-47 | A king slides along any of the four diagonals, and **every empty square it passes is a move of its own** — where it stops decides what it can do next ply |
+| GE-48 | The scan stops at the first occupied square, whoever owns it. A quiet move passes over nothing, so a friendly and an enemy piece block identically |
+| GE-49 | A king is never promoted, by a slide across its own crownhead or by anything else |
+
+### 5.3 Captures
+
+| Rule | Statement |
+| --- | --- |
+| GE-50 | A king may begin a capture sequence. The scan finds the first occupied square within `king_reach`; if it is an untaken opponent, **every** empty square beyond it up to the next blocker is a distinct landing, and therefore a distinct move |
+| GE-51 | It may not jump a friendly piece, an already-taken piece, or two pieces in one step — all three are "the first obstruction is not takeable", and all three close that diagonal |
+| GE-52 | Sequences may change direction between jumps, revisit squares, and must be complete. The A64-014.4 rules (GE-36 – GE-41) apply unchanged |
+
+### 5.4 Promotion, and what a king that started the ply reports
+
+| Rule | Statement |
+| --- | --- |
+| GE-53 | A move's `promotes_to` depends on the rank the piece **began** the ply with. A king that started as a king reports `None` however far it travels and wherever it stops |
+| GE-54 | `mid_sequence_promotion` decides what a man crossing its crownhead does — all three values, all configured |
+
+| Value | Variant | Behaviour |
+| --- | --- | --- |
+| `CROWNS_AND_CONTINUES` | Russian 8x8 | Crowned on arrival, carries on jumping under **king** rules — flying, all four diagonals |
+| `PASSES_THROUGH` | International 10x10 | Crosses uncrowned and carries on as a man; crowned only if the sequence *ends* there |
+| `CROWNS_AND_ENDS_PLY` | English 8x8 | Crowned on arrival and the ply stops there, even with another jump available |
+
+GE-53 is the correctness fix this task had to make. Before kings could start a move, "the mover
+is a king" was sufficient evidence that it had been crowned along the way; reading it that way
+now would have every king move claim a promotion.
+
+### 5.5 `ENGLISH_8X8`
+
+Added as **configuration only** — one enum member and one row in the geometry table, no algorithm
+anywhere reads its name. It is here because it is the rule set that gives three axes a second
+value:
+
+| Axis | Russian / International | English |
+| --- | --- | --- |
+| `men_may_capture_backward` | `True` | `False` |
+| `kings_fly` | `True` | `False` |
+| `mid_sequence_promotion` | crowns-and-continues / passes-through | crowns-and-ends-ply |
+
+Without it all three are settings nothing can tell apart from constants. It is a playable rule
+set as far as move generation goes; nothing about first mover, draw rules or ratings has been
+considered for it, and it is not offered anywhere.
+
+### 5.6 Removed: `UnsupportedPieceMovement`
+
+Deleted, with the guard that raised it. It existed from A64-014.3 to stop an empty move set
+meaning two things while kings were unimplemented, and was documented as temporary from the day
+it was written. A consumer that caught it can delete the handler: nothing raises it and nothing
+replaced it. Corpus v2 supersedes the case that asserted it (§5.7).
+
+### 5.7 Corpus v2
+
+`specs/game-engine/corpus/v2/` — king cases, plus the mechanism for retiring a case a rules
+change invalidates. A v2 file may carry a `supersedes` array naming ids from earlier versions; a
+reader loads every version and drops those ids. **Supersession is data, not prose**, so a
+TypeScript engine derives the same active set from the same files.
+
+v1 is untouched on disk. The one case it retires is
+`a-king-of-the-side-to-move-cannot-be-evaluated`, replaced by
+`king-quiet-moves-along-open-diagonals` — the identical position, with the eleven moves that lone
+king now has instead of a refusal.
+
+### 5.8 Performance, observed
+
+One contrived position: three flying kings against twelve men on a 10x10 board, every man
+reachable and every landing square open.
+
+| Measure | Observed |
+| --- | --- |
+| Complete sequences generated | 32 |
+| Captures per sequence | 12 — every opponent piece |
+| Wall time | 5.7 – 7.1 ms |
+
+The search is bounded by **material, not by the board**: a sequence cannot be longer than the
+number of opponent pieces, because every step consumes one and none is taken twice, so recursion
+depth is capped by the same number. No optimisation was made, because nothing here is evidence
+that one is needed (CLAUDE.md §10.1). The test asserts the structural bound plus a one-second
+ceiling — a blow-up detector, not a budget. A real latency budget belongs with a real workload
+rather than a position chosen to be awkward.
+
+---
+
+## 6. Not yet specified
+
+Everything that is not move generation: terminal-state detection, draw rules, repetition tracking
+and an incremental `PositionHash`, move undo, PDN notation and serialization, the TypeScript
+implementation of the corpus (AD-14), and the engine version recorded per match (AD-15).
+
+For `english_8x8` specifically: first mover, draw rules and rating category are unconsidered. It
+is configured for move generation and is offered nowhere.
 
 ## TODO
 
 - [ ] Assign a document owner
-- [ ] Specify standalone king movement and remove the `UnsupportedPieceMovement` boundary (A64-014.5)
-- [ ] Specify the repetition hash, termination and draw detection
+- [ ] Specify terminal-state detection, the repetition hash and draw rules (A64-014.6)
+- [ ] Decide whether `english_8x8` is a product variant or stays a configuration fixture
 - [ ] Add the TypeScript implementation that executes the same corpus (AD-14)
 - [ ] Review and promote status from Partial to Approved

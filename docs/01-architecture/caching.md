@@ -1,10 +1,10 @@
 # Redis Keyspaces, Caching and TTL Policy
 
-> **Status:** Approved for the keyspaces that exist — `rl:v1:`, `presence:v1:` and Celery's.
-> `friends:v1:` is **reserved**: owner and instance decided, contents not, nothing written.
-> Sections marked *Not yet allocated* describe workloads with no implementation.
+> **Status:** Approved for the keyspaces that exist — `rl:v1:`, `presence:v1:`,
+> `friends:v1:` and Celery's. Sections marked *Not yet allocated* describe
+> workloads with no implementation.
 > **Owner:** Backend platform
-> **Last reviewed:** 2026-08-01 (A64-013.1)
+> **Last reviewed:** 2026-08-01 (A64-013.6)
 
 ## Purpose
 
@@ -59,7 +59,7 @@ persistence-configured for its own workload.
 | `live` | AOF (AD-18) | none | Live match position and clocks. The only role whose loss interrupts play. |
 | `bus` | none | n/a | Pub/sub fan-out. No keys — channels only. |
 | `broker` | Celery's own | Celery's own | Task queues. Celery owns the keyspace entirely. |
-| `cache` | none | yes, by design | Response cache, read models, **presence**, and the reserved `friends:v1:`. Everything here is reconstructible or expendable. |
+| `cache` | none | yes, by design | Response cache, read models, **presence**, and the **social graph** (`friends:v1:`). Everything here is reconstructible or expendable — every value is derived from PostgreSQL, so eviction costs a query and never a fact. |
 | `limits` | none | **none — configured never to evict** | Rate limit counters. A counter evicted under memory pressure is a limit that disappears during exactly the traffic spike it exists for. |
 
 **Why presence is on `cache` and not a sixth role.** Presence is derived,
@@ -108,7 +108,7 @@ rule adds a name, not a namespace.
 | **Instance** | `cache` |
 | **Structure** | String, holding one JSON object: `online`, `last_seen`, `session_id`, `device_type` |
 | **TTL** | `PRESENCE_TTL_SECONDS`, default 60, reset on every write via `SET ... PX` |
-| **Written by** | The realtime gateway (AD-09) — **not yet implemented**, so no key currently exists in any deployment |
+| **Written by** | `users.application.services.PresenceService`, from `auth`'s lifecycle routes — `POST /auth/login` and `POST /auth/refresh` write online, `POST /auth/logout-all` writes offline (A64-013.6). The realtime gateway (AD-09) becomes a second writer when it exists |
 | **Read by** | The HTTP API, composing a public profile |
 | **On failure** | Returns "unknown", indistinguishable from a hidden, expired or never-recorded record. Logged at `WARNING` — an operator wants to know; nobody should be paged. |
 
@@ -117,6 +117,16 @@ platform that a gateway node died, so a record lapsing on its own is the only
 thing that stops that node's players being marked online forever. Whatever
 writes presence must rewrite it well inside the window — roughly a third of it
 leaves room for two missed writes before a present player flickers offline.
+
+**Since A64-013.6 the writer is authentication, not a socket.** A player who
+has just proved their identity is at a keyboard, and a client that exchanged a
+refresh token still is; those are the two facts the platform observes without
+a gateway. The consequence is that the refresh interval and
+`PRESENCE_TTL_SECONDS` are now coupled — a token lifetime longer than the
+presence window makes a signed-in player flicker offline between refreshes,
+and the default 60s window assumes a client that refreshes more often than it
+has to. `POST /auth/logout` deliberately writes nothing: presence is per
+player, and one device signing out is not the player leaving.
 
 Only `is_online` and `last_seen` are ever published, and both are gated by
 privacy flags the `users` module owns. `session_id` and `device_type` are
@@ -151,58 +161,68 @@ controls.
 *Future expansion:* AD-16's outbox relay is the first real producer. It changes
 what is *in* the queue, not the namespace.
 
-### 3.4 `friends:v1:` — **reserved, not yet written** (A64-013.1)
+### 3.4 `friends:v1:` — the social graph (A64-013.6)
 
 | | |
 | --- | --- |
-| **Owner** | `friends` (architecture.md §6) |
+| **Owner** | `friends` (architecture.md §6) — `app/modules/friends/infrastructure/cache/` |
 | **Instance** | `cache` |
-| **Structure** | *Undecided* — see below |
-| **TTL** | *Undecided*, and possibly none |
-| **Written by** | Nothing. **No key under this prefix exists in any deployment.** |
-| **Read by** | Nothing |
-| **On failure** | n/a |
+| **Structure** | String per entry, holding a JSON array of player ids |
+| **TTL** | `FRIENDS_CACHE_TTL_SECONDS`, default 300 — a **backstop**, not the mechanism (C-3) |
+| **Written by** | `CachedSocialGraphReader`, on a miss |
+| **Read by** | Every public profile composition, every friend list page and every search — through `friends.public.SocialGraphReader` |
+| **On failure** | Reads miss and fall through to PostgreSQL. Invalidation failures log at `ERROR`. Nothing raises. |
 
-**Still unwritten after A64-013.3**, which built the relation this namespace
-will cache. That task deliberately shipped `friend_count` and
-`friend_ids_among` as live queries, because caching.md C-1 and C-3 require
-the invalidation trigger to be written down before the first key — and the
-triggers are now knowable rather than speculative:
-`FriendRequestService.accept`, `FriendshipService.remove_friend`, and
-A64-013.5's block.
+**Two entries, and only two:**
 
-**Reserved by A64-013.1, which writes nothing.** That task builds user
-search — the entry point to the social graph — and the next one builds
-friend requests. Claiming the prefix now costs nothing and settles the one
-question that is expensive to settle later: C-8 requires a namespace to have
-exactly one owner, and the cheapest moment to establish that is before two
-modules have both started using `friends:`.
-
-It is listed here rather than in *Not yet allocated* below because the owner
-and the instance are decided; only the contents are not.
-
-**What it will most likely hold, and why none of it is committed to.** A
-friend list is *relational* — `friends.friendship` in PostgreSQL is the
-system of record, per AD-19 and domain-model.md §482 — so this namespace is
-for **derived** state only:
-
-| Candidate | Why it might live here | Why it is not decided |
+| Key | Holds | Invalidated by |
 | --- | --- | --- |
-| A player's friend-id set | Read on every presence fan-out and every "who is online" panel; a join per render is the N+1 this platform keeps refusing | Needs an invalidation rule on accept, remove and block (C-1), and a set that goes stale shows a stranger as a friend |
-| Blocked-id set | Read by **user search** on every request once blocking exists, and search already has the exclusion parameter to receive it | Same invalidation question, and a stale block is a worse failure than a stale friendship |
-| Friend **count** | `GET /friends/count` is one aggregate over a partial index; cheap, but read on every social page | Goes wrong on the first removal without a trigger. `FriendshipService.count_friends` is the single place to wrap |
-| `friend_ids_among` result | Runs on **every profile composition** since A64-013.3 — the hottest read path on the platform | The highest-value entry and the riskiest: a stale friendship here publishes a `friends`-scoped field to somebody who is no longer a friend |
-| Pending-request counts | A badge, cheap to recompute | May not be worth a cache at all |
+| `friends:v1:friends:<player_id>` | Every live friend's id | friend accepted, friend removed, player blocked, player unblocked |
+| `friends:v1:blocked:<player_id>` | Every player this one cannot interact with, **both directions** | player blocked, player unblocked |
 
-Each is a **cache of a durable relation**, so C-5 is satisfied by
-construction and C-3 is the open question — a set with no TTL needs an
-invalidation trigger that is provably complete, which is the work
-A64-013.2 must do before writing the first key.
+C-1 is why the list stops there. A64-013.6 permits `blocked_ids_for()` and
+`friend_ids_among()` and requires "only implement entries whose invalidation
+rules are complete" — and for these two the trigger set is provably
+exhaustive, because `friends.friendship` and `friends.blocked_player` have
+exactly four writers between them and all four invalidate. The candidates
+this section used to list and the reason each is still absent:
+
+| Candidate | Why it is still not written |
+| --- | --- |
+| Friend **count** | Derivable from the friend-id set the cache already holds, so a separate entry would be a second copy of one fact (C-8 in spirit). If `GET /friends/count` ever needs it, it comes from the same key. |
+| `friend_ids_among` **result** | Per-page, so the hit rate is near zero: two viewers of two different pages share no key. The whole friend set is cached instead and the intersection is done in Python — one key answers every page. |
+| Pending-request counts | Not a fact about the graph. Its triggers are `send`, `cancel`, `accept`, `decline` and `void`, and only two of those touch anything cached today. |
+
+**Whole sets, not query results.** One key per player answers a page of any
+length and any contents, which is what makes a hit free: `friend_ids_among`
+on a hit is set intersection and issues no query at all. A miss costs exactly
+one indexed read — the same one the uncached reader issues — so an evicted
+entry, a cold cache and `FRIENDS_CACHE_ENABLED=false` are all *slower* and
+none of them is a regression.
+
+**JSON arrays, not Redis sets.** A Redis `SET` cannot distinguish an empty
+set from a missing key, and a player with no friends is the most common state
+on this platform — those players would miss on every read, which is the cache
+being off for exactly the majority case. `[]` is a real value and therefore a
+hit.
+
+**Invalidation is by player, not by key.** `SocialGraphCache.invalidate` takes
+the player ids of both parties and drops every key in the namespace for each,
+because that is the vocabulary of the four triggers — a request was accepted
+*between two players*, a block was lifted *on one*. A third entry added to
+`keys_for` is invalidated by all four triggers without any of them changing.
+
+**It runs after the commit, deliberately.** Dropping the entry before the
+transaction commits opens a window in which a concurrent read repopulates it
+from the pre-commit state, and that stale value then survives for a whole
+TTL. After the commit the window is the microseconds between `COMMIT` and
+`DEL`, and closing it entirely needs the transactional outbox (AD-16) rather
+than a cleverer ordering. Invalidating after a *rollback* is harmless: the
+next read repopulates from the unchanged database.
 
 *Future expansion:* the version segment is already there. If the friend-id
-set ships as a Redis `SET` and later needs scores (recency, interaction
-weight) it becomes a sorted set under `friends:v2:`, written alongside `v1`
-until the fleet has rolled.
+set later needs scores (recency, interaction weight) it becomes a sorted set
+under `friends:v2:`, written alongside `v1` until the fleet has rolled (C-2).
 
 ### 3.5 Not yet allocated
 
@@ -235,6 +255,7 @@ is meaningless after that node restarts.
 | --- | --- | --- | --- |
 | Rate limit counters | The rule's window (60s–1h) | `PEXPIRE` inside the Lua script | Yes |
 | Presence | `PRESENCE_TTL_SECONDS`, default 60 | `SET ... PX` | Yes |
+| Social graph | `FRIENDS_CACHE_TTL_SECONDS`, default 300 | `SET ... EX` | Yes, on every repopulation |
 | Celery results | `result_expires` | Celery | n/a |
 
 Two properties hold across all of them, and both are C-3 and C-4 applied:
@@ -242,20 +263,45 @@ Two properties hold across all of them, and both are C-3 and C-4 applied:
 - **No sweeper exists, and none is needed.** Every key expires by construction.
   A cron job that deletes stale keys is a job that can fail silently, and the
   failure looks like a memory leak weeks later.
-- **The expiry is never a separate round trip.** Both namespaces above set value
-  and TTL in one command, so no crash sequence can leave a key immortal.
+- **The expiry is never a separate round trip.** Every namespace above sets
+  value and TTL in one command, so no crash sequence can leave a key immortal.
+
+`friends:v1:` is the first namespace whose TTL is **not** the correctness
+mechanism. Its entries are dropped by the four triggers in §5, and the 300
+seconds exist only to bound how long a bug in those triggers can be wrong. A
+shorter TTL would hide such a bug; a longer one would extend it.
 
 ## 5. Invalidation rules
 
-Nothing on this platform is invalidated *by hand* today, and that is worth
-stating plainly rather than leaving as an absence: both live namespaces are
-TTL-decayed, so "invalidation" is the passage of time.
+`rl:v1:` and `presence:v1:` are TTL-decayed, so "invalidation" there is the
+passage of time. `friends:v1:` is the first namespace on this platform with
+real invalidation, added by A64-013.6, and these are its complete triggers:
 
-The first namespace that needs real invalidation is the response cache (§3.4),
-and C-1 applies to it before it is added: layer, key, TTL and invalidation
-trigger get written down here first. A cache without a documented invalidation
-rule is a source of stale data, and the trigger is the part that is impossible
-to reconstruct later.
+| Event | Written by | Invalidates |
+| --- | --- | --- |
+| Friend request **accepted** | `FriendRequestService._transition` | requester and addressee |
+| Friend **removed** | `FriendshipService.remove_friend` | both former friends |
+| Player **blocked** | `BlockingService.block` | blocker and blocked |
+| Player **unblocked** | `BlockingService.unblock` | blocker and blocked |
+
+Three properties make the list complete rather than merely long:
+
+- **Every writer of the cached relations is here.** `friends.friendship` is
+  written by acceptance, removal and the block cascade; `friends.blocked_player`
+  by block and unblock. There is no fifth writer, so there is no fifth trigger.
+- **Both parties, always.** A friendship and a block are facts about a *pair*;
+  invalidating only the actor leaves the other side reading a friend they no
+  longer have.
+- **Every key for a player, not the one the trigger is named after.** Blocking
+  changes a block set *and* ends a friendship, so a trigger that dropped only
+  the entry matching its own name would leave the other stale.
+
+Transitions that deliberately invalidate **nothing**: sending, cancelling and
+declining a friend request. None of them changes the graph, and invalidating on
+send would cost two players their cache for an event that changed nothing.
+
+C-1 still applies to every future entry: layer, key, TTL and invalidation
+trigger get written down here *before* the first key is written.
 
 ## 6. Consistency guarantees
 
@@ -263,8 +309,9 @@ to reconstruct later.
 | --- | --- |
 | `rl:v1:` | **Atomic.** Read-prune-count-decide-write is one Lua script, so a concurrent burst cannot overshoot the limit. All-or-nothing across the rules on one endpoint: a request refused by one rule has not spent another's allowance. |
 | `presence:v1:` | **Last writer wins, whole record.** Two nodes observing the same player produce one of two complete records, never a mixture. No coordination, no node affinity — which is what makes it correct on one process and on fifty. |
+| `friends:v1:` | **Eventually consistent, bounded by the TTL and normally by the commit.** PostgreSQL is the system of record (AD-19); every entry is a copy. Invalidation runs after the writing transaction commits, so the stale window is the interval between `COMMIT` and `DEL` — microseconds — plus the TTL if that `DEL` fails. Closing it entirely requires AD-16's outbox. |
 
-Neither offers cross-key atomicity, and nothing needs it.
+None offers cross-key atomicity, and nothing needs it.
 
 ## 7. Failure behaviour
 
@@ -272,14 +319,18 @@ Neither offers cross-key atomicity, and nothing needs it.
 | --- | --- | --- |
 | `rl:v1:` | Fail open by default: the request is allowed, and `rate_limit_unavailable` is logged at `ERROR`. Set `RATE_LIMIT_FAIL_OPEN=false` for a `503` instead. | `RATE_LIMIT_REDIS_TIMEOUT_MS`, default 100 |
 | `presence:v1:` | Presence reads as unknown; the profile is served in full. Writes are dropped and self-heal on the next observation. Logged at `WARNING`. | `PRESENCE_REDIS_TIMEOUT_MS`, default 50 |
+| `friends:v1:` | Reads miss and fall through to PostgreSQL — the platform is slower, never wrong. Failed **invalidations** log at `ERROR`, because a missed drop is a correctness defect that the TTL bounds but does not prevent. | `FRIENDS_CACHE_TIMEOUT_MS`, default 50 |
 
 **The timeout is what makes the policy real.** A Redis that is *slow* rather
 than *down* is the common failure, and without a bound it would hang every
 request for the driver's default — taking the platform down while being
 perfectly available itself.
 
-**Kill switches.** `RATE_LIMIT_ENABLED` and `PRESENCE_ENABLED` both wire an
-inert implementation rather than removing a dependency. The alternative to a
+**Kill switches.** `RATE_LIMIT_ENABLED`, `PRESENCE_ENABLED` and
+`FRIENDS_CACHE_ENABLED` all wire an inert implementation rather than removing a
+dependency. `FRIENDS_CACHE_ENABLED=false` returns the platform to exactly what
+it did before A64-013.6 — one query per social-graph read — so it is a
+legitimate configuration and not a stub. The alternative to a
 documented switch is somebody commenting out a dependency under pressure and
 forgetting to restore it.
 
@@ -293,4 +344,5 @@ forgetting to restore it.
 - [`domain-model.md`](./domain-model.md) — DM-04 (ephemeral state), §299
 - `apps/api/app/database/redis.py` — the five pools
 - `apps/api/app/modules/users/infrastructure/presence/keys.py` — the presence keyspace in code
+- `apps/api/app/modules/friends/infrastructure/cache/keys.py` — the social-graph keyspace in code
 - `apps/api/app/database/rate_limiter.py` — the rate-limit keyspace in code

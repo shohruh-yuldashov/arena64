@@ -156,9 +156,11 @@ async def get_profile(
     the value that means offline, and it is only available for a player seen
     disconnecting recently.
 
-    **Both are `null` for every player today**, because presence is written
-    by the realtime gateway and that does not exist yet. The fields are in
-    the contract so clients gain no unexpected keys when it does.
+    **Both are real since A64-013.6**, which gave presence a producer:
+    signing in and refreshing a token mark a player online, and signing out
+    of every device marks them offline. What a *viewer* sees is still gated
+    by `online_status` and `show_last_seen` — so `null` here means hidden,
+    unobserved, lapsed or unavailable, and never says which.
 
     `bio` and `country` are `null` only when a player has not set them — or,
     for `country`, when they have chosen not to show it, which is

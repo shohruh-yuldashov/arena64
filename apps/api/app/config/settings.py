@@ -892,10 +892,11 @@ class PresenceSettings(BaseSettings):
 
     A dedicated sixth role is the AD-03-consistent answer if presence write
     volume ever becomes large enough to evict the leaderboard read models
-    beside it. It is not warranted today — nothing writes presence until
-    AD-09's gateway exists — and adding an instance nobody needs would be
-    speculative infrastructure. Recorded as a revisit-when rather than
-    guessed at now.
+    beside it. Not warranted today: since A64-013.6 the writers are
+    `POST /auth/login`, `POST /auth/refresh` and `POST /auth/logout-all`, so
+    the write rate is bounded by the token refresh interval rather than by
+    socket churn. Recorded as a revisit-when — AD-09's gateway is what would
+    change the volume — rather than guessed at now.
     """
 
     model_config = SettingsConfigDict(env_prefix="PRESENCE_", frozen=True, extra="forbid")
@@ -1000,6 +1001,54 @@ class FriendsSettings(BaseSettings):
     It does **not** disable the friend-request or friend-list endpoints.
     Those are writes and reads of the relation itself; this governs only
     whether *profile composition* consults it.
+    """
+
+    cache_enabled: bool = True
+    """Whether the social graph is read through the `friends:v1:` cache —
+    A64-013.6.
+
+    **`True` (default): `RedisSocialGraphCache` is wired.** `False` wires
+    `NoSocialGraphCache`, and every read goes to PostgreSQL — which is
+    exactly what the platform did before this task, so the fallback is a
+    legitimate degradation rather than a stub.
+
+    Separate from `enabled` above, deliberately. That one turns the social
+    graph *off*, which changes what players see; this one turns the cache
+    off, which changes nothing a player can observe and only costs queries.
+    Collapsing them would mean an operator with a misbehaving cache had to
+    choose between it and friends-only visibility.
+    """
+
+    cache_ttl_seconds: int = Field(default=300, ge=10, le=3600)
+    """How long a cached friend or block set survives without being
+    invalidated.
+
+    **A backstop, not the mechanism.** Invalidation is exhaustive — four
+    triggers, all of them methods on services in `friends` — so a correct
+    system never depends on this expiring. What it bounds is how long a bug
+    in one of those four triggers, or a `DEL` that failed against an
+    unreachable Redis, can serve a removed friend or a lifted block.
+
+    Five minutes is chosen against that failure rather than against a hit
+    rate: long enough that the cache does its job on any realistic session,
+    short enough that a stale block is measured in minutes rather than
+    hours. Lowering it is the right first move if invalidation is ever
+    suspected; raising it past an hour would make a missed trigger an
+    incident rather than a blip, which is why the bound exists.
+    """
+
+    cache_timeout_ms: int = Field(default=50, ge=1)
+    """How long a cache operation may take before it is abandoned.
+
+    Without it the "never raises" promise on every method of
+    `RedisSocialGraphCache` is decorative: a Redis that is *slow* rather
+    than down — the common failure — would hang every profile render for the
+    driver's default, and the cache would take down the read it exists to
+    accelerate.
+
+    Matched to `PresenceSettings.redis_timeout_ms`, because both sit on the
+    same hot path with the same budget: a few milliseconds, on a read whose
+    fallback is a query that costs about the same.
     """
 
 

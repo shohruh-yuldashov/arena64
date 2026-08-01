@@ -266,6 +266,30 @@ class FriendshipRepository(Protocol):
 
         An empty `others` returns an empty set without touching the
         database.
+
+        Still here after A64-013.6 wrapped this repository in a cache, and
+        deliberately: the *cached* reader answers from the whole friend set,
+        but a cache miss falls through to this, and the narrower query is
+        cheaper when the page is small. Both paths exist because both are
+        the right answer in different states.
+        """
+        ...
+
+    async def friend_ids_for(self, player_id: UUID) -> frozenset[UUID]:
+        """**Every** live friend of this player — A64-013.6.
+
+        The value `friends:v1:friends:<player_id>` caches. It is the whole
+        set rather than a filtered one because a cache keyed on a query
+        would need a key per distinct page: unbounded keys, the same four
+        invalidation triggers, and a hit rate near zero.
+
+        Bounded by the player's friend count, which is bounded by nothing
+        today — the same open question BL-4 raises about blocks. Recorded
+        here rather than guessed at, because the fix is a product decision
+        and not an engineering one.
+
+        A `frozenset` because every consumer only tests membership or
+        intersects, and because the cache stores it as one.
         """
         ...
 
@@ -361,5 +385,60 @@ class BlockedPlayerRepository(Protocol):
         Raises `NotBlocked` when there was none. `BlockingService.unblock`
         catches it, because unblocking is idempotent; the repository reports
         what happened rather than deciding what it means.
+        """
+        ...
+
+
+class SocialGraphCache(Protocol):
+    """Where the social graph is cached, and how it is dropped —
+    A64-013.6.
+
+    Keyed by **string**, not by player and entry kind, which is the one
+    thing about this port that looks wrong and is not. The keys are built by
+    `infrastructure.cache.keys`, which is the only module that knows the
+    keyspace; a port that took a player id and an entry name would put half
+    the key layout in `application/` and the other half in
+    `infrastructure/`, and caching.md C-2's version segment would then live
+    in two places.
+
+    Invalidation is the exception and takes player ids, because *that* is
+    the vocabulary of the four triggers: a request was accepted between two
+    players, a block was lifted on one. Which keys those touch is the
+    adapter's business, and `keys_for` is what makes a third entry invalidate
+    automatically.
+
+    **Nothing here raises.** A cache that failed loudly would convert an
+    optimisation into a dependency, and every method's contract says so.
+    """
+
+    async def get_ids(self, key: str) -> frozenset[UUID] | None:
+        """The cached id set, or `None` on a miss.
+
+        A miss covers an absent key, an unreachable cache, a slow one and a
+        malformed value — all of which mean the same thing to a caller: ask
+        the database.
+        """
+        ...
+
+    async def put_ids(self, key: str, ids: frozenset[UUID]) -> None:
+        """Stores an id set with the configured TTL.
+
+        The TTL is a backstop for invalidation failing, never the mechanism
+        (caching.md C-3). A failure to store is silent: the next read simply
+        misses.
+        """
+        ...
+
+    async def invalidate(self, player_ids: Sequence[UUID]) -> None:
+        """Drops every cached entry for these players.
+
+        Called with **both** parties of whatever changed, because a
+        friendship and a block are facts about a pair.
+
+        A failure here is a *correctness* problem rather than a performance
+        one — it leaves a removed friend visible or a lifted block in
+        effect until the TTL — so the adapter logs it at `ERROR`. It still
+        does not raise: the database is the system of record, and a block
+        that failed to invalidate must not also fail to be placed.
         """
         ...

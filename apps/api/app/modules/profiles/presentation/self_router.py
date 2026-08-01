@@ -159,9 +159,10 @@ async def get_my_profile(
     yourself (A64-012.6, A64-012.7). A control that hid a record from the
     person who hid it would be one nobody could verify they had set.
 
-    `is_online` and `last_seen` are `null` for every account today: presence
-    is written by the realtime gateway, which does not exist yet. A `null`
-    here means unobserved, never hidden.
+    Since A64-013.6 presence is recorded by authentication itself — signing
+    in and refreshing a token mark a player online — so a caller reading this
+    endpoint normally sees themselves online. `null` means unobserved (a
+    lapsed presence window, or `PRESENCE_ENABLED=false`), never hidden.
 
     Returns exactly the shape `PATCH /profile` returns, so a client can
     populate an edit form and render the result of a save with one parser.

@@ -292,6 +292,23 @@ class SqlAlchemyFriendshipRepository:
             mutual_friend_count=await self.mutual_friend_count(viewer_id, other_id),
         )
 
+    async def friend_ids_for(self, player_id: UUID) -> frozenset[UUID]:
+        """Every live friend of this player, in one query — A64-013.6.
+
+        Projects the *other* participant with `_friend_of`, so the caller
+        never has to work out which side of each row the player was on —
+        the same projection `mutual_friend_count` intersects, which is what
+        keeps the two agreeing about what a friend is.
+
+        Served by the two partial indexes §12.3 specifies, and it is an
+        index-only read: neither `created_at` nor any other column is
+        touched.
+        """
+        rows = await self._session.scalars(
+            self._live(select(_friend_of(player_id)).where(_involves(player_id)))
+        )
+        return frozenset(rows)
+
     async def friend_count(self, player_id: UUID) -> int:
         """How many live friendships this player has.
 
@@ -299,10 +316,10 @@ class SqlAlchemyFriendshipRepository:
         the first page and costs one index-only scan of the two partial
         indexes rather than materialising every row.
 
-        Deliberately **not** cached. `friends:v1:` is reserved for exactly
-        this and A64-013.3 excludes Redis — a count with no invalidation
-        trigger is a number that goes wrong on the first removal, and
-        caching.md C-1 requires the trigger before the first key.
+        Deliberately **not** cached, and still not after A64-013.6 opened
+        `friends:v1:`. The count is derivable from the friend-id set that
+        namespace holds, so a dedicated entry would be a second copy of one
+        fact — with its own opportunity to go stale on the first removal.
         """
         total = await self._session.scalar(
             self._live(

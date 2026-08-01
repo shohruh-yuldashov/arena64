@@ -123,6 +123,7 @@ from app.modules.auth.presentation.schemas import (
     VerificationAccepted,
     VerifyEmailRequest,
 )
+from app.modules.users.presentation.dependencies import PresenceServiceDep
 from app.modules.users.public import UserRead
 
 logger = logging.getLogger(__name__)
@@ -277,6 +278,7 @@ async def login(
     authentication: AuthenticationServiceDep,
     access_tokens: AccessTokenServiceDep,
     sessions: SessionServiceDep,
+    presence: PresenceServiceDep,
 ) -> ApiResponse[TokenPair]:
     """Verifies credentials and starts a session.
 
@@ -295,12 +297,27 @@ async def login(
 
     Each sign-in starts an independent session, so signing in on a phone
     does not disturb a laptop.
+
+    **Marks the player online** (A64-013.6). Presence is best-effort and
+    expires on its own timer, so a client that wants to keep showing as
+    online must keep refreshing — see `POST /auth/refresh`. Nothing about
+    presence can fail this request.
     """
     account = await authentication.authenticate(
         AuthenticateUser(email=payload.email, password=payload.password)
     )
     issued_session = await sessions.create_session(account.id, device=_device_of(request))
     access = access_tokens.create_access_token(account)
+
+    # A64-013.6. **After the session exists**, so a sign-in that failed to
+    # issue one records no presence — and never before, because presence
+    # asserts a player is here and a failed login has not established that.
+    #
+    # `PresenceService` never raises (`PresenceRecorder`'s contract), so a
+    # Redis blip costs an online indicator and not a sign-in. See that
+    # service on why authentication is a legitimate presence signal without
+    # a socket.
+    await presence.mark_online(account.id, session_id=issued_session.session.id)
 
     logger.info(
         "login_completed",
@@ -321,6 +338,7 @@ async def refresh(
     sessions: SessionServiceDep,
     access_tokens: AccessTokenServiceDep,
     profiles: UserProfileReaderDep,
+    presence: PresenceServiceDep,
 ) -> ApiResponse[TokenPair]:
     """Rotates the refresh token and issues a fresh access token.
 
@@ -345,6 +363,13 @@ async def refresh(
     because the access token must reflect the account as it is *now* — and
     because a deactivated or deleted account must not be able to refresh
     its way to a fresh 15 minutes of access.
+
+    **Marks the player online and restarts their presence window**
+    (A64-013.6). This is what keeps a signed-in player visible as online
+    without a socket: a client that stops refreshing stops being online one
+    `PRESENCE_TTL_SECONDS` later, with nothing having to observe that it
+    left. A client that wants to stay online should refresh well inside
+    that window.
     """
     rotated = await sessions.rotate_refresh_token(payload.refresh_token)
 
@@ -353,6 +378,12 @@ async def refresh(
     # a 404 here is the honest answer rather than a 500.
     account = await profiles.get_profile(rotated.session.user_id)
     access = access_tokens.create_access_token(account)
+
+    # A64-013.6. A client exchanging a refresh token is a client that is
+    # still there, so this is what keeps a signed-in player online: the
+    # presence record's TTL restarts on every refresh, and a player who
+    # closes the tab stops refreshing and goes quiet on its own.
+    await presence.mark_online(rotated.session.user_id, session_id=rotated.session.id)
 
     logger.info(
         "refresh_completed",
@@ -391,6 +422,13 @@ async def logout(payload: RefreshRequest, sessions: SessionServiceDep) -> Respon
     up to its remaining 15 minutes. That window is the documented cost of
     a stateless token (`JWTSettings`), and closing it needs the `jti`
     denylist recommended for A64-011.6.
+
+    **Also deliberately does not mark the player offline** (A64-013.6).
+    Presence is per *player*, not per session, and somebody signing out on
+    a laptop may still be signed in on a phone — publishing "offline" here
+    would be a falsehood the phone's next refresh silently corrects.
+    `POST /auth/logout-all` is the one that means it; short of that, the
+    presence window expiring is what marks an absent player absent.
     """
     await sessions.revoke_by_refresh_token(payload.refresh_token, reason=RevocationReason.PLAYER)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -403,7 +441,9 @@ async def logout(payload: RefreshRequest, sessions: SessionServiceDep) -> Respon
     response_description="Every session for the account was revoked.",
     responses=_UNAUTHORIZED,
 )
-async def logout_all(user: CurrentUser, sessions: SessionServiceDep) -> Response:
+async def logout_all(
+    user: CurrentUser, sessions: SessionServiceDep, presence: PresenceServiceDep
+) -> Response:
     """Revokes every session for the authenticated account.
 
     Takes the **access token** rather than a refresh token, unlike
@@ -418,6 +458,10 @@ async def logout_all(user: CurrentUser, sessions: SessionServiceDep) -> Response
     in is the point, and this is not that.
 
     `204`, and idempotent: revoking nothing succeeds.
+
+    **Marks the player offline** (A64-013.6) — the only endpoint that does,
+    because it is the only one that leaves no device able to be present.
+    `POST /auth/logout` deliberately does not; see its description.
     """
     revoked = await sessions.revoke_all_sessions(user.id, reason=RevocationReason.PLAYER)
 
@@ -425,6 +469,15 @@ async def logout_all(user: CurrentUser, sessions: SessionServiceDep) -> Response
         "logout_all_completed",
         extra={"user_id": str(user.id), "sessions_revoked": revoked},
     )
+
+    # A64-013.6. **The one place a player is marked offline**, because it is
+    # the one place that revokes every session — there is no device left
+    # that could be present. `POST /auth/logout` deliberately does not; see
+    # its docstring.
+    #
+    # After the revocation, so a failed sign-out publishes nothing.
+    await presence.mark_offline(user.id)
+
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

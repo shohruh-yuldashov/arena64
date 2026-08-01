@@ -39,7 +39,7 @@ from uuid import UUID
 
 from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork
-from app.modules.friends.application.ports import FriendshipRepository
+from app.modules.friends.application.ports import FriendshipRepository, SocialGraphCache
 from app.modules.friends.domain.exceptions import FriendshipNotFound
 from app.modules.friends.domain.friendship import (
     Friendship,
@@ -55,10 +55,14 @@ class FriendshipService:
         self,
         *,
         friendships: FriendshipRepository,
+        cache: SocialGraphCache,
         unit_of_work: UnitOfWork,
         clock: Clock,
     ) -> None:
         self._friendships = friendships
+        # One of the four `friends:v1:` invalidation triggers. See
+        # `BlockingService._invalidate` for why it fires after the commit.
+        self._cache = cache
         self._unit_of_work = unit_of_work
         self._clock = clock
 
@@ -147,6 +151,11 @@ class FriendshipService:
         async with self._unit_of_work:
             removed = await self._friendships.remove(friendship)
             await self._unit_of_work.commit()
+
+        # Both parties: a friendship is a fact about a pair, so both cached
+        # friend sets are now wrong. After the commit — see
+        # `BlockingService._invalidate`.
+        await self._cache.invalidate((player_id, other_id))
 
         # **The actor and the friendship, never the other party.** Who
         # removed whom is a social-graph edge, and FS-2's silence is about

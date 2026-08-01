@@ -191,22 +191,22 @@ class MyProfileResponse(BaseResponseDTO):
             "yourself — a control that hid your own presence from you would "
             "be one you could never verify you had set.\n\n"
             "`null` means the platform has no current observation of you, "
-            "not that it is hidden: presence decays on a timer, and nothing "
-            "records it yet (see `last_seen`)."
+            "not that it is hidden: presence decays on a timer, so a client "
+            "that has not signed in or refreshed recently reads as `null`."
         ),
-        examples=[None],
+        examples=[True],
     )
     last_seen: datetime | None = Field(
         default=None,
         description=(
             "When **you** were last observed online, UTC. **Never "
             "redacted** — `show_last_seen` governs strangers, not you.\n\n"
-            "`null` today for every account: presence is written by the "
-            "realtime gateway, which does not exist yet. The field is in the "
-            "contract so a client renders 'unknown' rather than gaining an "
-            "unexpected key later."
+            "Recorded by authentication since A64-013.6: signing in and "
+            "refreshing a token both stamp this, and signing out of every "
+            "device stamps it once more. `null` only where nothing has been "
+            "observed — render it as 'unknown', never as a date."
         ),
-        examples=[None],
+        examples=["2026-08-01T12:00:00Z"],
     )
     statistics: StatisticsResponse = Field(
         description=(

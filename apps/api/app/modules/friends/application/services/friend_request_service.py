@@ -53,7 +53,11 @@ from uuid import UUID
 
 from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork
-from app.modules.friends.application.ports import FriendRequestRepository, FriendshipRepository
+from app.modules.friends.application.ports import (
+    FriendRequestRepository,
+    FriendshipRepository,
+    SocialGraphCache,
+)
 from app.modules.friends.application.validators import FriendRequestValidator
 from app.modules.friends.domain.exceptions import FriendRequestNotFound
 from app.modules.friends.domain.friend_request import FriendRequest, FriendRequestStatus
@@ -76,6 +80,7 @@ class FriendRequestService:
         *,
         requests: FriendRequestRepository,
         friendships: FriendshipRepository,
+        cache: SocialGraphCache,
         validator: FriendRequestValidator,
         unit_of_work: UnitOfWork,
         clock: Clock,
@@ -89,6 +94,10 @@ class FriendRequestService:
         # write that joins the caller's transaction, which is exactly what a
         # repository is.
         self._friendships = friendships
+        # The fourth `friends:v1:` invalidation trigger — acceptance is the
+        # only way a friendship comes into existence, so it is the only way
+        # a cached friend set can gain a member.
+        self._cache = cache
         self._validator = validator
         self._unit_of_work = unit_of_work
         self._clock = clock
@@ -313,6 +322,16 @@ class FriendRequestService:
                 # after it returns.
                 await on_resolved(stored, at)
             await self._unit_of_work.commit()
+
+        if on_resolved is not None:
+            # A64-013.6. **Outside** the unit of work, unlike the write
+            # above and for the opposite reason: a cache dropped before the
+            # commit can be repopulated from the pre-commit state by a
+            # concurrent read, and nothing would invalidate it again. Only
+            # acceptance changes the graph — declining and cancelling leave
+            # every friend set exactly as it was — so this is guarded by the
+            # same condition the friendship write is.
+            await self._cache.invalidate((stored.requester_id, stored.addressee_id))
 
         # The actor, not both parties. An acceptance already implies who the
         # two are via the request id, and repeating them here would make the

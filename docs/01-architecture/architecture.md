@@ -648,6 +648,7 @@ and position hashing for repetition rules.
 | A64-014.5 | Kings — flying and short, quiet slides and captures, starting a ply. `BoardVariant.ENGLISH_8X8`, corpus v2, and the removal of `UnsupportedPieceMovement` |
 | A64-014.6 | `EngineVersion` (AD-15), `TerminalState` and `TerminalStateEvaluator` — and, in the new `game` module, the `Match` lifecycle aggregate with its position history |
 | A64-014.7 | `DrawRules` as a variant axis, `game.DrawRuleSet`, draw by threefold repetition, and **engine version 2** |
+| A64-014.8 | Primitive serialization for every engine and match value, `Match`'s append-only move log (MT-5, MT-6), and `ReplayEngine` |
 
 **The rules of movement are complete.** Men and kings, quiet moves and complete multi-jump
 sequences, mandatory capture, the largest-capture obligation where a variant has one, and every
@@ -727,6 +728,21 @@ loads every version and drops those ids. Supersession is data rather than prose,
 implementation derives the same active set from the same files. v1 stays byte-for-byte what it
 was; the one case it retires is the assertion that the engine refused a position containing a
 king.
+
+#### Status (A64-014.8) — replay is version-gated, and refuses rather than approximates
+
+`game.ReplayEngine` reconstructs a match from its move log by playing every ply through the same
+validator, applier, terminal evaluator and draw rules a live game uses — so a replay reproduces
+*why* a game ended, not merely where. Position occurrence counts and the no-progress counter are
+recomputed, never restored from the record.
+
+`SUPPORTED_ENGINE_VERSIONS` currently holds **version 2 only**. Version 1 had no draw rules, so
+replaying a version-1 game under 2 could end it earlier than it really ended — this section's
+scenario word for word — and it is refused rather than approximated. Nothing has been persisted
+under version 1, so the refusal costs nothing today.
+
+The stored version is an explicit integer and is **never inferred** from a timestamp, a schema
+version or the current build. `specs/game-engine.md` §8 has the full contract.
 
 ### AD-15 — Every match records the engine version it was played under
 

@@ -68,6 +68,7 @@ algebraic square notation, the same ordering rule. v2 adds only the optional top
 | `kings.json` | `cases`, `supersedes` | King quiet moves and captures, multiple landing squares, direction changes, the taken-once rule with kings, maximum capture with kings, promotion continuation under all three variant rules, and a mixed man-and-king position — A64-014.5 |
 | `terminal-positions.json` | `terminal_positions` | Which positions have ended, who won, and why — A64-014.6 |
 | `draw-sequences.json` | `draw_sequences` | Draw rules and lifecycle counters over an ordered list of plies — A64-014.7 |
+| `replays.json` | `replays` | Stored games replayed through the live rules, and records that must be refused — A64-014.8 |
 
 ## Format — `terminal_positions`
 
@@ -177,6 +178,69 @@ the *second* return:
 
 A case exists for each of those three states, because an implementation that counted returns
 would pass a corpus that only tested the draw.
+
+## Format — `replays`
+
+The **fifth** expectation shape: a stored game, and what replaying it must produce — or refuse.
+
+```jsonc
+{
+  "corpus_version": 2,
+  "replays": [
+    {
+      "id": "kebab-case, unique within the version, never reused",
+      "description": "what the case proves, in one sentence",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "opening_position": { "variant": "…", "side_to_move": "light", "pieces": [] },
+      "records": [
+        {
+          "ply_number": 1,
+          "move": { "path": ["c3", "d4"], "captured": [], "promotes_to": null },
+          "resulting_position_hash": "russian_8x8/dark/d4=light:man",
+          "think_time_ms": null,
+          "remaining_clock_ms": null
+        }
+      ],
+      "expected_rejection": null,
+      "expected_final_position_hash": "russian_8x8/dark/d4=light:man",
+      "expected_status": "active",
+      "expected_result": null,
+      "expected_position_occurrences": 1,
+      "expected_plies_since_progress": 1
+    }
+  ]
+}
+```
+
+| Field | Rule |
+| --- | --- |
+| `engine_version` | Explicit, always. Never inferred from anything |
+| `opening_position` | The position the game started from, in the same shape a position takes anywhere in this corpus |
+| `records` | The move log. Ply numbers contiguous from 1; each carries the fingerprint of the position it produced |
+| `resulting_position_hash` | `Position.fingerprint`. **Not a Zobrist hash** — see `specs/game-engine.md` §8.4 |
+| `think_time_ms`, `remaining_clock_ms` | Required keys, `null` until clocks exist. `null` says "not measured"; a zero would say "measured, and instant" |
+| `expected_rejection` | A refusal category, or `null` for a replay that must succeed |
+| everything else `expected_*` | The reconstructed match. All `null` when a rejection is expected, because a refused replay reaches no state to compare |
+
+### Rejection categories
+
+| Category | Meaning |
+| --- | --- |
+| `unsupported_engine_version` | Rules this build cannot reproduce |
+| `malformed_move_log` | Ply numbers not contiguous from 1 |
+| `corrupt_move_log` | A move the rules refuse, or one recorded after the game ended |
+| `position_hash_mismatch` | A recorded position and the one the rules produce disagree |
+
+### A replay reproduces *why*, not *where*
+
+`expected_position_occurrences` and `expected_plies_since_progress` are part of the expectation
+because a replay that rebuilt only the final board would agree about where the pieces stopped and
+have nothing to say about a draw by repetition. Both are recomputed by applying the log; neither
+appears in `records`.
+
+**No case exercises a no-progress draw**, because no variant configures a move limit — see
+`specs/game-engine.md` §7.7.
 
 ## What v2 still does not cover
 

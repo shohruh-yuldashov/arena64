@@ -1,8 +1,8 @@
 # Game Engine
 
-> **Status:** Partial — **the rules of play are complete** (A64-014.1 – A64-014.7: movement,
-> lifecycle, terminal detection and draws), except that three of the four draw thresholds are
-> **undecided product rules** (§7.7). Clocks, notation and serialization are not yet specified
+> **Status:** Partial — **the rules of play are complete** (A64-014.1 – A64-014.7) and games
+> serialize and replay (A64-014.8), except that three of the four draw thresholds are **undecided
+> product rules** (§7.7). Clocks and PDN notation are not yet specified
 > **Owner:** _Unassigned_
 > **Related:** `templates/feature-spec.md`, `docs/01-architecture/architecture.md` §11,
 > `docs/01-architecture/domain-model.md` §2.1 and §16.1
@@ -718,15 +718,119 @@ No case exercises a move limit, because no variant configures one.
 
 ---
 
-## 8. Not yet specified
+## 8. Serialization and replay — A64-014.8
+
+### 8.1 One encoding
+
+`engine.serialization` projects every kernel value to and from JSON-shaped primitives, and
+`game.domain.serialization` does the same for the aggregate's own shapes. **They are the shapes
+the conformance corpus is written in**, and `tests/corpus.py` reads through them — a corpus in
+one encoding and a stored game in another would be two definitions of what a move is.
+
+| Rule | Statement |
+| --- | --- |
+| GE-81 | A move serializes as its **complete path**, plus captured squares in order and the promotion result. Never as an origin and a destination: §2.1's multi-jump reaches one square by different routes taking different pieces, and a from/to record cannot tell them apart |
+| GE-82 | Every `*_from_primitive` requires every field. **No hidden defaults** — a promotion flag that quietly defaulted would replay into a different position, which is the failure AD-15 exists to surface rather than absorb |
+| GE-83 | Boards serialize with their squares sorted, so two identical boards built by different move orders produce identical text |
+| GE-84 | Kernel projections live in `engine` because `replay` and `fairplay` may import it and not `game` (R-2) |
+
+### 8.2 Engine version
+
+| Rule | Statement |
+| --- | --- |
+| GE-85 | The stored value is `EngineVersion.as_primitive()` — a plain integer |
+| GE-86 | Deserialization requires an explicit integer. **Never inferred** from a timestamp, a schema version, a file format, a creation date, or the version this build happens to be. A boolean is refused, because `True == 1` would silently become version 1 |
+
+### 8.3 The move log
+
+MT-5 and MT-6, implemented. `Match` owns an append-only log of `MoveRecord`.
+
+| Rule | Statement |
+| --- | --- |
+| GE-87 | Ply numbers are contiguous from 1. A gap makes the game unreplayable, which invalidates the result, the analysis and the fair-play record at once |
+| GE-88 | One record per **successful** move. A refused move appends nothing and is indistinguishable from one nobody sent |
+| GE-89 | The log is handed out as a tuple; records are frozen. "Append-only" is a property, not a convention |
+| GE-90 | `Match.last_move` reads off the log rather than being stored beside it — two histories of one game are two answers to what was played |
+
+`MoveRecord` carries `think_time_ms` and `remaining_clock_ms`, both `None` on every record this
+build writes, because there are no clocks. They exist now for MT-6's reason: `fairplay` cannot be
+retrofitted (AD-05), and a log written without them would leave a hole in the games recorded
+before clocks arrive. `None` says "not measured"; a zero would say "measured, and it was instant".
+
+### 8.4 The position hash is a fingerprint, not a Zobrist hash
+
+`resulting_position_hash` is `Position.fingerprint` — a sorted deterministic string of the
+variant, the side to move and every occupied square. Stable across processes, machines and
+languages, which is what a replay and a cross-implementation corpus need.
+
+It is **not** a Zobrist hash and must not be called one. It is not incremental, not fixed-width,
+and has no XOR structure to update in place. domain-model.md §10.1 reserves `PositionHash` for
+that; when it arrives it will be a second, narrower thing beside this one, adopted with a
+measurement behind it.
+
+### 8.5 Replay
+
+`ReplayData` carries the engine version, the variant, the opening position, the ordered records,
+and optionally the result the record claims. **Nothing derived**: no position counts, no
+no-progress counter, no final board.
+
+    1. check the engine version is one this build reproduces
+    2. check the log is contiguous from 1 — whole, before anything is applied
+    3. open a Match at the recorded position and start it
+    4. play every record through Match.play — the same validator, applier,
+       terminal evaluator and draw rules a live game uses
+    5. verify each ply's resulting fingerprint against the record
+    6. check the stated result, if one was stated
+
+| Rule | Statement |
+| --- | --- |
+| GE-91 | A replay reproduces **why** a game ended, not merely where. Position counts and the no-progress counter are recomputed by applying the log, never restored from the record |
+| GE-92 | Verification is **per ply**. A mismatch caught on the move that caused it names the rule that changed; the same mismatch caught at the end names nothing |
+| GE-93 | A replay re-derives no rule. Everything goes through `Match.play`, so there is one source of truth for what a game is |
+
+### 8.6 Replay refusals
+
+| Failure | Raised for |
+| --- | --- |
+| `UnsupportedEngineVersion` | Rules this build cannot reproduce |
+| `MalformedMoveLog` | Ply numbers not contiguous from 1 — checked before any move is applied |
+| `CorruptMoveLog` | A move the rules refuse, or one recorded after the game ended. The original refusal is **chained**, because which rule refused it is the diagnostic |
+| `PositionHashMismatch` | A recorded position and the one the rules produce disagree |
+| `ReplayResultMismatch` | The reconstructed match ended differently from the record |
+
+All five descend from `ReplayError`, deliberately a different family from
+`InvalidMatchTransition`: a lifecycle refusal is a caller with a stale view, and one of these is
+**a record that cannot be true**.
+
+### 8.7 Historical version support — engine version 2 only
+
+`SUPPORTED_ENGINE_VERSIONS` holds version 2 and nothing else.
+
+Version 1 had no draw rules (A64-014.7 added them and bumped the version for exactly this
+reason). A version-1 game replayed under version 2 could end earlier than it did — a repetition
+that ran on in the real game would draw in the replay — which is AD-15's scenario word for word.
+So **a version-1 replay is refused, not approximated**.
+
+Nothing has been persisted under version 1: no store exists yet, so the refusal costs nothing
+today and is the honest position when it does. The seam is an injectable set rather than an `if`,
+so supporting an older build means adding a rules profile beside the current one.
+
+**The compatibility question this leaves open** is the §7.7 one: when the undecided draw
+thresholds are settled, `CURRENT_ENGINE_VERSION` becomes 3, and every version-2 game becomes
+unreplayable by the same argument. That is correct behaviour and an operational cost, and it is
+the reason to settle the thresholds before anything is stored rather than after.
+
+---
+
+## 9. Not yet specified
 
 Three of the four **draw thresholds** — see §7.7. The rules are implemented and tested; the
 numbers are a product decision.
 
 Also absent: clocks, flag falls and abandonment; `Offer` and the draw-agreement flow; the rest of
-the `Match` aggregate (seats, move log, sequence numbers, events); persistence and transport of
-any kind; move undo; an incremental `PositionHash`; PDN notation and serialization; and the
-TypeScript implementation of the corpus (AD-14).
+the `Match` aggregate (the two seats, sequence numbers, domain events); persistence and transport
+of any kind; move undo; an incremental `PositionHash`; PDN notation; and the TypeScript
+implementation of the corpus (AD-14).
 
 For `english_8x8` specifically: first mover, draw rules and rating category are unconsidered. It
 is configured for move generation and is offered nowhere.

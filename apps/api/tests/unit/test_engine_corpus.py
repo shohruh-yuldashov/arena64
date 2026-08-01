@@ -33,16 +33,26 @@ from app.modules.engine import (
     TerminalStateEvaluator,
     initial_board,
 )
-from app.modules.game.domain import DrawRuleSet, Match
+from app.modules.game.domain import (
+    CorruptMoveLog,
+    DrawRuleSet,
+    MalformedMoveLog,
+    Match,
+    PositionHashMismatch,
+    ReplayEngine,
+    UnsupportedEngineVersion,
+)
 from tests.corpus import (
     CorpusCase,
     DrawSequenceCase,
     RejectionCase,
     RejectionCategory,
+    ReplayCase,
     TerminalCase,
     load_cases,
     load_draw_sequences,
     load_rejections,
+    load_replays,
     load_terminal_positions,
     superseded_ids,
 )
@@ -51,6 +61,19 @@ CASES = load_cases()
 REJECTIONS = load_rejections()
 TERMINALS = load_terminal_positions()
 SEQUENCES = load_draw_sequences()
+REPLAYS = load_replays()
+
+REJECTION_FOR = {
+    "position_hash_mismatch": PositionHashMismatch,
+    "malformed_move_log": MalformedMoveLog,
+    "corrupt_move_log": CorruptMoveLog,
+    "unsupported_engine_version": UnsupportedEngineVersion,
+}
+"""Each replay rejection category's exception. The category is part of the
+expectation, not a hint: a log with a gap and a log with an illegal move
+are refused at different stages for different reasons, and a case that
+swapped them would satisfy a reader that only checked "something was
+refused"."""
 SUPERSEDED = superseded_ids()
 
 REFUSAL_FOR = {
@@ -124,6 +147,30 @@ validator = MoveValidator(generator)
 evaluator = TerminalStateEvaluator(generator)
 applier = MoveApplier(validator)
 draw_rules = DrawRuleSet()
+replay_engine = ReplayEngine(applier, evaluator, draw_rules)
+
+
+@pytest.mark.parametrize("case", REPLAYS, ids=[case.id for case in REPLAYS])
+def test_the_engine_replays_what_the_corpus_records(case: ReplayCase) -> None:
+    """A64-014.8's half of the contract — the fifth expectation shape.
+
+    A replay must reproduce *why* a game ended, not merely where, so the
+    position occurrence count and the no-progress counter are compared
+    alongside the result. Both are rebuilt by applying the log; neither is
+    restored from the record.
+    """
+    if case.expected_rejection is not None:
+        with pytest.raises(REJECTION_FOR[case.expected_rejection]):
+            replay_engine.replay(case.replay)
+        return
+
+    match = replay_engine.replay(case.replay)
+
+    assert match.position.fingerprint == case.expected_final_position_hash, case.description
+    assert match.status.value == case.expected_status, case.description
+    assert match.result == case.expected_result, case.description
+    assert match.current_position_occurrences == case.expected_position_occurrences
+    assert match.plies_since_progress == case.expected_plies_since_progress
 
 
 @pytest.mark.parametrize("case", SEQUENCES, ids=[case.id for case in SEQUENCES])
@@ -230,6 +277,27 @@ class TestCorpusIntegrity:
     def test_the_draw_sequence_corpus_is_not_empty(self) -> None:
         assert SEQUENCES
 
+    def test_the_replay_corpus_is_not_empty(self) -> None:
+        assert REPLAYS
+
+    def test_every_replay_rejection_category_has_an_expected_exception(self) -> None:
+        stated = {case.expected_rejection for case in REPLAYS} - {None}
+
+        assert stated <= set(REJECTION_FOR)
+
+    def test_every_replay_rejection_category_is_exercised(self) -> None:
+        assert {case.expected_rejection for case in REPLAYS} - {None} == set(REJECTION_FOR)
+
+    def test_a_refused_replay_states_no_other_expectation(self) -> None:
+        """A replay that is refused reaches no state to compare, so a case
+        that stated one would be describing something that cannot happen."""
+        for case in REPLAYS:
+            if case.expected_rejection is None:
+                continue
+            assert case.expected_status is None, case.source
+            assert case.expected_final_position_hash is None, case.source
+            assert case.expected_result is None, case.source
+
     def test_every_sequence_states_the_engine_version_it_expects(self) -> None:
         """Draw rules arrived in version 2, so a reader on 1 would disagree
         about the last ply of half of these. The version is part of the
@@ -266,6 +334,7 @@ class TestCorpusIntegrity:
             + [case.id for case in REJECTIONS]
             + [case.id for case in TERMINALS]
             + [case.id for case in SEQUENCES]
+            + [case.id for case in REPLAYS]
         )
 
         assert len(set(identifiers)) == len(identifiers)

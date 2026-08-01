@@ -82,6 +82,18 @@ class TestMatchmakingReachesGameThroughItsPublicSurface:
 
         assert importers != []
 
+    def test_the_pairing_service_reaches_game_only_through_the_command(self) -> None:
+        """A64-015.3 §9 and §15.12. The scan's whole dependency on `game` is
+        the published command port — no `Match`, no aggregate, no
+        repository."""
+        service = _MATCHMAKING / "application" / "services" / "pairing_service.py"
+        from_game = sorted(
+            name for name in _imported_modules(service) if name.startswith("app.modules.game")
+        )
+
+        assert all(name.startswith("app.modules.game.public") for name in from_game)
+        assert "app.modules.game.public.CreateMatchRequest" in from_game
+
     def test_no_module_imports_the_engine(self) -> None:
         """R-2 names three permitted consumers — `game`, `replay`,
         `fairplay` — and `matchmaking` is not one of them. It reaches the
@@ -97,6 +109,56 @@ class TestMatchmakingReachesGameThroughItsPublicSurface:
         offenders = {path: names for path, names in offenders.items() if names}
 
         assert offenders == {}
+
+
+class TestMatchmakingReachesFriendsThroughItsPublicSurface:
+    """A64-015.3 §5. BL-2's pairwise block filter is `friends`' rule, read
+    through `friends.public.PairingExclusions` and nothing else.
+
+    `friends-internals-are-private` in `.importlinter` already listed
+    `matchmaking` as a source before this task had an edge to it, so the
+    fence was built before the first import arrived. This states the rule in
+    code as well — see this module's docstring on why both.
+    """
+
+    def test_no_module_imports_a_friends_internal(self) -> None:
+        offenders = {
+            str(module.relative_to(_APP)): sorted(
+                name
+                for name in _imported_modules(module)
+                if name.startswith("app.modules.friends")
+                and not name.startswith("app.modules.friends.public")
+            )
+            for module in _modules_under(_MATCHMAKING)
+            if "dependencies" not in module.parts
+        }
+        offenders = {path: names for path, names in offenders.items() if names}
+
+        assert offenders == {}
+
+    def test_the_pairing_service_holds_only_the_exclusion_port(self) -> None:
+        """Not `SocialGraphReader`, which could answer who is friends with
+        whom, and not `PresenceAudience`. The port a module does not hold is
+        what guarantees the capability it does not have."""
+        service = _MATCHMAKING / "application" / "services" / "pairing_service.py"
+        from_friends = sorted(
+            name for name in _imported_modules(service) if name.startswith("app.modules.friends")
+        )
+
+        assert from_friends == [
+            "app.modules.friends.public",
+            "app.modules.friends.public.PairingExclusions",
+        ]
+
+    def test_the_composition_root_is_where_the_adapter_is_named(self) -> None:
+        """`SqlAlchemyBlockedPlayerRepository` and `PairingExclusionService`
+        are concrete `friends` classes, and naming them is exactly what a
+        composition root is for — which is why it sits outside every privacy
+        contract's source list."""
+        root = _MATCHMAKING / "presentation" / "dependencies" / "__init__.py"
+        imported = _imported_modules(root)
+
+        assert "app.modules.friends.infrastructure.repositories" in imported
 
 
 class TestRouteHandlersGoThroughApplicationServices:

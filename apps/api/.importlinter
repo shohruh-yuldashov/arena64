@@ -514,6 +514,36 @@ allow_indirect_imports = True
 # than advisory: an import of `game.domain` fails the build, and an import of
 # `engine` fails it too, so the published surface is the only door.
 
+# ---------------------------------------------------------------------------
+# 5c. `matchmaking` reaches `friends` only through its published surface —
+#     A64-015.3
+# ---------------------------------------------------------------------------
+# The pairing scan is where BL-2 is finally enforced — a blocked pair is
+# unpairable — and it needs a batch, all-pairs read that no existing consumer
+# of `friends` wanted. That read is published as
+# `friends.public.PairingExclusions`, a third port beside `SocialGraphReader`
+# and `PresenceAudience`, split by *question* exactly as those two were.
+#
+# **No new contract was needed**, and that is the useful fact rather than an
+# omission: `friends-internals-are-private` above already names
+# `app.modules.matchmaking.domain`, `.application` and `.infrastructure` as
+# sources, because A64-013.5 wrote the list to cover every module that existed
+# rather than every module that then had an edge. The first real
+# `matchmaking -> friends` import therefore arrived with the fence already
+# built, and a probe confirms it: an import of `friends.domain.block` from
+# `pairing_service.py` breaks the contract.
+#
+# `presentation/dependencies` stays outside the source list, as it does for
+# every other privacy contract — it names `SqlAlchemyBlockedPlayerRepository`
+# and `PairingExclusionService` directly, which is what a composition root is
+# for.
+#
+# The intended edges, and the only ones:
+#
+#     matchmaking -> game.public
+#     matchmaking -> friends.public
+#     matchmaking -> users.public
+
 
 # ---------------------------------------------------------------------------
 # 6. The domain is framework-free — architecture.md §8

@@ -34,11 +34,21 @@ from app.modules.friends.infrastructure.cache import (
     NoSocialGraphCache,
     RedisSocialGraphCache,
 )
-from app.modules.matchmaking.application.services import QueueService
-from app.modules.matchmaking.infrastructure import QueueExpiryTask, expiry_request
+from app.modules.matchmaking.application.services import PairingService, QueueService
+from app.modules.matchmaking.domain.queue_pool import every_pool
+from app.modules.matchmaking.infrastructure import (
+    PairingTask,
+    QueueExpiryTask,
+    expiry_request,
+    pairing_request,
+)
 from app.modules.matchmaking.presentation.dependencies import (
     build_eligibility_policy,
+    build_match_creation,
+    build_pairing_exclusions,
+    build_pairing_service,
     build_queue_service,
+    build_recent_opponents,
 )
 from app.modules.notifications.application.services import (
     CONSUMER_NAME,
@@ -473,6 +483,21 @@ def build_task_schedulers(
     else:
         logger.info("queue_expiry_disabled", extra={"reason": "configuration"})
 
+    if settings.matchmaking.pairing_enabled:
+        handlers.append(
+            PairingTask(
+                session_factory=db.session_factory,
+                service_factory=lambda session: _pairing_service_for(session, settings, clock),
+            )
+        )
+    else:
+        # `INFO`, not `WARNING`: pairing is off by default and the reason is
+        # recorded on the setting — `game` cannot persist a match yet, so a
+        # scan would reserve, be refused and release, several times a second
+        # forever. An operator seeing this on every restart is being told
+        # the expected state, not a misconfiguration.
+        logger.info("queue_pairing_disabled", extra={"reason": "configuration"})
+
     if not handlers:
         return schedulers
 
@@ -495,6 +520,19 @@ def build_task_schedulers(
                 interval_seconds=settings.matchmaking.expiry_interval_seconds,
             )
         )
+    if settings.matchmaking.pairing_enabled:
+        # **One scheduler per pool**, because a pairing scan is per pool
+        # (A64-015.3 §1) and `PeriodicTaskScheduler` carries one request.
+        # Fourteen today — see `every_pool` on why enumerating them is
+        # right at this size and what replaces it when it is not.
+        schedulers.extend(
+            PeriodicTaskScheduler(
+                dispatcher=dispatcher,
+                request=pairing_request(pool),
+                interval_seconds=settings.matchmaking.pairing_interval_seconds,
+            )
+            for pool in every_pool()
+        )
     return schedulers
 
 
@@ -515,6 +553,32 @@ def _queue_service_for(
     return build_queue_service(
         session,
         eligibility=build_eligibility_policy(_presence_adapter(redis_pools, settings, clock)),
+        events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
+        settings=settings.matchmaking,
+        clock=clock,
+    )
+
+
+def _pairing_service_for(
+    session: AsyncSession, settings: Settings, clock: SystemClock
+) -> PairingService:
+    """A `PairingService` over one scan's session — A64-015.3.
+
+    Goes through `matchmaking`'s own `build_pairing_service` for the same
+    reason `_queue_service_for` does: one object graph, defined once, so a
+    hand-built copy here cannot drift.
+
+    The three collaborators this root chooses are the three that cross a
+    module boundary — `friends`' block read over this same session, `game`'s
+    command port, and the deferred rematch guard. Two of them are today's
+    honest answer rather than a final one, and both say so in their own
+    docstrings.
+    """
+    return build_pairing_service(
+        session,
+        exclusions=build_pairing_exclusions(session),
+        opponents=build_recent_opponents(),
+        matches=build_match_creation(),
         events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
         settings=settings.matchmaking,
         clock=clock,

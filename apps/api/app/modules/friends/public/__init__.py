@@ -18,6 +18,10 @@ What is published, and why only this much:
                        delivery (A64-013.7). Published so a fan-out can
                        live outside this module while BL-1's subtraction
                        stays inside it
+  `PairingExclusions`  answers "among these candidates, which pairs must
+                       never be formed" (A64-015.3). BL-2, published for
+                       the pairing scan — the only place on the platform
+                       that holds two players and has to decide
   the four social      `FriendRequestAccepted`, `FriendRemoved`,
   domain events        `PlayerBlocked`, `PlayerUnblocked` — the facts this
                        context makes durable through the outbox (AD-16).
@@ -49,11 +53,16 @@ from app.modules.friends.domain.events import (
     PlayerBlocked,
     PlayerUnblocked,
 )
-from app.modules.friends.public.ports import PresenceAudience, SocialGraphReader
+from app.modules.friends.public.ports import (
+    PairingExclusions,
+    PresenceAudience,
+    SocialGraphReader,
+)
 
 __all__ = [
     "FriendRemoved",
     "FriendRequestAccepted",
+    "PairingExclusions",
     "PlayerBlocked",
     "PlayerUnblocked",
     "PresenceAudience",

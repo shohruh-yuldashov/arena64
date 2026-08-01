@@ -1,4 +1,12 @@
-"""`QueueExpiryTask` — the background half of `expires_at`.
+"""`matchmaking`'s background work — two `platform.tasks` handlers.
+
+`QueueExpiryTask` is the background half of `expires_at`; `PairingTask`
+(A64-015.3) scans one pool for a match. Both are dispatched by a
+`PeriodicTaskScheduler` and wired at the composition root, and both are
+four lines of body over a service that takes ports — which is the whole
+point of AD-17's seam.
+
+## `QueueExpiryTask` — the background half of `expires_at`
 
 A `platform.tasks.TaskHandler`, dispatched by `PeriodicTaskScheduler` and
 wired at the composition root. Without it `expires_at` would still govern
@@ -37,7 +45,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.modules.matchmaking.application.services import QueueService
+from app.modules.matchmaking.application.services import PairingService, QueueService
+from app.modules.matchmaking.domain.queue_pool import QueuePool
 from app.platform.tasks import TaskRequest
 
 logger = logging.getLogger(__name__)
@@ -123,3 +132,85 @@ class QueueExpiryTask:
             await self._service_factory(session).expire_due(
                 limit=self._batch_size, claimed_by=self._worker_id
             )
+
+
+#: The name a pairing scan is dispatched under — A64-015.3.
+PAIRING_TASK = "matchmaking.queue.pair"
+
+#: The payload key carrying which pool to scan.
+#:
+#: A `QueuePool.identifier()` and nothing else. §13 forbids serialising a
+#: repository or a framework object into a payload, and a pool is already a
+#: primitive string by design — see `QueuePool.from_identifier`, which is
+#: the other half of this round trip.
+PAIRING_POOL_KEY = "pool"
+
+#: What the composition root supplies: a pairing service over one session.
+PairingServiceFactory = Callable[[AsyncSession], PairingService]
+
+
+def pairing_request(pool: QueuePool) -> TaskRequest:
+    """The request that asks for one scan of one pool.
+
+    One pool per request, which is A64-015.3 §1 and §12 stated as a wire
+    format: a task that carried a list would be a task whose failure is
+    partial, and a task that carried none would have to discover its own
+    work — putting pool enumeration inside the thing that scans.
+    """
+    return TaskRequest(
+        name=PAIRING_TASK,
+        queue=MATCHMAKING_QUEUE,
+        payload={PAIRING_POOL_KEY: pool.identifier()},
+    )
+
+
+class PairingTask:
+    """`platform.tasks.TaskHandler` — one pairing scan, over one session.
+
+    The same shape as `QueueExpiryTask` beside it, and the same division:
+    the *schedule* is `PeriodicTaskScheduler`'s, the *routing* is the
+    dispatcher's, and what is left here is "build a service over a session
+    and call one method". Moving matchmaking's background work onto Celery
+    replaces the first two and touches neither this class nor
+    `PairingService`.
+
+    ## It is registered and, by default, not scheduled
+
+    `MATCHMAKING_PAIRING_ENABLED` is `False` until `game` can persist a
+    match. With it off this handler exists, is wired, and is never
+    dispatched — which is deliberate rather than incomplete: a scan that
+    ran today would reserve two tickets, be refused by
+    `UnavailableMatchCreation`, and release them, several times a second
+    forever. The setting's docstring records when that changes.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        service_factory: PairingServiceFactory,
+    ) -> None:
+        self._session_factory = session_factory
+        self._service_factory = service_factory
+
+    @property
+    def name(self) -> str:
+        return PAIRING_TASK
+
+    async def run(self, payload: Mapping[str, Any]) -> None:
+        """Scans the one pool the payload names.
+
+        The pool is parsed rather than trusted: a malformed identifier
+        raises out of `QueuePool.from_identifier` and is recorded by
+        `InlineTaskDispatcher.dispatch`, which is where a task's failure is
+        logged. Defaulting to some pool instead would scan the wrong queue
+        quietly, which is worse than a loud dispatcher error for a payload
+        only this repository's own scheduler produces.
+
+        Does not catch anything else: `PairingService.pair_once` records
+        its own failures and never raises, so a `try` here would have
+        nothing left to swallow.
+        """
+        pool = QueuePool.from_identifier(str(payload[PAIRING_POOL_KEY]))
+        async with self._session_factory() as session:
+            await self._service_factory(session).pair_once(pool=pool)

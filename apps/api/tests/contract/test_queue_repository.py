@@ -356,6 +356,260 @@ class TestClaimAndExpire:
         assert await tickets.expire([], at=NOW) == 0
 
 
+class TestPairingTransitions:
+    """`reserve`, `release` and `complete` against the real table — the
+    three writes A64-015.3 added, and the CHECK and index that constrain
+    them.
+
+    All-or-nothing is the property worth a database test: it comes from one
+    `UPDATE` with a compare-and-set, and a fake that wrote per ticket would
+    pass a test the schema would fail.
+    """
+
+    async def test_a_pair_reserves(
+        self, tickets: SqlAlchemyQueueRepository, contract_session: AsyncSession
+    ) -> None:
+        one = await tickets.enqueue(_ticket())
+        other = await tickets.enqueue(_ticket(player_id=generate_uuid7()))
+
+        applied = await tickets.reserve([one.reserved(), other.reserved()])
+
+        assert applied
+        assert (await _status(contract_session, one.id)) is QueueStatus.RESERVED
+
+    async def test_a_reserved_ticket_carries_no_resolution_instant(
+        self, tickets: SqlAlchemyQueueRepository, contract_session: AsyncSession
+    ) -> None:
+        """`ck_queue_ticket__resolved_iff_terminal` counts `reserved` as
+        live, so a reservation that stamped one would be refused by the
+        database and not merely by the aggregate."""
+        one = await tickets.enqueue(_ticket())
+        await tickets.reserve([one.reserved()])
+
+        row = await contract_session.get(QueueTicketModel, one.id)
+        assert row is not None
+        assert row.resolved_at is None
+
+    async def test_a_reserved_player_still_holds_their_live_ticket(
+        self, tickets: SqlAlchemyQueueRepository
+    ) -> None:
+        """QT-1's index widened to cover `reserved` (A64-015.3). A player
+        being paired is still queued, and a second join must still be
+        refused."""
+        one = await tickets.enqueue(_ticket())
+        await tickets.reserve([one.reserved()])
+
+        with pytest.raises(AlreadyQueued):
+            await tickets.enqueue(_ticket(player_id=one.player_id))
+
+    async def test_a_reserved_ticket_is_not_in_a_pool_scan(
+        self, tickets: SqlAlchemyQueueRepository
+    ) -> None:
+        """`ix_queue_ticket__pool` still says `waiting`, which is what makes
+        a reserved pair invisible to every other worker's next scan."""
+        one = await tickets.enqueue(_ticket())
+        await tickets.reserve([one.reserved()])
+
+        snapshot = await tickets.queue_snapshot(pool=_pool(), now=NOW, limit=10)
+
+        assert snapshot.tickets == ()
+        assert snapshot.waiting == 0
+
+    async def test_a_waiting_ticket_cannot_be_reserved_twice(
+        self, tickets: SqlAlchemyQueueRepository
+    ) -> None:
+        """The compare-and-set: a second worker's reservation finds the row
+        no longer `waiting` and applies nothing."""
+        one = await tickets.enqueue(_ticket())
+        reserved = one.reserved()
+        await tickets.reserve([reserved])
+
+        assert not await tickets.reserve([reserved])
+
+    async def test_reserving_is_all_or_nothing(
+        self, tickets: SqlAlchemyQueueRepository, contract_session: AsyncSession
+    ) -> None:
+        """One of the two has already been cancelled. Neither may move — a
+        half-reserved pair strands one player with no match coming."""
+        one = await tickets.enqueue(_ticket())
+        other = await tickets.enqueue(_ticket(player_id=generate_uuid7()))
+        await tickets.cancel(other.cancelled(NOW))
+
+        applied = await tickets.reserve([one.reserved(), other.reserved()])
+
+        assert not applied
+        assert (await _status(contract_session, one.id)) is QueueStatus.WAITING
+
+    async def test_releasing_returns_a_ticket_to_waiting(
+        self, tickets: SqlAlchemyQueueRepository, contract_session: AsyncSession
+    ) -> None:
+        one = await tickets.enqueue(_ticket())
+        reserved = one.reserved()
+        await tickets.reserve([reserved])
+
+        assert await tickets.release([reserved.released()])
+        assert (await _status(contract_session, one.id)) is QueueStatus.WAITING
+
+    async def test_a_released_ticket_keeps_its_entry_time(
+        self, tickets: SqlAlchemyQueueRepository, contract_session: AsyncSession
+    ) -> None:
+        """§10: a platform failure must not cost a player their place in
+        line. `release` writes `status` and `resolved_at`, and `entered_at`
+        is not in the statement at all."""
+        one = await tickets.enqueue(_ticket())
+        reserved = one.reserved()
+        await tickets.reserve([reserved])
+        await tickets.release([reserved.released()])
+
+        row = await contract_session.get(QueueTicketModel, one.id)
+        assert row is not None
+        assert row.entered_at == one.entered_at
+        assert row.expires_at == one.expires_at
+
+    async def test_a_waiting_ticket_cannot_be_released(
+        self, tickets: SqlAlchemyQueueRepository
+    ) -> None:
+        """Compensation for an action that did not happen. The predicate is
+        what stops a stray call resurrecting a ticket the sweep resolved."""
+        one = await tickets.enqueue(_ticket())
+
+        assert not await tickets.release([one])
+
+    async def test_completing_marks_a_reserved_pair_matched(
+        self, tickets: SqlAlchemyQueueRepository, contract_session: AsyncSession
+    ) -> None:
+        one = await tickets.enqueue(_ticket())
+        other = await tickets.enqueue(_ticket(player_id=generate_uuid7()))
+        reserved = [one.reserved(), other.reserved()]
+        await tickets.reserve(reserved)
+
+        at = NOW + timedelta(seconds=3)
+        applied = await tickets.complete([ticket.matched(at) for ticket in reserved], at=at)
+
+        assert applied
+        assert (await _status(contract_session, one.id)) is QueueStatus.MATCHED
+        assert (await _status(contract_session, other.id)) is QueueStatus.MATCHED
+
+    async def test_a_matched_ticket_stamps_the_creation_instant(
+        self, tickets: SqlAlchemyQueueRepository, contract_session: AsyncSession
+    ) -> None:
+        one = await tickets.enqueue(_ticket())
+        reserved = one.reserved()
+        await tickets.reserve([reserved])
+
+        at = NOW + timedelta(seconds=3)
+        await tickets.complete([reserved.matched(at)], at=at)
+
+        row = await contract_session.get(QueueTicketModel, one.id)
+        assert row is not None
+        assert row.resolved_at == at
+
+    async def test_a_matched_player_may_queue_again(
+        self, tickets: SqlAlchemyQueueRepository
+    ) -> None:
+        """`matched` is terminal, so it leaves QT-1's index — the player is
+        free to queue for their next game once this one ends."""
+        one = await tickets.enqueue(_ticket())
+        reserved = one.reserved()
+        await tickets.reserve([reserved])
+        at = NOW + timedelta(seconds=3)
+        await tickets.complete([reserved.matched(at)], at=at)
+
+        await tickets.enqueue(_ticket(player_id=one.player_id))
+
+    async def test_an_unreserved_ticket_cannot_be_completed(
+        self, tickets: SqlAlchemyQueueRepository, contract_session: AsyncSession
+    ) -> None:
+        """§8: no ticket is marked matched before `game` accepted, and the
+        reservation is the evidence that it did."""
+        one = await tickets.enqueue(_ticket())
+
+        at = NOW + timedelta(seconds=3)
+        applied = await tickets.complete([_matched_without_reserving(one, at)], at=at)
+
+        assert not applied
+        assert (await _status(contract_session, one.id)) is QueueStatus.WAITING
+
+
+class TestAbandonedReservations:
+    """A worker that dies mid-pairing leaves two reserved tickets. Without
+    the widened `ix_queue_ticket__due` they would occupy QT-1's index
+    forever and lock both players out of the queue permanently."""
+
+    async def test_a_reserved_ticket_past_its_deadline_is_claimed(
+        self, tickets: SqlAlchemyQueueRepository
+    ) -> None:
+        one = await tickets.enqueue(_ticket())
+        await tickets.reserve([one.reserved()])
+
+        claimed = await tickets.claim_due(
+            now=NOW + timedelta(seconds=TTL + 1), limit=10, claimed_by="w1"
+        )
+
+        assert [ticket.id for ticket in claimed] == [one.id]
+
+    async def test_a_reserved_ticket_within_its_window_is_left_alone(
+        self, tickets: SqlAlchemyQueueRepository
+    ) -> None:
+        """A live reservation is a pairing in flight. Only one past its own
+        queue deadline is abandoned by any measure."""
+        one = await tickets.enqueue(_ticket())
+        await tickets.reserve([one.reserved()])
+
+        claimed = await tickets.claim_due(now=NOW, limit=10, claimed_by="w1")
+
+        assert list(claimed) == []
+
+    async def test_an_abandoned_reservation_expires(
+        self, tickets: SqlAlchemyQueueRepository, contract_session: AsyncSession
+    ) -> None:
+        one = await tickets.enqueue(_ticket())
+        await tickets.reserve([one.reserved()])
+
+        at = NOW + timedelta(seconds=TTL + 1)
+        assert await tickets.expire([one.id], at=at) == 1
+        assert (await _status(contract_session, one.id)) is QueueStatus.EXPIRED
+
+    async def test_the_player_can_queue_again_afterwards(
+        self, tickets: SqlAlchemyQueueRepository
+    ) -> None:
+        """The whole point: an abandoned reservation must not be a
+        permanent lockout."""
+        one = await tickets.enqueue(_ticket())
+        await tickets.reserve([one.reserved()])
+        await tickets.expire([one.id], at=NOW + timedelta(seconds=TTL + 1))
+
+        await tickets.enqueue(_ticket(player_id=one.player_id))
+
+
+async def _status(session: AsyncSession, ticket_id: UUID) -> QueueStatus:
+    """The row's status as PostgreSQL currently holds it."""
+    session.expire_all()
+    row = await session.get(QueueTicketModel, ticket_id)
+    assert row is not None
+    return row.status
+
+
+def _matched_without_reserving(ticket: QueueTicket, at: datetime) -> QueueTicket:
+    """A `matched` ticket the aggregate would refuse to build.
+
+    Constructed directly, because the point of the test it serves is that
+    the *repository's* predicate is the guard as well — `QueueTicket.matched`
+    already refuses this, and a database that did not would let a repair
+    script mark a waiting ticket matched.
+    """
+    return QueueTicket(
+        id=ticket.id,
+        player_id=ticket.player_id,
+        pool=ticket.pool,
+        rating_snapshot=ticket.rating_snapshot,
+        entered_at=ticket.entered_at,
+        expires_at=ticket.expires_at,
+        status=QueueStatus.MATCHED,
+        resolved_at=at,
+    )
+
+
 class TestConcurrentWorkers:
     """`SKIP LOCKED`, with two real transactions. The property that makes the
     expiry sweep horizontally scalable, and the only one a dictionary cannot
@@ -413,6 +667,79 @@ class TestConcurrentWorkers:
             assert len(taken_second) == 2
             assert taken_first.isdisjoint(taken_second)
             assert taken_first | taken_second == set(ids)
+        finally:
+            await _cleanup(contract_engine, ids)
+
+    async def test_two_workers_cannot_claim_one_pairing_pair(
+        self, contract_engine: AsyncEngine
+    ) -> None:
+        """§15.9, and the property the in-memory fake cannot model: two
+        pairing workers that selected the **same** pair, racing.
+
+        The first holds both rows; the second's `SKIP LOCKED` returns fewer
+        than two and `claim_pair` therefore returns nothing rather than the
+        one row it managed to lock. Returning that row would hand the loser
+        half a pairing — and, worse, a lock on a ticket the winner is about
+        to reserve.
+        """
+        ids: list[UUID] = []
+        try:
+            async with AsyncSession(contract_engine, expire_on_commit=False) as seeding:
+                repository = SqlAlchemyQueueRepository(seeding)
+                for offset in range(2):
+                    stored = await repository.enqueue(_ticket(at=NOW + timedelta(seconds=offset)))
+                    ids.append(stored.id)
+                await seeding.commit()
+
+            async with (
+                AsyncSession(contract_engine, expire_on_commit=False) as first_session,
+                AsyncSession(contract_engine, expire_on_commit=False) as second_session,
+            ):
+                first = await SqlAlchemyQueueRepository(first_session).claim_pair(ids, now=NOW)
+                # Uncommitted, so both rows are still locked when the second
+                # worker polls for exactly the same two.
+                second = await SqlAlchemyQueueRepository(second_session).claim_pair(ids, now=NOW)
+                await first_session.rollback()
+                await second_session.rollback()
+
+            assert len(first) == 2
+            assert list(second) == []
+        finally:
+            await _cleanup(contract_engine, ids)
+
+    async def test_a_partly_locked_pair_is_claimed_by_nobody(
+        self, contract_engine: AsyncEngine
+    ) -> None:
+        """The overlapping case, which is the one a naive implementation
+        gets wrong: two scans chose pairs that share **one** ticket.
+
+        The second worker can lock its free ticket and not the shared one,
+        so a `claim_pair` that returned what it managed to get would reserve
+        a single ticket for a pairing that can never complete — a player
+        invisible to every future scan with no match coming.
+        """
+        ids: list[UUID] = []
+        try:
+            async with AsyncSession(contract_engine, expire_on_commit=False) as seeding:
+                repository = SqlAlchemyQueueRepository(seeding)
+                for offset in range(3):
+                    stored = await repository.enqueue(_ticket(at=NOW + timedelta(seconds=offset)))
+                    ids.append(stored.id)
+                await seeding.commit()
+
+            async with (
+                AsyncSession(contract_engine, expire_on_commit=False) as first_session,
+                AsyncSession(contract_engine, expire_on_commit=False) as second_session,
+            ):
+                first = await SqlAlchemyQueueRepository(first_session).claim_pair(ids[:2], now=NOW)
+                overlapping = await SqlAlchemyQueueRepository(second_session).claim_pair(
+                    [ids[1], ids[2]], now=NOW
+                )
+                await first_session.rollback()
+                await second_session.rollback()
+
+            assert len(first) == 2
+            assert list(overlapping) == []
         finally:
             await _cleanup(contract_engine, ids)
 

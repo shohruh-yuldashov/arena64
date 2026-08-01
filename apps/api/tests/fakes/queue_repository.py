@@ -63,7 +63,7 @@ class InMemoryQueueRepository:
         player whose sweep is behind can still be refused.
         """
         if any(
-            stored.player_id == ticket.player_id and stored.is_waiting
+            stored.player_id == ticket.player_id and stored.status.is_live
             for stored in self.tickets.values()
         ):
             raise AlreadyQueued("You are already in a matchmaking queue.")
@@ -80,7 +80,7 @@ class InMemoryQueueRepository:
 
     async def active_ticket(self, player_id: UUID, *, now: datetime) -> QueueTicket | None:
         for ticket in self.tickets.values():
-            if ticket.player_id == player_id and ticket.is_waiting and not ticket.is_due(now):
+            if ticket.player_id == player_id and ticket.status.is_live and not ticket.is_due(now):
                 return ticket
         return None
 
@@ -111,10 +111,63 @@ class InMemoryQueueRepository:
             (
                 ticket
                 for ticket in self.tickets.values()
-                if ticket.is_waiting and ticket.is_due(now)
+                if ticket.status.is_live and ticket.is_due(now)
             ),
             key=lambda ticket: (ticket.expires_at, ticket.id),
         )[:limit]
+
+    async def claim_pair(
+        self, ticket_ids: Sequence[UUID], *, now: datetime
+    ) -> Sequence[QueueTicket]:
+        """Both tickets or neither, over the same predicate the real adapter
+        uses.
+
+        The predicate is modelled and the **row lock is not** — the same
+        line `claim_due` above draws. `SKIP LOCKED`'s behaviour under two
+        concurrent transactions belongs to PostgreSQL, and is asserted in
+        `tests/contract/test_queue_repository.py` with two real sessions.
+
+        What is modelled is the part `PairingService`'s correctness depends
+        on: a ticket another worker already reserved is not `waiting`, so
+        this returns nothing and the pairing is lost — which is exactly what
+        the "cannot pair one ticket twice" test drives through here.
+        """
+        if len(ticket_ids) != 2:
+            raise ValueError("a pairing claim is exactly two tickets")
+
+        claimed = [
+            ticket
+            for ticket_id in ticket_ids
+            if (ticket := self.tickets.get(ticket_id)) is not None
+            and ticket.is_waiting
+            and not ticket.is_due(now)
+        ]
+        return claimed if len(claimed) == 2 else ()
+
+    async def reserve(self, tickets: Sequence[QueueTicket]) -> bool:
+        return self._transition(tickets, expected=QueueStatus.WAITING)
+
+    async def release(self, tickets: Sequence[QueueTicket]) -> bool:
+        return self._transition(tickets, expected=QueueStatus.RESERVED)
+
+    async def complete(self, tickets: Sequence[QueueTicket], *, at: datetime) -> bool:
+        return self._transition(tickets, expected=QueueStatus.RESERVED)
+
+    def _transition(self, tickets: Sequence[QueueTicket], *, expected: QueueStatus) -> bool:
+        """All or nothing, with the compare-and-set the real `UPDATE`
+        carries.
+
+        Checked over the whole set *before* anything is written, so a
+        half-applied pair cannot be observed here either — the real adapter
+        gets that from one statement, and a fake that wrote as it went would
+        pass a test the database would fail.
+        """
+        stored = [self.tickets.get(ticket.id) for ticket in tickets]
+        if any(row is None or row.status is not expected for row in stored):
+            return False
+        for ticket in tickets:
+            self.tickets[ticket.id] = ticket
+        return True
 
     async def expire(self, ticket_ids: Sequence[UUID], *, at: datetime) -> int:
         expired = 0
@@ -123,7 +176,7 @@ class InMemoryQueueRepository:
             # `status = 'waiting'` in the predicate, exactly as the real
             # `UPDATE` carries it — a ticket cancelled between the claim and
             # this write must not be re-stamped as expired.
-            if ticket is None or not ticket.is_waiting:
+            if ticket is None or not ticket.status.is_live:
                 continue
             self.tickets[ticket_id] = ticket.expired(at)
             expired += 1

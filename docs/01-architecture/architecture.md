@@ -401,6 +401,21 @@ violation, even though the Python import would succeed. *Why:* the import graph 
 thing standing between a modular monolith and a big ball of mud; nothing about a monolith
 enforces boundaries except discipline and CI.
 
+In code this is a module's `public/` package (BE-03). `game.public` is the first one with
+contents (A64-015.2), published because `matchmaking` needs the variant catalogue, the
+engine version, and the engine's stateless collaborators — see
+[`specs/matchmaking.md §8`](../../specs/matchmaking.md). It deliberately withholds `Match`,
+`MoveRecord` and `MatchResult`: the modules that care about those subscribe to events (R-3),
+and the one module whose edge points inward — `matchmaking` — was given a **command** rather
+than an aggregate.
+
+A64-015.3 built that command: `CreateMatchRequest` in, `CreateMatchResult` out, idempotent on
+a `pairing_id` the caller derives. That is what an inbound edge looks like under R-3 — a
+caller may ask for a match to exist and cannot advance one. `friends` gained a third
+published port in the same task (`PairingExclusions`), for the same reason and by the same
+rule: a new *question* from a new consumer gets its own port rather than a wider existing
+one.
+
 **R-2 — Only `game`, `replay`, and `fairplay` may import `engine`, and only `game` may use
 it to mutate state.**
 The other two replay finished games; they never write. *Why:* see §11. The engine's
@@ -412,8 +427,15 @@ private package inside `game`.
 
 **R-3 — Only `game` may mutate match state.**
 Rating, statistics, achievements, leaderboard, notifications, replay, fairplay and spectator
-**never call into `game` to change anything**; they subscribe to its events. *Why:* two independent
-benefits. It keeps the move hot path free of their latency, and it makes them
+**never call into `game` to change anything**; they subscribe to its events.
+
+`matchmaking` is the one exception the diagram already drew, and it is not a weakening: it is
+*upstream* of a match rather than downstream of one, so there is no event that could carry
+its request. It sends a command `game` accepts (`game.public.MatchCreationUseCase`) and holds
+no match type at all — see `specs/matchmaking.md` §8.1. Every other module reacts to
+something that already happened; this one asks for something to start.
+
+*Why:* two independent benefits. It keeps the move hot path free of their latency, and it makes them
 *non-critical* — a rating outage degrades a scoreboard, it does not stop people from
 playing checkers. Inverting this (having `game` call `rating` on completion) would couple
 the platform's core loop to its least critical subsystem.
@@ -690,7 +712,7 @@ Two contracts in `apps/api/.importlinter` now hold the two rules this section st
 | Contract | Enforces |
 | --- | --- |
 | `engine-is-a-dependency-free-kernel` | AD-13 — the kernel may import `app.core` and nothing else. Every clause of "no I/O, no clock, no randomness, no logging, no framework, no database, no configuration" is a named forbidden module, `logging`, `random` and `datetime` included |
-| `engine-has-three-permitted-consumers` | R-2 — `game`, `replay` and `fairplay` only. None exists yet, so the contract names every module that does and forbids all of them |
+| `engine-has-three-permitted-consumers` | R-2 — `game`, `replay` and `fairplay` only. The contract names every *other* module that exists and forbids all of them, `matchmaking` included: it reaches the rules through `game.public`, so the engine's version stamping and variant catalogue stay one authority rather than two |
 
 Both were verified to fail on a real violation before being relied on. The kernel is the one
 module under `app/modules/` with no four-layer interior: the module map gives it no aggregate

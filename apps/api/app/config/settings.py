@@ -1259,12 +1259,13 @@ class OutboxSettings(BaseSettings):
 
 
 class MatchmakingSettings(BaseSettings):
-    """`matchmaking` — the queue domain (A64-014.1).
+    """`matchmaking` — the queue domain (A64-014.1) and the pairing scan
+    (A64-015.3).
 
-    Nothing here tunes *pairing*, because no pairing exists. What these
-    govern is how long a player may wait before the platform stops
-    asserting they are waiting, and which process is responsible for
-    noticing.
+    Two groups. The first governs how long a player may wait before the
+    platform stops asserting they are waiting, and which process notices.
+    The second governs how a scan decides who plays whom — QT-5's widening
+    rating window, and how much of a pool one pass reads.
     """
 
     model_config = SettingsConfigDict(env_prefix="MATCHMAKING_", frozen=True, extra="forbid")
@@ -1332,6 +1333,95 @@ class MatchmakingSettings(BaseSettings):
     same predicate rather than the length of this page — so a bounded read
     never turns into a wrong number.
     """
+
+    pairing_enabled: bool = False
+    """Whether *this process* scans pools for pairings — A64-015.3.
+
+    **Off by default, which is the only honest setting today.** `game` has
+    no match persistence, so a scan reaches
+    `game.public.UnavailableMatchCreation` and every pairing it found would
+    be reserved, refused and released. That is the compensation path
+    working exactly as designed, and it is still churn: two writes and a
+    `WARNING` per tick, forever, for no match.
+
+    A64-015.4 replaces the match-creation adapter, and this default becomes
+    `True` in the same change. Until then an operator can switch it on to
+    watch the scan and its compensation against a real pool, which is what
+    it is for.
+
+    Per-process, like `expiry_enabled` and `OUTBOX_WORKER_ENABLED` — one
+    API tier with it off, one worker tier with it on, running the same
+    image.
+    """
+
+    pairing_interval_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
+    """How often one pool is scanned.
+
+    A second, against fifteen for the expiry sweep, and the asymmetry is
+    the point: an expiry that is fifteen seconds late is invisible against
+    a ten-minute window, while a pairing that is fifteen seconds late is
+    fifteen seconds a player spends watching a spinner beside somebody they
+    could already be playing. architecture.md §14 puts pairing's freshness
+    target at ~1s for exactly that reason — "perceived quality of
+    matchmaking is mostly perceived speed".
+    """
+
+    candidate_batch_size: int = Field(default=200, ge=2, le=1000)
+    """How many waiting tickets one pairing pass reads from a pool.
+
+    Bounded like every batch on this platform (CLAUDE.md §10.5), and the
+    bound is what keeps the scan's cost independent of how popular the
+    platform becomes: it reads the *oldest* two hundred, which is where a
+    queue that serves the longest wait first is always going to find its
+    answer.
+
+    It is also the width of the block read — `blocked_pairs_among` takes
+    exactly these players — so raising it lengthens one query's parameter
+    list rather than adding queries.
+
+    Two is the floor because one candidate cannot be a pair.
+    """
+
+    rating_window_initial: int = Field(default=100, ge=0, le=5000)
+    """The rating gap a fresh ticket accepts — QT-5's starting window.
+
+    A hundred points is roughly "the same class of player" on every rating
+    scale this platform might adopt, and it is deliberately narrow: the
+    window widens on its own, so starting tight costs a few seconds and
+    starting loose costs a bad first game.
+    """
+
+    rating_window_widen_every_seconds: float = Field(default=15.0, ge=1.0, le=600.0)
+    """How long a ticket waits before its window takes one step outward."""
+
+    rating_window_widen_by: int = Field(default=50, ge=0, le=5000)
+    """How many points one step adds."""
+
+    rating_window_maximum: int = Field(default=600, ge=0, le=10000)
+    """The widest gap a pairing may ever bridge.
+
+    Reached after about two and a half minutes at the defaults, which is
+    well inside the ten-minute ticket window — so a player in a thin pool
+    spends most of their wait at the maximum rather than approaching it,
+    and then expires honestly rather than being handed a hopeless game.
+    """
+
+    @model_validator(mode="after")
+    def _rating_window_widens(self) -> "MatchmakingSettings":
+        """The maximum cannot be below the starting width.
+
+        `RatingWindowPolicy` refuses to construct in that shape, and
+        without this the refusal would arrive when the first pairing task
+        ran rather than when the process started — DI-06's argument, that
+        configuration must fail at startup and not in a background job at
+        three in the morning.
+        """
+        if self.rating_window_maximum < self.rating_window_initial:
+            raise ValueError(
+                "MATCHMAKING_RATING_WINDOW_MAXIMUM cannot be below "
+                "MATCHMAKING_RATING_WINDOW_INITIAL"
+            )
+        return self
 
 
 class Settings(BaseModel):

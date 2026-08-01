@@ -2,11 +2,18 @@
 layer that *needs* them, so a service depends on a contract and never on
 `SqlAlchemyQueueRepository`.
 
-Two protocols, and the split between them is by capability rather than by
-storage — the argument every port pair on this platform makes:
+Three protocols, and the split between them is by capability rather than
+by storage — the argument every port pair on this platform makes:
 
     QueueRepository        everything about a ticket in PostgreSQL
     RatingSnapshotProvider what number a ticket records at entry (QT-2)
+    RecentOpponentProvider who these players have just played (A64-015.3)
+
+The **pairwise block** port is deliberately not here either:
+`friends.public.PairingExclusions` already answers it, and BL-2 is
+`friends`' rule to enforce. Two ports for "who may not be paired" would be
+two places the block graph is interpreted, and one of them would eventually
+check a single direction.
 
 The presence port is deliberately **not** declared here.
 `users.public.PresenceProvider` already exists, `matchmaking` imports it
@@ -16,7 +23,7 @@ with two implementations and one of them wrong. A64-014.1 says so directly:
 reuse `presence:v1:`, do not create another online-player index.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
@@ -126,7 +133,104 @@ class QueueRepository(Protocol):
         Returns the number of rows actually updated, which is the count the
         log line reports — not `len(ticket_ids)`, which would claim a
         transition for a ticket somebody cancelled in between. The predicate
-        carries `status = 'waiting'` as well as the id list, for that reason.
+        carries the two live statuses as well as the id list, for that
+        reason.
+        """
+        ...
+
+    async def claim_pair(
+        self, ticket_ids: Sequence[UUID], *, now: datetime
+    ) -> Sequence[QueueTicket]:
+        """Locks exactly the two tickets a scan selected, or takes neither
+        — A64-015.3's atomic claim.
+
+        **The second method that must be safe under concurrency**, and it
+        reuses `claim_due`'s mechanism rather than inventing one:
+        `SELECT ... FOR UPDATE SKIP LOCKED` over the two ids. A64-015.3 §7
+        requires exactly this and forbids a distributed lock.
+
+        Returns both tickets or **an empty sequence** — never one. A single
+        locked ticket is not a claim on a pair, and returning it would hand
+        the caller half a pairing to reason about. Whatever the loser
+        skipped is still `waiting` and will be reconsidered by the next
+        scan.
+
+        `SKIP LOCKED` is what makes the loser *skip* rather than *wait*: two
+        workers that both selected the same pair would otherwise serialise,
+        and the second would then be holding a lock on tickets the first is
+        about to reserve.
+
+        The predicate is narrower than `claim_due`'s and every clause
+        excludes a real row:
+
+            id IN (...)          the two the engine chose
+            status = 'waiting'   not already reserved by another worker,
+                                 not cancelled, not expired, not matched
+            expires_at > now     the window has not closed since the
+                                 snapshot was taken
+
+        **Claiming is not a transition**, exactly as it is not for the
+        expiry sweep: the rows come back `waiting`, the lock lasts as long
+        as the caller's transaction, and `reserve` below is what changes
+        anything.
+        """
+        ...
+
+    async def reserve(self, tickets: Sequence[QueueTicket]) -> bool:
+        """Moves claimed tickets from `waiting` to `reserved`. All or
+        nothing.
+
+        Returns whether **every** ticket transitioned, and writes nothing
+        when the answer is no. `False` means at least one row was no longer
+        `waiting`, and the caller treats the whole pairing as lost — a
+        half-reserved pair would leave one player invisible to every future
+        scan with no match coming.
+
+        All-or-nothing is the *statement's* property, not the caller's
+        rollback — see `SqlAlchemyQueueRepository._transition` on the guard
+        subquery that makes it so.
+
+        Compare-and-set on `status = 'waiting'`, like `cancel`, and for the
+        same reason: the row lock from `claim_pair` makes this safe within
+        one transaction, and the predicate is what makes it safe if the two
+        are ever separated.
+        """
+        ...
+
+    async def release(self, tickets: Sequence[QueueTicket]) -> bool:
+        """Returns reserved tickets to `waiting` — A64-015.3's compensation.
+
+        Called when `game` refused the match after both tickets were
+        reserved. Returns whether every one applied; `False` means somebody
+        else resolved a reserved ticket, which is a state this system should
+        not be able to reach and is therefore logged as an error rather than
+        retried.
+
+        **Writes `status` and `resolved_at` only.** `entered_at` is not in
+        the statement at all, so a released player keeps the place in line
+        they held — losing it to a failure that was the platform's would be
+        a second penalty for the same fault.
+
+        Compare-and-set on `status = 'reserved'`: a ticket the expiry sweep
+        took because its window closed mid-pairing must not be resurrected
+        into `waiting` past its own deadline.
+        """
+        ...
+
+    async def complete(self, tickets: Sequence[QueueTicket], *, at: datetime) -> bool:
+        """Moves reserved tickets to `matched`. All or nothing.
+
+        Called **after** `game` has accepted the match request, never
+        before — A64-015.3 §8. `at` is the instant the match was created.
+
+        Returns whether every one applied. `False` after a successful match
+        creation is the one genuinely bad outcome this module has: a match
+        exists whose tickets do not say so. It is logged with the match id
+        at `ERROR`, because the reconciliation is manual until A64-015.4
+        gives a match a durable link back to its tickets.
+
+        Compare-and-set on `status = 'reserved'`, so a ticket that was never
+        reserved cannot be marked matched by a stray call.
         """
         ...
 
@@ -165,5 +269,51 @@ class RatingSnapshotProvider(Protocol):
         rating has a provisional one (PR-6), which is a value rather than an
         absence — and a join that failed because a rating could not be read
         would take matchmaking down for a number that has a safe default.
+        """
+        ...
+
+
+class RecentOpponentProvider(Protocol):
+    """Who each of these players has just finished a game against —
+    A64-015.3 §6.
+
+    The rematch guard. Being handed the same opponent twice in a row is the
+    most common complaint about a thin pool, and the exclusion is cheap to
+    apply and awkward to retrofit into a scan that was not designed for it
+    — which is why the port exists now and the implementation does not.
+
+    ## Why this is declared here and not imported from `game.public`
+
+    AD-06: a port is declared by the layer that needs it. When `game` gains
+    durable match history this is satisfied by `game.public` and no use
+    case, no engine and no test changes — exactly the path
+    `RatingSnapshotProvider` is already on. Declaring it there first would
+    mean `game` publishing a read for a consumer that had not asked.
+
+    **Deferred, and stated rather than hidden.** `game` has a `Match`
+    aggregate and no repository, no table and no migration for one (see
+    `game.public.UnavailableMatchCreation`), so there is no match history
+    to read. `NoRecentOpponents` is the implementation until there is, and
+    it excludes nothing — which is the safe direction: the failure mode is
+    an occasional rematch, not a player who cannot be paired at all.
+    """
+
+    async def recent_opponents_among(
+        self, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, frozenset[UUID]]:
+        """For each of `player_ids`, which **others in the same batch** they
+        have just played.
+
+        The same shape as `friends.public.PairingExclusions`, deliberately:
+        both are "pairs to veto", `PairExclusions.merged` unions them, and
+        one shape means the engine asks one question rather than two.
+
+        Batch and symmetric, for the same reasons — a per-candidate form
+        would be an N+1 inside a scan that runs continuously, and "they
+        played me" and "I played them" are the same game.
+
+        Never raises. An unreadable history must degrade to "no exclusions"
+        rather than stop pairing: a rematch is a disappointment, and an
+        empty pool is an outage.
         """
         ...

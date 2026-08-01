@@ -4,11 +4,12 @@ domain-model.md §10.2, and the aggregate root architecture.md §6 assigns to
 `matchmaking`. Framework-free (architecture.md §8): no SQL, no Redis, no
 clock — time arrives as an argument (AD-07).
 
-## The four states, and the three this task does not implement
+## The five states, and the two this task does not implement
 
-A64-014.1 specifies `waiting`, `matched`, `cancelled`, `expired`.
+A64-014.1 specified four — `waiting`, `matched`, `cancelled`, `expired` —
+and A64-015.3 adds the fifth, `reserved`, because pairing needs it.
 domain-model.md §10.2's diagram has seven, and the difference is worth
-recording rather than resolving silently, because the missing three are
+recording rather than resolving silently, because the missing two are
 *future* states and not omissions:
 
     Queued      -> `waiting`
@@ -18,10 +19,7 @@ recording rather than resolving silently, because the missing three are
                    window from its age. A state whose only content is "the
                    scan has looked at this a few times" is state the scan
                    can recompute, and one more transition to get wrong.
-    Reserved    -> A64-014.2. The two-phase claim QT-4 describes — a
-                   worker takes both tickets, then creates the match — is
-                   what `reserved` is for, and there is no pairing here to
-                   reserve anything.
+    Reserved    -> `reserved` (A64-015.3). See below.
     Consumed    -> `matched`. The name follows A64-014.1 rather than
                    domain-model.md; both mean "this ticket produced a
                    match and is finished".
@@ -29,13 +27,37 @@ recording rather than resolving silently, because the missing three are
     Expired     -> `expired`
     Abandoned   -> not modelled. It is `expired` with a different cause,
                    and the cause is only knowable once presence is watched
-                   continuously rather than checked at entry. A64-014.2.
+                   continuously rather than checked at entry.
 
-**Preparing for acceptance** (the task's own words) is what `matched` and
-`resolved_at` are for: an acceptance flow inserts `reserved` before
-`matched` and adds a deadline, and neither changes anything already
-written — the terminal states stay terminal and the partial unique index
-that enforces QT-1 keys on `waiting` alone, which `reserved` would join.
+## Why `reserved` had to exist — A64-015.3
+
+A64-015.1 predicted this state and A64-015.3 is where the prediction pays.
+Pairing is two steps that cannot be one: claim both tickets, then ask
+`game` to create a match. They cannot share a transaction, because a
+cross-context call inside an open transaction is what services.md BE-05
+forbids — it would hold two row locks across another module's work, and
+nobody could reason about the lock-acquisition order.
+
+So there is a window between "these two are mine" and "a match exists",
+and a status is what makes that window visible to every other worker:
+
+    waiting -> reserved     a worker has taken this pair
+    reserved -> matched     `game` accepted the match request
+    reserved -> waiting     it did not, and the player goes back in line
+
+Marking a ticket `matched` at the claim would be the alternative, and it is
+the one A64-015.3 §8 forbids by name: a ticket that says it produced a
+match before any match exists is a lie that survives a crash.
+
+**`reserved` is live, not terminal.** It carries no `resolved_at`, it is
+covered by QT-1's uniqueness index, and `active_ticket` reports it — a
+player being paired is still queued, and must not be able to join a second
+pool while a worker is creating their match.
+
+**A released ticket keeps its `entered_at`.** Compensation restores the
+row's status and nothing else, so a player whose match creation failed
+returns to exactly the place in line they held — not to the back of it for
+a failure that was the platform's.
 
 ## Why every transition returns a new ticket
 
@@ -82,20 +104,44 @@ class QueueStatus(StrEnum):
     """A ticket's position in its lifecycle — see this module's docstring
     for the mapping to domain-model.md §10.2's seven.
 
-    Exactly one of these is non-terminal, and every rule in this module is
-    a statement about that asymmetry: `waiting` is the only state a ticket
-    can leave, the only one QT-1's uniqueness covers, and the only one a
-    pairing scan will ever read.
+    Two of these are **live** and three are terminal, and nearly every rule
+    in this module is a statement about that split: a live ticket occupies
+    QT-1's uniqueness, carries no `resolved_at`, and is reported to its
+    owner as "you are queued". A terminal one is finished and immutable.
+
+    The two live states differ in one way that matters: a **pairing scan
+    reads only `waiting`**, so a reserved ticket is invisible to every
+    other worker's next scan while it is being turned into a match.
     """
 
     WAITING = "waiting"
+    RESERVED = "reserved"
+    """A pairing worker has claimed this ticket and is creating its match —
+    A64-015.3. Live, not terminal, and not scannable."""
+
     MATCHED = "matched"
     CANCELLED = "cancelled"
     EXPIRED = "expired"
 
     @property
+    def is_live(self) -> bool:
+        """Whether the player is still in the queue as far as every rule on
+        this platform is concerned."""
+        return self in _LIVE_STATUSES
+
+    @property
     def is_terminal(self) -> bool:
-        return self is not QueueStatus.WAITING
+        return not self.is_live
+
+
+#: The two live statuses, as one set.
+#:
+#: Defined once and mirrored by three database predicates —
+#: `uq_queue_ticket__one_live_per_player`, `ix_queue_ticket__due` and
+#: `ck_queue_ticket__resolved_iff_terminal`. A grep for this name finds
+#: every place the split is asserted, which is the property that matters
+#: when a sixth status is added.
+_LIVE_STATUSES = frozenset({QueueStatus.WAITING, QueueStatus.RESERVED})
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +217,7 @@ class QueueTicket:
         if self.rating_snapshot < 0:
             raise ValueError("rating_snapshot cannot be negative")
         if self.status.is_terminal != (self.resolved_at is not None):
-            raise ValueError("resolved_at is set exactly when the ticket has left `waiting`")
+            raise ValueError("resolved_at is set exactly when the ticket is no longer live")
 
     @property
     def queue_type(self) -> QueueType:
@@ -237,40 +283,98 @@ class QueueTicket:
         """
         return at >= self.expires_at
 
+    @property
+    def is_reserved(self) -> bool:
+        return self.status is QueueStatus.RESERVED
+
     def cancelled(self, at: datetime) -> "QueueTicket":
         """The ticket a player withdrew. Raises `TicketNotWaiting`."""
         return self._resolve(QueueStatus.CANCELLED, at)
 
     def expired(self, at: datetime) -> "QueueTicket":
-        """The ticket whose window closed. Raises `TicketNotWaiting`."""
+        """The ticket whose window closed. Raises `TicketNotWaiting`.
+
+        Reachable from `reserved` as well as from `waiting`, which is the
+        one place the expiry sweep sees the pairing states — an abandoned
+        reservation is a ticket whose worker died, and leaving it live
+        forever would lock its player out of the queue through QT-1. See
+        `QueueRepository.claim_due`.
+        """
         return self._resolve(QueueStatus.EXPIRED, at)
 
-    def matched(self, at: datetime) -> "QueueTicket":
-        """The ticket a pairing consumed. Raises `TicketNotWaiting`.
+    def reserved(self) -> "QueueTicket":
+        """This ticket, claimed by a pairing worker — A64-015.3.
 
-        **Nothing calls this yet**, and it is here rather than in A64-014.2
-        because `matched` is one of the four states this task specifies and
-        a status a transition cannot reach is a status the database can
-        hold and the domain cannot explain. The pairing worker that calls
-        it will pass the instant the match was created, not the instant it
-        claimed the ticket — see QT-4 on why the claim and the creation are
-        separable and why the compensating path returns the ticket to
-        `waiting` rather than through here.
-        """
-        return self._resolve(QueueStatus.MATCHED, at)
+        `waiting -> reserved`, and it takes **no instant**: nothing has
+        resolved, the ticket is still live, and `resolved_at` stays `None`
+        so the CHECK that pairs the two holds. A `reserved_at` would be a
+        column with one reader that does not exist yet — the acceptance
+        deadline A64-015.4 introduces.
 
-    def _resolve(self, status: QueueStatus, at: datetime) -> "QueueTicket":
-        """The one transition, three names.
-
-        Every terminal state is reached the same way — from `waiting`, with
-        an instant — so there is one place the guard lives and one place
-        `resolved_at` is set. Three separate bodies would be three chances
-        to forget the second.
+        Raises `TicketNotWaiting` when the ticket is anything else, which
+        is the aggregate's half of "no ticket can be paired twice". The
+        half that actually holds under two workers is the row lock in
+        `claim_pair`; this one turns a logic error into a failure rather
+        than a second reservation.
         """
         if not self.is_waiting:
+            raise TicketNotWaiting("That queue ticket is no longer waiting.")
+        return self._with(status=QueueStatus.RESERVED, resolved_at=None)
+
+    def released(self) -> "QueueTicket":
+        """This ticket, returned to the queue — A64-015.3's compensation.
+
+        `reserved -> waiting`, and **`entered_at` is untouched**, which is
+        the whole point: a player whose match creation failed goes back to
+        the place in line they held, not to the end of it for a failure
+        that was the platform's. `expires_at` is untouched for the same
+        reason — the ticket's window is the one the player agreed to, and a
+        failed pairing attempt is not a reason to extend or shorten it.
+
+        Raises `TicketNotWaiting` unless the ticket is reserved: releasing
+        something nobody reserved would be a compensation for an action
+        that did not happen.
+        """
+        if not self.is_reserved:
+            raise TicketNotWaiting("That queue ticket is not reserved.")
+        return self._with(status=QueueStatus.WAITING, resolved_at=None)
+
+    def matched(self, at: datetime) -> "QueueTicket":
+        """The ticket a pairing consumed — the end of its life.
+
+        `reserved -> matched`, never `waiting -> matched`: A64-015.3 §8
+        forbids marking a ticket matched before `game` has accepted the
+        match request, and requiring the reservation is how that is
+        enforced rather than remembered.
+
+        `at` is the instant the **match was created**, not the instant the
+        ticket was claimed. The two differ by however long `game` took, and
+        the first is the one that answers "when did this player's game
+        start".
+        """
+        if not self.is_reserved:
+            raise TicketNotWaiting("That queue ticket has not been reserved for a match.")
+        return self._with(status=QueueStatus.MATCHED, resolved_at=at)
+
+    def _resolve(self, status: QueueStatus, at: datetime) -> "QueueTicket":
+        """The terminal transition, two names.
+
+        `cancelled` and `expired` are reached the same way — from a live
+        state, with an instant — so there is one place the guard lives and
+        one place `resolved_at` is set. `matched` is deliberately *not*
+        routed through here: its guard is narrower (reserved only), and
+        collapsing the two would let a waiting ticket become matched.
+        """
+        if not self.status.is_live:
             raise TicketNotWaiting(
                 "That queue ticket has already been resolved.",
             )
+        return self._with(status=status, resolved_at=at)
+
+    def _with(self, *, status: QueueStatus, resolved_at: datetime | None) -> "QueueTicket":
+        """This ticket with a different status. Every other field is carried
+        across verbatim, which is what makes `entered_at` survive a release
+        without anybody having to remember to preserve it."""
         return QueueTicket(
             id=self.id,
             player_id=self.player_id,
@@ -279,7 +383,7 @@ class QueueTicket:
             entered_at=self.entered_at,
             expires_at=self.expires_at,
             status=status,
-            resolved_at=at,
+            resolved_at=resolved_at,
         )
 
 

@@ -16,7 +16,7 @@ would leak in exactly the way BL-1 forbids.
 """
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 from uuid import UUID
 
@@ -131,6 +131,49 @@ class SqlAlchemyBlockedPlayerRepository:
             )
         )
         return frozenset(blocked if blocker == player_id else blocker for blocker, blocked in rows)
+
+    async def blocked_pairs_among(
+        self, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, frozenset[UUID]]:
+        """Which of `player_ids` may not be paired with which — A64-015.3.
+
+        **One query for the whole batch**, which is the entire reason this
+        exists beside `blocked_ids_for`: the pairing scan holds up to a few
+        hundred candidates, and asking the symmetric question per candidate
+        would be that many round trips inside a job that runs continuously.
+
+        Both sides of the predicate are restricted to the batch, so the
+        index this rides — `ix_blocked_player__blocker` — is probed once per
+        blocker and the result set is bounded by the blocks *within* the
+        pool rather than by either player's whole block list. A block
+        against somebody who is not queueing is irrelevant here and never
+        leaves the database.
+
+        The mapping is built symmetric because BL-2's consequence is:
+        whichever direction the row runs, the pair is unpairable, and a
+        caller checking only one direction would pair exactly the halves
+        that a one-directional read missed.
+
+        Players with no exclusions are absent from the mapping rather than
+        present with an empty set — the common case is that nobody in a pool
+        has blocked anybody, and that case should allocate nothing.
+        """
+        if len(player_ids) < 2:
+            return {}
+
+        unique = list(set(player_ids))
+        rows = await self._session.execute(
+            select(BlockedPlayerModel.blocker_id, BlockedPlayerModel.blocked_id).where(
+                BlockedPlayerModel.blocker_id.in_(unique),
+                BlockedPlayerModel.blocked_id.in_(unique),
+            )
+        )
+
+        pairs: dict[UUID, set[UUID]] = {}
+        for blocker, blocked in rows:
+            pairs.setdefault(blocker, set()).add(blocked)
+            pairs.setdefault(blocked, set()).add(blocker)
+        return {player_id: frozenset(others) for player_id, others in pairs.items()}
 
     async def list_for_blocker(
         self, blocker_id: UUID, *, limit: int, cursor: str | None

@@ -63,6 +63,13 @@ logger = logging.getLogger(__name__)
 #: drives a real violation through this path.
 _ONE_LIVE_PER_PLAYER_INDEX = "uq_queue_ticket__one_live_per_player"
 
+#: The two statuses that mean "this player is still in the queue".
+#:
+#: Mirrors `QueueStatus.is_live` and is derived from it, so a sixth status
+#: cannot leave this predicate saying something different from the three
+#: database predicates in `models.py`.
+_LIVE_STATUSES = tuple(status for status in QueueStatus if status.is_live)
+
 
 class SqlAlchemyQueueRepository:
     """Constructed per use case with the active unit of work's session
@@ -161,7 +168,7 @@ class SqlAlchemyQueueRepository:
             select(QueueTicketModel)
             .where(
                 QueueTicketModel.player_id == player_id,
-                QueueTicketModel.status == QueueStatus.WAITING,
+                QueueTicketModel.status.in_(_LIVE_STATUSES),
                 QueueTicketModel.expires_at > now,
             )
             .limit(1)
@@ -240,7 +247,7 @@ class SqlAlchemyQueueRepository:
         due = (
             select(QueueTicketModel.id)
             .where(
-                QueueTicketModel.status == QueueStatus.WAITING,
+                QueueTicketModel.status.in_(_LIVE_STATUSES),
                 QueueTicketModel.expires_at <= now,
             )
             .order_by(QueueTicketModel.expires_at, QueueTicketModel.id)
@@ -281,12 +288,146 @@ class SqlAlchemyQueueRepository:
                 update(QueueTicketModel)
                 .where(
                     QueueTicketModel.id.in_(ticket_ids),
-                    QueueTicketModel.status == QueueStatus.WAITING,
+                    QueueTicketModel.status.in_(_LIVE_STATUSES),
                 )
                 .values(status=QueueStatus.EXPIRED, resolved_at=at)
             ),
         )
         return int(result.rowcount)
+
+    async def claim_pair(
+        self, ticket_ids: Sequence[UUID], *, now: datetime
+    ) -> Sequence[QueueTicket]:
+        """Locks exactly these two tickets, or neither — A64-015.3 §7.
+
+        `SELECT ... FOR UPDATE SKIP LOCKED`, the same mechanism `claim_due`
+        uses and the one the outbox proved. Nothing new is invented here,
+        which is the point: A64-015.3 forbids a distributed lock, and the
+        alternatives are already argued against in this module's docstring.
+
+        **Both or nothing**, enforced by a count rather than by hope. Two
+        workers that selected the same pair race here; the loser's `SELECT`
+        skips at least one locked row, comes back short, and returns
+        nothing. Returning the one row it did lock would hand the caller a
+        half-claim and, worse, hold a lock on a ticket that is about to be
+        reserved for somebody else.
+
+        The `expires_at > now` clause is not redundant with the snapshot
+        that produced these ids: a ticket can fall due between the read and
+        the claim, and pairing somebody whose window has closed is exactly
+        the "match created for a player who left" that
+        `MATCHMAKING_TICKET_TTL_SECONDS` exists to bound.
+        """
+        if len(ticket_ids) != 2:
+            raise ValueError("a pairing claim is exactly two tickets")
+
+        locked = (
+            select(QueueTicketModel.id)
+            .where(
+                QueueTicketModel.id.in_(ticket_ids),
+                QueueTicketModel.status == QueueStatus.WAITING,
+                QueueTicketModel.expires_at > now,
+            )
+            .with_for_update(skip_locked=True)
+        )
+
+        claimed_ids = list((await self._session.scalars(locked)).all())
+        if len(claimed_ids) != 2:
+            return ()
+
+        rows = await self._session.scalars(
+            select(QueueTicketModel).where(QueueTicketModel.id.in_(claimed_ids))
+        )
+        return [self._to_domain(row) for row in rows]
+
+    async def reserve(self, tickets: Sequence[QueueTicket]) -> bool:
+        """`waiting -> reserved` for every ticket, or none of them."""
+        return await self._transition(
+            tickets, expected=QueueStatus.WAITING, status=QueueStatus.RESERVED, resolved_at=None
+        )
+
+    async def release(self, tickets: Sequence[QueueTicket]) -> bool:
+        """`reserved -> waiting` — the compensation.
+
+        `entered_at` is not in the `SET` clause, so a released player keeps
+        the place in line they held. That is not an omission to be tidied
+        up later: see `QueueTicket.released` on why a platform failure must
+        not cost a player their wait.
+        """
+        return await self._transition(
+            tickets, expected=QueueStatus.RESERVED, status=QueueStatus.WAITING, resolved_at=None
+        )
+
+    async def complete(self, tickets: Sequence[QueueTicket], *, at: datetime) -> bool:
+        """`reserved -> matched`, with the instant the match was created."""
+        return await self._transition(
+            tickets, expected=QueueStatus.RESERVED, status=QueueStatus.MATCHED, resolved_at=at
+        )
+
+    async def _transition(
+        self,
+        tickets: Sequence[QueueTicket],
+        *,
+        expected: QueueStatus,
+        status: QueueStatus,
+        resolved_at: datetime | None,
+    ) -> bool:
+        """One compare-and-set over a set of tickets. All or nothing.
+
+        One statement rather than one per ticket, so a pair cannot half
+        apply within a transaction that then commits. `expected` is in the
+        predicate for the reason every write in this file carries one: a
+        blind `UPDATE` would let a pairing overwrite a cancellation, or
+        resurrect a ticket the expiry sweep had already resolved.
+
+        Returns whether **every** ticket moved, and writes nothing at all
+        when the answer is no.
+
+        ## The guard subquery, and why counting the rowcount is not enough
+
+        The obvious shape — update the matching rows, compare `rowcount` to
+        the batch size — reports "all or nothing" and does not deliver it:
+        with one ticket already cancelled, the *other* one moves and the
+        method returns `False`. A caller that rolled back would be fine and
+        a caller that did not would have half-reserved a pairing, which
+        strands one player with no match coming.
+
+        So the statement gates itself: it applies only if the number of
+        rows still in `expected` equals the number asked for. PostgreSQL
+        evaluates the subquery against the statement's own snapshot, so it
+        cannot see a partial application of the update it is guarding.
+
+        The three public transitions differ only in these three arguments,
+        so they share a body: three copies would be three chances to forget
+        the predicate, which is the one clause that makes any of them safe.
+        """
+        if not tickets:
+            return True
+
+        ticket_ids = [ticket.id for ticket in tickets]
+        movable = (
+            select(func.count())
+            .select_from(QueueTicketModel)
+            .where(
+                QueueTicketModel.id.in_(ticket_ids),
+                QueueTicketModel.status == expected,
+            )
+            .scalar_subquery()
+        )
+
+        result = cast(
+            "CursorResult[Any]",
+            await self._session.execute(
+                update(QueueTicketModel)
+                .where(
+                    QueueTicketModel.id.in_(ticket_ids),
+                    QueueTicketModel.status == expected,
+                    movable == len(ticket_ids),
+                )
+                .values(status=status, resolved_at=resolved_at)
+            ),
+        )
+        return int(result.rowcount) == len(tickets)
 
     @staticmethod
     def _translate(error: IntegrityError) -> Exception:

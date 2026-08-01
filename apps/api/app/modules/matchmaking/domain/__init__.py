@@ -21,13 +21,12 @@ from app.modules.matchmaking.domain.events import (
     QueueTicketEnqueued,
     QueueTicketExpired,
 )
+from app.modules.matchmaking.domain.queue_pool import QueueType, Region
 from app.modules.matchmaking.domain.queue_ticket import (
     PROVISIONAL_RATING,
     QueueSnapshot,
     QueueStatus,
     QueueTicket,
-    QueueType,
-    Region,
 )
 
 __all__ = [

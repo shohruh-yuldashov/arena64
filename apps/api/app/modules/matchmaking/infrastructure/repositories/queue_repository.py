@@ -51,13 +51,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.matchmaking.domain.exceptions import AlreadyQueued
-from app.modules.matchmaking.domain.queue_ticket import (
-    QueueSnapshot,
-    QueueStatus,
-    QueueTicket,
-    QueueType,
-    Region,
-)
+from app.modules.matchmaking.domain.queue_pool import QueuePool
+from app.modules.matchmaking.domain.queue_ticket import QueueSnapshot, QueueStatus, QueueTicket
 from app.modules.matchmaking.infrastructure.models import QueueTicketModel
 
 logger = logging.getLogger(__name__)
@@ -81,8 +76,7 @@ class SqlAlchemyQueueRepository:
         return QueueTicket(
             id=row.id,
             player_id=row.player_id,
-            queue_type=row.queue_type,
-            region=row.region,
+            pool=QueuePool(variant=row.variant, queue_type=row.queue_type, region=row.region),
             rating_snapshot=row.rating_snapshot,
             entered_at=row.entered_at,
             expires_at=row.expires_at,
@@ -107,6 +101,7 @@ class SqlAlchemyQueueRepository:
         row = QueueTicketModel(
             id=ticket.id,
             player_id=ticket.player_id,
+            variant=ticket.pool.variant,
             queue_type=ticket.queue_type,
             region=ticket.region,
             rating_snapshot=ticket.rating_snapshot,
@@ -173,14 +168,7 @@ class SqlAlchemyQueueRepository:
         )
         return self._to_domain(row) if row is not None else None
 
-    async def queue_snapshot(
-        self,
-        *,
-        queue_type: QueueType,
-        region: Region,
-        now: datetime,
-        limit: int,
-    ) -> QueueSnapshot:
+    async def queue_snapshot(self, *, pool: QueuePool, now: datetime, limit: int) -> QueueSnapshot:
         """One pool's depth and its oldest live tickets.
 
         **Two statements, and they are not an N+1.** The count and the page
@@ -197,8 +185,9 @@ class SqlAlchemyQueueRepository:
         is what makes counting affordable at all.
         """
         live = (
-            QueueTicketModel.queue_type == queue_type,
-            QueueTicketModel.region == region,
+            QueueTicketModel.variant == pool.variant,
+            QueueTicketModel.queue_type == pool.queue_type,
+            QueueTicketModel.region == pool.region,
             QueueTicketModel.status == QueueStatus.WAITING,
             QueueTicketModel.expires_at > now,
         )
@@ -215,8 +204,7 @@ class SqlAlchemyQueueRepository:
         )
 
         return QueueSnapshot(
-            queue_type=queue_type,
-            region=region,
+            pool=pool,
             taken_at=now,
             waiting=int(waiting or 0),
             tickets=tuple(self._to_domain(row) for row in rows),

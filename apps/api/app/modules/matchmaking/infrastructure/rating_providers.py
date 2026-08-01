@@ -40,7 +40,8 @@ what profiles display could move who gets paired with whom.
 import logging
 from uuid import UUID
 
-from app.modules.matchmaking.domain.queue_ticket import PROVISIONAL_RATING, QueueType
+from app.modules.matchmaking.domain.queue_pool import QueueType
+from app.modules.matchmaking.domain.queue_ticket import PROVISIONAL_RATING
 
 logger = logging.getLogger(__name__)
 

@@ -434,6 +434,18 @@ forbidden_modules =
 # point: a module that wants the rules of checkers has to argue for it in a
 # diff, and the argument is architecture.md §7's import diagram, where "any
 # edge not drawn is forbidden".
+# ## `allow_indirect_imports`, added by A64-015.2
+#
+# The same reason the four privacy contracts above carry it, and the same
+# argument: `game.public` names engine types — `ProductVariant`'s values are
+# `BoardVariant`'s, `game_engine_version()` returns an `EngineVersion` — so
+# `matchmaking -> game.public -> engine` is a chain R-1 *requires*, and a
+# contract counting indirect imports would flag every correct consumer of the
+# published surface.
+#
+# What stays forbidden is the **direct** import: a queue service naming
+# `MoveGenerator` itself. That is the reachable-by-typing mistake, it is the
+# one the graph can see, and a probe confirms it still fails the build.
 [importlinter:contract:engine-has-three-permitted-consumers]
 name = only game, replay and fairplay may import engine
 type = forbidden
@@ -441,12 +453,14 @@ source_modules =
     app.modules.auth
     app.modules.avatars
     app.modules.friends
+    app.modules.matchmaking
     app.modules.notifications
     app.modules.profiles
     app.modules.statistics
     app.modules.users
 forbidden_modules =
     app.modules.engine
+allow_indirect_imports = True
 
 
 [importlinter:contract:game-internals-are-private]
@@ -456,13 +470,49 @@ source_modules =
     app.modules.auth
     app.modules.avatars
     app.modules.friends
+    app.modules.matchmaking.domain
+    app.modules.matchmaking.application
+    app.modules.matchmaking.infrastructure
+    app.modules.matchmaking.presentation.router
+    app.modules.matchmaking.presentation.schemas
     app.modules.notifications
     app.modules.profiles
     app.modules.statistics
     app.modules.users
 forbidden_modules =
     app.modules.game.domain
+    app.modules.game.application
+    app.modules.game.infrastructure
 allow_indirect_imports = True
+
+
+# ---------------------------------------------------------------------------
+# 5b. `matchmaking` reaches `game` only through its published surface — A64-015.2
+# ---------------------------------------------------------------------------
+# The first cross-module edge into `game`, and architecture.md §7 draws it:
+# `MM -->|"creates match"| GAME`. What the diagram does not say, and R-1 does,
+# is that the edge lands on a *published surface* rather than on an aggregate.
+#
+# So `matchmaking` is added to `game-internals-are-private` above rather than
+# given a contract of its own, and its `presentation/dependencies` — the
+# composition root — is deliberately outside the source list for the same
+# reason every other module's is: assembling another module's concrete classes
+# is what a root is for.
+#
+# The intended edge, and the only one:
+#
+#     matchmaking -> game.public
+#
+# `matchmaking` is also added to `engine-has-three-permitted-consumers` above.
+# It was absent before this task — not by decision but because it did not
+# exist when that list was written — which meant nothing stopped a queue
+# service importing `MoveGenerator` directly. R-2 permits exactly `game`,
+# `replay` and `fairplay`; matchmaking reaches the rules through `game.public`
+# or not at all.
+#
+# The two contracts together are what make `game.public` load-bearing rather
+# than advisory: an import of `game.domain` fails the build, and an import of
+# `engine` fails it too, so the published surface is the only door.
 
 
 # ---------------------------------------------------------------------------

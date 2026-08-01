@@ -60,6 +60,7 @@ from uuid import UUID
 
 from app.core.identifiers import generate_uuid7
 from app.modules.matchmaking.domain.exceptions import TicketNotWaiting
+from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType, Region
 
 #: The rating a ticket records when nothing has measured the player.
 #:
@@ -75,58 +76,6 @@ from app.modules.matchmaking.domain.exceptions import TicketNotWaiting
 #: grep for `1500` finds both places that assumed it, which is the property
 #: that matters.
 PROVISIONAL_RATING = 1500
-
-
-class QueueType(StrEnum):
-    """Which pool a ticket is waiting in.
-
-    Two members, and the split is the one that changes what a match *means*
-    rather than how it is played: a rated game moves a permanent number
-    (A-4), a casual one does not. Everything else that could partition a
-    pool — variant, time control — belongs to `reference` (DB-08) and
-    arrives with the match, not with this enum.
-
-    A native PostgreSQL enum on the column (DB-15): closed, stable, and on
-    a column every pool query filters, so four bytes beats a string and a
-    typo cannot become a value no read path knows how to evaluate.
-    """
-
-    RANKED = "ranked"
-    CASUAL = "casual"
-
-
-class Region(StrEnum):
-    """Where the player is, for the purpose of who they can be paired with.
-
-    AD-25 defers multi-region *infrastructure* and says explicitly what
-    replaces it: "pairing players by geography (a matchmaking policy, not
-    an infrastructure change) buys more perceived latency improvement than
-    any replication topology." This is that policy's input, and it is on
-    the ticket from the first release for that reason — a pool that is not
-    partitioned by region at entry cannot be partitioned by it later
-    without re-queueing everybody.
-
-    **Reference data wearing an enum's clothes, and knowingly so.** DB-08
-    puts variants, time controls and locales in a `reference` schema, and a
-    region belongs there with them. No `reference` schema exists in code
-    yet, and creating one for a single closed list would be the speculative
-    generality CLAUDE.md §1.7 rules out. When `reference` arrives this
-    becomes `reference.region` and the column a foreign key; the values are
-    chosen to survive that move unchanged.
-
-    `GLOBAL` is not a place. It is the answer for a player who has not been
-    located and for a pool that does not partition, and it is the default
-    precisely so that an unlocated player is pairable with everybody rather
-    than with nobody.
-    """
-
-    GLOBAL = "global"
-    EUROPE = "europe"
-    NORTH_AMERICA = "north_america"
-    SOUTH_AMERICA = "south_america"
-    ASIA = "asia"
-    AFRICA = "africa"
-    OCEANIA = "oceania"
 
 
 class QueueStatus(StrEnum):
@@ -161,8 +110,19 @@ class QueueTicket:
     """Whose ticket it is. An opaque cross-context identifier (DM-06): no
     foreign key, and nothing here can resolve it to a person."""
 
-    queue_type: QueueType
-    region: Region
+    pool: QueuePool
+    """Which queue this ticket is waiting in — A64-015.2.
+
+    One value rather than the `queue_type` and `region` pair A64-015.1
+    carried, and now carrying the variant as well. `QueuePool` says why the
+    three belong together; the short version is that they are what decides
+    whether two players are candidates for each other.
+
+    `queue_type` and `region` remain readable as properties below, because
+    the columns, the indexes and the pool scan all name them individually
+    and a repository should not have to reach through two dots to build a
+    `WHERE`.
+    """
 
     rating_snapshot: int
     """The player's rating **at entry** — QT-2.
@@ -213,13 +173,23 @@ class QueueTicket:
         if self.status.is_terminal != (self.resolved_at is not None):
             raise ValueError("resolved_at is set exactly when the ticket has left `waiting`")
 
+    @property
+    def queue_type(self) -> QueueType:
+        """This ticket's pool mode. Read through the pool, never stored
+        twice — two copies of one fact is two things to keep in step."""
+        return self.pool.queue_type
+
+    @property
+    def region(self) -> Region:
+        """This ticket's pool region."""
+        return self.pool.region
+
     @classmethod
     def enter(
         cls,
         *,
         player_id: UUID,
-        queue_type: QueueType,
-        region: Region,
+        pool: QueuePool,
         rating_snapshot: int,
         at: datetime,
         ttl: float,
@@ -240,8 +210,7 @@ class QueueTicket:
         """
         return cls(
             player_id=player_id,
-            queue_type=queue_type,
-            region=region,
+            pool=pool,
             rating_snapshot=rating_snapshot,
             entered_at=at,
             expires_at=at + timedelta(seconds=ttl),
@@ -305,8 +274,7 @@ class QueueTicket:
         return QueueTicket(
             id=self.id,
             player_id=self.player_id,
-            queue_type=self.queue_type,
-            region=self.region,
+            pool=self.pool,
             rating_snapshot=self.rating_snapshot,
             entered_at=self.entered_at,
             expires_at=self.expires_at,
@@ -333,8 +301,7 @@ class QueueSnapshot:
     a snapshot cannot be one.
     """
 
-    queue_type: QueueType
-    region: Region
+    pool: QueuePool
     taken_at: datetime
 
     waiting: int

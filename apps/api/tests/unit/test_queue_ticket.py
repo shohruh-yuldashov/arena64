@@ -17,12 +17,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.core.identifiers import generate_uuid7
+from app.modules.game.public import ProductVariant
 from app.modules.matchmaking.domain.exceptions import TicketNotWaiting
+from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType, Region
 from app.modules.matchmaking.domain.queue_ticket import (
     QueueStatus,
     QueueTicket,
-    QueueType,
-    Region,
 )
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
@@ -32,8 +32,11 @@ TTL_SECONDS = 600.0
 def _ticket(*, at: datetime = NOW, ttl: float = TTL_SECONDS) -> QueueTicket:
     return QueueTicket.enter(
         player_id=generate_uuid7(),
-        queue_type=QueueType.RANKED,
-        region=Region.EUROPE,
+        pool=QueuePool(
+            variant=ProductVariant.RUSSIAN_8X8,
+            queue_type=QueueType.RANKED,
+            region=Region.EUROPE,
+        ),
         rating_snapshot=1500,
         at=at,
         ttl=ttl,
@@ -61,8 +64,11 @@ class TestEntering:
         changes while the ticket waits does not move it."""
         ticket = QueueTicket.enter(
             player_id=generate_uuid7(),
-            queue_type=QueueType.CASUAL,
-            region=Region.GLOBAL,
+            pool=QueuePool(
+                variant=ProductVariant.RUSSIAN_8X8,
+                queue_type=QueueType.CASUAL,
+                region=Region.GLOBAL,
+            ),
             rating_snapshot=1873,
             at=NOW,
             ttl=TTL_SECONDS,
@@ -84,8 +90,11 @@ class TestConstruction:
         with pytest.raises(ValueError, match="expire before"):
             QueueTicket(
                 player_id=generate_uuid7(),
-                queue_type=QueueType.RANKED,
-                region=Region.GLOBAL,
+                pool=QueuePool(
+                    variant=ProductVariant.RUSSIAN_8X8,
+                    queue_type=QueueType.RANKED,
+                    region=Region.GLOBAL,
+                ),
                 rating_snapshot=1500,
                 entered_at=NOW,
                 expires_at=NOW,
@@ -95,8 +104,11 @@ class TestConstruction:
         with pytest.raises(ValueError, match="rating_snapshot"):
             QueueTicket(
                 player_id=generate_uuid7(),
-                queue_type=QueueType.RANKED,
-                region=Region.GLOBAL,
+                pool=QueuePool(
+                    variant=ProductVariant.RUSSIAN_8X8,
+                    queue_type=QueueType.RANKED,
+                    region=Region.GLOBAL,
+                ),
                 rating_snapshot=-1,
                 entered_at=NOW,
                 expires_at=NOW + timedelta(seconds=1),
@@ -109,8 +121,11 @@ class TestConstruction:
         with pytest.raises(ValueError, match="resolved_at"):
             QueueTicket(
                 player_id=generate_uuid7(),
-                queue_type=QueueType.RANKED,
-                region=Region.GLOBAL,
+                pool=QueuePool(
+                    variant=ProductVariant.RUSSIAN_8X8,
+                    queue_type=QueueType.RANKED,
+                    region=Region.GLOBAL,
+                ),
                 rating_snapshot=1500,
                 entered_at=NOW,
                 expires_at=NOW + timedelta(seconds=1),
@@ -123,8 +138,11 @@ class TestConstruction:
         with pytest.raises(ValueError, match="resolved_at"):
             QueueTicket(
                 player_id=generate_uuid7(),
-                queue_type=QueueType.RANKED,
-                region=Region.GLOBAL,
+                pool=QueuePool(
+                    variant=ProductVariant.RUSSIAN_8X8,
+                    queue_type=QueueType.RANKED,
+                    region=Region.GLOBAL,
+                ),
                 rating_snapshot=1500,
                 entered_at=NOW,
                 expires_at=NOW + timedelta(seconds=1),

@@ -36,7 +36,10 @@ from app.modules.friends.infrastructure.cache import (
 )
 from app.modules.matchmaking.application.services import QueueService
 from app.modules.matchmaking.infrastructure import QueueExpiryTask, expiry_request
-from app.modules.matchmaking.presentation.dependencies import build_queue_service
+from app.modules.matchmaking.presentation.dependencies import (
+    build_eligibility_policy,
+    build_queue_service,
+)
 from app.modules.notifications.application.services import (
     CONSUMER_NAME,
     SUBSCRIBED_EVENT_TYPES,
@@ -511,7 +514,7 @@ def _queue_service_for(
     """
     return build_queue_service(
         session,
-        presence=_presence_adapter(redis_pools, settings, clock),
+        eligibility=build_eligibility_policy(_presence_adapter(redis_pools, settings, clock)),
         events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
         settings=settings.matchmaking,
         clock=clock,

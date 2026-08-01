@@ -122,10 +122,10 @@ def to_profile_visibility(user: User) -> ProfileVisibility:
     """
     privacy = user.privacy
     return ProfileVisibility(
-        last_seen=privacy.show_last_seen,
+        last_seen=privacy.last_seen,
         statistics=privacy.show_statistics,
-        online_status=privacy.show_online_status,
-        activity=privacy.show_activity,
+        online_status=privacy.online_status,
+        activity=privacy.activity,
     )
 
 
@@ -182,10 +182,10 @@ def to_privacy_settings(user: User) -> PrivacySettingsView:
     privacy = user.privacy
     return PrivacySettingsView(
         show_country=privacy.show_country,
-        show_last_seen=privacy.show_last_seen,
+        last_seen=privacy.last_seen,
         show_statistics=privacy.show_statistics,
-        show_online_status=privacy.show_online_status,
-        show_activity=privacy.show_activity,
+        online_status=privacy.online_status,
+        activity=privacy.activity,
     )
 
 

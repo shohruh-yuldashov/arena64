@@ -23,6 +23,7 @@ from uuid import UUID
 from app.core.dto import BaseResponseDTO
 from app.core.enums import Locale
 from app.modules.users.domain.preferences import AnimationSpeed, BoardTheme, PieceSet
+from app.modules.users.domain.visibility import VisibilityLevel
 
 
 class AvatarReference(BaseResponseDTO):
@@ -97,8 +98,14 @@ class ProfileVisibility(BaseResponseDTO):
     mapper ends up applying one backwards.
     """
 
-    last_seen: bool
-    """Whether a consumer may render when this player was last online."""
+    last_seen: VisibilityLevel
+    """Who may see when this player was last online — A64-013.2.
+
+    A `VisibilityLevel` rather than a boolean since the audience model
+    arrived. The consumer does not compare it against a member: it calls
+    `PrivacySettings.permits_*` through the composer, which is what keeps
+    `FRIENDS` from being silently treated as `EVERYONE` at a call site.
+    """
 
     statistics: bool
     """Whether a consumer may render the aggregate match record.
@@ -109,16 +116,14 @@ class ProfileVisibility(BaseResponseDTO):
     `PrivacySettings.show_statistics`.
     """
 
-    online_status: bool
-    """Whether a consumer may render live presence. Nothing produces
-    presence yet (AD-09's gateway); the flag is published now so the
-    release that adds it is not also the release that decides whether it
-    is public."""
+    online_status: VisibilityLevel
+    """Who may see live presence. The setting database.md §491 names
+    outright, and the one that made A64-013.2 widen the type."""
 
-    activity: bool
-    """Whether a consumer may render recent activity — match history, an
-    activity feed. Published ahead of the thing it governs, as
-    `online_status` is."""
+    activity: VisibilityLevel
+    """Who may see recent activity — match history, an activity feed.
+    Published ahead of the thing it governs, as `online_status` was before
+    presence existed."""
 
 
 class UserRead(BaseResponseDTO):
@@ -332,10 +337,11 @@ class PrivacySettingsView(BaseResponseDTO):
     """
 
     show_country: bool
-    show_last_seen: bool
     show_statistics: bool
-    show_online_status: bool
-    show_activity: bool
+
+    last_seen: VisibilityLevel
+    online_status: VisibilityLevel
+    activity: VisibilityLevel
 
 
 class GameplayPreferencesView(BaseResponseDTO):

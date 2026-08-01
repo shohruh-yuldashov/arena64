@@ -46,9 +46,9 @@ class PrivacySettingsService:
         # straight through — they *are* the partial-update signal.
         command = UpdatePrivacySettings(
             show_country=edits.show_country,
-            show_last_seen=edits.show_last_seen,
+            last_seen=edits.last_seen,
             show_statistics=edits.show_statistics,
-            show_online_status=edits.show_online_status,
-            show_activity=edits.show_activity,
+            online_status=edits.online_status,
+            activity=edits.activity,
         )
         return to_privacy_settings(await self._users.update_privacy(user_id, command))

@@ -127,6 +127,15 @@ class UserService:
         """Read-only: opens no transaction. Keyset-paginated (RP-03)."""
         return await self._users.list(params, is_active=is_active)
 
+    async def find_active_by_ids(self, user_ids: Sequence[UUID]) -> Sequence[User]:
+        """The active accounts among `user_ids`. Read-only; no transaction.
+
+        Delegates entirely — the `is_active` filter is the repository's
+        because it is expressible as a predicate, and there is no rule left
+        for a service to add.
+        """
+        return await self._users.get_active_by_ids(user_ids)
+
     async def search_users(self, query: UserSearchQuery) -> tuple[Sequence[User], str | None]:
         """Ranked search over username and display name — A64-013.1.
 
@@ -252,10 +261,10 @@ class UserService:
 
         user.privacy = user.privacy.updated(
             show_country=unset_to_none(command.show_country),
-            show_last_seen=unset_to_none(command.show_last_seen),
+            last_seen=unset_to_none(command.last_seen),
             show_statistics=unset_to_none(command.show_statistics),
-            show_online_status=unset_to_none(command.show_online_status),
-            show_activity=unset_to_none(command.show_activity),
+            online_status=unset_to_none(command.online_status),
+            activity=unset_to_none(command.activity),
         )
 
         user.updated_at = self._clock.now()

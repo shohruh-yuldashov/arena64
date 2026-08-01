@@ -63,11 +63,28 @@ PASSWORD = "CorrectHorse1!"
 #: brief, typed in by hand.
 DEFAULTS = {
     "show_country": True,
-    "show_last_seen": False,
     "show_statistics": True,
+    # A64-013.2 widened three of the five to `VisibilityLevel`. Each value
+    # is the widening of the boolean it replaced — `false -> nobody`,
+    # `true -> everyone` — which is what makes the migration lossless, and
+    # asserting the *values* here is what would catch a conversion that
+    # moved somebody's setting.
+    "last_seen": "nobody",
+    "online_status": "everyone",
+    "activity": "everyone",
+    # The deprecated booleans, still returned so clients written before
+    # A64-013.2 keep working. Derived from the three above rather than
+    # stored, so they cannot disagree.
+    "show_last_seen": False,
     "show_online_status": True,
     "show_activity": True,
 }
+
+#: What a client may *send*. The same keys as `DEFAULTS`, because every
+#: setting is writable in both spellings — the request and the response
+#: happen to have the same shape, and asserting them separately is what
+#: would catch one of them drifting.
+SETTABLE = set(DEFAULTS)
 
 
 @pytest_asyncio.fixture
@@ -109,15 +126,96 @@ async def patch_privacy(client: AsyncClient, auth: dict[str, str], body: dict[st
 
 
 class TestSuccessfulUpdate:
-    async def test_every_flag_can_be_turned_off(
+    async def test_every_setting_can_be_closed(
         self, client: AsyncClient, account: tuple[str, dict[str, str]]
     ) -> None:
+        """Everything off, in the current spelling.
+
+        A64-013.2 changed what "off" means for three of the five: `false`
+        for the two that stayed boolean, `nobody` for the three that became
+        audience-valued. The deprecated booleans are not sent — sending both
+        spellings for one setting is a `422` by design.
+        """
         _, auth = account
 
-        response = await patch_privacy(client, auth, dict.fromkeys(DEFAULTS, False))
+        response = await patch_privacy(
+            client,
+            auth,
+            {
+                "show_country": False,
+                "show_statistics": False,
+                "last_seen": "nobody",
+                "online_status": "nobody",
+                "activity": "nobody",
+            },
+        )
 
         assert response.status_code == 200, response.text
-        assert response.json()["data"] == dict.fromkeys(DEFAULTS, False)
+        assert response.json()["data"] == {
+            "show_country": False,
+            "show_statistics": False,
+            "last_seen": "nobody",
+            "online_status": "nobody",
+            "activity": "nobody",
+            # Derived, and `false` for all three — which is the honest
+            # answer to the question the deprecated field asks.
+            "show_last_seen": False,
+            "show_online_status": False,
+            "show_activity": False,
+        }
+
+    async def test_a_friends_only_setting_is_stored_and_reads_as_not_public(
+        self, client: AsyncClient, account: tuple[str, dict[str, str]]
+    ) -> None:
+        """The value a boolean could not express — A64-013.2's whole reason.
+
+        `friends` is accepted and stored from this release even though no
+        friendship exists to satisfy it, so a player can set what they mean
+        today. The deprecated boolean reads `false`, which is correct: it
+        asks whether *anybody* may see the field.
+        """
+        _, auth = account
+
+        response = await patch_privacy(client, auth, {"online_status": "friends"})
+
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["online_status"] == "friends"
+        assert response.json()["data"]["show_online_status"] is False
+
+    async def test_the_deprecated_boolean_still_works(
+        self, client: AsyncClient, account: tuple[str, dict[str, str]]
+    ) -> None:
+        """**The non-breaking guarantee**, asserted rather than claimed.
+
+        A client written before A64-013.2 sends `show_last_seen: true` and
+        must still be understood. It widens to `everyone`, which is what
+        `true` always meant.
+        """
+        _, auth = account
+
+        response = await patch_privacy(client, auth, {"show_last_seen": True})
+
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["last_seen"] == "everyone"
+        assert response.json()["data"]["show_last_seen"] is True
+
+    async def test_sending_both_spellings_for_one_setting_is_refused(
+        self, client: AsyncClient, account: tuple[str, dict[str, str]]
+    ) -> None:
+        """Two intentions for one column, and no correct way to pick.
+
+        Precedence would be a coin flip from the client's side; on a privacy
+        endpoint that means a caller believing it hid something it
+        published.
+        """
+        _, auth = account
+
+        response = await patch_privacy(
+            client, auth, {"last_seen": "friends", "show_last_seen": True}
+        )
+
+        assert response.status_code == 422
+        assert response.json()["code"] == "validation_error"
 
     async def test_the_change_persists(
         self, client: AsyncClient, account: tuple[str, dict[str, str]]
@@ -456,6 +554,6 @@ class TestOpenApi:
         body = schema["components"]["schemas"]["PrivacySettingsUpdateRequest"]
 
         assert body["additionalProperties"] is False
-        assert set(body["properties"]) == set(DEFAULTS)
+        assert set(body["properties"]) == SETTABLE
         for flag in DEFAULTS:
             assert body["properties"][flag]["description"]

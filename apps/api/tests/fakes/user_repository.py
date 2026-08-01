@@ -44,6 +44,25 @@ class FakeUserRepository:
 
     # --- reads --------------------------------------------------------------
 
+    async def get_active_by_ids(self, user_ids: Sequence[UUID]) -> Sequence[User]:
+        """The active accounts among `user_ids` — A64-013.2.
+
+        Genuinely implemented here, unlike `search` below, and the contrast
+        is the rule this file follows rather than an inconsistency: this is
+        a membership filter with no database semantics in it, so a Python
+        version and the SQL one cannot disagree about the answer. Search is
+        the opposite — its behaviour *is* PostgreSQL's.
+
+        Deep-copied like every other read, so a caller mutating what it gets
+        back cannot alter what the next test sees.
+        """
+        wanted = set(user_ids)
+        return [
+            copy.deepcopy(user)
+            for user in self._users.values()
+            if user.id in wanted and user.is_active
+        ]
+
     async def search(self, query: UserSearchQuery) -> tuple[Sequence[User], str | None]:
         """**Deliberately not implemented**, and this is not a gap.
 

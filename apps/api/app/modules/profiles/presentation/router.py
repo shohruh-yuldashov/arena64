@@ -36,13 +36,14 @@ endpoints use.
 
 from typing import Annotated
 
-from fastapi import APIRouter, Path, status
+from fastapi import APIRouter, Depends, Path, status
 
 from app.api.openapi import Responses, error_response
 from app.api.responses import build_response
 from app.core.responses import ApiResponse
 from app.modules.avatars.presentation.dependencies import AvatarLinkBuilderDep
 from app.modules.profiles.presentation.dependencies import ProfileServiceDep
+from app.modules.profiles.presentation.rate_limits import PROFILE_READ_RATE_LIMIT
 from app.modules.profiles.presentation.schemas import ProfileResponse
 from app.modules.users.domain.validators import USERNAME_MAX_LENGTH, USERNAME_MIN_LENGTH
 
@@ -55,6 +56,14 @@ _NOT_FOUND: Responses = error_response(
         "No visible profile for that username. Returned identically "
         "whether the username was never registered or belongs to a "
         "deactivated account."
+    ),
+)
+_TOO_MANY_REQUESTS: Responses = error_response(
+    429,
+    (
+        "Too many profile reads from this address. Counted **per network address**, "
+        "because this endpoint is anonymous and there is no account to count. "
+        "`Retry-After` says how long to wait."
     ),
 )
 _UNPROCESSABLE: Responses = error_response(
@@ -71,7 +80,8 @@ _UNPROCESSABLE: Responses = error_response(
     status_code=status.HTTP_200_OK,
     summary="Read a player's public profile",
     response_description="The player's public profile.",
-    responses={**_NOT_FOUND, **_UNPROCESSABLE},
+    responses={**_NOT_FOUND, **_UNPROCESSABLE, **_TOO_MANY_REQUESTS},
+    dependencies=[Depends(PROFILE_READ_RATE_LIMIT)],
 )
 async def get_profile(
     username: Annotated[

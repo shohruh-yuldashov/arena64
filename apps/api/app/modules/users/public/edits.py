@@ -51,6 +51,7 @@ from dataclasses import dataclass
 from app.core.enums import Locale
 from app.core.sentinels import UNSET, UnsetType
 from app.modules.users.domain.preferences import AnimationSpeed, BoardTheme, PieceSet
+from app.modules.users.domain.visibility import VisibilityLevel
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,10 +105,10 @@ class PrivacyEdits:
     """
 
     show_country: bool | UnsetType = UNSET
-    show_last_seen: bool | UnsetType = UNSET
+    last_seen: VisibilityLevel | UnsetType = UNSET
     show_statistics: bool | UnsetType = UNSET
-    show_online_status: bool | UnsetType = UNSET
-    show_activity: bool | UnsetType = UNSET
+    online_status: VisibilityLevel | UnsetType = UNSET
+    activity: VisibilityLevel | UnsetType = UNSET
 
 
 @dataclass(frozen=True, slots=True)

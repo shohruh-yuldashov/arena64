@@ -151,6 +151,29 @@ OPENAPI_TAGS: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "friends",
+        "description": (
+            "Friend requests — the first half of the social graph (A64-013.2). "
+            "Sending, listing what you have sent and received, and the three ways a "
+            "request ends: accepted, declined, cancelled.\n\n"
+            "**Every endpoint acts as the account behind your access token.** No "
+            "path, query or body field names who is sending, accepting, declining or "
+            "cancelling, so acting as somebody else is not something the API can "
+            "express.\n\n"
+            "Only the *recipient* may accept or decline; only the *sender* may "
+            "cancel. The two are not interchangeable — they leave different history, "
+            "and a future decline cooldown reads it.\n\n"
+            "**Nothing is ever deleted.** `DELETE /friends/requests/{id}` resolves a "
+            "request to `cancelled`; accepted, declined and cancelled rows are kept, "
+            "because a request that ended is a fact with a date.\n\n"
+            "A declined request is **silent to the sender**: it simply leaves their "
+            "outgoing list, with no notification and no explanation.\n\n"
+            "Accepting does not yet produce a friend list — that is A64-013.3, which "
+            "creates the friendship in the same transaction that resolves the "
+            "request."
+        ),
+    },
+    {
         "name": "health",
         "description": (
             "Liveness and readiness probes for load balancers and orchestrators. "

@@ -31,10 +31,21 @@ attack it would catch that the per-user rule does not — an attacker holding
 N stolen tokens already holds N compromised accounts, and rate limiting is
 not the control for that.
 
-## Why search is the one read that is limited
+## Two reads are limited, and for different reasons
 
-Every other read on this module is unlimited, and A64-013.1 makes search
-the exception rather than reversing the rule. The difference is what an
+`GET /profiles/{username}` (A64-013.2) and `GET /users/search` (A64-013.1).
+Everything else on this module is still unlimited, and the two exceptions
+are not the same exception:
+
+    search          bounded because an unbounded caller *enumerates the
+                    platform*. Per **user**, because it is authenticated
+                    and a proven identity beats an address.
+    profile read    bounded because it is the most enumerable surface on
+                    the platform and it is anonymous. Per **IP**, because
+                    there is no account to count — the only dimension
+                    available, and the reason its budget is far looser.
+
+The rest of this section is about search. The difference is what an
 unbounded caller can *accumulate*: reading your own privacy settings a
 thousand times yields your own privacy settings, while reading search a
 thousand times yields a substantial fraction of the player directory.
@@ -107,6 +118,23 @@ def build_rules(settings: RateLimitSettings) -> dict[str, tuple[RateLimitRule, .
         # bounded because an unbounded authenticated write hammers a row,
         # while this is bounded because an unbounded search *enumerates the
         # platform*. See `RateLimitSettings.search_user_limit`.
+        # A64-013.2. **Per IP**, and it has to be: the endpoint is anonymous
+        # by design, so there is no account to count. The brief asks that
+        # this endpoint be migrated to "the correct rate limiting", and for
+        # an unauthenticated read the correct dimension is the only one
+        # available — which is also why it is the loosest limit here.
+        #
+        # Until this task it was unlimited, and the last three tasks each
+        # recorded that as debt: it is the platform's most enumerable
+        # surface, a username at a time.
+        "profile_read": (
+            RateLimitRule(
+                name="profile_read_ip",
+                scope=RateLimitScope.IP,
+                limit=settings.profile_read_ip_limit,
+                window=timedelta(seconds=settings.profile_read_window_seconds),
+            ),
+        ),
         "search": (
             RateLimitRule(
                 name="user_search_user",
@@ -138,6 +166,12 @@ def _guard(endpoint: str) -> RateLimit:
 PRIVACY_UPDATE_RATE_LIMIT = _guard("privacy_update")
 PREFERENCES_UPDATE_RATE_LIMIT = _guard("preferences_update")
 SEARCH_RATE_LIMIT = _guard("search")
+
+#: The one IP-scoped guard on this module. Attachable as a bare
+#: `Depends(...)` precisely *because* it is IP-scoped — `resolve_subjects`
+#: needs no principal for it, which is what lets an anonymous endpoint carry
+#: a limit at all.
+PROFILE_READ_RATE_LIMIT = _guard("profile_read")
 
 
 async def _enforce(

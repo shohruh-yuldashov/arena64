@@ -59,7 +59,7 @@ from app.modules.users.domain.value_objects import (
     Username,
 )
 from app.modules.users.infrastructure.presence import RedisPresenceProvider
-from app.modules.users.public import Presence, PresenceProvider
+from app.modules.users.public import Presence, PresenceProvider, VisibilityLevel
 from tests.fakes.presence_redis import FakePresenceRedis, MovableClock
 from tests.fakes.user_repository import FakeUserRepository
 
@@ -359,7 +359,7 @@ class TestPresence:
         """UP-4: enforced server-side, on the read path, from a flag the
         response never carries. The record says `True` and the profile says
         nothing."""
-        user.privacy = user.privacy.updated(show_online_status=False)
+        user.privacy = user.privacy.updated(online_status=VisibilityLevel.NOBODY)
         service = build_service([user], presence)
         await presence.record_presence(user.id, is_online=True)
 
@@ -395,7 +395,10 @@ class TestPresence:
         already authenticated rather than a username, so there is no path by
         which it returns somebody else's.
         """
-        user.privacy = user.privacy.updated(show_online_status=False, show_last_seen=False)
+        user.privacy = user.privacy.updated(
+            online_status=VisibilityLevel.NOBODY,
+            last_seen=VisibilityLevel.NOBODY,
+        )
         service = build_service([user], presence)
         await presence.record_presence(user.id, is_online=True)
 
@@ -424,7 +427,10 @@ class TestPresence:
         take.
         """
         hidden = account(username="Hidden_One")
-        hidden.privacy = hidden.privacy.updated(show_online_status=False, show_last_seen=False)
+        hidden.privacy = hidden.privacy.updated(
+            online_status=VisibilityLevel.NOBODY,
+            last_seen=VisibilityLevel.NOBODY,
+        )
         service = build_service([hidden, user], presence)
         await presence.record_presence(hidden.id, is_online=True)
 
@@ -448,7 +454,10 @@ class TestPresence:
         precisely when nothing consults it.
         """
         hidden = account()
-        hidden.privacy = hidden.privacy.updated(show_online_status=False, show_last_seen=False)
+        hidden.privacy = hidden.privacy.updated(
+            online_status=VisibilityLevel.NOBODY,
+            last_seen=VisibilityLevel.NOBODY,
+        )
         service = build_service([hidden], _ExplodingPresenceProvider())
 
         profile = await service.get_public_profile("Player_One")

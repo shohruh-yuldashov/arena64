@@ -66,7 +66,7 @@ from fastapi import APIRouter, Depends, status
 from app.api.openapi import Responses, error_response
 from app.api.responses import build_response
 from app.core.responses import ApiResponse
-from app.core.sentinels import UNSET
+from app.core.sentinels import UNSET, UnsetType
 from app.modules.auth.presentation.dependencies import CurrentUser
 from app.modules.avatars.presentation.dependencies import AvatarLinkBuilderDep
 from app.modules.profiles.presentation.dependencies import (
@@ -95,6 +95,7 @@ from app.modules.users.public import (
     PreferenceEdits,
     PrivacyEdits,
     ProfileEdits,
+    VisibilityLevel,
 )
 
 logger = logging.getLogger(__name__)
@@ -402,26 +403,17 @@ async def update_my_privacy_settings(
             if "show_country" in sent and payload.show_country is not None
             else UNSET
         ),
-        show_last_seen=(
-            payload.show_last_seen
-            if "show_last_seen" in sent and payload.show_last_seen is not None
-            else UNSET
-        ),
         show_statistics=(
             payload.show_statistics
             if "show_statistics" in sent and payload.show_statistics is not None
             else UNSET
         ),
-        show_online_status=(
-            payload.show_online_status
-            if "show_online_status" in sent and payload.show_online_status is not None
-            else UNSET
-        ),
-        show_activity=(
-            payload.show_activity
-            if "show_activity" in sent and payload.show_activity is not None
-            else UNSET
-        ),
+        # The three audience-valued settings, each accepting either its own
+        # name or the boolean it replaced — `resolved` owns that pairing so
+        # this router never learns that a deprecated spelling exists.
+        last_seen=_level_or_unset(payload, "last_seen", "show_last_seen"),
+        online_status=_level_or_unset(payload, "online_status", "show_online_status"),
+        activity=_level_or_unset(payload, "activity", "show_activity"),
     )
 
     settings = await privacy.update_privacy_settings(user.id, edits)
@@ -601,6 +593,20 @@ async def update_my_preferences(
     )
 
     return build_response(PreferencesResponse.of(updated))
+
+
+def _level_or_unset(
+    payload: PrivacySettingsUpdateRequest, audience: str, legacy: str
+) -> VisibilityLevel | UnsetType:
+    """A visibility level, or `UNSET` when the client mentioned neither
+    spelling.
+
+    The `UNSET` is what makes this a real PATCH: omitting a setting leaves
+    it alone, and `None` is not available to mean that because the schema
+    rejects an explicit null. Same mechanism as `_gameplay_edits` below.
+    """
+    level = payload.resolved(audience, legacy)
+    return UNSET if level is None else level
 
 
 def _gameplay_edits(payload: GameplayPreferencesUpdate) -> GameplayEdits:

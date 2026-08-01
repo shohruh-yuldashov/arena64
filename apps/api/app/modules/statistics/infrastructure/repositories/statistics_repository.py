@@ -16,6 +16,7 @@ repositories.md §3:
 """
 
 import logging
+from collections.abc import Mapping, Sequence
 from uuid import UUID
 
 from sqlalchemy import select
@@ -65,3 +66,28 @@ class SqlAlchemyStatisticsRepository:
             select(PlayerStatisticsModel).where(PlayerStatisticsModel.player_id == player_id)
         )
         return self._to_domain(row) if row is not None else None
+
+    async def get_for_players(self, player_ids: Sequence[UUID]) -> Mapping[UUID, PlayerStatistics]:
+        """One statement for a whole page — A64-013.1.
+
+        `IN (...)` over the primary key, so PostgreSQL probes the index once
+        per id rather than scanning: the same access pattern as
+        `get_for_player` above, batched, and still index-only work.
+
+        `.in_()` rather than `= ANY(:array)`: SQLAlchemy renders it as an
+        expanding bind parameter, which keeps the ids as separate parameters
+        the planner can see, and stays correct on any driver rather than
+        depending on asyncpg's array handling.
+
+        Players with no row are simply absent from the mapping — the
+        repository reports what storage holds, and `StatisticsService`
+        decides what absence means (repositories.md §3's "honest absence",
+        applied to a set).
+        """
+        if not player_ids:
+            return {}
+
+        rows = await self._session.scalars(
+            select(PlayerStatisticsModel).where(PlayerStatisticsModel.player_id.in_(player_ids))
+        )
+        return {row.player_id: self._to_domain(row) for row in rows}

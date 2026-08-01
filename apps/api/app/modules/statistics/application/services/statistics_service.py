@@ -25,6 +25,7 @@ directory) and incidentally denies an enumeration oracle to anyone probing
 """
 
 import logging
+from collections.abc import Mapping, Sequence
 from uuid import UUID
 
 from app.modules.statistics.application.ports import StatisticsRepository
@@ -66,3 +67,40 @@ class StatisticsService:
         # response the caller already has.
         logger.info("statistics_lookup_succeeded", extra={"player_id": str(player_id)})
         return stored
+
+    async def for_players(self, player_ids: Sequence[UUID]) -> Mapping[UUID, PlayerStatistics]:
+        """A page of records, defaulting every absence to the empty one.
+
+        **Complete by construction**: every id asked for has an entry, so a
+        caller indexes the mapping rather than writing a `.get(id) or
+        NO_MATCHES_PLAYED` at each call site — which is the line somebody
+        eventually writes as `.get(id)` alone and renders a null record.
+
+        That is the opposite of `PresenceProvider.presence_for_many`, which
+        omits absent players, and the asymmetry is deliberate: absence of
+        statistics has a well-defined value (nobody has played nothing
+        *unknowably*), while absence of presence genuinely means unknown.
+        Padding presence would invent an observation; padding statistics
+        states a fact.
+
+        One log line for the page rather than one per player. Twenty
+        `statistics_lookup_succeeded` records per search would drown the
+        signal the single-profile path emits (CLAUDE.md §8.8), and the
+        count is what an operator would actually want from a batch.
+        """
+        if not player_ids:
+            return {}
+
+        stored = await self._statistics.get_for_players(player_ids)
+
+        # Ids only, and the two counts. Never the numbers, and never a
+        # username — a permanent access record must not become a searchable
+        # index of who looked at whom (services.md §8.5). `missing` is the
+        # useful diagnostic: on a platform with no matches it is the whole
+        # page, and a sudden change means the projection moved.
+        logger.debug(
+            "statistics_batch_lookup",
+            extra={"requested": len(player_ids), "found": len(stored)},
+        )
+
+        return {player_id: stored.get(player_id, NO_MATCHES_PLAYED) for player_id in player_ids}

@@ -62,6 +62,7 @@ BR-2 requires a `public/` port be consumed in terms of the DTOs it
 publishes.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 from uuid import UUID
 
@@ -98,6 +99,24 @@ class RatingProvider(Protocol):
         """
         ...
 
+    async def ratings_for_many(self, player_ids: Sequence[UUID]) -> Mapping[UUID, PlayerRatings]:
+        """Every category for a page of players — A64-013.1.
+
+        **Complete**: every id asked for has an entry, for the same reason
+        the singular form returns every category — a caller must never have
+        to write a fallback for a shape that is always total.
+
+        Free today, because the only implementation returns a constant and
+        a loop over it would cost nothing measurable. It exists anyway, and
+        that is a deliberate exception to this codebase's usual refusal to
+        build for a caller that does not exist: the *caller* very much
+        exists (user search renders fifty players at once), and it is the
+        day `rating` becomes a real network read that a loop here turns
+        into fifty round trips on a page. Widening the port now costs five
+        lines; discovering it then costs an incident.
+        """
+        ...
+
 
 class StatisticsProvider(Protocol):
     """Reads a player's aggregate match record."""
@@ -106,4 +125,21 @@ class StatisticsProvider(Protocol):
         """The counts, always. Zeroes for a player who has finished no
         matches — see `RatingProvider.ratings_for` on why absence is a
         value here rather than an exception."""
+        ...
+
+    async def statistics_for_many(
+        self, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, PlayerStatistics]:
+        """A page of records in one round trip — A64-013.1.
+
+        **Complete**: every id asked for has an entry, defaulting to the
+        empty record. A caller indexes rather than defaulting per site.
+
+        Added for user search, which renders up to fifty players at once.
+        Looping `statistics_for` would be fifty statements per page — the
+        N+1 pattern CLAUDE.md §10.4 names, on the first endpoint this
+        module serves that returns a collection.
+
+        Never raises, and an empty sequence costs no round trip.
+        """
         ...

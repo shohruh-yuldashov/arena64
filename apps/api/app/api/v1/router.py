@@ -30,11 +30,23 @@ from app.core.constants import API_V1_PREFIX
 from app.modules.auth.presentation.router import auth_router
 from app.modules.avatars.presentation.router import avatar_router
 from app.modules.profiles.presentation.router import profiles_router
+from app.modules.profiles.presentation.search_router import user_search_router
 from app.modules.profiles.presentation.self_router import my_profile_router
 from app.modules.users.presentation.router import users_router
 
 v1_router = APIRouter(prefix=API_V1_PREFIX)
 v1_router.include_router(health_router)
+
+# **Before `users_router`, and the order is load-bearing.** `GET /users/search`
+# and `GET /users/{user_id}` both match the path `/users/search`; Starlette
+# resolves in registration order, so registering the parameterised route first
+# would make every search a `422` complaining that `search` is not a UUID.
+#
+# The two live in different modules — the search composes a public profile and
+# therefore belongs to `profiles` — so this ordering cannot be enforced by
+# their decorators, only here. `tests/contract/test_user_search_api.py` asserts
+# the resolution rather than trusting this comment.
+v1_router.include_router(user_search_router)
 v1_router.include_router(users_router)
 v1_router.include_router(auth_router)
 v1_router.include_router(profiles_router)

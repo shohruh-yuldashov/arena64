@@ -1,9 +1,16 @@
 """The port other modules may depend on — BE-03's published surface.
 
-One port, one method. `profiles` (A64-012.6) is the first consumer and
-needs exactly this: a player's record by id.
+One port. `profiles` (A64-012.6) was the first consumer and needed one
+method — a player's record by id. A64-013.1 added the second, because user
+search renders a page of players at once and a per-player read over a page
+is the N+1 pattern CLAUDE.md §10.4 rules out.
+
+Two methods rather than a widened one: a caller rendering one profile
+should not have to build a one-element sequence, and a caller rendering a
+page should not loop.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 from uuid import UUID
 
@@ -45,5 +52,20 @@ class StatisticsReader(Protocol):
         account at all. That is correct for this context, which does not
         own the player directory and has no way to tell the two apart — and
         it usefully denies an existence oracle to anyone probing ids.
+        """
+        ...
+
+    async def for_players(self, player_ids: Sequence[UUID]) -> Mapping[UUID, PlayerStatistics]:
+        """The same answer for a page of players, in one round trip.
+
+        **Complete**: every id asked for has an entry, defaulting to
+        `NO_MATCHES_PLAYED`, so a caller indexes rather than defaulting at
+        each site. Never raises; an empty sequence returns an empty mapping
+        without touching storage.
+
+        **Applies no privacy**, exactly as `for_player` does not. The
+        consumer composing a public profile decides who may see a record —
+        see `PublicProfileComposer`, which declines to ask for the players
+        who have hidden theirs.
         """
         ...

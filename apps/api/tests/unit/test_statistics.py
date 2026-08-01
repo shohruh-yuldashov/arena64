@@ -7,6 +7,7 @@ that guard against a broken rebuild, and the cross-context constant that
 has no single owner yet.
 """
 
+from collections.abc import Mapping, Sequence
 from uuid import UUID, uuid4
 
 import pytest
@@ -30,6 +31,20 @@ class FakeStatisticsRepository:
     async def get_for_player(self, player_id: UUID) -> PlayerStatistics | None:
         self.calls.append(player_id)
         return self._stored
+
+    async def get_for_players(self, player_ids: Sequence[UUID]) -> Mapping[UUID, PlayerStatistics]:
+        """The batch read, modelled as "the same record for everyone who has
+        one" — enough for the only decision the service makes about a page,
+        which is what to substitute for a player who has none.
+
+        Omits absent players rather than padding them, matching the real
+        adapter: padding is the *service's* job, and a fake that did it
+        would hide the service failing to.
+        """
+        self.calls.extend(player_ids)
+        if self._stored is None:
+            return {}
+        return dict.fromkeys(player_ids, self._stored)
 
 
 class TestInvariants:

@@ -12,6 +12,7 @@ name says it is.
 Nothing about the class changed in the move.
 """
 
+from collections.abc import Mapping, Sequence
 from uuid import UUID
 
 from app.modules.profiles.domain.ratings import PlayerRatings
@@ -47,3 +48,14 @@ class UnratedRatingProvider:
 
     async def ratings_for(self, player_id: UUID) -> PlayerRatings:
         return PlayerRatings.unrated()
+
+    async def ratings_for_many(self, player_ids: Sequence[UUID]) -> Mapping[UUID, PlayerRatings]:
+        """The same starting snapshot for everyone asked about.
+
+        `PlayerRatings.unrated()` is called once and shared across the page
+        rather than per id. Safe because `PlayerRatings` is a frozen value
+        — no caller can mutate what another holds — and it keeps a
+        fifty-player page at one construction instead of fifty.
+        """
+        unrated = PlayerRatings.unrated()
+        return dict.fromkeys(player_ids, unrated)

@@ -20,6 +20,7 @@ port and never touches this table — is already in place, and a writer joins
 the same `application/` layer when there is something to write.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 from uuid import UUID
 
@@ -48,5 +49,27 @@ class StatisticsRepository(Protocol):
         the repository reports what storage holds and
         `StatisticsService.for_player` turns absence into
         `NO_MATCHES_PLAYED`.
+        """
+        ...
+
+    async def get_for_players(self, player_ids: Sequence[UUID]) -> Mapping[UUID, PlayerStatistics]:
+        """The stored records for a page of players, in **one** statement.
+
+        Added by A64-013.1, the first caller that renders more than one
+        player at a time. `get_for_player` in a loop over a page of search
+        results is the N+1 access pattern CLAUDE.md §10.4 calls "the single
+        most common cause of slow endpoints", and it would return with
+        friend lists and leaderboards.
+
+        **Players with no row are omitted**, exactly as `get_for_player`
+        returns `None` for them — absence stays an ordinary outcome and the
+        service is still the layer that decides what it *means*. A mapping
+        padded with `NO_MATCHES_PLAYED` would move that decision into
+        storage.
+
+        An empty `player_ids` returns an empty mapping without issuing a
+        statement. `WHERE player_id = ANY('{}')` is a round trip that can
+        only return nothing, and an empty page is the ordinary result of a
+        search nobody matched.
         """
         ...

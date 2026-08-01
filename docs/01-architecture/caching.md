@@ -1,9 +1,10 @@
 # Redis Keyspaces, Caching and TTL Policy
 
 > **Status:** Approved for the keyspaces that exist — `rl:v1:`, `presence:v1:` and Celery's.
+> `friends:v1:` is **reserved**: owner and instance decided, contents not, nothing written.
 > Sections marked *Not yet allocated* describe workloads with no implementation.
 > **Owner:** Backend platform
-> **Last reviewed:** 2026-08-01 (A64-012.8)
+> **Last reviewed:** 2026-08-01 (A64-013.1)
 
 ## Purpose
 
@@ -58,7 +59,7 @@ persistence-configured for its own workload.
 | `live` | AOF (AD-18) | none | Live match position and clocks. The only role whose loss interrupts play. |
 | `bus` | none | n/a | Pub/sub fan-out. No keys — channels only. |
 | `broker` | Celery's own | Celery's own | Task queues. Celery owns the keyspace entirely. |
-| `cache` | none | yes, by design | Response cache, read models, **presence**. Everything here is reconstructible or expendable. |
+| `cache` | none | yes, by design | Response cache, read models, **presence**, and the reserved `friends:v1:`. Everything here is reconstructible or expendable. |
 | `limits` | none | **none — configured never to evict** | Rate limit counters. A counter evicted under memory pressure is a limit that disappears during exactly the traffic spike it exists for. |
 
 **Why presence is on `cache` and not a sixth role.** Presence is derived,
@@ -150,7 +151,50 @@ controls.
 *Future expansion:* AD-16's outbox relay is the first real producer. It changes
 what is *in* the queue, not the namespace.
 
-### 3.4 Not yet allocated
+### 3.4 `friends:v1:` — **reserved, not yet written** (A64-013.1)
+
+| | |
+| --- | --- |
+| **Owner** | `friends` (architecture.md §6) |
+| **Instance** | `cache` |
+| **Structure** | *Undecided* — see below |
+| **TTL** | *Undecided*, and possibly none |
+| **Written by** | Nothing. **No key under this prefix exists in any deployment.** |
+| **Read by** | Nothing |
+| **On failure** | n/a |
+
+**Reserved by A64-013.1, which writes nothing.** That task builds user
+search — the entry point to the social graph — and the next one builds
+friend requests. Claiming the prefix now costs nothing and settles the one
+question that is expensive to settle later: C-8 requires a namespace to have
+exactly one owner, and the cheapest moment to establish that is before two
+modules have both started using `friends:`.
+
+It is listed here rather than in *Not yet allocated* below because the owner
+and the instance are decided; only the contents are not.
+
+**What it will most likely hold, and why none of it is committed to.** A
+friend list is *relational* — `friends.friendship` in PostgreSQL is the
+system of record, per AD-19 and domain-model.md §482 — so this namespace is
+for **derived** state only:
+
+| Candidate | Why it might live here | Why it is not decided |
+| --- | --- | --- |
+| A player's friend-id set | Read on every presence fan-out and every "who is online" panel; a join per render is the N+1 this platform keeps refusing | Needs an invalidation rule on accept, remove and block (C-1), and a set that goes stale shows a stranger as a friend |
+| Blocked-id set | Read by **user search** on every request once blocking exists, and search already has the exclusion parameter to receive it | Same invalidation question, and a stale block is a worse failure than a stale friendship |
+| Pending-request counts | A badge, cheap to recompute | May not be worth a cache at all |
+
+Each is a **cache of a durable relation**, so C-5 is satisfied by
+construction and C-3 is the open question — a set with no TTL needs an
+invalidation trigger that is provably complete, which is the work
+A64-013.2 must do before writing the first key.
+
+*Future expansion:* the version segment is already there. If the friend-id
+set ships as a Redis `SET` and later needs scores (recency, interaction
+weight) it becomes a sorted set under `friends:v2:`, written alongside `v1`
+until the fleet has rolled.
+
+### 3.5 Not yet allocated
 
 These are named in architecture.md §13 and domain-model.md and have **no
 implementation and no namespace**. Listed so the next module allocates a prefix

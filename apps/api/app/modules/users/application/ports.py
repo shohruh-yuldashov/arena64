@@ -10,12 +10,14 @@ Every method takes and returns **domain types** — `User`, `Username`,
 `Email` — never ORM rows and never Pydantic models (repositories.md §4).
 """
 
+from collections.abc import Sequence
 from typing import Protocol
 from uuid import UUID
 
 from app.core.pagination import CursorPageInfo, CursorPageParams
 from app.modules.users.domain.entities import User
 from app.modules.users.domain.value_objects import Email, Username
+from app.modules.users.public.search import UserSearchQuery
 
 
 class UserRepository(Protocol):
@@ -141,4 +143,21 @@ class UserRepository(Protocol):
         explicit named parameter rather than a generic predicate bag:
         repositories.md §4 forbids a generic filter API precisely so that
         every query has an owner and an index can be designed for it."""
+        ...
+
+    async def search(self, query: UserSearchQuery) -> tuple[Sequence[User], str | None]:
+        """Ranked, keyset-paginated search over username and display name —
+        A64-013.1. Returns the page and the cursor for the next one.
+
+        Separate from `list` above rather than a filter on it, and the
+        difference is not cosmetic: `list` is a roster ordered by
+        `(created_at, id)`, while this is ordered by a *relevance* rank
+        computed against the term. They share no ordering key, so they share
+        no cursor, and folding them together would produce a method whose
+        pagination behaviour depended on whether an argument was `None`.
+
+        Never returns a deactivated account. Raises `InvalidSearchTerm` for
+        a term the domain rules refuse and `InvalidSearchCursor` for a
+        cursor that is malformed or belongs to a different term.
+        """
         ...

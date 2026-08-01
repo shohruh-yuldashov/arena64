@@ -77,16 +77,28 @@ class EngineVersion:
         return f"engine-v{self.number}"
 
 
-CURRENT_ENGINE_VERSION = EngineVersion(number=1)
-"""The rules this build implements — A64-014.1 through A64-014.6.
+CURRENT_ENGINE_VERSION = EngineVersion(number=2)
+"""The rules this build implements — A64-014.1 through A64-014.7.
 
-Version 1 covers: the board, men's and kings' moves, complete capture
+**Version 1** — the board, men's and kings' moves, complete capture
 sequences, mandatory and maximum capture, all three mid-sequence promotion
-rules, and terminal detection by material and by mobility. It does **not**
-cover draw rules, which arrive in A64-014.7 and will make it 2 — a game
-played under version 1 has no draw-by-repetition and replaying it under
-version 2 could end it earlier, which is exactly the divergence AD-15 says
-must be recorded rather than discovered.
+rules, and terminal detection by material and by mobility. **No draw
+rules.**
+
+**Version 2** — everything in 1, plus draw by threefold repetition and the
+mechanism for the move-limit draws.
+
+**Why 2 exists.** A64-014.7 makes the engine answer differently about
+games it already answered about: a match that shuffles back to the same
+position twice is drawn under 2 and ran on under 1. That is precisely
+AD-15's case — "replaying a 2025 game under the new engine could yield a
+different outcome than the one that was rated and displayed" — so the
+version moved in the same change as the rules, and every match created
+from here records 2.
+
+A match created under 1 keeps its 1. Nothing rewrites a stamped version,
+because the point of stamping it is that it describes what actually
+happened.
 """
 
 

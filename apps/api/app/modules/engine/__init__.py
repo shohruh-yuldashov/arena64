@@ -20,6 +20,13 @@ versioned corpus in `specs/game-engine/corpus/v1/`.
 **A64-014.3 — validation and application.** `MoveValidator` (which holds no
 rules of its own — it asks the generator), `MoveApplier` and `IllegalMove`.
 
+**A64-014.7 — draw configuration.** `DrawRules` and `MaterialPlyLimit`, a
+variant axis like every other. The *evaluation* is not here: a draw is a
+property of a game's history (MT-12) and the kernel has none, so
+`game.DrawRuleSet` reads these. Only the repetition threshold is
+configured — the rest are undecided product rules, recorded in
+`draw_rules.py`.
+
 **A64-014.6 — terminal states and versioning.** `EngineVersion`,
 `CURRENT_ENGINE_VERSION`, `TerminalState`, `TerminalReason` and
 `TerminalStateEvaluator`. The evaluator is pure over a single position and
@@ -72,6 +79,11 @@ from app.modules.engine.coordinate import (
     BoardCoordinate,
     Direction,
 )
+from app.modules.engine.draw_rules import (
+    THREEFOLD_REPETITION_ONLY,
+    DrawRules,
+    MaterialPlyLimit,
+)
 from app.modules.engine.exceptions import (
     DestinationOccupied,
     GameDomainError,
@@ -100,6 +112,7 @@ from app.modules.engine.version import CURRENT_ENGINE_VERSION, EngineVersion
 
 __all__ = [
     "CURRENT_ENGINE_VERSION",
+    "THREEFOLD_REPETITION_ONLY",
     "DIAGONAL_DIRECTIONS",
     "MAX_BOARD_DIMENSION",
     "Board",
@@ -109,12 +122,14 @@ __all__ = [
     "CaptureObligation",
     "DestinationOccupied",
     "Direction",
+    "DrawRules",
     "EngineVersion",
     "GameDomainError",
     "IllegalMove",
     "InvalidBoardState",
     "InvalidCoordinate",
     "InvalidMove",
+    "MaterialPlyLimit",
     "MidSequencePromotion",
     "Move",
     "MoveApplier",

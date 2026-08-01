@@ -13,6 +13,7 @@ import pytest
 from app.modules.engine import (
     DIAGONAL_DIRECTIONS,
     MAX_BOARD_DIMENSION,
+    THREEFOLD_REPETITION_ONLY,
     BoardCoordinate,
     BoardGeometry,
     BoardVariant,
@@ -48,6 +49,7 @@ def _geometry(
         men_may_capture_backward=True,
         kings_fly=True,
         mid_sequence_promotion=MidSequencePromotion.CROWNS_AND_CONTINUES,
+        draw_rules=THREEFOLD_REPETITION_ONLY,
     )
 
 

@@ -1,0 +1,142 @@
+{
+  "corpus_version": 2,
+  "scope": "Draw rules and lifecycle counters over a *sequence* of plies (A64-014.7). A draw is a property of a game rather than of a board, so these cases state an opening position and an ordered list of moves, and assert what the match looks like afterwards. Only the threefold repetition threshold is configured on any variant — the move-limit thresholds are undecided product rules, so no case here can exercise them.",
+  "draw_sequences": [
+    {
+      "id": "threefold-repetition-draws-on-the-second-return",
+      "description": "The opening position is occurrence 1 before anybody moves. Four plies return to it — occurrence 2 — and four more return again, which is the third occurrence and the draw. This is what 'three-fold' has always meant, and it is why Match records its starting position at creation.",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "a1", "side": "light", "rank": "king" },
+        { "square": "h2", "side": "dark", "rank": "king" }
+      ],
+      "moves": [
+        { "path": ["a1", "b2"], "captured": [], "promotes_to": null },
+        { "path": ["h2", "g1"], "captured": [], "promotes_to": null },
+        { "path": ["b2", "a1"], "captured": [], "promotes_to": null },
+        { "path": ["g1", "h2"], "captured": [], "promotes_to": null },
+        { "path": ["a1", "b2"], "captured": [], "promotes_to": null },
+        { "path": ["h2", "g1"], "captured": [], "promotes_to": null },
+        { "path": ["b2", "a1"], "captured": [], "promotes_to": null },
+        { "path": ["g1", "h2"], "captured": [], "promotes_to": null }
+      ],
+      "expected_status": "completed",
+      "expected_outcome": "draw",
+      "expected_reason": "repetition",
+      "expected_winner": null,
+      "expected_position_occurrences": 3,
+      "expected_plies_since_progress": 8
+    },
+    {
+      "id": "two-occurrences-are-not-a-draw",
+      "description": "The same shuffle, stopped after one return. Occurrence 2 of three, so the match runs on — the case that fails if an implementation counts returns instead of occurrences, or forgets to record the opening.",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "a1", "side": "light", "rank": "king" },
+        { "square": "h2", "side": "dark", "rank": "king" }
+      ],
+      "moves": [
+        { "path": ["a1", "b2"], "captured": [], "promotes_to": null },
+        { "path": ["h2", "g1"], "captured": [], "promotes_to": null },
+        { "path": ["b2", "a1"], "captured": [], "promotes_to": null },
+        { "path": ["g1", "h2"], "captured": [], "promotes_to": null }
+      ],
+      "expected_status": "active",
+      "expected_outcome": null,
+      "expected_reason": null,
+      "expected_winner": null,
+      "expected_position_occurrences": 2,
+      "expected_plies_since_progress": 4
+    },
+    {
+      "id": "quiet-king-moves-increment-the-no-progress-counter",
+      "description": "Three king moves, nothing captured and no man moved, so the counter is three. This is the number the move-limit draws read — and nothing reads it yet, because no variant configures a limit.",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "a1", "side": "light", "rank": "king" },
+        { "square": "h2", "side": "dark", "rank": "king" }
+      ],
+      "moves": [
+        { "path": ["a1", "b2"], "captured": [], "promotes_to": null },
+        { "path": ["h2", "g1"], "captured": [], "promotes_to": null },
+        { "path": ["b2", "c3"], "captured": [], "promotes_to": null }
+      ],
+      "expected_status": "active",
+      "expected_outcome": null,
+      "expected_reason": null,
+      "expected_winner": null,
+      "expected_position_occurrences": 1,
+      "expected_plies_since_progress": 3
+    },
+    {
+      "id": "a-capture-resets-the-no-progress-counter",
+      "description": "Two king moves take the counter to two, and the capture on the third ply puts it back to nothing. Material only ever decreases, so a capture is progress by definition.",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "a1", "side": "light", "rank": "king" },
+        { "square": "h2", "side": "dark", "rank": "king" },
+        { "square": "c7", "side": "dark", "rank": "man" }
+      ],
+      "moves": [
+        { "path": ["a1", "b2"], "captured": [], "promotes_to": null },
+        { "path": ["h2", "e5"], "captured": [], "promotes_to": null },
+        { "path": ["b2", "f6"], "captured": ["e5"], "promotes_to": null }
+      ],
+      "expected_status": "active",
+      "expected_outcome": null,
+      "expected_reason": null,
+      "expected_winner": null,
+      "expected_position_occurrences": 1,
+      "expected_plies_since_progress": 0
+    },
+    {
+      "id": "a-man-move-resets-the-no-progress-counter",
+      "description": "Two king moves, then a man crowns on h8. A man only ever advances, so its move is progress — including the one that crowns it, because the advance is what was irreversible.",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "a1", "side": "light", "rank": "king" },
+        { "square": "g7", "side": "light", "rank": "man" },
+        { "square": "h2", "side": "dark", "rank": "king" }
+      ],
+      "moves": [
+        { "path": ["a1", "b2"], "captured": [], "promotes_to": null },
+        { "path": ["h2", "g1"], "captured": [], "promotes_to": null },
+        { "path": ["g7", "h8"], "captured": [], "promotes_to": "king" }
+      ],
+      "expected_status": "active",
+      "expected_outcome": null,
+      "expected_reason": null,
+      "expected_winner": null,
+      "expected_position_occurrences": 1,
+      "expected_plies_since_progress": 0
+    },
+    {
+      "id": "a-decisive-result-ends-the-match-as-a-win",
+      "description": "A capture that takes the last dark piece. The terminal evaluator is asked before the draw rules, so a game that was won is never recorded as drawn.",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c3", "side": "light", "rank": "man" },
+        { "square": "d4", "side": "dark", "rank": "man" }
+      ],
+      "moves": [{ "path": ["c3", "e5"], "captured": ["d4"], "promotes_to": null }],
+      "expected_status": "completed",
+      "expected_outcome": "win",
+      "expected_reason": "all_pieces_captured",
+      "expected_winner": "light",
+      "expected_position_occurrences": 1,
+      "expected_plies_since_progress": 0
+    }
+  ]
+}

@@ -104,6 +104,40 @@ class RejectionCase:
 
 
 @dataclass(frozen=True, slots=True)
+class DrawSequenceCase:
+    """An opening position, an ordered list of moves, and what the match
+    looks like once they have all been played.
+
+    The **fourth** expectation shape. A draw is a property of a game
+    rather than of a board, so it cannot be stated as a position the way
+    `terminal_positions` states a loss — this is the first case kind that
+    describes a sequence.
+    """
+
+    id: str
+    description: str
+    engine_version: int
+    """Which rules build the expectation was written for. Draws arrived in
+    2, so a reader on 1 would disagree about the last ply of half of
+    these."""
+
+    variant: BoardVariant
+    side_to_move: PlayerSide
+    pieces: Mapping[BoardCoordinate, Piece]
+    moves: tuple[Move, ...]
+    expected_status: str
+    expected_outcome: str | None
+    expected_reason: str | None
+    expected_winner: PlayerSide | None
+    expected_position_occurrences: int
+    expected_plies_since_progress: int
+    source: str
+
+    def __str__(self) -> str:
+        return self.source
+
+
+@dataclass(frozen=True, slots=True)
 class TerminalCase:
     """One position and the terminal verdict it must produce.
 
@@ -148,6 +182,11 @@ def load_terminal_positions(through: int = LATEST_VERSION) -> tuple[TerminalCase
     reader guess which it was looking at.
     """
     return tuple(_terminal(entry, name) for entry, name in _entries(through, "terminal_positions"))
+
+
+def load_draw_sequences(through: int = LATEST_VERSION) -> tuple[DrawSequenceCase, ...]:
+    """Every draw-sequence case still in force."""
+    return tuple(_draw_sequence(entry, name) for entry, name in _entries(through, "draw_sequences"))
 
 
 def superseded_ids(through: int = LATEST_VERSION) -> frozenset[str]:
@@ -229,17 +268,37 @@ def _terminal(entry: Mapping[str, Any], file_name: str) -> TerminalCase:
     )
 
 
-def _position(entry: Mapping[str, Any]) -> Position:
-    variant = BoardVariant(entry["variant"])
-    board = Board(
-        variant,
-        {
-            BoardCoordinate.parse(piece["square"]): Piece(
-                side=PlayerSide(piece["side"]), rank=PieceRank(piece["rank"])
-            )
-            for piece in entry["pieces"]
-        },
+def _draw_sequence(entry: Mapping[str, Any], file_name: str) -> DrawSequenceCase:
+    winner = entry["expected_winner"]
+    return DrawSequenceCase(
+        id=entry["id"],
+        description=entry["description"],
+        engine_version=entry["engine_version"],
+        variant=BoardVariant(entry["variant"]),
+        side_to_move=PlayerSide(entry["side_to_move"]),
+        pieces=_pieces(entry),
+        moves=tuple(_move(played) for played in entry["moves"]),
+        expected_status=entry["expected_status"],
+        expected_outcome=entry["expected_outcome"],
+        expected_reason=entry["expected_reason"],
+        expected_winner=None if winner is None else PlayerSide(winner),
+        expected_position_occurrences=entry["expected_position_occurrences"],
+        expected_plies_since_progress=entry["expected_plies_since_progress"],
+        source=f"{file_name}#{entry['id']}",
     )
+
+
+def _pieces(entry: Mapping[str, Any]) -> Mapping[BoardCoordinate, Piece]:
+    return {
+        BoardCoordinate.parse(piece["square"]): Piece(
+            side=PlayerSide(piece["side"]), rank=PieceRank(piece["rank"])
+        )
+        for piece in entry["pieces"]
+    }
+
+
+def _position(entry: Mapping[str, Any]) -> Position:
+    board = Board(BoardVariant(entry["variant"]), _pieces(entry))
     return Position(board=board, side_to_move=PlayerSide(entry["side_to_move"]))
 
 

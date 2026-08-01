@@ -127,6 +127,29 @@ class TestPositionsThatContinue:
         assert evaluator.evaluate(position({"c3": LIGHT_MAN, "d4": DARK_MAN})) is None
 
 
+class TestTheEvaluatorStaysDrawFree:
+    """A64-014.7 added draw rules and changed nothing here, deliberately.
+    Widening this evaluator would mean giving the kernel a memory — the one
+    thing AD-13 does not allow it — and would make "is this position
+    terminal" a question with a different answer depending on how the game
+    got there."""
+
+    def test_a_repeated_position_is_not_terminal_to_the_evaluator(self) -> None:
+        """It has no idea the position has occurred before, and must not."""
+        repeated = position({"a1": LIGHT_KING, "h2": DARK_MAN})
+
+        assert evaluator.evaluate(repeated) is None
+
+    def test_it_takes_a_position_and_nothing_else(self) -> None:
+        """The signature is the contract. A history argument would be the
+        first crack in it."""
+        import inspect
+
+        parameters = list(inspect.signature(evaluator.evaluate).parameters)
+
+        assert parameters == ["position"]
+
+
 class TestEveryVerdictNamesAWinner:
     """Not an accident of these examples — a guarantee. Every draw in
     draughts is a property of the game's history, which `Match` owns and
@@ -149,10 +172,10 @@ class TestEngineVersion:
         """A constant, not something read from package metadata or git — see
         `app.modules.engine.version`. Two runs of the same source must stamp
         the same value or AD-15's enumeration is a guess."""
-        assert EngineVersion(number=1) == CURRENT_ENGINE_VERSION
+        assert EngineVersion(number=2) == CURRENT_ENGINE_VERSION
 
     def test_it_serialises_to_a_primitive(self) -> None:
-        assert CURRENT_ENGINE_VERSION.as_primitive() == 1
+        assert CURRENT_ENGINE_VERSION.as_primitive() == 2
 
     def test_versions_compare(self) -> None:
         """ "Played under a version older than the fix" is the query AD-15

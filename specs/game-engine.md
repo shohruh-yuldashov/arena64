@@ -1,8 +1,8 @@
 # Game Engine
 
-> **Status:** Partial — **the rules of movement are complete** (A64-014.1 – A64-014.5) and the
-> game lifecycle, terminal detection and position history exist (A64-014.6). Draw rules, clocks
-> and notation are not yet specified
+> **Status:** Partial — **the rules of play are complete** (A64-014.1 – A64-014.7: movement,
+> lifecycle, terminal detection and draws), except that three of the four draw thresholds are
+> **undecided product rules** (§7.7). Clocks, notation and serialization are not yet specified
 > **Owner:** _Unassigned_
 > **Related:** `templates/feature-spec.md`, `docs/01-architecture/architecture.md` §11,
 > `docs/01-architecture/domain-model.md` §2.1 and §16.1
@@ -599,11 +599,129 @@ that has ended — the same shape `evaluate` answers with. Format in the corpus 
 
 ---
 
-## 7. Not yet specified
+## 7. Draw rules — A64-014.7
 
-**Draw rules** — the repetition threshold, the fifteen-move king-only rule, and the move-limit
-rules. `Match` already records everything they read; A64-014.7 decides what the numbers are and
-what they mean, and bumps `CURRENT_ENGINE_VERSION` when it does.
+### 7.1 Why draws are not in the engine
+
+domain-model.md MT-12: "terminal detection consults game **history**, not just the position."
+`TerminalStateEvaluator` is the half that reads a position, and A64-014.7 **did not touch it**.
+
+| | Sees | Can report |
+| --- | --- | --- |
+| `TerminalStateEvaluator` (`engine`) | One `Position` | A loss — no pieces, or no moves |
+| `DrawRuleSet` (`game`) | A `MatchHistory` snapshot | A draw — repetition, or a move limit |
+
+| Rule | Statement |
+| --- | --- |
+| GE-74 | The terminal evaluator's contract is unchanged: it takes a position and nothing else. Widening it would give the kernel a memory, which AD-13 forbids, and would make "is this position terminal" answer differently depending on how the game got there |
+| GE-75 | `DrawRuleSet.evaluate(rules, history)` takes two immutable values, not the `Match`. It cannot change the aggregate, and it can be exercised against configurations no variant has — which matters, because three of the four rules are configured by none |
+
+### 7.2 Repetition — the first occurrence counts
+
+| Rule | Statement |
+| --- | --- |
+| GE-76 | The key is `Position` — board plus side to move, unchanged. Nothing was added to it; a ply number or a clock would make every position unique and the rule dead |
+| GE-77 | A draw fires when `occurrences_of(position) >= repetition_threshold`. **Occurrences, not returns** |
+| GE-78 | The opening position has occurred **once** before anybody moves, so a threshold of 3 fires on the *second* return. `Match` records its starting position at creation for exactly this reason |
+
+    opening            occurrence 1
+    first return       occurrence 2   — not a draw
+    second return      occurrence 3   — draw
+
+### 7.3 The no-progress counter
+
+Unchanged from A64-014.6 in behaviour, and now **configured** rather than hard-coded:
+`captures_reset_progress` and `man_moves_reset_progress` are variant axes. Both are true in
+every configured variant, and the counter still resets on a capture or a man's move — including
+one that crowns, because the advance is what was irreversible — and increments on a
+non-capturing king move.
+
+Thresholds are counted in **plies**, one per player turn. database.md §6.1 settles the unit by
+naming the column `moveless_draw_plies`.
+
+### 7.4 Variant configuration
+
+`BoardGeometry.draw_rules` is a `DrawRules` record, an axis like every other. `DrawRuleSet`
+reads it and **names no variant** — a test asserts the source contains no `BoardVariant` member
+name or value, because a branch on a variant nobody has configured yet would pass every
+behavioural test.
+
+| Axis | Meaning |
+| --- | --- |
+| `repetition_threshold` | Occurrences of one position that end the game. `None` disables the rule |
+| `no_progress_ply_limit` | Plies without a capture or a man's move |
+| `king_only_ply_limit` | The shorter limit that applies once no men remain |
+| `material_ply_limits` | Bands that shorten the limit as material thins, narrowest first, first match wins |
+| `captures_reset_progress` | Whether a capture restarts the count |
+| `man_moves_reset_progress` | Whether a man's move restarts it |
+
+### 7.5 Evaluation order, and priority
+
+Inside `DrawRuleSet`: repetition → king-only → material band → plain no-progress. Most specific
+first, because all four can be true at once in a thin endgame and the reason a player reads
+should describe their game.
+
+Inside `Match.play`:
+
+    1. validate and apply          — MoveApplier, unchanged
+    2. record the position         — one occurrence
+    3. update the counter          — per the variant's reset axes
+    4. TerminalStateEvaluator      — a win short-circuits
+    5. DrawRuleSet                 — only if no decisive result
+    6. otherwise the match stays ACTIVE
+
+| Rule | Statement |
+| --- | --- |
+| GE-79 | **A decisive result takes priority.** A game that was won is never recorded as drawn |
+| GE-80 | A draw is a `MatchResult` with `MatchOutcome.DRAW` and no winner — the existing seam, validated so that a draw naming a winner is unrepresentable |
+
+### 7.6 Engine version 2
+
+`CURRENT_ENGINE_VERSION` is **2**. A64-014.7 makes the engine answer differently about games it
+already answered about — a match that shuffles back twice is drawn under 2 and ran on under 1 —
+which is precisely AD-15's case. Every match created from here records 2; a match created under
+1 keeps its 1, because the point of stamping a version is that it describes what happened.
+
+Every `draw_sequences` corpus case states `engine_version: 2`, and a test asserts the corpus and
+the build agree.
+
+### 7.7 Undecided thresholds — a product decision, not an implementation gap
+
+**Only `repetition_threshold` is configured.** The other three are `None` on every variant.
+
+| Threshold | Status |
+| --- | --- |
+| Repetition = 3 | **Decided.** domain-model.md states the "three-fold repetition draw rule" throughout, unqualified by variant |
+| `no_progress_ply_limit` | **Undecided.** database.md §6.1 names the column `moveless_draw_plies`; no document in this repository gives it a value |
+| `king_only_ply_limit` | **Undecided.** Russian draughts has a fifteen-move king-only rule; this repository does not state it |
+| `material_ply_limits` | **Undecided.** Russian draughts scales the limit by material; the bands are nowhere stated |
+| International 10x10 | **Undecided in full.** Its draw rules are not the Russian ones, and none of them is documented here. It currently carries the same configuration, which is a placeholder rather than a claim |
+
+The mechanism is complete and every branch is tested against explicit configurations. Guessing a
+number would end rated games on a threshold nobody chose, and AD-15 makes changing one an
+engine-version event — so the numbers wait for a decision, and are one table edit away.
+
+**A second open question.** `DrawReason` distinguishes `NO_PROGRESS`, `KING_ONLY_MOVE_LIMIT` and
+`MATERIAL_MOVE_LIMIT`, and all three are recorded as `TerminationReason.MOVE_LIMIT` because that
+is what domain-model.md §15 enumerates and R-19 fixes its members. A statistic that wanted to
+tell them apart cannot. Widening §15 is a documented-model change and was not made unilaterally.
+
+### 7.8 Corpus — draw sequences
+
+A **fourth** expectation shape, `draw_sequences`, beside `cases`, `rejections` and
+`terminal_positions`. A draw is a property of a game rather than of a board, so a case states an
+opening position, an ordered list of moves, and what the match looks like afterwards: status,
+outcome, reason, winner, the current position's occurrence count and the no-progress counter.
+Each case also states the engine version it was written for. Format in the corpus `README.md`.
+
+No case exercises a move limit, because no variant configures one.
+
+---
+
+## 8. Not yet specified
+
+Three of the four **draw thresholds** — see §7.7. The rules are implemented and tested; the
+numbers are a product decision.
 
 Also absent: clocks, flag falls and abandonment; `Offer` and the draw-agreement flow; the rest of
 the `Match` aggregate (seats, move log, sequence numbers, events); persistence and transport of
@@ -616,7 +734,8 @@ is configured for move generation and is offered nowhere.
 ## TODO
 
 - [ ] Assign a document owner
-- [ ] Specify the draw rules and their thresholds (A64-014.7)
+- [ ] **Decide the three undecided draw thresholds, and International's in full (§7.7)**
+- [ ] Decide whether `TerminationReason` should distinguish the three move-limit draws (§7.7)
 - [ ] Decide whether `english_8x8` is a product variant or stays a configuration fixture
 - [ ] Add the TypeScript implementation that executes the same corpus (AD-14)
 - [ ] Review and promote status from Partial to Approved

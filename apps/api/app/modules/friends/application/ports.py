@@ -25,7 +25,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.modules.friends.domain.friend_request import FriendRequest, FriendRequestStatus
-from app.modules.friends.domain.friendship import Friendship
+from app.modules.friends.domain.friendship import Friendship, FriendshipMetadata
 
 
 class FriendRequestRepository(Protocol):
@@ -171,7 +171,7 @@ class FriendshipRepository(Protocol):
         """Whether the two are currently friends. Order-independent."""
         ...
 
-    async def find_between(self, player_a: UUID, player_b: UUID) -> Friendship | None:
+    async def friendship_by_players(self, player_a: UUID, player_b: UUID) -> Friendship | None:
         """The live friendship between the two, or `None`.
 
         Separate from `exists` because removal needs the aggregate — it
@@ -179,6 +179,50 @@ class FriendshipRepository(Protocol):
         relationship provider needs only a yes or no, and answering that
         with a full row read on every profile render would be work spent to
         discard it.
+
+        Named for the pair rather than for the lookup (`find_between` until
+        A64-013.4), because there are now three ways to reach a friendship
+        and the argument is what distinguishes them.
+        """
+        ...
+
+    async def mutual_friend_count(self, player_a: UUID, player_b: UUID) -> int:
+        """How many live friends the two players have in common —
+        A64-013.4.
+
+        **The only definition of "mutual friend" on the platform**, and it
+        lives here rather than in a service by requirement: a service
+        intersecting two friend lists in Python would be a second definition
+        that disagrees the first time one of them forgets `ended_at`.
+
+        Returns `0` for two players who are not friends — a mutual-friend
+        count is a fact about two friend lists and is well defined for
+        strangers. Whether it may be *shown* is the caller's question.
+
+        Order-independent, like every method here.
+        """
+        ...
+
+    async def friendship_metadata(
+        self, viewer_id: UUID, other_id: UUID
+    ) -> FriendshipMetadata | None:
+        """The read model for one relationship, or `None` for strangers.
+
+        Returns `FriendshipMetadata` rather than the aggregate: a caller
+        inspecting a relationship must not be handed something it could
+        transition, and the derived counts a reader wants are not the
+        aggregate's to compute.
+
+        `None` covers "never were friends" and "the friendship ended"
+        indistinguishably, which is what an inspection endpoint needs —
+        whether two people were *ever* friends is not a question it should
+        answer.
+
+        **Designed so a cache can be introduced without changing this
+        signature.** `friends:v1:` remains unwritten (caching.md C-1 wants
+        the invalidation trigger first); when it arrives it wraps this
+        method, whose arguments and return type already carry everything a
+        key and a value would need.
         """
         ...
 

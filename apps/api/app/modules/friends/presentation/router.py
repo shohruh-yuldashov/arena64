@@ -87,10 +87,12 @@ from app.modules.friends.presentation.schemas import (
     FriendCountResponse,
     FriendRequestResponse,
     FriendResponse,
+    FriendshipDetailsResponse,
     SendFriendRequestRequest,
 )
 from app.modules.profiles.presentation.dependencies import ProfileDirectoryDep
 from app.modules.profiles.presentation.schemas import ProfileResponse
+from app.modules.users.public import ViewerRelationship
 
 logger = logging.getLogger(__name__)
 
@@ -583,10 +585,18 @@ async def list_friends(
     )
 
     player_ids = [friendship.other_than(user.id) for friendship in friendships]
-    # One batch for the whole page — never `compose` in a loop. Four round
-    # trips regardless of page size, and the viewer is passed in so every
-    # profile is composed as a *friend* sees it.
-    profiles = await directory.profiles_for(player_ids, viewer_id=user.id)
+    # One batch for the whole page — never `compose` in a loop, and a fixed
+    # number of round trips regardless of page size.
+    #
+    # `known_relationship` is A64-013.4's saving: every player on this page
+    # is a friend *by construction*, so resolving that from the social graph
+    # would be asking `friend_ids_among` — now on every composition path —
+    # to confirm what building the page already established.
+    profiles = await directory.profiles_for(
+        player_ids,
+        viewer_id=user.id,
+        known_relationship=ViewerRelationship.FRIEND,
+    )
 
     items = [
         FriendResponse.of(
@@ -607,12 +617,67 @@ async def list_friends(
     )
 
 
+@friends_router.get(
+    "/{player_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Inspect one friendship",
+    response_description="The friendship, with the other player's profile.",
+    responses={**_UNAUTHORIZED, **_FRIENDSHIP_NOT_FOUND},
+)
+async def get_friendship(
+    player_id: Annotated[UUID, Path(description="The friend to inspect.")],
+    user: CurrentUser,
+    service: FriendshipServiceDep,
+    directory: ProfileDirectoryDep,
+    avatar_links: AvatarLinkBuilderDep,
+) -> ApiResponse[FriendshipDetailsResponse]:
+    """Returns your friendship with `player_id`.
+
+    **Only your own.** The other party comes from the path and *you* come
+    from the access token, so the only relationship inspectable here is one
+    you are part of — there is no arrangement of parameters that could ask
+    about two other people. That is why there is no authorization check in
+    this handler: the alternative it would guard against is not expressible.
+
+    `404` when you are not currently friends, covering "never were" and "it
+    ended" indistinguishably. Whether two people were *ever* friends is not
+    a question an inspection endpoint should answer.
+
+    `player` is the full public profile, composed exactly as
+    `GET /profiles/{username}` composes it — and because you are a friend,
+    **fields restricted to friends are visible to you** here and hidden from
+    the same profile read by a stranger.
+
+    Registered **after** `/friends/count`, which is the same two-segment
+    shape; Starlette matches in registration order, so the literal path
+    leads. A contract test asserts the resolution.
+    """
+    metadata = await service.friendship_details(player_id=user.id, other_id=player_id)
+
+    # One batch of one — the directory has no singular method, deliberately,
+    # so the N+1 is unreachable from any caller. The relationship is stated
+    # rather than resolved: this endpoint only returns at all when the two
+    # are friends.
+    profiles = await directory.profiles_for(
+        [player_id],
+        viewer_id=user.id,
+        known_relationship=ViewerRelationship.FRIEND,
+    )
+    profile = profiles[player_id]
+
+    return build_response(
+        FriendshipDetailsResponse.of(
+            metadata, ProfileResponse.of(profile, avatar_links.links_for(profile.identity.avatar))
+        )
+    )
+
+
 @friends_router.delete(
     "/{player_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Remove a friend",
     response_description="The friendship has ended.",
-    responses={**_UNAUTHORIZED, **_FRIENDSHIP_NOT_FOUND, **_TOO_MANY_REQUESTS},
+    responses={**_UNAUTHORIZED, **_TOO_MANY_REQUESTS},
     dependencies=[Depends(enforce_friend_request_respond_limit)],
 )
 async def remove_friend(
@@ -632,11 +697,20 @@ async def remove_friend(
     one you are part of. A player who is not in the pair gets `404`, not
     `403` — there is no friendship between them and the caller to speak of.
 
-    `404` when you are not currently friends, and deliberately the same
-    answer whether you never were or the friendship has already ended. Which
-    of the two applies is exactly what a friends-only visibility setting
-    exists to control, so an endpoint that distinguished them would be a way
-    to ask.
+    **Idempotent** (A64-013.4). Removing somebody you are not friends with
+    returns `204` and changes nothing — it does not `404`. A client
+    retrying after a dropped response must not be told the resource is gone
+    when its own first attempt is what removed it.
+
+    It also stops the endpoint answering a question it should not. A `404`
+    for "you are not friends" beside a `204` for "you were" is an oracle:
+    anybody holding a player id could probe their own relationship state,
+    and once blocking voids friendships could detect having been blocked by
+    watching a removal turn into a `404`. One answer for both closes that.
+
+    Contrast `GET /friends/{player_id}`, which *does* `404`: a read of a
+    resource that does not exist has no other honest answer, and a `GET` has
+    no idempotency contract to honour.
 
     `204` with no body, unlike `DELETE /friends/requests/{id}`, and the
     difference is real rather than inconsistent: cancelling a request

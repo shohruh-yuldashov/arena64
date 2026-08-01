@@ -1,4 +1,4 @@
-"""`FriendshipService` — list friends, count them, end one.
+"""`FriendshipService` — list friends, count them, inspect one, end one.
 
 Orchestrates; does not compute (services.md §3.2). The canonical ordering is
 the domain's, participation is the aggregate's, uniqueness is the partial
@@ -41,7 +41,11 @@ from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork
 from app.modules.friends.application.ports import FriendshipRepository
 from app.modules.friends.domain.exceptions import FriendshipNotFound
-from app.modules.friends.domain.friendship import Friendship, FriendshipEndReason
+from app.modules.friends.domain.friendship import (
+    Friendship,
+    FriendshipEndReason,
+    FriendshipMetadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +85,7 @@ class FriendshipService:
         """
         return await self._friendships.friend_count(player_id)
 
-    async def remove_friend(self, *, player_id: UUID, other_id: UUID) -> Friendship:
+    async def remove_friend(self, *, player_id: UUID, other_id: UUID) -> None:
         """Ends the friendship between `player_id` and `other_id`.
 
         **Unilateral and silent** (FS-2). Either party may do this, neither
@@ -89,22 +93,50 @@ class FriendshipService:
         "requiring mutual agreement to stop being friends is not a feature
         anyone wants."
 
-        Raises `FriendshipNotFound` (404) when the two are not currently
-        friends, which deliberately covers both "never were" and "already
-        ended". The distinction is not a caller's to learn: whether two
-        people are friends is what `VisibilityLevel.FRIENDS` exists to
-        control, and an endpoint answering it differently for the two cases
-        would be a way to ask.
+        ## Idempotent — A64-013.4
 
-        `NotFriendshipParticipant` is unreachable from the HTTP path —
-        `player_id` comes from the token and the lookup is by pair, so the
-        caller is always one of the two — and the check runs anyway, in the
-        aggregate, because that is where it protects a caller this service
-        has not met yet.
+        Removing somebody you are not friends with **succeeds and does
+        nothing**. It does not raise, and this is a deliberate change from
+        A64-013.3, which answered `404`.
+
+        Two reasons, and the second is the stronger:
+
+          - `DELETE` is idempotent by HTTP semantics. A client retrying
+            after a dropped response must not be told the resource is gone
+            when its own first attempt is what removed it, and a UI that
+            double-fires a button should not surface an error for an
+            outcome the user got.
+          - **It stops the endpoint answering a question it should not.** A
+            `404` for "you are not friends" and a `204` for "you were" is an
+            oracle: anybody holding a player id could probe their own
+            relationship state, and — once A64-013.5 voids friendships on a
+            block — could detect having been blocked by watching a removal
+            turn into a 404. One answer for both cases closes that.
+
+        Ownership needs no check here because there is nothing to check:
+        `player_id` comes from the access token and the lookup is by pair,
+        so the only friendship reachable is one the caller is in. A third
+        party asking to remove two other people finds no friendship *of
+        theirs* and gets the same silent success — having changed nothing.
+
+        `Friendship.end` still refuses a non-participant, and still runs:
+        the check belongs in the aggregate, where it protects a caller this
+        service has not met yet.
+
+        Returns `None`. A64-013.3 returned the ended `Friendship`, which
+        made sense when the call always produced one; now that it may
+        produce nothing, returning "the friendship you ended, or None"
+        would push the idempotency the caller was spared straight back at
+        it.
         """
-        friendship = await self._friendships.find_between(player_id, other_id)
+        friendship = await self._friendships.friendship_by_players(player_id, other_id)
+
         if friendship is None:
-            raise FriendshipNotFound("You are not friends with that player.")
+            # Nothing to end. Logged at DEBUG rather than INFO: a retry is
+            # an ordinary event and an audit trail records what *changed*,
+            # so a line per no-op would dilute the removals that did.
+            logger.debug("friendship_removal_noop", extra={"actor_id": str(player_id)})
+            return
 
         friendship.end(
             by=player_id,
@@ -126,7 +158,60 @@ class FriendshipService:
             "friendship_removed",
             extra={"friendship_id": str(removed.id), "actor_id": str(player_id)},
         )
-        return removed
+
+    async def friendship_details(self, *, player_id: UUID, other_id: UUID) -> FriendshipMetadata:
+        """What `player_id` may learn about their friendship with
+        `other_id` — A64-013.4.
+
+        Raises `FriendshipNotFound` (404) when the two are not currently
+        friends, covering "never were" and "it ended" indistinguishably.
+        That is the opposite decision from `remove_friend` above, and the
+        asymmetry is deliberate: a `DELETE` must be idempotent and therefore
+        cannot signal absence, while a `GET` for a resource that does not
+        exist has no other honest answer than `404`.
+
+        Neither leaks more than the other. The removal's silence and this
+        `404` both stop at "you and this player are not friends", which the
+        caller is a party to and already knows; what neither reveals is
+        anything about the *other* player's relationships.
+
+        **Ownership is structural.** `player_id` comes from the token and
+        the lookup is by pair, so the only relationship inspectable is one
+        the caller is in — there is no arrangement of parameters that could
+        ask about two other people.
+        """
+        metadata = await self._friendships.friendship_metadata(player_id, other_id)
+        if metadata is None:
+            raise FriendshipNotFound("You are not friends with that player.")
+
+        # DEBUG, not INFO. Inspecting a relationship changes nothing, and an
+        # audit log records changes; at INFO this would fire on every render
+        # of a friend's profile card and drown the removals beside it
+        # (services.md §7.1). The actor only — who they looked at is the
+        # social-graph edge this must not accumulate.
+        logger.debug("friendship_inspected", extra={"actor_id": str(player_id)})
+
+        return metadata
+
+    async def mutual_friend_count(self, *, player_id: UUID, other_id: UUID) -> int:
+        """How many friends the two have in common.
+
+        Delegates entirely: A64-013.4 requires the calculation to exist once
+        and in the repository, so there is nothing for a service to add —
+        and computing it here from two friend lists would be the second
+        definition that requirement exists to prevent.
+
+        **Reachable from no endpoint.** A64-013.4 scopes mutual counts to
+        "repository/service only", so this is the seam a later UX surface
+        calls rather than a published capability. It works, it is tested,
+        and nothing on the wire carries its result.
+
+        Well defined for two players who are not friends — a count of shared
+        friends is a fact about two lists — so this does not raise for
+        strangers. Whether the number may be *shown* to a particular caller
+        is a question for whoever eventually publishes it.
+        """
+        return await self._friendships.mutual_friend_count(player_id, other_id)
 
 
 class FriendshipReaderService:

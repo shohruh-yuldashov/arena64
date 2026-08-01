@@ -32,12 +32,16 @@ from collections.abc import Sequence
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, Select, and_, func, or_, select, update
+from sqlalchemy import CursorResult, Select, and_, case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.friends.domain.exceptions import FriendshipAlreadyEnded
-from app.modules.friends.domain.friendship import Friendship, canonical_pair
+from app.modules.friends.domain.friendship import (
+    Friendship,
+    FriendshipMetadata,
+    canonical_pair,
+)
 from app.modules.friends.infrastructure.list_cursor import ListCursor
 from app.modules.friends.infrastructure.models import FriendshipModel
 
@@ -137,7 +141,7 @@ class SqlAlchemyFriendshipRepository:
         )
         return found is not None
 
-    async def find_between(self, player_a: UUID, player_b: UUID) -> Friendship | None:
+    async def friendship_by_players(self, player_a: UUID, player_b: UUID) -> Friendship | None:
         """The live friendship between the two, or `None`.
 
         Separate from `exists` because removal needs the aggregate — it has
@@ -145,6 +149,12 @@ class SqlAlchemyFriendshipRepository:
         relationship provider needs only a yes or no, and answering that
         with a full row read on every profile render would be work spent to
         discard it.
+
+        Separate from `friendship_metadata` below for the opposite reason:
+        that one returns a read model with derived counts and cannot be
+        transitioned, this one returns the aggregate and has no counts. A
+        single method doing both would compute a mutual-friend count on
+        every removal, which is a join nobody asked for on a write path.
         """
         low, high = canonical_pair(player_a, player_b)
         row = await self._session.scalar(
@@ -195,6 +205,92 @@ class SqlAlchemyFriendshipRepository:
         # simpler to read here than in SQL, and PostgreSQL is returning two
         # UUIDs either way.
         return {high if low == player_id else low for low, high in rows if player_id in (low, high)}
+
+    async def mutual_friend_count(self, player_a: UUID, player_b: UUID) -> int:
+        """How many live friends the two players have in common.
+
+        **The only definition of "mutual friend" on the platform.**
+        A64-013.4 requires the calculation to exist once, in the repository,
+        and this is it — a service computing it from two friend lists in
+        Python would be a second definition that disagrees the first time
+        one of them forgets `ended_at`.
+
+        ## How it is expressed
+
+        Two sets of "the friends of X", intersected. Each side is a
+        `SELECT` over the same `_involves` predicate the friend list and the
+        friend count use, so all four agree on what a friend is; `INTERSECT`
+        then does the set arithmetic in the database rather than shipping
+        two lists to Python to compare.
+
+        `INTERSECT` rather than a self-join on purpose. The join form needs
+        four `OR`ed equality pairs to cover which side each player sits on,
+        which is both unreadable and easy to get subtly wrong — the version
+        that misses one pair returns a plausible number that is quietly too
+        low. `INTERSECT` over the same predicate cannot have that bug,
+        because the predicate is written once and used twice.
+
+        Both legs are served by the two partial indexes §12.3 specifies, so
+        this is index work bounded by each player's friend count rather than
+        by the size of the relation.
+
+        Returns `0` rather than raising when the two are not friends: a
+        mutual-friend count is a fact about two friend lists and is
+        perfectly well defined for strangers. Whether it may be *shown* is
+        the caller's question.
+        """
+        left = select(_friend_of(player_a).label("player_id")).where(
+            FriendshipModel.ended_at.is_(None)
+        )
+        right = select(_friend_of(player_b).label("player_id")).where(
+            FriendshipModel.ended_at.is_(None)
+        )
+
+        total = await self._session.scalar(
+            select(func.count()).select_from(
+                left.where(_involves(player_a))
+                .intersect(right.where(_involves(player_b)))
+                .subquery()
+            )
+        )
+        return int(total or 0)
+
+    async def friendship_metadata(
+        self, viewer_id: UUID, other_id: UUID
+    ) -> FriendshipMetadata | None:
+        """The read model for one relationship, or `None` when the two are
+        not friends.
+
+        **Two facts, and deliberately not one round trip.** The friendship
+        row and the mutual count are two independent index reads, and
+        folding them into a single statement would mean a correlated
+        subquery whose cost is the same and whose plan is harder to reason
+        about — the count leg does not narrow the row lookup and the row
+        lookup does not narrow the count.
+
+        What it *does* avoid is the caller issuing them: a service composing
+        this from `friendship_by_players` plus `mutual_friend_count` would
+        put the ordering, the `None` handling and the "don't count if
+        they're not friends" short-circuit in the application layer, where
+        the next caller would reimplement it.
+
+        The short-circuit is the part that matters: a pair who are not
+        friends costs **one** query, not two, because there is nothing to
+        describe.
+
+        Returns `None` for strangers and for a friendship that has ended,
+        indistinguishably — which is what the endpoint above it needs, since
+        "were you ever friends" is not a question an inspection endpoint
+        should answer.
+        """
+        friendship = await self.friendship_by_players(viewer_id, other_id)
+        if friendship is None:
+            return None
+
+        return FriendshipMetadata(
+            friends_since=friendship.created_at,
+            mutual_friend_count=await self.mutual_friend_count(viewer_id, other_id),
+        )
 
     async def friend_count(self, player_id: UUID) -> int:
         """How many live friendships this player has.
@@ -339,4 +435,20 @@ def _involves(player_id: UUID) -> Any:
     return or_(
         FriendshipModel.player_low_id == player_id,
         FriendshipModel.player_high_id == player_id,
+    )
+
+
+def _friend_of(player_id: UUID) -> Any:
+    """The *other* participant, whichever column the player sits in.
+
+    A `CASE` rather than two selected columns, because this is used as the
+    projected value of a set operation — `INTERSECT` compares rows, so each
+    leg has to yield one column holding the friend's id and not the pair.
+
+    Pairs with `_involves`: that one selects the rows a player is in, this
+    one projects who they are friends with in each.
+    """
+    return case(
+        (FriendshipModel.player_low_id == player_id, FriendshipModel.player_high_id),
+        else_=FriendshipModel.player_low_id,
     )

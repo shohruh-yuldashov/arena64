@@ -194,8 +194,9 @@ class ProfileResponse(BaseResponseDTO):
     country: str | None = Field(
         description=(
             "ISO 3166-1 alpha-2, upper-cased — `GB`, `UZ`. `null` when the "
-            "player has not set one, which today is every player: no "
-            "endpoint writes it yet."
+            "player has not set one **or has chosen not to show it**. The two "
+            "are deliberately indistinguishable: reporting which is which "
+            "would answer the question the privacy setting exists to decline."
         ),
         examples=[None],
     )
@@ -225,8 +226,9 @@ class ProfileResponse(BaseResponseDTO):
             "When the player was last seen online, UTC. **Always `null` "
             "today** — presence tracking is not yet implemented, and this "
             "field is present so that clients render 'unknown' rather than "
-            "gaining an unexpected key when it is. Do not infer activity "
-            "from its absence."
+            "gaining an unexpected key when it is. It will also be `null` for "
+            "any player whose `show_last_seen` privacy setting is off, which "
+            "is the default. Do not infer activity from its absence."
         ),
         examples=[None],
     )
@@ -234,11 +236,19 @@ class ProfileResponse(BaseResponseDTO):
         description=(
             "Current rating per category. Every category is always present; "
             "a player who has never played reports a provisional starting "
-            "value rather than a missing key."
+            "value rather than a missing key. **Ratings are always visible** — "
+            "they are what pairing is computed from, and privacy settings do "
+            "not cover them."
         ),
     )
-    statistics: StatisticsResponse = Field(
-        description="Aggregate match record across every category.",
+    statistics: StatisticsResponse | None = Field(
+        description=(
+            "Aggregate match record across every category, or `null` when the "
+            "player has chosen not to show it. **Never zeroes for a hidden "
+            "record** — a zeroed record is indistinguishable from a beginner's, "
+            "which would mislead the opponent deciding whether to accept a "
+            "challenge. Render `null` as 'not shown', not as 'no games'."
+        ),
     )
 
     model_config = {
@@ -309,14 +319,23 @@ class ProfileResponse(BaseResponseDTO):
             joined_at=identity.created_at,
             last_seen=profile.last_seen,
             ratings=RatingsResponse.of(profile.ratings.as_map()),
-            statistics=StatisticsResponse(
-                games_played=statistics.games_played,
-                wins=statistics.wins,
-                losses=statistics.losses,
-                draws=statistics.draws,
-                # Computed by the domain, never stored — see
-                # `domain/statistics.py` on why a persisted win rate is a
-                # number that can disagree with the counts beside it.
-                win_rate=statistics.win_rate,
+            # `None` in, `null` out. **No privacy check here** — by the time
+            # this runs, a hidden record has already been declined by
+            # `ProfileService`, which never fetched it. This schema holds no
+            # flag it could get backwards, exactly as it holds no
+            # `StorageProvider` it could build a URL with.
+            statistics=(
+                StatisticsResponse(
+                    games_played=statistics.games_played,
+                    wins=statistics.wins,
+                    losses=statistics.losses,
+                    draws=statistics.draws,
+                    # Computed by the domain, never stored — see
+                    # `domain/statistics.py` on why a persisted win rate is
+                    # a number that can disagree with the counts beside it.
+                    win_rate=statistics.win_rate,
+                )
+                if statistics is not None
+                else None
             ),
         )

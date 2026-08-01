@@ -57,6 +57,13 @@ from app.core.enums import Locale
 from app.database.base import Base
 from app.database.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 from app.database.types import UtcDateTime
+from app.modules.users.domain.privacy import (
+    DEFAULT_SHOW_ACTIVITY,
+    DEFAULT_SHOW_COUNTRY,
+    DEFAULT_SHOW_LAST_SEEN,
+    DEFAULT_SHOW_ONLINE_STATUS,
+    DEFAULT_SHOW_STATISTICS,
+)
 from app.modules.users.domain.validators import (
     AVATAR_OBJECT_KEY_MAX_LENGTH,
     BIO_MAX_LENGTH,
@@ -69,6 +76,19 @@ from app.modules.users.domain.validators import (
 )
 
 USERS_SCHEMA = "users"
+
+
+def _sql_bool(value: bool) -> str:
+    """A Python bool as the SQL literal a `server_default` needs.
+
+    Exists so the five privacy columns take their database defaults from
+    `domain/privacy.py`'s constants rather than from hand-written `"true"`
+    strings beside them. The two would agree on the day they were written
+    and would disagree the first time a default is reconsidered — and the
+    disagreement would only show up for rows the application did not
+    insert, which is the hardest place to notice it (BE-06).
+    """
+    return "true" if value else "false"
 
 
 class UserModel(Base, UUIDPrimaryKeyMixin, TimestampMixin):
@@ -254,6 +274,40 @@ class UserModel(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         # `validate_country_code` is the application's.
         CHAR(COUNTRY_CODE_LENGTH),
         nullable=True,
+    )
+
+    # --- privacy (A64-012.4) -----------------------------------------------
+    #
+    # Five columns rather than one `jsonb`, and the choice is worth stating
+    # because `jsonb` is the obvious shortcut for a settings blob.
+    #
+    # These are not a blob. Each one is read on the platform's most-served
+    # endpoint, each has a database-level default that must apply to rows
+    # this application did not insert, and each will eventually be a filter
+    # (`WHERE show_online_status` on a "who is online" listing). A `jsonb`
+    # column gives up the default, the NOT NULL, and the plain b-tree index
+    # in exchange for schema-less growth this table does not want —
+    # database.md DB-15 makes the same argument for a native enum over a
+    # varchar. Adding a sixth flag is one migration, which is the friction a
+    # new disclosure should have.
+    #
+    # `NOT NULL` throughout: "no answer" is not a state a privacy control
+    # may be in, because every read path would then need a fallback and the
+    # fallbacks would drift. The default is the answer.
+    show_country: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text(_sql_bool(DEFAULT_SHOW_COUNTRY))
+    )
+    show_last_seen: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text(_sql_bool(DEFAULT_SHOW_LAST_SEEN))
+    )
+    show_statistics: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text(_sql_bool(DEFAULT_SHOW_STATISTICS))
+    )
+    show_online_status: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text(_sql_bool(DEFAULT_SHOW_ONLINE_STATUS))
+    )
+    show_activity: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text(_sql_bool(DEFAULT_SHOW_ACTIVITY))
     )
 
     # Explicit re-declarations so the reader sees the full row shape here

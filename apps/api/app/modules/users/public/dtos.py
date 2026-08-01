@@ -59,6 +59,67 @@ class AvatarReference(BaseResponseDTO):
         return self.object_key is not None
 
 
+class ProfileVisibility(BaseResponseDTO):
+    """Which *composed* parts of a public profile a consumer may render —
+    A64-012.4.
+
+    ## Why this crosses the boundary at all
+
+    A privacy flag is applied wherever the data it governs is produced, and
+    `users` does not produce all of it. It owns `country`, so it hides that
+    field itself: `to_public_profile` returns `country=None` and no flag is
+    published for it, exactly as `is_active` is applied inside `users` and
+    never published. That is the strongest form — the consumer cannot render
+    a hidden country because it never receives one.
+
+    The other four govern data `users` does not own. Match statistics come
+    from a statistics system, presence from a socket gateway, activity from
+    match history. `users` cannot redact what it never holds, so it publishes
+    the *decision* and the composing module applies it. UP-4 requires the
+    enforcement to be server-side on every read path; this is what makes it
+    server-side on the paths that run outside this module.
+
+    ## Why this is never on the wire
+
+    `PublicUserProfile` is an internal published DTO, not a response schema.
+    `profiles` maps it field by field into `ProfileResponse`, and these flags
+    are not among the fields it maps — so an anonymous caller sees
+    `statistics: null` and cannot tell a player who hid their record from a
+    platform that has not computed one yet.
+
+    That ambiguity is the point. Publishing `statistics_hidden: true` would
+    answer the question the setting exists to decline, in the same way
+    publishing `is_active` would announce which accounts have been withdrawn.
+
+    Every field is `True` for *visible*. No inverted spellings — see
+    `users.domain.privacy` on why a `hide_*` beside a `show_*` is how a
+    mapper ends up applying one backwards.
+    """
+
+    last_seen: bool
+    """Whether a consumer may render when this player was last online."""
+
+    statistics: bool
+    """Whether a consumer may render the aggregate match record.
+
+    **Not ratings.** A rating is public on this platform — it is what
+    pairing is computed from and what leaderboards already publish, and
+    UP-5 keeps rated results visible to the people they concern. See
+    `PrivacySettings.show_statistics`.
+    """
+
+    online_status: bool
+    """Whether a consumer may render live presence. Nothing produces
+    presence yet (AD-09's gateway); the flag is published now so the
+    release that adds it is not also the release that decides whether it
+    is public."""
+
+    activity: bool
+    """Whether a consumer may render recent activity — match history, an
+    activity feed. Published ahead of the thing it governs, as
+    `online_status` is."""
+
+
 class UserRead(BaseResponseDTO):
     """The full view of a user's own account.
 
@@ -162,8 +223,15 @@ class PublicUserProfile(BaseResponseDTO):
     display_name: str | None
     avatar: AvatarReference
     country: str | None
-    """ISO 3166-1 alpha-2, upper-cased. `None` until profile editing
-    exists — no endpoint writes it yet."""
+    """ISO 3166-1 alpha-2, upper-cased.
+
+    **`None` when the player has hidden it** (A64-012.4's `show_country`),
+    and identical in every respect to `None` for a player who never set
+    one — same type, same value, nothing to branch on. The redaction
+    happens in `to_public_profile`, before this DTO is constructed, because
+    `users` owns the column; a consumer cannot render a hidden country
+    because it is never handed one.
+    """
 
     preferred_language: Locale
     bio: str | None
@@ -175,6 +243,15 @@ class PublicUserProfile(BaseResponseDTO):
     """The join date. Named `created_at` here to match every other DTO on
     the platform and rendered as `joined_at` on the wire, where it is the
     word a player understands — see `profiles`' response schema."""
+
+    visibility: ProfileVisibility
+    """What the consumer may render of the parts `users` does not own.
+
+    Carried on the profile rather than fetched separately so a consumer
+    cannot compose a view without it — there is no call that returns the
+    identity and leaves the visibility behind, which is what stops a future
+    read path from forgetting to ask. See `ProfileVisibility`.
+    """
 
 
 class OwnUserProfile(BaseResponseDTO):
@@ -221,3 +298,34 @@ class OwnUserProfile(BaseResponseDTO):
 
     avatar: AvatarReference
     created_at: datetime
+
+
+class PrivacySettingsView(BaseResponseDTO):
+    """The owner's view of their own privacy controls — A64-012.4.
+
+    ## Why this is a fifth read shape rather than a field on `OwnUserProfile`
+
+    Different audience and different lifetime. `OwnUserProfile` answers
+    *what does my profile say* and is the response to a profile edit; this
+    answers *who may see it*, and a settings screen loads it without
+    touching a name or a biography. Folding them together would mean every
+    profile edit response also restated five privacy flags, and every
+    privacy change response also restated a biography — two shapes each
+    carrying half of something they do not own.
+
+    It is also the shape that must **not** appear anywhere public. There is
+    no anonymous read path that returns this type, and the four flags a
+    consumer genuinely needs are published separately as
+    `ProfileVisibility` — a narrower type with no `show_country`, because
+    that one is applied inside `users` and never travels.
+
+    All five flags are `True` for *visible*, matching the domain and the
+    wire exactly. See `users.domain.privacy` for the defaults and why
+    `show_last_seen` is the one that is off.
+    """
+
+    show_country: bool
+    show_last_seen: bool
+    show_statistics: bool
+    show_online_status: bool
+    show_activity: bool

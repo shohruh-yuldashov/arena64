@@ -27,9 +27,13 @@ from uuid import UUID
 
 from app.core.clock import Clock
 from app.core.pagination import CursorPageInfo, CursorPageParams
-from app.core.sentinels import is_set
+from app.core.sentinels import is_set, unset_to_none
 from app.core.unit_of_work import UnitOfWork
-from app.modules.users.application.commands import CreateUser, UpdateUserProfile
+from app.modules.users.application.commands import (
+    CreateUser,
+    UpdatePrivacySettings,
+    UpdateUserProfile,
+)
 from app.modules.users.application.ports import UserRepository
 from app.modules.users.domain.entities import User
 from app.modules.users.domain.exceptions import (
@@ -195,6 +199,45 @@ class UserService:
             user.preferred_language = command.preferred_language
         if is_set(command.timezone):
             user.timezone = Timezone(command.timezone)
+
+        user.updated_at = self._clock.now()
+
+        async with self._uow:
+            updated = await self._users.update(user)
+            await self._uow.commit()
+
+        return updated
+
+    async def update_privacy(self, user_id: UUID, command: UpdatePrivacySettings) -> User:
+        """Applies a partial privacy update — A64-012.4.
+
+        A separate use case from `update_profile` rather than five more
+        branches inside it, because the two are separate published ports
+        with separate rate limits and separate risk. What they share is the
+        transaction shape, and that is `UnitOfWork`'s to share.
+
+        `unset_to_none` is the right conversion here and is wrong almost
+        everywhere else. Its own docstring reserves it for "the narrow case
+        where absent and null genuinely mean the same thing to a caller" —
+        this is that case, because a boolean has no cleared state, so
+        `PrivacySettings.updated()` is free to read `None` as "leave it
+        alone". A profile field could not do this: for a biography, absent
+        and null are the difference between keeping and deleting one.
+
+        No validation, and nothing to validate: five independent booleans
+        have no invalid combination. The row is still written through the
+        same unit of work, so a concurrent profile edit cannot interleave
+        with a half-applied settings change.
+        """
+        user = await self.get_user(user_id)
+
+        user.privacy = user.privacy.updated(
+            show_country=unset_to_none(command.show_country),
+            show_last_seen=unset_to_none(command.show_last_seen),
+            show_statistics=unset_to_none(command.show_statistics),
+            show_online_status=unset_to_none(command.show_online_status),
+            show_activity=unset_to_none(command.show_activity),
+        )
 
         user.updated_at = self._clock.now()
 

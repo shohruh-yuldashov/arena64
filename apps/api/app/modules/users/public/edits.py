@@ -1,9 +1,15 @@
-"""`ProfileEdits` — the published shape of a partial profile update.
+"""The published shapes of a partial update — `ProfileEdits` (A64-012.3)
+and `PrivacyEdits` (A64-012.4).
 
-Lives in `public/` because BR-2 requires a published port to be defined in
-terms of published types: `ProfileEditor.update_own_profile` accepts this,
-so a consumer must be able to construct it without importing anything from
+Both live in `public/` because BR-2 requires a published port to be defined
+in terms of published types: `ProfileEditor.update_own_profile` and
+`PrivacySettingsEditor.update_privacy_settings` accept them, so a consumer
+must be able to construct one without importing anything from
 `users.application`.
+
+The reasoning below is written about `ProfileEdits` and applies to both;
+where `PrivacyEdits` differs — it has no nullable field, because a boolean
+has no cleared state — its own docstring says so.
 
 ## Why every field defaults to `UNSET` rather than `None`
 
@@ -62,3 +68,35 @@ class ProfileEdits:
     country: str | None | UnsetType = UNSET
     preferred_language: Locale | UnsetType = UNSET
     timezone: str | UnsetType = UNSET
+
+
+@dataclass(frozen=True, slots=True)
+class PrivacyEdits:
+    """The five privacy flags A64-012.4 makes settable, and nothing else.
+
+    Closed for the same reason `ProfileEdits` is, and the closure matters
+    more here rather than less: this is the type a request body is mapped
+    into on the endpoint that decides what strangers may see. A `**extra`
+    would let a field nobody designed reach a service that writes to the
+    account row.
+
+    **No `None` in any of these unions**, unlike `ProfileEdits`. A boolean
+    flag has two states and an account always has an answer, so there is no
+    "clear it" to express — `UNSET` for absent, `True` or `False` for a
+    value, and an explicit `null` on the wire is a client error the schema
+    rejects rather than a third meaning invented here.
+
+    Separate from `ProfileEdits` rather than five more fields on it. The two
+    are edited on different screens, are read by different code, and carry
+    different risk: getting a display name wrong is a cosmetic mistake,
+    getting `show_last_seen` wrong publishes a person's schedule. They also
+    go through different ports, which is what stops a component that may
+    edit a biography from thereby being able to make an account's activity
+    public.
+    """
+
+    show_country: bool | UnsetType = UNSET
+    show_last_seen: bool | UnsetType = UNSET
+    show_statistics: bool | UnsetType = UNSET
+    show_online_status: bool | UnsetType = UNSET
+    show_activity: bool | UnsetType = UNSET

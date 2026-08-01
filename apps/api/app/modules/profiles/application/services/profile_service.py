@@ -27,6 +27,27 @@ username nobody ever registered.
 Identical rather than merely similar matters. A distinct 403, or a 404 with
 a different message, would still answer the question.
 
+## Privacy is applied here, and the endpoint knows nothing about it
+
+A64-012.4 requires that "privacy filtering must happen inside the
+PublicProfileReader / mapper layer" and that "endpoints must not manually
+hide fields". This module is the second half of that, and the split with
+`users` follows ownership exactly:
+
+    country          `users` redacts it before it crosses the port. This
+                     module never sees a hidden one.
+    statistics       composed here, from a source `users` does not own —
+                     so `users` publishes the decision on
+                     `PublicUserProfile.visibility` and this service
+                     declines to fetch it.
+    last_seen        same shape, nothing to fetch yet.
+
+By the time `ProfileResponse.of` runs there is nothing left to hide: a
+hidden statistic is already `None`, and the router does not receive a flag
+it could act on even if it wanted to. That is what makes "endpoints must
+not manually hide fields" structural rather than a rule somebody has to
+remember — see `presentation/router.py`, which has no privacy logic in it.
+
 ## Why the three reads are sequential rather than concurrent
 
 Identity is fetched first and the other two only if it resolved. That
@@ -90,11 +111,22 @@ class ProfileService:
             logger.info("profile_lookup_missed")
             raise ProfileNotFound(_GENERIC_REJECTION)
 
+        visibility = identity.visibility
+
         # Both reads are in-process today. When either becomes a network
         # call, this is where `asyncio.gather` belongs — they are
         # independent of each other and both depend only on the id.
         ratings = await self._ratings.ratings_for(identity.id)
-        statistics = await self._statistics.statistics_for(identity.id)
+
+        # **Not fetched at all when hidden**, rather than fetched and
+        # discarded. Two reasons, and the second is the one that lasts: a
+        # value that is never loaded cannot be leaked by a later mapper
+        # that forgets the flag, and once `statistics` is a real service
+        # this is a cross-context read skipped entirely for every player
+        # who opted out.
+        statistics = (
+            await self._statistics.statistics_for(identity.id) if visibility.statistics else None
+        )
 
         # The player id, never the username. An id joins to everything for
         # anyone entitled to see it, and keeps a permanent access record
@@ -106,7 +138,12 @@ class ProfileService:
             identity=identity,
             ratings=ratings,
             statistics=statistics,
-            # `last_seen` stays at its default of `None` — presence is not
-            # this task's, and there is nothing stored that could stand in
-            # for it. See `PublicProfile.last_seen`.
+            # `last_seen` stays at its default of `None`, for two reasons
+            # now rather than one: presence is not implemented (A64-012.1),
+            # and `visibility.last_seen` is off for most accounts anyway
+            # (A64-012.4's one default-off flag). A gate written here today
+            # would be a branch whose arms are both `None` — dead code
+            # dressed as enforcement. The real read belongs where the
+            # statistics read is, guarded the same way, and the flag is in
+            # place waiting for it. See `PublicProfile.last_seen`.
         )

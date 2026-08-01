@@ -19,6 +19,8 @@ from app.modules.users.domain.entities import User
 from app.modules.users.public.dtos import (
     AvatarReference,
     OwnUserProfile,
+    PrivacySettingsView,
+    ProfileVisibility,
     PublicUserProfile,
     UserRead,
     UserSummary,
@@ -53,7 +55,7 @@ def to_user_summary(user: User) -> UserSummary:
 
 
 def to_public_profile(user: User) -> PublicUserProfile:
-    """The stranger's view — A64-012.1.
+    """The stranger's view — A64-012.1, redacted by A64-012.4.
 
     Field by field like the two above, and here the discipline stops being
     a style preference and becomes the control: this is the mapping that
@@ -64,16 +66,87 @@ def to_public_profile(user: User) -> PublicUserProfile:
 
     `bio` and `country` unwrap their value objects to plain strings, and
     `None` stays `None` — absence is one state, not an empty string.
+
+    ## This function is where privacy is enforced for `users`' own fields
+
+    UP-4 requires privacy preferences to be enforced server-side on every
+    read path, and this is the single read path by which a stranger obtains
+    anything `users` owns — `PublicProfileReader` has no other method, and
+    nothing outside this module can construct a `PublicUserProfile`.
+
+    So `show_country` is applied here rather than published. A hidden
+    country is `None`, which is byte-for-byte what a player who never set
+    one returns: no flag, no placeholder, nothing for a caller to render
+    differently and nothing for a scraper to learn. A64-012.4 asks for
+    `country: null` and this is the form of it that cannot be undone
+    downstream.
+
+    The four flags that *are* published govern data this module does not
+    hold — see `ProfileVisibility`.
     """
     return PublicUserProfile(
         id=user.id,
         username=user.username.value,
         display_name=_display_name_of(user),
         avatar=to_avatar_reference(user),
-        country=user.country.value if user.country else None,
+        # The redaction. Not `country if show else None` written at the
+        # call site of some consumer — here, before the value crosses the
+        # boundary, so there is no version of this DTO in existence that
+        # carries a country the player hid.
+        country=(
+            user.country.value if user.privacy.show_country and user.country is not None else None
+        ),
         preferred_language=user.preferred_language,
         bio=user.bio.value if user.bio else None,
         created_at=user.created_at,
+        visibility=to_profile_visibility(user),
+    )
+
+
+def to_profile_visibility(user: User) -> ProfileVisibility:
+    """The four decisions a consumer has to apply itself — A64-012.4.
+
+    `show_country` is **absent by design**: `users` owns that column and
+    redacts it in `to_public_profile` above, so publishing the flag would
+    add a disclosure ("this player hides their country") without enabling
+    anything. The four here govern statistics, presence and activity, none
+    of which this module holds — it can decide, but it cannot redact.
+
+    A helper beside the other `to_*` mappers rather than an inline literal,
+    for the reason `to_avatar_reference` is one: a sixth privacy flag is
+    wired in once, and the next read path that composes a public view gets
+    it without knowing it was added.
+    """
+    privacy = user.privacy
+    return ProfileVisibility(
+        last_seen=privacy.show_last_seen,
+        statistics=privacy.show_statistics,
+        online_status=privacy.show_online_status,
+        activity=privacy.show_activity,
+    )
+
+
+def to_privacy_settings(user: User) -> PrivacySettingsView:
+    """The owner's own controls — A64-012.4.
+
+    Unredacted, and that is the whole difference from
+    `to_profile_visibility` above: an account holder is shown what they
+    chose, including `show_country`, because a settings screen that hid a
+    setting from the person who set it would be unusable.
+
+    Explicit field by field like every other mapper here. The habit guards
+    a specific mistake on this one: `PrivacySettings` is a domain value
+    object and `PrivacySettingsView` a published DTO with the same five
+    field names, so `model_validate` would appear to work and would keep
+    appearing to work right up until the two diverge.
+    """
+    privacy = user.privacy
+    return PrivacySettingsView(
+        show_country=privacy.show_country,
+        show_last_seen=privacy.show_last_seen,
+        show_statistics=privacy.show_statistics,
+        show_online_status=privacy.show_online_status,
+        show_activity=privacy.show_activity,
     )
 
 

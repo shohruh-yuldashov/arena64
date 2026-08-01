@@ -19,12 +19,13 @@ mapping as the repository's core job). The benefit is that `UserService`
 and everything above it cannot touch a database even by accident.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
 from app.core.enums import Locale
 from app.core.identifiers import generate_uuid7
+from app.modules.users.domain.preferences import LocalePreferences, Preferences
 from app.modules.users.domain.privacy import PrivacySettings
 from app.modules.users.domain.value_objects import (
     Bio,
@@ -55,8 +56,6 @@ class User:
     username: Username
     email: Email
     password_hash: str
-    preferred_language: Locale
-    timezone: Timezone
     is_active: bool
     is_verified: bool
     created_at: datetime
@@ -126,6 +125,18 @@ class User:
     # would also redact the owner's own view of their own profile.
     privacy: PrivacySettings = PrivacySettings()
 
+    # The personal settings, grouped as domain-model.md §7.1 groups them —
+    # A64-012.5. `preferred_language` and `timezone` were top-level fields
+    # here until that task; they are inside `preferences.locale` now, and
+    # the two properties below keep every existing reader working.
+    #
+    # Moving them was the point rather than a side effect: they were
+    # writable from `PATCH /profile` *and* conceptually a preference, which
+    # is the duplicated writable surface A64-012.5 set out to remove. There
+    # is now exactly one path that changes a language, and it is the same
+    # path that changes a board theme.
+    preferences: Preferences = field(default_factory=Preferences)
+
     # Sign-in is refused until this instant passes. `None` means unlocked.
     #
     # Distinct from `is_active`, and the two are not interchangeable:
@@ -174,14 +185,47 @@ class User:
             username=username,
             email=email,
             password_hash=password_hash,
-            preferred_language=preferred_language,
-            timezone=timezone,
             is_active=True,
             is_verified=False,
             created_at=created_at,
             updated_at=None,
             display_name=display_name,
+            # Registration still supplies a language and a timezone — they
+            # arrive on the sign-up form and A64-012.5 did not move that.
+            # What changed is where they land: inside the preferences
+            # group, so the account is created with the same shape a later
+            # `PATCH /profile/preferences` writes rather than with two
+            # loose fields that endpoint would then have to reach around.
+            preferences=Preferences(
+                locale=LocalePreferences(
+                    preferred_language=preferred_language,
+                    timezone=timezone,
+                )
+            ),
         )
+
+    # --- locale shortcuts ----------------------------------------------------
+    #
+    # Read-only, and both were plain fields until A64-012.5 moved them into
+    # `preferences.locale`. They stay as properties because roughly thirty
+    # call sites *read* them — every mapper, the repository in both
+    # directions, the registration path — and not one writes them any more.
+    # Rewriting all of those to `user.preferences.locale.preferred_language`
+    # would be churn that made every call site longer and none of them
+    # clearer.
+    #
+    # There is no setter on either, deliberately. That is what makes the
+    # move real: the only way to change a language or a timezone is to
+    # replace the preferences value, which is what `update_preferences`
+    # does and what nothing else may do.
+
+    @property
+    def preferred_language(self) -> Locale:
+        return self.preferences.locale.preferred_language
+
+    @property
+    def timezone(self) -> Timezone:
+        return self.preferences.locale.timezone
 
     # --- avatar transitions --------------------------------------------------
     #

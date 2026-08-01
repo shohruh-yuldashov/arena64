@@ -23,6 +23,7 @@ service as an opaque string it never inspects.
 """
 
 import logging
+from dataclasses import replace
 from uuid import UUID
 
 from app.core.clock import Clock
@@ -31,6 +32,7 @@ from app.core.sentinels import is_set, unset_to_none
 from app.core.unit_of_work import UnitOfWork
 from app.modules.users.application.commands import (
     CreateUser,
+    UpdatePreferences,
     UpdatePrivacySettings,
     UpdateUserProfile,
 )
@@ -195,10 +197,13 @@ class UserService:
             user.bio = Bio(command.bio) if command.bio else None
         if is_set(command.country):
             user.country = CountryCode(command.country) if command.country else None
-        if is_set(command.preferred_language):
-            user.preferred_language = command.preferred_language
-        if is_set(command.timezone):
-            user.timezone = Timezone(command.timezone)
+
+        # `preferred_language` and `timezone` were applied here until
+        # A64-012.5 moved them into `update_preferences`. They are not
+        # reachable from this method any more, and that is enforced by the
+        # entity rather than by this omission: `User.preferred_language` and
+        # `User.timezone` are read-only properties over
+        # `preferences.locale`, so a line reassigning one would not compile.
 
         user.updated_at = self._clock.now()
 
@@ -239,6 +244,65 @@ class UserService:
             show_activity=unset_to_none(command.show_activity),
         )
 
+        user.updated_at = self._clock.now()
+
+        async with self._uow:
+            updated = await self._users.update(user)
+            await self._uow.commit()
+
+        return updated
+
+    async def update_preferences(self, user_id: UUID, command: UpdatePreferences) -> User:
+        """Applies a partial preferences update — A64-012.5.
+
+        **Partial at two levels.** An absent group is left entirely alone;
+        inside a present group, an absent setting is left alone. That is
+        what makes `{"gameplay": {"board_theme": "wood"}}` a one-setting
+        change rather than a reset of everything else in the group — and a
+        reset is exactly what a whole-object write would silently do to a
+        player's timezone.
+
+        `unset_to_none` bridges the two conventions, as it does in
+        `update_privacy`: the command speaks `UNSET`, the value objects
+        read `None` as "unchanged", and neither field in either group is
+        nullable, so the two meanings cannot collide. See
+        `app.core.sentinels.unset_to_none` for why that is a narrow licence
+        rather than a general one.
+
+        `Timezone` is constructed here rather than by the caller, which is
+        where A64-012.5's "timezone must be validated using the IANA
+        database" is actually satisfied for every path — HTTP, a future
+        admin tool, a test. The value object raises `InvalidTimezone`
+        before the entity is touched, so a request carrying a good board
+        theme and a bad timezone changes neither.
+        """
+        user = await self.get_user(user_id)
+        preferences = user.preferences
+
+        if is_set(command.gameplay):
+            gameplay = command.gameplay
+            preferences = replace(
+                preferences,
+                gameplay=preferences.gameplay.updated(
+                    board_theme=unset_to_none(gameplay.board_theme),
+                    piece_set=unset_to_none(gameplay.piece_set),
+                    confirm_move=unset_to_none(gameplay.confirm_move),
+                    show_coordinates=unset_to_none(gameplay.show_coordinates),
+                    animation_speed=unset_to_none(gameplay.animation_speed),
+                ),
+            )
+
+        if is_set(command.locale):
+            locale = command.locale
+            preferences = replace(
+                preferences,
+                locale=preferences.locale.updated(
+                    preferred_language=unset_to_none(locale.preferred_language),
+                    timezone=Timezone(locale.timezone) if is_set(locale.timezone) else None,
+                ),
+            )
+
+        user.preferences = preferences
         user.updated_at = self._clock.now()
 
         async with self._uow:

@@ -93,12 +93,32 @@ class InvalidCountryCode(ValidationError):
     """Not a two-letter ISO 3166-1 alpha-2 code."""
 
 
+class InvalidPreference(ValidationError):
+    """A stored preference document holds a value this application cannot
+    have written — A64-012.5.
+
+    Raised only when *reading* (`GameplayPreferences.from_document`), never
+    from the HTTP boundary: an unknown key or a bad enum value in a request
+    is rejected by the request schema before it reaches the domain, with a
+    422 naming the field. Reaching this exception therefore means the
+    `jsonb` column was written by something other than this code path, and
+    the honest answer is to fail rather than silently reset a player's
+    settings to defaults.
+
+    A `ValidationError` rather than a new kind, so the existing handler
+    table maps it without a new entry — a 422 is not quite the right shape
+    for stored corruption, and inventing a fifth status for a case that
+    should never occur would be worse than the imprecision.
+    """
+
+
 __all__ = [
     "EmailAlreadyExists",
     "InvalidBio",
     "InvalidCountryCode",
     "InvalidDisplayName",
     "InvalidEmail",
+    "InvalidPreference",
     "InvalidLanguage",
     "InvalidTimezone",
     "InvalidUsername",

@@ -54,6 +54,7 @@ from app.modules.profiles.infrastructure import (
     UnratedRatingProvider,
 )
 from app.modules.users.application.services import UserService
+from app.modules.users.application.services.preferences_service import PreferencesService
 from app.modules.users.application.services.privacy_settings_service import (
     PrivacySettingsService,
 )
@@ -61,6 +62,7 @@ from app.modules.users.application.services.profile_editing_service import Profi
 from app.modules.users.application.services.public_profile_service import PublicProfileService
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
 from app.modules.users.public import (
+    PreferencesEditor,
     PrivacySettingsEditor,
     ProfileEditor,
     PublicProfileReader,
@@ -138,6 +140,32 @@ def get_privacy_settings_editor(session: DbSessionDep, clock: ClockDep) -> Priva
 PrivacySettingsEditorDep = Annotated[PrivacySettingsEditor, Depends(get_privacy_settings_editor)]
 
 
+def get_preferences_editor(session: DbSessionDep, clock: ClockDep) -> PreferencesEditor:
+    """`users`' side of the personal settings, behind its tenth published
+    port.
+
+    A fourth factory over the same three objects, and the justification is
+    the one the second and third gave: what differs is the *capability*,
+    not the graph. This one can read and write two preference groups and
+    nothing else — it cannot rename anybody, cannot read a biography, and
+    cannot change what strangers see.
+
+    It is also the only factory on the platform that yields something able
+    to change a language or a timezone, which is what A64-012.5's "avoid
+    duplicated writable fields" looks like once it reaches the composition
+    root.
+    """
+    users = UserService(
+        users=SqlAlchemyUserRepository(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )
+    return PreferencesService(users)
+
+
+PreferencesEditorDep = Annotated[PreferencesEditor, Depends(get_preferences_editor)]
+
+
 def get_rating_provider() -> RatingProvider:
     """Ratings — **placeholder until the `rating` module exists.**
 
@@ -180,12 +208,14 @@ ProfileServiceDep = Annotated[ProfileService, Depends(get_profile_service)]
 
 
 __all__ = [
+    "PreferencesEditorDep",
     "PrivacySettingsEditorDep",
     "ProfileEditorDep",
     "ProfileServiceDep",
     "PublicProfileReaderDep",
     "RatingProviderDep",
     "StatisticsProviderDep",
+    "get_preferences_editor",
     "get_privacy_settings_editor",
     "get_profile_editor",
     "get_profile_service",

@@ -723,6 +723,29 @@ class RateLimitSettings(BaseSettings):
     privacy_update_ip_limit: int = Field(default=20, ge=1)
     privacy_update_window_seconds: int = Field(default=5 * 60, ge=1)
 
+    # --- PATCH /profile/preferences -----------------------------------------
+    # **Per authenticated user**, which A64-012.5 specifies explicitly and
+    # which `RateLimitScope.USER` exists to express — see that member on why
+    # a proven identity beats a network address on any endpoint behind a
+    # token, and `profiles.presentation.rate_limits` on how the principal
+    # reaches the limiter.
+    #
+    # 30 per 5 minutes is chosen rather than given. A settings screen is
+    # used in bursts — a player opens it, tries three board themes, changes
+    # a timezone and leaves — so the window has to absorb a short run of
+    # deliberate changes without a legitimate user ever meeting it. What it
+    # bounds is a client stuck in a retry loop writing to the account row,
+    # which is the realistic failure on an authenticated endpoint that
+    # nobody else can reach.
+    #
+    # No per-IP companion. Adding one would reintroduce exactly the
+    # shared-NAT problem the user scope removes, and there is no attack it
+    # would catch that the per-user rule does not: an attacker with N stolen
+    # tokens is already N compromised accounts, and rate limiting is not the
+    # control for that.
+    preferences_update_user_limit: int = Field(default=30, ge=1)
+    preferences_update_window_seconds: int = Field(default=5 * 60, ge=1)
+
 
 class Settings(BaseModel):
     """The composed, immutable configuration for this process."""

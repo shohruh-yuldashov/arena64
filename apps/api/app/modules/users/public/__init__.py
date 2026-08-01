@@ -39,6 +39,17 @@ What is published, and why only this much:
                          are different authorities
   `PrivacyEdits`         that port's input: five optional booleans
   `PrivacySettingsView`  that port's output — the owner's own five flags
+  `PreferencesEditor`    reads and updates the owner's personal settings
+                         (A64-012.5), and is the *only* way to change a
+                         language or a timezone since that task
+  `PreferenceEdits`      that port's input, grouped: gameplay and locale
+  `PreferencesView`      that port's output. Never public
+  `BoardTheme`, `PieceSet`, `AnimationSpeed`
+                         the closed sets those shapes are defined in terms
+                         of — published because BR-2 requires a published
+                         DTO's field types to be published too
+  the `DEFAULT_*`        the platform defaults, so a consumer documents the
+  preference constants   real ones rather than restating them by hand
   `ProfileVisibility`    the *four* a consumer needs to render somebody
                          else. No `show_country`: that one is applied
                          inside `users`, so it never has to travel
@@ -73,22 +84,42 @@ from app.modules.users.domain.exceptions import (
     UsernameAlreadyExists,
     UserNotFound,
 )
+from app.modules.users.domain.preferences import (
+    DEFAULT_ANIMATION_SPEED,
+    DEFAULT_BOARD_THEME,
+    DEFAULT_CONFIRM_MOVE,
+    DEFAULT_PIECE_SET,
+    DEFAULT_SHOW_COORDINATES,
+    AnimationSpeed,
+    BoardTheme,
+    PieceSet,
+)
 from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import (
     AvatarReference,
+    GameplayPreferencesView,
+    LocalePreferencesView,
     OwnUserProfile,
+    PreferencesView,
     PrivacySettingsView,
     ProfileVisibility,
     PublicUserProfile,
     UserRead,
     UserSummary,
 )
-from app.modules.users.public.edits import PrivacyEdits, ProfileEdits
+from app.modules.users.public.edits import (
+    GameplayEdits,
+    LocaleEdits,
+    PreferenceEdits,
+    PrivacyEdits,
+    ProfileEdits,
+)
 from app.modules.users.public.ports import (
     AvatarStore,
     EmailVerifier,
     NewUserAccount,
     PasswordResetter,
+    PreferencesEditor,
     PrivacySettingsEditor,
     ProfileEditor,
     PublicProfileReader,
@@ -104,6 +135,12 @@ from app.modules.users.public.ports import (
 type UserId = UUID
 
 __all__ = [
+    "DEFAULT_ANIMATION_SPEED",
+    "DEFAULT_BOARD_THEME",
+    "DEFAULT_CONFIRM_MOVE",
+    "DEFAULT_PIECE_SET",
+    "DEFAULT_SHOW_COORDINATES",
+    "AnimationSpeed",
     "AvatarReference",
     "AvatarStore",
     "OwnUserProfile",
@@ -117,7 +154,16 @@ __all__ = [
     "InvalidEmail",
     "InvalidUsername",
     "NewUserAccount",
+    "BoardTheme",
+    "GameplayEdits",
+    "GameplayPreferencesView",
+    "LocaleEdits",
+    "LocalePreferencesView",
     "PasswordResetter",
+    "PieceSet",
+    "PreferenceEdits",
+    "PreferencesEditor",
+    "PreferencesView",
     "PrivacyEdits",
     "PrivacySettingsEditor",
     "PrivacySettingsView",

@@ -1,7 +1,7 @@
-"""HTTP routes for your own profile — editing it (A64-012.3) and
-controlling who sees it (A64-012.4).
+"""HTTP routes for your own profile — editing it (A64-012.3), controlling
+who sees it (A64-012.4) and setting your own preferences (A64-012.5).
 
-Four endpoints, and **no business logic in any of them**. Each translates a
+Six endpoints in three pairs, and **no business logic in any of them**. Each translates a
 request into a service call and the result into a wire schema. Validation
 is the domain's, the transaction is `users`', and URL composition is
 `AvatarLinkBuilder`'s.
@@ -71,17 +71,31 @@ from app.core.sentinels import UNSET
 from app.modules.auth.presentation.dependencies import CurrentUser
 from app.modules.avatars.presentation.dependencies import AvatarLinkBuilderDep
 from app.modules.profiles.presentation.dependencies import (
+    PreferencesEditorDep,
     PrivacySettingsEditorDep,
     ProfileEditorDep,
 )
-from app.modules.profiles.presentation.rate_limits import PRIVACY_UPDATE_RATE_LIMIT
+from app.modules.profiles.presentation.rate_limits import (
+    PRIVACY_UPDATE_RATE_LIMIT,
+    enforce_preferences_update_limit,
+)
 from app.modules.profiles.presentation.schemas import (
+    GameplayPreferencesUpdate,
+    LocalePreferencesUpdate,
     MyProfileResponse,
+    PreferencesResponse,
+    PreferencesUpdateRequest,
     PrivacySettingsResponse,
     PrivacySettingsUpdateRequest,
     ProfileUpdateRequest,
 )
-from app.modules.users.public import PrivacyEdits, ProfileEdits
+from app.modules.users.public import (
+    GameplayEdits,
+    LocaleEdits,
+    PreferenceEdits,
+    PrivacyEdits,
+    ProfileEdits,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -166,11 +180,9 @@ async def update_my_profile(
     """Applies a partial update to the authenticated account's profile.
 
     **A real PATCH.** Send only what changes; omitted fields are left
-    alone. The three optional fields — `display_name`, `bio`, `country` —
+    alone. All three fields — `display_name`, `bio`, `country` —
     distinguish *omitted* from *explicitly null*: omitting leaves the value
-    as it is, sending `null` clears it. `preferred_language` and `timezone`
-    always have a value, so an explicit `null` for either is a `422` rather
-    than a silent no-op.
+    as it is, sending `null` clears it.
 
     **Only your own profile.** The account comes from your access token;
     there is no way to name a different one.
@@ -187,8 +199,11 @@ async def update_my_profile(
     | `display_name` | 3-50 characters, any script, trimmed |
     | `bio` | at most 500 characters, plain text |
     | `country` | an assigned ISO 3166-1 alpha-2 code |
-    | `preferred_language` | `en`, `ru`, or `uz` |
-    | `timezone` | an IANA name this system knows |
+
+    `preferred_language` and `timezone` were editable here until A64-012.5
+    moved them to `PATCH /profile/preferences`. Sending either now returns
+    a `422` naming it, which is the loud answer a silently-dropped setting
+    would not give.
 
     `display_name` and `bio` additionally reject control and
     bidirectional characters — a right-to-left override in a name rendered
@@ -214,16 +229,6 @@ async def update_my_profile(
         display_name=payload.display_name if "display_name" in sent else UNSET,
         bio=payload.bio if "bio" in sent else UNSET,
         country=payload.country if "country" in sent else UNSET,
-        # These two reject an explicit null at the schema, so reaching here
-        # with the key present means a real value.
-        preferred_language=(
-            payload.preferred_language
-            if "preferred_language" in sent and payload.preferred_language is not None
-            else UNSET
-        ),
-        timezone=(
-            payload.timezone if "timezone" in sent and payload.timezone is not None else UNSET
-        ),
     )
 
     profile = await editor.update_own_profile(user.id, edits)
@@ -417,3 +422,220 @@ async def update_my_privacy_settings(
     )
 
     return build_response(PrivacySettingsResponse.of(settings))
+
+
+# --- preferences (A64-012.5) ------------------------------------------------
+#
+# Two endpoints on `/profile/preferences`, and the third pair on this
+# router. The split from `/profile` and `/profile/privacy` is the same one
+# those two make from each other: a profile edit changes what a player says
+# about themselves, a privacy flag changes what strangers see, and a
+# preference changes what the player themselves sees. Three screens, three
+# ports, three rate-limit policies.
+
+_PREFERENCES_UNPROCESSABLE: _Responses = {
+    422: {
+        "description": (
+            "An unknown preference group or key, a value outside its allowed set, a "
+            "timezone this system does not know, or a key sent as `null`. `message` "
+            "names which. Unknown keys are **rejected** at both levels — an unknown "
+            "group and an unknown setting inside a known group are both errors."
+        ),
+        "model": ErrorResponse,
+    }
+}
+_PREFERENCES_TOO_MANY: _Responses = {
+    429: {
+        "description": (
+            "Too many preference updates from this account. Counted **per user**, not "
+            "per network address, so a shared connection is never somebody else's "
+            "problem. `Retry-After` says how long to wait."
+        ),
+        "model": ErrorResponse,
+    }
+}
+
+
+@my_profile_router.get(
+    "/preferences",
+    status_code=status.HTTP_200_OK,
+    summary="Read your preferences",
+    response_description="Every preference group, complete.",
+    responses={**_UNAUTHORIZED, **_NOT_FOUND},
+)
+async def get_my_preferences(
+    user: CurrentUser,
+    preferences: PreferencesEditorDep,
+) -> ApiResponse[PreferencesResponse]:
+    """Returns the authenticated account's personal settings.
+
+    **Always complete.** Every group is present and every setting inside it
+    has a value, even for an account that has never opened a settings
+    screen — the stored document is empty for such an account and the
+    domain fills each absent key with its default. So a client renders
+    every control from this response and never has to carry its own copy of
+    the defaults, which is the copy that would drift.
+
+    Not rate limited: one indexed read of a row you have already
+    authenticated as, changing nothing, loaded on every visit to a settings
+    screen. See `rate_limits.py`.
+
+    **Never public.** No anonymous endpoint returns any of this — a board
+    theme and a timezone are yours, and `GET /profiles/{username}` carries
+    neither.
+    """
+    return build_response(PreferencesResponse.of(await preferences.get_preferences(user.id)))
+
+
+@my_profile_router.patch(
+    "/preferences",
+    status_code=status.HTTP_200_OK,
+    summary="Update your preferences",
+    response_description="Every preference group as it now stands.",
+    responses={
+        **_UNAUTHORIZED,
+        **_NOT_FOUND,
+        **_PREFERENCES_UNPROCESSABLE,
+        **_PREFERENCES_TOO_MANY,
+    },
+    dependencies=[Depends(enforce_preferences_update_limit)],
+)
+async def update_my_preferences(
+    payload: PreferencesUpdateRequest,
+    user: CurrentUser,
+    preferences: PreferencesEditorDep,
+) -> ApiResponse[PreferencesResponse]:
+    """Applies a partial update to the authenticated account's preferences.
+
+    **A real PATCH, at two levels.** An omitted *group* is left entirely
+    alone, and inside a group an omitted *setting* is left alone. So
+    `{"locale": {"timezone": "UTC"}}` changes a timezone and touches
+    neither the language beside it nor any of the five gameplay settings.
+
+    **Only your own preferences.** The account comes from your access
+    token; there is no way to name a different one.
+
+    **Unknown keys are rejected at both levels.** `{"ui": {...}}` is a
+    `422` naming `ui`; `{"gameplay": {"sound": true}}` is a `422` naming
+    `sound`. A `null` value is rejected too — no preference has an empty
+    state, so `null` would need a meaning invented for it, and the likely
+    invention ("reset to default") is not a decision this endpoint should
+    make on a client's behalf.
+
+    ## Groups and settings
+
+    | Group | Setting | Values | Default |
+    | --- | --- | --- | --- |
+    | `gameplay` | `board_theme` | `classic`, `wood`, `marble`, `midnight` | `classic` |
+    | `gameplay` | `piece_set` | `classic`, `modern`, `neo` | `classic` |
+    | `gameplay` | `confirm_move` | boolean | `false` |
+    | `gameplay` | `show_coordinates` | boolean | `true` |
+    | `gameplay` | `animation_speed` | `instant`, `fast`, `normal`, `slow` | `normal` |
+    | `locale` | `preferred_language` | `en`, `ru`, `uz` | `en` |
+    | `locale` | `timezone` | any IANA name | `UTC` |
+
+    `animation_speed: instant` disables motion rather than being a fourth
+    speed — it is an accessibility setting, and motion is a migraine and
+    vestibular trigger.
+
+    **`preferred_language` and `timezone` are changed here and nowhere
+    else.** Both were editable through `PATCH /profile` before A64-012.5,
+    which removed them there; a field with two writable endpoints is a
+    field whose validation and audit trail depend on which one a client
+    happened to use.
+
+    **Nothing is written if any value is rejected.** The timezone is
+    validated before the account row is touched, so a request with a good
+    board theme and a bad timezone changes neither.
+
+    Rate limited **per account** rather than per network address, so a
+    shared office or carrier connection never throttles one player for
+    another's behaviour. See the `429` response.
+    """
+    # The two-level `model_fields_set` walk. The outer level distinguishes
+    # "did not mention gameplay" from "sent an empty gameplay object"; the
+    # inner one distinguishes a setting left alone from one being changed.
+    # Collapsing either would turn a one-setting change into a group reset,
+    # which is a failure a client cannot see and a player notices later.
+    sent_groups = payload.model_fields_set
+    edits = PreferenceEdits(
+        gameplay=(
+            _gameplay_edits(payload.gameplay)
+            if "gameplay" in sent_groups and payload.gameplay is not None
+            else UNSET
+        ),
+        locale=(
+            _locale_edits(payload.locale)
+            if "locale" in sent_groups and payload.locale is not None
+            else UNSET
+        ),
+    )
+
+    updated = await preferences.update_preferences(user.id, edits)
+
+    # **Group names only — never values, and never the settings inside.**
+    # A64-012.5 asks for the updated *groups*, which is a narrower record
+    # than `profile_updated`'s field list and deliberately so: a board
+    # theme is harmless but a timezone is location data (services.md §8.5),
+    # and "this account changed something in its locale group" answers what
+    # an audit asks without putting a person's region in a log with broader
+    # read access than the database.
+    logger.info(
+        "preferences_updated",
+        extra={"user_id": str(user.id), "updated_groups": sorted(sent_groups)},
+    )
+
+    return build_response(PreferencesResponse.of(updated))
+
+
+def _gameplay_edits(payload: GameplayPreferencesUpdate) -> GameplayEdits:
+    """One group's `model_fields_set` walk.
+
+    A helper per group rather than ten inline ternaries in the handler, so
+    that adding `ui` is a third function beside these two rather than five
+    more lines inside a route. The schema has already rejected an explicit
+    `null`, so a key present in `sent` carries a real value — the
+    `is not None` half is what keeps that a type-checked fact rather than
+    an assumption (see `update_my_privacy_settings` for the same note).
+    """
+    sent = payload.model_fields_set
+    return GameplayEdits(
+        board_theme=(
+            payload.board_theme
+            if "board_theme" in sent and payload.board_theme is not None
+            else UNSET
+        ),
+        piece_set=(
+            payload.piece_set if "piece_set" in sent and payload.piece_set is not None else UNSET
+        ),
+        confirm_move=(
+            payload.confirm_move
+            if "confirm_move" in sent and payload.confirm_move is not None
+            else UNSET
+        ),
+        show_coordinates=(
+            payload.show_coordinates
+            if "show_coordinates" in sent and payload.show_coordinates is not None
+            else UNSET
+        ),
+        animation_speed=(
+            payload.animation_speed
+            if "animation_speed" in sent and payload.animation_speed is not None
+            else UNSET
+        ),
+    )
+
+
+def _locale_edits(payload: LocalePreferencesUpdate) -> LocaleEdits:
+    """The locale group's `model_fields_set` walk — see `_gameplay_edits`."""
+    sent = payload.model_fields_set
+    return LocaleEdits(
+        preferred_language=(
+            payload.preferred_language
+            if "preferred_language" in sent and payload.preferred_language is not None
+            else UNSET
+        ),
+        timezone=(
+            payload.timezone if "timezone" in sent and payload.timezone is not None else UNSET
+        ),
+    )

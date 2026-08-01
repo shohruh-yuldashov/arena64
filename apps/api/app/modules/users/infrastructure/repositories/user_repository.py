@@ -33,6 +33,11 @@ from app.modules.users.domain.exceptions import (
     UsernameAlreadyExists,
     UserNotFound,
 )
+from app.modules.users.domain.preferences import (
+    GameplayPreferences,
+    LocalePreferences,
+    Preferences,
+)
 from app.modules.users.domain.privacy import PrivacySettings
 from app.modules.users.domain.value_objects import (
     Bio,
@@ -74,8 +79,6 @@ class SqlAlchemyUserRepository:
             username=Username(row.username),
             email=Email(row.email),
             password_hash=row.password_hash,
-            preferred_language=row.preferred_language,
-            timezone=Timezone(row.timezone),
             is_active=row.is_active,
             is_verified=row.is_verified,
             created_at=row.created_at,
@@ -90,6 +93,18 @@ class SqlAlchemyUserRepository:
             # absence is one state, not an empty `Bio`.
             bio=Bio(row.bio) if row.bio else None,
             country=CountryCode(row.country_code) if row.country_code else None,
+            # Locale lives inside `preferences` since A64-012.5, so the two
+            # columns are reassembled here rather than assigned to the
+            # entity's top level. `from_document` fills every key the
+            # `jsonb` document does not carry, which is what makes `{}` —
+            # what a fresh account holds — read as the platform defaults.
+            preferences=Preferences(
+                gameplay=GameplayPreferences.from_document(row.gameplay_preferences),
+                locale=LocalePreferences(
+                    preferred_language=row.preferred_language,
+                    timezone=Timezone(row.timezone),
+                ),
+            ),
             # The five columns become one value object here and split back
             # into five in `_to_model` — which is the whole reason the
             # entity holds a `PrivacySettings` rather than five booleans.
@@ -126,6 +141,7 @@ class SqlAlchemyUserRepository:
             avatar_version=user.avatar_version,
             bio=user.bio.value if user.bio else None,
             country_code=user.country.value if user.country else None,
+            gameplay_preferences=user.preferences.gameplay.as_document(),
             show_country=user.privacy.show_country,
             show_last_seen=user.privacy.show_last_seen,
             show_statistics=user.privacy.show_statistics,
@@ -157,6 +173,7 @@ class SqlAlchemyUserRepository:
         row.avatar_version = user.avatar_version
         row.bio = user.bio.value if user.bio else None
         row.country_code = user.country.value if user.country else None
+        row.gameplay_preferences = user.preferences.gameplay.as_document()
         row.show_country = user.privacy.show_country
         row.show_last_seen = user.privacy.show_last_seen
         row.show_statistics = user.privacy.show_statistics

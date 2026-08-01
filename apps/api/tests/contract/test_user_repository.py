@@ -15,6 +15,7 @@ contributor without Docker — with the fake half covering what it can.
 """
 
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -222,7 +223,14 @@ class TestUpdate:
         user = await repository.create(make_user())
 
         user.display_name = DisplayName("New Name")
-        user.preferred_language = Locale.UZ
+        # Locale lives inside `preferences` since A64-012.5, and
+        # `User.preferred_language` is a read-only property over it — so a
+        # language change is a replacement of the value object, which is
+        # the only way anything on the platform may make one.
+        user.preferences = replace(
+            user.preferences,
+            locale=user.preferences.locale.updated(preferred_language=Locale.UZ),
+        )
         user.updated_at = _BASE_TIME + timedelta(hours=1)
         await repository.update(user)
 

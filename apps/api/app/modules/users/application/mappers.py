@@ -18,7 +18,10 @@ hash is worth the extra lines.
 from app.modules.users.domain.entities import User
 from app.modules.users.public.dtos import (
     AvatarReference,
+    GameplayPreferencesView,
+    LocalePreferencesView,
     OwnUserProfile,
+    PreferencesView,
     PrivacySettingsView,
     ProfileVisibility,
     PublicUserProfile,
@@ -126,6 +129,42 @@ def to_profile_visibility(user: User) -> ProfileVisibility:
     )
 
 
+def to_preferences(user: User) -> PreferencesView:
+    """The owner's own personal settings — A64-012.5.
+
+    Explicit field by field like every other mapper here, and for the same
+    reason with one extra edge: the domain types and the published DTOs
+    share every field name, so `model_validate` would work today and would
+    keep appearing to work on the day a sixth gameplay setting is added to
+    one and not the other.
+
+    `timezone` unwraps its value object; the enums pass through as
+    themselves, because `users.public` publishes them and a consumer
+    comparing against a member is what makes them worth having.
+
+    **No privacy group.** `PrivacySettingsView` is its own shape behind its
+    own port — see `PreferencesView` on why the design document's fourth
+    preference group is deliberately not one of these.
+    """
+    preferences = user.preferences
+    gameplay = preferences.gameplay
+    locale = preferences.locale
+
+    return PreferencesView(
+        gameplay=GameplayPreferencesView(
+            board_theme=gameplay.board_theme,
+            piece_set=gameplay.piece_set,
+            confirm_move=gameplay.confirm_move,
+            show_coordinates=gameplay.show_coordinates,
+            animation_speed=gameplay.animation_speed,
+        ),
+        locale=LocalePreferencesView(
+            preferred_language=locale.preferred_language,
+            timezone=locale.timezone.value,
+        ),
+    )
+
+
 def to_privacy_settings(user: User) -> PrivacySettingsView:
     """The owner's own controls — A64-012.4.
 
@@ -186,8 +225,6 @@ def to_own_profile(user: User) -> OwnUserProfile:
         display_name=_display_name_of(user),
         bio=user.bio.value if user.bio else None,
         country=user.country.value if user.country else None,
-        preferred_language=user.preferred_language,
-        timezone=user.timezone.value,
         avatar=to_avatar_reference(user),
         created_at=user.created_at,
     )

@@ -5,7 +5,7 @@ Two types: what a client may send to `PATCH /profile`, and what both
 
 ## The request type is where mass assignment is stopped, twice
 
-`ProfileUpdateRequest` declares exactly five fields and inherits
+`ProfileUpdateRequest` declares exactly three fields and inherits
 `extra="forbid"` from `BaseRequestDTO`. A client sending `username`,
 `is_verified`, `avatar_object_key` or `id` gets a `422` naming the field —
 it is never silently applied and never silently dropped.
@@ -20,8 +20,20 @@ swallowed typos would be the one place a misspelled `display_nmae` looked
 like a success.
 
 The second layer is the published `ProfileEdits` type, which has the same
-five attributes and no `**extra`. Even a caller bypassing this schema
-cannot set a sixth field.
+three attributes and no `**extra`. Even a caller bypassing this schema
+cannot set a fourth field.
+
+## What A64-012.5 moved out
+
+`preferred_language` and `timezone` were here, on both types. They are
+preferences, and leaving them writable from a profile edit as well as from
+`PATCH /profile/preferences` would have been the duplicated writable field
+that task set out to remove — so they moved, and the *read* moved with the
+write. A response whose justification is "the fields this endpoint can
+change" must not keep reporting two it cannot.
+
+`GET /auth/me` still reports both; that is the account view, and a
+different question.
 
 ## Why `UNSET` is not a wire concept
 
@@ -35,10 +47,9 @@ used from A64-010; see the router for the mapping, and
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import Field
 
 from app.core.dto import BaseRequestDTO, BaseResponseDTO
-from app.core.enums import Locale
 from app.modules.avatars.public import AvatarLinks
 from app.modules.users.domain.validators import (
     BIO_MAX_LENGTH,
@@ -92,21 +103,6 @@ class ProfileUpdateRequest(BaseRequestDTO):
         ),
         examples=["UZ"],
     )
-    preferred_language: Locale | None = Field(
-        default=None,
-        description="Interface language. One of `en`, `ru`, `uz`. Cannot be cleared.",
-        examples=["uz"],
-    )
-    timezone: str | None = Field(
-        default=None,
-        description=(
-            "IANA timezone name — `Asia/Tashkent`, `Europe/London`, `UTC`. Never a "
-            "UTC offset: an offset is a fact about one instant, not a timezone, and "
-            "would break the moment daylight-saving rules applied. Cannot be cleared."
-        ),
-        examples=["Asia/Tashkent"],
-    )
-
     model_config = {
         "extra": "forbid",
         "json_schema_extra": {
@@ -115,32 +111,21 @@ class ProfileUpdateRequest(BaseRequestDTO):
                     "display_name": "Жанибек Алиев",
                     "bio": "Blitz player. Occasionally studies the endgame.",
                     "country": "UZ",
-                    "preferred_language": "uz",
-                    "timezone": "Asia/Tashkent",
                 },
                 {"bio": None},
             ]
         },
     }
 
-    @model_validator(mode="after")
-    def _reject_explicit_null_on_non_clearable(self) -> "ProfileUpdateRequest":
-        """`preferred_language` and `timezone` always have a value.
-
-        An account cannot be in a "no language" state, so an explicit
-        `null` for either is a client error rather than a clear — and
-        silently ignoring it would leave the caller believing it applied.
-        The three nullable fields are unaffected: `null` genuinely clears
-        them.
-
-        Mirrors `UserUpdate`'s validator, which A64-010 added for the same
-        reason on the same two fields.
-        """
-        sent = self.model_fields_set
-        for field in ("preferred_language", "timezone"):
-            if field in sent and getattr(self, field) is None:
-                raise ValueError(f"{field} cannot be set to null; omit it to leave it unchanged")
-        return self
+    # --- removed in A64-012.5: `_reject_explicit_null_on_non_clearable` ---
+    #
+    # It existed for `preferred_language` and `timezone`, the only two
+    # fields here that had no cleared state. Both moved to
+    # `PATCH /profile/preferences`, and every field that remains is
+    # genuinely nullable — `null` clears a display name, a biography or a
+    # country — so there is nothing left for it to reject. The equivalent
+    # rule now lives in `schemas/preferences.py`, where the non-clearable
+    # fields went.
 
 
 class MyProfileResponse(BaseResponseDTO):
@@ -183,17 +168,6 @@ class MyProfileResponse(BaseResponseDTO):
         description="ISO 3166-1 alpha-2, upper-cased. `null` when unset.",
         examples=["UZ"],
     )
-    language: Locale = Field(
-        description="Your interface language.",
-        examples=["uz"],
-    )
-    timezone: str = Field(
-        description=(
-            "Your IANA timezone. Returned here but **not** on the public profile — "
-            "publishing it would narrow your physical location to anyone who asks."
-        ),
-        examples=["Asia/Tashkent"],
-    )
     avatar_url: str | None = Field(
         description="Your avatar at up to 512px, or `null`. Managed at `/profile/avatar`.",
         examples=[None],
@@ -216,8 +190,6 @@ class MyProfileResponse(BaseResponseDTO):
                     "display_name": "Жанибек Алиев",
                     "bio": "Blitz player. Occasionally studies the endgame.",
                     "country": "UZ",
-                    "language": "uz",
-                    "timezone": "Asia/Tashkent",
                     "avatar_url": None,
                     "thumbnail_url": None,
                     "joined_at": "2026-08-01T12:00:00Z",
@@ -241,8 +213,6 @@ class MyProfileResponse(BaseResponseDTO):
             display_name=profile.display_name,
             bio=profile.bio,
             country=profile.country,
-            language=profile.preferred_language,
-            timezone=profile.timezone,
             avatar_url=avatar.avatar_url if avatar else None,
             thumbnail_url=avatar.thumbnail_url if avatar else None,
             joined_at=profile.created_at,

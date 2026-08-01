@@ -635,6 +635,28 @@ and position hashing for repetition rules.
    a worker, or later to a compiled implementation, if the engine has no ambient
    dependencies to carry with it.
 
+#### Status (A64-014.1) — the kernel exists, and AD-13 is enforced rather than asserted
+
+`apps/api/app/modules/engine/` implements the **board foundation only**: `BoardCoordinate`,
+`PlayerSide`, `PieceRank`, `Piece`, `BoardVariant`, `BoardGeometry`, `Board`, the opening
+position, and the failure taxonomy they raise. Move generation, move application, captures,
+king mobility, draw detection, `Position`, `Move`, repetition hashing and notation are all
+absent, and nothing anticipates their shape beyond keeping the board variant-parameterised.
+
+Two contracts in `apps/api/.importlinter` now hold the two rules this section states:
+
+| Contract | Enforces |
+| --- | --- |
+| `engine-is-a-dependency-free-kernel` | AD-13 — the kernel may import `app.core` and nothing else. Every clause of "no I/O, no clock, no randomness, no logging, no framework, no database, no configuration" is a named forbidden module, `logging`, `random` and `datetime` included |
+| `engine-has-three-permitted-consumers` | R-2 — `game`, `replay` and `fairplay` only. None exists yet, so the contract names every module that does and forbids all of them |
+
+Both were verified to fail on a real violation before being relied on. The kernel is the one
+module under `app/modules/` with no four-layer interior: the module map gives it no aggregate
+roots, and AD-13 forbids it the I/O the other layers exist to separate from rules, so four of
+the five packages would be permanently empty — an empty `infrastructure/` in the module whose
+guarantee is that it has none reads as an oversight rather than a rule. The reasoning is
+recorded in that package's docstring.
+
 ### AD-14 — Rules are shared as a conformance test corpus, not as shared code
 
 The Python engine and the TypeScript client engine are two implementations governed by one

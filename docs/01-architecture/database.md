@@ -1277,6 +1277,50 @@ partitioned only if it is ever partitioned *with* the outbox. It carries no
 foreign key to `outbox.id` precisely so that a detach cannot be blocked by a
 ledger row that outlived it.
 
+#### Retention, as implemented — A64-014.1
+
+The paragraph above said "until then the table grows monotonically". That is
+no longer true, and the mechanism is a bounded `DELETE` rather than the
+partition detach DB-18 designs for. Both relations now have a horizon.
+
+| | Outbox | Ledger |
+| --- | --- | --- |
+| Setting | `OUTBOX_RETENTION_DAYS`, default 14 | `OUTBOX_LEDGER_RETENTION_DAYS`, default 30 |
+| Measured on | `occurred_at` | `processed_at` |
+| Predicate | `occurred_at < cutoff AND published_at IS NOT NULL` | `processed_at < cutoff` |
+| Index added | `ix_outbox__occurred_at` | `ix_processed_event__processed_at` |
+
+Five properties, each of which is a defect if reversed:
+
+- **An unpublished entry is never pruned, at any age.** An exhausted event is
+  still owed to somebody, and §10.5 requires it to stay visible in the
+  backlog rather than be tidied into a dead-letter table nobody watches. The
+  pruner counts what it kept for this reason and logs it at `WARNING`; that
+  count is also the answer to "why can the oldest partition not be detached".
+- **The cutoff is `occurred_at`, not `published_at`** — the partition key
+  above, so this predicate and a future `DETACH PARTITION` select the same
+  rows and the eventual migration replaces an implementation rather than a
+  policy.
+- **The ledger's horizon is at or beyond the outbox's**, and the policy
+  refuses to construct otherwise. Dropping a ledger row while its entry can
+  still be claimed lets that entry be redelivered *and* re-handled — the
+  double effect the ledger exists to prevent. The outbox is pruned first
+  within a run for the same reason.
+- **Both deletes are bounded and claim with `FOR UPDATE SKIP LOCKED`**, so
+  two pruners take disjoint batches instead of blocking on each other and no
+  statement takes a lock proportional to the backlog.
+- **`ix_outbox__occurred_at` is unconditional**, not partial on
+  `published_at IS NOT NULL`. A partial index would match the predicate more
+  closely and would put `published_at` in a *second* index's definition —
+  and that column's one `UPDATE` is the mark-published write DB-18's
+  fillfactor exists to keep cheap. One index already pays that price.
+
+This supersedes §11.1's C3 grant line, which reads "`DELETE` only via
+partition detach": the runtime role's maintenance path now issues bounded
+`DELETE`s, and partition detach remains the destination rather than the
+current mechanism.
+
+
 ---
 
 ## 11. Audit Fields, Soft Delete, and Row Lifecycle

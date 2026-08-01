@@ -813,6 +813,15 @@ implementation settled:
 - **The consumer ledger is `platform.processed_event`**, keyed `(consumer,
   event_id)` and filtered in one batched read per relay tick — the idempotency
   check must not itself become the N+1 the batch avoids.
+- **The log has a horizon since A64-014.1.** A64-013.7 retained every row
+  forever, which was correct for replay and wrong for capacity (§10.5 calls
+  this the platform's highest-churn relation). Published entries older than
+  `OUTBOX_RETENTION_DAYS` are now pruned in bounded batches, and an
+  **unpublished** entry is never pruned at any age — see database.md §10.5's
+  retention subsection. The cost is stated plainly there: an event older than
+  the horizon cannot be re-dispatched, which is affordable only because
+  AD-19 already requires every projection to be rebuildable from PostgreSQL
+  rather than from this table.
 - **Presence is the documented exception.** `users.PresenceOnline` and
   `PresenceOffline` describe a fact that lives in Redis, which cannot enlist in
   a PostgreSQL transaction, so their outbox row is committed *after* the Redis
@@ -855,6 +864,30 @@ for N workers (`SELECT ... FOR UPDATE SKIP LOCKED`), a per-consumer idempotency
 ledger, and bounded retry recorded on the row rather than in a broker. When
 dispatch becomes `task.apply_async(...)`, the table and everything above it are
 unchanged.
+
+**Status (A64-014.1):** the *dispatch seam* now exists, in
+`apps/api/app/platform/tasks/`. Until it, the claim above was unfalsifiable —
+nothing on the platform dispatched anything, so "only the dispatch adapter is
+replaced" could not be checked. Three protocols make it checkable:
+
+| | |
+| --- | --- |
+| `TaskRequest` | name, queue, JSON payload — a Celery message body in all but transport |
+| `TaskDispatcher` | accepts work. The half Celery replaces |
+| `TaskHandler` | performs it. The half Celery does not touch |
+
+`InlineTaskDispatcher` runs handlers in the calling event loop, and its
+contract is deliberately the *weaker* of the two implementations: no return
+value, and a handler's exception is recorded rather than re-raised. Writing it
+to the inline behaviour would let every caller come to depend on the effect
+having happened by the time `dispatch` returned, and the migration would then
+be a behaviour change in each of them rather than an adapter swap.
+
+Two jobs run through it today — `platform.outbox.prune` and
+`matchmaking.queue.expire` — each with its own `PeriodicTaskScheduler` and its
+own AD-20 queue name. Celery is still not a dependency of this build; the
+migration is `send_task` in one class and beat entries in place of two
+schedulers.
 
 **Note:** the clock worker (AD-21) is *not* a Celery task. Its rationale is in
 `docs/03-backend/services.md §1`.

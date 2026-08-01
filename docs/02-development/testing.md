@@ -58,11 +58,11 @@ Every one of these runs from `apps/api/`, and a red result blocks a merge
 | Tests | `pytest` | A failing or erroring test |
 | Migrations | `alembic upgrade head` then `alembic downgrade -1` | An irreversible or non-applying revision |
 
-### The architecture gate — A64-013.8
+### The architecture gate — A64-013.8, extended by A64-014.1
 
-`import-linter` reads the real import graph and checks fifteen contracts
-(thirteen at A64-013.8; two more added by A64-014.1). They encode rules that
-were already written down and, until this task, were enforced only by review:
+`import-linter` reads the real import graph and checks every contract defined in
+`apps/api/.importlinter`. The contract set has grown as new modules were added; the rules below
+were already written down and, before automated enforcement, were checked only by review:
 
 - **`app.platform` imports no bounded context.** The outbox belongs to the
   platform (database.md §232), and the moment it imports `friends` for "just
@@ -92,6 +92,30 @@ were already written down and, until this task, were enforced only by review:
 Three imports are exempted, each with the argument recorded beside it in the
 config rather than merely silenced. Adding a fourth without one defeats the
 file.
+
+**A64-014.1 added three contracts and one source.** `matchmaking` joins the
+privacy and layering rules like every other module, and gains one of its own:
+
+- **`no module depends on matchmaking`** — nothing outside it may import any
+  part of it, including its `public/` package. R-6 forbids cycles "including
+  through events" and import-linter has no general cycle detector; this is
+  the strongest statement the graph *can* check, and it happens to make a
+  cycle through the new module unconstructible. It is written **before**
+  `matchmaking` has any consumers, which is the difference between a rule
+  that fails on the pull request introducing a violation and one discovered
+  in an audit. It is expected to be *relaxed* by the first real consumer —
+  a visible, argued diff — rather than deleted.
+- **`app.platform.tasks` is framework-free**, alongside `app.platform.events`
+  and the module domains. A `TaskRequest` must be constructible in a unit
+  test with no framework and encodable by a broker that knows none; the
+  moment it could hold a SQLAlchemy object, AD-17's Celery migration would be
+  blocked by a payload nobody can serialise — and the failure would surface
+  on the day of the migration rather than on the change that caused it.
+
+The gate now also runs as a test (`tests/unit/test_import_contracts.py`),
+which shells out to the same `lint-imports` command. A gate that lives only
+in a pipeline definition is one a contributor discovers after pushing; one
+that lives only in the suite is one a pipeline can forget to run.
 
 **Why an import graph and not a review checklist.** Both were in place before
 this task; only one of them found the three violations A64-013.8 fixed —

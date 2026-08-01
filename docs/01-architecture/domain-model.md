@@ -142,9 +142,13 @@ Presence, connections, spectator subscriptions, and rate-limit counters are true
 right now. They are not part of the persistent domain and appear in this model only so that
 nobody later "promotes" them to entities.
 
-*Applied:* `Connection` and `Presence` are ephemeral. `QueueTicket` is **also** ephemeral in
-storage terms (Redis) but **is** a domain entity, because a pairing decision must be able to
-name the exact ticket it consumed.
+*Applied:* `Connection` and `Presence` are ephemeral. `QueueTicket` is a domain entity, because
+a pairing decision must be able to name the exact ticket it consumed. It was also classified as
+ephemeral *in storage terms* (Redis) until A64-014.1, which moved it to PostgreSQL — see §10.2.
+The reclassification does not weaken DM-04: a ticket's **lifetime** is still minutes and its loss
+still costs nothing anybody grieves, and it is durable for a reason that has nothing to do with
+that (QT-1 and QT-4 are constraints under concurrency). DM-04 is about what disappearance costs,
+not about which store an entity happens to live in.
 
 ### DM-05 — A rule the platform enforces on behalf of the business gets a name and a home
 
@@ -265,7 +269,7 @@ The complete inventory. **Kind** follows §3. **Store** follows AD-18/AD-19.
 | 14 | `Notification` | notifications | **Aggregate root** | PostgreSQL | A player must see what they missed while away, on whatever device they return on |
 | 15 | `NotificationDelivery` | notifications | Entity (in `Notification`) | PostgreSQL | One notification, several channels, each failing independently against third parties |
 | 16 | `DeviceRegistration` | notifications | **Aggregate root** | PostgreSQL | Push targets a device, not a player, and devices are revoked independently of accounts |
-| 17 | `QueueTicket` | matchmaking | **Aggregate root** | **Redis** | A pairing decision must name the exact ticket it consumed, to make double-pairing impossible |
+| 17 | `QueueTicket` | matchmaking | **Aggregate root** | **PostgreSQL** *(was Redis until A64-014.1 — see §10.2)* | A pairing decision must name the exact ticket it consumed, to make double-pairing impossible — and QT-1 and QT-4 are both constraints under concurrency, which only a database can hold |
 | 18 | `Challenge` | matchmaking | **Aggregate root** | PostgreSQL | A direct invitation outlives a session and must survive the challenger closing the tab |
 | 19 | `Match` | game | **Aggregate root** | Redis while live, PostgreSQL when archived | The contest itself — the entity every other context orbits |
 | 20 | `MatchParticipant` | game | Entity (in `Match`) | with `Match` | A seat: who played which colour, with what rating, and what happened to them |
@@ -617,7 +621,7 @@ every position, with no piece the generator declines to answer for. `TerminalSta
 a loss: MT-12's history half belongs to `Match`, and every draw in draughts is historical.
 Details in `specs/game-engine.md`.
 
-### 10.2 `QueueTicket` — aggregate root, Redis-authoritative
+### 10.2 `QueueTicket` — aggregate root, PostgreSQL-authoritative
 
 **Purpose.** A player's standing request to be paired, under one time control and variant.
 
@@ -651,9 +655,42 @@ stateDiagram-v2
 | QT-4 | Claiming both tickets is atomic; failure to create the match compensates by reinsertion | BE §3.4 — the sanctioned compensating action |
 | QT-5 | The rating window widens monotonically with ticket age | `system-design.md §4.3` — the extremes of the rating distribution are otherwise unpairable |
 
-**Why it is an aggregate root despite living in Redis:** RP-01. The pairing worker must name the
-exact ticket it consumed, and the port must expose the compare-and-set contract rather than hide
-it behind `save()`.
+**Why it is an aggregate root:** RP-01. The pairing worker must name the exact ticket it
+consumed, and the port must expose the compare-and-set contract rather than hide it behind
+`save()`. `QueueRepository.cancel` and `.expire` are that contract, and both carry
+`status = 'waiting'` in their predicates.
+
+### The store changed in A64-014.1, and the argument is recorded
+
+This section, and row 17 of §5's table, said **Redis** until 2026-08-01. Both now say PostgreSQL,
+and the full argument is in database.md §8.1a; in short:
+
+- **QT-4's atomic claim is unimplementable in Redis without inventing a concurrency mechanism.**
+  Over a sorted set it becomes a Lua script reimplementing row locking, an optimistic retry loop,
+  or a distributed lock. `SELECT ... FOR UPDATE SKIP LOCKED` is the platform's proven answer —
+  it already carries the outbox — and it exists only in PostgreSQL.
+- **QT-1 is a constraint, not a check.** A partial unique index holds it under concurrency; a
+  check-then-act in application code holds it until two joins race, and losing that race puts a
+  player in two simultaneous matches, one to be abandoned. A-4 makes that a permanent corruption
+  of the competitive record rather than a duplicate row.
+
+What Redis keeps is the *index*: a sorted set per pool scored by rating remains the right shape
+for QT-5's widening-window scan, derived from the table and rebuildable from it (AD-19). Nothing
+about matchmaking is Redis-authoritative.
+
+### What A64-014.1 implemented, and what it did not
+
+The lifecycle above has seven states; the implementation has four — `waiting`, `matched`,
+`cancelled`, `expired` — and the three absences are decisions rather than omissions:
+
+| Absent | Why |
+| --- | --- |
+| `Widening` | QT-5's window is a property of a *pairing scan*, not of a ticket: the ticket carries `entered_at` and the scan derives the window from its age. A state whose only content is "the scan has looked at this a few times" is state the scan can recompute |
+| `Reserved` | QT-4's two-phase claim needs something to reserve, and there is no pairing yet. It inserts between `waiting` and `matched` without changing either, and joins the partial unique index that enforces QT-1 |
+| `Abandoned` | It is `Expired` with a different cause, and the cause is only knowable once presence is watched continuously rather than checked at entry |
+
+`matched` has a transition (`QueueTicket.matched`) and no caller: a status the database can hold
+and the domain cannot reach is a status nothing can explain.
 
 ### 10.3 `Challenge` — aggregate root, PostgreSQL
 
@@ -664,7 +701,7 @@ Distinct from a ticket in every respect that matters.
 | --- | --- | --- |
 | Opponent | Unknown, chosen by rating | Named at creation |
 | Lifetime | Seconds to minutes, dies with the session | Hours to days, survives sign-out |
-| Store | Redis | PostgreSQL |
+| Store | PostgreSQL — see §10.2; was Redis until A64-014.1 | PostgreSQL |
 | Resolution | Pairing worker | The recipient |
 | Notifies | Nobody | The recipient, out-of-band |
 

@@ -23,6 +23,23 @@ dependencies = [
     # algorithm-confusion attack awkward to write by accident rather than
     # easy), and python-jose has a history of CVEs in exactly that area.
     "pyjwt>=2.10,<3.0",
+    # Image processing (A64-012.2). Pillow is the only mature option in
+    # Python and is the one the task names. Used for exactly three things —
+    # decoding an *already signature-validated* upload, applying EXIF
+    # orientation, and re-encoding to WebP — because those are the
+    # operations that cannot be done safely by hand.
+    #
+    # Kept at a recent floor deliberately: image decoders are a historically
+    # rich source of memory-safety CVEs, and this one is fed bytes by
+    # anonymous-adjacent callers. `Image.MAX_IMAGE_PIXELS` (see
+    # `PillowImageProcessor`) is the decompression-bomb guard on top.
+    "pillow>=11.0,<12.0",
+    # Multipart parsing (A64-012.2). FastAPI needs it to accept
+    # `multipart/form-data`, which is what a file upload is — declared
+    # explicitly rather than left as a transitive extra, because without it
+    # the avatar routes raise at *import* time and the whole app fails to
+    # start. A dependency the process cannot boot without is a direct one.
+    "python-multipart>=0.0.20,<0.1",
 ]
 
 [project.optional-dependencies]

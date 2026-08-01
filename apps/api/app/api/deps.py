@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config.settings import RateLimitSettings, Settings, get_settings
 from app.core.clock import Clock, SystemClock
 from app.core.rate_limiting import RateLimiter
+from app.core.storage import StorageProvider
 from app.database.redis import RedisPools
 from app.database.session_manager import DatabaseSessionManager
 
@@ -74,6 +75,32 @@ def get_redis_pools(request: Request) -> RedisPools:
 
 
 RedisPoolsDep = Annotated[RedisPools, Depends(get_redis_pools)]
+
+
+def get_storage_provider(request: Request) -> StorageProvider:
+    """The process-lifetime object store, built in `lifespan` (A64-012.2).
+
+    A singleton because a provider holds configuration and a connection
+    pool (an S3 client will; the local one holds a resolved path), and
+    neither is per-request state. Nothing here is scoped to a request, so
+    dependency-injection.md §1.3's "never singleton: anything holding a
+    session" does not apply.
+
+    Platform-level, beside the database and Redis, because object storage
+    is not any one module's property: `avatars` writes to it and `profiles`
+    reads URLs out of it, and a provider owned by either would make the
+    other depend on it.
+
+    Typed as the **port**, never as `LocalStorageProvider`. That is what
+    makes "business logic must never depend on local storage" checkable —
+    a route or service annotating this dependency cannot name a concrete
+    provider even by accident.
+    """
+    storage: StorageProvider = request.app.state.storage
+    return storage
+
+
+StorageProviderDep = Annotated[StorageProvider, Depends(get_storage_provider)]
 
 
 def get_rate_limiter(request: Request) -> RateLimiter:

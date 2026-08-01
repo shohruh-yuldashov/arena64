@@ -16,7 +16,12 @@ hash is worth the extra lines.
 """
 
 from app.modules.users.domain.entities import User
-from app.modules.users.public.dtos import PublicUserProfile, UserRead, UserSummary
+from app.modules.users.public.dtos import (
+    AvatarReference,
+    PublicUserProfile,
+    UserRead,
+    UserSummary,
+)
 
 
 def to_user_read(user: User) -> UserRead:
@@ -25,7 +30,7 @@ def to_user_read(user: User) -> UserRead:
         username=user.username.value,
         email=user.email.value,
         display_name=user.display_name,
-        avatar_url=user.avatar_url,
+        avatar=to_avatar_reference(user),
         preferred_language=user.preferred_language,
         timezone=user.timezone.value,
         is_active=user.is_active,
@@ -40,7 +45,7 @@ def to_user_summary(user: User) -> UserSummary:
         id=user.id,
         username=user.username.value,
         display_name=user.display_name,
-        avatar_url=user.avatar_url,
+        avatar=to_avatar_reference(user),
     )
 
 
@@ -61,9 +66,25 @@ def to_public_profile(user: User) -> PublicUserProfile:
         id=user.id,
         username=user.username.value,
         display_name=user.display_name,
-        avatar_url=user.avatar_url,
+        avatar=to_avatar_reference(user),
         country=user.country.value if user.country else None,
         preferred_language=user.preferred_language,
         bio=user.bio.value if user.bio else None,
         created_at=user.created_at,
+    )
+
+
+def to_avatar_reference(user: User) -> AvatarReference:
+    """The three avatar columns as one published value.
+
+    A helper rather than three inline fields at each call site, so that a
+    fourth avatar column — a moderation flag, a content hash — is added
+    once. Sits beside the other three `to_*` mappers because it has the
+    same job and the same reason for being explicit: a field added to the
+    entity never reaches a published DTO by accident.
+    """
+    return AvatarReference(
+        object_key=user.avatar_object_key,
+        version=user.avatar_version,
+        uploaded_at=user.avatar_uploaded_at,
     )

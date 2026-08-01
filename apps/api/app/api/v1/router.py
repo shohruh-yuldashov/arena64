@@ -28,6 +28,7 @@ from fastapi import APIRouter
 from app.api.v1.health import health_router
 from app.core.constants import API_V1_PREFIX
 from app.modules.auth.presentation.router import auth_router
+from app.modules.avatars.presentation.router import avatar_router
 from app.modules.profiles.presentation.router import profiles_router
 from app.modules.users.presentation.router import users_router
 
@@ -36,3 +37,4 @@ v1_router.include_router(health_router)
 v1_router.include_router(users_router)
 v1_router.include_router(auth_router)
 v1_router.include_router(profiles_router)
+v1_router.include_router(avatar_router)

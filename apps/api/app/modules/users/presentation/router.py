@@ -79,7 +79,6 @@ async def update_user(
     sent = payload.model_fields_set
     command = UpdateUserProfile(
         display_name=payload.display_name if "display_name" in sent else UNSET,
-        avatar_url=payload.avatar_url if "avatar_url" in sent else UNSET,
         # These two are non-nullable on the entity, so there is no "clear"
         # state to map — `UserUpdate` rejects an explicit null for them
         # before reaching here, leaving only present-with-value or absent.

@@ -47,7 +47,7 @@ from app.modules.auth.domain.exceptions import (
 )
 from app.modules.auth.domain.password_reset import PasswordResetToken
 from app.modules.auth.domain.sessions import RevocationReason, SessionDevice
-from app.modules.users.public import UserNotFound, UserRead
+from app.modules.users.public import AvatarReference, UserNotFound, UserRead
 from tests.fakes.password_reset_token_repository import FakePasswordResetTokenRepository
 from tests.fakes.session_repository import FakeSessionRepository
 
@@ -111,7 +111,7 @@ def account(*, is_active: bool = True, is_verified: bool = True) -> UserRead:
         username="player_one",
         email=EMAIL,
         display_name=None,
-        avatar_url=None,
+        avatar=AvatarReference(object_key=None, version=1, uploaded_at=None),
         preferred_language=Locale.EN,
         timezone="UTC",
         is_active=is_active,

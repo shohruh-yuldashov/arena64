@@ -35,6 +35,7 @@ from pydantic import Field
 
 from app.core.dto import BaseResponseDTO
 from app.core.enums import Locale
+from app.modules.avatars.public import AvatarLinks
 from app.modules.profiles.domain.profile import PublicProfile
 from app.modules.profiles.domain.ratings import RatingCategory, RatingSnapshot
 from app.modules.users.domain.validators import BIO_MAX_LENGTH
@@ -175,7 +176,19 @@ class ProfileResponse(BaseResponseDTO):
         examples=["Player One"],
     )
     avatar_url: str | None = Field(
-        description="Absolute URL of the player's avatar, or `null` when unset.",
+        description=(
+            "URL of the player's avatar at up to 512px, or `null` when they have not "
+            "set one. Carries a `?v=` cache-buster that changes on every upload and "
+            "delete, so the URL may be treated as immutable and cached freely."
+        ),
+        examples=[None],
+    )
+    thumbnail_url: str | None = Field(
+        description=(
+            "URL of the 128px rendition, for listings and match cards. `null` when "
+            "the player has no avatar. Rendering a placeholder is the client's "
+            "decision — only it knows the size and the surrounding design."
+        ),
         examples=[None],
     )
     country: str | None = Field(
@@ -236,6 +249,7 @@ class ProfileResponse(BaseResponseDTO):
                     "username": "player_one",
                     "display_name": "Player One",
                     "avatar_url": None,
+                    "thumbnail_url": None,
                     "country": None,
                     "language": "en",
                     "bio": None,
@@ -263,7 +277,7 @@ class ProfileResponse(BaseResponseDTO):
     }
 
     @classmethod
-    def of(cls, profile: PublicProfile) -> "ProfileResponse":
+    def of(cls, profile: PublicProfile, avatar: AvatarLinks | None) -> "ProfileResponse":
         """Renders the composed domain view.
 
         Field by field rather than `model_validate(profile)`, for the
@@ -271,6 +285,14 @@ class ProfileResponse(BaseResponseDTO):
         a field added upstream can never appear on an anonymous response by
         accident. On the one endpoint the whole platform serves to
         strangers, that is worth the lines.
+
+        **`avatar` arrives already rendered.** This schema holds no
+        `StorageProvider`, knows no object-key layout and cannot compose a
+        URL — `avatars.public.AvatarLinkBuilder` does that and the router
+        hands the result in. That is A64-012.2's "avatar URL must be
+        generated during response mapping ... `ProfileResponse` should not
+        know storage implementation details", and it is structural: there
+        is nothing in this module's imports that could reach a bucket name.
         """
         identity = profile.identity
         statistics = profile.statistics
@@ -279,7 +301,8 @@ class ProfileResponse(BaseResponseDTO):
             id=identity.id,
             username=identity.username,
             display_name=identity.display_name,
-            avatar_url=identity.avatar_url,
+            avatar_url=avatar.avatar_url if avatar else None,
+            thumbnail_url=avatar.thumbnail_url if avatar else None,
             country=identity.country,
             language=identity.preferred_language,
             bio=identity.bio,

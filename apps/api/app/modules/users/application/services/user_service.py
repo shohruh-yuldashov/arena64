@@ -149,7 +149,6 @@ class UserService:
             timezone=timezone,
             created_at=self._clock.now(),
             display_name=command.display_name,
-            avatar_url=command.avatar_url,
         )
 
         async with self._uow:
@@ -177,8 +176,6 @@ class UserService:
 
         if is_set(command.display_name):
             user.display_name = command.display_name
-        if is_set(command.avatar_url):
-            user.avatar_url = command.avatar_url
         if is_set(command.preferred_language):
             user.preferred_language = command.preferred_language
         if is_set(command.timezone):
@@ -259,6 +256,63 @@ class UserService:
         # whom. `users` records the *write*; `auth` records the reset that
         # caused it, because only `auth` knows a token was involved.
         logger.info("password_hash_replaced", extra={"user_id": str(user_id)})
+
+    # --- avatar (A64-012.2) --------------------------------------------------
+
+    async def set_avatar(self, user_id: UUID, *, object_key: str) -> User:
+        """Points the account at a newly stored avatar object.
+
+        This service still never inspects an image: `object_key` arrives as
+        an opaque string from `avatars`, which has already validated,
+        processed and stored the bytes. What this owns is the transaction
+        and the invariant that the three avatar columns move together —
+        enforced by `User.set_avatar`, which is why this method does not
+        assign them itself.
+
+        Raises `UserNotFound` if the account is gone.
+        """
+        user = await self.get_user(user_id)
+        user.set_avatar(object_key, at=self._clock.now())
+        user.updated_at = self._clock.now()
+
+        async with self._uow:
+            updated = await self._users.update(user)
+            await self._uow.commit()
+
+        # The version, never the key. An object key is not secret, but it is
+        # an address — logging it on every upload turns the log into an
+        # index of every stored object, which is the first thing worth
+        # having if the store is ever misconfigured to allow listing.
+        logger.info(
+            "avatar_reference_set",
+            extra={"user_id": str(user_id), "avatar_version": updated.avatar_version},
+        )
+        return updated
+
+    async def clear_avatar(self, user_id: UUID) -> User:
+        """Removes the reference and bumps the version.
+
+        Idempotent for a player who has none — it succeeds and bumps
+        anyway, because the version is a cache key rather than a count and
+        a caller retrying after a dropped response must not get an error
+        (CLAUDE.md §3 rule 8).
+
+        Deletes nothing from storage: this module has no storage. Removing
+        the objects is `AvatarService.delete`'s next step.
+        """
+        user = await self.get_user(user_id)
+        user.clear_avatar()
+        user.updated_at = self._clock.now()
+
+        async with self._uow:
+            updated = await self._users.update(user)
+            await self._uow.commit()
+
+        logger.info(
+            "avatar_reference_cleared",
+            extra={"user_id": str(user_id), "avatar_version": updated.avatar_version},
+        )
+        return updated
 
     async def mark_email_verified(self, user_id: UUID) -> User:
         """Records that ownership of the address has been proven.

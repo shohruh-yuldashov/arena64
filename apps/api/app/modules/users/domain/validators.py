@@ -217,7 +217,11 @@ def validate_email(value: str) -> str:
 # any future check all read the same number instead of three literals that
 # drift apart (CLAUDE.md §2.1, one source of truth per concept).
 DISPLAY_NAME_MAX_LENGTH = 64
-AVATAR_URL_MAX_LENGTH = 2048  # the de-facto maximum URL length browsers accept
+#: A64-012.2 replaced the stored URL with an object key. Keys this
+#: platform generates are ~60 characters (`avatars/{uuid}/{uuid}.webp`);
+#: 512 is generous room for a provider prefix without letting the column
+#: become somewhere arbitrary text can be parked.
+AVATAR_OBJECT_KEY_MAX_LENGTH = 512
 
 
 # --- preferred language -----------------------------------------------------

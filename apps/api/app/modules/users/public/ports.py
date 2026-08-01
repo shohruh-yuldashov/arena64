@@ -22,7 +22,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.modules.users.public.credentials import UserCredentials
-from app.modules.users.public.dtos import PublicUserProfile, UserRead
+from app.modules.users.public.dtos import AvatarReference, PublicUserProfile, UserRead
 
 
 class NewUserAccount(Protocol):
@@ -303,5 +303,76 @@ class PublicProfileReader(Protocol):
         "which accounts are deactivated" is itself a disclosure — see
         `PublicProfileService` for the argument. A consumer of this port
         cannot render a withdrawn account even if it tries.
+        """
+        ...
+
+
+class AvatarStore(Protocol):
+    """Reads and writes a player's avatar *reference* — never the image.
+
+    The seventh narrow port, added by A64-012.2. The split it draws is the
+    same one `auth` and `users` already draw over passwords: `avatars` owns
+    the *bytes* — validating them, stripping metadata, resizing, encoding,
+    storing — and `users` owns the *columns*. Neither can do the other's
+    half, and the port is the seam.
+
+    Three methods, all about a reference and none about an image. There is
+    deliberately no `upload`, no `delete_image`, and nothing taking `bytes`:
+    a port that accepted image data would make `users` the module that has
+    to know what a valid image is, which is precisely the coupling this
+    exists to prevent.
+
+    **Every write moves three columns together** — key, timestamp and
+    version — because they are one fact. `User.set_avatar` and
+    `User.clear_avatar` enforce that, and a database CHECK enforces it
+    again (BE-06).
+    """
+
+    async def get_avatar(self, user_id: UUID) -> AvatarReference:
+        """The account's current avatar reference.
+
+        Returns a reference with `object_key=None` for a player who has
+        none — never `None` itself, and never raising for that case. The
+        version is meaningful either way, so "no avatar" is a *value* here
+        rather than an absence, and a caller renders it without a null
+        check.
+
+        Raises `UserNotFound` if the account is gone: every caller holds an
+        identifier it has already authenticated, so absence is a genuine
+        failure rather than an ordinary outcome.
+        """
+        ...
+
+    async def set_avatar(self, user_id: UUID, *, object_key: str) -> AvatarReference:
+        """Points the account at a newly stored object and bumps the
+        version. Returns the new reference.
+
+        Returns rather than yielding `None` because the caller needs the
+        new version *immediately* — it goes into the URL of the response to
+        the very upload that caused it, and a second read to fetch it would
+        be a round trip for a number this call just computed.
+
+        Does not touch storage. The previous object is still there when
+        this returns, and removing it is the caller's next step — see
+        `AvatarService.upload` on why that ordering is the one that cannot
+        orphan a file.
+
+        Raises `UserNotFound` if the account is gone.
+        """
+        ...
+
+    async def clear_avatar(self, user_id: UUID) -> AvatarReference:
+        """Removes the reference and bumps the version. Returns the new
+        reference, whose `object_key` is `None`.
+
+        Bumping on a *removal* is the non-obvious half and is required by
+        A64-012.2 ("deleting must ... increment avatar_version"): a client
+        or CDN holding the previous URL has no other signal to stop serving
+        it.
+
+        Idempotent for a player who has no avatar — it succeeds and bumps
+        the version anyway. A caller retrying after a dropped response must
+        not receive an error for the retry, and a spurious cache bust costs
+        one refetch while a missed one costs correctness.
         """
         ...

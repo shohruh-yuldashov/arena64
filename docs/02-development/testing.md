@@ -60,9 +60,9 @@ Every one of these runs from `apps/api/`, and a red result blocks a merge
 
 ### The architecture gate — A64-013.8
 
-`import-linter` reads the real import graph and checks thirteen contracts.
-They encode rules that were already written down and, until this task, were
-enforced only by review:
+`import-linter` reads the real import graph and checks fifteen contracts
+(thirteen at A64-013.8; two more added by A64-014.1). They encode rules that
+were already written down and, until this task, were enforced only by review:
 
 - **`app.platform` imports no bounded context.** The outbox belongs to the
   platform (database.md §232), and the moment it imports `friends` for "just
@@ -76,6 +76,18 @@ enforced only by review:
 - **Dependencies point inward** — one `layers` contract per module.
 - **Domain layers import no framework** — no SQLAlchemy, FastAPI, Starlette
   or Redis reachable from an aggregate (architecture.md §8).
+- **The rules kernel imports nothing but the shared kernel** — A64-014.1.
+  AD-13 gives `engine` "no I/O, no clock, no randomness, no logging, no
+  framework, no database, no configuration", and the contract forbids each
+  by name, `logging`, `random` and `datetime` included. Everything that
+  makes an engine trustworthy — perft counts, apply/undo property tests,
+  differential testing against the TypeScript engine — needs purity, and
+  the way purity is lost is a reporting requirement satisfied with a query
+  inside a rules function, which no test would turn red.
+- **Only `game`, `replay` and `fairplay` may import `engine`** — R-2.
+  None of the three exists yet, so the contract names every module that
+  does and forbids all of them; each new module joins that list unless it
+  is one of the three.
 
 Three imports are exempted, each with the argument recorded beside it in the
 config rather than merely silenced. Adding a fourth without one defeats the

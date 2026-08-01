@@ -1219,7 +1219,7 @@ become entities. Each rejection is a real modelling decision with a consequence.
 | Proposed | Verdict | Why |
 | --- | --- | --- |
 | **Board** | **Value object `Position`, inside `engine`** | A board has no identity and no lifecycle — it does not persist beyond the position it represents, and it is never referenced later. Worse, an entity `Board` would compare by identity, and the **three-fold repetition draw rule requires positions to compare by value**. Modelling the board as an entity does not merely add a table; it makes a rule of checkers unimplementable |
-| **Piece** | **Not modelled at all** | A piece has no identity in draughts. When a man is crowned it is not "the same object in a new state" in any way the domain cares about; when it is captured nothing refers to it again. Pieces are an encoding detail of `Position`. An entity per piece at ~5,000 moves per second would also be the largest write volume on the platform, in service of data nobody queries |
+| **Piece** | **Not an entity** — a value object inside `engine` | A piece has no identity in draughts. When a man is crowned it is not "the same object in a new state" in any way the domain cares about; when it is captured nothing refers to it again. Pieces are an encoding detail of `Position`. An entity per piece at ~5,000 moves per second would also be the largest write volume on the platform, in service of data nobody queries. **Amended A64-014.1** — see below |
 | **Game** *and* **Match** as two entities | **One entity: `Match`** | They are the same concept under two names, and two names for one thing guarantees that half the codebase means one and half means the other. A genuinely distinct concept exists — a best-of-N series — and it is named `MatchSeries` and deferred (§16.2) |
 | **Match Queue** | **`QueueTicket` is the entity; the queue is an index** | The queue is the result of ordering tickets by rating within a pool. Naming the queue creates a second thing to keep consistent with the tickets, and pairing correctness (QT-4) depends on there being exactly one |
 | **Block List** | **`Block` is the entity; the list is a query** | Same reasoning. A maintained list would drift from the blocks |
@@ -1227,6 +1227,25 @@ become entities. Each rejection is a real modelling decision with a consequence.
 | **Replay** | **Read model over `Match`** | Persisting it would duplicate the largest dataset the platform owns and let the copy diverge from the competitive record (§11.6) |
 | **Statistics**, **Achievement Progress** | **Projections** | Rebuildable by definition (DM-03) |
 | **Rating History** | **Renamed `RatingAdjustment`, inside `PlayerRating`** | History is the query; the adjustment is the fact (§11.2) |
+
+#### `Piece` and `Board`, as implemented — A64-014.1
+
+The first slice of the engine (`apps/api/app/modules/engine/`) builds both, and this table's
+wording is amended above so the code and the model do not contradict each other (CLAUDE.md §3.11).
+Neither is a reversal — both rejections were of an **entity**, and what exists is a value object:
+
+| Rejected here | What A64-014.1 built | Why the rejection still holds |
+| --- | --- | --- |
+| An entity per piece — identity, a row, ~5,000 writes/second | `Piece(side, rank)` — a frozen value object | No identity, no row, no lifecycle. Two pieces of one side and rank *are* the same piece; the opening position shares two instances across 24 squares. This is the table's own "encoding detail of `Position`", named instead of left implicit in a character array |
+| An entity `Board`, which "would compare by identity" | `Board` — immutable, compares by value, unhashable until a side to move joins it | Value equality is exactly what this table demanded for three-fold repetition. Every operation returns a new board; nothing persists one, and no repository will |
+
+What was rejected is what remains rejected: no `pieces` table, no `boards` table, no identifier on
+either, and no entry for either in §14's storage authority table. The alternative to naming them —
+raw integers inside the board — was rejected in turn because nothing then type-checks a light king
+against a dark man, and every rule that reads a piece has to remember the encoding.
+
+`Position` (a board plus the side to move) is still the value object §16.1 names, and is still
+where repetition hashing belongs. It arrives with move generation.
 
 ### 16.2 Future entities
 

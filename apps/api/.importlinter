@@ -272,7 +272,94 @@ layers =
 
 
 # ---------------------------------------------------------------------------
-# 4. The domain is framework-free — architecture.md §8
+# 4. The rules kernel is dependency-free — architecture.md §11, AD-13
+# ---------------------------------------------------------------------------
+# "The `engine` module is a **pure rules kernel**: no I/O, no clock, no
+# randomness, no logging, no framework, no database, no configuration."
+#
+# That sentence is the entire reason the engine can be trusted with a
+# competitive result. AD-13 spells out why in three parts, and each one dies
+# to a different import: exhaustive testing (perft counts, apply/undo
+# property tests, differential testing against the TypeScript engine) needs
+# purity; mirroring the same rules in the client needs a fixed, ambient-free
+# contract; and moving `fairplay`'s CPU-bound replay to a worker needs a
+# kernel with nothing to carry.
+#
+# The failure this catches is not malice, it is a reporting requirement:
+# somebody adds a database lookup to a rules function because a query was
+# easier there than at the caller, the engine keeps passing its tests, and
+# the guarantee is gone with nothing red.
+#
+# The two contracts below are the strongest form of that rule the import
+# graph can express — what the kernel may import, and who may import it.
+#
+# `app.core` is deliberately absent from the forbidden list: it is the shared
+# kernel the layer table in architecture.md §8 permits every `domain/` to
+# use, and the engine's failures inherit from `app.core.exceptions` so they
+# render through the platform's one error taxonomy rather than a parallel
+# tree.
+#
+# `engine` is also absent from `domain-is-framework-free` below, and is not
+# an omission: the frameworks that contract names are a subset of what this
+# one forbids, and listing it twice would let a future edit weaken one while
+# the other looked like it was still covering it.
+[importlinter:contract:engine-is-a-dependency-free-kernel]
+name = engine imports nothing but the shared kernel
+type = forbidden
+source_modules =
+    app.modules.engine
+forbidden_modules =
+    app.modules.auth
+    app.modules.avatars
+    app.modules.friends
+    app.modules.notifications
+    app.modules.profiles
+    app.modules.statistics
+    app.modules.users
+    app.platform
+    app.api
+    app.common
+    app.config
+    app.database
+    app.repositories
+    app.storage
+    sqlalchemy
+    fastapi
+    starlette
+    redis
+    logging
+    random
+    datetime
+
+# ---------------------------------------------------------------------------
+# 5. Only `game`, `replay` and `fairplay` may import the engine — R-2
+# ---------------------------------------------------------------------------
+# "The other two replay finished games; they never write... The two read-only
+# exceptions are the whole reason the engine is a peer module rather than a
+# private package inside `game`."
+#
+# None of the three exists yet, so this contract names every module that does
+# and forbids all of them. Each new module joins this list unless it is one of
+# those three — which is the point: a module that wants the rules of checkers
+# has to argue for it in a diff, and the argument is architecture.md §7's
+# import diagram, where "any edge not drawn is forbidden".
+[importlinter:contract:engine-has-three-permitted-consumers]
+name = only game, replay and fairplay may import engine
+type = forbidden
+source_modules =
+    app.modules.auth
+    app.modules.avatars
+    app.modules.friends
+    app.modules.notifications
+    app.modules.profiles
+    app.modules.statistics
+    app.modules.users
+forbidden_modules =
+    app.modules.engine
+
+
+# ---------------------------------------------------------------------------
+# 6. The domain is framework-free — architecture.md §8
 # ---------------------------------------------------------------------------
 # "Business rules must not import HTTP, ORM, or UI framework types. If the
 # framework changed tomorrow, the domain should not."

@@ -1,7 +1,7 @@
 # Game Engine
 
-> **Status:** Partial — **the rules of movement are complete** (A64-014.1 – A64-014.5: board,
-> men, validation and application, capture sequences, kings). Terminal states, draws, repetition
+> **Status:** Partial — **the rules of movement are complete** (A64-014.1 – A64-014.5) and the
+> game lifecycle, terminal detection and position history exist (A64-014.6). Draw rules, clocks
 > and notation are not yet specified
 > **Owner:** _Unassigned_
 > **Related:** `templates/feature-spec.md`, `docs/01-architecture/architecture.md` §11,
@@ -486,11 +486,129 @@ rather than a position chosen to be awkward.
 
 ---
 
-## 6. Not yet specified
+## 6. Game state and lifecycle — A64-014.6
 
-Everything that is not move generation: terminal-state detection, draw rules, repetition tracking
-and an incremental `PositionHash`, move undo, PDN notation and serialization, the TypeScript
-implementation of the corpus (AD-14), and the engine version recorded per match (AD-15).
+This section spans two modules, and the split is the point.
+
+| | Module | Sees |
+| --- | --- | --- |
+| `TerminalStateEvaluator`, `EngineVersion` | `engine` | One position. Nothing else |
+| `Match` | `game` | The whole game — every position it has held, and how long since anything irreversible |
+
+domain-model.md MT-12 states why: "terminal detection consults game **history**, not just the
+position." The engine is the half that does not, `Match` is the half that remembers, and neither
+can do the other's job.
+
+### 6.1 `EngineVersion`
+
+| Rule | Statement |
+| --- | --- |
+| GE-55 | `CURRENT_ENGINE_VERSION` is an explicit constant — never derived from package metadata, git state or a build timestamp. The same source must always stamp the same value, or AD-15's "enumerate exactly which matches were played under the defective version" is a guess |
+| GE-56 | It is a single ordered integer, `as_primitive()`-able to an `int`. There is no "minor rules change": two builds either agree about every position or they do not |
+| GE-57 | It is stamped on a `Match` at creation and is immutable thereafter (MT-3) |
+| GE-58 | It is bumped when a change alters what `MoveGenerator`, `MoveValidator` or `TerminalStateEvaluator` answer for any position — and only then. A corpus expectation changing is the practical test |
+
+Version **1** is A64-014.1 through A64-014.6. It has no draw rules; A64-014.7 makes it 2, and a
+game played under 1 replayed under 2 could end earlier — exactly the divergence AD-15 exists to
+record rather than discover.
+
+### 6.2 Terminal states
+
+| Rule | Statement |
+| --- | --- |
+| GE-59 | A side loses when it has **no pieces** or **no legal moves**. Both are properties of the position alone |
+| GE-60 | The evaluator does not decide whether a side can move — it asks `MoveGenerator.legal_moves`. A second implementation of that question would eventually disagree, and the disagreement would take the form of a game ending that should not have |
+| GE-61 | Material is checked first. Both are true of a side with nothing left, and `ALL_PIECES_CAPTURED` is the more useful answer |
+| GE-62 | `evaluate` answers `None` for a position that continues, and a `TerminalState` — which always names a winner — for one that has ended |
+| GE-63 | **The evaluator can never report a draw.** Every draw in draughts is historical, so a caller never has to handle a terminal state with nobody winning |
+
+Being blocked in is a **loss** in draughts, not the stalemate draw of chess.
+
+GE-60 is why terminal detection waited for kings: between A64-014.3 and A64-014.5 an empty move
+list could also have meant "this build cannot evaluate a king", and an evaluator built then would
+have declared a loss for a player who had moves the engine could not see.
+
+### 6.3 `Match` — the lifecycle aggregate
+
+`app/modules/game/domain/match.py`. Named `Match`, not `Game` or `GameState`: domain-model.md
+§16.1 rejects the alternative by name — "they are the same concept under two names, and two names
+for one thing guarantees that half the codebase means one and half means the other".
+
+| Status | Meaning |
+| --- | --- |
+| `CREATED` | Exists, no move played. Distinct from `ACTIVE` because a match exists before either clock starts (system-design.md §3) |
+| `ACTIVE` | Under way. The only status in which a move may be played |
+| `COMPLETED` | Finished with a result. Immutable from here except by an `admin` adjudication that is itself recorded (MT-10) |
+| `ABORTED` | Ended with **no** result and no rating effect (MT-11) |
+
+| Rule | Statement |
+| --- | --- |
+| GE-64 | `CREATED → ACTIVE → COMPLETED`; `CREATED → ABORTED`; `ACTIVE → ABORTED`. Every other transition raises `InvalidMatchTransition` (a `ConflictError`, so `409`) |
+| GE-65 | `play` sequences existing services and re-derives nothing: `MoveApplier` validates and applies, `TerminalStateEvaluator` decides whether the result has ended. A refused move leaves the match untouched |
+| GE-66 | Ply numbers are contiguous from 1 (MT-5); `0` means none has been played |
+| GE-67 | `resign(side)` gives the win to the opponent and **changes no board** — a resigned game must still replay to the position it was abandoned in. The side is given explicitly; who may resign for whom is an authorization question this layer has no notion of |
+| GE-68 | `abort()` is permitted from `CREATED` and `ACTIVE` and produces `MatchOutcome.NONE`. **Not a draw**: a draw is an outcome two players played to and it counts everywhere; an abort is a match that did not happen |
+| GE-69 | `MatchResult` is absent until the match ends (DM-08), and holds outcome, reason and winner together. A win names a winner; a draw and an abort cannot |
+
+`TerminationReason` is populated **in full** from domain-model.md §15 — all eleven members,
+including the eight nothing can produce yet. That is R-19: "adding 'abandonment' later, after
+months of games were recorded as 'resignation', makes every historical statistic wrong and
+unfixable." A64-014.6 produces four.
+
+The aggregate is deliberately incomplete against domain-model.md §10.4. Absent: the two
+`MatchParticipant` seats, the append-only move log, `ClockState` and time control, `Offer`, the
+per-match sequence number, and the domain events. None is a rules concern.
+
+### 6.4 Position history
+
+| Rule | Statement |
+| --- | --- |
+| GE-70 | `Position` **is** the repetition key — board plus side to move, hashable, and nothing else. Nothing may be added to it: a ply number or a timestamp would make every position unique and the repetition rule dead |
+| GE-71 | The opening position is recorded at creation. A game that returns to its opening has repeated it once, not reached it for the first time |
+| GE-72 | Every applied move records the position it produces |
+| GE-73 | `position_history` is a read-only view. The counts are the aggregate's to change; a caller that could edit them could desynchronise the history from the moves that produced it |
+
+`occurrences_of(position)` and `current_position_occurrences` answer the questions a repetition
+rule asks. **A64-014.6 sets no threshold and declares no draw** — what counts as enough, and what
+it means, is A64-014.7's.
+
+### 6.5 History counters
+
+`plies_since_progress` counts plies since anything irreversible happened.
+
+| Move | Effect |
+| --- | --- |
+| A capture | resets to `0` |
+| A man's move, including one that crowns | resets to `0` |
+| A non-capturing king's move | increments |
+
+Progress is a capture or a man's move because those are the two things that cannot be undone:
+material only decreases and a man only advances. A game shuffling kings around an empty board is
+going nowhere, which is the whole reason the counter exists.
+
+It lives on `Match` and not on `Position`, because it is a property of the *path* taken to a
+position rather than of the position: two games can reach the same board with different counters.
+
+### 6.6 Corpus — terminal expectations
+
+v2 gains a third top-level key, `terminal_positions`, beside `cases` and `rejections`. "These are
+the legal moves" and "this position has ended" are different claims; bending one shape into the
+other would make a reader guess which it was looking at. A case states `terminal`, and `winner`
+and `reason` which are absent together for a position that continues and present together for one
+that has ended — the same shape `evaluate` answers with. Format in the corpus `README.md`.
+
+---
+
+## 7. Not yet specified
+
+**Draw rules** — the repetition threshold, the fifteen-move king-only rule, and the move-limit
+rules. `Match` already records everything they read; A64-014.7 decides what the numbers are and
+what they mean, and bumps `CURRENT_ENGINE_VERSION` when it does.
+
+Also absent: clocks, flag falls and abandonment; `Offer` and the draw-agreement flow; the rest of
+the `Match` aggregate (seats, move log, sequence numbers, events); persistence and transport of
+any kind; move undo; an incremental `PositionHash`; PDN notation and serialization; and the
+TypeScript implementation of the corpus (AD-14).
 
 For `english_8x8` specifically: first mover, draw rules and rating category are unconsidered. It
 is configured for move generation and is offered nowhere.
@@ -498,7 +616,7 @@ is configured for move generation and is offered nowhere.
 ## TODO
 
 - [ ] Assign a document owner
-- [ ] Specify terminal-state detection, the repetition hash and draw rules (A64-014.6)
+- [ ] Specify the draw rules and their thresholds (A64-014.7)
 - [ ] Decide whether `english_8x8` is a product variant or stays a configuration fixture
 - [ ] Add the TypeScript implementation that executes the same corpus (AD-14)
 - [ ] Review and promote status from Partial to Approved

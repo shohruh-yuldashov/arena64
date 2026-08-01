@@ -646,11 +646,18 @@ and position hashing for repetition rules.
 | A64-014.3 | `MoveValidator`, `MoveApplier`, `IllegalMove`, `UnsupportedPieceMovement`, and the corpus's rejection cases |
 | A64-014.4 | Complete capture sequences of any length, the taken-once rule, maximum-capture filtering, and the configured mid-sequence promotion rules |
 | A64-014.5 | Kings — flying and short, quiet slides and captures, starting a ply. `BoardVariant.ENGLISH_8X8`, corpus v2, and the removal of `UnsupportedPieceMovement` |
+| A64-014.6 | `EngineVersion` (AD-15), `TerminalState` and `TerminalStateEvaluator` — and, in the new `game` module, the `Match` lifecycle aggregate with its position history |
 
 **The rules of movement are complete.** Men and kings, quiet moves and complete multi-jump
 sequences, mandatory capture, the largest-capture obligation where a variant has one, and every
-configured answer to crowning mid-jump. What the engine still lacks is everything *around* a
-move: terminal-state detection, draws, repetition — none of which is generation.
+configured answer to crowning mid-jump.
+
+Terminal detection is split across two modules, and the split is MT-12: "terminal detection
+consults game **history**, not just the position." `TerminalStateEvaluator` sees one position and
+can report only a loss — by material or by mobility — because every draw in draughts is
+historical. `game.Match` is the half that remembers, and it holds the position occurrence counts
+and the progress counter the draw rules will read. Those rules, and their thresholds, are
+A64-014.7's.
 
 Men and kings share one pipeline. A king differs in three answers — how far it travels, which
 diagonals it slides along, which it jumps along — and everything else is written once. `kings_fly`

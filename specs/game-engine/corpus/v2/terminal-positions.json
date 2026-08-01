@@ -1,0 +1,66 @@
+{
+  "corpus_version": 2,
+  "scope": "Terminal-state expectations for a single position (A64-014.6): the two ways a side loses that a board alone can show — no pieces left, and no legal moves — and positions that are not terminal. Draws are absent by construction: every draw in draughts is a property of the game's history, not of the position, and belongs to A64-014.7.",
+  "terminal_positions": [
+    {
+      "id": "a-side-with-no-pieces-has-lost",
+      "description": "LIGHT is to move and has nothing on the board. The more specific of the two reasons, which is why it is checked first — a side with no pieces also has no moves.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [{ "square": "c3", "side": "dark", "rank": "man" }],
+      "terminal": true,
+      "winner": "dark",
+      "reason": "all_pieces_captured"
+    },
+    {
+      "id": "a-side-with-pieces-and-no-moves-has-lost",
+      "description": "English rules, so the king reaches one square. LIGHT's king is cornered on a1 by a man it cannot jump — b2 is takeable in principle and c3 behind it is occupied. Blocked in is a loss in draughts, not the stalemate draw of chess.",
+      "variant": "english_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "a1", "side": "light", "rank": "king" },
+        { "square": "b2", "side": "dark", "rank": "man" },
+        { "square": "c3", "side": "dark", "rank": "man" }
+      ],
+      "terminal": true,
+      "winner": "dark",
+      "reason": "no_legal_moves"
+    },
+    {
+      "id": "an-ordinary-position-is-not-terminal",
+      "description": "Both sides have pieces and the side to move has moves. The common case, asserted so that an evaluator which called everything terminal would fail here rather than somewhere subtle.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c3", "side": "light", "rank": "man" },
+        { "square": "f6", "side": "dark", "rank": "man" }
+      ],
+      "terminal": false,
+      "winner": null,
+      "reason": null
+    },
+    {
+      "id": "a-king-with-moves-is-not-terminal",
+      "description": "A lone king against a distant man, and h8 cannot be jumped because there is nowhere beyond it. Between A64-014.3 and A64-014.5 the generator refused this position outright, so an evaluator built then would have read the refusal — or an empty list — as a loss for a player with eleven moves.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c3", "side": "light", "rank": "king" },
+        { "square": "h8", "side": "dark", "rank": "man" }
+      ],
+      "terminal": false,
+      "winner": null,
+      "reason": null
+    },
+    {
+      "id": "the-position-after-a-capture-can-be-terminal",
+      "description": "What LIGHT playing c3xe5 leaves behind: DARK to move with nothing left. Terminal detection runs on the position a move produces, which is why the lifecycle evaluates after applying rather than before.",
+      "variant": "russian_8x8",
+      "side_to_move": "dark",
+      "pieces": [{ "square": "e5", "side": "light", "rank": "man" }],
+      "terminal": true,
+      "winner": "light",
+      "reason": "all_pieces_captured"
+    }
+  ]
+}

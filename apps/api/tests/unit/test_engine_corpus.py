@@ -27,19 +27,23 @@ from app.modules.engine import (
     MoveValidator,
     PlayerSide,
     Position,
+    TerminalStateEvaluator,
     initial_board,
 )
 from tests.corpus import (
     CorpusCase,
     RejectionCase,
     RejectionCategory,
+    TerminalCase,
     load_cases,
     load_rejections,
+    load_terminal_positions,
     superseded_ids,
 )
 
 CASES = load_cases()
 REJECTIONS = load_rejections()
+TERMINALS = load_terminal_positions()
 SUPERSEDED = superseded_ids()
 
 REFUSAL_FOR = {
@@ -66,6 +70,15 @@ REQUIRED_REJECTIONS = {
 `a-king-of-the-side-to-move-cannot-be-evaluated` was one of them and is
 not any more: A64-014.5 implements kings, and v2 supersedes it. It is
 asserted below as *superseded* rather than dropped silently."""
+
+REQUIRED_TERMINALS = {
+    "a-side-with-no-pieces-has-lost",
+    "a-side-with-pieces-and-no-moves-has-lost",
+    "an-ordinary-position-is-not-terminal",
+    "a-king-with-moves-is-not-terminal",
+    "the-position-after-a-capture-can-be-terminal",
+}
+"""The terminal cases A64-014.6 names."""
 
 REQUIRED_CASES = {
     "russian-initial-position-light-to-move",
@@ -101,6 +114,26 @@ a deleted one covered."""
 
 generator = MoveGenerator()
 validator = MoveValidator(generator)
+evaluator = TerminalStateEvaluator(generator)
+
+
+@pytest.mark.parametrize("case", TERMINALS, ids=[case.id for case in TERMINALS])
+def test_the_engine_agrees_about_which_positions_have_ended(case: TerminalCase) -> None:
+    """A64-014.6's half of the contract — the third expectation shape.
+
+    "These are the legal moves" and "this position has ended" are different
+    claims, so they are different keys rather than one shape bent to carry
+    both. A verdict is compared whole: a reader that only checked
+    `terminal` would pass a corpus that named the wrong winner.
+    """
+    verdict = evaluator.evaluate(case.position)
+
+    if not case.terminal:
+        assert verdict is None, case.description
+        return
+
+    assert verdict is not None, case.description
+    assert (verdict.winner, verdict.reason) == (case.winner, case.reason), case.description
 
 
 @pytest.mark.parametrize("case", REJECTIONS, ids=[case.id for case in REJECTIONS])
@@ -147,6 +180,20 @@ class TestCorpusIntegrity:
 
     def test_the_rejection_corpus_is_not_empty(self) -> None:
         assert REJECTIONS
+
+    def test_the_terminal_corpus_is_not_empty(self) -> None:
+        assert TERMINALS
+
+    def test_every_required_terminal_case_is_present(self) -> None:
+        assert {case.id for case in TERMINALS} >= REQUIRED_TERMINALS
+
+    def test_a_terminal_case_names_a_winner_and_a_reason_together(self) -> None:
+        """The two are absent together for a position that continues and
+        present together for one that has ended — the same shape the
+        evaluator answers with, so neither can be written half-filled."""
+        for case in TERMINALS:
+            stated = (case.winner is None, case.reason is None)
+            assert stated == (not case.terminal, not case.terminal), case.source
 
     def test_every_required_case_is_present(self) -> None:
         assert {case.id for case in CASES} >= REQUIRED_CASES

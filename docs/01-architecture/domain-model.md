@@ -610,10 +610,12 @@ axes), because a variant's rule set is what a move generator reads and an enum m
 `LegalMoveSet` is the ordered tuple `MoveGenerator.legal_moves` returns rather than a named type
 — "a derived answer, not a thing", as the table says. `PositionHash` is `Position.fingerprint`
 reduced by `__hash__`; an incremental Zobrist hash belongs with a measurement, not with this.
-`TerminalState` and `EngineVersion` do not exist yet — and A64-014.5 is what makes `TerminalState`
+`TerminalState` and `EngineVersion` exist as of A64-014.6, both as this table specifies —
+"the output of a rule" and "stamped, never interpreted". A64-014.5 is what made the first
 implementable, because an empty legal move set now means "this side has nothing to play" for
-every position, with no piece the generator declines to answer for. Details in
-`specs/game-engine.md`.
+every position, with no piece the generator declines to answer for. `TerminalState` reports only
+a loss: MT-12's history half belongs to `Match`, and every draw in draughts is historical.
+Details in `specs/game-engine.md`.
 
 ### 10.2 `QueueTicket` — aggregate root, Redis-authoritative
 
@@ -763,6 +765,20 @@ whatever computes ratings.
 | MT-11 | An aborted match produces no result and no rating effect | T-2's landing point: infrastructure failure resolves to abort, never to loss |
 | MT-12 | Terminal detection consults game **history**, not just the position | Repetition and move-limit draws are properties of the game (`system-design.md §4.4`) |
 | MT-13 | Sequence numbers are monotonic and per-match, and every state-changing event increments exactly one | AD-12's replay protocol is unusable if two events can share a sequence |
+
+**As implemented (A64-014.6).** `apps/api/app/modules/game/domain/match.py` builds the
+rules-facing core of this aggregate and nothing else: identity, engine version (MT-3), variant,
+the authoritative position, status, ply number, last move, `MatchResult` (DM-08), and the game
+history MT-12 requires — how often each position has occurred, and how many plies since a capture
+or a man's move. Statuses are `CREATED`, `ACTIVE`, `COMPLETED` and `ABORTED`, which are the four
+of system-design.md §3 a match reaches by the rules alone.
+
+Still absent, and each named here so the gap is a decision rather than a discovery: the two
+`MatchParticipant` seats (MT-1, MT-4), the append-only move log (MT-5, MT-6), `ClockState` and
+time control (MT-8, MT-9), `Offer`, the per-match sequence number (MT-13), and the five domain
+events. None of them is a rules concern, and each needs the task that owns clocks, transport or
+persistence. There is no `application/`, `infrastructure/` or `presentation/` layer in `game`
+yet — A64-014.6 is pure domain.
 
 ### 10.5 `MatchParticipant` — entity within `Match`
 

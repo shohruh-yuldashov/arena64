@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db_session, get_rate_limiter
 from app.app_factory import create_app
 from app.modules.users.domain.validators import BIO_MAX_LENGTH, DISPLAY_NAME_MAX_LENGTH
+from tests.contract.conftest import with_presence_switched_off
 from tests.fakes.rate_limiter import AllowAllRateLimiter
 
 PROFILE_URL = "/api/v1/profile"
@@ -57,6 +58,7 @@ async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
 
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_rate_limiter] = lambda: AllowAllRateLimiter()
+    with_presence_switched_off(app)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as http:
@@ -404,8 +406,10 @@ class TestReadOwnProfile:
         # No `language` and no `timezone` since A64-012.5: this response
         # reports the fields `PATCH /profile` can change, and it can no
         # longer change those two. `GET /profile/preferences` has them.
-        # `statistics` since A64-012.6: an owner always sees their own
-        # record, whatever `show_statistics` says about strangers.
+        # `statistics` since A64-012.6 and presence since A64-012.7: an
+        # owner always sees their own record and their own presence,
+        # whatever `show_statistics`, `show_online_status` and
+        # `show_last_seen` say about strangers.
         assert set(data) == {
             "id",
             "username",
@@ -415,6 +419,8 @@ class TestReadOwnProfile:
             "avatar_url",
             "thumbnail_url",
             "joined_at",
+            "is_online",
+            "last_seen",
             "statistics",
         }
 

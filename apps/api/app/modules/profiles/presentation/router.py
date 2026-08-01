@@ -112,16 +112,33 @@ async def get_profile(
     discover which handles belong to withdrawn accounts, which is what an
     impersonator would want before adopting one.
 
-    ## Fields that are always `null` today
+    ## Presence: `is_online` and `last_seen`
 
-    Three, and each for a different reason worth knowing before building
-    against them:
+    Both are best-effort and both may be `null`, and a `null` deliberately
+    means **nothing more than "nothing can be said"**. It covers a player
+    who has hidden their presence, a player nobody has observed, a presence
+    record that has expired, and presence being temporarily unavailable —
+    all rendered identically, because reporting which applies would answer
+    the question the privacy setting exists to decline.
 
-    - `last_seen` — presence tracking does not exist. The field is in the
-      contract so clients render "unknown" rather than gaining an
-      unexpected key later. Do not infer activity from it.
-    - `bio` and `country` — real columns with no writer: profile editing is
-      a later task. They will populate without any change to this shape.
+    Read them independently. They are governed by two different settings
+    with two different defaults, and the common case is a player who shows
+    `is_online` and withholds `last_seen`: `show_last_seen` is the one
+    privacy flag that is off out of the box, because a published "last seen
+    03:14" is a sleep schedule while "online now" is momentary.
+
+    Render `null` as *unknown*, never as *offline* — `is_online: false` is
+    the value that means offline, and it is only available for a player seen
+    disconnecting recently.
+
+    **Both are `null` for every player today**, because presence is written
+    by the realtime gateway and that does not exist yet. The fields are in
+    the contract so clients gain no unexpected keys when it does.
+
+    `bio` and `country` are `null` only when a player has not set them — or,
+    for `country`, when they have chosen not to show it, which is
+    indistinguishable here for the same reason presence is. Both are written
+    through `PATCH /profile`.
 
     ## Ratings and statistics are real fields with placeholder values
 

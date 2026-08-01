@@ -49,6 +49,7 @@ from app.modules.profiles.presentation.rate_limits import (
     enforce_privacy_update_limit,
 )
 from app.modules.profiles.presentation.self_router import my_profile_router
+from tests.contract.conftest import with_presence_switched_off
 from tests.fakes.rate_limiter import AllowAllRateLimiter
 
 PRIVACY_URL = "/api/v1/profile/privacy"
@@ -83,6 +84,7 @@ async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
 
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_rate_limiter] = lambda: AllowAllRateLimiter()
+    with_presence_switched_off(app)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as http:

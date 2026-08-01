@@ -14,6 +14,7 @@ from app.config.settings import (
     EmailSettings,
     JWTSettings,
     PostgresSettings,
+    PresenceSettings,
     RateLimitSettings,
     RedisSettings,
     SessionSettings,
@@ -94,6 +95,7 @@ class TestSettings:
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
+            presence=PresenceSettings(),
         )
         assert settings.environment is Environment.TEST
 
@@ -120,6 +122,7 @@ class TestSettings:
                 storage=StorageSettings(),
                 rate_limit=RateLimitSettings(),
                 statistics=StatisticsSettings(),
+                presence=PresenceSettings(),
             )
 
     def test_production_rejects_a_left_default_redis_role(self) -> None:
@@ -138,6 +141,7 @@ class TestSettings:
                 storage=StorageSettings(),
                 rate_limit=RateLimitSettings(),
                 statistics=StatisticsSettings(),
+                presence=PresenceSettings(),
             )
 
     def test_production_accepts_fully_explicit_configuration(self) -> None:
@@ -161,6 +165,7 @@ class TestSettings:
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
+            presence=PresenceSettings(),
         )
         assert settings.environment is Environment.PRODUCTION
 
@@ -177,6 +182,7 @@ class TestSettings:
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
+            presence=PresenceSettings(),
         )
         with pytest.raises(PydanticValidationError):
             settings.environment = Environment.PRODUCTION  # type: ignore[misc]
@@ -283,6 +289,7 @@ class TestJWTProductionGuard:
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
+            presence=PresenceSettings(),
             jwt=JWTSettings(**jwt_overrides),  # type: ignore[arg-type]
         )
 
@@ -313,6 +320,7 @@ class TestJWTProductionGuard:
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
+            presence=PresenceSettings(),
             jwt=JWTSettings(),
         )
 

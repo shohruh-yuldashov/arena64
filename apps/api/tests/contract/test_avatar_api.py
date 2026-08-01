@@ -43,6 +43,7 @@ from app.modules.avatars.domain.images import (
     THUMBNAIL_DIMENSION,
 )
 from app.storage import LocalStorageProvider
+from tests.contract.conftest import with_presence_switched_off
 from tests.fakes.rate_limiter import AllowAllRateLimiter
 
 AVATAR_URL = "/api/v1/profile/avatar"
@@ -117,6 +118,7 @@ async def client(app: FastAPI, contract_session: AsyncSession) -> AsyncIterator[
 
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_rate_limiter] = lambda: AllowAllRateLimiter()
+    with_presence_switched_off(app)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as http:

@@ -158,19 +158,25 @@ async def get_my_profile(
     fields. Together they are the two halves an account settings page
     needs.
 
-    Carries your **statistics**, always — `show_statistics` governs what a
-    stranger sees on `GET /profiles/{username}`, never what you see of
-    yourself (A64-012.6). A control that hid a record from the person who
-    hid it would be one nobody could verify they had set.
+    Carries your **statistics** and your **presence**, always —
+    `show_statistics`, `show_online_status` and `show_last_seen` govern what
+    a stranger sees on `GET /profiles/{username}`, never what you see of
+    yourself (A64-012.6, A64-012.7). A control that hid a record from the
+    person who hid it would be one nobody could verify they had set.
+
+    `is_online` and `last_seen` are `null` for every account today: presence
+    is written by the realtime gateway, which does not exist yet. A `null`
+    here means unobserved, never hidden.
 
     Returns exactly the shape `PATCH /profile` returns, so a client can
     populate an edit form and render the result of a save with one parser.
     """
     profile = await editor.get_own_profile(user.id)
     statistics = await profiles.get_own_statistics(user.id)
+    presence = await profiles.get_own_presence(user.id)
 
     return build_response(
-        MyProfileResponse.of(profile, avatar_links.links_for(profile.avatar), statistics)
+        MyProfileResponse.of(profile, avatar_links.links_for(profile.avatar), statistics, presence)
     )
 
 
@@ -260,12 +266,14 @@ async def update_my_profile(
 
     # Read after the write, so the response is one coherent view of the
     # account rather than an edited profile beside a record fetched before
-    # it. Nothing an edit can change touches statistics today, and reading
-    # it here means that stays true for free if something ever does.
+    # it. Nothing an edit can change touches statistics or presence today,
+    # and reading them here means that stays true for free if something ever
+    # does.
     statistics = await profiles.get_own_statistics(user.id)
+    presence = await profiles.get_own_presence(user.id)
 
     return build_response(
-        MyProfileResponse.of(profile, avatar_links.links_for(profile.avatar), statistics)
+        MyProfileResponse.of(profile, avatar_links.links_for(profile.avatar), statistics, presence)
     )
 
 

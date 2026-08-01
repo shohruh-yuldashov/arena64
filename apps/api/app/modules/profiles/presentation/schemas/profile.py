@@ -296,15 +296,42 @@ class ProfileResponse(BaseResponseDTO):
         description="When the account was created, UTC.",
         examples=["2026-08-01T12:00:00Z"],
     )
+    is_online: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the player is connected right now.\n\n"
+            "`true` while a connection is open. `false` means the platform "
+            "saw them disconnect recently enough to still be able to say so. "
+            "**`null` means nothing can be said** — and deliberately does not "
+            "distinguish between a player who has hidden their presence "
+            "(`show_online_status` off), a player nobody has observed, a "
+            "presence record that has since expired, and presence being "
+            "temporarily unavailable. Reporting which applies would answer "
+            "the question the privacy setting exists to decline.\n\n"
+            "Render `null` as 'unknown', never as 'offline'. Presence is "
+            "best-effort and decays on a timer, so a briefly stale value is "
+            "expected rather than a fault."
+        ),
+        # `true` rather than the `null` every player currently reports, so
+        # the schema view shows the value a client actually has to render.
+        # The response examples below carry both.
+        examples=[True],
+    )
     last_seen: datetime | None = Field(
         default=None,
         description=(
-            "When the player was last seen online, UTC. **Always `null` "
-            "today** — presence tracking is not yet implemented, and this "
-            "field is present so that clients render 'unknown' rather than "
-            "gaining an unexpected key when it is. It will also be `null` for "
-            "any player whose `show_last_seen` privacy setting is off, which "
-            "is the default. Do not infer activity from its absence."
+            "When the player was last seen online, UTC.\n\n"
+            "**`null` unless the player has turned `show_last_seen` on**, "
+            "which is the one privacy setting that is off by default — so "
+            "this is `null` for most accounts however active they are. It is "
+            "also `null` for a player nobody has observed, for a presence "
+            "record that has expired, and when presence is unavailable, and "
+            "those cases are deliberately indistinguishable from a player "
+            "who opted out.\n\n"
+            "Never inferred from anything else the platform stores: an "
+            "account's last write and a session's last token exchange are "
+            "both something other than a person being present. Do not infer "
+            "activity from its absence."
         ),
         examples=[None],
     )
@@ -330,16 +357,24 @@ class ProfileResponse(BaseResponseDTO):
     model_config = {
         "json_schema_extra": {
             "examples": [
+                # A player who is online and shows it, on the platform
+                # defaults — so `is_online` is reported and `last_seen` is
+                # `null`, because `show_last_seen` is the one flag that is
+                # off out of the box. That pairing is the *common* case and
+                # is worth showing as the first example: a client that
+                # assumed the two travel together would render this player
+                # as never having been seen.
                 {
                     "id": "019fb9ea-0a0c-7cec-9c5f-402727c31a96",
                     "username": "player_one",
                     "display_name": "Player One",
                     "avatar_url": None,
                     "thumbnail_url": None,
-                    "country": None,
+                    "country": "GB",
                     "language": "en",
                     "bio": None,
                     "joined_at": "2026-08-01T12:00:00Z",
+                    "is_online": True,
                     "last_seen": None,
                     "ratings": {
                         "classic": {
@@ -361,7 +396,36 @@ class ProfileResponse(BaseResponseDTO):
                         "current_streak": 0,
                         "best_win_streak": 0,
                     },
-                }
+                },
+                # A player about whom nothing may be said: presence hidden,
+                # country hidden, record hidden. Every one of them is `null`
+                # and none of them says why — which is the same shape a
+                # brand-new account with nothing filled in produces.
+                {
+                    "id": "019fb9ea-0a0c-7cec-9c5f-402727c31a96",
+                    "username": "player_one",
+                    "display_name": "Player One",
+                    "avatar_url": None,
+                    "thumbnail_url": None,
+                    "country": None,
+                    "language": "en",
+                    "bio": None,
+                    "joined_at": "2026-08-01T12:00:00Z",
+                    "is_online": None,
+                    "last_seen": None,
+                    "ratings": {
+                        "classic": {
+                            "rating": 1500,
+                            "is_provisional": True,
+                            "games_played": 0,
+                        },
+                        "rapid": {"rating": 1500, "is_provisional": True, "games_played": 0},
+                        "blitz": {"rating": 1500, "is_provisional": True, "games_played": 0},
+                    },
+                    # `null`, never zeroes — and the ratings above stay
+                    # visible, because no privacy flag covers them.
+                    "statistics": None,
+                },
             ]
         }
     }
@@ -397,6 +461,13 @@ class ProfileResponse(BaseResponseDTO):
             language=identity.preferred_language,
             bio=identity.bio,
             joined_at=identity.created_at,
+            # **No privacy check here either.** Both presence fields arrive
+            # already gated by `ProfileService`, which applies
+            # `show_online_status` and `show_last_seen` independently and
+            # skips the read entirely when both are off. This schema holds no
+            # flag it could get backwards and no provider it could call —
+            # exactly as it holds no `StorageProvider`.
+            is_online=profile.is_online,
             last_seen=profile.last_seen,
             ratings=RatingsResponse.of(profile.ratings.as_map()),
             # `None` in, `null` out. **No privacy check here** — by the time

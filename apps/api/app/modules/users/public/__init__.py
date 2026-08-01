@@ -39,6 +39,20 @@ What is published, and why only this much:
                          are different authorities
   `PrivacyEdits`         that port's input: five optional booleans
   `PrivacySettingsView`  that port's output — the owner's own five flags
+  `PresenceProvider`     reads whether a player is here right now
+                         (A64-012.7). Read-only, and separate from the
+                         recorder so that the module serving anonymous
+                         traffic cannot mark anybody online
+  `PresenceRecorder`     writes what a gateway node observed. Held by
+                         nothing on the HTTP surface
+  `Presence`             those ports' record — a frozen dataclass rather
+                         than a Pydantic DTO, because `profiles.domain`
+                         holds it and a domain layer must not import a
+                         framework (architecture.md §8)
+  `DeviceType`           the closed set `Presence.device_type` is defined
+                         in terms of, published because BR-2 requires a
+                         published shape's field types to be published too.
+                         Never reaches the wire
   `PreferencesEditor`    reads and updates the owner's personal settings
                          (A64-012.5), and is the *only* way to change a
                          language or a timezone since that task
@@ -94,6 +108,7 @@ from app.modules.users.domain.preferences import (
     BoardTheme,
     PieceSet,
 )
+from app.modules.users.domain.presence import DeviceType, Presence
 from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import (
     AvatarReference,
@@ -120,6 +135,8 @@ from app.modules.users.public.ports import (
     NewUserAccount,
     PasswordResetter,
     PreferencesEditor,
+    PresenceProvider,
+    PresenceRecorder,
     PrivacySettingsEditor,
     ProfileEditor,
     PublicProfileReader,
@@ -143,6 +160,7 @@ __all__ = [
     "AnimationSpeed",
     "AvatarReference",
     "AvatarStore",
+    "DeviceType",
     "OwnUserProfile",
     "ProfileEditor",
     "ProfileEdits",
@@ -164,6 +182,9 @@ __all__ = [
     "PreferenceEdits",
     "PreferencesEditor",
     "PreferencesView",
+    "Presence",
+    "PresenceProvider",
+    "PresenceRecorder",
     "PrivacyEdits",
     "PrivacySettingsEditor",
     "PrivacySettingsView",

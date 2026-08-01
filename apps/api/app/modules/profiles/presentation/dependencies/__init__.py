@@ -10,13 +10,18 @@ The graph assembled per request:
       -> UserService
       -> PublicProfileService adapts it to the published port
     UnratedRatingProvider     placeholder, stateless
-    NoMatchesStatisticsProvider
+    DatabaseStatisticsProvider
+    RedisPresenceProvider     the `cache` Redis role, A64-012.7
       -> ProfileService
 
-**Two of the three collaborators are placeholders**, and this file is the
-only place that will change when they stop being. `rating` ships, one line
-here points at its adapter, and nothing in `application/` or `domain/`
+**One of the four collaborators is still a placeholder**, and this file is
+the only place that will change when it stops being. `rating` ships, one
+line here points at its adapter, and nothing in `application/` or `domain/`
 moves. That is the payoff for the ports in `application/ports.py`.
+
+Two of them have a kill switch and therefore two branches each — see
+`get_statistics_provider` and `get_presence_provider`, which are the only
+places on the platform that know a fallback was chosen.
 
 ## Why a unit of work is constructed for a read-only path
 
@@ -46,7 +51,13 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from app.api.deps import ClockDep, DbSessionDep, StatisticsSettingsDep
+from app.api.deps import (
+    ClockDep,
+    DbSessionDep,
+    PresenceSettingsDep,
+    RedisPoolsDep,
+    StatisticsSettingsDep,
+)
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.profiles.application.ports import RatingProvider, StatisticsProvider
 from app.modules.profiles.application.services import ProfileService
@@ -64,9 +75,14 @@ from app.modules.users.application.services.privacy_settings_service import (
 )
 from app.modules.users.application.services.profile_editing_service import ProfileEditingService
 from app.modules.users.application.services.public_profile_service import PublicProfileService
+from app.modules.users.infrastructure.presence import (
+    NoPresenceProvider,
+    RedisPresenceProvider,
+)
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
 from app.modules.users.public import (
     PreferencesEditor,
+    PresenceProvider,
     PrivacySettingsEditor,
     ProfileEditor,
     PublicProfileReader,
@@ -234,10 +250,70 @@ def get_statistics_provider(
 StatisticsProviderDep = Annotated[StatisticsProvider, Depends(get_statistics_provider)]
 
 
+def get_presence_provider(
+    pools: RedisPoolsDep,
+    settings: PresenceSettingsDep,
+    clock: ClockDep,
+) -> PresenceProvider:
+    """Whether a player is here right now — A64-012.7.
+
+    The second selection point on this module, and it is logged for the
+    reason `get_statistics_provider` above is: this is the only place that
+    knows a *choice* was made, because neither provider can say what it was
+    chosen instead of.
+
+    ## The two branches
+
+    `RedisPresenceProvider` is the default. It is handed the **`cache`**
+    Redis role — never `live`, and never `limits`. Presence is derived,
+    expendable and self-expiring, and losing it is a cosmetic defect
+    (system-design.md §626), which is exactly the posture `cache` is
+    configured for. A reconnect storm writing one key per returning player
+    must not compete with the positions of games in progress on `live`
+    (AD-03's own worked example), and `limits` is deliberately configured to
+    evict nothing, which is the opposite of what this workload wants. See
+    `PresenceSettings` for the argument in full and for when a dedicated
+    sixth role becomes warranted.
+
+    `NoPresenceProvider` is the fallback, wired when `PRESENCE_ENABLED=false`
+    — for a presence instance being replaced or resized. Every profile then
+    reports `is_online: null` and `last_seen: null`.
+
+    ## Why the fallback logs at WARNING and the normal path does not
+
+    An operator should be able to see that presence is switched off, because
+    nothing in a response says so. `WARNING` makes it an alertable
+    condition; an `INFO` line on the healthy path would fire on every profile
+    read and be no signal at all (services.md §7.1).
+
+    It is a **quieter** warning than the statistics one, and the difference
+    is worth stating rather than inferring. Blank statistics are a lie — a
+    player with a real record looks like a beginner. Unknown presence is the
+    same `null` a profile already reports for a player who is offline or who
+    has hidden it, so this degradation misinforms nobody; it merely removes
+    a feature.
+
+    Returns the **provider**, not the recorder. Nothing on the HTTP surface
+    is handed `PresenceRecorder` — the two ports are separate so that the
+    module serving anonymous traffic cannot mark accounts online, and this
+    return type is where that separation is enforced rather than intended.
+    """
+    if not settings.enabled:
+        logger.warning("presence_provider_fallback", extra={"provider": "none"})
+        return NoPresenceProvider()
+
+    logger.debug("presence_provider_selected", extra={"provider": "redis"})
+    return RedisPresenceProvider(pools.cache, settings=settings, clock=clock)
+
+
+PresenceProviderDep = Annotated[PresenceProvider, Depends(get_presence_provider)]
+
+
 def get_profile_service(
     profiles: PublicProfileReaderDep,
     ratings: RatingProviderDep,
     statistics: StatisticsProviderDep,
+    presence: PresenceProviderDep,
 ) -> ProfileService:
     """The composed read use case.
 
@@ -246,7 +322,12 @@ def get_profile_service(
     `UserService` on a different session — the mistake `auth`'s
     `get_password_reset_service` documents at length.
     """
-    return ProfileService(profiles=profiles, ratings=ratings, statistics=statistics)
+    return ProfileService(
+        profiles=profiles,
+        ratings=ratings,
+        statistics=statistics,
+        presence=presence,
+    )
 
 
 ProfileServiceDep = Annotated[ProfileService, Depends(get_profile_service)]
@@ -254,6 +335,7 @@ ProfileServiceDep = Annotated[ProfileService, Depends(get_profile_service)]
 
 __all__ = [
     "PreferencesEditorDep",
+    "PresenceProviderDep",
     "PrivacySettingsEditorDep",
     "ProfileEditorDep",
     "ProfileServiceDep",
@@ -261,6 +343,7 @@ __all__ = [
     "RatingProviderDep",
     "StatisticsProviderDep",
     "get_preferences_editor",
+    "get_presence_provider",
     "get_privacy_settings_editor",
     "get_profile_editor",
     "get_profile_service",

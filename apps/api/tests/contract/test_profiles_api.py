@@ -13,7 +13,14 @@ database. Folding is a `Computed` column PostgreSQL populates
 `casefold` agrees with itself — the question is whether the *query* matches
 what the *generated column* holds.
 
-Skipped, not failed, when PostgreSQL is unreachable (see `conftest.py`).
+`TestPresence` at the end adds a second real dependency — Redis — for the
+same kind of reason: presence reaching the wire is a property of the
+composition root and the response mapper together, and a unit test whose
+expected answer is `null` cannot tell a working mapping from a hardcoded
+one.
+
+Skipped, not failed, when PostgreSQL or Redis is unreachable (see
+`conftest.py`).
 """
 
 from collections.abc import AsyncIterator
@@ -23,12 +30,17 @@ from uuid import uuid4
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db_session
 from app.app_factory import create_app
+from app.config.settings import PresenceSettings
+from app.core.clock import SystemClock
 from app.core.enums import Locale
+from app.modules.profiles.presentation.dependencies import get_presence_provider
 from app.modules.users.domain.entities import User
+from app.modules.users.domain.presence import DeviceType
 from app.modules.users.domain.value_objects import (
     Bio,
     CountryCode,
@@ -37,7 +49,9 @@ from app.modules.users.domain.value_objects import (
     Timezone,
     Username,
 )
+from app.modules.users.infrastructure.presence import RedisPresenceProvider
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
+from tests.contract.conftest import with_presence_switched_off
 
 JOINED_AT = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 BIO = "I play chess.\nSometimes well."
@@ -45,15 +59,24 @@ BIO = "I play chess.\nSometimes well."
 
 @pytest_asyncio.fixture
 async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
-    """The production app with only the session redirected into the test's
-    rolled-back transaction. No `dependency_overrides` on any service — the
-    graph under test is the one that ships."""
+    """The production app with the session redirected into the test's
+    rolled-back transaction and presence switched off.
+
+    Both overrides are of *infrastructure*, not of a service: the graph
+    under test — `ProfileService`, the mappers, the schemas — is the one
+    that ships. `NoPresenceProvider` is production code too, wired by
+    `PRESENCE_ENABLED=false` in a real deployment; see
+    `with_presence_switched_off` on why an app driven over `ASGITransport`
+    needs it at all, and `TestPresence` below for the suite that wires the
+    real Redis adapter instead.
+    """
     app = create_app()
 
     async def _session() -> AsyncIterator[AsyncSession]:
         yield contract_session
 
     app.dependency_overrides[get_db_session] = _session
+    with_presence_switched_off(app)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as http:
         yield http
@@ -115,6 +138,7 @@ class TestSuccessfulLookup:
             "language",
             "bio",
             "joined_at",
+            "is_online",
             "last_seen",
             "ratings",
             "statistics",
@@ -158,10 +182,21 @@ class TestSuccessfulLookup:
             "best_win_streak": 0,
         }
 
-    async def test_last_seen_is_null(self, client: AsyncClient, player: User) -> None:
-        data = (await client.get(profile_url(player.username.value))).json()["data"]
+    async def test_presence_is_null_when_it_is_switched_off(
+        self, client: AsyncClient, player: User
+    ) -> None:
+        """What a deployment running on `PRESENCE_ENABLED=false` serves.
 
-        assert data["last_seen"] is None
+        The interesting half is what it does *not* do: a profile still
+        returns `200` with every other field intact. Presence is decoration,
+        and losing it must not cost the platform its highest-volume public
+        read.
+        """
+        response = await client.get(profile_url(player.username.value))
+
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["is_online"] is None
+        assert response.json()["data"]["last_seen"] is None
 
     async def test_needs_no_authentication(self, client: AsyncClient, player: User) -> None:
         """No `Authorization` header is sent anywhere in this file, so every
@@ -264,6 +299,118 @@ class TestCaseInsensitiveLookup:
         response = await client.get(profile_url(player.username.value.upper()))
 
         assert response.json()["data"]["username"] == player.username.value
+
+
+class TestPresence:
+    """Presence on the wire — real Redis, the real adapter, the real
+    composition root.
+
+    `tests/unit/test_profile_service.py` covers which flag gates which
+    field, and `tests/unit/test_presence.py` covers the keyspace and the
+    decode. Neither can catch the mistake this suite exists for: a response
+    schema that receives a composed value and drops it. `is_online=None`
+    written into `ProfileResponse.of` would pass every unit test in the
+    repository, because every unit test's expected answer is `None` until
+    something records presence.
+
+    So this is the one place that writes a presence record and then reads it
+    back **through HTTP**. Skipped, not failed, when Redis is unreachable
+    (see `conftest.py`).
+    """
+
+    @pytest_asyncio.fixture
+    async def online_client(
+        self,
+        contract_session: AsyncSession,
+        contract_redis: Redis,
+    ) -> AsyncIterator[tuple[AsyncClient, RedisPresenceProvider]]:
+        """The app with the *real* presence adapter over the contract Redis
+        (database 15 — never a developer's live data; see `conftest.py`).
+
+        Yields the provider beside the client so a test can record an
+        observation the way the gateway will: through `PresenceRecorder`,
+        not by writing a key by hand. A test that hand-wrote the JSON would
+        pass while the writer and the reader disagreed about the shape,
+        which is the one bug this pairing cannot have.
+        """
+        app = create_app()
+
+        async def _session() -> AsyncIterator[AsyncSession]:
+            yield contract_session
+
+        provider = RedisPresenceProvider(
+            contract_redis,
+            settings=PresenceSettings(),
+            clock=SystemClock(),
+        )
+        app.dependency_overrides[get_db_session] = _session
+        app.dependency_overrides[get_presence_provider] = lambda: provider
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as http:
+            yield http, provider
+        app.dependency_overrides.clear()
+
+    async def test_an_online_player_is_reported_as_online(
+        self,
+        online_client: tuple[AsyncClient, RedisPresenceProvider],
+        player: User,
+    ) -> None:
+        client, presence = online_client
+        await presence.record_presence(player.id, is_online=True, device_type=DeviceType.WEB)
+
+        data = (await client.get(profile_url(player.username.value))).json()["data"]
+
+        assert data["is_online"] is True
+
+    async def test_last_seen_stays_null_on_the_platform_defaults(
+        self,
+        online_client: tuple[AsyncClient, RedisPresenceProvider],
+        player: User,
+    ) -> None:
+        """`show_last_seen` is the one privacy flag that is off out of the
+        box, so an online player publishes an indicator and no timestamp.
+        That pairing is the common case and the one a client is most likely
+        to get wrong."""
+        client, presence = online_client
+        await presence.record_presence(player.id, is_online=True)
+
+        data = (await client.get(profile_url(player.username.value))).json()["data"]
+
+        assert data["is_online"] is True
+        assert data["last_seen"] is None
+
+    async def test_a_recorded_disconnect_is_reported_as_offline(
+        self,
+        online_client: tuple[AsyncClient, RedisPresenceProvider],
+        player: User,
+    ) -> None:
+        client, presence = online_client
+        await presence.record_presence(player.id, is_online=False)
+
+        data = (await client.get(profile_url(player.username.value))).json()["data"]
+
+        assert data["is_online"] is False
+
+    async def test_the_session_identifier_never_reaches_the_response(
+        self,
+        online_client: tuple[AsyncClient, RedisPresenceProvider],
+        player: User,
+    ) -> None:
+        """A64-012.7: never expose internal session identifiers, and never
+        expose Redis keys. Asserted against the raw response text rather
+        than the parsed body, because either leaking through `meta` or a
+        header would be just as much of a disclosure."""
+        client, presence = online_client
+        await presence.record_presence(
+            player.id, is_online=True, session_id="gw-node-3-7f3a", device_type=DeviceType.MOBILE
+        )
+
+        response = await client.get(profile_url(player.username.value))
+
+        assert "gw-node-3-7f3a" not in response.text
+        assert "session_id" not in response.text
+        assert "presence:" not in response.text
 
 
 class TestOpenApi:

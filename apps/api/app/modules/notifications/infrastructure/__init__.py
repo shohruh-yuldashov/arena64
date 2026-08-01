@@ -1,6 +1,11 @@
-"""Adapters for `notifications`' ports, and the relay's entry point."""
+"""Adapters for `notifications`' ports, and the relay's session bridge."""
 
+from app.modules.notifications.infrastructure.presence_sweeper_worker import (
+    PresenceSweeperWorker,
+    SweeperFactory,
+)
 from app.modules.notifications.infrastructure.session_scoped_handler import (
+    DispatcherFactory,
     SessionScopedNotificationHandler,
 )
 from app.modules.notifications.infrastructure.sinks import (
@@ -9,6 +14,9 @@ from app.modules.notifications.infrastructure.sinks import (
 )
 
 __all__ = [
+    "DispatcherFactory",
+    "PresenceSweeperWorker",
+    "SweeperFactory",
     "LoggingNotificationSink",
     "NullNotificationSink",
     "SessionScopedNotificationHandler",

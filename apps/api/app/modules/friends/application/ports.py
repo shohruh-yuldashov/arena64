@@ -22,6 +22,7 @@ composition path the ability to accept requests.
 
 from collections.abc import Sequence
 from datetime import datetime
+from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
@@ -389,29 +390,47 @@ class BlockedPlayerRepository(Protocol):
         ...
 
 
+class SocialGraphEntry(StrEnum):
+    """Which cached set is being asked for — A64-013.8.
+
+    Replaces the string key the port used to take. The old shape had the
+    *application* layer building `friends:v1:blocked:<id>` through a helper
+    in `infrastructure.cache.keys`, which is a dependency pointing the wrong
+    way (CLAUDE.md §3.1) — and it was invisible until an import contract went
+    looking for it.
+
+    An enum keeps the split honest: the **application** names the entry, the
+    **adapter** knows the keyspace. Adding a third entry is a member here and
+    a branch in one adapter, and caching.md C-2's version segment stays in
+    exactly one file.
+    """
+
+    FRIENDS = "friends"
+    """Every live friend of a player."""
+
+    BLOCKED = "blocked"
+    """Every player this one cannot interact with, in either direction."""
+
+
 class SocialGraphCache(Protocol):
     """Where the social graph is cached, and how it is dropped —
     A64-013.6.
 
-    Keyed by **string**, not by player and entry kind, which is the one
-    thing about this port that looks wrong and is not. The keys are built by
-    `infrastructure.cache.keys`, which is the only module that knows the
-    keyspace; a port that took a player id and an entry name would put half
-    the key layout in `application/` and the other half in
-    `infrastructure/`, and caching.md C-2's version segment would then live
-    in two places.
+    Keyed by **player and entry**, not by a string: the keyspace belongs to
+    infrastructure (`friends.infrastructure.cache.keys`), and a port that
+    took a pre-built key would put half the key layout in `application/` and
+    the other half in `infrastructure/`.
 
-    Invalidation is the exception and takes player ids, because *that* is
-    the vocabulary of the four triggers: a request was accepted between two
-    players, a block was lifted on one. Which keys those touch is the
-    adapter's business, and `keys_for` is what makes a third entry invalidate
-    automatically.
+    Invalidation takes player ids because *that* is the vocabulary of the
+    four triggers: a request was accepted between two players, a block was
+    lifted on one. Which keys those touch is the adapter's business, and
+    `keys_for` is what makes a third entry invalidate automatically.
 
     **Nothing here raises.** A cache that failed loudly would convert an
     optimisation into a dependency, and every method's contract says so.
     """
 
-    async def get_ids(self, key: str) -> frozenset[UUID] | None:
+    async def get_ids(self, player_id: UUID, entry: SocialGraphEntry) -> frozenset[UUID] | None:
         """The cached id set, or `None` on a miss.
 
         A miss covers an absent key, an unreachable cache, a slow one and a
@@ -420,7 +439,7 @@ class SocialGraphCache(Protocol):
         """
         ...
 
-    async def put_ids(self, key: str, ids: frozenset[UUID]) -> None:
+    async def put_ids(self, player_id: UUID, entry: SocialGraphEntry, ids: frozenset[UUID]) -> None:
         """Stores an id set with the configured TTL.
 
         The TTL is a backstop for invalidation failing, never the mechanism

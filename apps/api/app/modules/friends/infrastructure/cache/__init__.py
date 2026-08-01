@@ -6,8 +6,7 @@ rules were complete enough to write (caching.md C-1).
 
 from app.modules.friends.infrastructure.cache.keys import (
     KEY_VERSION,
-    blocked_ids_key,
-    friend_ids_key,
+    key_for,
     keys_for,
 )
 from app.modules.friends.infrastructure.cache.social_graph_cache import (
@@ -19,7 +18,6 @@ __all__ = [
     "KEY_VERSION",
     "NoSocialGraphCache",
     "RedisSocialGraphCache",
-    "blocked_ids_key",
-    "friend_ids_key",
+    "key_for",
     "keys_for",
 ]

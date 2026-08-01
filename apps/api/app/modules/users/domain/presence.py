@@ -53,6 +53,7 @@ rendering all of them, and a player who has hidden their presence, as
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from uuid import UUID
 
 
 class DeviceType(StrEnum):
@@ -132,3 +133,24 @@ class Presence:
     `None` when the recorder did not say, or when the stored value is one
     this build does not know. See `DeviceType`.
     """
+
+
+@dataclass(frozen=True, slots=True)
+class LapsedPresence:
+    """A player whose presence window closed without anybody observing it —
+    A64-013.8.
+
+    The sweeper's unit of work. Two fields and no more, because that is all
+    a missed `offline` transition is: who left, and when their record was due
+    to stop being true.
+
+    `lapsed_at` is **the expiry instant, not the sweep instant**, and the
+    difference matters to whoever reads the notification: a sweeper running
+    on a thirty-second tick would otherwise report every departure as having
+    happened at a tick boundary, and "went offline 12:00:30" for somebody who
+    left at 12:00:03 is a fabrication the roster can easily avoid — it is
+    scoring exactly that instant.
+    """
+
+    player_id: UUID
+    lapsed_at: datetime

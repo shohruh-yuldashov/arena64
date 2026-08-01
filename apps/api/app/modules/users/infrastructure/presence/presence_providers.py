@@ -55,13 +55,14 @@ from redis.asyncio import Redis
 
 from app.config.settings import PresenceSettings
 from app.core.clock import Clock
-from app.modules.users.domain.presence import DeviceType, Presence
+from app.modules.users.domain.presence import DeviceType, LapsedPresence, Presence
 from app.modules.users.infrastructure.presence.keys import (
     FIELD_DEVICE_TYPE,
     FIELD_LAST_SEEN,
     FIELD_ONLINE,
     FIELD_SESSION_ID,
     presence_key,
+    roster_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -227,11 +228,7 @@ class RedisPresenceProvider:
 
         try:
             await asyncio.wait_for(
-                self._redis.set(
-                    presence_key(player_id),
-                    json.dumps(payload),
-                    px=self._settings.ttl_ms,
-                ),
+                self._write(player_id, payload, is_online=is_online),
                 timeout=self._settings.redis_timeout_ms / 1000,
             )
         except Exception as error:  # noqa: BLE001 — a lost observation is not a failure
@@ -242,6 +239,112 @@ class RedisPresenceProvider:
             logger.warning(
                 "presence_write_failed",
                 extra={"user_id": str(player_id), "error": type(error).__name__},
+                exc_info=error,
+            )
+
+    async def _write(self, player_id: UUID, payload: dict[str, Any], *, is_online: bool) -> None:
+        """The record and the roster entry, in one round trip — A64-013.8.
+
+        A pipeline rather than two awaits: the roster is written on every
+        observation, so a second round trip here would double the Redis cost
+        of the platform's most frequent write.
+
+        **The record is written first and the roster second**, and the order
+        is the failure model. The record is the fact; the roster is a derived
+        index whose only consumer is the sweeper. A pipeline that failed
+        after the `SET` leaves a player correctly online with no roster
+        entry — one missed *notification* when they leave, which is exactly
+        the pre-A64-013.8 behaviour. The reverse ordering would leave a
+        roster entry for a player who was never recorded, and the sweeper
+        would announce a departure that never happened.
+
+        `transaction=False`: these are two independent commands and neither
+        reads the other, so `MULTI`/`EXEC` would buy atomicity nothing needs
+        and cost a round trip's worth of blocking on the server.
+
+        The roster score is the **expiry instant in milliseconds**, which is
+        what makes `ZRANGEBYSCORE 0 now` mean "these windows have closed".
+        `ZADD` overwrites an existing member's score, so a refresh moves the
+        deadline rather than adding a duplicate — and an explicit offline
+        removes the member outright, because a player who said they were
+        leaving needs no sweeping.
+        """
+        pipeline = self._redis.pipeline(transaction=False)
+        pipeline.set(presence_key(player_id), json.dumps(payload), px=self._settings.ttl_ms)
+
+        if is_online:
+            expires_at_ms = _to_millis(self._clock.now()) + self._settings.ttl_ms
+            pipeline.zadd(roster_key(), {str(player_id): expires_at_ms})
+        else:
+            pipeline.zrem(roster_key(), str(player_id))
+
+        await pipeline.execute()
+
+    async def lapsed(self, *, now: datetime, limit: int) -> Sequence[LapsedPresence]:
+        """Players whose window closed and whom nothing observed leaving.
+
+        One `ZRANGEBYSCORE ... LIMIT 0 <limit>`, oldest lapse first, so a
+        backlog drains in deadline order rather than in whatever order Redis
+        happens to hold members.
+
+        **Bounded on every axis**: the command carries a limit, the set holds
+        one member per online player, and the caller ticks on a timer. There
+        is no arrangement in which this reads an unbounded amount
+        (CLAUDE.md §10.5).
+
+        Returns `()` rather than raising when Redis is unreachable — the
+        sweeper is a background job whose failure must not escalate, and the
+        entries are still there for the next tick. Logged at `WARNING`, not
+        `DEBUG`: unlike a presence read this one going quiet means departures
+        are silently not being announced.
+        """
+        try:
+            members = await asyncio.wait_for(
+                self._redis.zrangebyscore(
+                    roster_key(), min=0, max=_to_millis(now), start=0, num=limit, withscores=True
+                ),
+                timeout=self._settings.redis_timeout_ms / 1000,
+            )
+        except Exception as error:  # noqa: BLE001 — a background sweep must not escalate
+            logger.warning(
+                "presence_roster_read_failed",
+                extra={"error": type(error).__name__},
+                exc_info=error,
+            )
+            return ()
+
+        lapsed: list[LapsedPresence] = []
+        for member, score in members:
+            player_id = _parse_player_id(member)
+            if player_id is None:
+                # Something other than this code wrote the roster. Dropped
+                # rather than decoded, and the next `forget` cannot remove it
+                # because it never became a `UUID` — so it is logged, once
+                # per sweep, as the data-integrity event it is.
+                logger.warning("presence_roster_malformed")
+                continue
+            lapsed.append(LapsedPresence(player_id=player_id, lapsed_at=_from_millis(float(score))))
+        return lapsed
+
+    async def forget(self, player_ids: Sequence[UUID]) -> None:
+        """Drops these players from the roster. One `ZREM`, whatever the size.
+
+        Never raises: a member left behind is swept again next tick, and the
+        consumer's own idempotency is what makes that safe. See
+        `PresenceSweeper` on why this runs *after* the events are committed.
+        """
+        if not player_ids:
+            return
+
+        try:
+            await asyncio.wait_for(
+                self._redis.zrem(roster_key(), *[str(player_id) for player_id in player_ids]),
+                timeout=self._settings.redis_timeout_ms / 1000,
+            )
+        except Exception as error:  # noqa: BLE001 — a stale member is re-swept, not lost
+            logger.warning(
+                "presence_roster_forget_failed",
+                extra={"player_count": len(player_ids), "error": type(error).__name__},
                 exc_info=error,
             )
 
@@ -353,6 +456,17 @@ class NoPresenceProvider:
     ) -> None:
         return None
 
+    async def lapsed(self, *, now: datetime, limit: int) -> Sequence[LapsedPresence]:
+        """Nobody lapses, because nobody was ever recorded.
+
+        The sweeper therefore ticks and finds nothing, which is the correct
+        behaviour for a deployment with presence switched off — and is why
+        the sweeper needs no kill switch of its own."""
+        return ()
+
+    async def forget(self, player_ids: Sequence[UUID]) -> None:
+        return None
+
 
 def _parse_instant(value: object) -> datetime | None:
     """An ISO-8601 string -> a timezone-aware UTC instant, or `None`.
@@ -385,5 +499,36 @@ def _parse_device_type(value: object) -> DeviceType | None:
         return None
     try:
         return DeviceType(value)
+    except ValueError:
+        return None
+
+
+def _to_millis(instant: datetime) -> int:
+    """A UTC instant as epoch milliseconds — the roster's score type.
+
+    Milliseconds rather than seconds because `PRESENCE_TTL_SECONDS` is
+    expressed in `ttl_ms` internally and a sweep comparing a second-truncated
+    deadline against a millisecond one would sweep a player up to a second
+    early. Integers rather than floats because a score that carries sub-
+    millisecond noise makes two equal deadlines compare unequal.
+    """
+    return int(instant.timestamp() * 1000)
+
+
+def _from_millis(score: float) -> datetime:
+    """A roster score back to the instant it encodes, in UTC (DM-14)."""
+    return datetime.fromtimestamp(score / 1000, tz=UTC)
+
+
+def _parse_player_id(member: bytes | str) -> UUID | None:
+    """A roster member back to a player id, or `None` if it is not one.
+
+    Tolerant for the reason `_decode` is: the roster is a shared keyspace,
+    and the safe response to a value this code did not write is to ignore it
+    rather than to fail a sweep over it.
+    """
+    raw = member.decode() if isinstance(member, bytes) else member
+    try:
+        return UUID(raw)
     except ValueError:
         return None

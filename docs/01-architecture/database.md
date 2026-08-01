@@ -1169,6 +1169,55 @@ Three design consequences:
 which every projection is rebuilt. Its retention horizon is therefore a function of rebuild policy,
 not of the relay.
 
+### DB-18.1 — Outbox retention, cleanup and partitioning (A64-013.8)
+
+A64-013.7 built the outbox and left three operational questions open. The
+audit closes them **as decisions**, and deliberately implements none of them:
+there is no production volume, and a retention job written against a guess is
+a job that deletes the wrong rows on the day it first matters.
+
+**Retention: 90 days.** Long enough to rebuild any C5 projection from
+scratch, which is the only reason AD-17 keeps published rows at all —
+`player_statistics`, `head_to_head` and the leaderboard read models are all
+derived, and a rebuild reaches back as far as the events do. Short enough
+that the table stays a working set rather than an archive. **Nothing is
+retained for audit here:** `admin.audit_entry` is the audit trail, with its
+own retention set by policy, and conflating the two would put an engineering
+retention number in front of a compliance question.
+
+**Cleanup: partition detach, never `DELETE`.** A bulk delete on this relation
+would generate more dead tuples than the rows it removed and would leave the
+autovacuum debt behind — which is precisely the failure DB-18 designs against.
+The mechanism is:
+
+    detach the oldest partition -> drop it
+
+as one operation on a partition whose whole range is older than the horizon.
+It is O(1), it takes no row locks on live data, and it is reversible right up
+to the `DROP`.
+
+**Partitioning: range on `occurred_at`, monthly, when it is warranted.**
+
+| | |
+| --- | --- |
+| **Key** | `occurred_at` — already leads `ix_outbox__unpublished`, so the conversion is a table rewrite and not an index redesign |
+| **Granularity** | Monthly. Three to four live partitions at a 90-day horizon, which is few enough that planning stays cheap |
+| **Pre-creation** | At least two months ahead. A missing partition is an `INSERT` failure on the platform's hottest write path — the one operational hazard this scheme has, and the reason `system-design.md §9` already tracks "age of the newest pre-created partition" |
+| **Trigger to implement** | Sustained table size past a few million rows, **or** the first projection rebuild that needs a bounded scan. Not a date |
+
+**Why not now.** A partitioned table with one partition is operational weight
+— a creation job, a monitoring check, a runbook — bought before there is
+anything to weigh. What this build owes that future is the partition key
+leading every index, which it already does. Until then the table grows
+monotonically and its size is a graphed number, which is the honest state for
+a platform with no traffic.
+
+**`processed_event` follows the outbox.** Its rows are meaningless once the
+event they name is gone, so it is pruned on the same horizon — and it is
+partitioned only if it is ever partitioned *with* the outbox. It carries no
+foreign key to `outbox.id` precisely so that a detach cannot be blocked by a
+ledger row that outlived it.
+
 ---
 
 ## 11. Audit Fields, Soft Delete, and Row Lifecycle

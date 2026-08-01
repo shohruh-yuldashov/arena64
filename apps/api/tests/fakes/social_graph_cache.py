@@ -4,10 +4,11 @@ beneath it — A64-013.6.
 Two fakes at two levels, because two different things need proving.
 
     RecordingSocialGraphCache   a `SocialGraphCache` that stores in a dict
-                                and counts what was asked of it. What the
-                                *invalidation triggers* are tested against:
-                                the question is whether blocking drops the
-                                right keys, not how a delete reaches Redis.
+                                keyed by `(player, entry)` and counts what was
+                                asked of it. What the *invalidation triggers*
+                                are tested against: the question is whether
+                                blocking drops the right entries, not how a
+                                delete reaches Redis.
 
     FakeCacheRedis              `GET`, `SET ... EX` and `DEL`, in a dict.
                                 What `RedisSocialGraphCache` itself runs on,
@@ -29,6 +30,8 @@ mechanism is what A64-013.6 says must never leave stale state.
 from collections.abc import Sequence
 from uuid import UUID
 
+from app.modules.friends.application.ports import SocialGraphEntry
+
 
 class RecordingSocialGraphCache:
     """A working cache that also remembers what happened to it.
@@ -40,32 +43,33 @@ class RecordingSocialGraphCache:
     """
 
     def __init__(self) -> None:
-        self.entries: dict[str, frozenset[UUID]] = {}
-        self.reads: list[str] = []
-        self.writes: list[str] = []
+        self.entries: dict[tuple[UUID, SocialGraphEntry], frozenset[UUID]] = {}
+        self.reads: list[tuple[UUID, SocialGraphEntry]] = []
+        self.writes: list[tuple[UUID, SocialGraphEntry]] = []
         #: One entry per `invalidate` call, holding the players it named —
         #: so a test can assert both that it fired and who it covered.
         self.invalidations: list[tuple[UUID, ...]] = []
 
-    async def get_ids(self, key: str) -> frozenset[UUID] | None:
-        self.reads.append(key)
-        return self.entries.get(key)
+    async def get_ids(self, player_id: UUID, entry: SocialGraphEntry) -> frozenset[UUID] | None:
+        self.reads.append((player_id, entry))
+        return self.entries.get((player_id, entry))
 
-    async def put_ids(self, key: str, ids: frozenset[UUID]) -> None:
-        self.writes.append(key)
-        self.entries[key] = ids
+    async def put_ids(self, player_id: UUID, entry: SocialGraphEntry, ids: frozenset[UUID]) -> None:
+        self.writes.append((player_id, entry))
+        self.entries[(player_id, entry)] = ids
 
     async def invalidate(self, player_ids: Sequence[UUID]) -> None:
-        self.invalidations.append(tuple(player_ids))
-        # Imports the real key builder rather than reproducing the format:
-        # a fake that spelled the keyspace itself would keep passing after
-        # the real one changed, which is the failure this whole file exists
-        # to avoid.
-        from app.modules.friends.infrastructure.cache.keys import keys_for
+        """Drops **every** entry for each player, by iterating the enum.
 
+        Not a hand-written pair: `SocialGraphEntry` is the single source of
+        what the namespace holds since A64-013.8, so a third entry is dropped
+        here the moment it is declared — the same property `keys_for` gives
+        the real adapter.
+        """
+        self.invalidations.append(tuple(player_ids))
         for player_id in player_ids:
-            for key in keys_for(player_id):
-                self.entries.pop(key, None)
+            for entry in SocialGraphEntry:
+                self.entries.pop((player_id, entry), None)
 
 
 class FakeCacheRedis:

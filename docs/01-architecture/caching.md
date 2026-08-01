@@ -4,7 +4,7 @@
 > `friends:v1:` and Celery's. Sections marked *Not yet allocated* describe
 > workloads with no implementation.
 > **Owner:** Backend platform
-> **Last reviewed:** 2026-08-01 (A64-013.6)
+> **Last reviewed:** 2026-08-01 (A64-013.8 — full Redis audit, §8)
 
 ## Purpose
 
@@ -133,6 +133,42 @@ privacy flags the `users` module owns. `session_id` and `device_type` are
 recorded because the keyspace must have room for them from the first release —
 adding a field to a live keyspace means every key written before the change
 decodes short — and they reach no response schema.
+
+### 3.2a `presence:v1:roster` — who is due to lapse (A64-013.8)
+
+| | |
+| --- | --- |
+| **Owner** | `users` — `app/modules/users/infrastructure/presence/` |
+| **Instance** | `cache` |
+| **Structure** | Sorted set. Member = `player_id`, score = the millisecond that player's record expires |
+| **TTL** | **None on the key.** Members leave by explicit sign-out, by a sweep, or by being re-scored on the next observation |
+| **Written by** | `RedisPresenceProvider.record_presence`, in the same pipeline as the record |
+| **Read by** | `PresenceSweeper`, on a `PRESENCE_SWEEP_INTERVAL_SECONDS` tick |
+| **On failure** | The sweep is an idle tick; entries remain for the next one. Logged at `WARNING` |
+
+**Why it exists.** A64-013.7 shipped presence notifications with a hole it
+recorded openly: a player who closes the tab produces no `offline` event,
+because *nothing observes a key expiring*. An expired key cannot be scanned
+for — it is gone — so the only thing a sweeper can read is a record of who
+was **expected** to expire. That is this set.
+
+**Why a sorted set.** The score is the query. `ZRANGEBYSCORE roster 0 <now>
+LIMIT 0 <n>` returns exactly the closed windows, oldest first, in one
+command. A plain set would mean fetching every online player and testing each
+against Redis.
+
+**Why it is the one key here with no TTL, and why that is still bounded.** It
+holds one member per *currently online* player — bounded by concurrency, not
+by history. Members leave three ways, and the sweeper is the backstop for the
+third: a player who never returns is removed by the first sweep that sees
+them. The failure mode a TTL would guard against (unbounded growth) is
+therefore already closed by the consumer, and a TTL would instead delete the
+evidence a sweep needs.
+
+**Derived, and losing it costs a notification rather than a fact.** The
+per-player keys remain the record of who is online. This decides only who is
+*told* that somebody left, which is why its write is ordered after the
+record's and why neither raises.
 
 *Future expansion:* multiple devices per player. It does not fit this shape: it
 wants a key per session with the player's presence derived from the set of them,
@@ -343,6 +379,81 @@ it did before A64-013.6 — one query per social-graph read — so it is a
 legitimate configuration and not a stub. The alternative to a
 documented switch is somebody commenting out a dependency under pressure and
 forgetting to restore it.
+
+---
+
+## 8. Redis audit — A64-013.8
+
+The Social Platform epic is complete, so every keyspace it produces now
+exists and can be audited rather than predicted. This section is the one
+table an operator needs: **who owns each key, what expires it, how it grows,
+and what happens when it stops fitting.**
+
+### 8.1 Ownership and expiry
+
+| Keyspace | Owner | Instance | Expiry | Failure posture |
+| --- | --- | --- | --- | --- |
+| `rl:v1:<rule>:<digest>` | platform (`app/database/rate_limiter.py`) | `limits` | The rule's window, `PEXPIRE` inside the Lua | Fail **open** by default; `RATE_LIMIT_FAIL_OPEN=false` for `503` |
+| `presence:v1:<player_id>` | `users` | `cache` | `PRESENCE_TTL_SECONDS`, `SET … PX`, reset per write | Reads unknown, writes dropped and self-healing |
+| `presence:v1:roster` | `users` | `cache` | **None** — see §3.2a; bounded by the sweeper | Sweep is an idle tick; entries survive |
+| `friends:v1:friends:<player_id>` | `friends` | `cache` | `FRIENDS_CACHE_TTL_SECONDS` — a *backstop*, not the mechanism | Miss, then query |
+| `friends:v1:blocked:<player_id>` | `friends` | `cache` | Same | Miss, then query |
+| `celery-*` | Celery | `broker` | `result_expires` | Celery's |
+
+**Sessions are not in this table, and that is the finding.** `auth`'s refresh
+tokens and session rows live in **PostgreSQL** (`auth.user_session`), not in
+Redis — deliberately, because a session must be revocable and auditable, and
+an evicted session is a signed-in player thrown out at random. The only
+session-adjacent thing in Redis is the *rate limit* on the endpoints that
+issue them. Anybody looking for a session keyspace should stop looking.
+
+### 8.2 Growth expectations
+
+Sized against system-design.md's target concurrency rather than against
+registrations, because every keyspace here is keyed by *activity*.
+
+| Keyspace | Grows with | Bounded by | Rough size per unit |
+| --- | --- | --- | --- |
+| `rl:v1:` | Distinct (rule, actor) pairs **in the current window** | The shortest window, 60s for most rules | ~100 B per counter |
+| `presence:v1:<id>` | Concurrent players | `PRESENCE_TTL_SECONDS` after each leaves | ~150 B per online player |
+| `presence:v1:roster` | Concurrent players | The sweeper, then explicit sign-out | ~60 B per member |
+| `friends:v1:friends:` | Players **read** in the TTL window, not players who exist | `FRIENDS_CACHE_TTL_SECONDS` + invalidation | ~40 B per friend, per cached player |
+| `friends:v1:blocked:` | Same | Same | ~40 B per block |
+
+The one entry that is not self-limiting by count is `friends:v1:friends:` for
+a player with an unusually large friend list, and `blocked:` for one with a
+large block list — BL-4 already flags block capacity as an unset product
+decision. Neither is a problem at any plausible per-player number; both are
+the reason `blocked_ids_for` is documented as "unbounded today, bounded by
+design later" in `block_repository.py`.
+
+### 8.3 Future scaling — recorded, not implemented
+
+A64-013.8 introduces **no Redis micro-optimisation**, deliberately: nothing
+here has been measured under load, and an optimisation without a measurement
+is superstition (CLAUDE.md §10.1). What follows is what to reach for *when*
+there is a number.
+
+| Pressure | First move | Why not now |
+| --- | --- | --- |
+| `cache` instance under memory pressure | Split presence onto a sixth AD-03 role | Presence and the social graph have the same posture — derived, expendable, evictable — so they share correctly until one of them is large enough to evict the other |
+| Social-graph cache hit rate too low | Raise the TTL, not the entry count | The TTL is a backstop; raising it lengthens the window a *failed invalidation* is wrong for, which is a correctness trade and must be a decision |
+| Presence writes dominating the instance | `SET … GET` to collapse the transition read | Widens the published `PresenceRecorder` port for an optimisation nothing has measured — recorded since A64-013.7 |
+| Roster reads dominating a large fleet | Shard the roster by a player-id prefix | One `ZRANGEBYSCORE` with a `LIMIT` per sweeper tick is not a workload yet |
+| A second consumer needs the friend cache | Nothing — it is already a per-player set | The shape was chosen for exactly this: one key answers a page of any length |
+
+### 8.4 What the audit found, and what it did not
+
+**Found and fixed.** The social-graph cache port took a pre-built string key,
+which meant the *application* layer imported `infrastructure.cache.keys` to
+build one — a dependency pointing the wrong way (CLAUDE.md §3.1). The port
+now takes a `SocialGraphEntry`, and the keyspace is named in exactly one
+file. `keys_for` is a loop over that enum, so a third entry is invalidated
+the moment it is declared rather than when somebody remembers.
+
+**Found and accepted.** Nothing else. Every namespace has one owner, one
+instance, a documented expiry and a documented failure posture, and no key is
+written by more than one module.
 
 ---
 

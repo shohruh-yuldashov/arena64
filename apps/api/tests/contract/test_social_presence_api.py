@@ -17,9 +17,11 @@ provable from a unit test:
 
 The cache here is `RecordingSocialGraphCache` rather than the Redis adapter,
 and that is the same line `build_contract_app` draws everywhere else: Redis
-is infrastructure the test environment should not need, and *which* keys a
-trigger drops is a property of this code. The keys it asserts against are
-built by the real `keys` module, so a renamed key fails here too.
+is infrastructure the test environment should not need, and *which* entries
+a trigger drops is a property of this code. The entries it asserts against
+are `SocialGraphEntry` members, which is the vocabulary the port itself
+uses since A64-013.8 — so an entry added without an invalidation trigger
+fails here too.
 
 Skipped, not failed, when PostgreSQL is unreachable (see `conftest.py`).
 """
@@ -34,7 +36,7 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import PresenceSettings
-from app.modules.friends.infrastructure.cache.keys import blocked_ids_key, friend_ids_key
+from app.modules.friends.application.ports import SocialGraphEntry
 from app.modules.users.infrastructure.presence import RedisPresenceProvider
 from tests.contract.contract_app import build_contract_app, contract_client
 from tests.fakes.presence_redis import (
@@ -293,17 +295,17 @@ class TestCacheInvalidation:
         """
         client, fixtures = stack
         alice, bob = await register(client), await register(client)
-        fixtures.cache.entries[friend_ids_key(alice.id)] = frozenset()
-        fixtures.cache.entries[friend_ids_key(bob.id)] = frozenset()
+        fixtures.cache.entries[(alice.id, SocialGraphEntry.FRIENDS)] = frozenset()
+        fixtures.cache.entries[(bob.id, SocialGraphEntry.FRIENDS)] = frozenset()
 
         await befriend(client, alice, bob)
 
         assert set(fixtures.cache.invalidations[-1]) == {alice.id, bob.id}
-        assert fixtures.cache.entries.get(friend_ids_key(alice.id)) in (
+        assert fixtures.cache.entries.get((alice.id, SocialGraphEntry.FRIENDS)) in (
             None,
             frozenset({bob.id}),
         )
-        assert fixtures.cache.entries.get(friend_ids_key(bob.id)) in (
+        assert fixtures.cache.entries.get((bob.id, SocialGraphEntry.FRIENDS)) in (
             None,
             frozenset({alice.id}),
         )
@@ -349,14 +351,14 @@ class TestCacheInvalidation:
         client, fixtures = stack
         alice, bob = await register(client), await register(client)
         await befriend(client, alice, bob)
-        fixtures.cache.entries[friend_ids_key(alice.id)] = frozenset({bob.id})
-        fixtures.cache.entries[friend_ids_key(bob.id)] = frozenset({alice.id})
+        fixtures.cache.entries[(alice.id, SocialGraphEntry.FRIENDS)] = frozenset({bob.id})
+        fixtures.cache.entries[(bob.id, SocialGraphEntry.FRIENDS)] = frozenset({alice.id})
 
         removed = await client.delete(f"{FRIENDS_URL}/{bob.id}", headers=alice.auth)
         assert removed.status_code == 204, removed.text
 
-        assert friend_ids_key(alice.id) not in fixtures.cache.entries
-        assert friend_ids_key(bob.id) not in fixtures.cache.entries
+        assert (alice.id, SocialGraphEntry.FRIENDS) not in fixtures.cache.entries
+        assert (bob.id, SocialGraphEntry.FRIENDS) not in fixtures.cache.entries
 
     async def test_blocking_invalidates_both_players(
         self, stack: tuple[AsyncClient, _Fixtures]
@@ -367,8 +369,8 @@ class TestCacheInvalidation:
         alice, bob = await register(client), await register(client)
         await befriend(client, alice, bob)
         for player in (alice, bob):
-            fixtures.cache.entries[friend_ids_key(player.id)] = frozenset()
-            fixtures.cache.entries[blocked_ids_key(player.id)] = frozenset()
+            fixtures.cache.entries[(player.id, SocialGraphEntry.FRIENDS)] = frozenset()
+            fixtures.cache.entries[(player.id, SocialGraphEntry.BLOCKED)] = frozenset()
 
         blocked = await client.post(BLOCKS_URL, headers=alice.auth, json={"player_id": str(bob.id)})
         assert blocked.status_code == 201, blocked.text
@@ -385,14 +387,14 @@ class TestCacheInvalidation:
         alice, bob = await register(client), await register(client)
         blocked = await client.post(BLOCKS_URL, headers=alice.auth, json={"player_id": str(bob.id)})
         assert blocked.status_code == 201, blocked.text
-        fixtures.cache.entries[blocked_ids_key(alice.id)] = frozenset({bob.id})
-        fixtures.cache.entries[blocked_ids_key(bob.id)] = frozenset({alice.id})
+        fixtures.cache.entries[(alice.id, SocialGraphEntry.BLOCKED)] = frozenset({bob.id})
+        fixtures.cache.entries[(bob.id, SocialGraphEntry.BLOCKED)] = frozenset({alice.id})
 
         lifted = await client.delete(f"{BLOCKS_URL}/{bob.id}", headers=alice.auth)
         assert lifted.status_code == 204, lifted.text
 
-        assert blocked_ids_key(alice.id) not in fixtures.cache.entries
-        assert blocked_ids_key(bob.id) not in fixtures.cache.entries
+        assert (alice.id, SocialGraphEntry.BLOCKED) not in fixtures.cache.entries
+        assert (bob.id, SocialGraphEntry.BLOCKED) not in fixtures.cache.entries
 
     async def test_a_stale_block_set_cannot_outlive_the_unblock(
         self, stack: tuple[AsyncClient, _Fixtures]

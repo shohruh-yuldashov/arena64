@@ -26,13 +26,14 @@ online.
 """
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 if TYPE_CHECKING:
     from app.modules.users.public.edits import PreferenceEdits, PrivacyEdits, ProfileEdits
 
-from app.modules.users.domain.presence import DeviceType, Presence
+from app.modules.users.domain.presence import DeviceType, LapsedPresence, Presence
 from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import (
     AvatarReference,
@@ -759,6 +760,55 @@ class PresenceProvider(Protocol):
         the ordinary result of a search nobody matches, and issuing a
         zero-key `MGET` to learn nothing is a round trip spent on the most
         common failed query.
+        """
+        ...
+
+
+class PresenceRoster(Protocol):
+    """Who is due to lapse, and forgetting them once they have — A64-013.8.
+
+    A **third** presence port rather than two more methods on
+    `PresenceRecorder`, and the separation is the point: A64-013.8 says "do
+    not redesign `PresenceRecorder`", and more importantly a recorder is held
+    by the sign-in path while this is held by a background sweeper. Two
+    capabilities, two ports, so neither caller can reach the other's.
+
+    Satisfied by the same `RedisPresenceProvider` object that satisfies the
+    other two — one keyspace, one adapter, three narrow views of it.
+
+    ## What problem this exists for
+
+    A player who closes the tab produces no observation. Their record lapses
+    on its own (which is correct, and is the whole liveness design), but
+    nothing emits the `offline` transition, so anybody subscribed to presence
+    is told they are still there until the client reconnects and leaves
+    again. A64-013.7 recorded that gap; this port closes it.
+
+    An expired key cannot be found by scanning, so the roster is a *separate*
+    record of who is expected to lapse and when — see
+    `infrastructure.presence.keys.roster_key`.
+    """
+
+    async def lapsed(self, *, now: datetime, limit: int) -> Sequence[LapsedPresence]:
+        """Players whose window closed, oldest first, at most `limit` of them.
+
+        **Never raises.** A sweeper is a background job; an unreachable store
+        means "nothing to do this tick", and the entries are still there for
+        the next one.
+
+        The result may be *stale by a moment*: a player can sign in between
+        this read and whatever the caller does with it. The caller is
+        responsible for re-checking, which `PresenceSweeper` does with one
+        batched `presence_for_many`.
+        """
+        ...
+
+    async def forget(self, player_ids: Sequence[UUID]) -> None:
+        """Drops these players from the roster.
+
+        Never raises. A member left behind is swept again on the next tick,
+        which is why the caller may call this *after* it has committed
+        whatever it did about them.
         """
         ...
 

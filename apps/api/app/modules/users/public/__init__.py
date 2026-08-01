@@ -33,6 +33,12 @@ What is published, and why only this much:
                          representation rather than two
   `UserSearchQuery`      that port's input, including the exclusion set
                          blocking will fill
+  `SearchTerm`           the value object that decides whether a raw term is
+                         searchable at all — published by A64-013.8 because
+                         `profiles` was reaching into `users.domain` for it.
+                         The rules belong to `users`, which owns handles;
+                         the caller that parses is whoever received the
+                         request
   `UserSearchPage`       that port's output: ranked identities and a cursor
   `AvatarStore`          reads and writes the avatar *reference* — never
                          image data (A64-012.2)
@@ -54,6 +60,12 @@ What is published, and why only this much:
   `PresenceOffline`      through the outbox (A64-013.7). Emitted on
                          transitions only — a token refresh by a player who
                          was already online is not an event
+  `PresenceRoster`       who is due to lapse, and forgetting them once they
+                         have (A64-013.8). Held only by the presence sweeper,
+                         which is what closes the "nobody observes an expiry"
+                         gap A64-013.7 left open
+  `LapsedPresence`       that port's record — a player and the instant their
+                         window closed
   `PresenceRecorder`     writes what was observed of a player. Held only by
                          `PresenceService`, which `auth`'s lifecycle routes
                          resolve (A64-013.6) — and by AD-09's gateway when
@@ -128,7 +140,8 @@ from app.modules.users.domain.preferences import (
     BoardTheme,
     PieceSet,
 )
-from app.modules.users.domain.presence import DeviceType, Presence
+from app.modules.users.domain.presence import DeviceType, LapsedPresence, Presence
+from app.modules.users.domain.search import SearchTerm
 from app.modules.users.domain.visibility import ViewerRelationship, VisibilityLevel
 from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import (
@@ -158,6 +171,7 @@ from app.modules.users.public.ports import (
     PreferencesEditor,
     PresenceProvider,
     PresenceRecorder,
+    PresenceRoster,
     PrivacySettingsEditor,
     ProfileEditor,
     PublicProfileReader,
@@ -210,13 +224,16 @@ __all__ = [
     "Presence",
     "PresenceOffline",
     "PresenceOnline",
+    "LapsedPresence",
     "PresenceProvider",
     "PresenceRecorder",
+    "PresenceRoster",
     "PrivacyEdits",
     "PrivacySettingsEditor",
     "PrivacySettingsView",
     "ProfileVisibility",
     "PublicProfileReader",
+    "SearchTerm",
     "PublicProfileSearcher",
     "PublicUserProfile",
     "UserSearchPage",

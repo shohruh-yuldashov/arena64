@@ -15,6 +15,7 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exception_handlers import register_exception_handlers
 from app.api.router import api_router
@@ -27,11 +28,36 @@ from app.core.constants import API_PREFIX
 from app.database.rate_limiter import RedisRateLimiter
 from app.database.redis import RedisPools, create_redis_pools
 from app.database.session_manager import DatabaseSessionManager
+from app.database.unit_of_work import SessionUnitOfWork
+from app.modules.friends.application.ports import SocialGraphCache
+from app.modules.friends.infrastructure.cache import (
+    NoSocialGraphCache,
+    RedisSocialGraphCache,
+)
+from app.modules.notifications.application.services import (
+    CONSUMER_NAME,
+    SUBSCRIBED_EVENT_TYPES,
+    SocialNotificationDispatcher,
+)
+from app.modules.notifications.application.services.presence_sweeper import PresenceSweeper
 from app.modules.notifications.infrastructure import (
     LoggingNotificationSink,
+    PresenceSweeperWorker,
     SessionScopedNotificationHandler,
 )
-from app.platform.outbox import OutboxWorker
+from app.modules.notifications.presentation.dependencies import (
+    build_social_notification_dispatcher,
+)
+from app.modules.profiles.presentation.dependencies import build_profile_renderer
+from app.modules.users.infrastructure.presence import (
+    NoPresenceProvider,
+    RedisPresenceProvider,
+)
+from app.platform.outbox import (
+    OutboxEventPublisher,
+    OutboxWorker,
+    SqlAlchemyOutboxRepository,
+)
 from app.storage import LocalStorageProvider
 
 logger = logging.getLogger(__name__)
@@ -233,15 +259,49 @@ def build_outbox_worker(
         return None
 
     clock = SystemClock()
+
+    # `LoggingNotificationSink` is the terminal adapter until AD-09's gateway
+    # exists — A64-013.7 excludes every delivery channel. See that class on
+    # why it is a seam rather than a stub.
+    sink = LoggingNotificationSink()
+
+    def dispatcher_for(session: AsyncSession) -> SocialNotificationDispatcher:
+        """The consumer, over one relay tick's session.
+
+        A closure defined here rather than a method on the handler, because
+        this is the **only** place permitted to name three modules' concrete
+        classes at once (BR-6: a module must not reach for the container; the
+        root wiring modules together is the root's job). A64-013.8 moved it
+        out of `notifications.infrastructure`, where it was three boundary
+        violations that an import contract then caught.
+
+        The cache is built per call and shared by the dispatcher's graph
+        reader and its profile renderer, so a block set read while resolving
+        an audience and one read while rendering are the same read.
+        """
+        cache: SocialGraphCache = (
+            RedisSocialGraphCache(redis_pools.cache, settings=settings.friends)
+            if settings.friends.cache_enabled
+            else NoSocialGraphCache()
+        )
+        return build_social_notification_dispatcher(
+            session,
+            cache=cache,
+            profiles=build_profile_renderer(
+                session,
+                pools=redis_pools,
+                settings=settings,
+                cache=cache,
+                clock=clock,
+            ),
+            sink=sink,
+        )
+
     handler = SessionScopedNotificationHandler(
         session_factory=db.session_factory,
-        pools=redis_pools,
-        settings=settings,
-        clock=clock,
-        # `LoggingNotificationSink` is the terminal adapter until AD-09's
-        # gateway exists — A64-013.7 excludes every delivery channel. See
-        # that class on why it is a seam rather than a stub.
-        sink=LoggingNotificationSink(),
+        dispatcher_factory=dispatcher_for,
+        consumer=CONSUMER_NAME,
+        event_types=SUBSCRIBED_EVENT_TYPES,
     )
     return OutboxWorker(
         session_factory=db.session_factory,
@@ -253,6 +313,61 @@ def build_outbox_worker(
         settings=settings.outbox,
         clock=clock,
     )
+
+
+def build_presence_sweeper(
+    db: DatabaseSessionManager, redis_pools: RedisPools, settings: Settings
+) -> PresenceSweeperWorker | None:
+    """The presence sweeper for this process, or `None` if it does not run one.
+
+    Closes the gap A64-013.7 recorded: a player whose window expires
+    unobserved produces no `PresenceOffline`, so friends see them online
+    until they come back and leave again. See `PresenceSweeper`.
+
+    Assembled here for the same reason the relay's handler is: it composes
+    `users`' presence adapter with the platform outbox, and composing across
+    that line is the composition root's job.
+
+    The **same `RedisPresenceProvider` instance** satisfies the roster and the
+    reader, which is not incidental — the sweeper's re-check ("is this player
+    back?") is only meaningful if it reads the store the roster describes.
+    """
+    if not settings.presence.sweeper_enabled:
+        return None
+
+    clock = SystemClock()
+
+    def sweeper_for(session: AsyncSession) -> PresenceSweeper:
+        presence = _presence_adapter(redis_pools, settings, clock)
+        return PresenceSweeper(
+            roster=presence,
+            presence=presence,
+            events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
+            unit_of_work=SessionUnitOfWork(session),
+            clock=clock,
+            batch_size=settings.presence.sweep_batch_size,
+        )
+
+    return PresenceSweeperWorker(
+        session_factory=db.session_factory,
+        sweeper_factory=sweeper_for,
+        interval_seconds=settings.presence.sweep_interval_seconds,
+    )
+
+
+def _presence_adapter(
+    redis_pools: RedisPools, settings: Settings, clock: SystemClock
+) -> RedisPresenceProvider | NoPresenceProvider:
+    """The presence store this process talks to.
+
+    Branches on `PRESENCE_ENABLED` exactly as every other presence factory
+    does. With presence off the sweeper reads an always-empty roster and
+    ticks harmlessly — which is why the sweeper needs no kill switch for
+    *that* condition, only for "does this process run it".
+    """
+    if not settings.presence.enabled:
+        return NoPresenceProvider()
+    return RedisPresenceProvider(redis_pools.cache, settings=settings.presence, clock=clock)
 
 
 @asynccontextmanager
@@ -324,11 +439,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("outbox_worker_disabled", extra={"reason": "configuration"})
     app.state.outbox_worker = outbox_worker
 
+    # A64-013.8. The presence sweeper, started beside the relay and stopped
+    # before it: the sweeper *produces* events the relay consumes, so on the
+    # way down the producer is quiesced first and the relay is given a final
+    # tick's worth of time to drain what it already claimed.
+    presence_sweeper = build_presence_sweeper(db, redis_pools, settings)
+    if presence_sweeper is not None:
+        await presence_sweeper.start()
+    else:
+        logger.info("presence_sweeper_disabled", extra={"reason": "configuration"})
+    app.state.presence_sweeper = presence_sweeper
+
     logger.info("startup_complete")
     try:
         yield
     finally:
         logger.info("shutdown_begin")
+        if presence_sweeper is not None:
+            await presence_sweeper.stop()
         if outbox_worker is not None:
             await outbox_worker.stop()
         await redis_pools.aclose()

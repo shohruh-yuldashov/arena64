@@ -30,6 +30,7 @@ import pytest
 from redis.asyncio import Redis
 
 from app.config.settings import FriendsSettings
+from app.modules.friends.application.ports import SocialGraphEntry
 from app.modules.friends.application.services.cached_social_graph_reader import (
     CachedSocialGraphReader,
 )
@@ -40,8 +41,7 @@ from app.modules.friends.infrastructure.cache import (
     KEY_VERSION,
     NoSocialGraphCache,
     RedisSocialGraphCache,
-    blocked_ids_key,
-    friend_ids_key,
+    key_for,
     keys_for,
 )
 from tests.fakes.social_graph_cache import (
@@ -132,10 +132,20 @@ class TestTheKeyspace:
         """Friends and blocks are different sets about the same player, and
         one key holding either would be the worst cache bug available: a
         block list served as a friend list."""
-        assert friend_ids_key(VIEWER) != blocked_ids_key(VIEWER)
+        assert key_for(VIEWER, SocialGraphEntry.FRIENDS) != key_for(
+            VIEWER, SocialGraphEntry.BLOCKED
+        )
 
     def test_a_key_is_per_player(self) -> None:
-        assert friend_ids_key(VIEWER) != friend_ids_key(STRANGER)
+        entry = SocialGraphEntry.FRIENDS
+        assert key_for(VIEWER, entry) != key_for(STRANGER, entry)
+
+    def test_every_declared_entry_has_a_key(self) -> None:
+        """A64-013.8: `SocialGraphEntry` is the single source of what the
+        namespace holds, so a member added without a key would be a cache
+        entry nothing could ever store — and, worse, nothing would
+        invalidate."""
+        assert {key_for(VIEWER, entry) for entry in SocialGraphEntry} == set(keys_for(VIEWER))
 
     def test_keys_for_names_every_entry_in_the_namespace(self) -> None:
         """The invalidation contract, structurally.
@@ -145,7 +155,10 @@ class TestTheKeyspace:
         — stale for a whole TTL, and invisible until somebody noticed a
         removed friend still listed.
         """
-        assert set(keys_for(VIEWER)) == {friend_ids_key(VIEWER), blocked_ids_key(VIEWER)}
+        assert set(keys_for(VIEWER)) == {
+            key_for(VIEWER, SocialGraphEntry.FRIENDS),
+            key_for(VIEWER, SocialGraphEntry.BLOCKED),
+        }
 
 
 class TestTheRedisAdapter:
@@ -158,9 +171,10 @@ class TestTheRedisAdapter:
         return RedisSocialGraphCache(cast(Redis, redis), settings=FriendsSettings())
 
     async def test_a_stored_set_reads_back_whole(self, adapter: RedisSocialGraphCache) -> None:
-        await adapter.put_ids(friend_ids_key(VIEWER), frozenset({FRIEND, STRANGER}))
+        await adapter.put_ids(VIEWER, SocialGraphEntry.FRIENDS, frozenset({FRIEND, STRANGER}))
 
-        assert await adapter.get_ids(friend_ids_key(VIEWER)) == frozenset({FRIEND, STRANGER})
+        cached = await adapter.get_ids(VIEWER, SocialGraphEntry.FRIENDS)
+        assert cached == frozenset({FRIEND, STRANGER})
 
     async def test_an_empty_set_is_a_hit_and_not_a_miss(
         self, adapter: RedisSocialGraphCache
@@ -172,12 +186,12 @@ class TestTheRedisAdapter:
         same thing, and those players would miss on every single read —
         the cache would be off for exactly the majority case.
         """
-        await adapter.put_ids(friend_ids_key(VIEWER), frozenset())
+        await adapter.put_ids(VIEWER, SocialGraphEntry.FRIENDS, frozenset())
 
-        assert await adapter.get_ids(friend_ids_key(VIEWER)) == frozenset()
+        assert await adapter.get_ids(VIEWER, SocialGraphEntry.FRIENDS) == frozenset()
 
     async def test_an_absent_key_misses(self, adapter: RedisSocialGraphCache) -> None:
-        assert await adapter.get_ids(friend_ids_key(VIEWER)) is None
+        assert await adapter.get_ids(VIEWER, SocialGraphEntry.FRIENDS) is None
 
     async def test_nothing_is_ever_stored_without_an_expiry(
         self, adapter: RedisSocialGraphCache, redis: FakeCacheRedis
@@ -185,9 +199,10 @@ class TestTheRedisAdapter:
         """The TTL is the backstop for invalidation failing (caching.md
         C-3). A key written without one would be stale forever if a trigger
         ever missed it, which is the failure the backstop exists for."""
-        await adapter.put_ids(blocked_ids_key(VIEWER), frozenset({BLOCKED}))
+        await adapter.put_ids(VIEWER, SocialGraphEntry.BLOCKED, frozenset({BLOCKED}))
 
-        assert redis.expiries[blocked_ids_key(VIEWER)] == FriendsSettings().cache_ttl_seconds
+        key = key_for(VIEWER, SocialGraphEntry.BLOCKED)
+        assert redis.expiries[key] == FriendsSettings().cache_ttl_seconds
 
     async def test_invalidating_a_player_drops_both_of_their_entries(
         self, adapter: RedisSocialGraphCache
@@ -198,13 +213,13 @@ class TestTheRedisAdapter:
         invalidation that dropped only the entry its trigger was named after
         would leave the other stale.
         """
-        await adapter.put_ids(friend_ids_key(VIEWER), frozenset({FRIEND}))
-        await adapter.put_ids(blocked_ids_key(VIEWER), frozenset({BLOCKED}))
+        await adapter.put_ids(VIEWER, SocialGraphEntry.FRIENDS, frozenset({FRIEND}))
+        await adapter.put_ids(VIEWER, SocialGraphEntry.BLOCKED, frozenset({BLOCKED}))
 
         await adapter.invalidate([VIEWER])
 
-        assert await adapter.get_ids(friend_ids_key(VIEWER)) is None
-        assert await adapter.get_ids(blocked_ids_key(VIEWER)) is None
+        assert await adapter.get_ids(VIEWER, SocialGraphEntry.FRIENDS) is None
+        assert await adapter.get_ids(VIEWER, SocialGraphEntry.BLOCKED) is None
 
     async def test_invalidating_a_pair_drops_both_players(
         self, adapter: RedisSocialGraphCache
@@ -212,13 +227,13 @@ class TestTheRedisAdapter:
         """A friendship and a block are facts about a pair, so both sides
         are dropped — a viewer whose own entry survived would still see the
         friend they just removed."""
-        await adapter.put_ids(friend_ids_key(VIEWER), frozenset({FRIEND}))
-        await adapter.put_ids(friend_ids_key(FRIEND), frozenset({VIEWER}))
+        await adapter.put_ids(VIEWER, SocialGraphEntry.FRIENDS, frozenset({FRIEND}))
+        await adapter.put_ids(FRIEND, SocialGraphEntry.FRIENDS, frozenset({VIEWER}))
 
         await adapter.invalidate([VIEWER, FRIEND])
 
-        assert await adapter.get_ids(friend_ids_key(VIEWER)) is None
-        assert await adapter.get_ids(friend_ids_key(FRIEND)) is None
+        assert await adapter.get_ids(VIEWER, SocialGraphEntry.FRIENDS) is None
+        assert await adapter.get_ids(FRIEND, SocialGraphEntry.FRIENDS) is None
 
     async def test_invalidating_nobody_issues_no_command(
         self, adapter: RedisSocialGraphCache, redis: FakeCacheRedis
@@ -238,7 +253,7 @@ class TestTheRedisAdapter:
             cast(Redis, UnreachableCacheRedis()), settings=FriendsSettings()
         )
 
-        assert await adapter.get_ids(friend_ids_key(VIEWER)) is None
+        assert await adapter.get_ids(VIEWER, SocialGraphEntry.FRIENDS) is None
 
     async def test_an_unreachable_cache_swallows_writes_and_invalidations(self) -> None:
         """The invalidation failure is logged at `ERROR` and still does not
@@ -248,7 +263,7 @@ class TestTheRedisAdapter:
             cast(Redis, UnreachableCacheRedis()), settings=FriendsSettings()
         )
 
-        await adapter.put_ids(friend_ids_key(VIEWER), frozenset({FRIEND}))
+        await adapter.put_ids(VIEWER, SocialGraphEntry.FRIENDS, frozenset({FRIEND}))
         await adapter.invalidate([VIEWER, FRIEND])
 
     async def test_a_malformed_value_is_ignored_rather_than_decoded(
@@ -256,16 +271,16 @@ class TestTheRedisAdapter:
     ) -> None:
         """Something other than this code wrote the key. The safe answer is
         to miss, not to decode half a social graph."""
-        redis.values[friend_ids_key(VIEWER)] = "{not json"
+        redis.values[key_for(VIEWER, SocialGraphEntry.FRIENDS)] = "{not json"
 
-        assert await adapter.get_ids(friend_ids_key(VIEWER)) is None
+        assert await adapter.get_ids(VIEWER, SocialGraphEntry.FRIENDS) is None
 
     async def test_a_value_holding_something_that_is_not_an_id_misses(
         self, adapter: RedisSocialGraphCache, redis: FakeCacheRedis
     ) -> None:
-        redis.values[friend_ids_key(VIEWER)] = '["not-a-uuid"]'
+        redis.values[key_for(VIEWER, SocialGraphEntry.FRIENDS)] = '["not-a-uuid"]'
 
-        assert await adapter.get_ids(friend_ids_key(VIEWER)) is None
+        assert await adapter.get_ids(VIEWER, SocialGraphEntry.FRIENDS) is None
 
 
 class TestTheCachedReader:

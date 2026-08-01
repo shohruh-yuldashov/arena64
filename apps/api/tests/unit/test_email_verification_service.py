@@ -26,7 +26,7 @@ from app.modules.auth.application.services import (
     OpaqueTokenService,
 )
 from app.modules.auth.domain.exceptions import InvalidVerificationToken
-from app.modules.users.public import UserRead
+from app.modules.users.public import AvatarReference, UserRead
 from tests.fakes.verification_token_repository import FakeVerificationTokenRepository
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
@@ -70,7 +70,7 @@ def account(*, is_verified: bool = False) -> UserRead:
         username="player_one",
         email=EMAIL,
         display_name=None,
-        avatar_url=None,
+        avatar=AvatarReference(object_key=None, version=1, uploaded_at=None),
         preferred_language=Locale.EN,
         timezone="UTC",
         is_active=True,

@@ -103,6 +103,7 @@ class TestSuccessfulLookup:
             "username",
             "display_name",
             "avatar_url",
+            "thumbnail_url",
             "country",
             "language",
             "bio",

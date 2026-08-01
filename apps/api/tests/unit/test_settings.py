@@ -18,6 +18,7 @@ from app.config.settings import (
     RedisSettings,
     SessionSettings,
     Settings,
+    StorageSettings,
     get_settings,
 )
 
@@ -89,6 +90,7 @@ class TestSettings:
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             session=SessionSettings(),
             email=EmailSettings(),
+            storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
         )
         assert settings.environment is Environment.TEST
@@ -113,6 +115,7 @@ class TestSettings:
                 jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
                 session=SessionSettings(),
                 email=EmailSettings(),
+                storage=StorageSettings(),
                 rate_limit=RateLimitSettings(),
             )
 
@@ -129,6 +132,7 @@ class TestSettings:
                 jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
                 session=SessionSettings(),
                 email=EmailSettings(),
+                storage=StorageSettings(),
                 rate_limit=RateLimitSettings(),
             )
 
@@ -150,6 +154,7 @@ class TestSettings:
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             session=SessionSettings(),
             email=EmailSettings(),
+            storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
         )
         assert settings.environment is Environment.PRODUCTION
@@ -164,6 +169,7 @@ class TestSettings:
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             session=SessionSettings(),
             email=EmailSettings(),
+            storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
         )
         with pytest.raises(PydanticValidationError):
@@ -268,6 +274,7 @@ class TestJWTProductionGuard:
             auth=AuthSettings(),
             session=SessionSettings(),
             email=EmailSettings(),
+            storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             jwt=JWTSettings(**jwt_overrides),  # type: ignore[arg-type]
         )
@@ -296,6 +303,7 @@ class TestJWTProductionGuard:
             auth=AuthSettings(),
             session=SessionSettings(),
             email=EmailSettings(),
+            storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             jwt=JWTSettings(),
         )

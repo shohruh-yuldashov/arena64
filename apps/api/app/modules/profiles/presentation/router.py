@@ -41,6 +41,7 @@ from fastapi import APIRouter, Path, status
 from app.api.exception_handlers import ErrorResponse
 from app.api.responses import build_response
 from app.core.responses import ApiResponse
+from app.modules.avatars.presentation.dependencies import AvatarLinkBuilderDep
 from app.modules.profiles.presentation.dependencies import ProfileServiceDep
 from app.modules.profiles.presentation.schemas import ProfileResponse
 from app.modules.users.domain.validators import USERNAME_MAX_LENGTH, USERNAME_MIN_LENGTH
@@ -91,6 +92,7 @@ async def get_profile(
         ),
     ],
     service: ProfileServiceDep,
+    avatar_links: AvatarLinkBuilderDep,
 ) -> ApiResponse[ProfileResponse]:
     """Returns the public profile of the player holding `username`.
 
@@ -135,4 +137,10 @@ async def get_profile(
     to accept a challenge (domain-model.md PR-6).
     """
     profile = await service.get_public_profile(username)
-    return build_response(ProfileResponse.of(profile))
+
+    # The avatar URL is composed here, at the edge, from the reference the
+    # profile carries — see `ProfileResponse.of` on why the schema is
+    # handed links rather than a provider.
+    return build_response(
+        ProfileResponse.of(profile, avatar_links.links_for(profile.identity.avatar))
+    )

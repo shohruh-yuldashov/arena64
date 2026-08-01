@@ -27,6 +27,10 @@ What is published, and why only this much:
                          else — not even read one (A64-011.7)
   `PublicProfileReader`  reads the view a *stranger* may see, by username
                          (A64-012.1)
+  `AvatarStore`          reads and writes the avatar *reference* — never
+                         image data (A64-012.2)
+  `AvatarReference`      an object key, a version and a timestamp. No URL:
+                         composing one is `StorageProvider`'s
   `PublicUserProfile`    that port's output — deliberately has no `email`
                          field, so the module serving anonymous traffic
                          cannot leak one
@@ -52,8 +56,14 @@ from app.modules.users.domain.exceptions import (
     UserNotFound,
 )
 from app.modules.users.public.credentials import UserCredentials
-from app.modules.users.public.dtos import PublicUserProfile, UserRead, UserSummary
+from app.modules.users.public.dtos import (
+    AvatarReference,
+    PublicUserProfile,
+    UserRead,
+    UserSummary,
+)
 from app.modules.users.public.ports import (
+    AvatarStore,
     EmailVerifier,
     NewUserAccount,
     PasswordResetter,
@@ -70,6 +80,8 @@ from app.modules.users.public.ports import (
 type UserId = UUID
 
 __all__ = [
+    "AvatarReference",
+    "AvatarStore",
     "EmailAlreadyExists",
     "EmailVerifier",
     "InvalidEmail",

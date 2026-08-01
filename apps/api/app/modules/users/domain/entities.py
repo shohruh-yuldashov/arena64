@@ -54,7 +54,40 @@ class User:
     created_at: datetime
     updated_at: datetime | None = None
     display_name: str | None = None
-    avatar_url: str | None = None
+
+    # --- avatar (A64-012.2) -------------------------------------------------
+    # database.md §4.6: "`avatar_object_key` | `text` | Object-storage key,
+    # not a URL". A64-010 stored a full `avatar_url`; that column is gone.
+    #
+    # A URL bakes the CDN hostname, the bucket and the URL scheme into every
+    # row, so changing provider or putting a CDN in front becomes a data
+    # migration over the whole table. A key is the object's address and
+    # nothing else — `StorageProvider.get_public_url` composes the rest at
+    # render time.
+    avatar_object_key: str | None = None
+    """The stored object, or `None` when the player has no avatar."""
+
+    avatar_uploaded_at: datetime | None = None
+    """When the current avatar was stored. `None` exactly when
+    `avatar_object_key` is: the two are set and cleared together by
+    `set_avatar` and `clear_avatar`, which are the only writers."""
+
+    avatar_version: int = 1
+    """A cache-buster, **not** a count of avatars.
+
+    Starts at 1 and increments on every successful upload *and* on every
+    delete. Rendered into the avatar URL, so a replaced avatar is a
+    different URL and any browser or CDN holding the old one still fetches
+    the new.
+
+    That is what makes a long cache lifetime safe on an avatar: the object
+    key is random and immutable, and this is the second lock for any
+    intermediary that keyed on something else.
+
+    Deliberately not a timestamp. `avatar_uploaded_at` already is one, and
+    a counter that is monotonic per user stays legible in a URL and cannot
+    go backwards if a clock does.
+    """
 
     # Presentational identity — domain-model.md §7: `UserProfile` owns
     # "display name, avatar reference, country, biography, join date".
@@ -92,7 +125,6 @@ class User:
         timezone: Timezone,
         created_at: datetime,
         display_name: str | None = None,
-        avatar_url: str | None = None,
     ) -> "User":
         """Builds a new, never-persisted user.
 
@@ -125,8 +157,54 @@ class User:
             created_at=created_at,
             updated_at=None,
             display_name=display_name,
-            avatar_url=avatar_url,
         )
+
+    # --- avatar transitions --------------------------------------------------
+    #
+    # Both live on the entity rather than in a service because they enforce
+    # one invariant between three columns: the key, its timestamp and the
+    # version move together or not at all. A service setting them
+    # individually is how a row ends up with a key and no timestamp, or a
+    # cleared key whose version never changed — the second of which is a
+    # deleted avatar that every cache keeps serving.
+
+    def set_avatar(self, object_key: str, *, at: datetime) -> None:
+        """Points the account at a newly stored object.
+
+        Does **not** delete whatever was there before — this entity has no
+        access to storage, and mixing a persistence-layer decision into a
+        domain transition is how the two get out of order. Removing the
+        previous object is `AvatarService.upload`'s, which does it only
+        after this write has committed. See that method on why that
+        ordering is the one that cannot orphan a file.
+
+        `at` is a parameter rather than a clock read: AD-07 forbids the
+        domain from reading the clock.
+        """
+        self.avatar_object_key = object_key
+        self.avatar_uploaded_at = at
+        self.avatar_version += 1
+
+    def clear_avatar(self) -> None:
+        """Removes the reference and busts every cache holding the old one.
+
+        Increments the version *because* it is a removal, which is the
+        non-obvious half: a client or CDN that cached the previous URL has
+        no other signal that it should stop. Without the increment, a
+        deleted avatar keeps rendering for as long as anything holds it.
+
+        Idempotent in effect but not in the version: clearing twice bumps
+        twice. That is correct — the version is a cache key, not a count,
+        and a spurious bump costs one refetch while a missed one costs
+        correctness.
+        """
+        self.avatar_object_key = None
+        self.avatar_uploaded_at = None
+        self.avatar_version += 1
+
+    @property
+    def has_avatar(self) -> bool:
+        return self.avatar_object_key is not None
 
     @property
     def effective_display_name(self) -> str:

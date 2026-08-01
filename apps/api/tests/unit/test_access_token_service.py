@@ -24,7 +24,7 @@ from app.modules.auth.application.services import (
 from app.modules.auth.domain.exceptions import ExpiredToken, InvalidToken
 from app.modules.auth.domain.tokens import TokenType
 from app.modules.auth.infrastructure import JwtTokenProvider
-from app.modules.users.public import UserRead
+from app.modules.users.public import AvatarReference, UserRead
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 USER_ID = UUID("019fb9ea-0a0c-7cec-9c5f-402727c31a96")
@@ -73,7 +73,11 @@ def account() -> UserRead:
         username="player_one",
         email=EMAIL,
         display_name="Player One",
-        avatar_url="https://cdn.example.com/a.png",
+        avatar=AvatarReference(
+            object_key="avatars/019fb9ea-0a0c-7cec-9c5f-402727c31a96/abc.webp",
+            version=2,
+            uploaded_at=NOW,
+        ),
         preferred_language=Locale.EN,
         timezone="UTC",
         is_active=True,

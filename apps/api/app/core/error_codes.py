@@ -161,3 +161,11 @@ class ErrorCode(StrEnum):
     # enum growing a member per exception class; one member per credential
     # *kind* is not that failure mode.
     INVALID_RESET_TOKEN = "invalid_reset_token"
+
+    # `avatars` (A64-012.2). **One** code, for the one avatar rejection a
+    # client can act on without human choice: an oversized file can be
+    # re-encoded and retried automatically, where "not a supported format"
+    # and "not a decodable image" both mean *ask the person for a different
+    # file*. Those two share the generic `validation_error`, which the
+    # message qualifies.
+    AVATAR_TOO_LARGE = "avatar_too_large"

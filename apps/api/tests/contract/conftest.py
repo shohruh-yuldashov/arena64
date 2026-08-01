@@ -17,6 +17,7 @@ anything between tests.
 
 import os
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -39,6 +40,23 @@ _TEST_DSN = os.environ.get(
 #: because a test picked the same index is the kind of accident that only
 #: has to happen once.
 _TEST_REDIS_URL = os.environ.get("CONTRACT_TEST_REDIS_URL", "redis://localhost:6379/15")
+
+
+@pytest.fixture
+def contract_storage_root(tmp_path: Path) -> Path:
+    """A per-test object-storage root.
+
+    `tmp_path` rather than the configured `var/storage`, so a test that
+    uploads never touches a developer's local objects and never leaves
+    bytes behind — pytest removes the directory itself.
+
+    Function-scoped deliberately. Two tests sharing a root would share
+    orphan state, and "no files are left behind" is one of the properties
+    the avatar suite asserts.
+    """
+    root = tmp_path / "storage"
+    root.mkdir()
+    return root
 
 
 @pytest_asyncio.fixture

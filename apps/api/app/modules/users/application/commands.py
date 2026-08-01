@@ -36,7 +36,6 @@ class CreateUser:
     preferred_language: str
     timezone: str
     display_name: str | None = None
-    avatar_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +59,5 @@ class UpdateUserProfile:
     """
 
     display_name: str | None | UnsetType = UNSET
-    avatar_url: str | None | UnsetType = UNSET
     preferred_language: Locale | UnsetType = UNSET
     timezone: str | UnsetType = UNSET

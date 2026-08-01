@@ -40,7 +40,16 @@ page render.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CHAR, Boolean, CheckConstraint, Computed, Index, String, text
+from sqlalchemy import (
+    CHAR,
+    Boolean,
+    CheckConstraint,
+    Computed,
+    Index,
+    Integer,
+    String,
+    text,
+)
 from sqlalchemy.dialects.postgresql import ENUM as PgEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -49,7 +58,7 @@ from app.database.base import Base
 from app.database.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 from app.database.types import UtcDateTime
 from app.modules.users.domain.validators import (
-    AVATAR_URL_MAX_LENGTH,
+    AVATAR_OBJECT_KEY_MAX_LENGTH,
     BIO_MAX_LENGTH,
     COUNTRY_CODE_LENGTH,
     DISPLAY_NAME_MAX_LENGTH,
@@ -121,6 +130,19 @@ class UserModel(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         # Format only — membership is `reference.country`'s job once that
         # table exists. `~` is PostgreSQL's regex match.
         CheckConstraint("country_code ~ '^[A-Z]{2}$'", name="country_code_format"),
+        # The three avatar columns are one fact in three places, and this
+        # is the database refusing to hold half of it: a key without a
+        # timestamp renders an avatar nobody can date, and a timestamp
+        # without a key is a row claiming an upload that is not there.
+        # `User.set_avatar`/`clear_avatar` move them together; this is
+        # what makes that a guarantee rather than a convention (BE-06).
+        CheckConstraint(
+            "(avatar_object_key IS NULL) = (avatar_uploaded_at IS NULL)",
+            name="avatar_reference_is_complete",
+        ),
+        # A cache-buster that started below 1 would be a version a client
+        # could not distinguish from "unset".
+        CheckConstraint("avatar_version >= 1", name="avatar_version_positive"),
         {"schema": USERS_SCHEMA},
     )
 
@@ -184,7 +206,24 @@ class UserModel(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     locked_until: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
     display_name: Mapped[str | None] = mapped_column(String(DISPLAY_NAME_MAX_LENGTH), nullable=True)
-    avatar_url: Mapped[str | None] = mapped_column(String(AVATAR_URL_MAX_LENGTH), nullable=True)
+    # --- avatar (A64-012.2) ------------------------------------------------
+    # database.md §4.6 specifies `avatar_object_key text`. A64-010 stored a
+    # full URL here; that column is dropped by `f1c4a0d2b7e5`.
+    avatar_object_key: Mapped[str | None] = mapped_column(
+        String(AVATAR_OBJECT_KEY_MAX_LENGTH), nullable=True
+    )
+
+    avatar_uploaded_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    avatar_version: Mapped[int] = mapped_column(
+        # `server_default` as well as a Python default, because the
+        # migration backfills existing rows and DB-19 makes the database
+        # value the backstop rather than the primary mechanism.
+        Integer,
+        nullable=False,
+        default=1,
+        server_default=text("1"),
+    )
 
     # A64-012.1's presentational identity. Both nullable and both `None`
     # for every row today — nothing writes them until profile editing

@@ -145,8 +145,13 @@ class TestGetById:
             timezone=Timezone("Asia/Samarkand"),
             created_at=_BASE_TIME,
             display_name="Full Fields",
-            avatar_url="https://cdn.example.com/a.png",
         )
+        # Set through the domain transition rather than the constructor:
+        # `User.create` deliberately takes no avatar arguments, because a
+        # new account has none. `set_avatar` moves all three columns
+        # together and bumps the version from its starting 1 to 2, which is
+        # what a real first upload produces.
+        user.set_avatar("avatars/019fb9ea-0a0c-7cec-9c5f-402727c31a96/abc.webp", at=_BASE_TIME)
         await repository.create(user)
 
         found = await repository.get_by_id(user.id)
@@ -157,7 +162,9 @@ class TestGetById:
         assert found.preferred_language is Locale.RU
         assert found.timezone.value == "Asia/Samarkand"
         assert found.display_name == "Full Fields"
-        assert found.avatar_url == "https://cdn.example.com/a.png"
+        assert found.avatar_object_key == "avatars/019fb9ea-0a0c-7cec-9c5f-402727c31a96/abc.webp"
+        assert found.avatar_uploaded_at == _BASE_TIME
+        assert found.avatar_version == 2
         assert found.is_active is True
         assert found.is_verified is False
         assert found.created_at == _BASE_TIME

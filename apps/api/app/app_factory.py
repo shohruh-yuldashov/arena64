@@ -14,18 +14,20 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.api.exception_handlers import register_exception_handlers
 from app.api.router import api_router
 from app.api.v1.health import health_router
 from app.common.logging import configure_logging
 from app.common.middleware import CorrelationIdMiddleware, RequestIdMiddleware
-from app.config.settings import get_settings
+from app.config.settings import Settings, get_settings
 from app.core.clock import SystemClock
 from app.core.constants import API_PREFIX
 from app.database.rate_limiter import RedisRateLimiter
 from app.database.redis import create_redis_pools
 from app.database.session_manager import DatabaseSessionManager
+from app.storage import LocalStorageProvider
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +80,19 @@ OPENAPI_TAGS: list[dict[str, Any]] = [
             "starting rating and zero matches — because no game has been played on this "
             "platform yet. The **shape** is final, so a client written against it today "
             "needs no change when real values arrive."
+        ),
+    },
+    {
+        "name": "avatars",
+        "description": (
+            "Self-service avatar management for the authenticated account. Every "
+            "endpoint acts on **your own** avatar — there is no path segment or body "
+            "field naming an account, so another player's avatar cannot be addressed "
+            "at all.\n\n"
+            "Uploads are validated by file signature rather than by the declared "
+            "`Content-Type`, re-encoded to WebP from decoded pixels (which strips EXIF "
+            "and every other metadata block), and stored in two sizes. Read anyone's "
+            "avatar URL from `GET /profiles/{username}` instead."
         ),
     },
     {
@@ -152,6 +167,59 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("shutdown_complete")
 
 
+def _configure_storage(app: FastAPI, settings: Settings) -> None:
+    """Builds the object-storage provider and, in development, serves it.
+
+    **The only place on the platform that names a concrete provider.**
+    Everything else — every service, every dependency, every route —
+    takes `StorageProvider`. Adding S3, R2, MinIO or GCS is a branch here
+    and nothing else, which is what makes A64-012.2's "without changing
+    business logic" a structural claim rather than an intention.
+
+    `LocalStorageProvider` refuses to construct in a production-like
+    environment (objects would live on one node's disk and vanish on
+    reschedule, and a second replica would serve nothing at all), so a
+    deployed tier that never sets `STORAGE_PROVIDER` fails at startup
+    rather than accepting uploads it is going to lose.
+
+    ## Why this is in `create_app` and not `lifespan`
+
+    Everything else on `app.state` is built in `lifespan`, because engines
+    and connection pools need an ordered async teardown. Storage does not:
+    the local provider holds a resolved path and nothing else.
+
+    What decided it is the mount. `StaticFiles` has to be part of the
+    route table, and an app that skipped `lifespan` — every contract test
+    on this platform drives the app over `ASGITransport`, which does — would
+    otherwise have a working upload endpoint and no way to fetch what it
+    stored. Building both here keeps the app self-contained and makes
+    "the URL actually serves" testable, which is exactly the property a
+    storage abstraction is easiest to get subtly wrong about.
+
+    A provider that eventually needs an async close — an S3 client — gets
+    that wired into `lifespan` at the point it exists, alongside its
+    construction.
+    """
+    storage = LocalStorageProvider(settings.storage, settings.environment)
+    app.state.storage = storage
+
+    # Development only, and the guard is the provider's own type rather
+    # than an environment check: `LocalStorageProvider` cannot exist in a
+    # production-like tier, so neither can this mount.
+    #
+    # A deployed tier serves objects from the store, or from a CDN in front
+    # of it — never through this process. Routing image bytes through
+    # Python would put an ASGI worker on the hot path of every avatar
+    # render, which is the thing object storage exists to avoid.
+    if isinstance(storage, LocalStorageProvider):
+        storage.root.mkdir(parents=True, exist_ok=True)
+        app.mount(
+            settings.storage.public_url_path,
+            StaticFiles(directory=storage.root),
+            name="media",
+        )
+
+
 def create_app() -> FastAPI:
     """Assembles middleware, exception handlers, and routers. Wires nothing
     a route handler could not otherwise reach through `app.state` or
@@ -170,6 +238,8 @@ def create_app() -> FastAPI:
     app.add_middleware(CorrelationIdMiddleware)
     app.add_middleware(RequestIdMiddleware)
     register_exception_handlers(app)
+
+    _configure_storage(app, get_settings())
 
     # Unversioned, for load-balancer and orchestrator probes: a liveness
     # check must not sit behind API versioning that could itself fail to

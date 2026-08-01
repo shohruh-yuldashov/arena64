@@ -73,7 +73,9 @@ class SqlAlchemyUserRepository:
             created_at=row.created_at,
             updated_at=row.updated_at,
             display_name=row.display_name,
-            avatar_url=row.avatar_url,
+            avatar_object_key=row.avatar_object_key,
+            avatar_uploaded_at=row.avatar_uploaded_at,
+            avatar_version=row.avatar_version,
             # Reconstructed through the value objects rather than assigned
             # raw, so a row written before a rule tightened fails loudly
             # here instead of flowing into a response. `None` stays `None`:
@@ -100,7 +102,9 @@ class SqlAlchemyUserRepository:
             created_at=user.created_at,
             updated_at=user.updated_at,
             display_name=user.display_name,
-            avatar_url=user.avatar_url,
+            avatar_object_key=user.avatar_object_key,
+            avatar_uploaded_at=user.avatar_uploaded_at,
+            avatar_version=user.avatar_version,
             bio=user.bio.value if user.bio else None,
             country_code=user.country.value if user.country else None,
             locked_until=user.locked_until,
@@ -124,7 +128,9 @@ class SqlAlchemyUserRepository:
         row.is_verified = user.is_verified
         row.updated_at = user.updated_at
         row.display_name = user.display_name
-        row.avatar_url = user.avatar_url
+        row.avatar_object_key = user.avatar_object_key
+        row.avatar_uploaded_at = user.avatar_uploaded_at
+        row.avatar_version = user.avatar_version
         row.bio = user.bio.value if user.bio else None
         row.country_code = user.country.value if user.country else None
         row.locked_until = user.locked_until

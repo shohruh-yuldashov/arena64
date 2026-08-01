@@ -31,7 +31,6 @@ from app.core.enums import Locale
 from app.core.pagination import CursorPage
 from app.modules.users.domain.exceptions import InvalidLanguage, InvalidTimezone
 from app.modules.users.domain.validators import (
-    AVATAR_URL_MAX_LENGTH,
     DISPLAY_NAME_MAX_LENGTH,
     validate_email,
     validate_timezone,
@@ -47,7 +46,6 @@ UsernameField = Annotated[str, AfterValidator(validate_username)]
 EmailField = Annotated[str, AfterValidator(validate_email)]
 TimezoneField = Annotated[str, AfterValidator(validate_timezone)]
 DisplayNameField = Annotated[str, Field(min_length=1, max_length=DISPLAY_NAME_MAX_LENGTH)]
-AvatarUrlField = Annotated[str, Field(min_length=1, max_length=AVATAR_URL_MAX_LENGTH)]
 
 
 class UserCreate(BaseRequestDTO):
@@ -72,7 +70,6 @@ class UserCreate(BaseRequestDTO):
     preferred_language: Locale = Locale.EN
     timezone: TimezoneField = "UTC"
     display_name: DisplayNameField | None = None
-    avatar_url: AvatarUrlField | None = None
 
 
 class UserUpdate(BaseRequestDTO):
@@ -87,17 +84,25 @@ class UserUpdate(BaseRequestDTO):
     `username`, `email`, `is_active` and `is_verified` are absent by
     design — see `application/commands.py::UpdateUserProfile` for why each
     is its own use case rather than a PATCH field.
+
+    **`avatar_url` was removed by A64-012.2** and is not coming back in
+    this shape. The platform no longer stores a URL at all: it stores an
+    object key that it wrote itself, and the only way to change one is to
+    upload an image to `POST /api/v1/profile/avatar`, which validates and
+    re-encodes it. A client-supplied URL would have been a way to point a
+    player's avatar at any address on the internet — including one that
+    serves different bytes to different viewers — which is an open redirect
+    and a tracking pixel wearing a profile picture.
     """
 
     display_name: DisplayNameField | None = None
-    avatar_url: AvatarUrlField | None = None
     preferred_language: Locale | None = None
     timezone: TimezoneField | None = None
 
     @model_validator(mode="after")
     def _reject_explicit_null_on_non_clearable(self) -> "UserUpdate":
-        """`display_name` and `avatar_url` are nullable on the entity, so
-        an explicit `null` legitimately clears them. `preferred_language`
+        """`display_name` is nullable on the entity, so an explicit
+        `null` legitimately clears it. `preferred_language`
         and `timezone` are `NOT NULL` with defaults — there is no state
         for `null` to mean, so accepting it would force a silent choice
         between "leave alone" and "reset to default", and a client could

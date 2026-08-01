@@ -31,7 +31,7 @@ class PublicProfile:
     `identity` is `users`' published DTO carried whole rather than
     unpacked into fields here. Two reasons, and the second is the one that
     matters: unpacking would mean this module re-declaring `username`,
-    `display_name`, `avatar_url`, `country`, `bio` and `created_at`, so
+    `display_name`, `avatar`, `country`, `bio` and `created_at`, so
     every field `users` adds would need adding twice — and, worse, a field
     `users` *removes* would keep working here until something noticed. The
     published DTO is the contract; holding it whole is what makes it one.

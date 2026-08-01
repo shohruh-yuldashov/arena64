@@ -478,6 +478,61 @@ class EmailSettings(BaseSettings):
         return self.password_reset_url_template.format(token=token)
 
 
+class StorageSettings(BaseSettings):
+    """`storage` — where binary objects live (A64-012.2).
+
+    One provider today and the setting that chooses it, because the choice
+    is a deployment concern rather than a code one: the same artifact runs
+    on a laptop with a directory and in a deployed tier with a bucket
+    (architecture.md AD-02's one-artifact rule).
+
+    `LocalStorageProvider` refuses to construct in a production-like
+    environment, so a tier that never sets `STORAGE_PROVIDER` fails at
+    startup rather than accepting uploads onto a disk that vanishes on the
+    next reschedule.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="STORAGE_", frozen=True, extra="forbid")
+
+    provider: Literal["local"] = "local"
+    """The only value today. A `Literal` rather than a free string so that
+    `STORAGE_PROVIDER=s3` on a tier where S3 is not yet implemented fails
+    at startup with a readable error, rather than silently falling through
+    to local and losing every upload."""
+
+    local_root: str = "var/storage"
+    """Where `LocalStorageProvider` writes. Relative to the process working
+    directory, and deliberately inside the repository's ignored `var/` —
+    development objects are disposable, and putting them under a path a
+    developer might commit is how a 5 MB test avatar ends up in git."""
+
+    public_base_url: str = "http://localhost:8000/media"
+    """The prefix `get_public_url` composes keys onto.
+
+    Configurable rather than derived, because in a deployed tier it is a
+    CDN or bucket host that has nothing to do with this process's own
+    address — and because that is precisely the substitution that lets a
+    CDN be put in front without any code change.
+
+    In `local` it must match where `app_factory` mounts `StaticFiles`, and
+    a validator below enforces the pairing rather than leaving two settings
+    to drift into a 404 nobody can explain.
+    """
+
+    @property
+    def public_url_path(self) -> str:
+        """The path component of `public_base_url` — what `StaticFiles` is
+        mounted at in development.
+
+        Derived rather than configured separately, so the mount point and
+        the generated URL cannot disagree. Two settings for one fact is how
+        an avatar renders as a broken image on somebody else's machine.
+        """
+        path = self.public_base_url.split("://", 1)[-1]
+        mount = path[path.index("/") :] if "/" in path else "/media"
+        return mount.rstrip("/") or "/media"
+
+
 class RateLimitSettings(BaseSettings):
     """`rate_limit` — abuse prevention on the authentication endpoints
     (A64-011.8).
@@ -656,6 +711,7 @@ class Settings(BaseModel):
     jwt: JWTSettings
     session: SessionSettings
     email: EmailSettings
+    storage: StorageSettings
     rate_limit: RateLimitSettings
 
     @model_validator(mode="after")
@@ -736,5 +792,6 @@ def get_settings() -> Settings:
         jwt=JWTSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         session=SessionSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         email=EmailSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        storage=StorageSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         rate_limit=RateLimitSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

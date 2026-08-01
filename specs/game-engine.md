@@ -1,8 +1,10 @@
 # Game Engine
 
-> **Status:** Partial — **the rules of play are complete** (A64-014.1 – A64-014.7) and games
-> serialize and replay (A64-014.8), except that three of the four draw thresholds are **undecided
-> product rules** (§7.7). Clocks and PDN notation are not yet specified
+> **Status:** Partial — **the rules of play are complete** (A64-014.1 – A64-014.7), games
+> serialize and replay (A64-014.8), and the engine is verified against a published perft series
+> (A64-014.9). Outstanding: three of the four draw thresholds are **undecided product rules**
+> (§7.7), and **differential testing awaits the TypeScript engine** (§9.6). Clocks and PDN
+> notation are not yet specified
 > **Owner:** _Unassigned_
 > **Related:** `templates/feature-spec.md`, `docs/01-architecture/architecture.md` §11,
 > `docs/01-architecture/domain-model.md` §2.1 and §16.1
@@ -822,7 +824,107 @@ the reason to settle the thresholds before anything is stored rather than after.
 
 ---
 
-## 9. Not yet specified
+## 9. Verification — A64-014.9
+
+The engine's own suites answer "does this rule work". This section is the
+layer above: does the *corpus* still describe the engine, do the node counts
+match somebody else's arithmetic, does a replay reproduce a game rather than
+a board, and is any of it fast enough to matter.
+
+### 9.1 Perft — the only external oracle
+
+AD-13 names it first: "move-generation node counts verified against known
+reference values at increasing depth."
+
+| Depth | 0 | 1 | 2 | 3 | 4 | 5 | 6 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **English 8x8** *(published)* | 1 | 7 | 49 | 302 | 1,469 | 7,361 | 36,768 |
+| **Russian 8x8** *(this build)* | 1 | 7 | 49 | 302 | 1,469 | 7,482 | 37,986 |
+
+| Rule | Statement |
+| --- | --- |
+| GE-94 | English 8x8 perft is checked against the **published** English/American checkers series. `ENGLISH_8X8` was added in A64-014.5 as configuration only, and reproducing the series validates move generation, mandatory capture, the capture walk, promotion-ends-ply and the short-king reach at once |
+| GE-95 | Perft is deliberately naive — no caching, no pruning, no bulk counting — and applies every move through `MoveApplier`, so it exercises validation as well as generation. A perft that cached would share a bug with the generator it checks |
+| GE-96 | Russian must agree with English through depth 4 and diverge at 5. The rules that differ — backward capture, flying kings, promotion continuing — cannot apply earlier, so this is a prediction the rules make and not a coincidence |
+| GE-97 | Depths 5 and 6 for Russian are a **characterization baseline**, not a verification. **No published Russian 8x8 perft table was available**, and inventing values would produce a test that passes, proves nothing, and reads as though it proved something |
+
+Depth 6 is opt-in behind `ENGINE_PERFT_DEEP` — about four seconds per variant.
+
+### 9.2 Corpus audit
+
+The corpus is audited as *files*, separately from whether the engine agrees
+with it.
+
+| Rule | Statement |
+| --- | --- |
+| GE-98 | Every file parses, declares the version of its directory, states its scope, and carries **exactly one** expectation shape — the loader skips a file for a key it does not understand, so a second key would be silently unread |
+| GE-99 | All five expectation shapes are in use: `cases`, `rejections`, `terminal_positions`, `draw_sequences`, `replays`. A shape nothing exercises is a reader nothing checks |
+| GE-100 | Every written position and move survives a **round trip through production serialization**, and the serializer's own output is a fixed point. This is what stops the corpus and the store drifting into two encodings |
+| GE-101 | Every superseded id names a case that still exists, with a replacement and a reason, retiring only an earlier version. Unreadable history is no history |
+
+The round trip compares **values, not bytes**. Some hand-written v1 and v2
+entries list pieces in reading order while the serializer emits them sorted
+by square; the two describe the same position, and demanding byte equality
+would force an edit to `v1`, which the corpus is append-only to prevent.
+
+### 9.3 Replay verification
+
+Every corpus replay is walked **prefix by prefix**. After each ply the
+reconstruction is compared against the same game played forward, on the
+position, its fingerprint, the ply number, the occurrence count, the
+no-progress counter, the status and the result — and separately against the
+fingerprint the record itself wrote down.
+
+A replay that agreed only at the end would pass a test that only looked at
+the end, and would be wrong about every draw.
+
+### 9.4 Determinism
+
+The same replay run three times in one process must give identical
+fingerprints, identical results, identical move ordering and **byte-identical
+JSON**. Nothing seeds a random number generator, because nothing in the engine
+has one.
+
+### 9.5 Performance — sanity, not a budget
+
+Observed on the development machine (Apple silicon, CPython 3.14):
+
+| Operation | Observed |
+| --- | --- |
+| `legal_moves`, opening | 83 µs |
+| `legal_moves`, contrived king-heavy 10x10 | 5.9 ms |
+| Whole ply: apply + terminal evaluation | 170 µs |
+| `Position.fingerprint` | 9 µs |
+| Replay of a corpus game | 125 µs |
+| `perft(depth=4)`, English | 170 ms |
+
+CP-1 budgets **p99 < 25 ms** for a whole submit-move round trip. An ordinary
+ply costs the engine about **0.7% of it**. The king-heavy position costs a
+quarter of the budget on its own, and was built to be as awkward as the rules
+allow — it bounds the tail, it does not describe a ply.
+
+Every timing assertion is one to two orders of magnitude above the
+observation, so a failure means an algorithmic regression and never a busy
+runner. **These are not budgets**: a real one belongs with a real workload,
+and CP-1 also contains transport, clocks and persistence this suite cannot
+see. No optimisation was made, because nothing here is evidence one is
+needed (CLAUDE.md §10.1).
+
+### 9.6 Differential testing is deferred
+
+AD-14's contract is that "the Python engine and the TypeScript client engine
+are two implementations governed by one versioned corpus… executed by both in
+CI". **There is no TypeScript engine.** Until there is, the corpus proves
+conformance to a contract rather than *agreement between implementations*,
+and the second half of AD-14 is unmet.
+
+That is the largest open item in the engine's verification, and no amount of
+Python testing closes it: a bug both implementations would share is exactly
+what a second implementation is for.
+
+---
+
+## 10. Not yet specified
 
 Three of the four **draw thresholds** — see §7.7. The rules are implemented and tested; the
 numbers are a product decision.
@@ -841,5 +943,6 @@ is configured for move generation and is offered nowhere.
 - [ ] **Decide the three undecided draw thresholds, and International's in full (§7.7)**
 - [ ] Decide whether `TerminationReason` should distinguish the three move-limit draws (§7.7)
 - [ ] Decide whether `english_8x8` is a product variant or stays a configuration fixture
-- [ ] Add the TypeScript implementation that executes the same corpus (AD-14)
+- [ ] Add the TypeScript implementation that executes the same corpus (AD-14) — the one gap Python testing cannot close (§9.6)
+- [ ] Obtain or compute a published Russian 8x8 perft table (§9.1)
 - [ ] Review and promote status from Partial to Approved

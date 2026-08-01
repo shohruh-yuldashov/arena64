@@ -649,6 +649,7 @@ and position hashing for repetition rules.
 | A64-014.6 | `EngineVersion` (AD-15), `TerminalState` and `TerminalStateEvaluator` — and, in the new `game` module, the `Match` lifecycle aggregate with its position history |
 | A64-014.7 | `DrawRules` as a variant axis, `game.DrawRuleSet`, draw by threefold repetition, and **engine version 2** |
 | A64-014.8 | Primitive serialization for every engine and match value, `Match`'s append-only move log (MT-5, MT-6), and `ReplayEngine` |
+| A64-014.9 | Verification: perft against published values, a corpus audit, ply-by-ply replay consistency, determinism and performance sanity. **No engine behaviour changed** |
 
 **The rules of movement are complete.** Men and kings, quiet moves and complete multi-jump
 sequences, mandatory capture, the largest-capture obligation where a variant has one, and every
@@ -720,7 +721,18 @@ implementation's test suite, and the point is that neither owns it.
 
 The Python engine executes it (`apps/api/tests/unit/test_engine_corpus.py`). There is no
 TypeScript engine yet, so the corpus currently proves conformance to a contract rather than
-agreement between two implementations — the second half of AD-14 arrives with the client.
+agreement between two implementations — the second half of AD-14 arrives with the client, and
+A64-014.9 records it as the largest open item in the engine's verification. No amount of Python
+testing closes it: a bug both implementations would share is precisely what the second one is
+for.
+
+A64-014.9 did supply the *other* kind of external check AD-13 asks for. English 8x8 perft node
+counts — 1, 7, 49, 302, 1,469, 7,361, 36,768 from the opening position — are the long-published
+English/American checkers series, and this engine reproduces them exactly. `ENGLISH_8X8` is
+configuration only, so that one series validates move generation, mandatory capture, the capture
+walk, promotion-ends-ply and the short-king reach together. No published **Russian** table was
+available, and the Russian numbers past depth 4 are recorded as a characterization baseline
+rather than dressed up as a verification.
 
 **v2 (A64-014.5)** adds king cases and the mechanism for retiring one that a rules change
 invalidates: a file may carry a `supersedes` array naming ids from earlier versions, and a reader

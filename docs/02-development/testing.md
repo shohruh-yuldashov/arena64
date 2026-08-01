@@ -98,6 +98,29 @@ this task; only one of them found the three violations A64-013.8 fixed —
 including a cache port that had the application layer building Redis keys,
 which had passed review twice.
 
+## Game Engine verification — A64-014.9
+
+The engine has a verification layer above its per-rule suites, specified in
+`specs/game-engine.md` §9. Four things are worth knowing from here:
+
+| Check | What it buys |
+| --- | --- |
+| **Perft** | The only **external** oracle in the repository. English 8x8 node counts are checked against the long-published English/American checkers series; everything else in the suite asks the engine whether it agrees with itself |
+| **Corpus audit** | The corpus is audited as *files* — every entry round-trips through production serialization, so a corpus and a stored game cannot drift into two encodings |
+| **Replay consistency** | Every corpus replay is walked prefix by prefix, so a replay is verified to reconstruct a game's *history* rather than its final board |
+| **Performance sanity** | Blow-up detectors an order or two above the observed numbers. Not budgets — see §9.5 for why, and for the measured figures against CP-1 |
+
+Two limits are recorded rather than hidden. There is **no published Russian
+8x8 perft table** available, so the Russian numbers past depth 4 are a
+characterization baseline rather than a verification. And **differential
+testing is deferred until the TypeScript engine exists** (AD-14): until then
+the corpus proves conformance to a contract, not agreement between two
+implementations, and a bug both would share is exactly what the second one is
+for.
+
+`ENGINE_PERFT_DEEP` opts into the depth-6 runs, which cost about four seconds
+per variant and are skipped by default.
+
 ## TODO
 
 - [ ] Assign a document owner

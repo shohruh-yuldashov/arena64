@@ -12,8 +12,8 @@ move produce the same result every time, and neither argument is touched.
     5. hand the turn to the opponent
 
 **Victims come off before the attacker moves**, and that is not a stylistic
-preference. `Board.move` refuses to relocate onto an occupied square and
-knows nothing whatever about capture — deliberately, since A64-014.1 — so
+preference. `Board` knows nothing whatever about capture — deliberately,
+since A64-014.1 — and refuses to place a piece on an occupied square, so
 the board must already be in the state the relocation is legal in. Doing it
 the other way round would mean either teaching `Board` about capture, which
 would put a rule inside the placement primitive, or relaxing the
@@ -22,7 +22,7 @@ relies on.
 
 It also matches the rule as players state it: you take the piece, then you
 stand beyond it. A64-014.4's longer sequences remove more victims in step
-two and change nothing else here.
+two, and changed one thing in step three: see `_relocated`.
 
 ## Validation is not optional, and not a parameter
 
@@ -76,11 +76,34 @@ class MoveApplier:
         board = position.board
         for captured in move.captured:
             board = board.remove(captured)
-        board = board.move(move.origin, move.destination)
+        board = _relocated(board, move.origin, move.destination)
         if move.promotes_to is not None:
             board = _crowned(board, move.destination)
 
         return Position(board=board, side_to_move=position.side_to_move.opponent())
+
+
+def _relocated(board: Board, origin: BoardCoordinate, destination: BoardCoordinate) -> Board:
+    """`board` with the piece on `origin` standing on `destination`.
+
+    Lift, then place — rather than `Board.move`, which refuses to relocate a
+    piece onto the square it is already on. That refusal is correct where it
+    lives: A64-014.1 made it so because a bare relocation onto itself is a
+    caller with a bug, and weakening it would remove the protection for
+    every other caller.
+
+    It is wrong *here*, though, and A64-014.4 is what showed it. A capture
+    sequence may circle a ring of victims and come back to the square it
+    started from, which makes `origin == destination` an ordinary, legal
+    ply. Lifting first says what actually happens on a board — the piece is
+    picked up, the victims come off, the piece is put down — and keeps
+    every guarantee: `remove` refuses an empty origin, `place` refuses an
+    occupied or unplayable destination.
+    """
+    piece = board.piece_at(origin)
+    if piece is None:
+        raise PieceNotFound(f"Square {origin} holds no piece to move.")
+    return board.remove(origin).place(destination, piece)
 
 
 def _crowned(board: Board, square: BoardCoordinate) -> Board:

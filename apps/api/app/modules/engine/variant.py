@@ -88,9 +88,44 @@ class CaptureObligation(StrEnum):
 
     MAXIMUM = "maximum"
     """The capture played must take the most pieces available —
-    international draughts. Selecting it is A64-014.4's; this task records
-    the obligation without acting on it, because a single jump is the only
-    sequence it generates and every single jump takes one piece."""
+    international draughts. Applied by `MoveGenerator` as a filter over
+    complete sequences (A64-014.4), never as a pruning rule inside the
+    search: a branch that looks short can end up the longest."""
+
+
+class MidSequencePromotion(StrEnum):
+    """What happens when a man reaches the crownhead *during* a capture.
+
+    domain-model.md §2.1 describes one of these — "a man reaching the
+    crownhead becomes a king; in most variants this ends the ply even if
+    further jumps exist" — and A64-014.2 encoded it as a boolean
+    `promotion_ends_ply`, flagged provisional because it had no observable
+    meaning until sequences existed. A64-014.4 gives it one, and the
+    boolean turns out to be the wrong shape: the two variants configured
+    here take **neither** of its two values.
+
+    | Variant | Rule |
+    | --- | --- |
+    | Russian 8x8 | Crowns on arrival and carries on jumping, now as a king |
+    | International 10x10 | Passes over without crowning and carries on as a man |
+    | English *(not configured)* | Crowns on arrival and the ply ends there |
+
+    Three distinct rules, so the axis is an enum. The third member is
+    absent rather than unconfigured: no variant here has that rule, and a
+    branch in the walker that nothing reaches is a branch nothing tests.
+    Adding English means adding `CROWNS_AND_ENDS_PLY` here and one stop
+    condition in `_sequences` — recorded so the next person does not have
+    to rediscover which of the three axes moved.
+    """
+
+    CROWNS_AND_CONTINUES = "crowns_and_continues"
+    """Russian draughts. The crowned man continues the same sequence under
+    king capture rules, which is why king jumps exist at all in
+    A64-014.4."""
+
+    PASSES_THROUGH = "passes_through"
+    """International draughts. Crossing the crownhead mid-sequence is not
+    a promotion; the piece is crowned only if the sequence *ends* there."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,33 +175,37 @@ class BoardGeometry:
     """Whether a king travels any distance along a diagonal (Russian,
     international) or exactly one square (English).
 
-    Recorded, unread: kings do not move until A64-014.5. It is here because
-    domain-model.md §10.1 names it as an axis of `Variant`, and because a
-    generator that had to be re-parameterised later is a generator whose
-    tests all change at once.
+    Read through `king_reach`, which is how A64-014.4 continues a sequence
+    after a man crowns mid-jump. Standalone king movement is still
+    A64-014.5's.
     """
 
-    promotion_ends_ply: bool
-    """Whether crowning stops a capture sequence that could otherwise
-    continue — domain-model.md §2.1: "in most variants this ends the ply
-    even if further jumps exist".
+    mid_sequence_promotion: MidSequencePromotion
+    """What crowning mid-capture does — see that enum.
 
-    False for Russian draughts, where a man that reaches the crownhead
-    mid-sequence becomes a king and continues jumping as one.
-
-    **Unread by this task, and provisional for international.** It only has
-    observable meaning once sequences continue past a square, which is
-    A64-014.4; the international value is recorded to the best reading of
-    its rules and must be confirmed there against the corpus rather than
-    trusted from here.
+    Replaces A64-014.2's provisional `promotion_ends_ply` boolean, which
+    could not express what either configured variant actually does.
     """
 
     @property
     def maximum_capture_is_mandatory(self) -> bool:
         """Whether the capture played must be the one taking the most
-        pieces. Recorded for A64-014.4; nothing selects on it yet, and this
-        task generates single jumps only, so there is nothing to compare."""
+        pieces available. Applied to complete sequences, after the search
+        (A64-014.4)."""
         return self.capture_obligation is CaptureObligation.MAXIMUM
+
+    @property
+    def king_reach(self) -> int:
+        """How far a king travels in one leg of a jump — to the far side of
+        the board where kings fly, one square where they do not.
+
+        Expressing "short king" as a reach of one rather than as a separate
+        code path is what keeps the jump scan single: a short king is a
+        flying king that cannot see past its neighbour, and the same loop
+        is correct for both without a branch that only one variant ever
+        takes.
+        """
+        return max(self.rows, self.columns) if self.kings_fly else 1
 
     def __post_init__(self) -> None:
         if not 2 <= self.rows <= MAX_BOARD_DIMENSION:
@@ -292,7 +331,7 @@ _GEOMETRIES: Mapping[BoardVariant, BoardGeometry] = MappingProxyType(
             capture_obligation=CaptureObligation.ANY,
             men_may_capture_backward=True,
             kings_fly=True,
-            promotion_ends_ply=False,
+            mid_sequence_promotion=MidSequencePromotion.CROWNS_AND_CONTINUES,
         ),
         BoardVariant.INTERNATIONAL_10X10: BoardGeometry(
             rows=10,
@@ -302,7 +341,7 @@ _GEOMETRIES: Mapping[BoardVariant, BoardGeometry] = MappingProxyType(
             capture_obligation=CaptureObligation.MAXIMUM,
             men_may_capture_backward=True,
             kings_fly=True,
-            promotion_ends_ply=True,
+            mid_sequence_promotion=MidSequencePromotion.PASSES_THROUGH,
         ),
     }
 )
@@ -325,4 +364,10 @@ def geometry_of(variant: BoardVariant) -> BoardGeometry:
     return _GEOMETRIES[variant]
 
 
-__all__ = ["BoardGeometry", "BoardVariant", "CaptureObligation", "geometry_of"]
+__all__ = [
+    "BoardGeometry",
+    "BoardVariant",
+    "CaptureObligation",
+    "MidSequencePromotion",
+    "geometry_of",
+]

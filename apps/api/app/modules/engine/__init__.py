@@ -81,6 +81,7 @@ from app.modules.engine.variant import (
     BoardGeometry,
     BoardVariant,
     CaptureObligation,
+    MidSequencePromotion,
     geometry_of,
 )
 
@@ -99,6 +100,7 @@ __all__ = [
     "InvalidBoardState",
     "InvalidCoordinate",
     "InvalidMove",
+    "MidSequencePromotion",
     "Move",
     "MoveApplier",
     "MoveGenerator",

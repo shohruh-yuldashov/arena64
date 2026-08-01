@@ -62,9 +62,18 @@ REQUIRED_CASES = {
     "capture-suppresses-every-other-piece-quiet-moves",
     "man-captures-backward-when-the-variant-allows-it",
     "quiet-move-onto-the-crownhead-promotes",
+    "forced-two-jump-sequence",
+    "incomplete-prefix-is-not-offered",
+    "two-alternative-complete-sequences",
+    "maximum-capture-keeps-only-the-longest",
+    "a-taken-piece-blocks-and-is-never-taken-again",
+    "russian-man-crowns-mid-sequence-and-continues",
+    "international-man-passes-through-the-crownhead",
+    "international-man-crowned-when-the-sequence-ends-there",
 }
-"""The cases A64-014.2 names. Asserted by id rather than by count, so that
-adding a case never quietly satisfies a requirement a deleted one covered."""
+"""The cases A64-014.2 and A64-014.4 name. Asserted by id rather than by
+count, so that adding a case never quietly satisfies a requirement a
+deleted one covered."""
 
 generator = MoveGenerator()
 validator = MoveValidator(generator)

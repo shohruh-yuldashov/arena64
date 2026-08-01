@@ -34,6 +34,7 @@ somewhere still says what it is.
 | --- | --- | --- |
 | `men-basic.json` | `cases` | Quiet moves, single captures, mandatory-capture priority and promotion detection for men — the whole of A64-014.2 |
 | `men-rejections.json` | `rejections` | Moves that must be refused, and the category of refusal — A64-014.3 |
+| `men-capture-sequences.json` | `cases` | Complete multi-jump sequences, the taken-once rule, path revisits, maximum-capture filtering and both mid-sequence promotion rules — A64-014.4 |
 
 A file carries **one** of the two top-level keys. A reader loads the key it
 understands and ignores files that do not have it, which is what makes adding a
@@ -81,8 +82,12 @@ third kind of case an append rather than a migration of every existing reader.
 Because move order is part of the engine's contract, not a rendering detail. A replay reproduces
 a game by index, a search visits siblings in a fixed sequence, and two implementations that agree
 on the *set* but not the order will diverge the first time either of those matters. The order is
-ascending by `(path, captured)`, which is defined in `Move.sort_key` and is the same total order
-in any language that compares tuples of `(row, column)` pairs.
+ascending by `(path, captured)`, which is defined in `Move.sort_key`.
+
+Compare a path element-wise as `(row, column)` pairs, and where one path is a prefix of another,
+the shorter sorts first — the ordinary lexicographic rule, which many languages give for free on
+tuples and none give by default on JavaScript arrays. A reader implements the comparator; it does
+not inherit it.
 
 ## Format — `rejections`
 
@@ -128,10 +133,12 @@ that changes the rule.
 
 ## What v1 does not cover
 
-King movement, capture sequences longer than one jump, maximum-capture selection, promotion in
-the middle of a sequence, terminal states and draws. Those arrive with the tasks that implement
-them, as new cases in this version or as `v2` if a rule they settle contradicts a case here.
+Standalone king movement — king quiet moves, and a ply that *starts* from a king — terminal
+states and draws. Those arrive with the tasks that implement them, as new cases in this version
+or as `v2` if a rule they settle contradicts a case here.
 
 A file in this corpus is a claim about **complete** legal move sets. Until kings move
-(A64-014.5), every case must therefore be a position with no king belonging to the side to move —
-otherwise the expected list would be complete only by accident.
+(A64-014.5), every `cases` entry must therefore be a position with no king belonging to the side
+to move — otherwise the expected list would be complete only by accident. A king a man *becomes*
+mid-sequence is fine and is exercised; a king standing there at the start of the ply is a
+`rejections` entry, not a `cases` one.

@@ -1,11 +1,12 @@
 # Matchmaking
 
-> **Status:** Partial — §1–§9 specify the **queue domain** and its boundary with
-> `game`, and are implemented (A64-014.1, A64-015.2). Pairing, challenges and
-> acceptance are still unspecified.
+> **Status:** Partial — §1–§10 specify the **queue domain**, its boundary with
+> `game`, and **pairing**, and are implemented (A64-014.1, A64-015.2,
+> A64-015.3). Challenges and acceptance are still unspecified, and no match is
+> persisted yet — see §9.8.
 > **Owner:** _Unassigned_
 > **Related:** `templates/feature-spec.md`,
-> [`domain-model.md §10.2`](../docs/01-architecture/domain-model.md),
+> [`domain-model.md §9.2`](../docs/01-architecture/domain-model.md),
 > [`database.md §8.1a`](../docs/01-architecture/database.md),
 > [`specs/game-engine.md`](game-engine.md)
 
@@ -20,18 +21,21 @@ Queueing, opponent selection, match creation, and direct challenge flows.
 A64-014.1 builds the foundation every matchmaking workflow stands on, and
 nothing that consumes it.
 
+A64-015.3 closed most of it. What remains out is listed against its owner.
+
 | In | Out — and where it goes |
 | --- | --- |
-| Entering a pool, leaving one, reading your own ticket | Pairing two tickets — A64-015.3 |
-| One live ticket per player (QT-1) | Rating-window expansion (QT-5) — A64-015.3 |
-| The rating snapshot at entry (QT-2) | Opponent eligibility (QT-3) — A64-015.3 |
-| Expiry, and the atomic claim that records it (QT-4's mechanism) | Acceptance — later |
-| The three durable queue events | Match creation — `game` |
-| | Realtime queue updates — the gateway (AD-09) |
+| Entering a pool, leaving one, reading your own ticket | Acceptance: the countdown, the decline, the deadline — A64-015.4 |
+| One live ticket per player (QT-1) | Persisting a `Match` — `game`, A64-015.4 |
+| The rating snapshot at entry (QT-2) | Direct challenges — `matchmaking.challenge`, later |
+| Expiry, and the atomic claim that records it (QT-4) | Realtime queue updates — the gateway (AD-09) |
+| **Pairing**: the scan, QT-3, QT-5, the two-phase claim (§10) | Rating changes — `rating`, on `match.completed` |
+| The four durable queue events | |
 
 **The exclusions are consumers, not gaps.** Pairing scans `queue_snapshot`,
-claims through `claim_due`, and creates a match through the `matchmaking →
-game` port architecture.md §7 already draws — whose published half is §8. None of them changes the ticket.
+claims through `claim_pair`, and asks for a match through the `matchmaking →
+game` command architecture.md §7 draws — whose published half is §8. None of
+them changes the ticket's shape.
 
 ## 2. The aggregate
 
@@ -85,38 +89,52 @@ stateDiagram-v2
     [*] --> waiting: player joins a pool
     waiting --> cancelled: player leaves
     waiting --> expired: the window closed
-    waiting --> matched: a pairing consumed the ticket
+    waiting --> reserved: a scan claimed the pair
+    reserved --> matched: game accepted the request
+    reserved --> waiting: game refused — compensation
+    reserved --> expired: the reservation was abandoned
     cancelled --> [*]
     expired --> [*]
     matched --> [*]
 ```
 
-Four of domain-model.md §10.2's seven. `Widening` is a property of a scan
-rather than of a ticket; `Reserved` needs a pairing to reserve anything;
-`Abandoned` is `expired` with a cause only continuous presence can know.
-`matched` has a transition and no caller — a status the database can hold and
-the domain cannot reach is a status nothing can explain.
+Five of domain-model.md §9.2's seven, since A64-015.3 added `reserved`.
+`Widening` is a property of a scan rather than of a ticket — the ticket carries
+`entered_at` and the scan derives the window from its age. `Abandoned` is
+`expired` with a cause only continuous presence could know.
 
-**Preparing for acceptance** (A64-014.1's own requirement): an acceptance flow
-inserts `reserved` between `waiting` and `matched` and adds a deadline. Neither
-changes anything written today — the terminal states stay terminal, and the
-partial unique index that enforces QT-1 keys on `waiting` alone, which
-`reserved` would join.
+**`waiting` and `reserved` are both live.** Neither carries `resolved_at`, both
+are covered by QT-1's uniqueness, and both are reported to their owner as "you
+are queued". They differ in one way, and it is the mechanism the whole scan
+rests on: **a pairing scan reads only `waiting`**, so a reserved pair is
+invisible to every other worker's next scan.
+
+**`reserved -> waiting` is the only backward edge**, and it is compensation
+rather than a state machine loop — §9.6. The ticket keeps its `entered_at`,
+so a player whose match creation failed returns to the place in line they held.
+
+**`reserved -> expired` is the abandonment path.** A worker that dies between
+reserving a pair and settling it leaves two reserved tickets; the expiry sweep
+covers them once their own window closes, because a live status that nothing
+can clear would lock both players out of the queue through QT-1 forever.
 
 ## 3. Business rules
 
 | # | Rule | Enforced by |
 | --- | --- | --- |
-| QT-1 | One live ticket per player, **across all pools** | `uq_queue_ticket__one_live_per_player` — partial unique on `player_id` where `status = 'waiting'`. `QueueService.join` reads first for a cheap error; the index is what holds under concurrency (BE-06) |
+| QT-1 | One live ticket per player, **across all pools** | `uq_queue_ticket__one_live_per_player` — partial unique on `player_id` where `status IN ('waiting', 'reserved')`. `QueueService.join` reads first for a cheap error; the index is what holds under concurrency (BE-06) |
 | QT-2 | The ticket carries the rating **at entry**, not a reference | `RatingSnapshotProvider`, read before the transaction opens (BE-05) |
-| QT-4 | Claiming is atomic and safe for N workers | `SELECT ... FOR UPDATE SKIP LOCKED` in `QueueRepository.claim_due` — the outbox's mechanism, reused rather than reinvented |
+| QT-3 | Two players who cannot be paired are never paired | The scan, not entry — §9.4 |
+| QT-4 | Claiming is atomic and safe for N workers | `SELECT ... FOR UPDATE SKIP LOCKED` in `QueueRepository.claim_due` and `.claim_pair` — the outbox's mechanism, reused twice rather than reinvented |
+| QT-5 | The rating window widens with the wait | `RatingWindowPolicy` — §9.3 |
 | — | A player must be **eligible** to enter a pool | `QueueEligibilityPolicy` — see §3.1 |
 | — | A pool must name a variant the platform **offers** | `QueuePool.__post_init__`, via `game.public.require_offered` (§8) |
 | — | A ticket past `expires_at` is not live, whatever a worker has recorded | Applied in the query (`QueueRepository.active_ticket`), so no reader can forget it |
 | — | Leaving is idempotent | `DELETE` semantics, and one answer for both cases so a status code never reports queue state back to a probe |
 
-QT-3 (opponent eligibility) and QT-5 (the widening window) are pairing rules
-and are unimplemented — see §1.
+QT-3 and QT-5 are pairing rules and live in §9. They are listed here because
+they are queue-domain rules that the scan happens to enforce, not scan-local
+policy — a future acceptance flow must not be able to bypass either.
 
 ### 3.1 Entry eligibility
 
@@ -189,11 +207,25 @@ Written to the outbox in the same transaction as the ticket (AD-16). Nothing
 subscribes yet; the relay marks an unwanted entry published and counts it
 separately, so an unsubscribed event costs one row.
 
-| Event | `occurred_at` | Payload beyond ids and pool |
-| --- | --- | --- |
-| `matchmaking.queue_ticket_enqueued` | `entered_at` | `rating_snapshot`, `expires_at` |
-| `matchmaking.queue_ticket_cancelled` | the cancellation | `waited_for_seconds` |
-| `matchmaking.queue_ticket_expired` | the ticket's **`expires_at`**, not the sweep's instant | `waited_for_seconds` |
+| Event | Aggregate | `occurred_at` | Payload beyond ids and pool |
+| --- | --- | --- | --- |
+| `matchmaking.queue_ticket_enqueued` | `queue_ticket` | `entered_at` | `rating_snapshot`, `expires_at` |
+| `matchmaking.queue_ticket_cancelled` | `queue_ticket` | the cancellation | `waited_for_seconds` |
+| `matchmaking.queue_ticket_expired` | `queue_ticket` | the ticket's **`expires_at`**, not the sweep's instant | `waited_for_seconds` |
+| `matchmaking.players_paired` | **`match`** | the match's creation | `pairing_id`, both player and ticket ids by side, `waited_for_seconds` |
+
+**`players_paired` is one event about two tickets**, which is the opposite of
+the choice the three above make — and the difference is real. Enqueued,
+cancelled and expired are each one ticket's whole story; a pairing is not, and
+every consumer of it needs both halves. Two per-ticket events would make every
+consumer join them back together, and the first to act on a half-delivered pair
+would announce a match to one player.
+
+Its aggregate is the **match**, not a ticket: that is the subject an operator
+queries for and the identifier every downstream context (`rating`,
+`statistics`, `replay`) will key on. It is published in the same transaction as
+the two `matched` transitions, and a **compensated** pairing publishes nothing
+— nothing durable happened.
 
 "Pool" in every payload is `variant`, `queue_type` and `region` as three
 primitive fields (A64-015.2 added the first). A subscriber routes by pool, and a
@@ -248,6 +280,11 @@ therefore *does* lead with `variant`.
 | Two workers claim disjoint sets; two joins race one constraint | `tests/contract/test_queue_repository.py` |
 | Status codes, the wire shapes, the OpenAPI document, variant selection | `tests/contract/test_matchmaking_queue_api.py` |
 | The architecture contracts | `tests/unit/test_import_contracts.py` |
+| Ordering, the widening window, exclusions, determinism, sides | `tests/unit/test_pairing_engine.py` |
+| Claim sequencing, compensation, idempotency, pool isolation | `tests/unit/test_pairing_service.py` |
+| The pool wire format and the pairing task | `tests/unit/test_pairing_task.py` |
+| `reserve`/`release`/`complete`, abandoned reservations, two workers on one pair | `tests/contract/test_queue_repository.py` |
+| The batch block read, and that it is **one statement** | `tests/contract/test_pairing_exclusions.py` |
 
 **Not testable while one variant is offered:** that a pool scan excludes another
 variant's tickets. `ProductVariant` has one member and `queue_variant` one label,
@@ -273,11 +310,23 @@ all (R-1, R-2) — enforced by two import-linter contracts and asserted by
 | `board_variant_of()` | `ProductVariant` → the engine's `BoardVariant` |
 | `game_engine_version()` | The engine version a new match would be stamped with (AD-15) |
 | `GameEngineServices`, `engine_services()` | The engine's stateless collaborators, wired once |
+| `CreateMatchRequest`, `CreateMatchResult`, `MatchParticipant`, `PlayerSide` | The command `matchmaking` sends to create a match — A64-015.3 |
+| `MatchCreationUseCase`, `MatchCreationRefused`, `MatchCreationUnavailable`, `UnavailableMatchCreation` | The port that accepts it, its refusals, and the implementation that ships until matches are stored |
 
 `Match`, `MoveRecord`, `MatchResult` and the draw-rule set are **not**
-published. R-3 keeps the modules that care about matches on the event bus;
-`matchmaking`'s edge points the other way — it will *ask* `game` to create a
-match, and that port does not exist yet.
+published, and A64-015.3 did not change that. R-3 keeps the modules that care
+about matches on the event bus; `matchmaking`'s edge points the other way, and
+it is answered with a **command `game` accepts** rather than a type it hands
+out. A caller can ask for a match to exist; it cannot advance one.
+
+**The request carries no time control**, and §9's own list names one. The
+reason is the one `QueuePool` already records: `reference.time_control`
+(database.md §6.2) does not exist in code, and inventing a speed class in
+`matchmaking` would put the definition of "blitz" in the module least entitled
+to own it. A nullable placeholder would be worse than the gap — it would be a
+contract saying a time control is optional when every real match has one. When
+`reference.time_control` ships, `QueuePool` gains a component and this request
+gains a field, in one change.
 
 ### 8.2 Product variants
 
@@ -316,7 +365,230 @@ the first caller.
 
 ---
 
-## 9. Unresolved rules decisions blocking persisted games
+---
+
+## 9. Pairing — A64-015.3
+
+One pool, one scan, at most one match. `PairingEngine` decides;
+`PairingService` orchestrates; neither knows about HTTP and only the second
+knows about a transaction.
+
+### 9.1 One pool at a time
+
+A scan is handed exactly one `QueuePool` and reads
+`ix_queue_ticket__pool`, which leads with `(variant, queue_type, region)`.
+Two players in different pools are never candidates for each other, whatever
+their ratings — rated never meets casual, one variant never meets another,
+and regions are separate when a player names one.
+
+The scan is scheduled **per pool**: `PairingTask` takes one
+`QueuePool.identifier()` in its payload and `app_factory` builds one
+`PeriodicTaskScheduler` per pool from `every_pool()`. Fourteen today.
+
+`QueuePool.identifier()` — `"russian_8x8:ranked:global"` — is therefore no
+longer only a log label. It is the task's wire format, and it is the key a
+**future Redis pool index** would use (`from_identifier` is the other half of
+the round trip). No Redis index is built in this task: A64-015.3 rules it out
+until something has been measured, and the identifier existing is what makes
+adding one later a change in one module.
+
+**A reserved ticket is not scannable.** `ix_queue_ticket__pool` keeps the
+predicate `status = 'waiting'` even though "live" widened elsewhere, which is
+what makes a claimed pair invisible to every other worker.
+
+### 9.2 Candidate ordering
+
+Deterministic end to end, because two workers reading one pool at one instant
+must reach the same conclusion. No randomness, no set iteration, no dependence
+on row order — `PairingEngine` re-sorts its input rather than trusting the
+query.
+
+**Candidates**, in order:
+
+| # | Key | Why |
+| --- | --- | --- |
+| 1 | `entered_at` ascending | The longest wait is served first |
+| 2 | `id` ascending | A total tiebreak. UUIDv7, so it is itself time-ordered |
+
+**Partners**, for a given candidate:
+
+| # | Key | Why |
+| --- | --- | --- |
+| 1 | `abs(rating difference)` ascending | The closest game available |
+| 2 | `entered_at` ascending | Then the longest wait |
+| 3 | `id` ascending | Then the total tiebreak |
+
+The **first candidate with any compatible partner wins**. A scan that searched
+for the globally closest rating match would starve whoever had waited longest,
+which is the failure mode a queue is judged on.
+
+### 9.3 The rating window — QT-5
+
+`RatingWindowPolicy`, from four settings, monotonic and bounded:
+
+    width(age) = min(initial + floor(age / every) * by, maximum)
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `MATCHMAKING_RATING_WINDOW_INITIAL` | 100 | The gap a fresh ticket accepts |
+| `MATCHMAKING_RATING_WINDOW_WIDEN_EVERY_SECONDS` | 15 | One step |
+| `MATCHMAKING_RATING_WINDOW_WIDEN_BY` | 50 | What a step adds |
+| `MATCHMAKING_RATING_WINDOW_MAXIMUM` | 600 | Where it stops |
+
+**Stepped rather than continuous**, so two workers whose clocks differ by a
+millisecond compute the same width everywhere except within that millisecond of
+a boundary. A continuous function would make every scan a different scan.
+
+**Bounded**, because an unbounded window eventually pairs a beginner with the
+top of the ladder. Expiring is the honest answer to a thin pool, and
+`expires_at` already says it.
+
+**A pair is compatible when the gap fits inside _both_ windows.** The narrower
+governs. The alternative would let a player who has waited five minutes drag in
+somebody who joined a second ago and asked for a close game: a long wait buys
+*access* to more opponents, never the right to impose a bad game on one.
+
+The rating is `QueueTicket.rating_snapshot` (QT-2) — never a live lookup, so a
+rating that moves mid-scan cannot make one scan pair inconsistently.
+
+### 9.4 Pairwise exclusion — QT-3
+
+Two vetoes, unioned into one `PairExclusions` before the engine sees them.
+
+| Source | Port | Status |
+| --- | --- | --- |
+| Blocked either way (BL-2) | `friends.public.PairingExclusions` | **Implemented** |
+| Immediately previous opponent | `RecentOpponentProvider` | **Deferred** — §9.7 |
+
+**Here and not at entry.** A block is a fact about a *pair*, and it can only be
+answered where both players are in hand. `QueueEligibilityPolicy` (§3.1) stays
+responsible for single-player eligibility only.
+
+**Symmetric**, though a block is not (BL-1). A blocker paired with the person
+they blocked would have gained nothing from blocking them.
+
+**One query for the whole batch.** `blocked_pairs_among` takes every candidate
+and restricts both sides of the predicate to that set, so the result is bounded
+by the blocks *within* the pool rather than by either player's whole list. A
+per-candidate form would be an N+1 inside a job that runs several times a
+second. A contract test counts the statements.
+
+**Reveals nothing.** A skipped pairing is indistinguishable from a pool that
+had nobody suitable, which is what BL-1 requires.
+
+### 9.5 The atomic claim
+
+Three transactions, and the boundaries are the design:
+
+    read      snapshot the pool, batch the exclusions       no transaction
+    claim     lock both tickets, reserve them               transaction 1
+    create    ask `game` for a match                        no transaction
+    settle    mark both matched, publish the event          transaction 2
+              — or release both back to `waiting`           transaction 2'
+
+`claim_pair` is `SELECT ... FOR UPDATE SKIP LOCKED` over exactly two ids, with
+`status = 'waiting' AND expires_at > now`. It returns **both tickets or
+nothing** — never one. A single locked ticket is not a claim on a pair, and
+returning it would hand the loser half a pairing plus a lock the winner needs.
+
+`SKIP LOCKED` makes the loser *skip* rather than *wait*: two workers that chose
+the same pair would otherwise serialise, and the second would hold a lock on
+tickets the first is about to reserve. No distributed lock, no `claimed_by`
+column, no check-then-act — the same mechanism the outbox proved.
+
+`reserve`, `release` and `complete` are one `UPDATE` each, guarded by a
+compare-and-set on the expected status **and** by a subquery asserting that
+every row still matches. All-or-nothing is the statement's property, not the
+caller's rollback: without the subquery, a pair with one cancelled ticket would
+move the other one and report failure.
+
+**The create step is outside a transaction on purpose.** services.md BE-05
+forbids a cross-context call inside an open one — it would hold two row locks
+across another module's work. The price of letting go is the reservation, and
+that is what `reserved` is for.
+
+**The claim commits before `game` is called**, which is what makes the
+reservation visible to every other worker.
+
+### 9.6 Compensation
+
+`game` refused, or anything else went wrong: both tickets go back to `waiting`.
+
+| Property | How |
+| --- | --- |
+| Neither player is lost from the queue | `release` is called on every failure path, refusal or fault |
+| Both keep their place in line | `release` writes `status` and `resolved_at` only — `entered_at` is not in the statement |
+| Nothing is announced | No event. Nothing durable happened, and "a pairing was attempted and abandoned" is an implementation detail of a background job |
+| The failure is observable | `pairing_compensated` at `WARNING` with the pool, the pairing id and the reason; `pairing_release_failed` at `ERROR` if the release itself does not apply |
+
+A **fault** (an unreachable database, a bug in `game`) compensates identically
+to a **refusal**. Two players are waiting either way, so the recovery must not
+depend on which.
+
+The one genuinely bad outcome is a `complete` that does not apply *after* a
+match was created — a match exists whose tickets do not say so. It is logged as
+`pairing_settle_failed` at `ERROR` with both identifiers, and the
+reconciliation is manual until a match carries a durable link back to its
+tickets (A64-015.4).
+
+### 9.7 Idempotency
+
+`pairing_id = uuid5(namespace, sorted(ticket_id, ticket_id))` — **derived,
+never generated**, so it survives a process restart with no stored state.
+
+The contract, stated once on `MatchCreationUseCase.create_match`: calling twice
+with the same `pairing_id` returns the same `match_id`, with `created=False` on
+every call after the first.
+
+It exists for one crash: a worker that dies after `game` committed the match
+and before it settled the tickets. The retry re-derives the same key, `game`
+returns the match it already has, and the settle completes. Without it, one
+ticket pair becomes two matches — two games for two players who agreed to one.
+
+Sides are derived from the same identifier (its parity), so a replayed pairing
+assigns the same sides as the attempt that crashed. "The longer wait moves
+first" was rejected: light moves first in Russian draughts, so it would be a
+measurable permanent edge handed to whoever the pool made wait.
+
+### 9.8 What is wired and not switched on
+
+`MATCHMAKING_PAIRING_ENABLED` defaults to **`false`**, and that is the only
+honest setting today.
+
+`game` has a `Match` aggregate (A64-014.6) and no repository, no table and no
+migration for one. `game.public.UnavailableMatchCreation` is therefore what a
+scan reaches, and every pairing it found would be reserved, refused and
+released — the compensation path working exactly as designed, several times a
+second, forever, for no match.
+
+So the engine, the service, the task and the whole object graph ship and are
+tested; the schedule does not run. A64-015.4 replaces the match-creation
+adapter and flips the default in the same change.
+
+The **previous-opponent** exclusion is deferred for the same reason: there is
+no match history to read. `NoRecentOpponents` excludes nobody, which is the
+safe direction — a rematch is a disappointment and an empty pool is an outage.
+When `game` publishes the read, `RecentOpponentProvider` is satisfied by
+`game.public` and nothing else in the graph changes.
+
+### 9.9 Performance
+
+| Concern | Answer |
+| --- | --- |
+| Pool scan | `ix_queue_ticket__pool`, partial on `waiting`, leading with the pool — bounded by concurrency rather than by history |
+| Candidate batch | `MATCHMAKING_CANDIDATE_BATCH_SIZE`, default **200**, the oldest first |
+| Block reads | One statement per scan, restricted to the batch on both sides |
+| Recent opponents | One call per scan, same shape |
+| Claim | Two rows by primary key, `SKIP LOCKED` |
+| Settle | One `UPDATE` for both tickets |
+| Pool configuration | Resolved once per task run from the payload; no per-candidate lookup |
+
+No Redis, no cache, and no pool index — none of them is justified before a
+measurement, and `QueuePool.identifier()` is what makes adding one cheap.
+
+---
+
+## 10. Unresolved rules decisions blocking persisted games
 
 Games are **not** persisted in A64-015.2 and no `Match` is created, so none of
 the following blocks the queue. All of them block the first stored game, because
@@ -343,8 +615,11 @@ Resolving any threshold above is a rules change and must bump it.
 ## TODO
 
 - [ ] Resolve §9's two research items and one product decision **before any game is persisted**
-- [ ] Specify **pairing**: the scan, QT-3's eligibility, QT-5's widening window, and the two-phase claim (A64-015.3)
-- [ ] Add `time_control` to `QueuePool` when `reference.time_control` ships (§2.1)
+- [ ] Ship **match persistence** in `game` and replace `UnavailableMatchCreation`, then default `MATCHMAKING_PAIRING_ENABLED` to `true` (§9.8)
+- [ ] Satisfy `RecentOpponentProvider` from `game.public` once match history exists (§9.7)
+- [ ] Add `time_control` to `QueuePool` and to `CreateMatchRequest` when `reference.time_control` ships (§2.1, §8.1)
+- [ ] Give a stored match a durable link back to its queue tickets, so `pairing_settle_failed` becomes reconcilable rather than manual (§9.6)
+- [ ] Replace `every_pool()` with a scan of pools that actually have waiting tickets, when the pool count makes it worth a query (§9.1)
 - [ ] Specify **acceptance**: the `reserved` state, its deadline, and what a declined acceptance does to both tickets
 - [ ] Specify **challenges** — `matchmaking.challenge` (database.md §8.1), direct and open
 - [ ] Define the `matchmaking → game` match-creation port with `game`

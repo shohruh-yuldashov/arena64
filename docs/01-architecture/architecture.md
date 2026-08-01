@@ -406,8 +406,15 @@ contents (A64-015.2), published because `matchmaking` needs the variant catalogu
 engine version, and the engine's stateless collaborators — see
 [`specs/matchmaking.md §8`](../../specs/matchmaking.md). It deliberately withholds `Match`,
 `MoveRecord` and `MatchResult`: the modules that care about those subscribe to events (R-3),
-and the one module whose edge points inward — `matchmaking`, which will ask `game` to create
-a match — needs a use case, not an aggregate.
+and the one module whose edge points inward — `matchmaking` — was given a **command** rather
+than an aggregate.
+
+A64-015.3 built that command: `CreateMatchRequest` in, `CreateMatchResult` out, idempotent on
+a `pairing_id` the caller derives. That is what an inbound edge looks like under R-3 — a
+caller may ask for a match to exist and cannot advance one. `friends` gained a third
+published port in the same task (`PairingExclusions`), for the same reason and by the same
+rule: a new *question* from a new consumer gets its own port rather than a wider existing
+one.
 
 **R-2 — Only `game`, `replay`, and `fairplay` may import `engine`, and only `game` may use
 it to mutate state.**
@@ -420,8 +427,15 @@ private package inside `game`.
 
 **R-3 — Only `game` may mutate match state.**
 Rating, statistics, achievements, leaderboard, notifications, replay, fairplay and spectator
-**never call into `game` to change anything**; they subscribe to its events. *Why:* two independent
-benefits. It keeps the move hot path free of their latency, and it makes them
+**never call into `game` to change anything**; they subscribe to its events.
+
+`matchmaking` is the one exception the diagram already drew, and it is not a weakening: it is
+*upstream* of a match rather than downstream of one, so there is no event that could carry
+its request. It sends a command `game` accepts (`game.public.MatchCreationUseCase`) and holds
+no match type at all — see `specs/matchmaking.md` §8.1. Every other module reacts to
+something that already happened; this one asks for something to start.
+
+*Why:* two independent benefits. It keeps the move hot path free of their latency, and it makes them
 *non-critical* — a rating outage degrades a scoreboard, it does not stop people from
 playing checkers. Inverting this (having `game` call `rating` on completion) would couple
 the platform's core loop to its least critical subsystem.

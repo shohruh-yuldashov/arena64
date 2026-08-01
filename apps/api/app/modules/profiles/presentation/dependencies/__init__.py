@@ -60,11 +60,16 @@ from app.api.deps import (
     StatisticsSettingsDep,
 )
 from app.database.unit_of_work import SessionUnitOfWork
-from app.modules.friends.application.services import SocialGraphReaderService
+from app.modules.friends.application.services import (
+    CachedSocialGraphReader,
+    SocialGraphReaderService,
+)
 from app.modules.friends.infrastructure.repositories import (
     SqlAlchemyBlockedPlayerRepository,
     SqlAlchemyFriendshipRepository,
 )
+from app.modules.friends.presentation.dependencies import SocialGraphCacheDep
+from app.modules.friends.public import SocialGraphReader
 from app.modules.profiles.application.ports import (
     BlockedPlayersProvider,
     RatingProvider,
@@ -333,25 +338,32 @@ def get_presence_provider(
 PresenceProviderDep = Annotated[PresenceProvider, Depends(get_presence_provider)]
 
 
-def _social_graph(session: DbSessionDep) -> SocialGraphReaderService:
+def _social_graph(session: DbSessionDep, cache: SocialGraphCacheDep) -> SocialGraphReader:
     """`friends`' published reader, assembled over this request's session.
 
     A helper because two providers need the same object, and building it
-    twice would mean two identity maps over the same rows in one request.
+    twice would mean two identity maps over the same rows in one request —
+    and, since A64-013.6, two cache decorators that would each miss and each
+    repopulate.
 
     Not a `Depends` factory of its own: it returns `friends`' type, and a
     dependency yielding it would publish that module's service into this
     module's dependency namespace for no caller's benefit. What the two
     providers below expose are `profiles`' own ports.
     """
-    return SocialGraphReaderService(
+    reader = SocialGraphReaderService(
         friendships=SqlAlchemyFriendshipRepository(session),
         blocks=SqlAlchemyBlockedPlayerRepository(session),
     )
+    # A64-013.6. The cache is a **decorator** rather than something inside
+    # the reader, so `FRIENDS_CACHE_ENABLED=false` swaps one object here and
+    # changes nothing else — and so the reader stays a thing that reads
+    # PostgreSQL, which is its only storage.
+    return CachedSocialGraphReader(reader, cache)
 
 
 def get_relationship_provider(
-    session: DbSessionDep, settings: FriendsSettingsDep
+    session: DbSessionDep, settings: FriendsSettingsDep, cache: SocialGraphCacheDep
 ) -> ViewerRelationshipProvider:
     """What a viewer is to the players they are reading — A64-013.3.
 
@@ -391,14 +403,14 @@ def get_relationship_provider(
         return NoRelationshipsProvider()
 
     logger.debug("relationship_provider_selected", extra={"provider": "friendship"})
-    return FriendshipRelationshipProvider(_social_graph(session))
+    return FriendshipRelationshipProvider(_social_graph(session, cache))
 
 
 RelationshipProviderDep = Annotated[ViewerRelationshipProvider, Depends(get_relationship_provider)]
 
 
 def get_blocked_players_provider(
-    session: DbSessionDep, settings: FriendsSettingsDep
+    session: DbSessionDep, settings: FriendsSettingsDep, cache: SocialGraphCacheDep
 ) -> BlockedPlayersProvider:
     """Who a viewer must never be shown — A64-013.5.
 
@@ -422,7 +434,7 @@ def get_blocked_players_provider(
         return NoBlockedPlayersProvider()
 
     logger.debug("blocked_players_provider_selected", extra={"provider": "social_graph"})
-    return SocialGraphBlockedPlayersProvider(_social_graph(session))
+    return SocialGraphBlockedPlayersProvider(_social_graph(session, cache))
 
 
 BlockedPlayersProviderDep = Annotated[BlockedPlayersProvider, Depends(get_blocked_players_provider)]

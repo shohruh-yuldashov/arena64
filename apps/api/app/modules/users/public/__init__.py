@@ -50,8 +50,10 @@ What is published, and why only this much:
                          (A64-012.7). Read-only, and separate from the
                          recorder so that the module serving anonymous
                          traffic cannot mark anybody online
-  `PresenceRecorder`     writes what a gateway node observed. Held by
-                         nothing on the HTTP surface
+  `PresenceRecorder`     writes what was observed of a player. Held only by
+                         `PresenceService`, which `auth`'s lifecycle routes
+                         resolve (A64-013.6) — and by AD-09's gateway when
+                         it exists. Never by a read path
   `Presence`             those ports' record — a frozen dataclass rather
                          than a Pydantic DTO, because `profiles.domain`
                          holds it and a domain layer must not import a

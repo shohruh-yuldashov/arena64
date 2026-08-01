@@ -25,11 +25,17 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from app.api.deps import ClockDep, DbSessionDep, get_clock
+from app.api.deps import ClockDep, DbSessionDep, PresenceSettingsDep, RedisPoolsDep, get_clock
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.users.application.ports import UserRepository
 from app.modules.users.application.services import UserService
+from app.modules.users.application.services.presence_service import PresenceService
+from app.modules.users.infrastructure.presence import (
+    NoPresenceProvider,
+    RedisPresenceProvider,
+)
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
+from app.modules.users.public import PresenceProvider, PresenceRecorder
 
 # `get_clock` and `ClockDep` moved to `app.api.deps` in A64-011.9 — "now"
 # is a platform concern, not this module's, and `auth` was importing them
@@ -64,3 +70,53 @@ def get_user_service(
 
 
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
+
+
+def get_presence_service(
+    pools: RedisPoolsDep, settings: PresenceSettingsDep, clock: ClockDep
+) -> PresenceService:
+    """The presence **producer** — A64-013.6.
+
+    The one factory on the platform that yields something holding
+    `PresenceRecorder`. `profiles` gets the reader alone, precisely so the
+    module serving anonymous traffic cannot assert that somebody is online;
+    this is what `auth`'s lifecycle routes are handed.
+
+    ## Why it lives in `users` and is wired from `auth`
+
+    domain-model.md §299 assigns `Presence` to this module, so the service
+    that writes it belongs here. The *events* that produce it — a sign-in, a
+    refresh, a full sign-out — are `auth`'s, which is why `auth`'s routes
+    resolve this dependency rather than `users` observing something it
+    cannot see.
+
+    That is the same shape `profiles` already uses for
+    `avatars.presentation.dependencies.AvatarLinkBuilderDep`: a module's
+    presentation layer resolving another module's published capability.
+
+    ## The same two branches every presence dependency has
+
+    `RedisPresenceProvider` is both the reader and the recorder, and it is
+    handed the **`cache`** Redis role — see `PresenceSettings` for the AD-03
+    argument. `NoPresenceProvider` is the fallback, wired by
+    `PRESENCE_ENABLED=false`; it accepts writes and discards them silently,
+    which is what a kill switch for a cosmetic feature must do rather than
+    breaking a sign-in.
+
+    Not logged at selection here, unlike `profiles`' presence factory: that
+    one is the *only* place that knows a choice was made for a read path,
+    and duplicating its `WARNING` on every login would double the noise for
+    the same fact.
+    """
+    if not settings.enabled:
+        recorder: PresenceRecorder = NoPresenceProvider()
+        provider: PresenceProvider = NoPresenceProvider()
+    else:
+        redis_presence = RedisPresenceProvider(pools.cache, settings=settings, clock=clock)
+        recorder = redis_presence
+        provider = redis_presence
+
+    return PresenceService(recorder=recorder, provider=provider)
+
+
+PresenceServiceDep = Annotated[PresenceService, Depends(get_presence_service)]

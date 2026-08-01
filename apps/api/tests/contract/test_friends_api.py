@@ -34,6 +34,7 @@ from app.core.clock import SystemClock
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.friends.application.services import FriendshipService
 from app.modules.friends.domain.friendship import FriendshipEndReason
+from app.modules.friends.infrastructure.cache import NoSocialGraphCache
 from app.modules.friends.infrastructure.models import FriendRequestModel, FriendshipModel
 from app.modules.friends.infrastructure.repositories import SqlAlchemyFriendshipRepository
 from tests.contract.contract_app import build_contract_app, contract_client
@@ -99,6 +100,11 @@ def _friendship_service(session: AsyncSession) -> FriendshipService:
     """
     return FriendshipService(
         friendships=SqlAlchemyFriendshipRepository(session),
+        # A64-013.6. `NoSocialGraphCache` rather than a real one: this
+        # service is reached directly here, so nothing would invalidate
+        # what it cached, and the mutual-friend count is not a cached
+        # entry in any case (see `friends.infrastructure.cache.keys`).
+        cache=NoSocialGraphCache(),
         unit_of_work=SessionUnitOfWork(session),
         clock=SystemClock(),
     )

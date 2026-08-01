@@ -540,9 +540,10 @@ async def count_friends(
     either direction.
 
     A real count rather than the length of a page, so it stays correct past
-    the first one. It is deliberately **not cached** — `friends:v1:` is
-    reserved for exactly this, and a count with no invalidation trigger goes
-    wrong on the first removal.
+    the first one. Still deliberately **not cached**, even though
+    `friends:v1:` is live since A64-013.6: the count is derivable from the
+    friend-id set that namespace already holds, and a second entry would be
+    a second copy of one fact with its own way of going stale.
     """
     return build_response(FriendCountResponse(total=await service.count_friends(player_id=user.id)))
 

@@ -32,18 +32,25 @@ same request, and a second repository would mean a second identity map over
 the same rows.
 """
 
+import logging
 from typing import Annotated
 
 from fastapi import Depends
 
-from app.api.deps import ClockDep, DbSessionDep
+from app.api.deps import ClockDep, DbSessionDep, FriendsSettingsDep, RedisPoolsDep
 from app.database.unit_of_work import SessionUnitOfWork
+from app.modules.friends.application.ports import SocialGraphCache
 from app.modules.friends.application.services import (
     BlockingService,
     FriendRequestService,
     FriendshipService,
+    PresenceAudienceService,
 )
 from app.modules.friends.application.validators import FriendRequestValidator
+from app.modules.friends.infrastructure.cache import (
+    NoSocialGraphCache,
+    RedisSocialGraphCache,
+)
 from app.modules.friends.infrastructure.repositories import (
     SqlAlchemyBlockedPlayerRepository,
     SqlAlchemyFriendRequestRepository,
@@ -53,8 +60,62 @@ from app.modules.users.application.services import UserService
 from app.modules.users.application.services.public_profile_service import PublicProfileService
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
 
+logger = logging.getLogger(__name__)
 
-def get_friend_request_service(session: DbSessionDep, clock: ClockDep) -> FriendRequestService:
+
+def get_social_graph_cache(pools: RedisPoolsDep, settings: FriendsSettingsDep) -> SocialGraphCache:
+    """The `friends:v1:` cache, or an inert stand-in — A64-013.6.
+
+    The **`cache` Redis role**, never `live` or `limits`: every value here
+    is derived from PostgreSQL and reconstructible by definition, so
+    eviction is correct rather than merely tolerable (caching.md §2). Losing
+    an entry costs one query.
+
+    `NoSocialGraphCache` is the fallback, wired by
+    `FRIENDS_CACHE_ENABLED=false` — for a cache that is misbehaving. The
+    platform then reads the graph from PostgreSQL on every composition,
+    which is what it did before this task, so the degradation is a
+    legitimate configuration rather than a stub.
+
+    `WARNING` on the fallback because nothing in a response says the cache
+    is off: the platform is simply slower.
+    """
+    if not settings.cache_enabled:
+        logger.warning("social_graph_cache_fallback", extra={"provider": "none"})
+        return NoSocialGraphCache()
+
+    logger.debug("social_graph_cache_selected", extra={"provider": "redis"})
+    return RedisSocialGraphCache(pools.cache, settings=settings)
+
+
+SocialGraphCacheDep = Annotated[SocialGraphCache, Depends(get_social_graph_cache)]
+
+
+def get_presence_audience_service(session: DbSessionDep) -> PresenceAudienceService:
+    """Who may be told about a player's presence — A64-013.6.
+
+    **Reachable from no endpoint**, and that is the design: A64-013.6 asks
+    for the fan-out integration point and excludes the transport that would
+    use it. A gateway resolves this dependency; nothing on the HTTP surface
+    does.
+
+    Registered here rather than left unwired so that the object graph is
+    real — a "seam" nothing can construct is a comment, not a seam.
+    """
+    return PresenceAudienceService(
+        friendships=SqlAlchemyFriendshipRepository(session),
+        blocks=SqlAlchemyBlockedPlayerRepository(session),
+    )
+
+
+PresenceAudienceServiceDep = Annotated[
+    PresenceAudienceService, Depends(get_presence_audience_service)
+]
+
+
+def get_friend_request_service(
+    session: DbSessionDep, clock: ClockDep, cache: SocialGraphCacheDep
+) -> FriendRequestService:
     """The friend-request use cases, assembled for this request.
 
     Everything is constructed here rather than injected from further out,
@@ -76,6 +137,9 @@ def get_friend_request_service(session: DbSessionDep, clock: ClockDep) -> Friend
         # A64-013.3 forbids. What acceptance needs is a write that joins the
         # caller's transaction, which is exactly what a repository is.
         friendships=SqlAlchemyFriendshipRepository(session),
+        # The fourth `friends:v1:` invalidation trigger — acceptance is the
+        # only way a friendship comes into existence.
+        cache=cache,
         # The validator now reaches three relations: requests, blocks, and
         # `users` for the existence half of FR-2 — see
         # `_ensure_recipient_reachable` on why a blocked pair and an
@@ -99,7 +163,9 @@ def get_friend_request_service(session: DbSessionDep, clock: ClockDep) -> Friend
 FriendRequestServiceDep = Annotated[FriendRequestService, Depends(get_friend_request_service)]
 
 
-def get_blocking_service(session: DbSessionDep, clock: ClockDep) -> BlockingService:
+def get_blocking_service(
+    session: DbSessionDep, clock: ClockDep, cache: SocialGraphCacheDep
+) -> BlockingService:
     """The blocking use cases — A64-013.5.
 
     Holds **three** repositories, which is what makes the cascade one
@@ -120,6 +186,7 @@ def get_blocking_service(session: DbSessionDep, clock: ClockDep) -> BlockingServ
         blocks=SqlAlchemyBlockedPlayerRepository(session),
         friendships=SqlAlchemyFriendshipRepository(session),
         requests=SqlAlchemyFriendRequestRepository(session),
+        cache=cache,
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
     )
@@ -128,7 +195,9 @@ def get_blocking_service(session: DbSessionDep, clock: ClockDep) -> BlockingServ
 BlockingServiceDep = Annotated[BlockingService, Depends(get_blocking_service)]
 
 
-def get_friendship_service(session: DbSessionDep, clock: ClockDep) -> FriendshipService:
+def get_friendship_service(
+    session: DbSessionDep, clock: ClockDep, cache: SocialGraphCacheDep
+) -> FriendshipService:
     """The friend-list use cases — A64-013.3.
 
     Separate from `get_friend_request_service` above even though both are
@@ -142,6 +211,7 @@ def get_friendship_service(session: DbSessionDep, clock: ClockDep) -> Friendship
     """
     return FriendshipService(
         friendships=SqlAlchemyFriendshipRepository(session),
+        cache=cache,
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
     )
@@ -152,9 +222,13 @@ FriendshipServiceDep = Annotated[FriendshipService, Depends(get_friendship_servi
 
 __all__ = [
     "BlockingServiceDep",
+    "PresenceAudienceServiceDep",
+    "SocialGraphCacheDep",
     "FriendRequestServiceDep",
     "FriendshipServiceDep",
     "get_blocking_service",
+    "get_presence_audience_service",
+    "get_social_graph_cache",
     "get_friend_request_service",
     "get_friendship_service",
 ]

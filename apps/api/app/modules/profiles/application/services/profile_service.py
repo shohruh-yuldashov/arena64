@@ -215,8 +215,10 @@ class ProfileService:
         switched off reports "unknown" to owner and stranger alike rather
         than only to one of them.
 
-        `None` for an owner nobody has observed, which today is everybody:
-        nothing writes presence until AD-09's gateway does. Unredacted does
+        `None` for an owner nobody has observed — a player whose presence
+        window lapsed, or a deployment with `PRESENCE_ENABLED=false`. Since
+        A64-013.6 a signed-in caller is normally observed, because the
+        request that authenticated them is what recorded it. Unredacted does
         not mean invented.
         """
         presence = await self._presence.presence_for(player_id)

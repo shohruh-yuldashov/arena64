@@ -312,9 +312,10 @@ class ProfileResponse(BaseResponseDTO):
             "best-effort and decays on a timer, so a briefly stale value is "
             "expected rather than a fault."
         ),
-        # `true` rather than the `null` every player currently reports, so
-        # the schema view shows the value a client actually has to render.
-        # The response examples below carry both.
+        # `true` rather than `null`, so the schema view shows the value a
+        # client actually has to render. The response examples below carry
+        # both, because `null` stays the honest answer for a hidden, lapsed
+        # or never-observed player.
         examples=[True],
     )
     last_seen: datetime | None = Field(

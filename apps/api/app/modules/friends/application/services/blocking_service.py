@@ -63,6 +63,7 @@ from app.modules.friends.application.ports import (
     BlockedPlayerRepository,
     FriendRequestRepository,
     FriendshipRepository,
+    SocialGraphCache,
 )
 from app.modules.friends.domain.block import Block
 from app.modules.friends.domain.exceptions import AlreadyBlocked, NotBlocked, SelfBlock
@@ -78,10 +79,14 @@ class BlockingService:
         blocks: BlockedPlayerRepository,
         friendships: FriendshipRepository,
         requests: FriendRequestRepository,
+        cache: SocialGraphCache,
         unit_of_work: UnitOfWork,
         clock: Clock,
     ) -> None:
         self._blocks = blocks
+        # Two of the four `friends:v1:` invalidation triggers live in this
+        # class — see `_invalidate` on why they fire after the commit.
+        self._cache = cache
         # The two **repositories**, not the services that wrap them. Those
         # open transactions of their own, and calling them from inside the
         # cascade's unit of work would produce the nested, multi-transaction
@@ -122,6 +127,8 @@ class BlockingService:
             ended = await self._end_friendship(blocker_id, blocked_id, at=at)
             voided = await self._requests.void_pending_between(blocker_id, blocked_id, at=at)
             await self._unit_of_work.commit()
+
+        await self._invalidate(blocker_id, blocked_id)
 
         # **Both ids, and the counts of what the cascade did.** A block is
         # an edge one party created and the other must never learn about, so
@@ -164,10 +171,13 @@ class BlockingService:
                 await self._blocks.remove(blocker_id, blocked_id)
                 await self._unit_of_work.commit()
         except NotBlocked:
-            # Nothing to lift. DEBUG rather than INFO: a retry is ordinary,
-            # and an audit trail records what *changed*.
+            # Nothing to lift, and therefore nothing to invalidate. DEBUG
+            # rather than INFO: a retry is ordinary, and an audit trail
+            # records what *changed*.
             logger.debug("player_unblock_noop", extra={"blocker_id": str(blocker_id)})
             return
+
+        await self._invalidate(blocker_id, blocked_id)
 
         logger.info(
             "player_unblocked",
@@ -221,3 +231,30 @@ class BlockingService:
             extra={"friendship_id": str(friendship.id), "actor_id": str(blocker_id)},
         )
         return True
+
+    async def _invalidate(self, *player_ids: UUID) -> None:
+        """Drops both players' cached graph entries — A64-013.6.
+
+        **After the commit, never inside it**, and the ordering is the one
+        decision here worth arguing:
+
+          - invalidating *before* the commit opens a window in which another
+            request repopulates the cache from the pre-commit database state
+            and then nothing invalidates it again. That entry is wrong until
+            the TTL, which is the failure this whole mechanism exists to
+            prevent;
+          - invalidating *after* a transaction that rolled back is harmless.
+            The entry was correct, it is dropped, and the next read
+            repopulates it identically — one wasted query.
+
+        So the window that remains is between the commit and the `DEL`,
+        during which a concurrent read may repopulate stale data. It is
+        microseconds wide, it is bounded by the TTL, and closing it properly
+        needs the outbox (AD-16) rather than a cleverer ordering — recorded
+        here so the next person does not try to fix it with one.
+
+        Both parties, always: a friendship and a block are facts about a
+        pair, and invalidating one side would leave the other's cached view
+        of the relationship intact.
+        """
+        await self._cache.invalidate(player_ids)

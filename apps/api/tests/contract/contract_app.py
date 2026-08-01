@@ -7,17 +7,20 @@ and every mapper are the ones that ship. What it also means is that
 `lifespan` never runs — `ASGITransport` calls the application, it does not
 start it — so nothing that `lifespan` puts on `app.state` exists.
 
-Three dependencies read `app.state`, and each one had to be redirected by
+Five dependencies read `app.state`, and each one had to be redirected by
 hand in every suite that touched it:
 
-    get_db_session        `app.state.db`           -> the test's transaction
-    get_rate_limiter      `app.state.rate_limiter` -> an in-memory limiter
-    get_presence_provider `app.state.redis_pools`  -> `NoPresenceProvider`
+    get_db_session         `app.state.db`           -> the test's transaction
+    get_rate_limiter       `app.state.rate_limiter` -> an in-memory limiter
+    get_presence_provider  `app.state.redis_pools`  -> `NoPresenceProvider`
+    get_presence_service   `app.state.redis_pools`  -> `NoPresenceProvider`
+    get_social_graph_cache `app.state.redis_pools`  -> `NoSocialGraphCache`
 
 Before this module that was seven near-identical fixtures, and the third
 arrived in A64-012.7 by editing six files at once. This is the shape that
 does not repeat: a module that adds an `app.state` dependency adds one
-parameter here, and every existing suite keeps working unchanged.
+parameter here, and every existing suite keeps working unchanged — which is
+exactly what A64-013.6 did when it added the fourth and fifth.
 
 ## What may be overridden, and what may not
 
@@ -65,9 +68,14 @@ from app.api.deps import (
 from app.app_factory import create_app
 from app.config.settings import RateLimitSettings, StatisticsSettings
 from app.core.rate_limiting import RateLimiter
+from app.modules.friends.application.ports import SocialGraphCache
+from app.modules.friends.infrastructure.cache import NoSocialGraphCache
+from app.modules.friends.presentation.dependencies import get_social_graph_cache
 from app.modules.profiles.presentation.dependencies import get_presence_provider
+from app.modules.users.application.services.presence_service import PresenceService
 from app.modules.users.infrastructure.presence import NoPresenceProvider
-from app.modules.users.public import PresenceProvider
+from app.modules.users.presentation.dependencies import get_presence_service
+from app.modules.users.public import PresenceProvider, PresenceRecorder
 from tests.fakes.rate_limiter import AllowAllRateLimiter
 
 #: The base URL every contract client uses. A constant so that a test
@@ -83,6 +91,8 @@ def build_contract_app(
     rate_limiter: RateLimiter | None = None,
     rate_limit_settings: RateLimitSettings | None = None,
     presence: PresenceProvider | None = None,
+    presence_recorder: PresenceRecorder | None = None,
+    social_graph_cache: SocialGraphCache | None = None,
     statistics_settings: StatisticsSettings | None = None,
 ) -> FastAPI:
     """The production application, with `lifespan`'s state stood in for.
@@ -106,6 +116,18 @@ def build_contract_app(
                               `tests/conftest.py` pins to disabled
         presence              `NoPresenceProvider`, which is what
                               `PRESENCE_ENABLED=false` wires in production
+        presence_recorder     `NoPresenceProvider` again — the *write* half,
+                              which `auth`'s lifecycle routes hold since
+                              A64-013.6. Separate from `presence` because
+                              the two capabilities are separate ports, and a
+                              suite asserting that signing in records
+                              presence passes one object as both
+        social_graph_cache    `NoSocialGraphCache`, which is what
+                              `FRIENDS_CACHE_ENABLED=false` wires in
+                              production. Off by default for the reason
+                              rate limiting is: a cache is shared state
+                              across tests, and a suite that is not
+                              testing the cache must not be coupled to one
         statistics_settings   left at the environment's, i.e. enabled and
                               reading the real projection
 
@@ -116,6 +138,9 @@ def build_contract_app(
     application = app if app is not None else create_app()
     limiter = rate_limiter if rate_limiter is not None else AllowAllRateLimiter()
     presence_provider = presence if presence is not None else NoPresenceProvider()
+    recorder = presence_recorder if presence_recorder is not None else NoPresenceProvider()
+    cache = social_graph_cache if social_graph_cache is not None else NoSocialGraphCache()
+    presence_service = PresenceService(recorder=recorder, provider=presence_provider)
 
     async def _session() -> AsyncIterator[AsyncSession]:
         yield session
@@ -123,6 +148,8 @@ def build_contract_app(
     application.dependency_overrides[get_db_session] = _session
     application.dependency_overrides[get_rate_limiter] = lambda: limiter
     application.dependency_overrides[get_presence_provider] = lambda: presence_provider
+    application.dependency_overrides[get_presence_service] = lambda: presence_service
+    application.dependency_overrides[get_social_graph_cache] = lambda: cache
 
     # The two settings sections are overridden only when a test is varying
     # them. Registering an override that returns the same value the real

@@ -58,10 +58,22 @@ class SocialGraphReaderService:
     async def blocked_ids_for(self, player_id: UUID) -> frozenset[UUID]:
         """Every player `player_id` cannot interact with, either direction.
 
-        Also straight delegation, and also a cache seam. This is the read
-        that runs on **every** profile composition and every search, so it
-        is the first entry `friends:v1:` should hold once caching.md C-1's
-        invalidation trigger is written down — and the trigger is known:
-        `BlockingService.block` and `.unblock`, the only two writers.
+        Also straight delegation, and the seam A64-013.6 filled: this is
+        the read that runs on **every** profile composition and every
+        search, and `CachedSocialGraphReader` now decorates this class to
+        serve it from `friends:v1:`. The invalidation triggers caching.md
+        C-1 demanded are `BlockingService.block` and `.unblock`, the only
+        two writers of the relation beneath it.
         """
         return await self._blocks.blocked_ids_for(player_id)
+
+    async def friend_ids_for(self, player_id: UUID) -> frozenset[UUID]:
+        """Every live friend of this player — A64-013.6.
+
+        Not on the published port: its only consumer is
+        `CachedSocialGraphReader`, which needs the whole set to populate one
+        cache entry. Publishing it would offer other modules a read whose
+        cost grows with a player's friend count, for no use case any of them
+        has.
+        """
+        return await self._friendships.friend_ids_for(player_id)

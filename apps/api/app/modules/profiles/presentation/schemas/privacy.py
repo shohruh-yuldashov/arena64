@@ -124,9 +124,11 @@ class PrivacySettingsUpdateRequest(BaseRequestDTO):
     online_status: VisibilityLevel | None = Field(
         default=None,
         description=(
-            "Who may see that you are online right now. Stored and honoured, but "
-            "nothing publishes presence yet — the setting is here so it is already "
-            "yours when that ships. Default: `everyone`."
+            "Who may see that you are online right now. Honoured on "
+            "`GET /profiles/{username}`, where a viewer outside this audience "
+            "reads `is_online: null` — indistinguishable from a player nobody "
+            "has observed. Presence itself has been recorded since A64-013.6. "
+            "Default: `everyone`."
         ),
         examples=["everyone"],
     )

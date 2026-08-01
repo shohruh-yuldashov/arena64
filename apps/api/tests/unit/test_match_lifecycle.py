@@ -27,10 +27,12 @@ from app.modules.engine import (
     PlayerSide,
     Position,
     TerminalReason,
+    TerminalState,
     TerminalStateEvaluator,
     initial_board,
 )
 from app.modules.game.domain import (
+    DrawRuleSet,
     InvalidMatchTransition,
     Match,
     MatchOutcome,
@@ -49,6 +51,7 @@ DARK_KING = Piece(side=PlayerSide.DARK, rank=PieceRank.KING)
 generator = MoveGenerator()
 applier = MoveApplier(MoveValidator(generator))
 evaluator = TerminalStateEvaluator(generator)
+draw_rules = DrawRuleSet()
 
 
 def square(name: str) -> BoardCoordinate:
@@ -85,7 +88,7 @@ def match_at(placement: dict[str, Piece], side: PlayerSide = PlayerSide.LIGHT) -
 
 
 def play(match: Match, played: Move) -> None:
-    match.play(played, applier, evaluator)
+    match.play(played, applier, evaluator, draw_rules)
 
 
 class TestCreation:
@@ -500,3 +503,113 @@ class TestAbort:
         playing.abort()
 
         assert playing.termination_reason is TerminationReason.ABORT
+
+
+class TestDrawIntegration:
+    """Draws reach the match through `DrawRuleSet`, and only after the
+    terminal evaluator has declined. Three-fold repetition is the one rule
+    a configured variant enables, so it is the one this can exercise
+    end-to-end; the move-limit rules are tested against explicit
+    configurations in `test_draw_rules.py`."""
+
+    SHUFFLE = (
+        move("a1", "b2"),
+        move("h2", "g1"),
+        move("b2", "a1"),
+        move("g1", "h2"),
+    )
+    """Four plies that return the board *and* the side to move to where
+    they started."""
+
+    def shuffling(self) -> Match:
+        return match_at({"a1": LIGHT_KING, "h2": DARK_KING})
+
+    def test_the_opening_position_alone_does_not_draw(self) -> None:
+        assert self.shuffling().status is MatchStatus.ACTIVE
+
+    def test_one_return_does_not_draw(self) -> None:
+        """Occurrence 2 of three. The case that fails if an implementation
+        counts returns rather than occurrences."""
+        match = self.shuffling()
+
+        for played in self.SHUFFLE:
+            play(match, played)
+
+        assert (match.status, match.current_position_occurrences) == (MatchStatus.ACTIVE, 2)
+
+    def test_a_second_return_draws(self) -> None:
+        match = self.shuffling()
+
+        for played in self.SHUFFLE * 2:
+            play(match, played)
+
+        assert (match.status, match.current_position_occurrences) == (MatchStatus.COMPLETED, 3)
+
+    def test_a_drawn_match_has_no_winner(self) -> None:
+        match = self.shuffling()
+
+        for played in self.SHUFFLE * 2:
+            play(match, played)
+
+        assert match.result is not None
+        assert (match.result.outcome, match.result.winner) == (MatchOutcome.DRAW, None)
+
+    def test_the_reason_is_repetition(self) -> None:
+        match = self.shuffling()
+
+        for played in self.SHUFFLE * 2:
+            play(match, played)
+
+        assert match.termination_reason is TerminationReason.REPETITION
+
+    def test_a_drawn_match_accepts_no_further_move(self) -> None:
+        match = self.shuffling()
+        for played in self.SHUFFLE * 2:
+            play(match, played)
+
+        with pytest.raises(InvalidMatchTransition):
+            play(match, move("h2", "g1"))
+
+    def test_a_decisive_result_takes_priority_over_a_draw(self) -> None:
+        """Contrived on purpose: the evaluator is replaced by one that
+        always finds a win, and the match is played to a position that is
+        simultaneously a third repetition. A win short-circuits, so the
+        draw rules are never consulted — the ordering `play` promises.
+        """
+
+        class AlwaysWon(TerminalStateEvaluator):
+            def evaluate(self, position: Position) -> TerminalState:
+                return TerminalState(winner=PlayerSide.LIGHT, reason=TerminalReason.NO_LEGAL_MOVES)
+
+        match = self.shuffling()
+        match.play(self.SHUFFLE[0], applier, AlwaysWon(generator), draw_rules)
+
+        assert match.result is not None
+        assert (match.result.outcome, match.result.winner) == (
+            MatchOutcome.WIN,
+            PlayerSide.LIGHT,
+        )
+
+    def test_the_rules_come_from_the_variant_geometry(self) -> None:
+        """`Match` names no variant; it reads the axis off the board it
+        already holds."""
+        assert self.shuffling().draw_rules.repetition_threshold == 3
+
+    def test_the_history_snapshot_reports_what_the_rules_read(self) -> None:
+        match = self.shuffling()
+        play(match, self.SHUFFLE[0])
+
+        snapshot = match.history()
+
+        assert (
+            snapshot.plies_since_progress,
+            snapshot.total_pieces,
+            snapshot.light_kings,
+            snapshot.dark_kings,
+            snapshot.kings_only,
+        ) == (1, 2, 1, 1, True)
+
+    def test_the_snapshot_counts_men_apart_from_kings(self) -> None:
+        match = match_at({"a1": LIGHT_KING, "c3": LIGHT_MAN, "h2": DARK_KING})
+
+        assert match.history().men_remaining == 1

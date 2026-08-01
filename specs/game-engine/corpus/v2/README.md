@@ -67,6 +67,7 @@ algebraic square notation, the same ordering rule. v2 adds only the optional top
 | --- | --- | --- |
 | `kings.json` | `cases`, `supersedes` | King quiet moves and captures, multiple landing squares, direction changes, the taken-once rule with kings, maximum capture with kings, promotion continuation under all three variant rules, and a mixed man-and-king position — A64-014.5 |
 | `terminal-positions.json` | `terminal_positions` | Which positions have ended, who won, and why — A64-014.6 |
+| `draw-sequences.json` | `draw_sequences` | Draw rules and lifecycle counters over an ordered list of plies — A64-014.7 |
 
 ## Format — `terminal_positions`
 
@@ -120,8 +121,65 @@ square, and crowning that ends the ply — and it is here because it is the one 
 those three axes a second value. Without it they are settings nothing can tell apart from
 constants.
 
+## Format — `draw_sequences`
+
+The **fourth** expectation shape. A draw is a property of a *game* rather than of a board, so a
+case cannot state it the way `terminal_positions` states a loss: it names an opening position, an
+ordered list of moves, and what the match looks like once they have all been played.
+
+```jsonc
+{
+  "corpus_version": 2,
+  "draw_sequences": [
+    {
+      "id": "kebab-case, unique within the version, never reused",
+      "description": "what the case proves, in one sentence",
+      "engine_version": 2,
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [{ "square": "a1", "side": "light", "rank": "king" }],
+      "moves": [{ "path": ["a1", "b2"], "captured": [], "promotes_to": null }],
+      "expected_status": "active",
+      "expected_outcome": null,
+      "expected_reason": null,
+      "expected_winner": null,
+      "expected_position_occurrences": 1,
+      "expected_plies_since_progress": 1
+    }
+  ]
+}
+```
+
+`variant`, `side_to_move`, `pieces` and the shape of a move are exactly as above — one format for
+a square and one for a move, whichever kind of case they appear in.
+
+| Field | Rule |
+| --- | --- |
+| `engine_version` | Which rules build the expectation was written for. **Part of the expectation, not metadata**: draws arrived in version 2, so a reader on 1 would disagree about the last ply of half of these |
+| `moves` | Played in order from the opening position. Every one must be legal |
+| `expected_status` | `created`, `active`, `completed` or `aborted` |
+| `expected_outcome` | `win`, `draw`, `none`, or `null` while the match is still running |
+| `expected_reason` | A `TerminationReason` value, or `null` |
+| `expected_winner` | `light`, `dark`, or `null`. Present exactly when the outcome is `win` |
+| `expected_position_occurrences` | How often the final position has occurred, **counting itself** |
+| `expected_plies_since_progress` | Plies since the last capture or man's move |
+
+### Repetition counts occurrences, not returns
+
+The opening position has occurred **once** before anybody has moved, so a threefold rule fires on
+the *second* return:
+
+| | Occurrence |
+| --- | --- |
+| Opening | 1 |
+| First return | 2 — not a draw |
+| Second return | 3 — draw |
+
+A case exists for each of those three states, because an implementation that counted returns
+would pass a corpus that only tested the draw.
+
 ## What v2 still does not cover
 
-Draws, and everything that needs a game rather than a position: repetition thresholds, move
-limits, clocks. `terminal_positions` was the first expectation shape that is not about legal
-moves; draws need a second, describing a sequence of plies.
+**The move-limit draws.** The mechanism exists and is tested, but three of the four thresholds
+are undecided product rules and no variant configures one — so no case here can exercise them.
+See `specs/game-engine.md` §7.7. Also absent: clocks, flag falls, and draw agreement.

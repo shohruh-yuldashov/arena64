@@ -60,6 +60,7 @@ from app.modules.engine.coordinate import (
     BoardCoordinate,
     Direction,
 )
+from app.modules.engine.draw_rules import THREEFOLD_REPETITION_ONLY, DrawRules
 from app.modules.engine.exceptions import InvalidBoardState
 from app.modules.engine.piece import PlayerSide
 
@@ -201,6 +202,18 @@ class BoardGeometry:
 
     Replaces A64-014.2's provisional `promotion_ends_ply` boolean, which
     could not express what either configured variant actually does.
+    """
+
+    draw_rules: DrawRules
+    """The thresholds that end a game in a draw — see `DrawRules`.
+
+    Configuration only. Nothing in `engine` reads it: a draw is a property
+    of the game's history (MT-12) and the kernel has none, so `game`'s
+    `DrawRuleSet` is what evaluates these against a match.
+
+    All three variants currently carry the same value, because three-fold
+    repetition is the only threshold this repository documents. That is a
+    recorded gap, not a claim that the variants agree — see `DrawRules`.
     """
 
     @property
@@ -348,6 +361,7 @@ _GEOMETRIES: Mapping[BoardVariant, BoardGeometry] = MappingProxyType(
             men_may_capture_backward=True,
             kings_fly=True,
             mid_sequence_promotion=MidSequencePromotion.CROWNS_AND_CONTINUES,
+            draw_rules=THREEFOLD_REPETITION_ONLY,
         ),
         BoardVariant.INTERNATIONAL_10X10: BoardGeometry(
             rows=10,
@@ -358,6 +372,7 @@ _GEOMETRIES: Mapping[BoardVariant, BoardGeometry] = MappingProxyType(
             men_may_capture_backward=True,
             kings_fly=True,
             mid_sequence_promotion=MidSequencePromotion.PASSES_THROUGH,
+            draw_rules=THREEFOLD_REPETITION_ONLY,
         ),
         BoardVariant.ENGLISH_8X8: BoardGeometry(
             rows=8,
@@ -368,6 +383,7 @@ _GEOMETRIES: Mapping[BoardVariant, BoardGeometry] = MappingProxyType(
             men_may_capture_backward=False,
             kings_fly=False,
             mid_sequence_promotion=MidSequencePromotion.CROWNS_AND_ENDS_PLY,
+            draw_rules=THREEFOLD_REPETITION_ONLY,
         ),
     }
 )

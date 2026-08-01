@@ -20,9 +20,12 @@ Two kinds of test live here, and the distinction matters:
 import pytest
 
 from app.modules.engine import (
+    CURRENT_ENGINE_VERSION,
+    Board,
     BoardVariant,
     IllegalMove,
     InvalidMove,
+    MoveApplier,
     MoveGenerator,
     MoveValidator,
     PlayerSide,
@@ -30,12 +33,15 @@ from app.modules.engine import (
     TerminalStateEvaluator,
     initial_board,
 )
+from app.modules.game.domain import DrawRuleSet, Match
 from tests.corpus import (
     CorpusCase,
+    DrawSequenceCase,
     RejectionCase,
     RejectionCategory,
     TerminalCase,
     load_cases,
+    load_draw_sequences,
     load_rejections,
     load_terminal_positions,
     superseded_ids,
@@ -44,6 +50,7 @@ from tests.corpus import (
 CASES = load_cases()
 REJECTIONS = load_rejections()
 TERMINALS = load_terminal_positions()
+SEQUENCES = load_draw_sequences()
 SUPERSEDED = superseded_ids()
 
 REFUSAL_FOR = {
@@ -115,6 +122,42 @@ a deleted one covered."""
 generator = MoveGenerator()
 validator = MoveValidator(generator)
 evaluator = TerminalStateEvaluator(generator)
+applier = MoveApplier(validator)
+draw_rules = DrawRuleSet()
+
+
+@pytest.mark.parametrize("case", SEQUENCES, ids=[case.id for case in SEQUENCES])
+def test_the_engine_reaches_the_outcome_the_corpus_expects(case: DrawSequenceCase) -> None:
+    """A64-014.7's half of the contract — the fourth expectation shape.
+
+    A draw is a property of a game rather than of a board, so this plays
+    the whole sequence and compares the match afterwards: status, outcome,
+    reason, winner, and the two history numbers a draw rule reads.
+    """
+    assert case.engine_version == CURRENT_ENGINE_VERSION.as_primitive(), (
+        "the corpus states expectations for a rules build this is not"
+    )
+
+    match = Match(
+        variant=case.variant,
+        engine_version=CURRENT_ENGINE_VERSION,
+        position=Position(board=Board(case.variant, case.pieces), side_to_move=case.side_to_move),
+    )
+    match.start()
+    for played in case.moves:
+        match.play(played, applier, evaluator, draw_rules)
+
+    assert match.status.value == case.expected_status, case.description
+    outcome = None if match.result is None else match.result.outcome.value
+    reason = None if match.result is None else match.result.reason.value
+    winner = None if match.result is None else match.result.winner
+    assert (outcome, reason, winner) == (
+        case.expected_outcome,
+        case.expected_reason,
+        case.expected_winner,
+    ), case.description
+    assert match.current_position_occurrences == case.expected_position_occurrences
+    assert match.plies_since_progress == case.expected_plies_since_progress
 
 
 @pytest.mark.parametrize("case", TERMINALS, ids=[case.id for case in TERMINALS])
@@ -184,6 +227,22 @@ class TestCorpusIntegrity:
     def test_the_terminal_corpus_is_not_empty(self) -> None:
         assert TERMINALS
 
+    def test_the_draw_sequence_corpus_is_not_empty(self) -> None:
+        assert SEQUENCES
+
+    def test_every_sequence_states_the_engine_version_it_expects(self) -> None:
+        """Draw rules arrived in version 2, so a reader on 1 would disagree
+        about the last ply of half of these. The version is part of the
+        expectation, not metadata."""
+        assert {case.engine_version for case in SEQUENCES} == {
+            CURRENT_ENGINE_VERSION.as_primitive()
+        }
+
+    def test_a_sequence_names_a_winner_only_when_it_expects_a_win(self) -> None:
+        for case in SEQUENCES:
+            expects_win = case.expected_outcome == "win"
+            assert (case.expected_winner is not None) is expects_win, case.source
+
     def test_every_required_terminal_case_is_present(self) -> None:
         assert {case.id for case in TERMINALS} >= REQUIRED_TERMINALS
 
@@ -202,7 +261,12 @@ class TestCorpusIntegrity:
         assert {case.id for case in REJECTIONS} >= REQUIRED_REJECTIONS
 
     def test_case_ids_are_unique(self) -> None:
-        identifiers = [case.id for case in CASES] + [case.id for case in REJECTIONS]
+        identifiers = (
+            [case.id for case in CASES]
+            + [case.id for case in REJECTIONS]
+            + [case.id for case in TERMINALS]
+            + [case.id for case in SEQUENCES]
+        )
 
         assert len(set(identifiers)) == len(identifiers)
 

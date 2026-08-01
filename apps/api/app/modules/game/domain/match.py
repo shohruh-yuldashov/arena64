@@ -49,6 +49,7 @@ from app.core.identifiers import generate_uuid7
 from app.modules.engine import (
     CURRENT_ENGINE_VERSION,
     BoardVariant,
+    DrawRules,
     EngineVersion,
     Move,
     MoveApplier,
@@ -60,6 +61,7 @@ from app.modules.engine import (
     TerminalStateEvaluator,
     initial_board,
 )
+from app.modules.game.domain.draws import DrawReason, DrawRuleSet, MatchHistory
 from app.modules.game.domain.exceptions import InvalidMatchTransition
 from app.modules.game.domain.result import MatchOutcome, MatchResult, TerminationReason
 
@@ -213,6 +215,30 @@ class Match:
         return self._position_counts.get(position, 0)
 
     @property
+    def draw_rules(self) -> DrawRules:
+        """The variant's draw thresholds — an axis of the rule set this
+        match is played under, reached through its own geometry so that
+        nothing here names a variant."""
+        return self.position.board.geometry.draw_rules
+
+    def history(self) -> MatchHistory:
+        """An immutable snapshot of everything a draw rule reads.
+
+        Built on demand rather than maintained, because every number in it
+        is either a counter this aggregate already keeps or a count of the
+        position it already holds — storing it twice would be a second
+        place for it to be wrong.
+        """
+        board = self.position.board
+        return MatchHistory(
+            current_position_occurrences=self.current_position_occurrences,
+            plies_since_progress=self.plies_since_progress,
+            total_pieces=board.piece_count(),
+            light_kings=_kings(self.position, PlayerSide.LIGHT),
+            dark_kings=_kings(self.position, PlayerSide.DARK),
+        )
+
+    @property
     def current_position_occurrences(self) -> int:
         """How often the position now on the board has occurred.
 
@@ -227,11 +253,22 @@ class Match:
         self._require(MatchStatus.CREATED, "start")
         self.status = MatchStatus.ACTIVE
 
-    def play(self, move: Move, applier: MoveApplier, evaluator: TerminalStateEvaluator) -> None:
+    def play(
+        self,
+        move: Move,
+        applier: MoveApplier,
+        evaluator: TerminalStateEvaluator,
+        draw_rules: DrawRuleSet,
+    ) -> None:
         """Play `move`, and finish the match if the position it reaches has
-        ended.
+        ended — decisively or in a draw.
 
-        The two engine services arrive as arguments rather than as fields.
+        **A decisive result takes priority.** The terminal evaluator is
+        asked first, and a win short-circuits: a position can be both a
+        third repetition and a win for the side that just moved, and a
+        game that was won is not a game that was drawn.
+
+        The three services arrive as arguments rather than as fields.
         They are stateless and shared, so holding them would put a
         collaborator inside an entity a repository has to rehydrate —
         every load would have to know how to rebuild them, and a match read
@@ -248,18 +285,24 @@ class Match:
         """
         self._require(MatchStatus.ACTIVE, "play a move")
 
+        rules = self.draw_rules
         moved = self._moving_rank(move)
         self.position = applier.apply(self.position, move)
         self.ply_number += 1
         self.last_move = move
         self._record(self.position)
         self.plies_since_progress = (
-            0 if _is_progress(move, moved) else self.plies_since_progress + 1
+            0 if is_progress(move, moved, rules) else self.plies_since_progress + 1
         )
 
         terminal = evaluator.evaluate(self.position)
         if terminal is not None:
             self._complete(terminal)
+            return
+
+        drawn = draw_rules.evaluate(self.draw_rules, self.history())
+        if drawn is not None:
+            self._draw(drawn)
 
     def resign(self, side: PlayerSide) -> None:
         """`side` gives up; the opponent wins.
@@ -296,6 +339,10 @@ class Match:
         self.status = MatchStatus.ABORTED
         self.result = MatchResult(outcome=MatchOutcome.NONE, reason=TerminationReason.ABORT)
 
+    def _draw(self, reason: DrawReason) -> None:
+        self.status = MatchStatus.COMPLETED
+        self.result = MatchResult(outcome=MatchOutcome.DRAW, reason=_TERMINATION_FOR_DRAW[reason])
+
     def _complete(self, terminal: TerminalState) -> None:
         self.status = MatchStatus.COMPLETED
         self.result = MatchResult(
@@ -321,7 +368,7 @@ class Match:
             )
 
 
-def _is_progress(move: Move, moved: PieceRank | None) -> bool:
+def is_progress(move: Move, moved: PieceRank | None, rules: DrawRules) -> bool:
     """Whether `move` resets the counter behind the move-limit draws.
 
     Progress is a capture or a man's move — the two things that cannot be
@@ -331,8 +378,44 @@ def _is_progress(move: Move, moved: PieceRank | None) -> bool:
 
     A man's move that crowns still counts as a man's move: it began as one,
     and it is the advance that was irreversible.
+
+    Both are variant axes rather than constants (A64-014.7), and both are
+    true in every configured variant. Reading them from the rules keeps a
+    house rule that disagreed a table edit rather than a change here — and
+    makes the two branches testable, which they would not be if the
+    aggregate were the only caller.
     """
-    return move.is_capture or moved is PieceRank.MAN
+    if move.is_capture:
+        return rules.captures_reset_progress
+    if moved is PieceRank.MAN:
+        return rules.man_moves_reset_progress
+    return False
+
+
+def _kings(position: Position, side: PlayerSide) -> int:
+    return sum(
+        1
+        for piece in position.board.occupied_squares.values()
+        if piece.side is side and piece.rank is PieceRank.KING
+    )
+
+
+_TERMINATION_FOR_DRAW: Mapping[DrawReason, TerminationReason] = MappingProxyType(
+    {
+        DrawReason.REPETITION: TerminationReason.REPETITION,
+        DrawReason.NO_PROGRESS: TerminationReason.MOVE_LIMIT,
+        DrawReason.KING_ONLY_MOVE_LIMIT: TerminationReason.MOVE_LIMIT,
+        DrawReason.MATERIAL_MOVE_LIMIT: TerminationReason.MOVE_LIMIT,
+    }
+)
+"""The draw rules, in the vocabulary a finished match is recorded in.
+
+Three of the four collapse to `move_limit`, because that is what
+domain-model.md §15 enumerates and R-19 fixes its members. The finer
+reason is available while the rule fires and is not kept — an open
+question, flagged in `specs/game-engine.md` §7.7 rather than resolved by
+widening a documented closed enumeration here.
+"""
 
 
 _TERMINATION_FOR: Mapping[TerminalReason, TerminationReason] = MappingProxyType(

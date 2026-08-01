@@ -21,12 +21,15 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from fastapi import FastAPI
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 import app.database.models  # noqa: F401 — registers every module's tables on Base.metadata
 from app.database.base import Base
+from app.modules.profiles.presentation.dependencies import get_presence_provider
+from app.modules.users.infrastructure.presence import NoPresenceProvider
 from tests.contract._models import ContractWidget  # noqa: F401 — registers the table on import
 
 _TEST_DSN = os.environ.get(
@@ -40,6 +43,31 @@ _TEST_DSN = os.environ.get(
 #: because a test picked the same index is the kind of accident that only
 #: has to happen once.
 _TEST_REDIS_URL = os.environ.get("CONTRACT_TEST_REDIS_URL", "redis://localhost:6379/15")
+
+
+def with_presence_switched_off(app: FastAPI) -> None:
+    """Wires `NoPresenceProvider`, for every suite that is not testing
+    presence.
+
+    Not a convenience — without it these apps do not start. Every contract
+    fixture drives the application over `ASGITransport`, which does **not**
+    run `lifespan`, so `app.state.redis_pools` is never populated and the
+    presence dependency that reads it raises. That is the same reason
+    `get_db_session` and `get_rate_limiter` are already overridden
+    everywhere in this directory.
+
+    `NoPresenceProvider` rather than a bespoke double, and this is the part
+    worth stating: it is *production* code, wired by `PRESENCE_ENABLED=false`
+    in a real deployment. So a suite running on this is exercising a
+    configuration the platform genuinely ships, and the profile responses it
+    asserts against are the ones a deployment with presence switched off
+    serves — `is_online: null`, `last_seen: null`, everything else unchanged.
+
+    A suite that *is* testing presence overrides the same dependency with a
+    real `RedisPresenceProvider` over `contract_redis` — see
+    `test_profiles_api.py`.
+    """
+    app.dependency_overrides[get_presence_provider] = NoPresenceProvider
 
 
 @pytest.fixture

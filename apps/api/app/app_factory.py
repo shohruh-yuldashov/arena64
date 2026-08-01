@@ -75,11 +75,18 @@ OPENAPI_TAGS: list[dict[str, Any]] = [
         "description": (
             "Public player profiles, read by handle and by anyone. A profile is a "
             "*composition* rather than a record: identity comes from `users`, ratings "
-            "from the rating system and match counts from statistics.\n\n"
-            "Ratings and statistics currently report placeholder values — a provisional "
-            "starting rating and zero matches — because no game has been played on this "
-            "platform yet. The **shape** is final, so a client written against it today "
-            "needs no change when real values arrive."
+            "from the rating system, match counts from statistics and presence from "
+            "the realtime tier.\n\n"
+            "Ratings currently report placeholder values — a provisional starting "
+            "rating — because no game has been played on this platform yet, and "
+            "presence reports `null` for everyone because the gateway that records it "
+            "does not exist yet. The **shape** is final, so a client written against it "
+            "today needs no change when real values arrive.\n\n"
+            "**A `null` never explains itself.** `country`, `statistics`, `is_online` "
+            "and `last_seen` are all `null` both when a player has hidden them and "
+            "when the platform simply has nothing to report, and the two are "
+            "deliberately indistinguishable — saying which applies would answer the "
+            "question the privacy setting exists to decline."
         ),
     },
     {

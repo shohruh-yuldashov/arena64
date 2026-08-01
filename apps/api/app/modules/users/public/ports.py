@@ -16,6 +16,13 @@ gain the ability to read password hashes.
 Note what is *still* not published: there is no way here to fetch an
 arbitrary user, list users, or change a profile. The value of a published
 surface is entirely in what it withholds.
+
+The two presence ports (A64-012.7) are the clearest case of that principle
+so far: `PresenceProvider` can read presence and nothing else,
+`PresenceRecorder` can write it and cannot read it back, and the same two
+adapters satisfy both. `profiles` is handed only the reader, so the module
+serving the platform's highest-volume anonymous read cannot mark anybody
+online.
 """
 
 from typing import TYPE_CHECKING, Protocol
@@ -24,6 +31,7 @@ from uuid import UUID
 if TYPE_CHECKING:
     from app.modules.users.public.edits import PreferenceEdits, PrivacyEdits, ProfileEdits
 
+from app.modules.users.domain.presence import DeviceType, Presence
 from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import (
     AvatarReference,
@@ -579,5 +587,134 @@ class PreferencesEditor(Protocol):
         The enum-valued settings cannot fail here at all; they arrive
         already narrowed to a member, and a request carrying an unknown
         board theme was rejected at the HTTP boundary with a 422 naming it.
+        """
+        ...
+
+
+class PresenceProvider(Protocol):
+    """Reads whether a player is here right now — A64-012.7.
+
+    The eleventh narrow port, and the first that reads something no
+    PostgreSQL row holds. domain-model.md §299 assigns `Presence` to this
+    module and Redis to the store; `RedisPresenceProvider` and
+    `NoPresenceProvider` in `infrastructure/presence/` are the two
+    implementations, and the composition root chooses between them.
+
+    **Read-only by construction**, and separate from `PresenceRecorder`
+    below for the reason `PublicProfileReader` is separate from
+    `ProfileEditor`: `profiles` serves anonymous traffic and must be able to
+    *render* presence without being able to *assert* it. A single port with
+    both halves would let the public profile endpoint mark accounts online.
+
+    ## Applies no privacy
+
+    `show_online_status` and `show_last_seen` are `users` flags, but they are
+    applied by the consumer that composes a public profile — see
+    `profiles.application.services.ProfileService`, which declines to call
+    this at all when both are off. Two reasons, the second of which is the
+    one that lasts: a check here would be a second copy of a rule that
+    already has an owner (`PrivacySettings`), and the owner's own view at
+    `GET /profile/me` deliberately bypasses privacy entirely, so a port that
+    enforced it would need a "but not for the owner" flag — which is exactly
+    the disclosure decision that must never sit on a caller.
+
+    ## Designed for more than one node
+
+    A player's presence is one key, written by whichever gateway node holds
+    their socket and read by every API node. There is no node affinity, no
+    per-node registry to consult and no coordination: the last writer wins,
+    and the record expires on its own if every writer stops. That is what
+    makes this correct on one process and on fifty without changing.
+    """
+
+    async def presence_for(self, player_id: UUID) -> Presence | None:
+        """This player's last observed presence, or `None`.
+
+        **`None` is an ordinary outcome, not a failure**, and it deliberately
+        collapses three different situations into one answer: the presence
+        window has expired, presence has never been recorded for this
+        account, or the store could not be reached. A caller cannot tell them
+        apart and must not try — `profiles` renders all three as `null`, in
+        the same way a hidden field is `null`.
+
+        Distinguishing them would defeat the purpose. "No record because the
+        window expired" is a statement about when somebody was last online,
+        which is precisely what `show_last_seen` exists to withhold.
+
+        **Never raises.** An unreachable Redis degrades presence to unknown
+        rather than failing the profile read behind it — a stale or missing
+        online indicator is a cosmetic defect (system-design.md §626), and
+        taking down the platform's most-read public endpoint for one would be
+        the self-inflicted outage T-2 warns about.
+
+        Takes a `UUID` — DM-06's `player_id`. Deliberately not a username or
+        a profile: a presence store has no business receiving a display name.
+        """
+        ...
+
+
+class PresenceRecorder(Protocol):
+    """Writes what a gateway node observed — A64-012.7.
+
+    The twelfth narrow port, and the write half of presence.
+    `RedisPresenceProvider` and `NoPresenceProvider` satisfy this as well as
+    `PresenceProvider`; nothing on the HTTP surface holds it.
+
+    ## Why this exists before its caller does
+
+    `statistics.application.ports` declines to publish a writer on exactly
+    this argument — "a method with no caller and no correctness story" — and
+    that judgement was right there and is being set aside here deliberately,
+    so the difference is worth stating.
+
+    A statistics writer needs a watermark column, an ordering guarantee and a
+    dead-letter path, none of which exist; publishing one would have been
+    publishing a *hole*. This is one operation with a complete specification:
+    write the whole record, set the TTL in the same round trip, let it
+    expire. There is nothing about it left to design, it is exercised by the
+    tests that assert presence expires, and without it "store presence in
+    Redis with a TTL" (A64-012.7) is not implemented at all — nothing would
+    ever set a key, so `is_online` would be `null` for every player forever
+    and the read path would be untestable against anything but a fixture.
+
+    Its caller is AD-09's gateway. That is a wiring change in the task that
+    opens the sockets, not a design change here.
+
+    **No `clear`.** A player going offline is recorded, not erased —
+    `record_presence(is_online=False)` is what makes "last seen four minutes
+    ago" possible, and a delete would throw away the timestamp the record
+    exists to carry. Genuine forgetting is what the TTL is for.
+    """
+
+    async def record_presence(
+        self,
+        player_id: UUID,
+        *,
+        is_online: bool,
+        session_id: str | None = None,
+        device_type: DeviceType | None = None,
+    ) -> None:
+        """Records an observation, replacing whatever was there.
+
+        **The whole record, every time.** There is no partial write: a caller
+        that knows a player is online knows when (now) and from what, so
+        merging into a stored record would only ever preserve fields from an
+        observation that is by definition older. Whole-record writes are also
+        what make this safe across nodes — two gateways racing produce one of
+        two complete records rather than a mixture of both.
+
+        `is_online=False` is a *recorded* disconnect, not a deletion. The
+        record survives for the remainder of the window carrying the instant
+        the player left, which is what a profile renders as "last seen".
+
+        **Resets the expiry on every call.** The TTL is the whole
+        availability model: a node that stops writing stops asserting, and a
+        node that dies mid-session leaves a record that lapses on its own
+        rather than a player who is online forever. Whatever calls this must
+        call it again well inside the window.
+
+        Returns `None` and **never raises.** A failed presence write is a
+        cosmetic loss, and a gateway must not drop a socket because Redis was
+        briefly unreachable.
         """
         ...

@@ -16,7 +16,13 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config.settings import RateLimitSettings, Settings, StatisticsSettings, get_settings
+from app.config.settings import (
+    PresenceSettings,
+    RateLimitSettings,
+    Settings,
+    StatisticsSettings,
+    get_settings,
+)
 from app.core.clock import Clock, SystemClock
 from app.core.rate_limiting import RateLimiter
 from app.core.storage import StorageProvider
@@ -151,3 +157,17 @@ def get_statistics_settings(settings: SettingsDep) -> StatisticsSettings:
 
 
 StatisticsSettingsDep = Annotated[StatisticsSettings, Depends(get_statistics_settings)]
+
+
+def get_presence_settings(settings: SettingsDep) -> PresenceSettings:
+    """The presence section alone — A64-012.7.
+
+    The same narrowing the two above make, for the same reason: the presence
+    adapter needs a TTL and a timeout, and nothing else about the platform's
+    configuration. A component handed the whole `Settings` object can come to
+    depend on any of it.
+    """
+    return settings.presence
+
+
+PresenceSettingsDep = Annotated[PresenceSettings, Depends(get_presence_settings)]

@@ -38,6 +38,7 @@ from app.api.deps import get_db_session, get_rate_limiter, get_statistics_settin
 from app.app_factory import create_app
 from app.config.settings import StatisticsSettings
 from app.modules.statistics.infrastructure.models import PlayerStatisticsModel
+from tests.contract.conftest import with_presence_switched_off
 from tests.fakes.rate_limiter import AllowAllRateLimiter
 
 PROFILES_URL = "/api/v1/profiles"
@@ -93,6 +94,7 @@ def _app(session: AsyncSession, *, statistics_enabled: bool = True) -> Any:
 
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_rate_limiter] = lambda: AllowAllRateLimiter()
+    with_presence_switched_off(app)
     if not statistics_enabled:
         app.dependency_overrides[get_statistics_settings] = lambda: StatisticsSettings(
             enabled=False

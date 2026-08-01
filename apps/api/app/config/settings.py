@@ -780,6 +780,113 @@ class StatisticsSettings(BaseSettings):
     """
 
 
+class PresenceSettings(BaseSettings):
+    """`presence` — who is online right now (A64-012.7).
+
+    ## Which Redis role presence uses, and why it is not a sixth one
+
+    `cache`. AD-03 separates roles by *hostile interaction*, and presence's
+    profile matches that instance's posture almost exactly: it is derived
+    rather than authoritative, it is expendable, it expires on its own, and
+    losing it is a cosmetic defect (system-design.md §626 — "a stale 'online'
+    indicator"). `cache` is the instance already configured with no
+    persistence and an eviction policy, because evicting from it is correct.
+
+    The three it must *not* share are more interesting than the one it does:
+
+      **Not `live`.** AD-03's own worked example. A deploy or a network blip
+      produces a reconnect storm, which is a write burst of one key per
+      returning player — precisely the traffic that must not compete for
+      memory or connections with the positions of games in progress. Presence
+      loss is cosmetic; live match state loss interrupts matches (AD-18).
+
+      **Not `limits`.** That instance is deliberately configured to evict
+      nothing, because a rate limit counter dropped under memory pressure is
+      a limit that disappears during the traffic spike it exists for.
+      Presence is exactly the high-churn, safely-evictable workload that
+      would put it under that pressure.
+
+      **Not `broker`.** Celery owns the keyspace.
+
+    A dedicated sixth role is the AD-03-consistent answer if presence write
+    volume ever becomes large enough to evict the leaderboard read models
+    beside it. It is not warranted today — nothing writes presence until
+    AD-09's gateway exists — and adding an instance nobody needs would be
+    speculative infrastructure. Recorded as a revisit-when rather than
+    guessed at now.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="PRESENCE_", frozen=True, extra="forbid")
+
+    enabled: bool = True
+    """Whether presence is read from Redis at all.
+
+    **`True` (default): `RedisPresenceProvider` is wired.** `False` wires
+    `NoPresenceProvider`, and every profile then reports `is_online: null`
+    and `last_seen: null`.
+
+    Present for the reason `RateLimitSettings.enabled` and
+    `StatisticsSettings.enabled` are: the alternative to a documented switch
+    is somebody commenting out a dependency under pressure and forgetting to
+    restore it. What it is actually for is a presence instance being
+    replaced or resized.
+
+    Unlike the statistics switch, **the degradation here is honest.** A
+    blank statistics record is indistinguishable from a beginner's and
+    therefore misleading; unknown presence is the same `null` a profile
+    already reports for a player who is offline or who has hidden it, which
+    every client must handle regardless.
+    """
+
+    ttl_seconds: int = Field(default=60, ge=5, le=3600)
+    """How long an observation stands before the platform stops asserting it.
+
+    **This is the liveness protocol, not a tuning knob.** Nothing tells the
+    platform that a gateway node died, so the only thing that stops a dead
+    node's players being marked online forever is the record expiring on its
+    own. Whatever writes presence must rewrite it well inside this window —
+    a refresh interval of roughly a third of it leaves room for two missed
+    writes before a present player flickers offline.
+
+    Sixty seconds is chosen rather than given. Shorter makes an online
+    indicator flicker for anyone on a mobile network; much longer means a
+    player who closed their laptop lid shows as available for minutes, and
+    the cost of that is specific on this platform — a challenge sent to a
+    player who is not there is a challenge that expires, which is the
+    reasoning `PrivacySettings.show_online_status` records for why the flag
+    defaults to on.
+
+    The `ge=` floor exists because a TTL below a plausible refresh interval
+    is not a shorter window, it is presence that never reports anybody.
+    """
+
+    redis_timeout_ms: int = Field(default=50, ge=1)
+    """How long a presence operation may take before it is abandoned.
+
+    Without it the "never raises" promise on both ports is decorative: a
+    Redis that is *slow* rather than *down* — the common failure — would hang
+    every profile read for the client's default timeout, and presence would
+    take down the platform's highest-volume public read while being perfectly
+    available itself.
+
+    Tighter than the rate limiter's 100ms, and deliberately so. That budget
+    sits in front of an Argon2 verification that costs five times as much
+    anyway; this one sits on a read whose whole latency budget is a few
+    milliseconds, and the thing being protected is an indicator nobody would
+    trade a page load for.
+    """
+
+    @property
+    def ttl_ms(self) -> int:
+        """`ttl_seconds` in the unit Redis's `PX` takes.
+
+        Derived rather than configured, so the two cannot disagree — and
+        expressed once here rather than as a `* 1000` in the adapter, which
+        is the arithmetic somebody eventually writes as `* 100`.
+        """
+        return self.ttl_seconds * 1000
+
+
 class Settings(BaseModel):
     """The composed, immutable configuration for this process."""
 
@@ -796,6 +903,7 @@ class Settings(BaseModel):
     storage: StorageSettings
     rate_limit: RateLimitSettings
     statistics: StatisticsSettings
+    presence: PresenceSettings
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":
@@ -878,4 +986,5 @@ def get_settings() -> Settings:
         storage=StorageSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         rate_limit=RateLimitSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         statistics=StatisticsSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        presence=PresenceSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

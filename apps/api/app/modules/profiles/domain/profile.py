@@ -69,32 +69,55 @@ class PublicProfile:
     """
 
     last_seen: datetime | None = None
-    """When this player was last observed online. **Always `None` today**,
-    and `None` for anyone who has hidden it once it is not.
+    """When this player was last observed online, or `None` when the
+    platform has nothing to report.
 
-    A64-012.1 lists `last_seen` in the response and excludes "online
-    status" from the scope, which is not a contradiction so much as a line:
-    the field is part of the contract, and the presence tracking that would
-    fill it is not this task's.
+    Read from `users.public.PresenceProvider` since A64-012.7. Before that
+    it was declared and permanently `None`, because presence is `users`-owned
+    and lives in Redis with a TTL — "online" is true only while a socket is
+    open (domain-model.md §141, §299) — and there was no presence store to
+    read from.
 
-    A64-012.4 added the control before the data: `show_last_seen` is the
-    one privacy flag that defaults to *off*, and `ProfileService` already
-    refuses to fill this field for a player who has it off. So the release
-    that ships presence tracking cannot be the release that publishes a
-    sleep schedule — the enforcement is in place and untested only because
-    there is nothing yet to enforce it against.
+    It is still never faked from anything else stored, and the near misses
+    are worth keeping on the record because each is wrong in a different way.
+    `users.updated_at` is when a row was written, which for most accounts is
+    registration day. A session's `last_used_at` is when a refresh token was
+    exchanged, which happens on a timer rather than when a person is present,
+    and would publish the activity of a background tab.
 
-    It cannot be faked from anything already stored, and the near misses
-    are worth naming because each is wrong in a different way.
-    `users.updated_at` is when a row was written, which for most accounts
-    is registration day. A session's `last_used_at` is when a refresh token
-    was exchanged, which happens on a timer rather than when a person is
-    present, and would publish the activity of a background tab.
+    ## Every reason for `None` is the same `None`
 
-    Presence is `users`-owned and lives in Redis with a TTL, because
-    "online" is true only while a socket is open (domain-model.md §141,
-    §299) — so this is filled in by whatever opens those sockets, and
-    stays `None` until then. Declared now rather than added later so the
-    field is in the contract from the first release and clients render it
-    as "unknown" rather than gaining a key they did not expect.
+    A64-012.4 added the control before the data, and `show_last_seen` is the
+    one privacy flag that defaults to *off*. So the common case for this
+    field is a player who has opted out — and the response must not let a
+    caller tell that apart from a player nobody has observed, a presence
+    window that has expired, or a presence store that was unreachable
+    (A64-012.7). All four are this one value, and `ProfileService` is where
+    they converge.
+    """
+
+    is_online: bool | None = None
+    """Whether the player is here right now, or `None` when unknown.
+
+    Three states rather than two, and the third is the one that carries the
+    privacy requirement:
+
+        True    a socket was open when presence was last written
+        False   the platform saw this player *leave*, recently enough that
+                the record has not yet expired — so `last_seen` beside it,
+                if visible, is meaningful
+        None    nothing is known, or nothing may be said
+
+    `None` covers a player who has hidden their presence, a player nobody
+    has ever observed, a presence window that has lapsed, and a presence
+    store that could not be reached. A64-012.7 requires exactly that
+    conflation: reporting *that* presence is hidden answers the question
+    hiding it exists to decline, and it is the same argument
+    `PublicUserProfile.country` records for a hidden country.
+
+    **Governed by `show_online_status`, not by `show_last_seen`.** The two
+    are separate flags with separate defaults — "online now" is coarse and
+    momentary, while a published `last_seen` is a sleep schedule — so a
+    player may show one and hide the other, and `ProfileService` gates them
+    independently from one read.
     """

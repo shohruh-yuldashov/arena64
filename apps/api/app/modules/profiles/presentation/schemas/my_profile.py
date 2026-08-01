@@ -58,7 +58,7 @@ from app.modules.users.domain.validators import (
     DISPLAY_NAME_MAX_LENGTH,
     DISPLAY_NAME_MIN_LENGTH,
 )
-from app.modules.users.public import OwnUserProfile
+from app.modules.users.public import OwnUserProfile, Presence
 
 
 class ProfileUpdateRequest(BaseRequestDTO):
@@ -182,6 +182,32 @@ class MyProfileResponse(BaseResponseDTO):
         description="When your account was created, UTC.",
         examples=["2026-08-01T12:00:00Z"],
     )
+    is_online: bool | None = Field(
+        default=None,
+        description=(
+            "Whether **you** are shown as connected right now.\n\n"
+            "**Never redacted.** `show_online_status` governs what strangers "
+            "see on `GET /profiles/{username}`, not what you see of "
+            "yourself — a control that hid your own presence from you would "
+            "be one you could never verify you had set.\n\n"
+            "`null` means the platform has no current observation of you, "
+            "not that it is hidden: presence decays on a timer, and nothing "
+            "records it yet (see `last_seen`)."
+        ),
+        examples=[None],
+    )
+    last_seen: datetime | None = Field(
+        default=None,
+        description=(
+            "When **you** were last observed online, UTC. **Never "
+            "redacted** — `show_last_seen` governs strangers, not you.\n\n"
+            "`null` today for every account: presence is written by the "
+            "realtime gateway, which does not exist yet. The field is in the "
+            "contract so a client renders 'unknown' rather than gaining an "
+            "unexpected key later."
+        ),
+        examples=[None],
+    )
     statistics: StatisticsResponse = Field(
         description=(
             "Your competitive record. **Always present, never `null`** — "
@@ -204,6 +230,8 @@ class MyProfileResponse(BaseResponseDTO):
                     "avatar_url": None,
                     "thumbnail_url": None,
                     "joined_at": "2026-08-01T12:00:00Z",
+                    "is_online": None,
+                    "last_seen": None,
                     "statistics": {
                         "games_played": 0,
                         "wins": 0,
@@ -226,6 +254,7 @@ class MyProfileResponse(BaseResponseDTO):
         profile: OwnUserProfile,
         avatar: AvatarLinks | None,
         statistics: PlayerStatistics,
+        presence: Presence | None,
     ) -> "MyProfileResponse":
         """Renders the published owner view.
 
@@ -242,6 +271,17 @@ class MyProfileResponse(BaseResponseDTO):
 
         Required rather than optional, unlike `ProfileResponse.statistics`.
         The public shape has to express "hidden"; this one never does.
+
+        `presence` arrives read through the same `PresenceProvider` the
+        public path uses, and unredacted for the same reason (A64-012.7:
+        "authenticated users may always view their own presence
+        information"). `None` here means *unobserved*, never *hidden* — the
+        only two flags that could hide it are not consulted on this path.
+
+        **Nothing from `Presence` beyond the two fields.** `session_id` and
+        `device_type` are on the record and have no field on this schema to
+        land in, which is what makes "never expose internal session
+        identifiers" structural rather than remembered.
         """
         return cls(
             id=profile.id,
@@ -252,5 +292,7 @@ class MyProfileResponse(BaseResponseDTO):
             avatar_url=avatar.avatar_url if avatar else None,
             thumbnail_url=avatar.thumbnail_url if avatar else None,
             joined_at=profile.created_at,
+            is_online=presence.is_online if presence else None,
+            last_seen=presence.last_seen if presence else None,
             statistics=StatisticsResponse.of(statistics),
         )

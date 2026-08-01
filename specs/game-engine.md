@@ -1,7 +1,8 @@
 # Game Engine
 
-> **Status:** Partial — the board foundation is specified and implemented (A64-014.1);
-> movement, termination and notation are not yet specified
+> **Status:** Partial — the board foundation (A64-014.1) and men's move generation (A64-014.2)
+> are specified and implemented; kings, capture sequences, validation, termination and notation
+> are not yet specified
 > **Owner:** _Unassigned_
 > **Related:** `templates/feature-spec.md`, `docs/01-architecture/architecture.md` §11,
 > `docs/01-architecture/domain-model.md` §2.1 and §16.1
@@ -76,19 +77,119 @@ None carries a wire code of its own: the engine has no HTTP surface, and the tas
 
 ---
 
-## 2. Not yet specified
+## 2. Men's move generation — A64-014.2
 
-Move generation, mandatory capture and maximum capture, multi-jump paths, king mobility
-(flying versus short), promotion on arrival and whether it ends the ply, `Position` (a board plus
-the side to move), `Move` as an ordered path plus captured squares, repetition hashing, draw
-rules, termination detection, PDN notation and serialization, the conformance corpus shared with
-the TypeScript client engine (AD-14), and the engine version recorded per match (AD-15).
+### 2.1 Types
+
+| Type | Kind | Contract |
+| --- | --- | --- |
+| `Position` | Frozen value object, hashable | `(board, side_to_move)` and nothing else |
+| `Move` | Frozen value object | `(path, captured, promotes_to)` |
+| `Direction` | Frozen value object, ordered | One diagonal step. The four are `DIAGONAL_DIRECTIONS` |
+| `CaptureObligation` | Enum | `ANY`, `MAXIMUM` |
+| `MoveGenerator` | Stateless service | `legal_moves(position) -> tuple[Move, ...]` |
+
+### 2.2 `Position`
+
+| Rule | Statement |
+| --- | --- |
+| GE-8 | A position is a board and a side to move. No status, no clock, no player identity, no move number — anything identifying *this* game would make every position unique and the repetition rule dead |
+| GE-9 | Equality is by value, and the side to move is part of it: the same placement with the other player to move is a different position |
+| GE-10 | `fingerprint` is the deterministic primitive reduction — `"<variant>/<side>/<square>=<side>:<rank>,…"`, squares ascending. It is stable across processes and languages, and it is what `__hash__` is defined over |
+
+`Board` stays deliberately unhashable (A64-014.1); the position is the repetition key, which is
+what that decision asked for.
+
+### 2.3 `Move` — the path is the move
+
+domain-model.md §2.1: "a multi-jump in draughts can reach the same destination square by
+different capture paths, capturing different pieces." An origin/destination pair is therefore an
+ambiguous description of several moves, and the ambiguity lands on the piece the paths disagree
+about.
+
+| Rule | Statement |
+| --- | --- |
+| GE-11 | `path` is the ordered sequence of squares the moving piece occupies, origin first, destination last. At least two |
+| GE-12 | A quiet move is a two-square path with nothing captured — the shortest member of the same shape, not a special case |
+| GE-13 | `captured` is ordered, and each square appears at most once. The order is what distinguishes two paths through the same pieces |
+| GE-14 | Adjacent duplicate path squares are refused with `InvalidMove`; a non-adjacent revisit is legal, because a capture sequence may cross its own track |
+| GE-15 | `promotes_to` states the rank the move *results* in. Nothing mutates a `Piece`; applying a move is a later task |
+| GE-16 | Ordering is ascending `Move.sort_key` = `(path, captured)`. The promotion rank is never a tie-break, because crowning is a function of where the path ends |
+
+### 2.4 `BoardGeometry` rule axes
+
+The generator reads the geometry and **never** the variant. A `BoardVariant` value reaches
+`geometry_of` and goes no further; a variant check inside a rules algorithm is invisible from the
+variant table and is how a second variant becomes unshippable.
+
+| Axis | Kind | Russian 8x8 | International 10x10 | Read by |
+| --- | --- | --- | --- | --- |
+| `rows`, `columns` | field | 8, 8 | 10, 10 | A64-014.1 |
+| `setup_rows_per_side` | field | 3 | 4 | A64-014.1 |
+| `is_playable` | derived | `(row + column)` even | same | A64-014.1 |
+| `capture_is_mandatory` | field | `True` | `True` | A64-014.2 |
+| `capture_obligation` | field | `ANY` | `MAXIMUM` | A64-014.4 |
+| `men_may_capture_backward` | field | `True` | `True` | A64-014.2 |
+| `kings_fly` | field | `True` | `True` | A64-014.5 |
+| `promotion_ends_ply` | field | `False` | `True` *(provisional)* | A64-014.4 |
+| `forward_step(side)` | derived | `+1` / `-1` | same | A64-014.2 |
+| `promotion_row(side)` | derived | `7` / `0` | `9` / `0` | A64-014.2 |
+| `step(origin, direction, distance)` | derived | — | — | A64-014.2 |
+
+`forward_step` and `promotion_row` are derived rather than stored because `BoardCoordinate`
+already fixes the orientation (GE-1); a stored direction could contradict it and nothing would
+catch that.
+
+### 2.5 Generation flow
+
+1. Generate captures.
+2. If any exist and `capture_is_mandatory`, **that is the answer** — quiet moves are never
+   generated.
+3. Otherwise generate quiet moves.
+4. Return them in ascending `sort_key` order, as a tuple.
+
+| Rule | Statement |
+| --- | --- |
+| GE-17 | Mandatory capture binds the **player**, not the piece: one man's available jump suppresses every other man's quiet moves |
+| GE-18 | Captures are generated first, never generated-then-filtered. Under `MAXIMUM` the survivors must be compared by length, and a pool that has already mixed quiet moves in has to re-identify which were captures |
+| GE-19 | A man steps one square forward diagonally onto an empty playable square. It never steps backward in any configured variant |
+| GE-20 | A man jumps an adjacent opponent onto the empty playable square directly beyond, along the directions `man_capture_directions` gives — all four where `men_may_capture_backward` |
+| GE-21 | Only pieces of `side_to_move` generate moves |
+| GE-22 | A move landing on the mover's promotion row carries `promotes_to = KING` |
+| GE-23 | The same position produces the same ordered tuple on every machine and in every process |
+
+### 2.6 Corpus
+
+`specs/game-engine/corpus/v1/` — the versioned conformance corpus AD-14 requires, in
+language-neutral JSON, executed today by `apps/api/tests/unit/test_engine_corpus.py` and by a
+TypeScript engine when one exists. Format, field rules and the versioning policy are in that
+directory's `README.md`. A version is append-only.
+
+### 2.7 Deliberate scope boundary
+
+`MoveGenerator` skips kings — a king belonging to the side to move contributes **no** moves, and
+is not refused. Until A64-014.5 its answer is complete only for positions with no king of the
+side to move, and the corpus asserts that every case satisfies that. Every generated capture is a
+single jump; A64-014.4 replaces one private method with a recursive walk without changing a
+signature, an ordering, or the flow above.
+
+---
+
+## 3. Not yet specified
+
+Capture sequences longer than one jump, maximum-capture selection, king mobility (flying versus
+short), promotion in the middle of a sequence, move validation and application, repetition
+hashing as an incremental `PositionHash`, draw rules, termination detection, PDN notation and
+serialization, the TypeScript implementation of the corpus (AD-14), and the engine version
+recorded per match (AD-15).
 
 ## TODO
 
 - [ ] Assign a document owner
-- [ ] Specify move generation and the capture obligation per variant
-- [ ] Specify `Position`, `Move`, and the repetition hash
-- [ ] Specify termination and draw detection
-- [ ] Define the conformance corpus format and its CI execution (AD-14)
+- [ ] Specify recursive capture sequences and maximum-capture selection (A64-014.4)
+- [ ] Confirm `promotion_ends_ply` for international draughts against corpus cases
+- [ ] Specify king mobility (A64-014.5)
+- [ ] Specify move validation and application (A64-014.3)
+- [ ] Specify the repetition hash, termination and draw detection
+- [ ] Add the TypeScript implementation that executes the same corpus (AD-14)
 - [ ] Review and promote status from Partial to Approved

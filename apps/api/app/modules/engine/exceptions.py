@@ -79,6 +79,21 @@ class PieceNotFound(GameDomainError):
     """
 
 
+class InvalidMove(GameDomainError):
+    """A `Move` that is not well-formed — A64-014.2.
+
+    Malformed **shape**, not illegality: a path shorter than two squares, a
+    step that goes nowhere, the same piece captured twice. Whether a
+    well-formed move is *legal* in a position is `MoveGenerator`'s answer
+    and, from A64-014.3, a validator's.
+
+    The distinction matters because the two have different audiences. An
+    illegal move is a player being told no, and it is expected traffic; one
+    of these is a caller that built a move wrong, and it should never
+    happen in play.
+    """
+
+
 class DestinationOccupied(GameDomainError):
     """A command would have put a piece on a square that already holds one.
 
@@ -93,5 +108,6 @@ __all__ = [
     "GameDomainError",
     "InvalidBoardState",
     "InvalidCoordinate",
+    "InvalidMove",
     "PieceNotFound",
 ]

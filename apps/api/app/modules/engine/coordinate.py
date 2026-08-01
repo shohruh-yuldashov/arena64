@@ -19,6 +19,15 @@ The number is a rendering of a coordinate under a variant, and it belongs
 with the variant, in the task that needs notation. Nothing here forecloses
 it.
 
+## Algebraic notation is now load-bearing — A64-014.2
+
+`__str__` was debugging output at A64-014.1. It is now the notation the
+engine corpus is written in (`specs/game-engine/corpus/`) and the notation
+`Position.fingerprint` reduces to, so `parse` exists beside it and the two
+are asserted to round-trip. It is still not PDN and still not a wire
+format: it names a square on no board in particular, which is exactly what
+a corpus case needs and exactly what a client protocol does not.
+
 ## Orientation
 
 `row` increases away from LIGHT: row 0 is LIGHT's back rank and the last
@@ -99,12 +108,69 @@ class BoardCoordinate:
             raise InvalidCoordinate(f"Column {self.column} is not an addressable file.")
 
     def __str__(self) -> str:
-        """Algebraic notation — `a1` is the near-left corner.
+        """Algebraic notation — `a1` is the near-left corner, `j10` the far
+        corner of the largest board.
 
-        For logs, test failures and debugging only. It is not PDN and is
-        not a wire format; see the module docstring.
+        The corpus notation (see the module docstring). `parse` is its
+        inverse, and a round-trip test holds the two together.
         """
         return f"{_COLUMN_LETTERS[self.column]}{self.row + 1}"
 
+    @classmethod
+    def parse(cls, text: str) -> "BoardCoordinate":
+        """A coordinate from its algebraic notation.
 
-__all__ = ["MAX_BOARD_DIMENSION", "BoardCoordinate"]
+        Strict on purpose: no whitespace tolerance, no uppercase, no
+        leading zero. A corpus is a contract between two implementations
+        (AD-14), and a parser that accepted `"A1 "` in Python and rejected
+        it in TypeScript would make the contract mean two things.
+
+        Raises `InvalidCoordinate` for anything that is not one letter
+        followed by a positive rank number.
+        """
+        if len(text) < 2:
+            raise InvalidCoordinate(f"{text!r} is not a square.")
+        file_letter, rank_digits = text[0], text[1:]
+        if file_letter not in _COLUMN_LETTERS or not rank_digits.isdigit():
+            raise InvalidCoordinate(f"{text!r} is not a square.")
+        if rank_digits[0] == "0":
+            raise InvalidCoordinate(f"{text!r} is not a square — ranks are one-based.")
+        return cls(row=int(rank_digits) - 1, column=_COLUMN_LETTERS.index(file_letter))
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class Direction:
+    """One step of travel across the board.
+
+    Only the four diagonals are meaningful in draughts, and they are the
+    four constants below; nothing validates that, because a direction that
+    is not diagonal lands on a light square and `BoardGeometry.step`
+    answers `None` for it. The type exists so that "which way" is a named,
+    ordered value rather than an anonymous integer pair — move ordering
+    depends on iterating directions in one sequence, and a tuple would have
+    made that sequence an accident of how the literal was written.
+
+    Distance is not part of a direction. A flying king travelling three
+    squares travels three steps in one direction, which keeps the four
+    constants total for every piece the rules will eventually have.
+    """
+
+    row_step: int
+    column_step: int
+
+
+DIAGONAL_DIRECTIONS: tuple[Direction, ...] = (
+    Direction(row_step=-1, column_step=-1),
+    Direction(row_step=-1, column_step=1),
+    Direction(row_step=1, column_step=-1),
+    Direction(row_step=1, column_step=1),
+)
+"""The four diagonals, in ascending `(row_step, column_step)` order.
+
+The order is the contract, not an implementation detail: move generation
+walks it, and the generated move list is required to be identical in every
+implementation of these rules (AD-14).
+"""
+
+
+__all__ = ["DIAGONAL_DIRECTIONS", "MAX_BOARD_DIMENSION", "BoardCoordinate", "Direction"]

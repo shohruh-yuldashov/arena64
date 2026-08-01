@@ -635,13 +635,22 @@ and position hashing for repetition rules.
    a worker, or later to a compiled implementation, if the engine has no ambient
    dependencies to carry with it.
 
-#### Status (A64-014.1) — the kernel exists, and AD-13 is enforced rather than asserted
+#### Status — the kernel exists, and AD-13 is enforced rather than asserted
 
-`apps/api/app/modules/engine/` implements the **board foundation only**: `BoardCoordinate`,
-`PlayerSide`, `PieceRank`, `Piece`, `BoardVariant`, `BoardGeometry`, `Board`, the opening
-position, and the failure taxonomy they raise. Move generation, move application, captures,
-king mobility, draw detection, `Position`, `Move`, repetition hashing and notation are all
-absent, and nothing anticipates their shape beyond keeping the board variant-parameterised.
+`apps/api/app/modules/engine/` implements:
+
+| Task | Contents |
+| --- | --- |
+| A64-014.1 | `BoardCoordinate`, `PlayerSide`, `PieceRank`, `Piece`, `BoardVariant`, `BoardGeometry`, `Board`, the opening position, and the failure taxonomy |
+| A64-014.2 | `Position`, `Move` (a path, not a from/to pair), `Direction`, `CaptureObligation`, `MoveGenerator`, the rule axes on `BoardGeometry`, and the first corpus version |
+
+Move generation covers **men only**: quiet moves, single jumps, mandatory-capture priority,
+promotion detected on arrival, one deterministic order. Kings contribute no moves, capture
+sequences stop at one jump, and move validation, application, termination and draw detection do
+not exist. See `specs/game-engine.md` §2.7 for the boundary as stated to callers.
+
+The generator reads `BoardGeometry` and never `BoardVariant` — the rule that keeps a second
+variant a table entry rather than a search for hidden branches.
 
 Two contracts in `apps/api/.importlinter` now hold the two rules this section states:
 
@@ -669,6 +678,17 @@ WebAssembly adds a build toolchain and a multi-hundred-kilobyte download to the 
 path of a page whose whole job is showing a board quickly. Two idiomatic implementations
 plus a shared corpus keeps each side natural, and — crucially — divergence is caught by a
 failing test rather than by a player disputing a result. The corpus is the contract.
+
+#### Status (A64-014.2) — the corpus exists, one implementation executes it
+
+`specs/game-engine/corpus/v1/` holds the first version, in language-neutral JSON, with its
+format and append-only versioning policy in that directory's `README.md`. It lives in `specs/`
+rather than beside either engine on purpose: a corpus owned by one implementation is that
+implementation's test suite, and the point is that neither owns it.
+
+The Python engine executes it (`apps/api/tests/unit/test_engine_corpus.py`). There is no
+TypeScript engine yet, so the corpus currently proves conformance to a contract rather than
+agreement between two implementations — the second half of AD-14 arrives with the client.
 
 ### AD-15 — Every match records the engine version it was played under
 

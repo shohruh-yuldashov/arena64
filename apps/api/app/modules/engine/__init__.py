@@ -6,17 +6,23 @@ functions over immutable value objects." That is AD-13, and it is enforced
 rather than asserted: `apps/api/.importlinter` fails the build on an import
 from this package to anything but the shared kernel in `app.core`.
 
-## A64-014.1 implements the board, and only the board
+## What is implemented
 
-Present: `BoardCoordinate`, `PlayerSide`, `PieceRank`, `Piece`,
-`BoardVariant`, `BoardGeometry`, `Board`, `initial_board`, and the failure
-taxonomy they raise.
+**A64-014.1 — the board.** `BoardCoordinate`, `PlayerSide`, `PieceRank`,
+`Piece`, `BoardVariant`, `BoardGeometry`, `Board`, `initial_board`.
 
-Absent, by the task's constraints: move generation, move validation,
-captures and multi-jumps, king mobility, promotion-on-arrival, draw
-detection, repetition hashing, `Position` (a board plus the side to move),
-`Move`, serialization and PDN notation. Nothing here anticipates their
-shape beyond keeping the board variant-parameterised.
+**A64-014.2 — men's moves.** `Position`, `Move`, `MoveGenerator`,
+`Direction`, `CaptureObligation`, and the rule axes on `BoardGeometry`.
+Quiet moves and single jumps for men, mandatory-capture priority,
+promotion detected on arrival, one deterministic move order, and the first
+versioned corpus in `specs/game-engine/corpus/v1/`.
+
+Absent, by the tasks' constraints: **king movement** (a king contributes no
+moves — see `MoveGenerator`), **capture sequences longer than one jump**,
+maximum-capture selection, move validation and application, terminal-state
+and draw detection, `PositionHash` as an incremental hash, PDN notation,
+and serialization. Nothing here anticipates their shape beyond keeping the
+rules variant-parameterised and the move a path.
 
 ## Why this module has no four-layer interior
 
@@ -43,32 +49,53 @@ state (R-2). None of the three exists yet, so today's contract in
 """
 
 from app.modules.engine.board import Board
-from app.modules.engine.coordinate import MAX_BOARD_DIMENSION, BoardCoordinate
+from app.modules.engine.coordinate import (
+    DIAGONAL_DIRECTIONS,
+    MAX_BOARD_DIMENSION,
+    BoardCoordinate,
+    Direction,
+)
 from app.modules.engine.exceptions import (
     DestinationOccupied,
     GameDomainError,
     InvalidBoardState,
     InvalidCoordinate,
+    InvalidMove,
     PieceNotFound,
 )
 from app.modules.engine.initial_position import initial_board
+from app.modules.engine.move import Move
+from app.modules.engine.move_generation import MoveGenerator
 from app.modules.engine.piece import Piece, PieceRank, PlayerSide
-from app.modules.engine.variant import BoardGeometry, BoardVariant, geometry_of
+from app.modules.engine.position import Position
+from app.modules.engine.variant import (
+    BoardGeometry,
+    BoardVariant,
+    CaptureObligation,
+    geometry_of,
+)
 
 __all__ = [
+    "DIAGONAL_DIRECTIONS",
     "MAX_BOARD_DIMENSION",
     "Board",
     "BoardCoordinate",
     "BoardGeometry",
     "BoardVariant",
+    "CaptureObligation",
     "DestinationOccupied",
+    "Direction",
     "GameDomainError",
     "InvalidBoardState",
     "InvalidCoordinate",
+    "InvalidMove",
+    "Move",
+    "MoveGenerator",
     "Piece",
     "PieceNotFound",
     "PieceRank",
     "PlayerSide",
+    "Position",
     "geometry_of",
     "initial_board",
 ]

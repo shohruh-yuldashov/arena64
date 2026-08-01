@@ -101,3 +101,51 @@ class TestReadableRepresentation:
 
     def test_the_repr_names_both_axes(self) -> None:
         assert repr(BoardCoordinate(row=2, column=3)) == "BoardCoordinate(row=2, column=3)"
+
+
+class TestParsing:
+    """A64-014.2 made the notation load-bearing: the corpus is written in
+    it, so `parse` and `__str__` are two halves of one contract."""
+
+    def test_a1_is_the_near_left_corner(self) -> None:
+        assert BoardCoordinate.parse("a1") == BoardCoordinate(row=0, column=0)
+
+    def test_every_addressable_square_round_trips(self) -> None:
+        for row in range(MAX_BOARD_DIMENSION):
+            for column in range(MAX_BOARD_DIMENSION):
+                square = BoardCoordinate(row=row, column=column)
+                assert BoardCoordinate.parse(str(square)) == square
+
+    def test_a_two_digit_rank_parses(self) -> None:
+        """The tenth rank exists on an international board, and `j10` is
+        where a one-character rank parser would silently read `1`."""
+        assert BoardCoordinate.parse("j10") == BoardCoordinate(row=9, column=9)
+
+    def test_an_unknown_file_is_refused(self) -> None:
+        with pytest.raises(InvalidCoordinate):
+            BoardCoordinate.parse("z1")
+
+    def test_an_uppercase_file_is_refused(self) -> None:
+        """Strict on purpose: a corpus is a contract between two
+        implementations, and a parser that is lenient in one language and
+        strict in the other makes the contract mean two things."""
+        with pytest.raises(InvalidCoordinate):
+            BoardCoordinate.parse("A1")
+
+    def test_surrounding_whitespace_is_refused(self) -> None:
+        with pytest.raises(InvalidCoordinate):
+            BoardCoordinate.parse(" a1")
+
+    def test_a_missing_rank_is_refused(self) -> None:
+        with pytest.raises(InvalidCoordinate):
+            BoardCoordinate.parse("a")
+
+    def test_a_zero_rank_is_refused(self) -> None:
+        """Ranks are one-based, so `a0` is not the first rank written
+        another way — it is off the board."""
+        with pytest.raises(InvalidCoordinate):
+            BoardCoordinate.parse("a0")
+
+    def test_a_rank_past_the_largest_board_is_refused(self) -> None:
+        with pytest.raises(InvalidCoordinate):
+            BoardCoordinate.parse("a11")

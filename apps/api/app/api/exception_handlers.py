@@ -16,6 +16,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.api.rate_limiting import (
+    RATE_LIMIT_LIMIT_HEADER,
+    RATE_LIMIT_REMAINING_HEADER,
+    RATE_LIMIT_RESET_HEADER,
+    RETRY_AFTER_HEADER,
+)
 from app.common.context import current_correlation_id, current_request_id
 from app.core.error_codes import ErrorCode
 from app.core.exceptions import (
@@ -29,6 +35,7 @@ from app.core.exceptions import (
     PreconditionFailedError,
     RateLimitedError,
     RuleViolationError,
+    TooManyRequests,
     TransientInfrastructureError,
     ValidationError,
 )
@@ -146,6 +153,36 @@ def _log(exc: Arena64Error) -> None:
         logger.error("infrastructure_error", extra={"code": exc.code}, exc_info=exc)
 
 
+def _headers_for(exc: Arena64Error) -> dict[str, str]:
+    """The transport-specific headers an exception's *data* implies.
+
+    This is the mapping table's other half, and the reason
+    `TooManyRequests` carries integers rather than header strings: the
+    exception knows the caller may retry in 180 seconds, and only this
+    layer knows that HTTP spells that `Retry-After: 180`. AD-09's gateway
+    will render the same exception as an error frame with no headers at
+    all (services.md §7.2: "transport meaning cannot live in [services]").
+
+    `Retry-After` is emitted in delta-seconds rather than as an HTTP-date.
+    RFC 9110 §10.2.3 permits both; delta-seconds does not require the
+    client's clock to agree with the server's, and a mobile client's often
+    does not.
+    """
+    headers: dict[str, str] = {}
+
+    challenge = _challenge_for(exc)
+    if challenge:
+        headers["WWW-Authenticate"] = challenge
+
+    if isinstance(exc, TooManyRequests):
+        headers[RETRY_AFTER_HEADER] = str(exc.retry_after)
+        headers[RATE_LIMIT_LIMIT_HEADER] = str(exc.limit)
+        headers[RATE_LIMIT_REMAINING_HEADER] = str(exc.remaining)
+        headers[RATE_LIMIT_RESET_HEADER] = str(exc.reset_after)
+
+    return headers
+
+
 async def _handle_arena64_error(request: Request, exc: Exception) -> JSONResponse:
     # pragma: no cover — FastAPI only ever routes an Arena64Error to this handler
     if not isinstance(exc, Arena64Error):
@@ -157,11 +194,11 @@ async def _handle_arena64_error(request: Request, exc: Exception) -> JSONRespons
         request_id=current_request_id(),
         correlation_id=current_correlation_id(),
     )
-    challenge = _challenge_for(exc)
+    headers = _headers_for(exc)
     return JSONResponse(
         status_code=_status_for(exc),
         content=body.model_dump(mode="json"),
-        headers={"WWW-Authenticate": challenge} if challenge else None,
+        headers=headers or None,
     )
 
 

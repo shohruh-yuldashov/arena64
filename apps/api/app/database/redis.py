@@ -22,15 +22,35 @@ class RedisPools:
     `bus`    — pub/sub fan-out
     `broker` — Celery broker and task queues (unused until a worker entrypoint exists)
     `cache`  — response cache and read models
+    `limits` — rate limit counters (A64-011.8)
+
+    `limits` is the fifth role, added because rate limit counters must not
+    share an instance with anything that evicts — see `RedisSettings` for
+    the argument, which is AD-03's own reasoning applied to a workload it
+    predates.
     """
 
     live: Redis
     bus: Redis
     broker: Redis
     cache: Redis
+    limits: Redis
+
+    def _all(self) -> tuple[tuple[str, Redis], ...]:
+        """Named once so `aclose` and `ping_all` cannot disagree about
+        which roles exist — the way to leak a connection pool for a year is
+        to add a sixth role to one of those two methods and not the
+        other."""
+        return (
+            ("live", self.live),
+            ("bus", self.bus),
+            ("broker", self.broker),
+            ("cache", self.cache),
+            ("limits", self.limits),
+        )
 
     async def aclose(self) -> None:
-        for client in (self.live, self.bus, self.broker, self.cache):
+        for _, client in self._all():
             await client.aclose()
 
     async def ping_all(self) -> dict[str, bool]:
@@ -38,12 +58,7 @@ class RedisPools:
         on a hot path, so a per-role try/except here is the right place to
         absorb a single role's outage rather than fail the whole probe."""
         results: dict[str, bool] = {}
-        for name, client in (
-            ("live", self.live),
-            ("bus", self.bus),
-            ("broker", self.broker),
-            ("cache", self.cache),
-        ):
+        for name, client in self._all():
             try:
                 results[name] = bool(await client.ping())
             except Exception:  # noqa: BLE001 — a readiness probe must not raise
@@ -57,4 +72,5 @@ def create_redis_pools(settings: RedisSettings) -> RedisPools:
         bus=Redis.from_url(settings.bus_url.get_secret_value()),
         broker=Redis.from_url(settings.broker_url.get_secret_value()),
         cache=Redis.from_url(settings.cache_url.get_secret_value()),
+        limits=Redis.from_url(settings.limits_url.get_secret_value()),
     )

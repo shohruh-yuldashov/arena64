@@ -14,6 +14,7 @@ from app.config.settings import (
     EmailSettings,
     JWTSettings,
     PostgresSettings,
+    RateLimitSettings,
     RedisSettings,
     SessionSettings,
     Settings,
@@ -88,6 +89,7 @@ class TestSettings:
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             session=SessionSettings(),
             email=EmailSettings(),
+            rate_limit=RateLimitSettings(),
         )
         assert settings.environment is Environment.TEST
 
@@ -105,11 +107,13 @@ class TestSettings:
                     bus_url=SecretStr("redis://prod-bus:6379/0"),
                     broker_url=SecretStr("redis://prod-broker:6379/0"),
                     cache_url=SecretStr("redis://prod-cache:6379/0"),
+                    limits_url=SecretStr("redis://prod-limits:6379/0"),
                 ),
                 auth=AuthSettings(),
                 jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
                 session=SessionSettings(),
                 email=EmailSettings(),
+                rate_limit=RateLimitSettings(),
             )
 
     def test_production_rejects_a_left_default_redis_role(self) -> None:
@@ -125,6 +129,7 @@ class TestSettings:
                 jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
                 session=SessionSettings(),
                 email=EmailSettings(),
+                rate_limit=RateLimitSettings(),
             )
 
     def test_production_accepts_fully_explicit_configuration(self) -> None:
@@ -139,11 +144,13 @@ class TestSettings:
                 bus_url=SecretStr("redis://prod-bus:6379/0"),
                 broker_url=SecretStr("redis://prod-broker:6379/0"),
                 cache_url=SecretStr("redis://prod-cache:6379/0"),
+                limits_url=SecretStr("redis://prod-limits:6379/0"),
             ),
             auth=AuthSettings(),
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             session=SessionSettings(),
             email=EmailSettings(),
+            rate_limit=RateLimitSettings(),
         )
         assert settings.environment is Environment.PRODUCTION
 
@@ -157,6 +164,7 @@ class TestSettings:
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             session=SessionSettings(),
             email=EmailSettings(),
+            rate_limit=RateLimitSettings(),
         )
         with pytest.raises(PydanticValidationError):
             settings.environment = Environment.PRODUCTION  # type: ignore[misc]
@@ -255,10 +263,12 @@ class TestJWTProductionGuard:
                 bus_url=SecretStr("redis://prod-bus:6379/0"),
                 broker_url=SecretStr("redis://prod-broker:6379/0"),
                 cache_url=SecretStr("redis://prod-cache:6379/0"),
+                limits_url=SecretStr("redis://prod-limits:6379/0"),
             ),
             auth=AuthSettings(),
             session=SessionSettings(),
             email=EmailSettings(),
+            rate_limit=RateLimitSettings(),
             jwt=JWTSettings(**jwt_overrides),  # type: ignore[arg-type]
         )
 
@@ -286,6 +296,7 @@ class TestJWTProductionGuard:
             auth=AuthSettings(),
             session=SessionSettings(),
             email=EmailSettings(),
+            rate_limit=RateLimitSettings(),
             jwt=JWTSettings(),
         )
 

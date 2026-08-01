@@ -31,6 +31,30 @@ Every failure is a typed exception on the platform hierarchy, and
     RevokedSession          -> 401  invalid_session
     InvalidVerificationToken-> 422  invalid_verification_token
     InvalidResetToken       -> 422  invalid_reset_token
+    TooManyRequests         -> 429  rate_limited
+
+## Rate limiting (A64-011.8)
+
+Six of the ten endpoints carry a `RateLimit` guard, declared in
+`rate_limits.py` and attached here as a route dependency. The limits
+themselves are not repeated in this file — one place for a number, and it
+is `RateLimitSettings`, which is what an operator edits during an
+incident.
+
+The guards run **before** Pydantic validates the body, because FastAPI
+resolves route dependencies first. That is deliberate: a request with a
+malformed body still consumes its per-IP allowance, so "send garbage
+quickly" is not a cheaper way to probe an endpoint than sending something
+valid.
+
+The four endpoints without a guard are `POST /auth/logout`,
+`POST /auth/logout-all`, `GET /auth/me` and `POST /auth/email/verify`.
+The first three require a credential the caller must already hold, so
+abusing them requires an account and is bounded by whatever produced the
+credential; A64-011.8's endpoint list does not include them. The fourth is
+listed nowhere either and is guarded by its token's 256 bits rather than
+by a counter — though it is a reasonable thing to add, and the
+recommendations say so.
 
 `SessionNotFound` is a 401 rather than a 404 on purpose — see its
 docstring: a 404 would confirm the endpoint looked something up and did
@@ -63,7 +87,7 @@ whose shape belongs with its own task.
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 
 from app.api.exception_handlers import ErrorResponse
 from app.api.responses import build_response
@@ -80,6 +104,14 @@ from app.modules.auth.presentation.dependencies import (
     RegistrationServiceDep,
     SessionServiceDep,
     UserProfileReaderDep,
+)
+from app.modules.auth.presentation.rate_limits import (
+    FORGOT_PASSWORD_RATE_LIMIT,
+    LOGIN_RATE_LIMIT,
+    REFRESH_RATE_LIMIT,
+    REGISTER_RATE_LIMIT,
+    RESEND_VERIFICATION_RATE_LIMIT,
+    RESET_PASSWORD_RATE_LIMIT,
 )
 from app.modules.auth.presentation.schemas import (
     ForgotPasswordRequest,
@@ -133,6 +165,25 @@ _UNPROCESSABLE: _Responses = {
         "model": ErrorResponse,
     }
 }
+#: A64-011.8. Every endpoint below that carries a `RateLimit` guard
+#: documents this, because a 429 a client has not been told to expect is
+#: one it will retry immediately and in a loop.
+#:
+#: The description names the headers rather than the *rule*: a caller needs
+#: to know when to come back, and deliberately does not learn which
+#: dimension refused them — see `TooManyRequests`.
+_TOO_MANY_REQUESTS: _Responses = {
+    429: {
+        "description": (
+            "A rate limit was exceeded. `Retry-After` gives the number of seconds to "
+            "wait; `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset` "
+            "describe the limit that bound. The same three `X-RateLimit-*` headers are "
+            "returned on successful responses, so a client can pace itself before "
+            "being refused."
+        ),
+        "model": ErrorResponse,
+    }
+}
 
 
 def _device_of(request: Request) -> SessionDevice:
@@ -163,10 +214,11 @@ def _device_of(request: Request) -> SessionDevice:
 
 @auth_router.post(
     "/register",
+    dependencies=[Depends(REGISTER_RATE_LIMIT)],
     status_code=status.HTTP_201_CREATED,
     summary="Create an account",
     response_description="The newly created account.",
-    responses={**_CONFLICT, **_UNPROCESSABLE},
+    responses={**_CONFLICT, **_UNPROCESSABLE, **_TOO_MANY_REQUESTS},
 )
 async def register(
     payload: RegisterRequest,
@@ -221,9 +273,10 @@ async def register(
 
 @auth_router.post(
     "/login",
+    dependencies=[Depends(LOGIN_RATE_LIMIT)],
     summary="Sign in and receive a token pair",
     response_description="An access token and a refresh token.",
-    responses={**_UNAUTHORIZED, **_FORBIDDEN, **_UNPROCESSABLE},
+    responses={**_UNAUTHORIZED, **_FORBIDDEN, **_UNPROCESSABLE, **_TOO_MANY_REQUESTS},
 )
 async def login(
     payload: LoginRequest,
@@ -265,9 +318,10 @@ async def login(
 
 @auth_router.post(
     "/refresh",
+    dependencies=[Depends(REFRESH_RATE_LIMIT)],
     summary="Exchange a refresh token for a new token pair",
     response_description="A new access token and a rotated refresh token.",
-    responses={**_UNAUTHORIZED, **_UNPROCESSABLE},
+    responses={**_UNAUTHORIZED, **_UNPROCESSABLE, **_TOO_MANY_REQUESTS},
 )
 async def refresh(
     payload: RefreshRequest,
@@ -447,10 +501,11 @@ async def verify_email(
 
 @auth_router.post(
     "/email/resend",
+    dependencies=[Depends(RESEND_VERIFICATION_RATE_LIMIT)],
     status_code=status.HTTP_202_ACCEPTED,
     summary="Request a new verification link",
     response_description="Accepted. The reply is identical whether or not an account exists.",
-    responses={**_UNPROCESSABLE},
+    responses={**_UNPROCESSABLE, **_TOO_MANY_REQUESTS},
 )
 async def resend_verification(
     payload: ResendVerificationRequest,
@@ -492,10 +547,11 @@ async def resend_verification(
 
 @auth_router.post(
     "/password/forgot",
+    dependencies=[Depends(FORGOT_PASSWORD_RATE_LIMIT)],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Request a password reset link",
     response_description="Accepted. The reply is identical whether or not an account exists.",
-    responses={**_UNPROCESSABLE},
+    responses={**_UNPROCESSABLE, **_TOO_MANY_REQUESTS},
 )
 async def forgot_password(
     payload: ForgotPasswordRequest,
@@ -548,10 +604,11 @@ async def forgot_password(
 
 @auth_router.post(
     "/password/reset",
+    dependencies=[Depends(RESET_PASSWORD_RATE_LIMIT)],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Set a new password using a reset link",
     response_description="The password was replaced and every session was revoked.",
-    responses={**_UNPROCESSABLE},
+    responses={**_UNPROCESSABLE, **_TOO_MANY_REQUESTS},
 )
 async def reset_password(
     payload: ResetPasswordRequest,

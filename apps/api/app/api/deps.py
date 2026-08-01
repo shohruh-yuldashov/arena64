@@ -16,7 +16,8 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config.settings import Settings, get_settings
+from app.config.settings import RateLimitSettings, Settings, get_settings
+from app.core.rate_limiting import RateLimiter
 from app.database.redis import RedisPools
 from app.database.session_manager import DatabaseSessionManager
 
@@ -49,3 +50,39 @@ def get_redis_pools(request: Request) -> RedisPools:
 
 
 RedisPoolsDep = Annotated[RedisPools, Depends(get_redis_pools)]
+
+
+def get_rate_limiter(request: Request) -> RateLimiter:
+    """The process-lifetime limiter, built in `lifespan` (A64-011.8).
+
+    A singleton rather than per-request, and for once the reason is not
+    only cost. `RedisRateLimiter` calls `register_script` in its
+    constructor, which computes the Lua script's SHA so that every check
+    can use `EVALSHA` — one hash instead of shipping the script body on
+    every login. Building one per request would recompute that on the
+    hottest unauthenticated path on the platform and discard it.
+
+    Safe as a singleton because it holds no session and no per-request
+    state: the Redis client it wraps *is* a pool, exactly as
+    `get_redis_pools` above describes (dependency-injection.md §1.3).
+    """
+    limiter: RateLimiter = request.app.state.rate_limiter
+    return limiter
+
+
+RateLimiterDep = Annotated[RateLimiter, Depends(get_rate_limiter)]
+
+
+def get_rate_limit_settings(settings: SettingsDep) -> RateLimitSettings:
+    """The rate-limiting section alone.
+
+    A dependency of its own so the guard in `app/api/rate_limiting.py`
+    receives the section it needs rather than the whole `Settings` object
+    — the same narrowing the module ports elsewhere on the platform make,
+    for the same reason: a component handed everything can come to depend
+    on anything.
+    """
+    return settings.rate_limit
+
+
+RateLimitSettingsDep = Annotated[RateLimitSettings, Depends(get_rate_limit_settings)]

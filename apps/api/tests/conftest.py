@@ -9,6 +9,27 @@ import os
 
 os.environ.setdefault("ENVIRONMENT", "test")
 
+# A64-011.8: rate limiting is **off by default across the suite**, and on
+# only in the files that test it.
+#
+# Not a convenience. Every limit is a shared counter with a window measured
+# in minutes or hours, so leaving it on would couple otherwise independent
+# tests through Redis: `test_auth_api.py` registers a fresh account per
+# test from one apparent IP, and the fourth of those would be refused by a
+# limit of three per hour. The failure would be order-dependent, would only
+# appear once the file grew past the limit, and would be blamed on
+# registration rather than on the limiter.
+#
+# The alternative — flushing Redis between tests — makes every suite on the
+# platform depend on a reachable Redis to test things that have nothing to
+# do with it.
+#
+# What keeps this from hiding a regression is that the rate-limiting suites
+# turn it back on explicitly, and `test_auth_rate_limits.py` asserts
+# *structurally* that each of the six endpoints still carries its guard —
+# an assertion this switch cannot affect.
+os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
+
 from collections.abc import Iterator
 
 import pytest

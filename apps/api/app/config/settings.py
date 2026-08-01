@@ -37,6 +37,7 @@ _LOCAL_REDIS_URLS = {
     "bus": "redis://localhost:6379/1",
     "broker": "redis://localhost:6379/2",
     "cache": "redis://localhost:6379/3",
+    "limits": "redis://localhost:6379/4",
 }
 
 
@@ -74,14 +75,47 @@ class PostgresSettings(BaseSettings):
 
 
 class RedisSettings(BaseSettings):
-    """`redis` — four role-separated pools, never one shared client.
+    """`redis` — five role-separated pools, never one shared client.
 
     architecture.md AD-03: a spectator fan-out storm on `bus` must not be
     able to evict live match state on `live`; a queue backlog on `broker`
-    must not evict the leaderboard read model on `cache`. Four URLs, four
-    independent pools (app/database/redis.py) — never a single client
-    reused across roles, even where they happen to point at the same
+    must not evict the leaderboard read model on `cache`. One URL per role,
+    one independent pool each (app/database/redis.py) — never a single
+    client reused across roles, even where they happen to point at the same
     instance in `local`.
+
+    ## Why A64-011.8 added a fifth role rather than using `cache`
+
+    AD-03 names four. Rate limit counters are the fifth, and putting them
+    on any of the existing four would break the decision rather than
+    reuse it.
+
+    **Not `cache`.** AD-03 states its persistence posture outright — "the
+    cache runs with no persistence at all" — and a cache is configured with
+    an eviction policy, because evicting from a cache is *correct*. A rate
+    limit counter evicted under memory pressure is a limit that silently
+    stops applying, and memory pressure on the cache arrives during a
+    traffic spike, which is exactly when an authentication endpoint is
+    either genuinely busy or under attack. The failure mode is a limiter
+    that works in testing and disappears in the incident it exists for.
+
+    **Not `live` or `bus`.** Both are AD-03's own example of a hostile
+    interaction: a flood of login attempts is precisely the traffic that
+    must not compete for memory or connections with games in progress. A
+    limiter sharing an instance with live match state means a
+    credential-stuffing run degrades matches, which is the platform-wide
+    outage AD-03 exists to convert into a single degraded feature.
+
+    **Not `broker`.** Celery owns the keyspace there.
+
+    So this is AD-03 applied, not AD-03 amended: the argument for four
+    instances is an argument about hostile workloads with different
+    persistence needs, and rate limiting is a sixth such workload with a
+    seventh such need (it wants no eviction and can tolerate losing its
+    state on restart — the opposite of both `live` and `cache`).
+
+    In `local` all five point at one instance with different database
+    indices, exactly as the four already did.
     """
 
     model_config = SettingsConfigDict(env_prefix="REDIS_", frozen=True, extra="forbid")
@@ -90,6 +124,12 @@ class RedisSettings(BaseSettings):
     bus_url: SecretStr = SecretStr(_LOCAL_REDIS_URLS["bus"])
     broker_url: SecretStr = SecretStr(_LOCAL_REDIS_URLS["broker"])
     cache_url: SecretStr = SecretStr(_LOCAL_REDIS_URLS["cache"])
+
+    #: Rate limit counters (A64-011.8). Its own instance in a deployed
+    #: tier, configured with **no eviction policy** — see this class's
+    #: docstring on why sharing `cache` would be a limiter that vanishes
+    #: under load.
+    limits_url: SecretStr = SecretStr(_LOCAL_REDIS_URLS["limits"])
 
 
 class AuthSettings(BaseSettings):
@@ -438,6 +478,171 @@ class EmailSettings(BaseSettings):
         return self.password_reset_url_template.format(token=token)
 
 
+class RateLimitSettings(BaseSettings):
+    """`rate_limit` — abuse prevention on the authentication endpoints
+    (A64-011.8).
+
+    Every limit is configurable rather than constant, for the reason
+    `AuthSettings` gives about Argon2's cost: a control that can only be
+    changed by a deploy is a control that cannot be tightened during an
+    incident. A credential-stuffing run in progress is answered by lowering
+    `login_ip_limit` and restarting, in minutes, not by a release.
+
+    The defaults are the figures A64-011.8 specifies. Two are not, and both
+    are called out below (`password_reset_ip_limit` and the dimensions
+    chosen for the two endpoints whose brief gave a count but no
+    dimension) — a chosen default is worth more than a missing one, and
+    saying which is which is worth more than either.
+
+    ## `ge=` floors, and why there are no `le=` ceilings
+
+    The floors exist because a limit of zero takes an endpoint down
+    completely (see `RateLimitRule.__post_init__`), and a misconfigured
+    environment variable that parses as `0` is a far more likely event than
+    a deliberate one.
+
+    There is no upper bound, deliberately. Raising a limit is a
+    *loosening*, and an operator who needs to raise one at 3am to keep a
+    launch alive should not be blocked by a bound this file guessed at.
+    Lowering is the direction that matters and the floors protect it.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="RATE_LIMIT_", frozen=True, extra="forbid")
+
+    enabled: bool = True
+    """The kill switch. `False` disables every rule — for a load test, or
+    for the incident where the limiter itself is the problem.
+
+    Present because the alternative to a documented switch is somebody
+    commenting out a dependency under pressure and forgetting to restore
+    it, which is how an endpoint ends up unprotected for a quarter."""
+
+    fail_open: bool = True
+    """What an unreachable or slow Redis means.
+
+    **`True` (default): the request is allowed.** A Redis outage then
+    degrades abuse prevention rather than removing the ability to sign in.
+    That is the right default for this platform and the reasoning is worth
+    stating plainly, because the opposite is defensible elsewhere:
+
+      - Failing closed converts a *rate-limiting* outage into a **total
+        authentication outage** — nobody signs in, nobody registers,
+        nobody recovers a password, and every logged-in session dies at
+        its next refresh. That is a self-inflicted platform outage
+        (system-design.md T-2) triggered by the least critical dependency
+        in the request path.
+      - Rate limiting is not the only control on these endpoints. Argon2id
+        at ~20ms still bounds guess throughput, `users.locked_until` still
+        exists, sign-in still returns one generic failure, and reset tokens
+        still carry 256 bits. Losing the limiter is losing defence in
+        depth, not losing the defence.
+      - The outage is loud: every failure logs at ERROR with
+        `rate_limit_unavailable`, so "we are currently unprotected" is an
+        alertable condition rather than a silent one.
+
+    Set to `False` for a tier where credential stuffing is the greater
+    risk than availability. The limiter then returns `503` — not `429` —
+    because "our dependency is down" is not "you did too much", and a
+    client that saw 429 would back off politely for an hour over a fault
+    that may clear in seconds."""
+
+    trusted_proxy_count: int = Field(default=0, ge=0)
+    """How many reverse proxies sit in front of this process.
+
+    **This is the setting that decides whether per-IP limiting works at
+    all**, and both of its wrong values are quietly catastrophic in
+    opposite directions, which is why it is explicit rather than inferred.
+
+    `0` (the default) means "no proxy": the caller's IP is the socket peer,
+    and `X-Forwarded-For` is ignored entirely. That is the only safe
+    default, because a process that trusts `X-Forwarded-For` without a
+    proxy in front of it lets **any client set its own rate-limit
+    identity** — a header away from unlimited login attempts, which is not
+    a limiter with a bug but a limiter with an off switch.
+
+    Set it to the real number of proxies in a deployed tier. Behind a load
+    balancer with the default `0`, every request appears to come from the
+    balancer, so all traffic on the platform shares one per-IP bucket and
+    the first five sign-ins of any fifteen minutes lock out everybody
+    else — a total outage in the shape of a working feature.
+
+    The count is used to index from the *right* of the header, which is
+    what makes it unspoofable: each trusted proxy appends one entry, so the
+    (count+1)-th from the end is the address the outermost trusted proxy
+    actually observed. Entries to the left of it may be forged and are
+    never read."""
+
+    redis_timeout_ms: int = Field(default=100, ge=1)
+    """How long a limit check may take before it is treated as a failure.
+
+    Without this the fail-open policy above is decorative: a Redis that is
+    *slow* rather than *down* — the common failure — would hang every
+    authentication request for the client's default timeout, and the
+    limiter would take the platform down while being perfectly available
+    itself.
+
+    100ms is roughly two orders of magnitude above a healthy local round
+    trip and one fifth of the Argon2 verification the login path is about
+    to perform anyway, so it costs nothing observable when things are well
+    and cuts fast when they are not."""
+
+    # --- POST /auth/login ---------------------------------------------------
+    # Two rules, and the pair is the point. Per-IP bounds a single attacker
+    # brute-forcing one account; per-email bounds a *distributed* attempt on
+    # one account, which is exactly what per-IP cannot see. Credential
+    # stuffing is the distributed case by definition.
+    login_ip_limit: int = Field(default=5, ge=1)
+    login_ip_window_seconds: int = Field(default=15 * 60, ge=1)
+    login_email_limit: int = Field(default=10, ge=1)
+    login_email_window_seconds: int = Field(default=60 * 60, ge=1)
+
+    # --- POST /auth/register ------------------------------------------------
+    # Per IP only: there is no account yet, so there is no per-account
+    # dimension to count. Bounds mass account creation.
+    register_ip_limit: int = Field(default=3, ge=1)
+    register_ip_window_seconds: int = Field(default=60 * 60, ge=1)
+
+    # --- POST /auth/password/forgot -----------------------------------------
+    # Per email: the victim of this endpoint's abuse is the *inbox*, and a
+    # botnet spraying one address from a thousand hosts is stopped by
+    # counting the address, not the hosts.
+    forgot_password_email_limit: int = Field(default=3, ge=1)
+    forgot_password_window_seconds: int = Field(default=60 * 60, ge=1)
+
+    # --- POST /auth/email/resend --------------------------------------------
+    # The brief gives "3 requests / hour" without a dimension. Read as per
+    # email, because this endpoint is the structural twin of forgot-password
+    # — unauthenticated, takes an address, sends mail — and mail-bombing one
+    # inbox is the abuse that matters. A per-IP companion rule, which would
+    # bound *spraying* many addresses from one host, is a recommendation for
+    # A64-011.9 rather than a limit invented here.
+    resend_verification_email_limit: int = Field(default=3, ge=1)
+    resend_verification_window_seconds: int = Field(default=60 * 60, ge=1)
+
+    # --- POST /auth/refresh -------------------------------------------------
+    # The brief gives "30 requests / minute" without a dimension. Read as
+    # per IP: the credential is an opaque token, and keying on the token
+    # would let an attacker holding N stolen tokens make 30N requests —
+    # counting the thing being abused rather than the abuser. See the
+    # recommendations on what this costs behind a corporate NAT.
+    refresh_ip_limit: int = Field(default=30, ge=1)
+    refresh_ip_window_seconds: int = Field(default=60, ge=1)
+
+    # --- POST /auth/password/reset ------------------------------------------
+    # **A64-011.8 lists this endpoint but specifies no limit**, so this
+    # figure is chosen rather than given, and is flagged as such.
+    #
+    # Per IP, because the token is the only other thing in the request and a
+    # correct one is used once. 10/hour is generous against the legitimate
+    # pattern (one reset, occasionally retried after a rejected password)
+    # and restrictive against what the endpoint actually risks: it performs
+    # an Argon2id hash, so it is the cheapest CPU-amplification primitive in
+    # the authentication module. Guessing the token itself is not the threat
+    # — that is 256 bits.
+    password_reset_ip_limit: int = Field(default=10, ge=1)
+    password_reset_window_seconds: int = Field(default=60 * 60, ge=1)
+
+
 class Settings(BaseModel):
     """The composed, immutable configuration for this process."""
 
@@ -451,6 +656,7 @@ class Settings(BaseModel):
     jwt: JWTSettings
     session: SessionSettings
     email: EmailSettings
+    rate_limit: RateLimitSettings
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":
@@ -477,6 +683,7 @@ class Settings(BaseModel):
             "REDIS_BUS_URL": (self.redis.bus_url, _LOCAL_REDIS_URLS["bus"]),
             "REDIS_BROKER_URL": (self.redis.broker_url, _LOCAL_REDIS_URLS["broker"]),
             "REDIS_CACHE_URL": (self.redis.cache_url, _LOCAL_REDIS_URLS["cache"]),
+            "REDIS_LIMITS_URL": (self.redis.limits_url, _LOCAL_REDIS_URLS["limits"]),
         }
         unset = [
             name
@@ -529,4 +736,5 @@ def get_settings() -> Settings:
         jwt=JWTSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         session=SessionSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         email=EmailSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        rate_limit=RateLimitSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

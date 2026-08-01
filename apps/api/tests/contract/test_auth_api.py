@@ -35,8 +35,9 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db_session
+from app.api.deps import get_db_session, get_rate_limiter
 from app.app_factory import create_app
+from tests.fakes.rate_limiter import AllowAllRateLimiter
 
 REGISTER_URL = "/api/v1/auth/register"
 LOGIN_URL = "/api/v1/auth/login"
@@ -76,6 +77,13 @@ async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
         yield contract_session
 
     app.dependency_overrides[get_db_session] = _session
+    # A64-011.8: the ASGI transport does not run `lifespan`, so the
+    # rate limiter that lifespan builds does not exist on `app.state`.
+    # Overridden rather than constructed here because this file is not
+    # testing rate limiting — `tests/contract/test_rate_limiting_api.py`
+    # is, against a real Redis. An `AllowAllRateLimiter` keeps these tests
+    # independent of a shared counter with a window measured in hours.
+    app.dependency_overrides[get_rate_limiter] = lambda: AllowAllRateLimiter()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as http:
         yield http

@@ -20,6 +20,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
+from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
@@ -31,6 +32,44 @@ _TEST_DSN = os.environ.get(
     "CONTRACT_TEST_POSTGRES_DSN",
     "postgresql+asyncpg://arena64:arena64@localhost:5432/arena64_test",
 )
+
+#: A64-011.8. Database **15**, never 0-4, which is what `local` points the
+#: five Redis roles at (`app/config/settings.py`). A contract test flushes
+#: the database it is given, and flushing a developer's live match state
+#: because a test picked the same index is the kind of accident that only
+#: has to happen once.
+_TEST_REDIS_URL = os.environ.get("CONTRACT_TEST_REDIS_URL", "redis://localhost:6379/15")
+
+
+@pytest_asyncio.fixture
+async def contract_redis() -> AsyncIterator[Redis]:
+    """A real Redis, flushed before and after each test.
+
+    Skipped, not failed, when unreachable — the same contract the Postgres
+    fixtures keep, so `pytest` still runs cleanly for a contributor without
+    Docker running.
+
+    Flushed on **both** sides deliberately. Flushing on the way in is what
+    makes a test independent of whatever ran before it, including a
+    previous run that was interrupted; flushing on the way out keeps a
+    developer's `redis-cli` session readable. Rate-limit keys expire on
+    their own within an hour, but "within an hour" is not isolation.
+    """
+    client = Redis.from_url(_TEST_REDIS_URL)
+
+    try:
+        await client.ping()
+    except Exception as exc:  # noqa: BLE001 — the point is to skip, not fail
+        await client.aclose()
+        pytest.skip(
+            f"contract tests need a reachable Redis at {_TEST_REDIS_URL!r} "
+            f"(see docker/docker-compose.yml): {exc}"
+        )
+
+    await client.flushdb()
+    yield client
+    await client.flushdb()
+    await client.aclose()
 
 
 @pytest_asyncio.fixture

@@ -38,7 +38,7 @@ def test_readiness_has_the_documented_shape(client: TestClient) -> None:
     data = response.json()["data"]
     assert data["status"] in {"ok", "degraded"}
     assert isinstance(data["postgres"], bool)
-    assert set(data["redis"]) == {"live", "bus", "broker", "cache"}
+    assert set(data["redis"]) == {"live", "bus", "broker", "cache", "limits"}
 
 
 def test_readiness_reports_degraded_when_dependencies_are_unreachable(
@@ -53,6 +53,7 @@ def test_readiness_reports_degraded_when_dependencies_are_unreachable(
     monkeypatch.setenv("REDIS_BUS_URL", "redis://invalid.invalid:6379/1")
     monkeypatch.setenv("REDIS_BROKER_URL", "redis://invalid.invalid:6379/2")
     monkeypatch.setenv("REDIS_CACHE_URL", "redis://invalid.invalid:6379/3")
+    monkeypatch.setenv("REDIS_LIMITS_URL", "redis://invalid.invalid:6379/4")
 
     from app.app_factory import create_app
 
@@ -63,7 +64,13 @@ def test_readiness_reports_degraded_when_dependencies_are_unreachable(
     data = response.json()["data"]
     assert data["status"] == "degraded"
     assert data["postgres"] is False
-    assert data["redis"] == {"live": False, "bus": False, "broker": False, "cache": False}
+    assert data["redis"] == {
+        "live": False,
+        "bus": False,
+        "broker": False,
+        "cache": False,
+        "limits": False,
+    }
 
 
 def test_response_carries_correlation_headers(client: TestClient) -> None:

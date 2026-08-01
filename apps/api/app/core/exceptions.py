@@ -17,6 +17,7 @@ the two structures once the first module is built.
     |   +-- PreconditionFailedError
     |   +-- RuleViolationError
     |   +-- RateLimitedError
+    |       +-- TooManyRequests    429, carrying retry metadata (A64-011.8)
     +-- InfrastructureError        a dependency failed
         +-- TransientInfrastructureError   retryable
         +-- PermanentInfrastructureError   not retryable
@@ -109,6 +110,61 @@ class RuleViolationError(DomainError):
 
 class RateLimitedError(DomainError):
     default_code: ClassVar[ErrorCode] = ErrorCode.RATE_LIMITED
+
+
+class TooManyRequests(RateLimitedError):
+    """A rate limit refused the request — HTTP 429 (A64-011.8).
+
+    The concrete member of `RateLimitedError`, which existed from A64-006
+    as a taxonomy placeholder with nothing able to raise it. This is what
+    raises.
+
+    ## Why it carries numbers and not headers
+
+    It exposes `retry_after`, `limit`, `remaining` and `reset_after` as
+    plain values, and deliberately does **not** know that they are rendered
+    as `Retry-After` and `X-RateLimit-*`. Transport meaning does not live
+    in `core/` — services.md is explicit that "the same
+    `PreconditionFailed` maps to an HTTP status in `entrypoints/http` and
+    to a WebSocket error frame code in `entrypoints/gateway`", and this
+    exception has both futures: AD-09's gateway rate limits per connection
+    (architecture.md §10) and will refuse a frame with an error *frame*,
+    which has no headers at all.
+
+    `app/api/exception_handlers.py` owns the HTTP rendering.
+
+    ## Why `message` says nothing specific
+
+    "Too many requests. Try again later." — the same string whatever rule
+    fired, whatever endpoint it fired on, and whichever of an IP or an
+    email bucket was exhausted.
+
+    Naming the rule would tell an attacker which dimension they tripped,
+    which is precisely the information needed to evade it: "per email" says
+    rotate the address, "per IP" says rotate the host. The numbers in the
+    headers are a deliberate exception to that reticence — a legitimate
+    client genuinely needs to know when to retry, and the numbers describe
+    the *binding* rule without naming which one it is.
+    """
+
+    def __init__(
+        self,
+        message: str = "Too many requests. Try again later.",
+        *,
+        retry_after: int,
+        limit: int,
+        remaining: int = 0,
+        reset_after: int,
+        code: ErrorCode | None = None,
+    ) -> None:
+        super().__init__(message, code=code)
+        self.retry_after = retry_after
+        """Whole seconds until the caller may retry. Never zero — see
+        `RateLimitDecision.retry_after_seconds`."""
+
+        self.limit = limit
+        self.remaining = remaining
+        self.reset_after = reset_after
 
 
 class InfrastructureError(Arena64Error):

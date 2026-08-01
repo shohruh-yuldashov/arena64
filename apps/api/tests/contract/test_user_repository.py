@@ -28,7 +28,12 @@ from app.core.pagination import CursorPageParams
 from app.modules.users.application.ports import UserRepository
 from app.modules.users.domain.entities import User
 from app.modules.users.domain.exceptions import EmailAlreadyExists, UsernameAlreadyExists
-from app.modules.users.domain.value_objects import Email, Timezone, Username
+from app.modules.users.domain.value_objects import (
+    DisplayName,
+    Email,
+    Timezone,
+    Username,
+)
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
 from tests.fakes.user_repository import FakeUserRepository
 
@@ -144,7 +149,7 @@ class TestGetById:
             preferred_language=Locale.RU,
             timezone=Timezone("Asia/Samarkand"),
             created_at=_BASE_TIME,
-            display_name="Full Fields",
+            display_name=DisplayName("Full Fields"),
         )
         # Set through the domain transition rather than the constructor:
         # `User.create` deliberately takes no avatar arguments, because a
@@ -161,7 +166,7 @@ class TestGetById:
         assert found.password_hash == "argon2id$fake$hash"
         assert found.preferred_language is Locale.RU
         assert found.timezone.value == "Asia/Samarkand"
-        assert found.display_name == "Full Fields"
+        assert found.display_name is not None and found.display_name.value == "Full Fields"
         assert found.avatar_object_key == "avatars/019fb9ea-0a0c-7cec-9c5f-402727c31a96/abc.webp"
         assert found.avatar_uploaded_at == _BASE_TIME
         assert found.avatar_version == 2
@@ -216,20 +221,20 @@ class TestUpdate:
     async def test_persists_changed_fields(self, repository: UserRepository) -> None:
         user = await repository.create(make_user())
 
-        user.display_name = "New Name"
+        user.display_name = DisplayName("New Name")
         user.preferred_language = Locale.UZ
         user.updated_at = _BASE_TIME + timedelta(hours=1)
         await repository.update(user)
 
         found = await repository.get_by_id(user.id)
         assert found is not None
-        assert found.display_name == "New Name"
+        assert found.display_name is not None and found.display_name.value == "New Name"
         assert found.preferred_language is Locale.UZ
         assert found.updated_at == _BASE_TIME + timedelta(hours=1)
 
     async def test_can_clear_a_nullable_field(self, repository: UserRepository) -> None:
         user = make_user()
-        user.display_name = "Something"
+        user.display_name = DisplayName("Something")
         await repository.create(user)
 
         user.display_name = None

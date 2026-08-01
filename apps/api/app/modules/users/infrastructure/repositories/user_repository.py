@@ -33,7 +33,14 @@ from app.modules.users.domain.exceptions import (
     UsernameAlreadyExists,
     UserNotFound,
 )
-from app.modules.users.domain.value_objects import Bio, CountryCode, Email, Timezone, Username
+from app.modules.users.domain.value_objects import (
+    Bio,
+    CountryCode,
+    DisplayName,
+    Email,
+    Timezone,
+    Username,
+)
 from app.modules.users.infrastructure.models import UserModel
 from app.repositories.pagination import paginate_cursor
 
@@ -72,7 +79,7 @@ class SqlAlchemyUserRepository:
             is_verified=row.is_verified,
             created_at=row.created_at,
             updated_at=row.updated_at,
-            display_name=row.display_name,
+            display_name=DisplayName(row.display_name) if row.display_name else None,
             avatar_object_key=row.avatar_object_key,
             avatar_uploaded_at=row.avatar_uploaded_at,
             avatar_version=row.avatar_version,
@@ -101,7 +108,7 @@ class SqlAlchemyUserRepository:
             is_verified=user.is_verified,
             created_at=user.created_at,
             updated_at=user.updated_at,
-            display_name=user.display_name,
+            display_name=user.display_name.value if user.display_name else None,
             avatar_object_key=user.avatar_object_key,
             avatar_uploaded_at=user.avatar_uploaded_at,
             avatar_version=user.avatar_version,
@@ -127,7 +134,7 @@ class SqlAlchemyUserRepository:
         row.is_active = user.is_active
         row.is_verified = user.is_verified
         row.updated_at = user.updated_at
-        row.display_name = user.display_name
+        row.display_name = user.display_name.value if user.display_name else None
         row.avatar_object_key = user.avatar_object_key
         row.avatar_uploaded_at = user.avatar_uploaded_at
         row.avatar_version = user.avatar_version

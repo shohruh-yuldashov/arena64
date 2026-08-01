@@ -237,7 +237,7 @@ class TestUpdateProfile:
         updated = await service.update_profile(
             created.id, UpdateUserProfile(display_name="New Name")
         )
-        assert updated.display_name == "New Name"
+        assert updated.display_name is not None and updated.display_name.value == "New Name"
 
     async def test_an_absent_field_is_left_alone(self, service: UserService) -> None:
         created = await service.create_user(create_command())
@@ -247,7 +247,7 @@ class TestUpdateProfile:
         updated = await service.update_profile(
             created.id, UpdateUserProfile(timezone="Europe/London")
         )
-        assert updated.display_name == "Keep Me"
+        assert updated.display_name is not None and updated.display_name.value == "Keep Me"
         assert updated.timezone.value == "Europe/London"
 
     async def test_an_explicit_null_clears_the_field(self, service: UserService) -> None:

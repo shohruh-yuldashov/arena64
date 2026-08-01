@@ -7,7 +7,7 @@ boundary too and a published DTO cannot live behind a presentation layer
 regardless of which side a given shape is defined on.
 """
 
-from app.modules.users.presentation.schemas.user import UserCreate, UserList, UserUpdate
+from app.modules.users.presentation.schemas.user import UserCreate, UserList
 from app.modules.users.public.dtos import UserRead, UserSummary
 
-__all__ = ["UserCreate", "UserList", "UserRead", "UserSummary", "UserUpdate"]
+__all__ = ["UserCreate", "UserList", "UserRead", "UserSummary"]

@@ -111,6 +111,8 @@ def account(*, is_active: bool = True, is_verified: bool = True) -> UserRead:
         username="player_one",
         email=EMAIL,
         display_name=None,
+        bio=None,
+        country=None,
         avatar=AvatarReference(object_key=None, version=1, uploaded_at=None),
         preferred_language=Locale.EN,
         timezone="UTC",

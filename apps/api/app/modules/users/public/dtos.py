@@ -74,6 +74,12 @@ class UserRead(BaseResponseDTO):
     username: str
     email: str
     display_name: str | None
+    bio: str | None
+    """Added by A64-012.3. A64-012.1 created the column and never put it on
+    the account holder's own view, so `GET /auth/me` could not show what
+    `GET /profiles/{username}` showed about the same person."""
+
+    country: str | None
     avatar: AvatarReference
     preferred_language: Locale
     timezone: str
@@ -169,3 +175,49 @@ class PublicUserProfile(BaseResponseDTO):
     """The join date. Named `created_at` here to match every other DTO on
     the platform and rendered as `joined_at` on the wire, where it is the
     word a player understands — see `profiles`' response schema."""
+
+
+class OwnUserProfile(BaseResponseDTO):
+    """What the account holder sees of their own profile — A64-012.3.
+
+    ## Why a fourth read shape
+
+    The three that exist all answer a different question, and none of them
+    answers this one:
+
+        UserRead           the account, email included — `GET /auth/me`
+        UserSummary        a listing row
+        PublicUserProfile  what a *stranger* sees — no timezone, no email
+
+    An edit form needs every field it can write plus enough identity to
+    render a header, and it needs `timezone`, which `PublicUserProfile`
+    deliberately omits because publishing it narrows a player's physical
+    location to anyone who asks. Widening the public shape to serve the
+    owner would leak that to everybody; reusing `UserRead` would put an
+    email address in the response to every profile edit, which nothing in
+    an edit form needs.
+
+    So: exactly the five editable fields, plus the identity and avatar a
+    header renders, plus nothing else.
+
+    **No `email`, no `is_verified`, no `is_active`, no `locked_until`.**
+    Account state and credentials belong to `auth` and are already served
+    by `GET /auth/me`; duplicating them here would give a profile endpoint
+    a second, drifting copy of them.
+    """
+
+    id: UUID
+    username: str
+    """Read-only here. A64-012.3 excludes username changes deliberately —
+    a rename has to record the old handle and enforce a reuse cooldown
+    (UP-2/UP-3), which is a use case of its own. Returned so an edit form
+    can render the handle it may not change."""
+
+    display_name: str | None
+    bio: str | None
+    country: str | None
+    preferred_language: Locale
+    timezone: str
+
+    avatar: AvatarReference
+    created_at: datetime

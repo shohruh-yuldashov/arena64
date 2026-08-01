@@ -27,11 +27,9 @@ from fastapi import APIRouter, Query, status
 from app.api.responses import build_response
 from app.core.pagination import CursorPageParams
 from app.core.responses import ApiResponse
-from app.core.sentinels import UNSET
-from app.modules.users.application.commands import UpdateUserProfile
 from app.modules.users.application.mappers import to_user_read, to_user_summary
 from app.modules.users.presentation.dependencies import UserServiceDep
-from app.modules.users.presentation.schemas import UserList, UserRead, UserUpdate
+from app.modules.users.presentation.schemas import UserList, UserRead
 
 users_router = APIRouter(prefix="/users", tags=["users"])
 
@@ -63,30 +61,24 @@ async def list_users(
     return build_response(UserList(items=[to_user_summary(user) for user in users], page=page))
 
 
-@users_router.patch("/{user_id}", status_code=status.HTTP_200_OK)
-async def update_user(
-    user_id: UUID, payload: UserUpdate, service: UserServiceDep
-) -> ApiResponse[UserRead]:
-    """Partial profile update.
-
-    `model_fields_set` is what makes this a real PATCH: it reports which
-    keys the client actually sent, so an omitted field maps to `UNSET`
-    (leave alone) while an explicit `null` maps to `None` (clear). Reading
-    the attribute values alone cannot distinguish the two, and treating
-    them the same is how a PATCH silently wipes fields the caller never
-    mentioned.
-    """
-    sent = payload.model_fields_set
-    command = UpdateUserProfile(
-        display_name=payload.display_name if "display_name" in sent else UNSET,
-        # These two are non-nullable on the entity, so there is no "clear"
-        # state to map — `UserUpdate` rejects an explicit null for them
-        # before reaching here, leaving only present-with-value or absent.
-        preferred_language=(
-            payload.preferred_language if payload.preferred_language is not None else UNSET
-        ),
-        timezone=(payload.timezone if payload.timezone is not None else UNSET),
-    )
-
-    user = await service.update_profile(user_id, command)
-    return build_response(to_user_read(user))
+# --- removed in A64-012.3: `PATCH /users/{user_id}` --------------------------
+#
+# A64-010 shipped an **unauthenticated** partial profile update keyed on a
+# user id in the path. Anyone who knew a player's id — which is public, and
+# which `GET /profiles/{username}` returns — could rewrite that player's
+# display name, language and timezone.
+#
+# A64-012.3's requirement is that "only the profile owner may edit", and
+# leaving this route would have made that claim false rather than merely
+# incomplete: the new `PATCH /profile` would enforce ownership while this
+# one sat beside it enforcing nothing. Shipping both is worse than shipping
+# neither.
+#
+# `UserService.update_profile` is untouched and is what the new endpoint
+# calls. What is gone is only the route and its request schema.
+#
+# The replacement is `PATCH /api/v1/profile` — authenticated, scoped to the
+# token's own account, and unable to name a different one. An
+# administrative "edit any player" capability is a different feature with a
+# different authorisation story, and belongs with `apps/admin` (AD-04)
+# rather than on the public API.

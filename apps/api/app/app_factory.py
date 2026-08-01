@@ -83,6 +83,20 @@ OPENAPI_TAGS: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "profile",
+        "description": (
+            "Your own profile — reading it and editing it. Every endpoint acts on the "
+            "account behind your access token; there is no path segment or body field "
+            "naming an account, so another player's profile cannot be addressed "
+            "here.\n\n"
+            "Editable: display name, biography, country, interface language and "
+            "timezone. **Username and email are not** — changing either has "
+            "consequences a profile edit does not (a rename must reserve the old "
+            "handle; an email change must re-prove ownership), so each gets its own "
+            "flow. Read anyone else's profile at `GET /profiles/{username}`."
+        ),
+    },
+    {
         "name": "avatars",
         "description": (
             "Self-service avatar management for the authenticated account. Every "

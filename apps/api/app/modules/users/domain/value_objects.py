@@ -19,6 +19,7 @@ from app.modules.users.domain.validators import (
     fold_username,
     validate_bio,
     validate_country_code,
+    validate_display_name,
     validate_email,
     validate_timezone,
     validate_username,
@@ -127,6 +128,36 @@ class CountryCode:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "value", validate_country_code(self.value))
+
+    def __str__(self) -> str:
+        return self.value
+
+
+@dataclass(frozen=True, slots=True)
+class DisplayName:
+    """The free-form name a player renders under.
+
+    Normalises on construction like `Email` and `Bio` — the stored form is
+    the trimmed form, so a name differing only by a trailing space is the
+    same name rather than a second one that sorts differently.
+
+    A value object rather than a bare `str` from A64-012.3 onward, and the
+    reason is the field becoming *editable*: until then nothing but
+    registration wrote it, and `User.display_name` was a plain string
+    nobody could put a control character into. An endpoint that accepts one
+    from a client every day needs the guarantee at the type, not at the one
+    call site somebody remembered.
+
+    Distinct from `Username`: a handle is unique, folded, ASCII-restricted
+    and part of a URL; this is decorative, Unicode-friendly and shared by
+    as many players as like it. Conflating them is how a display name ends
+    up in a route.
+    """
+
+    value: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "value", validate_display_name(self.value))
 
     def __str__(self) -> str:
         return self.value

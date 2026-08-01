@@ -29,7 +29,14 @@ from app.api.deps import get_db_session
 from app.app_factory import create_app
 from app.core.enums import Locale
 from app.modules.users.domain.entities import User
-from app.modules.users.domain.value_objects import Bio, CountryCode, Email, Timezone, Username
+from app.modules.users.domain.value_objects import (
+    Bio,
+    CountryCode,
+    DisplayName,
+    Email,
+    Timezone,
+    Username,
+)
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
 
 JOINED_AT = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
@@ -73,8 +80,8 @@ async def player(contract_session: AsyncSession) -> User:
         preferred_language=Locale.EN,
         timezone=Timezone("Europe/London"),
         created_at=JOINED_AT,
-        display_name="Player One",
     )
+    user.display_name = DisplayName("Player One")
     user.bio = Bio(BIO)
     user.country = CountryCode("GB")
 

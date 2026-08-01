@@ -62,6 +62,7 @@ from app.modules.users.domain.validators import (
     BIO_MAX_LENGTH,
     COUNTRY_CODE_LENGTH,
     DISPLAY_NAME_MAX_LENGTH,
+    DISPLAY_NAME_MIN_LENGTH,
     EMAIL_MAX_LENGTH,
     USERNAME_MAX_LENGTH,
     USERNAME_MIN_LENGTH,
@@ -143,6 +144,16 @@ class UserModel(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         # A cache-buster that started below 1 would be a version a client
         # could not distinguish from "unset".
         CheckConstraint("avatar_version >= 1", name="avatar_version_positive"),
+        # A64-012.3 made this field editable, so the database gains the
+        # bound the domain now enforces. Interpolated from the domain's
+        # own constants so the two cannot drift (BE-06), exactly as
+        # `username_length` does. `NULL` passes: "no display name" is a
+        # legitimate state.
+        CheckConstraint(
+            f"display_name IS NULL OR char_length(display_name) BETWEEN "
+            f"{DISPLAY_NAME_MIN_LENGTH} AND {DISPLAY_NAME_MAX_LENGTH}",
+            name="display_name_length",
+        ),
         {"schema": USERS_SCHEMA},
     )
 

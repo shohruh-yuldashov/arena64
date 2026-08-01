@@ -60,11 +60,10 @@ validating and re-encoding an image rather than storing a string.
 """
 
 import logging
-from typing import Any
 
 from fastapi import APIRouter, Depends, status
 
-from app.api.exception_handlers import ErrorResponse
+from app.api.openapi import Responses, error_response
 from app.api.responses import build_response
 from app.core.responses import ApiResponse
 from app.core.sentinels import UNSET
@@ -102,33 +101,24 @@ logger = logging.getLogger(__name__)
 
 my_profile_router = APIRouter(prefix="/profile", tags=["profile"])
 
-#: FastAPI's own annotation for `responses=`. Spelled once rather than
-#: inferred, for the reason `auth`'s router gives.
-type _Responses = dict[int | str, dict[str, Any]]
 
-_UNAUTHORIZED: _Responses = {
-    401: {
-        "description": "No access token was presented, or it was invalid or expired.",
-        "model": ErrorResponse,
-    }
-}
-_NOT_FOUND: _Responses = {
-    404: {
-        "description": "The account no longer exists — deleted while a valid token was in flight.",
-        "model": ErrorResponse,
-    }
-}
-_UNPROCESSABLE: _Responses = {
-    422: {
-        "description": (
-            "A field failed validation, or the body carried a field this endpoint does "
-            "not accept. `message` names which. Unknown fields are **rejected**, not "
-            "ignored — a silently dropped `username` would look like a successful "
-            "rename."
-        ),
-        "model": ErrorResponse,
-    }
-}
+_UNAUTHORIZED: Responses = error_response(
+    401,
+    "No access token was presented, or it was invalid or expired.",
+)
+_NOT_FOUND: Responses = error_response(
+    404,
+    "The account no longer exists — deleted while a valid token was in flight.",
+)
+_UNPROCESSABLE: Responses = error_response(
+    422,
+    (
+        "A field failed validation, or the body carried a field this endpoint does "
+        "not accept. `message` names which. Unknown fields are **rejected**, not "
+        "ignored — a silently dropped `username` would look like a successful "
+        "rename."
+    ),
+)
 
 
 @my_profile_router.get(
@@ -146,17 +136,21 @@ async def get_my_profile(
 ) -> ApiResponse[MyProfileResponse]:
     """Returns the authenticated account's own profile.
 
-    Differs from `GET /profiles/{username}` in two ways that matter. It
-    includes **`timezone`**, which the public view withholds because
-    publishing it narrows a player's physical location to anyone who asks;
-    and it is scoped to the caller by construction, so it needs no
-    username and cannot be pointed at anybody else.
+    Differs from `GET /profiles/{username}` in two ways that matter. It is
+    **never redacted** — statistics and presence are reported whatever the
+    privacy flags say, because those govern strangers rather than you; and
+    it is scoped to the caller by construction, so it needs no username and
+    cannot be pointed at anybody else.
 
     Differs from `GET /auth/me` in the other direction: that one answers
     *who am I* and carries the email and verification state; this one
-    answers *what does my profile say* and carries the five editable
+    answers *what does my profile say* and carries the three editable
     fields. Together they are the two halves an account settings page
     needs.
+
+    **No `timezone` and no `language`.** Both were here until A64-012.5
+    moved them to `GET /profile/preferences`, which is now the only place
+    either is read or written on this router.
 
     Carries your **statistics** and your **presence**, always —
     `show_statistics`, `show_online_status` and `show_last_seen` govern what
@@ -286,25 +280,23 @@ async def update_my_profile(
 # confer the ability to publish an account's activity, and a settings screen
 # loads visibility without touching a display name.
 
-_PRIVACY_UNPROCESSABLE: _Responses = {
-    422: {
-        "description": (
-            "The body carried a field this endpoint does not accept, or a flag was "
-            "sent as `null`. `message` names which. Unknown fields are **rejected**, "
-            "not ignored — a client that believed it had hidden something it had not "
-            "would act as though the field were private."
-        ),
-        "model": ErrorResponse,
-    }
-}
-_TOO_MANY_REQUESTS: _Responses = {
-    429: {
-        "description": (
-            "Too many privacy updates from this address. `Retry-After` says how long to wait."
-        ),
-        "model": ErrorResponse,
-    }
-}
+_PRIVACY_UNPROCESSABLE: Responses = error_response(
+    422,
+    (
+        "The body carried a field this endpoint does not accept, or a flag was "
+        "sent as `null`. `message` names which. Unknown fields are **rejected**, "
+        "not ignored — a client that believed it had hidden something it had not "
+        "would act as though the field were private."
+    ),
+)
+_TOO_MANY_REQUESTS: Responses = error_response(
+    429,
+    (
+        "Too many privacy updates from this account. Counted **per user**, not per "
+        "network address, so a shared connection is never somebody else's problem. "
+        "`Retry-After` says how long to wait."
+    ),
+)
 
 
 @my_profile_router.get(
@@ -460,27 +452,23 @@ async def update_my_privacy_settings(
 # preference changes what the player themselves sees. Three screens, three
 # ports, three rate-limit policies.
 
-_PREFERENCES_UNPROCESSABLE: _Responses = {
-    422: {
-        "description": (
-            "An unknown preference group or key, a value outside its allowed set, a "
-            "timezone this system does not know, or a key sent as `null`. `message` "
-            "names which. Unknown keys are **rejected** at both levels — an unknown "
-            "group and an unknown setting inside a known group are both errors."
-        ),
-        "model": ErrorResponse,
-    }
-}
-_PREFERENCES_TOO_MANY: _Responses = {
-    429: {
-        "description": (
-            "Too many preference updates from this account. Counted **per user**, not "
-            "per network address, so a shared connection is never somebody else's "
-            "problem. `Retry-After` says how long to wait."
-        ),
-        "model": ErrorResponse,
-    }
-}
+_PREFERENCES_UNPROCESSABLE: Responses = error_response(
+    422,
+    (
+        "An unknown preference group or key, a value outside its allowed set, a "
+        "timezone this system does not know, or a key sent as `null`. `message` "
+        "names which. Unknown keys are **rejected** at both levels — an unknown "
+        "group and an unknown setting inside a known group are both errors."
+    ),
+)
+_PREFERENCES_TOO_MANY: Responses = error_response(
+    429,
+    (
+        "Too many preference updates from this account. Counted **per user**, not "
+        "per network address, so a shared connection is never somebody else's "
+        "problem. `Retry-After` says how long to wait."
+    ),
+)
 
 
 @my_profile_router.get(

@@ -47,11 +47,11 @@ away. The recommendations say so.
 """
 
 import logging
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, File, UploadFile, status
 
-from app.api.exception_handlers import ErrorResponse
+from app.api.openapi import Responses, error_response
 from app.api.responses import build_response
 from app.core.responses import ApiResponse
 from app.modules.auth.presentation.dependencies import CurrentUser
@@ -69,33 +69,24 @@ logger = logging.getLogger(__name__)
 
 avatar_router = APIRouter(prefix="/profile/avatar", tags=["avatars"])
 
-#: FastAPI's own annotation for `responses=`. Spelled once rather than
-#: inferred, for the reason `auth`'s router gives.
-type _Responses = dict[int | str, dict[str, Any]]
 
-_UNAUTHORIZED: _Responses = {
-    401: {
-        "description": "No access token was presented, or it was invalid or expired.",
-        "model": ErrorResponse,
-    }
-}
-_NOT_FOUND: _Responses = {
-    404: {
-        "description": "This account has no avatar.",
-        "model": ErrorResponse,
-    }
-}
-_UNPROCESSABLE: _Responses = {
-    422: {
-        "description": (
-            "The upload was rejected. `code` is `avatar_too_large` when the file "
-            f"exceeds {MAX_UPLOAD_MB} MB — a client can re-encode and retry — and "
-            "`validation_error` when the file is empty, is not one of the accepted "
-            "formats, or is not a readable image."
-        ),
-        "model": ErrorResponse,
-    }
-}
+_UNAUTHORIZED: Responses = error_response(
+    401,
+    "No access token was presented, or it was invalid or expired.",
+)
+_NOT_FOUND: Responses = error_response(
+    404,
+    "This account has no avatar.",
+)
+_UNPROCESSABLE: Responses = error_response(
+    422,
+    (
+        "The upload was rejected. `code` is `avatar_too_large` when the file "
+        f"exceeds {MAX_UPLOAD_MB} MB — a client can re-encode and retry — and "
+        "`validation_error` when the file is empty, is not one of the accepted "
+        "formats, or is not a readable image."
+    ),
+)
 
 
 @avatar_router.post(

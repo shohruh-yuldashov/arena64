@@ -29,16 +29,13 @@ from typing import Any
 from uuid import uuid4
 
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db_session
-from app.app_factory import create_app
 from app.config.settings import PresenceSettings
 from app.core.clock import SystemClock
 from app.core.enums import Locale
-from app.modules.profiles.presentation.dependencies import get_presence_provider
 from app.modules.users.domain.entities import User
 from app.modules.users.domain.presence import DeviceType
 from app.modules.users.domain.value_objects import (
@@ -51,7 +48,7 @@ from app.modules.users.domain.value_objects import (
 )
 from app.modules.users.infrastructure.presence import RedisPresenceProvider
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
-from tests.contract.conftest import with_presence_switched_off
+from tests.contract.contract_app import build_contract_app, contract_client
 
 JOINED_AT = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 BIO = "I play chess.\nSometimes well."
@@ -59,28 +56,17 @@ BIO = "I play chess.\nSometimes well."
 
 @pytest_asyncio.fixture
 async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
-    """The production app with the session redirected into the test's
-    rolled-back transaction and presence switched off.
+    """The production app over the test's rolled-back transaction, with
+    presence at the factory's default of `NoPresenceProvider`.
 
-    Both overrides are of *infrastructure*, not of a service: the graph
-    under test — `ProfileService`, the mappers, the schemas — is the one
-    that ships. `NoPresenceProvider` is production code too, wired by
-    `PRESENCE_ENABLED=false` in a real deployment; see
-    `with_presence_switched_off` on why an app driven over `ASGITransport`
-    needs it at all, and `TestPresence` below for the suite that wires the
-    real Redis adapter instead.
+    No override on any service, mapper or schema — the graph under test is
+    the one that ships. `NoPresenceProvider` is production code too, wired
+    by `PRESENCE_ENABLED=false` in a real deployment, so these assertions
+    describe a configuration the platform genuinely serves. `TestPresence`
+    below wires the real Redis adapter instead.
     """
-    app = create_app()
-
-    async def _session() -> AsyncIterator[AsyncSession]:
-        yield contract_session
-
-    app.dependency_overrides[get_db_session] = _session
-    with_presence_switched_off(app)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as http:
+    async with contract_client(build_contract_app(contract_session)) as http:
         yield http
-    app.dependency_overrides.clear()
 
 
 @pytest_asyncio.fixture
@@ -333,23 +319,14 @@ class TestPresence:
         pass while the writer and the reader disagreed about the shape,
         which is the one bug this pairing cannot have.
         """
-        app = create_app()
-
-        async def _session() -> AsyncIterator[AsyncSession]:
-            yield contract_session
-
         provider = RedisPresenceProvider(
             contract_redis,
             settings=PresenceSettings(),
             clock=SystemClock(),
         )
-        app.dependency_overrides[get_db_session] = _session
-        app.dependency_overrides[get_presence_provider] = lambda: provider
-
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://testserver") as http:
+        app = build_contract_app(contract_session, presence=provider)
+        async with contract_client(app) as http:
             yield http, provider
-        app.dependency_overrides.clear()
 
     async def test_an_online_player_is_reported_as_online(
         self,

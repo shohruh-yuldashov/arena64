@@ -30,11 +30,10 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db_session, get_rate_limiter
 from app.app_factory import create_app
 from app.config.settings import get_settings
 from app.modules.avatars.domain.images import (
@@ -43,8 +42,7 @@ from app.modules.avatars.domain.images import (
     THUMBNAIL_DIMENSION,
 )
 from app.storage import LocalStorageProvider
-from tests.contract.conftest import with_presence_switched_off
-from tests.fakes.rate_limiter import AllowAllRateLimiter
+from tests.contract.contract_app import build_contract_app, contract_client
 
 AVATAR_URL = "/api/v1/profile/avatar"
 REGISTER_URL = "/api/v1/auth/register"
@@ -105,25 +103,17 @@ def storage(app: FastAPI) -> LocalStorageProvider:
 
 @pytest_asyncio.fixture
 async def client(app: FastAPI, contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
-    """The production app with only the session and the rate limiter
-    redirected.
+    """The production app over the test's rolled-back transaction.
 
-    The rate limiter is a permissive double for the reason
-    `tests/conftest.py` documents: limiting is off suite-wide, and these
-    tests would otherwise depend on a counter with an hour-long window.
+    Passes the `app` fixture in rather than letting the factory build one:
+    storage is wired in `create_app` rather than `lifespan`, and the
+    `StaticFiles` mount is part of the route table, so this suite has to
+    construct the application *after* redirecting `STORAGE_LOCAL_ROOT` —
+    see the `app` fixture above. It is the one case the factory takes an
+    application instead of making one.
     """
-
-    async def _session() -> AsyncIterator[AsyncSession]:
-        yield contract_session
-
-    app.dependency_overrides[get_db_session] = _session
-    app.dependency_overrides[get_rate_limiter] = lambda: AllowAllRateLimiter()
-    with_presence_switched_off(app)
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as http:
+    async with contract_client(build_contract_app(contract_session, app=app)) as http:
         yield http
-    app.dependency_overrides.clear()
 
 
 @pytest_asyncio.fixture

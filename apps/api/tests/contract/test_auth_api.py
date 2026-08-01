@@ -31,13 +31,11 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db_session, get_rate_limiter
-from app.app_factory import create_app
-from tests.fakes.rate_limiter import AllowAllRateLimiter
+from tests.contract.contract_app import build_contract_app, contract_client
 
 REGISTER_URL = "/api/v1/auth/register"
 LOGIN_URL = "/api/v1/auth/login"
@@ -51,12 +49,13 @@ PASSWORD = "CorrectHorse1!"
 
 @pytest_asyncio.fixture
 async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
-    """The production app, with only the session redirected.
+    """The production app over the test's rolled-back transaction.
 
-    Everything else — the hasher, the token provider, the repositories,
-    the composition root — is what ships. `contract_session` runs inside
-    an outer transaction that is always rolled back, so a test can call
-    endpoints that commit without leaving anything behind.
+    Everything the endpoints reach — the hasher, the token provider, the
+    repositories, the composition root — is what ships. Only `lifespan`'s
+    state is stood in for; see `tests/contract/contract_app.py` for which
+    three dependencies that is and why an app driven over `ASGITransport`
+    has none of it.
 
     **`httpx.AsyncClient` over ASGI rather than `fastapi.TestClient`**, and
     the reason is the same event-loop trap `conftest.py` documents for the
@@ -65,29 +64,9 @@ async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     pytest-asyncio gave this test — observed directly here as
     `RuntimeError: got Future attached to a different loop` on every
     request that touched the database. Driving the app in-process on the
-    test's own loop removes the mismatch entirely.
-
-    The ASGI transport does not run the lifespan, which is correct here:
-    the only startup state a route needs is the database session, and
-    that is exactly what is being overridden.
-    """
-    app = create_app()
-
-    async def _session() -> AsyncIterator[AsyncSession]:
-        yield contract_session
-
-    app.dependency_overrides[get_db_session] = _session
-    # A64-011.8: the ASGI transport does not run `lifespan`, so the
-    # rate limiter that lifespan builds does not exist on `app.state`.
-    # Overridden rather than constructed here because this file is not
-    # testing rate limiting — `tests/contract/test_rate_limiting_api.py`
-    # is, against a real Redis. An `AllowAllRateLimiter` keeps these tests
-    # independent of a shared counter with a window measured in hours.
-    app.dependency_overrides[get_rate_limiter] = lambda: AllowAllRateLimiter()
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as http:
+    test's own loop removes the mismatch entirely."""
+    async with contract_client(build_contract_app(contract_session)) as http:
         yield http
-    app.dependency_overrides.clear()
 
 
 def credentials() -> dict[str, str]:

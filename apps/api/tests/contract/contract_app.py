@@ -1,0 +1,161 @@
+"""The contract suite's application factory — A64-012.8.
+
+Every contract suite drives the **real** `create_app()` over
+`httpx.ASGITransport`. That is what makes these tests worth having: routing,
+middleware, the response envelope, every exception handler, every service
+and every mapper are the ones that ship. What it also means is that
+`lifespan` never runs — `ASGITransport` calls the application, it does not
+start it — so nothing that `lifespan` puts on `app.state` exists.
+
+Three dependencies read `app.state`, and each one had to be redirected by
+hand in every suite that touched it:
+
+    get_db_session        `app.state.db`           -> the test's transaction
+    get_rate_limiter      `app.state.rate_limiter` -> an in-memory limiter
+    get_presence_provider `app.state.redis_pools`  -> `NoPresenceProvider`
+
+Before this module that was seven near-identical fixtures, and the third
+arrived in A64-012.7 by editing six files at once. This is the shape that
+does not repeat: a module that adds an `app.state` dependency adds one
+parameter here, and every existing suite keeps working unchanged.
+
+## What may be overridden, and what may not
+
+Only **infrastructure the test environment cannot provide** and
+**configuration a test is deliberately varying**. There is no parameter here
+for a service, a repository, a mapper or a schema, and adding one would
+defeat the point — the graph under test has to be the graph that ships, or a
+contract test proves nothing about the contract.
+
+`NoPresenceProvider` and `AllowAllRateLimiter` deserve a word, because they
+look like doubles and only one of them is. `NoPresenceProvider` is
+*production code*, wired by `PRESENCE_ENABLED=false` in a real deployment,
+so a suite running on it exercises a configuration the platform genuinely
+ships. `AllowAllRateLimiter` is a true double, and it is what
+`tests/conftest.py` already arranges globally with `RATE_LIMIT_ENABLED=false`
+— see that file on why shared counters would otherwise couple every suite
+on the platform through Redis.
+
+## Why the app and the client are two calls
+
+    app = build_contract_app(session)
+    async with contract_client(app) as http:
+        ...
+
+Rather than one helper returning a client. Three suites genuinely need the
+`FastAPI` object: `test_avatar_api.py` reads `app.state.storage`,
+`test_rate_limiting_api.py` inspects the route table, and several assert
+against `app.openapi()`. Hiding it would push those back to hand-rolling
+what this module exists to centralise.
+"""
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import (
+    get_db_session,
+    get_rate_limit_settings,
+    get_rate_limiter,
+    get_statistics_settings,
+)
+from app.app_factory import create_app
+from app.config.settings import RateLimitSettings, StatisticsSettings
+from app.core.rate_limiting import RateLimiter
+from app.modules.profiles.presentation.dependencies import get_presence_provider
+from app.modules.users.infrastructure.presence import NoPresenceProvider
+from app.modules.users.public import PresenceProvider
+from tests.fakes.rate_limiter import AllowAllRateLimiter
+
+#: The base URL every contract client uses. A constant so that a test
+#: asserting against an absolute URL — an avatar URL, a `Location` header —
+#: has one place to compare against.
+BASE_URL = "http://testserver"
+
+
+def build_contract_app(
+    session: AsyncSession,
+    *,
+    app: FastAPI | None = None,
+    rate_limiter: RateLimiter | None = None,
+    rate_limit_settings: RateLimitSettings | None = None,
+    presence: PresenceProvider | None = None,
+    statistics_settings: StatisticsSettings | None = None,
+) -> FastAPI:
+    """The production application, with `lifespan`'s state stood in for.
+
+    `session` is the only required argument: every suite needs its queries
+    to land inside the test's rolled-back transaction, and an app without it
+    would open a second connection whose writes outlive the test.
+
+    `app` accepts an application the caller built itself, for the one case
+    that needs it — `test_avatar_api.py` must set `STORAGE_LOCAL_ROOT` and
+    clear the settings cache *before* `create_app()` runs, because storage
+    is wired in `create_app` rather than `lifespan` and the mount is part of
+    the route table. Everything else lets this build it.
+
+    Every remaining parameter is a **deliberate variation**, and the
+    defaults are the ones a suite that is not testing that thing wants:
+
+        rate_limiter          `AllowAllRateLimiter`, so limits never couple
+                              one suite to another through shared counters
+        rate_limit_settings   left at the environment's, which
+                              `tests/conftest.py` pins to disabled
+        presence              `NoPresenceProvider`, which is what
+                              `PRESENCE_ENABLED=false` wires in production
+        statistics_settings   left at the environment's, i.e. enabled and
+                              reading the real projection
+
+    Overrides are registered as plain callables rather than lambdas
+    capturing loop variables, so a fixture that builds two apps in one test
+    cannot accidentally share one.
+    """
+    application = app if app is not None else create_app()
+    limiter = rate_limiter if rate_limiter is not None else AllowAllRateLimiter()
+    presence_provider = presence if presence is not None else NoPresenceProvider()
+
+    async def _session() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    application.dependency_overrides[get_db_session] = _session
+    application.dependency_overrides[get_rate_limiter] = lambda: limiter
+    application.dependency_overrides[get_presence_provider] = lambda: presence_provider
+
+    # The two settings sections are overridden only when a test is varying
+    # them. Registering an override that returns the same value the real
+    # dependency would is not neutral — it hides the case where the real one
+    # stops being reachable.
+    if rate_limit_settings is not None:
+        application.dependency_overrides[get_rate_limit_settings] = lambda: rate_limit_settings
+    if statistics_settings is not None:
+        application.dependency_overrides[get_statistics_settings] = lambda: statistics_settings
+
+    return application
+
+
+@asynccontextmanager
+async def contract_client(app: FastAPI) -> AsyncIterator[AsyncClient]:
+    """An `AsyncClient` over `app`, with the overrides cleared on the way
+    out.
+
+    The clear is the reason this is a context manager rather than three
+    lines in each fixture. `dependency_overrides` lives on the `FastAPI`
+    object, and `create_app()` is called afresh per test everywhere on this
+    suite — but `test_avatar_api.py` shares one app across a test's
+    fixtures, and a suite that forgot to clear would leak a closed session
+    into whatever ran next. Making it structural costs nothing and removes
+    the whole failure mode.
+
+    Cleared on exit rather than in a `finally`, deliberately: if the body
+    raised, the overrides are the least interesting thing about the failure
+    and clearing them first would run teardown before pytest captured the
+    error. `asynccontextmanager` propagates the exception either way, and
+    the app object is discarded with the test.
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url=BASE_URL) as client:
+        yield client
+    app.dependency_overrides.clear()

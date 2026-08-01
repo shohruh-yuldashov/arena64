@@ -2,14 +2,38 @@
 `application/`, satisfied by `infrastructure/` or by another module's
 published surface.
 
-Three sources, three ports, and only one of them has a real implementation
-today.
+Four sources now, and only one of them is still a placeholder. Two of the
+four are **not declared here at all**, which is the more interesting half:
 
     PublicProfileReader   `users.public` — identity. Real.
-    RatingProvider        a rating system. Placeholder.
-    StatisticsProvider    a statistics system. Placeholder.
+    PresenceProvider      `users.public` — presence. Real (A64-012.7).
+    StatisticsProvider    declared below. Real since A64-012.6, reading
+                          `statistics.public` through an adapter.
+    RatingProvider        declared below. Still a placeholder — a `rating`
+                          module does not exist.
 
-## Why the two unbuilt sources get ports rather than inline defaults
+## Why two of the four are consumed as another module's port
+
+`PublicProfileReader` and `PresenceProvider` belong to `users`. They are
+imported and used as-is rather than redeclared here, because a local
+re-declaration would be a second definition of a contract that already has
+an owner, and BR-2 requires a `public/` port be consumed in terms of the
+DTOs it publishes.
+
+`StatisticsProvider` is declared here even though `statistics.public`
+publishes a structurally identical `StatisticsReader`, and the difference
+is not inconsistency. That module's own `public/__init__.py` gives the
+argument: `NoMatchesStatisticsProvider` is a fallback that must keep working
+when `statistics` is switched off entirely, so it cannot be defined in terms
+of that module's port — collapsing the two would make the fallback depend on
+the thing it exists to replace.
+
+Presence needs no such split, because both of *its* implementations
+(`RedisPresenceProvider`, `NoPresenceProvider`) live inside `users`, which
+owns the concept. The fallback and the real adapter answer to the same
+owner, so there is nothing for a second port to decouple.
+
+## Why the unbuilt source gets a port rather than an inline default
 
 `ProfileService` could return `PlayerRatings.unrated()` directly and save
 two files. The ports exist because of what happens next: when `rating`

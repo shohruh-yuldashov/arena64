@@ -85,11 +85,10 @@ whose shape belongs with its own task.
 """
 
 import logging
-from typing import Any
 
 from fastapi import APIRouter, Depends, Request, Response, status
 
-from app.api.exception_handlers import ErrorResponse
+from app.api.openapi import Responses, error_response
 from app.api.responses import build_response
 from app.core.constants import API_PREFIX, API_V1_PREFIX
 from app.core.responses import ApiResponse
@@ -130,52 +129,37 @@ logger = logging.getLogger(__name__)
 
 auth_router = APIRouter(prefix="/auth", tags=["auth"])
 
-#: FastAPI's own annotation for the `responses=` argument. Spelled once
-#: rather than inferred, because `dict[int, dict[str, object]]` is what
-#: Python infers from the literals below and it is not assignable to what
-#: FastAPI declares.
-type _Responses = dict[int | str, dict[str, Any]]
 
 #: Reused across every endpoint that can 401, so the documented error
 #: shape is declared once. `ErrorResponse` is the platform's only error
 #: body (`app/api/exception_handlers.py`), so naming it here makes the
 #: generated docs show the real shape rather than FastAPI's default
 #: `{"detail": ...}`, which this platform never returns.
-_UNAUTHORIZED: _Responses = {
-    401: {
-        "description": "The credential was missing, malformed, expired or revoked.",
-        "model": ErrorResponse,
-    }
-}
-_FORBIDDEN: _Responses = {
-    403: {
-        "description": "Credentials were correct but the account may not sign in.",
-        "model": ErrorResponse,
-    }
-}
-_CONFLICT: _Responses = {
-    409: {
-        "description": "The username or email address is already registered.",
-        "model": ErrorResponse,
-    }
-}
-_UNPROCESSABLE: _Responses = {
-    422: {
-        "description": "A field failed validation. `code` names which one.",
-        "model": ErrorResponse,
-    }
-}
+_UNAUTHORIZED: Responses = error_response(
+    401,
+    "The credential was missing, malformed, expired or revoked.",
+)
+_FORBIDDEN: Responses = error_response(
+    403,
+    "Credentials were correct but the account may not sign in.",
+)
+_CONFLICT: Responses = error_response(
+    409,
+    "The username or email address is already registered.",
+)
+_UNPROCESSABLE: Responses = error_response(
+    422,
+    "A field failed validation. `code` names which one.",
+)
 #: A64-011.9. `GET /auth/me` documented `200` and `401` while its own
 #: docstring described a `404` — the narrow window in which an account is
 #: deleted while a valid token is still in flight. Prose a client cannot
 #: read is not documentation, and a 404 nobody declared is one a generated
 #: client has no branch for.
-_NOT_FOUND: _Responses = {
-    404: {
-        "description": "The account no longer exists — deleted while a valid token was in flight.",
-        "model": ErrorResponse,
-    }
-}
+_NOT_FOUND: Responses = error_response(
+    404,
+    "The account no longer exists — deleted while a valid token was in flight.",
+)
 #: A64-011.8. Every endpoint below that carries a `RateLimit` guard
 #: documents this, because a 429 a client has not been told to expect is
 #: one it will retry immediately and in a loop.
@@ -183,18 +167,16 @@ _NOT_FOUND: _Responses = {
 #: The description names the headers rather than the *rule*: a caller needs
 #: to know when to come back, and deliberately does not learn which
 #: dimension refused them — see `TooManyRequests`.
-_TOO_MANY_REQUESTS: _Responses = {
-    429: {
-        "description": (
-            "A rate limit was exceeded. `Retry-After` gives the number of seconds to "
-            "wait; `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset` "
-            "describe the limit that bound. The same three `X-RateLimit-*` headers are "
-            "returned on successful responses, so a client can pace itself before "
-            "being refused."
-        ),
-        "model": ErrorResponse,
-    }
-}
+_TOO_MANY_REQUESTS: Responses = error_response(
+    429,
+    (
+        "A rate limit was exceeded. `Retry-After` gives the number of seconds to "
+        "wait; `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset` "
+        "describe the limit that bound. The same three `X-RateLimit-*` headers are "
+        "returned on successful responses, so a client can pace itself before "
+        "being refused."
+    ),
+)
 
 
 def _device_of(request: Request) -> SessionDevice:

@@ -13,11 +13,23 @@
 #
 #   POSTGRES_PORT=55432 REDIS_PORT=56379 docker compose -f docker/docker-compose.yml up -d
 #
-# One Redis instance, four logical databases (indices 0-3) — AD-03's four
-# role-separated pools (live/bus/broker/cache) share one process in
-# `local`, per architecture.md §4's own note that this is acceptable
-# outside production, where each role gets its own instance, sized and
-# persistence-configured for its own workload.
+# One Redis instance, six logical databases. AD-03's role-separated pools
+# share one process in `local`, per architecture.md §4's own note that this
+# is acceptable outside production, where each role gets its own instance,
+# sized and persistence-configured for its own workload:
+#
+#   0  live    live match position and clocks
+#   1  bus     pub/sub fan-out
+#   2  broker  Celery task queues
+#   3  cache   response cache, read models, and presence (A64-012.7)
+#   4  limits  rate limit counters (A64-011.8) — the fifth role, added
+#              because a counter evicted under memory pressure is a limit
+#              that disappears during the traffic spike it exists for
+#   15 tests   tests/contract/ flushes whatever it is given, so it is
+#              given an index none of the five roles points at
+#
+# What lives under which key prefix, with owners and TTLs, is
+# docs/01-architecture/caching.md.
 
 services:
   postgres:
@@ -47,12 +59,19 @@ services:
     restart: unless-stopped
     ports:
       - "${REDIS_PORT:-6379}:6379"
-    # AOF persistence: architecture.md §13's live-match-state role (index
-    # 0) is the one Redis role this platform ever wants to survive a
-    # restart, per AD-18. The cache role's disposability (AD-19) does not
-    # require the *instance* to skip persistence, only that nothing
-    # depends on it doing so — running one shared policy in `local` is
-    # simpler and costs nothing a development machine notices.
+    # AOF persistence: the live-match-state role (index 0) is the one Redis
+    # role this platform ever wants to survive a restart, per AD-18. The
+    # other roles' disposability (AD-19) does not require the *instance* to
+    # skip persistence, only that nothing depends on it doing so — running
+    # one shared policy in `local` is simpler and costs nothing a
+    # development machine notices.
+    #
+    # **No `maxmemory-policy` here, and that is a `local`-only shortcut.**
+    # A deployed tier configures eviction per role and the two settings are
+    # opposites: `cache` (index 3) evicts by design, while `limits`
+    # (index 4) must evict nothing, because a dropped counter is a limit
+    # that silently stops applying. One process cannot hold both policies,
+    # which is a large part of why AD-03 splits the instances at all.
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - arena64_redis_data:/data

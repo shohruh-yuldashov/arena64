@@ -229,6 +229,33 @@ def load_draw_sequences(through: int = LATEST_VERSION) -> tuple[DrawSequenceCase
     return tuple(_draw_sequence(entry, name) for entry, name in _entries(through, "draw_sequences"))
 
 
+def position_of(entry: Mapping[str, Any]) -> Position:
+    """The opening position of any raw corpus entry that states one.
+
+    Every expectation shape spells a position the same way — `variant`,
+    `side_to_move`, `pieces` — so the audit reads them all through one
+    function rather than four.
+    """
+    return _position(entry)
+
+
+def corpus_documents(through: int = LATEST_VERSION) -> tuple[tuple[Mapping[str, Any], str], ...]:
+    """Every corpus file, parsed, with the name to blame in a failure.
+
+    Exposed for the audit in `test_corpus_audit.py`, which checks the files
+    as *files* — that each declares the version of the directory it sits
+    in, that every entry re-serializes to what is written down, and that
+    every expectation shape a reader knows about is actually present.
+    """
+    return tuple(_documents(through))
+
+
+EXPECTATION_KEYS = ("cases", "rejections", "terminal_positions", "draw_sequences", "replays")
+"""Every top-level expectation shape a reader understands, in the order
+they were introduced. The audit asserts each is used by at least one file:
+a shape nothing exercises is a reader nothing checks."""
+
+
 def superseded_ids(through: int = LATEST_VERSION) -> frozenset[str]:
     """The case ids a later version has retired."""
     return frozenset(entry["id"] for entry, _ in _supersessions(through))

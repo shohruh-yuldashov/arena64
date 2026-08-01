@@ -1,7 +1,7 @@
 """The ports `friends` programs against — AD-06: declared in
 `application/`, satisfied by `infrastructure/`.
 
-Two ports since A64-013.3. This module owns its own storage, so unlike
+Three ports since A64-013.5. This module owns its own storage, so unlike
 `profiles` there is no cross-context read here and nothing to adapt — these
 are the whole surface between the use cases and PostgreSQL.
 
@@ -21,9 +21,11 @@ composition path the ability to accept requests.
 """
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from app.modules.friends.domain.block import Block
 from app.modules.friends.domain.friend_request import FriendRequest, FriendRequestStatus
 from app.modules.friends.domain.friendship import Friendship, FriendshipMetadata
 
@@ -93,6 +95,33 @@ class FriendRequestRepository(Protocol):
         rules distinguishable: a duplicate and an opposite-direction request
         are different conflicts with different codes and different advice
         for the client.
+        """
+        ...
+
+    async def void_pending_between(self, player_a: UUID, player_b: UUID, *, at: datetime) -> int:
+        """Resolves every pending request **between** the two, in either
+        direction, to `VOIDED`. Returns how many were resolved.
+
+        Added by A64-013.5 for the blocking cascade (FR-2, BL-2). Both
+        directions in one statement, because a block suppresses contact
+        symmetrically and leaving the reverse request pending would let the
+        blocked player's request sit in the blocker's inbox.
+
+        A set-based `UPDATE` rather than reading the aggregates and
+        resolving each: there are at most two rows (FR-1 permits one pending
+        request per ordered pair), but the write must be one statement so it
+        cannot half-apply, and there is no per-row decision to make — the
+        transition is the same for every match and the actor is not a party
+        to it.
+
+        **Deliberately bypasses the aggregate's version check**, which is
+        the one place on this platform that does. A block is not a race
+        between two devices resolving one request; it is a unilateral act
+        that must win, and losing to a concurrent accept would leave a
+        friendship formed against a block placed first.
+
+        Returns the count so the caller can log what the cascade actually
+        did — `0` is the common case and is not a failure.
         """
         ...
 
@@ -265,5 +294,72 @@ class FriendshipRepository(Protocol):
         Never deletes — database.md §1221: a friendship that ended is a fact
         with a date. Raises `FriendshipAlreadyEnded` if it ended between the
         read and this write, which is two devices removing at once.
+        """
+        ...
+
+
+class BlockedPlayerRepository(Protocol):
+    """Collection-like access to the `Block` aggregate — A64-013.5.
+
+    **Directional throughout, except `blocked_ids_for`.** A block is a
+    one-directional fact (BL-1), so `add`, `exists`, `remove` and
+    `list_for_blocker` all name a blocker and a blocked player in that
+    order. The one symmetric method is the one every *consumer* needs,
+    because the visibility consequence of a block runs both ways even though
+    the fact does not.
+
+    No update of any kind. A block is created and deleted; nothing about it
+    is ever modified, which is why `Block` is frozen.
+    """
+
+    async def add(self, block: Block) -> Block:
+        """Persists a new block.
+
+        Raises `AlreadyBlocked` when the unique index refuses a duplicate —
+        the guard that holds under concurrency, and one that matters more
+        than usual here because a second block would run the cascade twice.
+
+        Flushes, never commits: the caller's unit of work spans the block,
+        the friendship it ends and the requests it voids.
+        """
+        ...
+
+    async def exists(self, blocker_id: UUID, blocked_id: UUID) -> bool:
+        """Whether `blocker_id` has blocked `blocked_id`. Directional."""
+        ...
+
+    async def blocked_ids_for(self, player_id: UUID) -> frozenset[UUID]:
+        """Every player this one cannot interact with, in **either**
+        direction.
+
+        The set behind `ViewerRelationship.BLOCKED`, the search exclusion
+        and the friend-request refusal. One query, one union, so the three
+        consumers cannot disagree about which directions count — the one
+        that forgot a direction would leak in exactly the way BL-1 forbids.
+
+        **Designed so a cache can be introduced without changing this
+        signature.** `friends:v1:` remains unwritten (caching.md C-1 wants
+        the invalidation trigger first, and here it is `block` and
+        `unblock` — both in `BlockingService`).
+        """
+        ...
+
+    async def list_for_blocker(
+        self, blocker_id: UUID, *, limit: int, cursor: str | None
+    ) -> tuple[Sequence[Block], str | None]:
+        """The blocks this player has **placed**, newest first,
+        keyset-paginated.
+
+        One-directional on purpose: blocks placed *on* you are not yours to
+        see, which is the whole reason a block is worth placing (BL-1).
+        """
+        ...
+
+    async def remove(self, blocker_id: UUID, blocked_id: UUID) -> None:
+        """Lifts a block — a **hard delete** (database.md §7.2).
+
+        Raises `NotBlocked` when there was none. `BlockingService.unblock`
+        catches it, because unblocking is idempotent; the repository reports
+        what happened rather than deciding what it means.
         """
         ...

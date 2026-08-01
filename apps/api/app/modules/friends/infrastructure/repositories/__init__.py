@@ -1,5 +1,8 @@
 """Adapters satisfying the ports `friends` declares in `application/`."""
 
+from app.modules.friends.infrastructure.repositories.block_repository import (
+    SqlAlchemyBlockedPlayerRepository,
+)
 from app.modules.friends.infrastructure.repositories.friend_request_repository import (
     SqlAlchemyFriendRequestRepository,
 )
@@ -7,4 +10,8 @@ from app.modules.friends.infrastructure.repositories.friendship_repository impor
     SqlAlchemyFriendshipRepository,
 )
 
-__all__ = ["SqlAlchemyFriendRequestRepository", "SqlAlchemyFriendshipRepository"]
+__all__ = [
+    "SqlAlchemyBlockedPlayerRepository",
+    "SqlAlchemyFriendRequestRepository",
+    "SqlAlchemyFriendshipRepository",
+]

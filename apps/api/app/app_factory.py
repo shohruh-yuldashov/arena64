@@ -174,6 +174,29 @@ OPENAPI_TAGS: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "blocks",
+        "description": (
+            "Blocking — a platform-wide policy rather than a feature (A64-013.5).\n\n"
+            "**The blocked player is never told.** Nothing notifies them, no response "
+            "of theirs changes shape, and no endpoint anywhere reports being blocked. "
+            "A visible block is an invitation to retaliate from a second account.\n\n"
+            "Blocking takes effect everywhere at once, in one transaction: any "
+            "friendship ends, any pending friend request in either direction is "
+            "voided, new requests are refused, each disappears from the other's "
+            "search results, and neither sees the other's presence or "
+            "audience-restricted profile fields.\n\n"
+            "**A block outranks every privacy setting**, including `everyone`: a "
+            "player who published a field and then blocked somebody has not published "
+            "it to them.\n\n"
+            "The effect is symmetric even though the fact is not. A block is "
+            "one-directional and only the blocker can lift it — but neither party can "
+            "tell which of them placed it, which is what keeps 'am I blocked' "
+            "unanswerable.\n\n"
+            "**Nothing is restored on unblock.** A friendship a block ended stays "
+            "ended and a voided request stays voided; the two must start again."
+        ),
+    },
+    {
         "name": "health",
         "description": (
             "Liveness and readiness probes for load balancers and orchestrators. "

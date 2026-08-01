@@ -196,3 +196,36 @@ class ViewerRelationshipProvider(Protocol):
         anything.
         """
         ...
+
+
+class BlockedPlayersProvider(Protocol):
+    """Who a viewer must never be shown — A64-013.5.
+
+    Separate from `ViewerRelationshipProvider` above even though both read
+    the same graph through the same published port, because what differs is
+    the *capability*: search needs an exclusion set and never resolves a
+    relationship, while composition resolves relationships and never
+    excludes anybody. One provider serving both would hand each of them the
+    other's.
+
+    Per **viewer**, not per candidate, so one call answers a page of any
+    length — which is why there is no batch form and none is needed.
+    """
+
+    async def blocked_ids_for(self, player_id: UUID) -> frozenset[UUID]:
+        """Every player to exclude from this viewer's results, in **either**
+        direction.
+
+        Symmetric even though a block is not: a blocked player must not find
+        the blocker either, or the asymmetry itself would be the signal BL-1
+        withholds.
+
+        Never raises. An empty set means no blocks — the common case — and
+        is also what the fallback returns, which **never fabricates a
+        block**: inventing restrictions from missing data is how a kill
+        switch becomes an outage.
+
+        A `frozenset` because it is handed straight to
+        `UserSearchQuery.exclude_player_ids`, which is frozen.
+        """
+        ...

@@ -49,6 +49,7 @@ import logging
 import time
 from uuid import UUID
 
+from app.modules.profiles.application.ports import BlockedPlayersProvider
 from app.modules.profiles.application.services.profile_composer import PublicProfileComposer
 from app.modules.profiles.domain.profile import PublicProfile
 from app.modules.profiles.domain.search import ProfileSearchResults
@@ -64,9 +65,13 @@ class ProfileSearchService:
         *,
         searcher: PublicProfileSearcher,
         composer: PublicProfileComposer,
+        blocked_players: BlockedPlayersProvider,
     ) -> None:
         self._searcher = searcher
         self._composer = composer
+        # A64-013.5. Typed as the port, so this service cannot learn that a
+        # `friends` module exists — it asks who to exclude and never why.
+        self._blocked_players = blocked_players
 
     async def search(
         self,
@@ -92,6 +97,11 @@ class ProfileSearchService:
         """
         term = SearchTerm.parse(raw_term)
 
+        # Fetched before the query rather than filtered after it: a blocked
+        # player must not occupy a row of the page, and post-filtering a
+        # keyset page would return short pages whose cursor skipped people.
+        blocked = await self._blocked_players.blocked_ids_for(viewer_id)
+
         # `perf_counter`, not the injected `Clock`. AD-07 governs *domain*
         # time — the instants that end up in records and drive rules — and
         # this is a stopwatch over a code path, which is neither. A test
@@ -106,10 +116,20 @@ class ProfileSearchService:
                 term=term.value,
                 limit=limit,
                 cursor=cursor,
-                # The searcher never appears in their own results. One
-                # member today; `friends` adds the blocked set beside it
-                # without this signature changing.
-                exclude_player_ids=frozenset({viewer_id}),
+                # The searcher, plus everybody they cannot interact with.
+                #
+                # **This is the whole of A64-013.5's search integration**,
+                # and the parameter it uses is the one A64-013.1 built for
+                # it — no second filtering mechanism, no `WHERE NOT IN`
+                # written a second time, and the SQL branch that applies it
+                # has been exercised on every request since that task
+                # because the searcher's own id was always in the set.
+                #
+                # Symmetric: a player excluded here may have blocked the
+                # searcher or been blocked by them, and neither can tell
+                # which — a one-directional exclusion would make the
+                # asymmetry itself the signal BL-1 withholds.
+                exclude_player_ids=frozenset({viewer_id}) | blocked,
             )
         )
 
@@ -145,6 +165,11 @@ class ProfileSearchService:
                 "user_id": str(viewer_id),
                 "term_length": term.length,
                 "result_count": len(profiles),
+                # A count, never the ids. Who a player has blocked is the
+                # one edge on this platform the other party must never learn
+                # about (BL-1), and a log naming them would put it somewhere
+                # with broader read access than the row (services.md §8.5).
+                "excluded_count": len(blocked),
                 "has_more": page.has_more,
                 "elapsed_ms": round(elapsed_ms, 2),
             },

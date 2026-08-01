@@ -19,6 +19,7 @@ repositories.md §3:
 
 import logging
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
@@ -163,6 +164,47 @@ class SqlAlchemyFriendRequestRepository:
             )
         )
         return self._to_domain(row) if row is not None else None
+
+    async def void_pending_between(self, player_a: UUID, player_b: UUID, *, at: datetime) -> int:
+        """Voids every pending request between the two, both directions.
+
+        One `UPDATE` with an `OR` over the two ordered pairs, served by the
+        partial unique index that already constrains pending rows. At most
+        two rows can match (FR-1), but the statement is set-based so it
+        cannot half-apply.
+
+        `responded_at` is set in the same statement as `status`, which the
+        `responded_iff_resolved` CHECK asserts independently — a voided
+        request cannot record an outcome without its instant.
+
+        **No version guard**, which is deliberate and is the only write on
+        this platform that omits one. A block is unilateral and must win: a
+        version check could lose to a concurrent accept, leaving a
+        friendship formed against a block that was placed first.
+        """
+        statement = (
+            update(FriendRequestModel)
+            .where(
+                FriendRequestModel.status == FriendRequestStatus.PENDING,
+                or_(
+                    and_(
+                        FriendRequestModel.requester_id == player_a,
+                        FriendRequestModel.addressee_id == player_b,
+                    ),
+                    and_(
+                        FriendRequestModel.requester_id == player_b,
+                        FriendRequestModel.addressee_id == player_a,
+                    ),
+                ),
+            )
+            .values(
+                status=FriendRequestStatus.VOIDED,
+                responded_at=at,
+                version=FriendRequestModel.version + 1,
+            )
+        )
+        result = cast("CursorResult[Any]", await self._session.execute(statement))
+        return int(result.rowcount)
 
     async def list_for_addressee(
         self,

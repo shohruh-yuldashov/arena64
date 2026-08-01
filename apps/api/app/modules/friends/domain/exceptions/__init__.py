@@ -164,6 +164,50 @@ class FriendshipAlreadyEnded(ConflictError):
     """
 
 
+class SelfBlock(ValidationError):
+    """A player tried to block themselves — A64-013.5.
+
+    A `422`: nothing about the platform's state made this fail, and retrying
+    will not help. `ck_blocked_player__not_self` enforces it too, so a row
+    cannot exist in this shape even if the aggregate were bypassed (BE-06).
+    """
+
+
+class AlreadyBlocked(ConflictError):
+    """A block already exists in this direction — A64-013.5.
+
+    `409`. Deliberately **not** made idempotent, unlike unblocking: blocking
+    has side effects that must not be replayed. A second block would find
+    the friendship already ended and the requests already voided, and
+    reporting success would tell the caller a cascade ran that did not.
+    """
+
+
+class NotBlocked(NotFoundError):
+    """No block exists in this direction — A64-013.5.
+
+    Raised by the repository, never by the endpoint: unblocking is
+    idempotent, so `BlockingService.unblock` catches the absence and
+    succeeds. It exists as a type because A64-013.6's presence integration
+    will need to ask.
+    """
+
+
+class FriendRequestRecipientUnavailable(NotFoundError):
+    """The addressee cannot receive a friend request — A64-013.5.
+
+    **One exception for two causes**, and that is the entire point. FR-2:
+    "a request to a blocked or blocking player is rejected —
+    indistinguishably from a request to a non-existent player. Distinguishable
+    rejection tells the sender they were blocked, which is exactly what the
+    blocker was avoiding."
+
+    So a blocked pair and an id nobody holds produce the same `404` with the
+    same message. A caller cannot tell which applies, and the platform does
+    not record which it was.
+    """
+
+
 class NotFriendshipParticipant(PermissionDeniedError):
     """Somebody who is not one of the two tried to act on a friendship.
 
@@ -196,11 +240,15 @@ __all__ = [
     "FriendRequestAlreadyResolved",
     "FriendRequestNotFound",
     "FriendRequestNotPending",
+    "AlreadyBlocked",
+    "FriendRequestRecipientUnavailable",
     "FriendshipAlreadyEnded",
     "FriendshipAlreadyExists",
     "FriendshipNotFound",
     "InvalidFriendsCursor",
+    "NotBlocked",
     "NotFriendshipParticipant",
+    "SelfBlock",
     "SelfFriendship",
     "NotRequestAddressee",
     "NotRequestRequester",

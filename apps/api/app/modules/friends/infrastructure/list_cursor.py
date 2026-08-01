@@ -1,9 +1,17 @@
-"""The friend-request list cursor — a keyset over `(created_at, id)`.
+"""The cursor both friends lists use — a keyset over `(created_at, id)`.
 
 Infrastructure rather than domain, for the reason
 `app.core.pagination.encode_cursor` gives: a cursor encodes an *ordering
-key*, and which key is the query's business. This one belongs to the two
-list queries in `SqlAlchemyFriendRequestRepository` and to nothing else.
+key*, and which key is the query's business. This one belongs to the
+three list queries in this module — incoming requests, outgoing requests
+and friends — which share it because they share an ordering key, not
+because sharing was convenient.
+
+A64-013.3 renamed it from `RequestCursor` when the friend list became the
+third caller. All three are keyset pages over `(created_at, id)` on a
+relation scoped to the authenticated caller, newest first; a second class
+with the same two fields and the same comparison would be duplication with
+a different name on it.
 
 ## Why not `app.repositories.pagination.paginate_cursor`
 
@@ -20,14 +28,17 @@ direction flag was the alternative and is what CLAUDE.md §2.3 rules out: a
 boolean that selects behaviour is two functions wearing one name, and the
 two would differ in the operator *and* the tuple order.
 
-## Why the term is not part of this cursor
+## Why nothing is bound into this cursor
 
-Unlike `users.infrastructure.search_cursor`, there is nothing to bind to.
-A search cursor carries a rank computed against a term, so replaying it
-against another term is meaningless; a request cursor carries an instant and
-an id, which mean the same thing on every page of every filter. The party
-is not encoded either — it comes from the access token, so a cursor cannot
-be replayed against somebody else's list.
+Unlike `users.infrastructure.search_cursor`, there is nothing to bind to. A
+search cursor carries a rank computed against a term, so replaying it
+against another term is meaningless; these carry an instant and an id, which
+mean the same thing on every page of every list.
+
+The *party* is not encoded either, and that is safe rather than an
+oversight: it comes from the access token on every one of the three
+endpoints, so a cursor replayed against somebody else's list simply pages
+through the caller's own.
 """
 
 from dataclasses import dataclass
@@ -36,7 +47,7 @@ from typing import Final
 from uuid import UUID
 
 from app.core.pagination import decode_cursor, encode_cursor
-from app.modules.friends.domain.exceptions import InvalidFriendRequestCursor
+from app.modules.friends.domain.exceptions import InvalidFriendsCursor
 
 #: How many values a decoded cursor must carry. Checked explicitly so a
 #: cursor from an older encoding fails as a `422` naming the problem rather
@@ -45,7 +56,7 @@ _CURSOR_FIELDS: Final = 2
 
 
 @dataclass(frozen=True, slots=True)
-class RequestCursor:
+class ListCursor:
     """Where the previous page stopped, in the ordering the query imposes.
 
     The two values are exactly the `ORDER BY`, in the same order — the
@@ -55,14 +66,17 @@ class RequestCursor:
     """
 
     created_at: datetime
-    request_id: UUID
+    row_id: UUID
+    """The last row's identifier — a request id or a friendship id depending
+    on which list issued the cursor. Named for its *role* rather than its
+    source, because the keyset does not care which relation it came from."""
 
     def encode(self) -> str:
-        return encode_cursor(self.created_at, self.request_id)
+        return encode_cursor(self.created_at, self.row_id)
 
     @classmethod
-    def decode(cls, cursor: str) -> "RequestCursor":
-        """Parses a cursor, or raises `InvalidFriendRequestCursor` (422).
+    def decode(cls, cursor: str) -> "ListCursor":
+        """Parses a cursor, or raises `InvalidFriendsCursor` (422).
 
         `decode_cursor` returns JSON-native values and deliberately does not
         reconstruct types, so both are parsed here rather than assumed — a
@@ -72,16 +86,16 @@ class RequestCursor:
         try:
             values = decode_cursor(cursor)
         except ValueError as error:
-            raise InvalidFriendRequestCursor("The pagination cursor is malformed.") from error
+            raise InvalidFriendsCursor("The pagination cursor is malformed.") from error
 
         if len(values) != _CURSOR_FIELDS:
-            raise InvalidFriendRequestCursor("The pagination cursor is malformed.")
+            raise InvalidFriendsCursor("The pagination cursor is malformed.")
 
         raw_created_at, raw_id = values
         try:
             return cls(
                 created_at=datetime.fromisoformat(str(raw_created_at)),
-                request_id=UUID(str(raw_id)),
+                row_id=UUID(str(raw_id)),
             )
         except ValueError as error:
-            raise InvalidFriendRequestCursor("The pagination cursor is malformed.") from error
+            raise InvalidFriendsCursor("The pagination cursor is malformed.") from error

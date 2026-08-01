@@ -1,4 +1,5 @@
-"""The `friends.friend_request` relation — database.md §7.1.
+"""The `friends` relations — `friend_request` (database.md §7.1) and
+`friendship` (§7.3).
 
 The only place in this module that knows SQLAlchemy exists. Nothing above
 `infrastructure/` imports this file, and the aggregate it maps to holds no
@@ -65,6 +66,7 @@ from app.database.mixins.timestamp import TimestampMixin
 from app.database.mixins.uuid_pk import UUIDPrimaryKeyMixin
 from app.database.types import UtcDateTime
 from app.modules.friends.domain.friend_request import FriendRequestStatus
+from app.modules.friends.domain.friendship import FriendshipEndReason
 
 #: database.md §222 — one schema per bounded context.
 FRIENDS_SCHEMA = "friends"
@@ -162,3 +164,101 @@ class FriendRequestModel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     `(id, version)`, so the second write matches no row and its caller is
     told the request has already been resolved — which is true.
     """
+
+
+#: `friends.friendship_end_reason`. Declared with both members from the
+#: first release even though only `removed` has a producer — `ALTER TYPE ...
+#: ADD VALUE` on a type used by a live table is a migration nobody should
+#: have to schedule to ship blocking.
+_END_REASON_ENUM = PgEnum(
+    FriendshipEndReason,
+    name="friendship_end_reason",
+    schema=FRIENDS_SCHEMA,
+    values_callable=lambda enum_cls: [member.value for member in enum_cls],
+)
+
+
+class FriendshipModel(UUIDPrimaryKeyMixin, Base):
+    """The `friends.friendship` row — DB-12's canonical-pair pattern.
+
+    **One row per unordered pair**, never two mirrored ones: "two rows for
+    one relationship is two facts that can disagree, and when they do,
+    neither is authoritative — there is no principled repair." The read
+    convenience mirroring would buy is bought instead with two indexes on
+    one row (§12.3), which costs index space rather than correctness.
+
+    Composes `UUIDPrimaryKeyMixin` (DB-07) but **not** `TimestampMixin`,
+    unlike `FriendRequestModel`. A friendship has a `created_at` and an
+    `ended_at`, and there is no third thing to update: the row is written
+    once and ended once, so an `updated_at` would be a column that only ever
+    equals one of the other two.
+    """
+
+    __tablename__ = "friendship"
+    __table_args__ = (
+        # DB-12: "without it, `(B, A)` is insertable and the unique
+        # constraint does not fire, so the invariant fails exactly once —
+        # silently, in production, under the concurrency that produced the
+        # out-of-order write."
+        CheckConstraint("player_low_id < player_high_id", name="ck_friendship__canonical_order"),
+        # `ended_at` and `ended_reason` are set together or not at all, so a
+        # row cannot record an end without saying why (BE-06). `Friendship.end`
+        # writes both in one statement; this is the copy that also binds a
+        # repair script.
+        CheckConstraint(
+            "(ended_at IS NULL) = (ended_reason IS NULL)",
+            name="ck_friendship__ended_pairing",
+        ),
+        # One **live** friendship per pair. Partial for the reason
+        # `uq_friend_request__one_pending_per_pair` is: a plain unique would
+        # mean a pair whose friendship ended could never form another one,
+        # which is not what FS-1 says.
+        Index(
+            "uq_friendship__pair",
+            "player_low_id",
+            "player_high_id",
+            unique=True,
+            postgresql_where=text("ended_at IS NULL"),
+        ),
+        # §12.3's two indexes, one per side, each partial on live rows.
+        # `created_at` and `id` follow the player column because every read
+        # of this relation is a keyset page ordered by them — so PostgreSQL
+        # can walk each leg in order and stop at the page size.
+        Index(
+            "ix_friendship__low",
+            "player_low_id",
+            "created_at",
+            "id",
+            postgresql_where=text("ended_at IS NULL"),
+        ),
+        Index(
+            "ix_friendship__high",
+            "player_high_id",
+            "created_at",
+            "id",
+            postgresql_where=text("ended_at IS NULL"),
+        ),
+        {"schema": FRIENDS_SCHEMA},
+    )
+
+    player_low_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    player_high_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, server_default=text("now()")
+    )
+
+    source_request_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    """The request whose acceptance created this (database.md §7.3).
+
+    **No foreign key**, even though the referenced table is in this same
+    schema and an FK would therefore cost nothing architecturally. It is
+    nullable audit provenance: a retention policy that purges resolved
+    requests must not be forced to choose between deleting friendships and
+    keeping requests forever, which is exactly what an FK would impose.
+    """
+
+    ended_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    ended_reason: Mapped[FriendshipEndReason | None] = mapped_column(
+        _END_REASON_ENUM, nullable=True
+    )

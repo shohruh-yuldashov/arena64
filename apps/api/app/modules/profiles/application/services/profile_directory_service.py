@@ -36,7 +36,7 @@ from uuid import UUID
 
 from app.modules.profiles.application.services.profile_composer import PublicProfileComposer
 from app.modules.profiles.domain.profile import PublicProfile
-from app.modules.users.public import PublicProfileReader, ViewerRelationship
+from app.modules.users.public import PublicProfileReader
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ class ProfileDirectoryService:
         self,
         player_ids: Sequence[UUID],
         *,
-        viewer: ViewerRelationship = ViewerRelationship.STRANGER,
+        viewer_id: UUID | None = None,
     ) -> Mapping[UUID, PublicProfile]:
         """Composed public profiles for a page of ids, keyed by id.
 
@@ -74,12 +74,15 @@ class ProfileDirectoryService:
         for its own row — `friends` drops the request, because a request
         from a withdrawn account is not something to render.
 
-        `viewer` is the composition point A64-013.5 will use: once blocks
-        and friendships exist, the caller passes what it knows about the
-        relationship and every privacy gate honours it. Today every caller
-        passes the default, so the parameter is threaded rather than
-        exercised — but it is threaded, which is what stops the eventual
-        change from reaching into the mappers.
+        `viewer_id` is the **authenticated caller**, and since A64-013.3 it
+        is fully live: the composer resolves what the viewer is to each
+        player and every privacy gate honours it, so a friend sees a
+        `FRIENDS`-scoped field and a stranger does not. `None` means signed
+        out, which resolves nothing and costs no query.
+
+        It is also the seam A64-013.5 extends: a `BLOCKED` relationship is a
+        third value the same resolution produces, and nothing above or below
+        this line changes to accommodate it.
         """
         if not player_ids:
             return {}
@@ -91,7 +94,7 @@ class ProfileDirectoryService:
         # stable order and the result can be zipped back deterministically.
         ordered = [identities[player_id] for player_id in player_ids if player_id in identities]
 
-        composed = await self._composer.compose_many(ordered, viewer=viewer)
+        composed = await self._composer.compose_many(ordered, viewer_id=viewer_id)
 
         # Counts only. Which players a caller looked up is a social-graph
         # read — on the friend-request path it is literally who asked whom —

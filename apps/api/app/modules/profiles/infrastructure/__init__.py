@@ -3,6 +3,8 @@
 One file per port, since A64-012.8:
 
     rating_providers.py       `RatingProvider` — one placeholder
+    relationship_providers.py `ViewerRelationshipProvider` — the real one
+                              over `friends.public`, and its fallback
     statistics_providers.py   `StatisticsProvider` — the real adapter and
                               its kill-switch fallback
 
@@ -22,6 +24,10 @@ module's published ports rather than locally declared ones.
 """
 
 from app.modules.profiles.infrastructure.rating_providers import UnratedRatingProvider
+from app.modules.profiles.infrastructure.relationship_providers import (
+    FriendshipRelationshipProvider,
+    NoRelationshipsProvider,
+)
 from app.modules.profiles.infrastructure.statistics_providers import (
     DatabaseStatisticsProvider,
     NoMatchesStatisticsProvider,
@@ -29,6 +35,8 @@ from app.modules.profiles.infrastructure.statistics_providers import (
 
 __all__ = [
     "DatabaseStatisticsProvider",
+    "FriendshipRelationshipProvider",
+    "NoRelationshipsProvider",
     "NoMatchesStatisticsProvider",
     "UnratedRatingProvider",
 ]

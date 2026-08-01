@@ -17,6 +17,7 @@ from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import (
+    FriendsSettings,
     PresenceSettings,
     RateLimitSettings,
     Settings,
@@ -171,3 +172,16 @@ def get_presence_settings(settings: SettingsDep) -> PresenceSettings:
 
 
 PresenceSettingsDep = Annotated[PresenceSettings, Depends(get_presence_settings)]
+
+
+def get_friends_settings(settings: SettingsDep) -> FriendsSettings:
+    """The friends section alone — A64-013.3.
+
+    The same narrowing the three above make, for the same reason:
+    `profiles`' composition root needs to know whether the social graph is
+    switched on, and nothing else about the platform's configuration.
+    """
+    return settings.friends
+
+
+FriendsSettingsDep = Annotated[FriendsSettings, Depends(get_friends_settings)]

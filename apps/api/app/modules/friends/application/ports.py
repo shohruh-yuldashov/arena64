@@ -1,14 +1,23 @@
 """The ports `friends` programs against — AD-06: declared in
 `application/`, satisfied by `infrastructure/`.
 
-One port. This module owns its own storage, so unlike `profiles` there is no
-cross-context read here and nothing to adapt — `FriendRequestRepository` is
-the whole surface between the use cases and PostgreSQL.
+Two ports since A64-013.3. This module owns its own storage, so unlike
+`profiles` there is no cross-context read here and nothing to adapt — these
+are the whole surface between the use cases and PostgreSQL.
 
-There is deliberately no `FriendshipRepository` and no `BlockRepository`.
-A64-013.2 implements neither, and a port with no implementation is a hole
-that reads as supported (`statistics.application.ports` makes the same
-argument about a writer that does not exist yet).
+There is still deliberately no `BlockRepository`. A64-013.3 does not
+implement blocking, and a port with no implementation is a hole that reads
+as supported (`statistics.application.ports` makes the same argument about a
+writer that does not exist yet).
+
+## Why two ports rather than one `FriendsRepository`
+
+They are two aggregates with two lifecycles and two relations, and the
+capability each grants is different: `FriendRequestService` needs both,
+while the *relationship provider* that answers "are these two friends" on
+every profile render needs only `FriendshipRepository.friend_ids_among` and
+must not be able to resolve a request. Merging them would hand the
+composition path the ability to accept requests.
 """
 
 from collections.abc import Sequence
@@ -16,6 +25,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.modules.friends.domain.friend_request import FriendRequest, FriendRequestStatus
+from app.modules.friends.domain.friendship import Friendship
 
 
 class FriendRequestRepository(Protocol):
@@ -126,5 +136,90 @@ class FriendRequestRepository(Protocol):
         behaviour is two functions wearing one name, and here the two
         genuinely differ — they filter different columns and serve
         different endpoints.
+        """
+        ...
+
+
+class FriendshipRepository(Protocol):
+    """Collection-like access to the `Friendship` aggregate — A64-013.3.
+
+    **Every method takes the pair unordered.** DB-12 stores one row per
+    unordered pair in canonical order, and no caller should have to know
+    about `low` and `high` — the adapter sorts through the domain's
+    `canonical_pair`, which is the single definition of the ordering.
+
+    Read-only for everything except `create` and `remove`, and there is no
+    method that could rewrite a friendship's participants. A friendship is
+    formed and it ends; it never moves.
+    """
+
+    async def create(self, friendship: Friendship) -> Friendship:
+        """Persists a new friendship.
+
+        Raises `FriendshipAlreadyExists` when the partial unique index
+        refuses a second live row for the pair. The service checks first to
+        produce a good error cheaply; this is the guard that holds under
+        concurrency (BE-06).
+
+        **Flushes, never commits.** On the acceptance path the caller's unit
+        of work is the *request's*, which is what makes FR-4 hold: the
+        resolved request and this row commit together or not at all.
+        """
+        ...
+
+    async def exists(self, player_a: UUID, player_b: UUID) -> bool:
+        """Whether the two are currently friends. Order-independent."""
+        ...
+
+    async def find_between(self, player_a: UUID, player_b: UUID) -> Friendship | None:
+        """The live friendship between the two, or `None`.
+
+        Separate from `exists` because removal needs the aggregate — it
+        checks participation and records an end reason — while the
+        relationship provider needs only a yes or no, and answering that
+        with a full row read on every profile render would be work spent to
+        discard it.
+        """
+        ...
+
+    async def friend_ids_among(self, player_id: UUID, others: Sequence[UUID]) -> set[UUID]:
+        """Which of `others` are currently friends with `player_id`, in one
+        query.
+
+        The batch read behind `ViewerRelationship.FRIEND`. A page renders up
+        to fifty players, and asking `exists` per row would put the N+1
+        pattern CLAUDE.md §10.4 names on the composition path — multiplying
+        every profile render on the platform.
+
+        An empty `others` returns an empty set without touching the
+        database.
+        """
+        ...
+
+    async def friend_count(self, player_id: UUID) -> int:
+        """How many live friendships this player has.
+
+        A real count rather than the length of a page, so it is correct
+        beyond the first one.
+        """
+        ...
+
+    async def friends_of(
+        self, player_id: UUID, *, limit: int, cursor: str | None
+    ) -> tuple[Sequence[Friendship], str | None]:
+        """This player's live friendships, newest first, keyset-paginated.
+
+        Returns the page and the cursor for the next one, or `None` when
+        this is the last. Raises `InvalidFriendsCursor` for a malformed
+        cursor.
+        """
+        ...
+
+    async def remove(self, friendship: Friendship) -> Friendship:
+        """Records the end of a friendship.
+
+        Never deletes — database.md §1221: a friendship that ended is a fact
+        with a date. Raises `FriendshipAlreadyEnded` if it ended between the
+        read and this write, which is two devices removing at once.
         """
         ...

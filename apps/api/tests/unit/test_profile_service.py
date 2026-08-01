@@ -44,6 +44,7 @@ from app.modules.profiles.domain.exceptions import ProfileNotFound
 from app.modules.profiles.domain.ratings import STARTING_RATING, PlayerRatings, RatingCategory
 from app.modules.profiles.infrastructure import (
     NoMatchesStatisticsProvider,
+    NoRelationshipsProvider,
     UnratedRatingProvider,
 )
 from app.modules.statistics.public import PlayerStatistics
@@ -166,6 +167,10 @@ def build_service(accounts: list[User], presence: PresenceProvider) -> ProfileSe
             ratings=UnratedRatingProvider(),
             statistics=statistics,
             presence=presence,
+            # The real fallback, which is the production wiring for an
+            # anonymous read and for a deployment with the graph switched
+            # off. `test_friendship.py` covers the friend-aware provider.
+            relationships=NoRelationshipsProvider(),
         ),
         statistics=statistics,
         presence=presence,

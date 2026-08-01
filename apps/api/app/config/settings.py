@@ -969,6 +969,40 @@ class PresenceSettings(BaseSettings):
         return self.ttl_seconds * 1000
 
 
+class FriendsSettings(BaseSettings):
+    """`friends` — the social graph (A64-013.3).
+
+    One setting, and it is a kill switch rather than a feature flag — the
+    same shape as `StatisticsSettings.enabled` and `PresenceSettings.enabled`.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="FRIENDS_", frozen=True, extra="forbid")
+
+    enabled: bool = True
+    """Whether profile composition consults the social graph.
+
+    **`True` (default): `FriendshipRelationshipProvider` is wired**, so a
+    viewer who is a friend sees fields set to `friends`. `False` wires
+    `NoRelationshipsProvider`, and every viewer is treated as a stranger.
+
+    Present for the reason the other two kill switches are: the alternative
+    to a documented switch is somebody commenting out a dependency under
+    pressure and forgetting to restore it. What it is actually for is a
+    `friends.friendship` relation being migrated, or a social graph that is
+    unhealthy on a read path that runs for every profile render.
+
+    **The degradation narrows rather than widens.** With the graph off, a
+    field restricted to friends is hidden from everyone — a visible loss of
+    functionality, not a disclosure. That is the only acceptable direction
+    for a privacy control to fail in, and it is why this switch is safe to
+    reach for during an incident.
+
+    It does **not** disable the friend-request or friend-list endpoints.
+    Those are writes and reads of the relation itself; this governs only
+    whether *profile composition* consults it.
+    """
+
+
 class Settings(BaseModel):
     """The composed, immutable configuration for this process."""
 
@@ -986,6 +1020,7 @@ class Settings(BaseModel):
     rate_limit: RateLimitSettings
     statistics: StatisticsSettings
     presence: PresenceSettings
+    friends: FriendsSettings
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":
@@ -1069,4 +1104,5 @@ def get_settings() -> Settings:
         rate_limit=RateLimitSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         statistics=StatisticsSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         presence=PresenceSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        friends=FriendsSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

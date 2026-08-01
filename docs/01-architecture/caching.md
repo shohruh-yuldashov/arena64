@@ -163,6 +163,14 @@ what is *in* the queue, not the namespace.
 | **Read by** | Nothing |
 | **On failure** | n/a |
 
+**Still unwritten after A64-013.3**, which built the relation this namespace
+will cache. That task deliberately shipped `friend_count` and
+`friend_ids_among` as live queries, because caching.md C-1 and C-3 require
+the invalidation trigger to be written down before the first key — and the
+triggers are now knowable rather than speculative:
+`FriendRequestService.accept`, `FriendshipService.remove_friend`, and
+A64-013.5's block.
+
 **Reserved by A64-013.1, which writes nothing.** That task builds user
 search — the entry point to the social graph — and the next one builds
 friend requests. Claiming the prefix now costs nothing and settles the one
@@ -182,6 +190,8 @@ for **derived** state only:
 | --- | --- | --- |
 | A player's friend-id set | Read on every presence fan-out and every "who is online" panel; a join per render is the N+1 this platform keeps refusing | Needs an invalidation rule on accept, remove and block (C-1), and a set that goes stale shows a stranger as a friend |
 | Blocked-id set | Read by **user search** on every request once blocking exists, and search already has the exclusion parameter to receive it | Same invalidation question, and a stale block is a worse failure than a stale friendship |
+| Friend **count** | `GET /friends/count` is one aggregate over a partial index; cheap, but read on every social page | Goes wrong on the first removal without a trigger. `FriendshipService.count_friends` is the single place to wrap |
+| `friend_ids_among` result | Runs on **every profile composition** since A64-013.3 — the hottest read path on the platform | The highest-value entry and the riskiest: a stale friendship here publishes a `friends`-scoped field to somebody who is no longer a friend |
 | Pending-request counts | A badge, cheap to recompute | May not be worth a cache at all |
 
 Each is a **cache of a durable relation**, so C-5 is satisfied by

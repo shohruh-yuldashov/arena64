@@ -51,9 +51,14 @@ a privacy setting and a privacy label.
 """
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from uuid import UUID
 
-from app.modules.profiles.application.ports import RatingProvider, StatisticsProvider
+from app.modules.profiles.application.ports import (
+    RatingProvider,
+    StatisticsProvider,
+    ViewerRelationshipProvider,
+)
 from app.modules.profiles.domain.profile import PublicProfile
 from app.modules.profiles.domain.ratings import PlayerRatings
 from app.modules.statistics.public import PlayerStatistics
@@ -81,23 +86,41 @@ class PublicProfileComposer:
         ratings: RatingProvider,
         statistics: StatisticsProvider,
         presence: PresenceProvider,
+        relationships: ViewerRelationshipProvider,
     ) -> None:
         self._ratings = ratings
         self._statistics = statistics
         self._presence = presence
+        # A64-013.3. Typed as the port, so nothing here can learn that a
+        # `friends` module exists: this class cannot name a friendship, a
+        # table or a repository, and cannot tell the real provider from the
+        # fallback.
+        self._relationships = relationships
 
     async def compose(
         self,
         identity: PublicUserProfile,
         *,
-        viewer: ViewerRelationship = ViewerRelationship.STRANGER,
+        viewer_id: UUID | None = None,
     ) -> PublicProfile:
         """One player, through the singular providers.
 
         The path `GET /profiles/{username}` takes. Reads are sequential
         rather than gathered because all three are in-process or a single
         indexed read today; when one becomes a slow network call this is
-        where `asyncio.gather` belongs, and the three are independent.
+        where `asyncio.gather` belongs, and the four are independent.
+
+        `viewer_id` is the **authenticated caller**, or `None` for an
+        anonymous one. A64-013.3 replaced the `viewer: ViewerRelationship`
+        parameter this used to take, and the change is not cosmetic: a
+        relationship is a fact about a *pair*, so a caller that passed one
+        in would have to compute it — and on the batch path it would have to
+        compute a different one per player. Taking the viewer's id and
+        resolving here is what keeps that single-sourced.
+
+        `None` resolves nothing and issues no query: a signed-out visitor
+        has no relationships, and every setting evaluates against
+        `STRANGER`.
         """
         visibility = identity.visibility
 
@@ -106,6 +129,8 @@ class PublicProfileComposer:
         statistics = (
             await self._statistics.statistics_for(identity.id) if visibility.statistics else None
         )
+
+        viewer = await self._relationship_to(viewer_id, identity.id)
 
         presence: Presence | None = None
         if _wants_presence(identity, viewer):
@@ -125,7 +150,7 @@ class PublicProfileComposer:
         self,
         identities: Sequence[PublicUserProfile],
         *,
-        viewer: ViewerRelationship = ViewerRelationship.STRANGER,
+        viewer_id: UUID | None = None,
     ) -> list[PublicProfile]:
         """A page of players, in a fixed number of round trips.
 
@@ -140,6 +165,13 @@ class PublicProfileComposer:
         presence costs no Redis command. The filtering is the same gate
         `compose` applies, one level up.
 
+        **The relationship is resolved per player, not per page** —
+        A64-013.3. A search result or a friend-request list mixes friends
+        and strangers, so one relationship applied to the whole page would
+        either publish a friends-only field to strangers or hide it from
+        friends. That resolution happens first, because the presence filter
+        below depends on it.
+
         Order is preserved: the ranking is the caller's and must survive
         composition unchanged.
         """
@@ -150,8 +182,10 @@ class PublicProfileComposer:
             # than for correctness.
             return []
 
+        relationships = await self._relationships_to(viewer_id, [one.id for one in identities])
+
         statistics_ids = [one.id for one in identities if one.visibility.statistics]
-        presence_ids = [one.id for one in identities if _wants_presence(one, viewer)]
+        presence_ids = [one.id for one in identities if _wants_presence(one, relationships[one.id])]
 
         statistics = await self._statistics.statistics_for_many(statistics_ids)
         presence = await self._presence.presence_for_many(presence_ids)
@@ -168,6 +202,13 @@ class PublicProfileComposer:
                 "statistics_visible": len(statistics_ids),
                 "presence_visible": len(presence_ids),
                 "presence_observed": len(presence),
+                # How many of the page the viewer is friends with. A count,
+                # never the ids — which players somebody is friends with is
+                # precisely what `VisibilityLevel.FRIENDS` exists to control,
+                # so it must not be reassembled from a log (services.md §8.5).
+                "friends_in_page": sum(
+                    1 for level in relationships.values() if level is ViewerRelationship.FRIEND
+                ),
             },
         )
 
@@ -180,10 +221,35 @@ class PublicProfileComposer:
                 # their record was never in that list.
                 statistics=statistics.get(identity.id),
                 presence=presence.get(identity.id),
-                viewer=viewer,
+                viewer=relationships[identity.id],
             )
             for identity in identities
         ]
+
+    async def _relationship_to(self, viewer_id: UUID | None, player_id: UUID) -> ViewerRelationship:
+        """What `viewer_id` is to one player.
+
+        Delegates to the batch form with a one-element sequence rather than
+        reaching for a singular port, because there is no singular port —
+        see `ViewerRelationshipProvider` on why its absence is the design.
+        """
+        relationships = await self._relationships_to(viewer_id, [player_id])
+        return relationships[player_id]
+
+    async def _relationships_to(
+        self, viewer_id: UUID | None, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, ViewerRelationship]:
+        """What `viewer_id` is to each player, defaulting to `STRANGER`.
+
+        **An anonymous viewer costs no query.** `None` means signed out,
+        which has no relationships by definition — so this returns the total
+        stranger mapping directly rather than asking a provider a question
+        whose answer is already known. That matters: the anonymous path is
+        `GET /profiles/{username}`, the platform's highest-volume read.
+        """
+        if viewer_id is None:
+            return dict.fromkeys(player_ids, ViewerRelationship.STRANGER)
+        return await self._relationships.relationships_for(viewer_id, player_ids)
 
 
 def _wants_presence(identity: PublicUserProfile, viewer: ViewerRelationship) -> bool:

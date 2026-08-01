@@ -71,3 +71,26 @@ class RegisterRequest(BaseRequestDTO):
     preferred_language: Locale = Locale.EN
     timezone: TimezoneField = "UTC"
     display_name: DisplayNameField | None = None
+
+    model_config = {
+        "extra": "forbid",
+        "json_schema_extra": {
+            # A64-011.9. Shows the optional fields as well as the required
+            # ones: `preferred_language`, `timezone` and `display_name` all
+            # have defaults, and an example that omitted them would leave a
+            # reader to discover from the schema that they exist at all.
+            #
+            # The password matches `LoginRequest`'s example so the two
+            # endpoints can be exercised in sequence from the docs page.
+            "examples": [
+                {
+                    "username": "player_one",
+                    "email": "player@example.com",
+                    "password": "CorrectHorse1!",
+                    "preferred_language": "en",
+                    "timezone": "Europe/London",
+                    "display_name": "Player One",
+                }
+            ]
+        },
+    }

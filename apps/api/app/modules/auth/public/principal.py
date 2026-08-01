@@ -45,8 +45,9 @@ class AuthenticatedUser:
     """`jti` — which token proved this, not which session.
 
     Carried so that a log line written by a route can be joined to the
-    `access_token_issued` line that minted the credential. When A64-011.4
-    adds revocation, this is also the value a denylist is keyed on.
+    `access_token_issued` line that minted the credential. It is also the
+    value a `jti` denylist would key on — still unbuilt as of A64-011.9,
+    and tracked in that audit's technical-debt list.
     """
 
     issued_at: datetime

@@ -25,21 +25,19 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from app.api.deps import DbSessionDep
-from app.core.clock import Clock, SystemClock
+from app.api.deps import ClockDep, DbSessionDep, get_clock
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.users.application.ports import UserRepository
 from app.modules.users.application.services import UserService
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
 
-
-def get_clock() -> Clock:
-    """The real clock in production. A test overrides this dependency with
-    a fixed one rather than patching `datetime` — AD-07's whole point."""
-    return SystemClock()
-
-
-ClockDep = Annotated[Clock, Depends(get_clock)]
+# `get_clock` and `ClockDep` moved to `app.api.deps` in A64-011.9 — "now"
+# is a platform concern, not this module's, and `auth` was importing them
+# from here, which meant reaching into another module's private
+# presentation package (R-1). Re-exported under the original names so this
+# module's own routes and every test that overrides `get_clock` are
+# unaffected by where it lives.
+__all__ = ["ClockDep", "UserRepositoryDep", "UserServiceDep", "get_clock"]
 
 
 def get_user_repository(session: DbSessionDep) -> UserRepository:

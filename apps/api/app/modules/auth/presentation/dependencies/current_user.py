@@ -38,13 +38,12 @@ platform's own taxonomy.
 import logging
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.api.deps import SettingsDep
-from app.core.clock import SystemClock
+from app.api.deps import ClockDep, SettingsDep
 from app.modules.auth.application.services import TokenValidator
-from app.modules.auth.domain.exceptions import AuthenticationRequired, MissingToken
+from app.modules.auth.domain.exceptions import MissingToken
 from app.modules.auth.infrastructure import JwtTokenProvider
 from app.modules.auth.public import AuthenticatedUser
 
@@ -63,7 +62,7 @@ bearer_scheme = HTTPBearer(
 BearerCredentialsDep = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)]
 
 
-def get_token_validator(settings: SettingsDep) -> TokenValidator:
+def get_token_validator(settings: SettingsDep, clock: ClockDep) -> TokenValidator:
     """Builds the validator for this request.
 
     Per-request construction of two stateless objects, both of which cost
@@ -73,11 +72,15 @@ def get_token_validator(settings: SettingsDep) -> TokenValidator:
     conclusion; the hasher was later shared for a *correctness* reason (a
     memo that had to be per-process), and nothing here has one.
 
-    `SystemClock` is constructed rather than injected because there is no
-    clock dependency in `app.api.deps` yet — `users` builds its own the
-    same way. When one is added, this becomes a parameter.
+    The clock is **injected**, closing the TODO this docstring carried
+    from A64-011.3 ("`SystemClock` is constructed rather than injected
+    because there is no clock dependency in `app.api.deps` yet"). A64-011.9
+    added one, and it matters more here than the note implied: this is the
+    clock every access-token expiry check on the platform is measured
+    against, and it was the one place a test could not move time without
+    patching `datetime` — exactly what AD-07 exists to avoid.
     """
-    return TokenValidator(tokens=JwtTokenProvider(settings.jwt, SystemClock()))
+    return TokenValidator(tokens=JwtTokenProvider(settings.jwt, clock))
 
 
 TokenValidatorDep = Annotated[TokenValidator, Depends(get_token_validator)]
@@ -146,24 +149,32 @@ class RequireAuthentication:
         return None
 
 
-def require_authentication(request: Request) -> AuthenticatedUser:
-    """Reads the identity a guard already established, from anywhere.
-
-    For code that runs outside a route signature — an exception handler, a
-    middleware, a future WebSocket frame dispatcher — and must not
-    re-verify. Raises `AuthenticationRequired` if nothing has been
-    established, rather than silently returning `None` and letting the
-    caller treat an unauthenticated request as authenticated.
-
-    Nothing populates `request.state.user` yet; the setter arrives with
-    whatever first needs it. It is defined now because the alternative —
-    each such caller reaching for the `Authorization` header itself — is
-    how a second, subtly different verification path gets written.
-    """
-    user = getattr(request.state, "user", None)
-    if not isinstance(user, AuthenticatedUser):
-        raise AuthenticationRequired("This endpoint requires authentication.")
-    return user
+# --- removed in A64-011.9: `require_authentication(request)` -----------------
+#
+# A module-level function that read `request.state.user` and raised
+# `AuthenticationRequired` when it was absent. Removed by the audit for two
+# reasons, either of which would have been sufficient.
+#
+# **Nothing ever set `request.state.user`.** No middleware, no dependency,
+# no route — the function's own docstring said so ("the setter arrives with
+# whatever first needs it"). It could therefore only ever raise. That is
+# the speculative generality CLAUDE.md §1 rule 7 forbids, and this module
+# already applies that rule twice elsewhere and says why: `TokenType` ships
+# `ACCESS` alone, and `PasswordHasher` shipped `hash` alone, both on the
+# grounds that "an unused member on a security interface reads as *this is
+# wired up* to whoever adds the next task".
+#
+# **Its name collided with the guard that is real.** `require_authentication`
+# (function, dead, always raises) beside `RequireAuthentication` (class,
+# live, the router-level guard) is one shift key apart. A reviewer skimming
+# `dependencies=[Depends(require_authentication)]` would see a plausible
+# guard, and get an endpoint that returns 401 to everyone — or, had a setter
+# ever been added carelessly, one that trusted state no verification wrote.
+#
+# The seam it was reserving is still worth having, and is cheaper to add
+# than to keep wrong: whatever first needs an identity outside a route
+# signature adds the setter and the reader together, in one commit, where
+# the pair can be reviewed.
 
 
 #: The two aliases routes actually annotate with.

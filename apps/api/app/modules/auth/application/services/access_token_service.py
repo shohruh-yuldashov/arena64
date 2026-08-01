@@ -9,12 +9,13 @@ user says*.
 
 `TokenProvider.issue` will mint whatever it is asked for. This is the one
 place that decides an **access** token lasts
-`JWTSettings.access_token_ttl_seconds` and carries `TokenType.ACCESS` —
-so when A64-011.4 adds `RefreshTokenService`, its very different lifetime
-is a different class rather than a different argument someone can pass by
-mistake. A single `create_token(type, lifetime)` would put the two most
-consequential security parameters on the platform into the hands of every
-caller.
+`JWTSettings.access_token_ttl_seconds` and carries `TokenType.ACCESS`.
+A64-011.4 bore the split out: `RefreshTokenService` has a thirty-day
+lifetime and is not even the same kind of credential — an opaque stored
+value rather than a signed one — so it is a different class rather than a
+different argument someone can pass by mistake. A single
+`create_token(type, lifetime)` would put the two most consequential
+security parameters on the platform into the hands of every caller.
 """
 
 import logging
@@ -41,9 +42,9 @@ class IssuedAccessToken:
 
     A plain frozen dataclass, not a Pydantic model, for the reason
     `TokenClaims` and `UserCredentials` are: a credential-bearing type
-    must not be one keystroke from being a FastAPI `response_model`. The
-    login response of A64-011.4 will declare its own wire schema and copy
-    these fields across deliberately.
+    must not be one keystroke from being a FastAPI `response_model`.
+    `presentation/schemas/tokens.py::TokenPair` is the wire schema, and it
+    copies these fields across deliberately.
 
     `repr=False` on the token itself is not decoration — a dataclass repr
     lands in tracebacks and in every error reporter that walks frame

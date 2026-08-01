@@ -11,6 +11,7 @@ with no enforced pairing.
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 
@@ -27,6 +28,55 @@ from app.database.redis import create_redis_pools
 from app.database.session_manager import DatabaseSessionManager
 
 logger = logging.getLogger(__name__)
+
+#: Tag metadata for the generated docs — A64-011.9.
+#:
+#: Without this, `/docs` renders bare tag names above each group and a
+#: reader has to infer from the endpoint list what "auth" contains and how
+#: it differs from "users". The two are genuinely easy to confuse on this
+#: platform, because the split is a *bounded context* boundary rather than
+#: an obvious one: `auth` owns proving who you are, `users` owns who you
+#: appear to be (architecture.md §6, DM-10). Saying so once, here, is the
+#: cheapest place to prevent an endpoint being added to the wrong module.
+#:
+#: FastAPI renders only tags it finds here *and* on a route, so a tag added
+#: to a router without an entry below is not an error — it simply gets no
+#: description, exactly as before.
+OPENAPI_TAGS: list[dict[str, Any]] = [
+    {
+        "name": "auth",
+        "description": (
+            "Proving identity: registration, sign-in, token issue and rotation, "
+            "email verification and password recovery.\n\n"
+            "Two credentials, and they are not interchangeable. The **access token** "
+            "is a short-lived JWT sent as `Authorization: Bearer <token>` and cannot "
+            "be revoked before it expires. The **refresh token** is an opaque, "
+            "single-use value sent in the request body of `POST /auth/refresh`; it "
+            "is rotated on every use, and presenting one that has already been "
+            "rotated revokes the entire session chain.\n\n"
+            "Endpoints that accept an address or send mail answer identically "
+            "whether or not an account exists — deliberately, so that none of them "
+            "can be used to discover which addresses are registered."
+        ),
+    },
+    {
+        "name": "users",
+        "description": (
+            "Player identity and profile — who someone *appears to be*, as opposed "
+            "to `auth`, which owns proving who they *are*. A player can exist "
+            "without an account (a bot seat, a guest), which is why the two are "
+            "separate contexts rather than one aggregate."
+        ),
+    },
+    {
+        "name": "health",
+        "description": (
+            "Liveness and readiness probes for load balancers and orchestrators. "
+            "Unversioned and unauthenticated: a probe must not sit behind API "
+            "versioning that could itself fail to resolve."
+        ),
+    },
+]
 
 
 @asynccontextmanager
@@ -99,6 +149,7 @@ def create_app() -> FastAPI:
         title="Arena64 API",
         version="0.1.0",
         lifespan=lifespan,
+        openapi_tags=OPENAPI_TAGS,
     )
 
     # Order is immaterial: A64-008 decoupled the two middlewares (see

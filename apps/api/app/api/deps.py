@@ -17,6 +17,7 @@ from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import RateLimitSettings, Settings, get_settings
+from app.core.clock import Clock, SystemClock
 from app.core.rate_limiting import RateLimiter
 from app.database.redis import RedisPools
 from app.database.session_manager import DatabaseSessionManager
@@ -27,6 +28,29 @@ def get_settings_dependency() -> Settings:
 
 
 SettingsDep = Annotated[Settings, Depends(get_settings_dependency)]
+
+
+def get_clock() -> Clock:
+    """The real clock in production. A test overrides this dependency with
+    a fixed one rather than patching `datetime` — AD-07's whole point.
+
+    Platform-level, beside the session and the settings, because "now" is
+    not any module's property. A64-010 declared it in
+    `users.presentation.dependencies` because `users` was the only module
+    that existed; `auth` then imported it from there, which meant every
+    `auth` dependency factory reached into another module's **private**
+    presentation package for it — eleven times. R-1 says reach a module
+    through its published surface, and `ClockDep` was never on one.
+
+    Moving it here removes the import rather than legitimising it, and
+    leaves exactly one `SystemClock()` construction site on the platform.
+    `users.presentation.dependencies` re-exports this name so its own
+    routes and the tests that override it are unaffected.
+    """
+    return SystemClock()
+
+
+ClockDep = Annotated[Clock, Depends(get_clock)]
 
 
 async def get_db_session(request: Request) -> AsyncIterator[AsyncSession]:

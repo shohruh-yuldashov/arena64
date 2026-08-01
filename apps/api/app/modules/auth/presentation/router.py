@@ -165,6 +165,17 @@ _UNPROCESSABLE: _Responses = {
         "model": ErrorResponse,
     }
 }
+#: A64-011.9. `GET /auth/me` documented `200` and `401` while its own
+#: docstring described a `404` — the narrow window in which an account is
+#: deleted while a valid token is still in flight. Prose a client cannot
+#: read is not documentation, and a 404 nobody declared is one a generated
+#: client has no branch for.
+_NOT_FOUND: _Responses = {
+    404: {
+        "description": "The account no longer exists — deleted while a valid token was in flight.",
+        "model": ErrorResponse,
+    }
+}
 #: A64-011.8. Every endpoint below that carries a `RateLimit` guard
 #: documents this, because a 429 a client has not been told to expect is
 #: one it will retry immediately and in a loop.
@@ -439,7 +450,7 @@ async def logout_all(user: CurrentUser, sessions: SessionServiceDep) -> Response
     "/me",
     summary="Read the authenticated account",
     response_description="The caller's own account.",
-    responses=_UNAUTHORIZED,
+    responses={**_UNAUTHORIZED, **_NOT_FOUND},
 )
 async def me(user: CurrentUser, profiles: UserProfileReaderDep) -> ApiResponse[UserRead]:
     """Returns the account the access token speaks for.

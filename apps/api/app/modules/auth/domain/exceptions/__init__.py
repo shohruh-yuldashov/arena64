@@ -117,10 +117,23 @@ class AccountLocked(PermissionDeniedError):
 class AuthenticationRequired(AuthenticationFailed):
     """This endpoint needs a proven identity and does not have one — 401.
 
-    The general case: `get_current_user` reached the end without a
-    principal. Distinct from `InvalidToken` in the one way a client acts
-    on: there is nothing stored to discard, so the correct response is to
-    prompt for sign-in rather than to clear a token and *then* prompt.
+    The general case. Distinct from `InvalidToken` in the one way a client
+    acts on: there is nothing stored to discard, so the correct response is
+    to prompt for sign-in rather than to clear a token and *then* prompt.
+
+    **Nothing raises this directly**, and that is intentional rather than
+    an oversight — it is the parent `MissingToken` specialises, so a route
+    guard written against this type keeps working when a later task adds a
+    second way to be unauthenticated (a cookie, a WebSocket ticket).
+    A64-011.9 removed its one direct raiser, a `request.state` reader that
+    nothing populated; see `presentation/dependencies/current_user.py` for
+    why that function should not have existed.
+
+    A parent with no direct raiser is not the thing this module refuses
+    elsewhere. `EmailAlreadyVerified` was deleted because no code path
+    could *reach* it, so `except EmailAlreadyVerified` was dead; this type
+    is reached on every request that arrives without a bearer token,
+    through its subclass.
     """
 
     default_code: ClassVar[ErrorCode] = ErrorCode.AUTHENTICATION_REQUIRED

@@ -11,6 +11,8 @@ and a twenty-four-piece one does not. The opening position is exercised
 once, through the corpus.
 """
 
+import pytest
+
 from app.modules.engine import (
     Board,
     BoardCoordinate,
@@ -21,6 +23,7 @@ from app.modules.engine import (
     PieceRank,
     PlayerSide,
     Position,
+    UnsupportedPieceMovement,
 )
 
 RUSSIAN = BoardVariant.RUSSIAN_8X8
@@ -273,11 +276,14 @@ class TestDeterminism:
 
 
 class TestScopeBoundary:
-    def test_a_king_contributes_no_moves(self) -> None:
-        """A64-014.5's, and stated as a test so the boundary is visible
-        rather than discovered. Until then this generator's answer is
-        complete only for positions without a king of the side to move —
-        see `MoveGenerator`."""
-        moves = generator.legal_moves(position({"c3": LIGHT_KING}, PlayerSide.LIGHT))
+    def test_a_king_of_the_side_to_move_is_refused(self) -> None:
+        """A64-014.2 skipped it and returned what the men could do, which
+        made "this player has no legal moves" and "this build cannot
+        answer" indistinguishable. A64-014.3 refuses instead, so an empty
+        move set means what it says.
 
-        assert moves == ()
+        The boundary is tested at length in `test_move_validation.py`; this
+        is here so the change is visible from the generator's own suite.
+        """
+        with pytest.raises(UnsupportedPieceMovement):
+            generator.legal_moves(position({"c3": LIGHT_KING}, PlayerSide.LIGHT))

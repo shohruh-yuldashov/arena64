@@ -1,8 +1,8 @@
 # Game Engine
 
-> **Status:** Partial — the board foundation (A64-014.1) and men's move generation (A64-014.2)
-> are specified and implemented; kings, capture sequences, validation, termination and notation
-> are not yet specified
+> **Status:** Partial — the board foundation (A64-014.1), men's move generation (A64-014.2) and
+> move validation and application (A64-014.3) are specified and implemented; kings, capture
+> sequences, termination and notation are not yet specified
 > **Owner:** _Unassigned_
 > **Related:** `templates/feature-spec.md`, `docs/01-architecture/architecture.md` §11,
 > `docs/01-architecture/domain-model.md` §2.1 and §16.1
@@ -58,7 +58,8 @@ read-only view, so no caller can reach past these refusals.
 
 `move` is a **relocation, not a move**: it consults no rule of draughts, refuses only what is
 mechanically impossible, and permits every geometrically absurd relocation in between. Legality
-is move generation's answer and does not exist yet.
+is `MoveValidator`'s answer (§3), and `MoveApplier` is the only thing that should be calling this
+— which is why it removes captured pieces *before* relocating (GE-31).
 
 ### 1.4 Opening position
 
@@ -71,7 +72,10 @@ is move generation's answer and does not exist yet.
 ### 1.5 Failures
 
 `GameDomainError` roots the kernel's taxonomy under `app.core.exceptions.DomainError`, with
-`InvalidCoordinate`, `InvalidBoardState`, `PieceNotFound` and `DestinationOccupied` below it.
+`InvalidCoordinate`, `InvalidBoardState`, `PieceNotFound`, `DestinationOccupied`, `InvalidMove`
+and `UnsupportedPieceMovement` below it. `IllegalMove` is the one deliberate exception and sits
+under `RuleViolationError` instead — see §3.3.
+
 None carries a wire code of its own: the engine has no HTTP surface, and the task that gives
 `game` an endpoint is the one that can judge which of them a client must distinguish.
 
@@ -175,13 +179,106 @@ signature, an ordering, or the flow above.
 
 ---
 
-## 3. Not yet specified
+## 3. Validation and application — A64-014.3
+
+### 3.1 Types
+
+| Type | Kind | Contract |
+| --- | --- | --- |
+| `MoveValidator` | Stateless service over `MoveGenerator` | `is_legal(position, move) -> bool`, `validate(position, move) -> None` |
+| `MoveApplier` | Stateless service over `MoveValidator` | `apply(position, move) -> Position` |
+| `IllegalMove` | `app.core.exceptions.RuleViolationError` | A well-formed move the rules do not allow here |
+| `UnsupportedPieceMovement` | `GameDomainError` | The engine cannot evaluate the position — temporary |
+
+### 3.2 Validation by generation
+
+| Rule | Statement |
+| --- | --- |
+| GE-24 | Legality is `move in move_generator.legal_moves(position)`. The validator holds **no** rules of its own |
+| GE-25 | Nothing about quiet moves, captures, the capture obligation, promotion geometry or the side to move is re-derived. Every rule added later is enforced here by construction, without this type knowing it |
+| GE-26 | Equality is exact and includes `promotes_to`, so a move that omits a required promotion or claims one the rules do not is refused. A caller echoes the generated move; it does not rebuild one from an origin and a destination |
+| GE-27 | `is_legal` answers a boolean; `validate` raises `IllegalMove`. Neither converts `UnsupportedPieceMovement` into a refusal |
+
+The cost is generating the full move set to check one move. For a validator called
+once per ply against a board of at most 50 squares that is not measurable; if a profile ever
+says otherwise, the lever is a generator that can answer for one origin square — never a second
+copy of the rules inside the validator.
+
+### 3.3 `IllegalMove` and the failure split
+
+| | `InvalidMove` | `IllegalMove` |
+| --- | --- | --- |
+| What | The move's *shape* is broken | Well formed, and not available here |
+| Raised by | `Move.__post_init__`, at construction | `MoveValidator`, against a position |
+| Root | `GameDomainError` | `RuleViolationError` |
+| Means | A caller built a move wrong | A player was told no |
+| In play | Never happens | Happens constantly |
+
+`IllegalMove` is the **only** engine failure that does not descend from `GameDomainError`, and
+that is the point: everything under that root is a caller bug that should never occur, and this
+one is ordinary traffic on every game ever played. `game` wants two handlers — one sends a
+message to a client, the other raises an incident.
+
+The message names no rule. The validator genuinely does not know which rule excluded the move —
+it checked set membership — and inventing a reason would mean re-deriving the rules in the place
+built to avoid that. A player-facing explanation belongs in `game`, which already holds the legal
+move set: "you must capture" is `any(move.is_capture for move in legal)`.
+
+### 3.4 The king boundary — temporary, removed by A64-014.5
+
+| Rule | Statement |
+| --- | --- |
+| GE-28 | A king belonging to the **side to move** raises `UnsupportedPieceMovement` from `MoveGenerator.legal_moves`, and therefore from validation and application |
+| GE-29 | A king belonging to the **opponent** raises nothing. It is a piece a man may jump, which this build handles correctly |
+| GE-30 | Consequently an empty move set means exactly one thing: the side to move has nothing to play |
+
+A64-014.2 skipped kings and returned whatever the men could do, which made two very different
+situations identical: "this player has no legal moves" — a loss under the full rules — and "this
+build cannot answer". Terminal-state detection reads an empty set as a statement about the game,
+so the ambiguity had to go before anything was built on it.
+
+### 3.5 Move application
+
+    1. validate                    — through `MoveValidator`, never inline
+    2. remove every captured square, in the order the move records
+    3. relocate the moving piece from origin to destination
+    4. crown it, if the move says it is crowned
+    5. hand the turn to the opponent
+
+| Rule | Statement |
+| --- | --- |
+| GE-31 | **Victims come off before the attacker moves.** `Board.move` refuses an occupied destination and knows nothing about capture (A64-014.1), so the board must already be in the state the relocation is legal in |
+| GE-32 | `apply` validates every time. There is no unchecked path and no `validate=False` — AD-13's failure mode is "a *plausible but illegal* game that is rated, ranked, and permanently recorded" |
+| GE-33 | Neither the position nor its board is modified, on any path including the ones that raise. Every intermediate board is a new value, so a failure part-way through cannot leave a half-applied state |
+| GE-34 | The returned position holds the new board and the opponent as side to move |
+| GE-35 | The same position and move produce the same result every time |
+
+Promotion replaces the arriving piece with `Piece.promote()` rather than building a king from
+`Move.promotes_to`. The field is read as *whether* the move crowns — its only possible value is
+`KING`, since validation refuses any move claiming another — and `Piece.promote` stays the one
+implementation of *what* crowning means.
+
+Move **undo** is deliberately absent. Positions are values, so undo is holding the previous one;
+a caller wanting a stack keeps a list. An `undo` that recomputed a prior position would be a
+second implementation of `apply`.
+
+### 3.6 Rejection corpus
+
+`men-rejections.json` adds a `rejections` key beside `men-basic.json`'s `cases`. A file carries
+one of the two, and a reader loads the key it understands — which makes a third kind of case an
+append rather than a migration of every reader. Categories are `illegal_move`, `malformed_move`
+and `unsupported_piece`; the category is part of the expectation, because the three are refused
+at different moments by different code. Format in the corpus `README.md`.
+
+---
+
+## 4. Not yet specified
 
 Capture sequences longer than one jump, maximum-capture selection, king mobility (flying versus
-short), promotion in the middle of a sequence, move validation and application, repetition
-hashing as an incremental `PositionHash`, draw rules, termination detection, PDN notation and
-serialization, the TypeScript implementation of the corpus (AD-14), and the engine version
-recorded per match (AD-15).
+short), promotion in the middle of a sequence, move undo, repetition hashing as an incremental
+`PositionHash`, draw rules, terminal-state detection, PDN notation and serialization, the
+TypeScript implementation of the corpus (AD-14), and the engine version recorded per match
+(AD-15).
 
 ## TODO
 
@@ -189,7 +286,6 @@ recorded per match (AD-15).
 - [ ] Specify recursive capture sequences and maximum-capture selection (A64-014.4)
 - [ ] Confirm `promotion_ends_ply` for international draughts against corpus cases
 - [ ] Specify king mobility (A64-014.5)
-- [ ] Specify move validation and application (A64-014.3)
 - [ ] Specify the repetition hash, termination and draw detection
 - [ ] Add the TypeScript implementation that executes the same corpus (AD-14)
 - [ ] Review and promote status from Partial to Approved

@@ -30,11 +30,16 @@ somewhere still says what it is.
 
 ## Files
 
-| File | Covers |
-| --- | --- |
-| `men-basic.json` | Quiet moves, single captures, mandatory-capture priority and promotion detection for men — the whole of A64-014.2 |
+| File | Key | Covers |
+| --- | --- | --- |
+| `men-basic.json` | `cases` | Quiet moves, single captures, mandatory-capture priority and promotion detection for men — the whole of A64-014.2 |
+| `men-rejections.json` | `rejections` | Moves that must be refused, and the category of refusal — A64-014.3 |
 
-## Format
+A file carries **one** of the two top-level keys. A reader loads the key it
+understands and ignores files that do not have it, which is what makes adding a
+third kind of case an append rather than a migration of every existing reader.
+
+## Format — `cases`
 
 ```jsonc
 {
@@ -78,6 +83,48 @@ a game by index, a search visits siblings in a fixed sequence, and two implement
 on the *set* but not the order will diverge the first time either of those matters. The order is
 ascending by `(path, captured)`, which is defined in `Move.sort_key` and is the same total order
 in any language that compares tuples of `(row, column)` pairs.
+
+## Format — `rejections`
+
+```jsonc
+{
+  "corpus_version": 1,
+  "scope": "…",
+  "rejections": [
+    {
+      "id": "kebab-case, unique within the version, never reused",
+      "description": "what the case proves, in one sentence",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [{ "square": "c3", "side": "light", "rank": "man" }],
+      "move": { "path": ["c3", "b4"], "captured": [], "promotes_to": null },
+      "rejection": "illegal_move"
+    }
+  ]
+}
+```
+
+`variant`, `side_to_move`, `pieces` and the shape of `move` are exactly as above —
+one format for a square, one for a move, whichever kind of case it appears in.
+
+### Rejection categories
+
+| Category | Meaning | Refused at |
+| --- | --- | --- |
+| `illegal_move` | The move is well-formed and is not among the moves the position offers | Validation |
+| `malformed_move` | The move's *shape* is broken; it cannot be constructed at all | Construction |
+| `unsupported_piece` | The engine cannot evaluate the position — today, a king belonging to the side to move | Generation |
+
+The category is part of the expectation, not a hint. `malformed_move` and
+`illegal_move` are refused at different moments by different code for different
+reasons — one is a caller that built a move wrong, the other is a player being
+told no — and a case that swapped them would pass a reader that only checked
+"something was refused".
+
+`unsupported_piece` is **temporary**. It exists because move generation covers men
+only; when kings move (A64-014.5) that case becomes a legal-move case, and per the
+append-only rule the rejection case is not edited — it is superseded in the version
+that changes the rule.
 
 ## What v1 does not cover
 

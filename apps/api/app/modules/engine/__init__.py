@@ -17,12 +17,17 @@ Quiet moves and single jumps for men, mandatory-capture priority,
 promotion detected on arrival, one deterministic move order, and the first
 versioned corpus in `specs/game-engine/corpus/v1/`.
 
-Absent, by the tasks' constraints: **king movement** (a king contributes no
-moves — see `MoveGenerator`), **capture sequences longer than one jump**,
-maximum-capture selection, move validation and application, terminal-state
-and draw detection, `PositionHash` as an incremental hash, PDN notation,
-and serialization. Nothing here anticipates their shape beyond keeping the
-rules variant-parameterised and the move a path.
+**A64-014.3 — validation and application.** `MoveValidator` (which holds no
+rules of its own — it asks the generator), `MoveApplier`, `IllegalMove`,
+and `UnsupportedPieceMovement`.
+
+Absent, by the tasks' constraints: **king movement** — a king of the side
+to move is now *refused* rather than ignored, so that an empty move set
+means what it says — **capture sequences longer than one jump**,
+maximum-capture selection, move undo, terminal-state and draw detection,
+`PositionHash` as an incremental hash, PDN notation, and serialization.
+Nothing here anticipates their shape beyond keeping the rules
+variant-parameterised and the move a path.
 
 ## Why this module has no four-layer interior
 
@@ -58,14 +63,18 @@ from app.modules.engine.coordinate import (
 from app.modules.engine.exceptions import (
     DestinationOccupied,
     GameDomainError,
+    IllegalMove,
     InvalidBoardState,
     InvalidCoordinate,
     InvalidMove,
     PieceNotFound,
+    UnsupportedPieceMovement,
 )
 from app.modules.engine.initial_position import initial_board
 from app.modules.engine.move import Move
+from app.modules.engine.move_application import MoveApplier
 from app.modules.engine.move_generation import MoveGenerator
+from app.modules.engine.move_validation import MoveValidator
 from app.modules.engine.piece import Piece, PieceRank, PlayerSide
 from app.modules.engine.position import Position
 from app.modules.engine.variant import (
@@ -86,16 +95,20 @@ __all__ = [
     "DestinationOccupied",
     "Direction",
     "GameDomainError",
+    "IllegalMove",
     "InvalidBoardState",
     "InvalidCoordinate",
     "InvalidMove",
     "Move",
+    "MoveApplier",
     "MoveGenerator",
+    "MoveValidator",
     "Piece",
     "PieceNotFound",
     "PieceRank",
     "PlayerSide",
     "Position",
+    "UnsupportedPieceMovement",
     "geometry_of",
     "initial_board",
 ]

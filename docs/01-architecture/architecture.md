@@ -643,11 +643,21 @@ and position hashing for repetition rules.
 | --- | --- |
 | A64-014.1 | `BoardCoordinate`, `PlayerSide`, `PieceRank`, `Piece`, `BoardVariant`, `BoardGeometry`, `Board`, the opening position, and the failure taxonomy |
 | A64-014.2 | `Position`, `Move` (a path, not a from/to pair), `Direction`, `CaptureObligation`, `MoveGenerator`, the rule axes on `BoardGeometry`, and the first corpus version |
+| A64-014.3 | `MoveValidator`, `MoveApplier`, `IllegalMove`, `UnsupportedPieceMovement`, and the corpus's rejection cases |
 
 Move generation covers **men only**: quiet moves, single jumps, mandatory-capture priority,
-promotion detected on arrival, one deterministic order. Kings contribute no moves, capture
-sequences stop at one jump, and move validation, application, termination and draw detection do
-not exist. See `specs/game-engine.md` §2.7 for the boundary as stated to callers.
+promotion detected on arrival, one deterministic order. Capture sequences stop at one jump, and
+terminal-state and draw detection do not exist.
+
+**Kings are refused, not ignored.** A king belonging to the side to move raises
+`UnsupportedPieceMovement`; a king belonging to the opponent is evaluated normally, because a man
+may jump it. That boundary is temporary and is deleted by A64-014.5. It exists because the
+alternative — returning what the men could do — made "this player has no legal moves", which is a
+loss under the full rules, indistinguishable from "this build cannot answer".
+
+`MoveValidator` holds **no rules**: legality is membership in the generated move set, so mandatory
+capture and every rule added later are enforced without a second implementation to disagree with
+the first. See `specs/game-engine.md` §3 for the contract as stated to callers.
 
 The generator reads `BoardGeometry` and never `BoardVariant` — the rule that keeps a second
 variant a table entry rather than a search for hidden branches.

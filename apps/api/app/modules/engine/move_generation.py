@@ -11,13 +11,19 @@ corpus tests and the property a rated result rests on.
 Present: quiet moves for men, single jumps for men, mandatory-capture
 priority, promotion detection on arrival.
 
-Absent: **kings**, and **capture sequences longer than one jump**. A king
-belonging to the side to move contributes nothing to the returned tuple —
-it is skipped, not refused — and a position where the only mobile piece is
-a king therefore reports no moves at all. That is a scope boundary, not a
-rules claim: until A64-014.5 this generator's answer is complete only for
-positions without kings, and nothing should present it to a player before
-then.
+Absent: **kings**, and **capture sequences longer than one jump**.
+
+A king belonging to the side to move is **refused**, with
+`UnsupportedPieceMovement`. A64-014.2 skipped it and returned whatever the
+men could do, which made two very different situations look identical: "this
+player has no legal moves" — a loss under the full rules — and "this build
+cannot answer". A64-014.3 needs that ambiguity gone, because validation and,
+next, terminal-state detection both read an empty move set as a statement
+about the game rather than about the engine.
+
+An opponent's king raises nothing. It is a piece a man may jump, which this
+build handles correctly, and refusing it would reject positions the engine
+genuinely answers for.
 
 `_captures` returning single jumps is the other half. A64-014.4 replaces
 the body of one private method with a recursive walk; the mandatory-capture
@@ -49,6 +55,7 @@ TypeScript engine mirrors this surface. One instance is safe to share.
 
 from app.modules.engine.board import Board
 from app.modules.engine.coordinate import BoardCoordinate, Direction
+from app.modules.engine.exceptions import UnsupportedPieceMovement
 from app.modules.engine.move import Move
 from app.modules.engine.piece import Piece, PieceRank, PlayerSide
 from app.modules.engine.position import Position
@@ -61,12 +68,17 @@ class MoveGenerator:
     def legal_moves(self, position: Position) -> tuple[Move, ...]:
         """The moves available in `position`, ordered and immutable.
 
-        Empty when the side to move has nothing to play, which under the
-        full rules is a loss for that side — a conclusion this task does
-        not draw, because it is also what an unimplemented king looks like
-        from here. Terminal-state detection is A64-014.3's, and it needs a
-        generator whose emptiness means what it says.
+        Empty means exactly one thing: **the side to move has nothing to
+        play**, which under the full rules is a loss for that side. It no
+        longer also means "the engine could not tell" — a king of the side
+        to move raises `UnsupportedPieceMovement` instead (A64-014.3).
+
+        Drawing the losing conclusion is still not this method's; terminal
+        state is a later task. What this guarantees is that the conclusion
+        will be safe to draw.
         """
+        _reject_unsupported_pieces(position)
+
         geometry = position.board.geometry
         captures = self._captures(position, geometry)
         if captures and geometry.capture_is_mandatory:
@@ -140,22 +152,41 @@ class MoveGenerator:
         )
 
 
+def _reject_unsupported_pieces(position: Position) -> None:
+    """Refuse a position this build cannot answer for — see
+    `UnsupportedPieceMovement`.
+
+    The check is on the side to move only, and it runs before any
+    generation so that no half-built answer can escape.
+    """
+    for square, piece in position.board.occupied_squares.items():
+        if piece.side is position.side_to_move and piece.rank is PieceRank.KING:
+            raise UnsupportedPieceMovement(
+                f"King movement is not implemented; the {piece.side.value} king on "
+                f"{square} has moves this engine cannot generate."
+            )
+
+
 def _men_to_move(position: Position) -> list[tuple[BoardCoordinate, Piece]]:
-    """The side to move's men, in ascending square order.
+    """The side to move's pieces, in ascending square order.
+
+    Every one of them is a man: `_reject_unsupported_pieces` has already
+    run, so a king of this side would have raised rather than reached here.
+    Re-filtering on rank would be a second statement of that invariant,
+    which is the kind of duplication that stays behind after the first one
+    is deleted in A64-014.5.
 
     Sorted here as well as in `_ordered`, so that the walk itself is
     reproducible: a bug that made two moves compare equal would otherwise
     surface as an ordering that depended on how the board's mapping was
     built, which is the class of defect that reproduces on one machine
     only.
-
-    Kings are excluded — see the module docstring.
     """
     return sorted(
         (
             (square, piece)
             for square, piece in position.board.occupied_squares.items()
-            if piece.side is position.side_to_move and piece.rank is PieceRank.MAN
+            if piece.side is position.side_to_move
         ),
         key=lambda entry: entry[0],
     )

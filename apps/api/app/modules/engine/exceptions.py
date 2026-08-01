@@ -14,6 +14,25 @@ kernel's refusals as one category at its own boundary, rather than
 enumerating four types that will become a dozen once move generation
 lands.
 
+## The one deliberate exception — `IllegalMove` — A64-014.3
+
+`IllegalMove` sits under `app.core.exceptions.RuleViolationError` instead,
+and is the only failure here that does **not** descend from
+`GameDomainError`. That is the point rather than an oversight: everything
+under `GameDomainError` means *the kernel was used wrongly* — a square that
+is not a square, a position that could not have arisen, a move whose shape
+is malformed — and every one of them is a caller bug that should never
+occur in play. `IllegalMove` means *a player was told no*, which is
+ordinary, expected traffic on every game ever played.
+
+`game` therefore wants two handlers, not one, and they behave nothing
+alike: an illegal move is a message back to one client, a `GameDomainError`
+is an incident. Collapsing them under one root would make the common case
+and the never-case indistinguishable at the only boundary that has to tell
+them apart. `RuleViolationError` already exists for exactly this and its
+docstring already names the case — "e.g. an illegal move, once `game`
+exists to raise one".
+
 Placing that root under `DomainError` rather than `ValidationError` is a
 deliberate call, and `InvalidCoordinate` is the case that makes it
 arguable: an off-board square really is malformed input. It sits here
@@ -35,11 +54,13 @@ four ride the inherited `domain_error` code. The task that gives `game` an
 endpoint is the one that can judge which of them a client must distinguish.
 """
 
-from app.core.exceptions import DomainError
+from app.core.exceptions import DomainError, RuleViolationError
 
 
 class GameDomainError(DomainError):
-    """Root of the rules kernel's failures. Never raised directly."""
+    """Root of the rules kernel's failures — every one of them a caller
+    bug. Never raised directly, and deliberately not the root of
+    `IllegalMove`; see the module docstring."""
 
 
 class InvalidCoordinate(GameDomainError):
@@ -103,11 +124,67 @@ class DestinationOccupied(GameDomainError):
     """
 
 
+class UnsupportedPieceMovement(GameDomainError):
+    """The engine cannot answer for this position — A64-014.3.
+
+    **A temporary boundary, and it is deleted by A64-014.5.** Move
+    generation covers men; a king belonging to the side to move has moves
+    this build does not know how to produce, so any answer it gave would be
+    an incomplete legal move set presented as a complete one.
+
+    That is worse than it sounds. An empty move set means "this player has
+    lost" under the full rules, so a generator that silently returned
+    nothing for a king-only position would hand terminal-state detection a
+    resignation the rules never called for. Refusing loudly is the only
+    honest option until kings move.
+
+    A king belonging to the *opponent* raises nothing: it is a piece a man
+    may jump, which this build handles correctly, and refusing it would
+    reject positions the engine actually answers for.
+
+    Not an `IllegalMove` — nobody did anything wrong. It is a caller
+    reaching past what this build implements, which is why it sits under
+    `GameDomainError` with the other caller bugs.
+    """
+
+
+class IllegalMove(RuleViolationError):
+    """A well-formed move that the rules do not allow here — A64-014.3.
+
+    The distinction from `InvalidMove` is the one that matters, and it is
+    not pedantry:
+
+    | | `InvalidMove` | `IllegalMove` |
+    | --- | --- | --- |
+    | What | The move's *shape* is broken | It is well formed, and not available here |
+    | Example | A one-square path | A quiet move while a capture waits |
+    | Raised by | `Move.__post_init__` | `MoveValidator`, against a position |
+    | Means | A caller built a move wrong | A player was told no |
+    | In play | Never happens | Happens constantly |
+
+    So a `Move` can be constructed, logged, compared and sent over a wire
+    while being completely illegal, and that is correct: illegality is a
+    property of a move *in a position*, not of the move.
+
+    **Why the message says nothing specific.** It names no rule — not "a
+    capture is available", not "that is not your piece". Two reasons. The
+    honest one: this class is raised by set membership against the
+    generated moves (see `MoveValidator`), so the validator genuinely does
+    not know which rule excluded it, and inventing a reason would mean
+    re-deriving the rules in the one place built to avoid that. The useful
+    one: `game` can compute a far better message from the legal move set it
+    already has — "you must capture" is `any(move.is_capture for move in
+    legal)` — and that is where a player-facing explanation belongs.
+    """
+
+
 __all__ = [
     "DestinationOccupied",
     "GameDomainError",
+    "IllegalMove",
     "InvalidBoardState",
     "InvalidCoordinate",
     "InvalidMove",
     "PieceNotFound",
+    "UnsupportedPieceMovement",
 ]

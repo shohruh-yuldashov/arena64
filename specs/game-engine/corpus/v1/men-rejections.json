@@ -1,0 +1,87 @@
+{
+  "corpus_version": 1,
+  "scope": "Moves that must be refused, and the category of refusal (A64-014.3). Each case is a position, one move, and what has to happen when that move is offered. No kings beyond the one case that asserts the temporary king boundary, and no capture sequences longer than one jump.",
+  "rejections": [
+    {
+      "id": "quiet-move-refused-while-a-capture-is-available",
+      "description": "Mandatory capture: c3-b4 is a perfectly ordinary step, and it is not on offer because c3 can jump d4.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c3", "side": "light", "rank": "man" },
+        { "square": "d4", "side": "dark", "rank": "man" }
+      ],
+      "move": { "path": ["c3", "b4"], "captured": [], "promotes_to": null },
+      "rejection": "illegal_move"
+    },
+    {
+      "id": "the-side-not-to-move-may-not-move",
+      "description": "A move of DARK's man while LIGHT is to move. Legal for DARK next ply, and refused now.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c3", "side": "light", "rank": "man" },
+        { "square": "f6", "side": "dark", "rank": "man" }
+      ],
+      "move": { "path": ["f6", "e5"], "captured": [], "promotes_to": null },
+      "rejection": "illegal_move"
+    },
+    {
+      "id": "a-move-from-an-empty-square-is-refused",
+      "description": "e3 holds nothing. The move is well-formed and describes a piece that does not exist.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [{ "square": "c3", "side": "light", "rank": "man" }],
+      "move": { "path": ["e3", "d4"], "captured": [], "promotes_to": null },
+      "rejection": "illegal_move"
+    },
+    {
+      "id": "a-move-onto-an-occupied-square-is-refused",
+      "description": "b4 is held by the mover's own man, so c3-b4 is not among the moves offered.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c3", "side": "light", "rank": "man" },
+        { "square": "b4", "side": "light", "rank": "man" }
+      ],
+      "move": { "path": ["c3", "b4"], "captured": [], "promotes_to": null },
+      "rejection": "illegal_move"
+    },
+    {
+      "id": "a-path-that-steps-nowhere-is-malformed",
+      "description": "Refused when the move is built, not when it is validated: the shape is broken regardless of position.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [{ "square": "c3", "side": "light", "rank": "man" }],
+      "move": { "path": ["c3", "c3"], "captured": [], "promotes_to": null },
+      "rejection": "malformed_move"
+    },
+    {
+      "id": "a-king-of-the-side-to-move-cannot-be-evaluated",
+      "description": "The temporary boundary until A64-014.5. The engine refuses rather than returning a move set it knows to be incomplete.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [{ "square": "c3", "side": "light", "rank": "king" }],
+      "move": { "path": ["c3", "b4"], "captured": [], "promotes_to": null },
+      "rejection": "unsupported_piece"
+    },
+    {
+      "id": "promotion-claimed-away-from-the-crownhead-is-refused",
+      "description": "d4 is not the eighth rank, so the move the rules offer carries no promotion and this one is a different move.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [{ "square": "c3", "side": "light", "rank": "man" }],
+      "move": { "path": ["c3", "d4"], "captured": [], "promotes_to": "king" },
+      "rejection": "illegal_move"
+    },
+    {
+      "id": "promotion-omitted-on-the-crownhead-is-refused",
+      "description": "The mirror of the case above. Promotion is part of a move's identity, not advisory metadata, so a caller must echo the move the engine offered rather than rebuild one from an origin and a destination.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [{ "square": "g7", "side": "light", "rank": "man" }],
+      "move": { "path": ["g7", "h8"], "captured": [], "promotes_to": null },
+      "rejection": "illegal_move"
+    }
+  ]
+}

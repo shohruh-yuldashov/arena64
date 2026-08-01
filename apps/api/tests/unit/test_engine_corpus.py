@@ -19,10 +19,40 @@ Two kinds of test live here, and the distinction matters:
 
 import pytest
 
-from app.modules.engine import BoardVariant, MoveGenerator, PlayerSide, Position, initial_board
-from tests.corpus import CorpusCase, load_cases
+from app.modules.engine import (
+    BoardVariant,
+    IllegalMove,
+    InvalidMove,
+    MoveGenerator,
+    MoveValidator,
+    PlayerSide,
+    Position,
+    UnsupportedPieceMovement,
+    initial_board,
+)
+from tests.corpus import CorpusCase, RejectionCase, RejectionCategory, load_cases, load_rejections
 
 CASES = load_cases()
+REJECTIONS = load_rejections()
+
+REFUSAL_FOR = {
+    RejectionCategory.ILLEGAL_MOVE: IllegalMove,
+    RejectionCategory.MALFORMED_MOVE: InvalidMove,
+    RejectionCategory.UNSUPPORTED_PIECE: UnsupportedPieceMovement,
+}
+"""Each category's exception. Exhaustive over `RejectionCategory` by a test
+below, so a category added to the corpus cannot be silently unhandled."""
+
+REQUIRED_REJECTIONS = {
+    "quiet-move-refused-while-a-capture-is-available",
+    "the-side-not-to-move-may-not-move",
+    "a-move-from-an-empty-square-is-refused",
+    "a-move-onto-an-occupied-square-is-refused",
+    "a-path-that-steps-nowhere-is-malformed",
+    "a-king-of-the-side-to-move-cannot-be-evaluated",
+    "promotion-claimed-away-from-the-crownhead-is-refused",
+}
+"""The rejection cases A64-014.3 names."""
 
 REQUIRED_CASES = {
     "russian-initial-position-light-to-move",
@@ -37,6 +67,31 @@ REQUIRED_CASES = {
 adding a case never quietly satisfies a requirement a deleted one covered."""
 
 generator = MoveGenerator()
+validator = MoveValidator(generator)
+
+
+@pytest.mark.parametrize("case", REJECTIONS, ids=[case.id for case in REJECTIONS])
+def test_the_engine_refuses_what_the_corpus_says_it_must(case: RejectionCase) -> None:
+    """A64-014.3's half of the contract: the moves that must not be played,
+    and *where* each is stopped.
+
+    The category is asserted, not just "something raised". `InvalidMove`
+    and `IllegalMove` are refused at different moments by different code
+    for different reasons — one is a caller that built a move wrong, the
+    other is a player being told no — and a case that swapped them would
+    satisfy a test that only checked for a failure.
+    """
+    expected = REFUSAL_FOR[case.rejection]
+
+    if case.rejection is RejectionCategory.MALFORMED_MOVE:
+        # Refused at construction, so there is no move to validate — which
+        # is the distinction the case exists to record.
+        with pytest.raises(expected):
+            case.build_move()
+        return
+
+    with pytest.raises(expected):
+        validator.validate(case.position, case.build_move())
 
 
 @pytest.mark.parametrize("case", CASES, ids=[case.id for case in CASES])
@@ -57,13 +112,29 @@ class TestCorpusIntegrity:
         conformance test above vacuously pass."""
         assert CASES
 
+    def test_the_rejection_corpus_is_not_empty(self) -> None:
+        assert REJECTIONS
+
     def test_every_required_case_is_present(self) -> None:
         assert {case.id for case in CASES} >= REQUIRED_CASES
 
+    def test_every_required_rejection_is_present(self) -> None:
+        assert {case.id for case in REJECTIONS} >= REQUIRED_REJECTIONS
+
     def test_case_ids_are_unique(self) -> None:
-        identifiers = [case.id for case in CASES]
+        identifiers = [case.id for case in CASES] + [case.id for case in REJECTIONS]
 
         assert len(set(identifiers)) == len(identifiers)
+
+    def test_every_rejection_category_has_an_expected_exception(self) -> None:
+        """Exhaustiveness over the enum, so a category added to the corpus
+        format cannot reach the parametrised test above as a `KeyError`
+        that reads like a corpus typo."""
+        assert set(REFUSAL_FOR) == set(RejectionCategory)
+
+    def test_every_rejection_category_is_exercised(self) -> None:
+        """A category nothing uses is a claim the corpus is not making."""
+        assert {case.rejection for case in REJECTIONS} == set(RejectionCategory)
 
     def test_expected_moves_are_written_in_the_contracted_order(self) -> None:
         """The README states ascending `(path, captured)`. A case written

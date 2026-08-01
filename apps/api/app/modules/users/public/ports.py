@@ -326,6 +326,28 @@ class PublicProfileReader(Protocol):
         """
         ...
 
+    async def find_public_profiles(
+        self, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, PublicUserProfile]:
+        """The same view for a page of players, by id, in **one** query.
+
+        Added by A64-013.2, whose friend-request lists hold ids rather than
+        usernames and render a page of them at once. Looking each up through
+        `find_public_profile` would be a username the caller does not have,
+        and looping any by-id read is the N+1 pattern CLAUDE.md §10.4 names.
+
+        **Deactivated accounts are omitted**, exactly as they are reported
+        as `None` above and for the same reason: `users` owns `is_active`,
+        and which handles belong to withdrawn accounts is itself a
+        disclosure. A caller therefore cannot assume the mapping has an
+        entry per id — it must skip what is missing, which is the same
+        behaviour it would get from four `None`s.
+
+        Never raises for an unknown id. An empty sequence returns an empty
+        mapping without touching the database.
+        """
+        ...
+
 
 class AvatarStore(Protocol):
     """Reads and writes a player's avatar *reference* — never the image.

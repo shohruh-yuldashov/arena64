@@ -48,6 +48,9 @@ it would make the profile appear and disappear on an action the visitor
 cannot see.
 """
 
+from collections.abc import Mapping, Sequence
+from uuid import UUID
+
 from app.modules.users.application.mappers import to_public_profile
 from app.modules.users.application.services.user_service import UserService
 from app.modules.users.domain.exceptions import InvalidUsername, UserNotFound
@@ -83,3 +86,21 @@ class PublicProfileService:
             return None
 
         return to_public_profile(user)
+
+    async def find_public_profiles(
+        self, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, PublicUserProfile]:
+        """The batch form — A64-013.2.
+
+        Keyed by id so a caller holding an ordering of its own (a
+        friend-request list is ordered by when the request arrived) can
+        index rather than search.
+
+        **Deactivated accounts are absent from the mapping**, because
+        `find_active_by_ids` never returns them. That is the same rule the
+        single lookup applies, expressed as omission rather than as `None`
+        — and it means a consumer cannot render a withdrawn account even by
+        iterating the ids it asked about.
+        """
+        users = await self._users.find_active_by_ids(player_ids)
+        return {user.id: to_public_profile(user) for user in users}

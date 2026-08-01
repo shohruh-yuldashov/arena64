@@ -37,19 +37,23 @@ Every failure is a typed exception on the platform hierarchy, and
     StorageError            -> 500  permanent_infrastructure_error
     MissingToken            -> 401  authentication_required
 
-## Not rate limited
+## The upload is rate limited; the read and the delete are not
 
-A64-012.2's scope does not include it, and this endpoint is authenticated —
-abusing it costs an account. It is nonetheless the most expensive
-unauthenticated-adjacent operation on the platform (a decode and two
-encodes per call), and `app.api.rate_limiting.RateLimit` is one dependency
-away. The recommendations say so.
+Since A64-013.2. `POST` decodes an image and encodes twice on bytes a caller
+supplies, which makes it the cheapest CPU-amplification primitive on the
+platform — bounded, before this, only by how many accounts an attacker held.
+Counted **per user**, which is the right dimension for an endpoint behind a
+token and one that addresses no account but the caller's.
+
+`GET` and `DELETE` stay unlimited: an indexed row read and a three-column
+update amplify nothing, and limiting them would spend a budget a settings
+screen needs on page load.
 """
 
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, File, UploadFile, status
+from fastapi import APIRouter, Depends, File, UploadFile, status
 
 from app.api.openapi import Responses, error_response
 from app.api.responses import build_response
@@ -59,6 +63,7 @@ from app.modules.avatars.presentation.dependencies import (
     AvatarLinkBuilderDep,
     AvatarServiceDep,
 )
+from app.modules.avatars.presentation.rate_limits import enforce_avatar_upload_limit
 from app.modules.avatars.presentation.schemas import AvatarResponse
 from app.modules.avatars.presentation.schemas.avatar import (
     ACCEPTED_FORMATS_TEXT,
@@ -78,6 +83,14 @@ _NOT_FOUND: Responses = error_response(
     404,
     "This account has no avatar.",
 )
+_TOO_MANY_REQUESTS: Responses = error_response(
+    429,
+    (
+        "Too many avatar uploads from this account. Counted **per user**, not per "
+        "network address, so a shared connection is never somebody else's problem. "
+        "`Retry-After` says how long to wait."
+    ),
+)
 _UNPROCESSABLE: Responses = error_response(
     422,
     (
@@ -94,7 +107,8 @@ _UNPROCESSABLE: Responses = error_response(
     status_code=status.HTTP_200_OK,
     summary="Upload or replace your avatar",
     response_description="The avatar as it now stands, with its stored dimensions.",
-    responses={**_UNAUTHORIZED, **_UNPROCESSABLE},
+    responses={**_UNAUTHORIZED, **_UNPROCESSABLE, **_TOO_MANY_REQUESTS},
+    dependencies=[Depends(enforce_avatar_upload_limit)],
 )
 async def upload_avatar(
     user: CurrentUser,

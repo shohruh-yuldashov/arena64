@@ -44,6 +44,7 @@ from app.modules.users.domain.value_objects import (
     Timezone,
     Username,
 )
+from app.modules.users.domain.visibility import VisibilityLevel
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
 from tests.contract.contract_app import build_contract_app, contract_client
 
@@ -378,7 +379,10 @@ class TestPrivacyRespected:
     ) -> None:
         tag = uuid4().hex[:8]
         player = await make_player(contract_session, username=f"ghost{tag}")
-        player.privacy = player.privacy.updated(show_online_status=False, show_last_seen=False)
+        player.privacy = player.privacy.updated(
+            online_status=VisibilityLevel.NOBODY,
+            last_seen=VisibilityLevel.NOBODY,
+        )
         await SqlAlchemyUserRepository(contract_session).update(player)
         await contract_session.flush()
 

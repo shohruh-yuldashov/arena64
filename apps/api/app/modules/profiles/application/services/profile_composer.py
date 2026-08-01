@@ -57,7 +57,12 @@ from app.modules.profiles.application.ports import RatingProvider, StatisticsPro
 from app.modules.profiles.domain.profile import PublicProfile
 from app.modules.profiles.domain.ratings import PlayerRatings
 from app.modules.statistics.public import PlayerStatistics
-from app.modules.users.public import Presence, PresenceProvider, PublicUserProfile
+from app.modules.users.public import (
+    Presence,
+    PresenceProvider,
+    PublicUserProfile,
+    ViewerRelationship,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +86,12 @@ class PublicProfileComposer:
         self._statistics = statistics
         self._presence = presence
 
-    async def compose(self, identity: PublicUserProfile) -> PublicProfile:
+    async def compose(
+        self,
+        identity: PublicUserProfile,
+        *,
+        viewer: ViewerRelationship = ViewerRelationship.STRANGER,
+    ) -> PublicProfile:
         """One player, through the singular providers.
 
         The path `GET /profiles/{username}` takes. Reads are sequential
@@ -98,7 +108,7 @@ class PublicProfileComposer:
         )
 
         presence: Presence | None = None
-        if _wants_presence(identity):
+        if _wants_presence(identity, viewer):
             presence = await self._presence.presence_for(identity.id)
             logger.debug(
                 "presence_lookup",
@@ -107,9 +117,16 @@ class PublicProfileComposer:
         else:
             logger.debug("presence_lookup_skipped", extra={"user_id": str(identity.id)})
 
-        return _assemble(identity, ratings=ratings, statistics=statistics, presence=presence)
+        return _assemble(
+            identity, ratings=ratings, statistics=statistics, presence=presence, viewer=viewer
+        )
 
-    async def compose_many(self, identities: Sequence[PublicUserProfile]) -> list[PublicProfile]:
+    async def compose_many(
+        self,
+        identities: Sequence[PublicUserProfile],
+        *,
+        viewer: ViewerRelationship = ViewerRelationship.STRANGER,
+    ) -> list[PublicProfile]:
         """A page of players, in a fixed number of round trips.
 
         **Three reads for any page size**, and the count does not grow with
@@ -134,7 +151,7 @@ class PublicProfileComposer:
             return []
 
         statistics_ids = [one.id for one in identities if one.visibility.statistics]
-        presence_ids = [one.id for one in identities if _wants_presence(one)]
+        presence_ids = [one.id for one in identities if _wants_presence(one, viewer)]
 
         statistics = await self._statistics.statistics_for_many(statistics_ids)
         presence = await self._presence.presence_for_many(presence_ids)
@@ -163,13 +180,14 @@ class PublicProfileComposer:
                 # their record was never in that list.
                 statistics=statistics.get(identity.id),
                 presence=presence.get(identity.id),
+                viewer=viewer,
             )
             for identity in identities
         ]
 
 
-def _wants_presence(identity: PublicUserProfile) -> bool:
-    """Whether either presence field is visible for this player.
+def _wants_presence(identity: PublicUserProfile, viewer: ViewerRelationship) -> bool:
+    """Whether either presence field is visible to `viewer`.
 
     One read serves two flags. `show_online_status` and `show_last_seen`
     govern different fields of the same record and have different defaults
@@ -183,7 +201,7 @@ def _wants_presence(identity: PublicUserProfile) -> bool:
     from the great majority of accounts running on the defaults.
     """
     visibility = identity.visibility
-    return visibility.online_status or visibility.last_seen
+    return visibility.online_status.permits(viewer) or visibility.last_seen.permits(viewer)
 
 
 def _assemble(
@@ -192,6 +210,7 @@ def _assemble(
     ratings: PlayerRatings,
     statistics: PlayerStatistics | None,
     presence: Presence | None,
+    viewer: ViewerRelationship,
 ) -> PublicProfile:
     """**The gate.** The one place a privacy flag becomes a `None`.
 
@@ -222,6 +241,10 @@ def _assemble(
         # the platform defaults produce — gets `is_online` and a `None`
         # `last_seen`, and nothing in the response says which of the four
         # reasons for that `None` applies.
-        last_seen=presence.last_seen if presence and visibility.last_seen else None,
-        is_online=presence.is_online if presence and visibility.online_status else None,
+        last_seen=(
+            presence.last_seen if presence and visibility.last_seen.permits(viewer) else None
+        ),
+        is_online=(
+            presence.is_online if presence and visibility.online_status.permits(viewer) else None
+        ),
     )

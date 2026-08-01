@@ -129,6 +129,15 @@ class UserRepository(Protocol):
         obligation with its own request record — not this method."""
         ...
 
+    async def get_active_by_ids(self, user_ids: Sequence[UUID]) -> Sequence[User]:
+        """The active accounts among `user_ids`, in one query — A64-013.2.
+
+        Batched because its callers render a page of players at once.
+        Filters `is_active` because `users` owns that rule and every
+        consumer of this method serves a public view.
+        """
+        ...
+
     async def list(
         self,
         params: CursorPageParams,

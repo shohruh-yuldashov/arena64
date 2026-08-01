@@ -774,6 +774,60 @@ class RateLimitSettings(BaseSettings):
     search_user_limit: int = Field(default=30, ge=1)
     search_window_seconds: int = Field(default=60, ge=1)
 
+    # --- friend requests (A64-013.2) -----------------------------------------
+    # Both **per authenticated user**, and the dimension is doing more work
+    # than on the settings endpoints: what these bound is *harassment*, not
+    # load. FR-1 already stops a second pending request to the same person,
+    # so an attacker's remaining move is to spray requests at many people —
+    # which only a per-account budget counts. Per-IP would let a botnet
+    # spread it and would throttle a campus network for one student.
+    #
+    # 20 sends per hour is chosen rather than given, and is set against the
+    # legitimate pattern: adding the people you know is a burst of a handful
+    # in one sitting and then almost nothing. Twenty absorbs a new player
+    # working through a search page; it does not absorb a script, and it is
+    # low enough that reaching it is itself a signal worth alerting on.
+    friend_request_send_user_limit: int = Field(default=20, ge=1)
+    friend_request_send_window_seconds: int = Field(default=60 * 60, ge=1)
+
+    # Accept, decline and cancel share one counter. None can reach a request
+    # the caller is not party to, so this bounds a stuck client rather than
+    # an attacker — hence the far looser figure and the short window.
+    friend_request_respond_user_limit: int = Field(default=60, ge=1)
+    friend_request_respond_window_seconds: int = Field(default=5 * 60, ge=1)
+
+    # --- GET /profiles/{username} --------------------------------------------
+    # **Per IP**, and it has to be: the endpoint is anonymous by design, so
+    # there is no account to count. A64-013.2 asks for this endpoint to be
+    # migrated to "the correct rate limiting", and for an unauthenticated
+    # read the correct dimension is the only one available.
+    #
+    # It is the platform's most enumerable surface — a username at a time —
+    # and until now it was unlimited, which the last three tasks each flagged
+    # as debt. 120 per minute is deliberately generous: a profile page is a
+    # normal thing to open repeatedly, and a server-rendered page under AD-24
+    # may fetch several per view. What it stops is a scraper walking a
+    # dictionary of handles, which needs orders of magnitude more.
+    #
+    # Behind a proxy this is only meaningful with `trusted_proxy_count` set
+    # correctly — see that setting, whose two wrong values are both severe.
+    profile_read_ip_limit: int = Field(default=120, ge=1)
+    profile_read_window_seconds: int = Field(default=60, ge=1)
+
+    # --- POST /profile/avatar ------------------------------------------------
+    # **Per user**, because it is authenticated — the correct dimension for a
+    # write behind a token, and the one A64-013.2 asks these endpoints be
+    # migrated to.
+    #
+    # This is the most expensive operation on the platform per call: a decode
+    # and two encodes, on bytes a caller supplies. 10 per hour is generous
+    # against the legitimate pattern (people change their avatar rarely, and
+    # a few times in a row when they are fiddling with it) and is the
+    # tightest limit on the platform against the thing it actually risks,
+    # which is CPU amplification from an account that costs one registration.
+    avatar_upload_user_limit: int = Field(default=10, ge=1)
+    avatar_upload_window_seconds: int = Field(default=60 * 60, ge=1)
+
 
 class StatisticsSettings(BaseSettings):
     """`statistics` — the competitive-record projection (A64-012.6).

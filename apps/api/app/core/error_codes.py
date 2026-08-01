@@ -62,6 +62,19 @@ class ErrorCode(StrEnum):
     USERNAME_ALREADY_EXISTS = "username_already_exists"
     EMAIL_ALREADY_EXISTS = "email_already_exists"
 
+    # --- friends (A64-013.2) -------------------------------------------------
+    # Two codes for two `409`s on the same endpoint, which is exactly when
+    # the rule above grants one: `POST /friends/requests` can conflict for
+    # two reasons and the client's next move is different for each.
+    #
+    #   DUPLICATE_FRIEND_REQUEST          you already asked — nothing to do
+    #   OPPOSITE_FRIEND_REQUEST_PENDING   they asked you — accept that instead
+    #
+    # The second is genuinely actionable UI, and a client cannot derive it
+    # from the status and the path.
+    DUPLICATE_FRIEND_REQUEST = "duplicate_friend_request"
+    OPPOSITE_FRIEND_REQUEST_PENDING = "opposite_friend_request_pending"
+
     # `auth` / `users` (A64-011.1): registration submits three fields at
     # once, and a bare `validation_error` leaves a form with no way to know
     # which of them to mark. These three are the same rule as above applied

@@ -60,10 +60,10 @@ from app.database.base import Base
 from app.database.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 from app.database.types import UtcDateTime
 from app.modules.users.domain.privacy import (
-    DEFAULT_SHOW_ACTIVITY,
+    DEFAULT_ACTIVITY,
+    DEFAULT_LAST_SEEN,
+    DEFAULT_ONLINE_STATUS,
     DEFAULT_SHOW_COUNTRY,
-    DEFAULT_SHOW_LAST_SEEN,
-    DEFAULT_SHOW_ONLINE_STATUS,
     DEFAULT_SHOW_STATISTICS,
 )
 from app.modules.users.domain.validators import (
@@ -76,8 +76,30 @@ from app.modules.users.domain.validators import (
     USERNAME_MAX_LENGTH,
     USERNAME_MIN_LENGTH,
 )
+from app.modules.users.domain.visibility import VisibilityLevel
 
 USERS_SCHEMA = "users"
+
+
+#: `users.audience` — database.md §491's enum, declared once and shared by
+#: the three columns below.
+#:
+#: One `PgEnum` object rather than three, because SQLAlchemy emits a
+#: `CREATE TYPE` per distinct instance: three would try to create the same
+#: type three times and fail on the second. `create_type=False` is
+#: deliberately *not* set — `create_all` must be able to produce it for the
+#: contract suite, and migrations create it explicitly before this ever
+#: runs.
+#:
+#: `values_callable` stores the member *values* (`"everyone"`), not the
+#: Python member names (`"EVERYONE"`), matching every other enum column on
+#: the platform and what database.md specifies.
+_AUDIENCE_ENUM = PgEnum(
+    VisibilityLevel,
+    name="audience",
+    schema=USERS_SCHEMA,
+    values_callable=lambda enum_cls: [member.value for member in enum_cls],
+)
 
 
 def _sql_bool(value: bool) -> str:
@@ -299,17 +321,32 @@ class UserModel(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     show_country: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text(_sql_bool(DEFAULT_SHOW_COUNTRY))
     )
-    show_last_seen: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text(_sql_bool(DEFAULT_SHOW_LAST_SEEN))
-    )
     show_statistics: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text(_sql_bool(DEFAULT_SHOW_STATISTICS))
     )
-    show_online_status: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text(_sql_bool(DEFAULT_SHOW_ONLINE_STATUS))
+
+    # --- audience-valued visibility (A64-013.2) ------------------------------
+    #
+    # Three columns widened from `boolean` to `users.audience`, which is the
+    # enum database.md §491 has specified since before any of them existed
+    # (`everyone`, `friends`, `nobody`). A native PostgreSQL enum rather
+    # than a varchar for DB-15's reason and one specific to this table:
+    # these columns are read on every profile render, so four bytes beats a
+    # string, and a closed type is what stops a typo from becoming a value
+    # no read path knows how to evaluate.
+    #
+    # The three keep their `NOT NULL` and their defaults — widened from the
+    # booleans they replace, so no row's meaning changed. See migration
+    # `c4e8b1a29f37` for the conversion and `domain/visibility.py` for why
+    # exactly these three.
+    last_seen_visibility: Mapped[VisibilityLevel] = mapped_column(
+        _AUDIENCE_ENUM, nullable=False, server_default=DEFAULT_LAST_SEEN.value
     )
-    show_activity: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text(_sql_bool(DEFAULT_SHOW_ACTIVITY))
+    online_status_visibility: Mapped[VisibilityLevel] = mapped_column(
+        _AUDIENCE_ENUM, nullable=False, server_default=DEFAULT_ONLINE_STATUS.value
+    )
+    activity_visibility: Mapped[VisibilityLevel] = mapped_column(
+        _AUDIENCE_ENUM, nullable=False, server_default=DEFAULT_ACTIVITY.value
     )
 
     # --- gameplay preferences (A64-012.5) -----------------------------------

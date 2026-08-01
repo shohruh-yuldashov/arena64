@@ -34,14 +34,35 @@ privacy API should make implicitly. Omit a flag to leave it alone.
 from pydantic import Field, model_validator
 
 from app.core.dto import BaseRequestDTO, BaseResponseDTO
-from app.modules.users.public import PrivacySettingsView
+from app.modules.users.public import PrivacySettingsView, VisibilityLevel
 
-_FLAGS = (
+#: Every settable key, including the three deprecated booleans. The `null`
+#: rejection below walks this list, so a field added to the request schema
+#: and not to this tuple would silently accept `null`.
+_SETTINGS = (
     "show_country",
-    "show_last_seen",
     "show_statistics",
+    "last_seen",
+    "online_status",
+    "activity",
+    "show_last_seen",
     "show_online_status",
     "show_activity",
+)
+
+#: The three settings a client may send in either of two spellings —
+#: A64-013.2's audience field, or the boolean it replaced.
+#:
+#: Sending both for the same setting is a `422` rather than a precedence
+#: rule. Any precedence rule is a coin flip from the client's point of view:
+#: `{"last_seen": "friends", "show_last_seen": true}` is a request with two
+#: incompatible intentions, and silently honouring one would leave the
+#: caller believing it had set the other. On a privacy endpoint that is the
+#: failure mode with real consequences.
+_AUDIENCE_ALIASES = (
+    ("last_seen", "show_last_seen"),
+    ("online_status", "show_online_status"),
+    ("activity", "show_activity"),
 )
 
 
@@ -65,13 +86,28 @@ class PrivacySettingsUpdateRequest(BaseRequestDTO):
         ),
         examples=[True],
     )
-    show_last_seen: bool | None = Field(
+    last_seen: VisibilityLevel | None = Field(
         default=None,
         description=(
-            "Whether the time you were last online is shown. **Default: `false`** "
-            "— the only one of the five that is off by default. A last-seen time "
-            "published continuously reveals a sleep schedule and a working "
-            "pattern, and unlike the others it is observed rather than declared."
+            "Who may see the time you were last online. **Default: `nobody`** — the "
+            "only one of the five that is closed by default. A last-seen time "
+            "published continuously reveals a sleep schedule and a working pattern, "
+            "and unlike the others it is observed rather than declared.\n\n"
+            "`friends` is accepted and stored, and currently behaves as `nobody`: "
+            "friendships do not exist until A64-013.3, so no viewer can be a friend "
+            "yet. That is the safe direction, and it is stated rather than silently "
+            "rejected so a client can set the value it means today."
+        ),
+        examples=["nobody"],
+    )
+    show_last_seen: bool | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "**Deprecated — send `last_seen` instead.** Accepted for clients written "
+            "before A64-013.2: `true` sets `everyone`, `false` sets `nobody`. Sending "
+            "both this and `last_seen` is a `422`, because two incompatible "
+            "intentions in one request must not be resolved by a coin flip."
         ),
         examples=[False],
     )
@@ -85,22 +121,34 @@ class PrivacySettingsUpdateRequest(BaseRequestDTO):
         ),
         examples=[True],
     )
-    show_online_status: bool | None = Field(
+    online_status: VisibilityLevel | None = Field(
         default=None,
         description=(
-            "Whether other players can see that you are online right now. Stored "
-            "and honoured, but nothing publishes presence yet — the setting is "
-            "here so it is already yours when that ships. Default: `true`."
+            "Who may see that you are online right now. Stored and honoured, but "
+            "nothing publishes presence yet — the setting is here so it is already "
+            "yours when that ships. Default: `everyone`."
         ),
+        examples=["everyone"],
+    )
+    show_online_status: bool | None = Field(
+        default=None,
+        deprecated=True,
+        description="**Deprecated — send `online_status` instead.** See `show_last_seen`.",
         examples=[True],
+    )
+    activity: VisibilityLevel | None = Field(
+        default=None,
+        description=(
+            "Who may see your recent activity — match history, activity feed. Stored "
+            "and honoured ahead of the feature it governs, as `online_status` is. "
+            "Default: `everyone`."
+        ),
+        examples=["everyone"],
     )
     show_activity: bool | None = Field(
         default=None,
-        description=(
-            "Whether your recent activity — match history, activity feed — is "
-            "shown. Stored and honoured ahead of the feature it governs, as "
-            "`show_online_status` is. Default: `true`."
-        ),
+        deprecated=True,
+        description="**Deprecated — send `activity` instead.** See `show_last_seen`.",
         examples=[True],
     )
 
@@ -130,10 +178,51 @@ class PrivacySettingsUpdateRequest(BaseRequestDTO):
         `null` would leave the caller believing a toggle applied.
         """
         sent = self.model_fields_set
-        for flag in _FLAGS:
-            if flag in sent and getattr(self, flag) is None:
-                raise ValueError(f"{flag} cannot be null; send true or false, or omit it")
+        for setting in _SETTINGS:
+            if setting in sent and getattr(self, setting) is None:
+                raise ValueError(f"{setting} cannot be null; send a value, or omit it")
         return self
+
+    @model_validator(mode="after")
+    def _reject_conflicting_spellings(self) -> "PrivacySettingsUpdateRequest":
+        """One setting, one spelling per request — A64-013.2.
+
+        A body carrying both `last_seen` and `show_last_seen` states two
+        intentions for one column, and there is no correct way to pick
+        between them. Precedence would be a coin flip from the client's
+        side; on a privacy endpoint that means a caller believing it hid
+        something it published.
+        """
+        sent = self.model_fields_set
+        for audience, legacy in _AUDIENCE_ALIASES:
+            if audience in sent and legacy in sent:
+                raise ValueError(
+                    f"send either {audience} or {legacy}, not both — "
+                    f"{legacy} is deprecated and {audience} replaces it"
+                )
+        return self
+
+    def resolved(self, audience: str, legacy: str) -> VisibilityLevel | None:
+        """The level a caller asked for, whichever spelling they used.
+
+        `None` when neither key was sent, which the router turns into
+        `UNSET` — the partial-update signal. Living on the schema rather
+        than in the router because the pairing of the two field names is
+        this shape's business, and the router should not have to know that
+        a legacy spelling exists at all.
+
+        The two validators above have already ruled out `null` and the
+        both-sent case, so this is total: at most one of the two is set,
+        and if it is the boolean it widens through the same `of` the
+        migration used.
+        """
+        sent = self.model_fields_set
+        if audience in sent:
+            level: VisibilityLevel | None = getattr(self, audience)
+            return level
+        if legacy in sent:
+            return VisibilityLevel.of(visible=bool(getattr(self, legacy)))
+        return None
 
 
 class PrivacySettingsResponse(BaseResponseDTO):
@@ -155,12 +244,23 @@ class PrivacySettingsResponse(BaseResponseDTO):
         description="Whether your country is shown on your public profile.",
         examples=[True],
     )
-    show_last_seen: bool = Field(
+    last_seen: VisibilityLevel = Field(
         description=(
-            "Whether the time you were last online is shown, as `last_seen` on your "
-            "public profile. `false` unless you turned it on — the one setting here "
-            "that is off by default, because a published timestamp is a sleep "
-            "schedule while 'online now' is momentary."
+            "Who may see the time you were last online, as `last_seen` on your public "
+            "profile. `nobody` unless you changed it — the one setting here that is "
+            "closed by default, because a published timestamp is a sleep schedule "
+            "while 'online now' is momentary."
+        ),
+        examples=["nobody"],
+    )
+    show_last_seen: bool = Field(
+        deprecated=True,
+        description=(
+            "**Deprecated — read `last_seen` instead.** `true` only when `last_seen` "
+            "is `everyone`; a friends-only setting reads as `false` here, because "
+            "this field asks whether *anybody* may see it. Retained so clients "
+            "written before A64-013.2 keep working, and removed no earlier than the "
+            "next API version."
         ),
         examples=[False],
     )
@@ -171,22 +271,32 @@ class PrivacySettingsResponse(BaseResponseDTO):
         ),
         examples=[True],
     )
-    show_online_status: bool = Field(
+    online_status: VisibilityLevel = Field(
         description=(
-            "Whether other players can see that you are online, as `is_online` on "
-            "your public profile. Governs the indicator only — `show_last_seen` "
-            "governs the timestamp beside it, separately."
+            "Who may see that you are online, as `is_online` on your public profile. "
+            "Governs the indicator only — `last_seen` governs the timestamp beside "
+            "it, separately."
         ),
+        examples=["everyone"],
+    )
+    show_online_status: bool = Field(
+        deprecated=True,
+        description="**Deprecated — read `online_status` instead.** See `show_last_seen`.",
         examples=[True],
     )
-    show_activity: bool = Field(
+    activity: VisibilityLevel = Field(
         description=(
-            "Whether your recent activity is shown. **Stored but not yet applied "
+            "Who may see your recent activity. **Stored but not yet applied "
             "anywhere** — no endpoint publishes activity, so changing this has no "
             "visible effect until a match history exists. Settable now so that the "
-            "release which adds one is not also the release that decides whether it "
-            "is public."
+            "release which adds one is not also the release that decides who may "
+            "read it."
         ),
+        examples=["everyone"],
+    )
+    show_activity: bool = Field(
+        deprecated=True,
+        description="**Deprecated — read `activity` instead.** See `show_last_seen`.",
         examples=[True],
     )
 
@@ -195,8 +305,17 @@ class PrivacySettingsResponse(BaseResponseDTO):
             "examples": [
                 {
                     "show_country": True,
-                    "show_last_seen": False,
                     "show_statistics": True,
+                    # The audience-valued settings, at the platform
+                    # defaults. `last_seen` is the one that is closed out of
+                    # the box.
+                    "last_seen": "nobody",
+                    "online_status": "everyone",
+                    "activity": "everyone",
+                    # The deprecated booleans, derived from the three above
+                    # and shown so a client reading the old fields sees what
+                    # they now report.
+                    "show_last_seen": False,
                     "show_online_status": True,
                     "show_activity": True,
                 }
@@ -217,8 +336,17 @@ class PrivacySettingsResponse(BaseResponseDTO):
         """
         return cls(
             show_country=settings.show_country,
-            show_last_seen=settings.show_last_seen,
             show_statistics=settings.show_statistics,
-            show_online_status=settings.show_online_status,
-            show_activity=settings.show_activity,
+            # The audience-valued settings, and the deprecated booleans
+            # **derived** from them. Deriving rather than storing both is
+            # what keeps the two from disagreeing: `is_public` is the single
+            # definition of "does the boolean say true", and a client
+            # reading the old field sees `false` for a friends-only setting
+            # — which is the honest answer to the question that field asks.
+            last_seen=settings.last_seen,
+            online_status=settings.online_status,
+            activity=settings.activity,
+            show_last_seen=settings.last_seen.is_public,
+            show_online_status=settings.online_status.is_public,
+            show_activity=settings.activity.is_public,
         )

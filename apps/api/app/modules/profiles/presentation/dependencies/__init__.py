@@ -62,6 +62,9 @@ from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.profiles.application.ports import RatingProvider, StatisticsProvider
 from app.modules.profiles.application.services import ProfileService
 from app.modules.profiles.application.services.profile_composer import PublicProfileComposer
+from app.modules.profiles.application.services.profile_directory_service import (
+    ProfileDirectoryService,
+)
 from app.modules.profiles.application.services.profile_search_service import ProfileSearchService
 from app.modules.profiles.infrastructure import (
     DatabaseStatisticsProvider,
@@ -383,6 +386,30 @@ def get_profile_service(
     )
 
 
+def get_profile_directory(
+    profiles: PublicProfileReaderDep,
+    composer: ProfileComposerDep,
+) -> ProfileDirectoryService:
+    """Player ids to composed public profiles — A64-013.2.
+
+    Exported for **other modules** to depend on, which is what separates it
+    from the four factories above. `friends` renders a page of players it
+    knows only by id, and this is how it does so without rebuilding
+    composition: one dependency, four round trips per page, and the same
+    privacy gate `GET /profiles/{username}` applies.
+
+    Reached through `presentation/dependencies` rather than a `public/`
+    port, matching how `avatars.presentation.dependencies.AvatarLinkBuilderDep`
+    is already consumed by three modules. A composition root is the one
+    place permitted to know how to construct things, and a `Depends` factory
+    is that root's vocabulary.
+    """
+    return ProfileDirectoryService(profiles=profiles, composer=composer)
+
+
+ProfileDirectoryDep = Annotated[ProfileDirectoryService, Depends(get_profile_directory)]
+
+
 def get_profile_search_service(
     searcher: PublicProfileSearcherDep,
     composer: ProfileComposerDep,
@@ -409,6 +436,7 @@ __all__ = [
     "PrivacySettingsEditorDep",
     "ProfileEditorDep",
     "ProfileComposerDep",
+    "ProfileDirectoryDep",
     "ProfileSearchServiceDep",
     "ProfileServiceDep",
     "PublicProfileSearcherDep",
@@ -420,6 +448,7 @@ __all__ = [
     "get_privacy_settings_editor",
     "get_profile_editor",
     "get_profile_composer",
+    "get_profile_directory",
     "get_profile_search_service",
     "get_profile_service",
     "get_public_profile_searcher",

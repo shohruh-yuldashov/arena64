@@ -56,6 +56,12 @@ What is published, and why only this much:
                          than a Pydantic DTO, because `profiles.domain`
                          holds it and a domain layer must not import a
                          framework (architecture.md §8)
+  `VisibilityLevel`      who a profile field is published to — `everyone`,
+                         `friends`, `nobody` (A64-013.2). Published because
+                         `ProfileVisibility` and `PrivacySettingsView` are
+                         defined in terms of it (BR-2)
+  `ViewerRelationship`   what the caller is to the player being read.
+                         Computed per request, never stored
   `DeviceType`           the closed set `Presence.device_type` is defined
                          in terms of, published because BR-2 requires a
                          published shape's field types to be published too.
@@ -116,6 +122,7 @@ from app.modules.users.domain.preferences import (
     PieceSet,
 )
 from app.modules.users.domain.presence import DeviceType, Presence
+from app.modules.users.domain.visibility import ViewerRelationship, VisibilityLevel
 from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import (
     AvatarReference,
@@ -170,6 +177,8 @@ __all__ = [
     "AvatarReference",
     "AvatarStore",
     "DeviceType",
+    "ViewerRelationship",
+    "VisibilityLevel",
     "OwnUserProfile",
     "ProfileEditor",
     "ProfileEdits",

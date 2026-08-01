@@ -158,10 +158,10 @@ class SqlAlchemyUserRepository:
             # Every consumer above this line takes the group or none of it.
             privacy=PrivacySettings(
                 show_country=row.show_country,
-                show_last_seen=row.show_last_seen,
                 show_statistics=row.show_statistics,
-                show_online_status=row.show_online_status,
-                show_activity=row.show_activity,
+                last_seen=row.last_seen_visibility,
+                online_status=row.online_status_visibility,
+                activity=row.activity_visibility,
             ),
             locked_until=row.locked_until,
         )
@@ -190,10 +190,10 @@ class SqlAlchemyUserRepository:
             country_code=user.country.value if user.country else None,
             gameplay_preferences=user.preferences.gameplay.as_document(),
             show_country=user.privacy.show_country,
-            show_last_seen=user.privacy.show_last_seen,
+            last_seen_visibility=user.privacy.last_seen,
             show_statistics=user.privacy.show_statistics,
-            show_online_status=user.privacy.show_online_status,
-            show_activity=user.privacy.show_activity,
+            online_status_visibility=user.privacy.online_status,
+            activity_visibility=user.privacy.activity,
             locked_until=user.locked_until,
         )
 
@@ -222,10 +222,10 @@ class SqlAlchemyUserRepository:
         row.country_code = user.country.value if user.country else None
         row.gameplay_preferences = user.preferences.gameplay.as_document()
         row.show_country = user.privacy.show_country
-        row.show_last_seen = user.privacy.show_last_seen
+        row.last_seen_visibility = user.privacy.last_seen
         row.show_statistics = user.privacy.show_statistics
-        row.show_online_status = user.privacy.show_online_status
-        row.show_activity = user.privacy.show_activity
+        row.online_status_visibility = user.privacy.online_status
+        row.activity_visibility = user.privacy.activity
         row.locked_until = user.locked_until
 
     # --- error translation --------------------------------------------------
@@ -302,6 +302,34 @@ class SqlAlchemyUserRepository:
     async def exists_by_email(self, email: Email) -> bool:
         statement = select(exists().where(UserModel.email == email.value))
         return bool(await self._session.scalar(statement))
+
+    async def get_active_by_ids(self, user_ids: Sequence[UUID]) -> Sequence[User]:
+        """The **active** accounts among `user_ids`, in one query.
+
+        Primary-key lookups batched with `IN`, so PostgreSQL probes the
+        index once per id rather than scanning — the same access pattern as
+        `get_by_id`, without the round trips.
+
+        Filters `is_active` here rather than leaving it to the caller,
+        because every consumer of this method serves a public view and
+        `users` owns the rule. A withdrawn account is simply absent, which
+        is the same answer `get_by_username` gives through
+        `PublicProfileService`.
+
+        Order is not specified and callers must not rely on it: they hold
+        their own ordering — a friend-request list is ordered by when the
+        request arrived, not by anything about the player.
+        """
+        if not user_ids:
+            return []
+
+        rows = await self._session.scalars(
+            select(UserModel).where(
+                UserModel.id.in_(user_ids),
+                UserModel.is_active.is_(True),
+            )
+        )
+        return [self._to_domain(row) for row in rows]
 
     async def list(
         self,

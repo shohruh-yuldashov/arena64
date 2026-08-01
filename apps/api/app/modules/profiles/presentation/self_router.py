@@ -74,10 +74,11 @@ from app.modules.profiles.presentation.dependencies import (
     PreferencesEditorDep,
     PrivacySettingsEditorDep,
     ProfileEditorDep,
+    ProfileServiceDep,
 )
 from app.modules.profiles.presentation.rate_limits import (
-    PRIVACY_UPDATE_RATE_LIMIT,
     enforce_preferences_update_limit,
+    enforce_privacy_update_limit,
 )
 from app.modules.profiles.presentation.schemas import (
     GameplayPreferencesUpdate,
@@ -140,6 +141,7 @@ _UNPROCESSABLE: _Responses = {
 async def get_my_profile(
     user: CurrentUser,
     editor: ProfileEditorDep,
+    profiles: ProfileServiceDep,
     avatar_links: AvatarLinkBuilderDep,
 ) -> ApiResponse[MyProfileResponse]:
     """Returns the authenticated account's own profile.
@@ -156,12 +158,20 @@ async def get_my_profile(
     fields. Together they are the two halves an account settings page
     needs.
 
+    Carries your **statistics**, always — `show_statistics` governs what a
+    stranger sees on `GET /profiles/{username}`, never what you see of
+    yourself (A64-012.6). A control that hid a record from the person who
+    hid it would be one nobody could verify they had set.
+
     Returns exactly the shape `PATCH /profile` returns, so a client can
     populate an edit form and render the result of a save with one parser.
     """
     profile = await editor.get_own_profile(user.id)
+    statistics = await profiles.get_own_statistics(user.id)
 
-    return build_response(MyProfileResponse.of(profile, avatar_links.links_for(profile.avatar)))
+    return build_response(
+        MyProfileResponse.of(profile, avatar_links.links_for(profile.avatar), statistics)
+    )
 
 
 @my_profile_router.patch(
@@ -175,6 +185,7 @@ async def update_my_profile(
     payload: ProfileUpdateRequest,
     user: CurrentUser,
     editor: ProfileEditorDep,
+    profiles: ProfileServiceDep,
     avatar_links: AvatarLinkBuilderDep,
 ) -> ApiResponse[MyProfileResponse]:
     """Applies a partial update to the authenticated account's profile.
@@ -247,7 +258,15 @@ async def update_my_profile(
         extra={"user_id": str(user.id), "updated_fields": sorted(sent)},
     )
 
-    return build_response(MyProfileResponse.of(profile, avatar_links.links_for(profile.avatar)))
+    # Read after the write, so the response is one coherent view of the
+    # account rather than an edited profile beside a record fetched before
+    # it. Nothing an edit can change touches statistics today, and reading
+    # it here means that stays true for free if something ever does.
+    statistics = await profiles.get_own_statistics(user.id)
+
+    return build_response(
+        MyProfileResponse.of(profile, avatar_links.links_for(profile.avatar), statistics)
+    )
 
 
 # --- privacy settings (A64-012.4) -------------------------------------------
@@ -317,7 +336,7 @@ async def get_my_privacy_settings(
     summary="Update your privacy settings",
     response_description="All five flags as they now stand.",
     responses={**_UNAUTHORIZED, **_NOT_FOUND, **_PRIVACY_UNPROCESSABLE, **_TOO_MANY_REQUESTS},
-    dependencies=[Depends(PRIVACY_UPDATE_RATE_LIMIT)],
+    dependencies=[Depends(enforce_privacy_update_limit)],
 )
 async def update_my_privacy_settings(
     payload: PrivacySettingsUpdateRequest,

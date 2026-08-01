@@ -1,4 +1,5 @@
-"""`ProfileService` — read a public profile by username.
+"""`ProfileService` — read a public profile by username, and read an
+owner's own record.
 
 Orchestrates; does not compute (services.md §3.2). Identity comes from
 `users` through a published port, ratings and counts from two more, and
@@ -63,10 +64,12 @@ comment at the call site says so.
 """
 
 import logging
+from uuid import UUID
 
 from app.modules.profiles.application.ports import RatingProvider, StatisticsProvider
 from app.modules.profiles.domain.exceptions import ProfileNotFound
 from app.modules.profiles.domain.profile import PublicProfile
+from app.modules.statistics.public import PlayerStatistics
 from app.modules.users.public import PublicProfileReader
 
 logger = logging.getLogger(__name__)
@@ -147,3 +150,35 @@ class ProfileService:
             # statistics read is, guarded the same way, and the flag is in
             # place waiting for it. See `PublicProfile.last_seen`.
         )
+
+    async def get_own_statistics(self, player_id: UUID) -> PlayerStatistics:
+        """The account holder's own record — **never redacted.**
+
+        A64-012.6: "only profile owners may always see their own
+        statistics." `show_statistics` governs what a *stranger* sees, and
+        a settings screen that hid a player's record from the player would
+        be a control nobody could verify they had set.
+
+        So this deliberately does not consult `visibility` and deliberately
+        takes a `player_id` rather than a username: the only caller is
+        `GET /profile/me`, which has already authenticated the id it passes
+        and cannot name a different one.
+
+        Reads through the same `StatisticsProvider` the public path uses,
+        which is what keeps the fallback honest — a deployment with
+        statistics switched off reports the empty record to owner and
+        stranger alike rather than only to one of them.
+
+        Never raises for a player with no history: the port returns the
+        empty record, which is the correct answer for a new account.
+        """
+        statistics = await self._statistics.statistics_for(player_id)
+
+        # Distinguishable from `profile_lookup_succeeded` above because the
+        # two answer different audit questions: that one is "somebody
+        # looked at this player", this one is "this player looked at
+        # themselves". Id only, no counts — the numbers are in the response
+        # the caller already holds (services.md §8.5).
+        logger.info("own_statistics_lookup", extra={"user_id": str(player_id)})
+
+        return statistics

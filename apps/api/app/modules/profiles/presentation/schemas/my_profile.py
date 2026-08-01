@@ -51,6 +51,8 @@ from pydantic import Field
 
 from app.core.dto import BaseRequestDTO, BaseResponseDTO
 from app.modules.avatars.public import AvatarLinks
+from app.modules.profiles.presentation.schemas.profile import StatisticsResponse
+from app.modules.statistics.public import PlayerStatistics
 from app.modules.users.domain.validators import (
     BIO_MAX_LENGTH,
     DISPLAY_NAME_MAX_LENGTH,
@@ -180,6 +182,15 @@ class MyProfileResponse(BaseResponseDTO):
         description="When your account was created, UTC.",
         examples=["2026-08-01T12:00:00Z"],
     )
+    statistics: StatisticsResponse = Field(
+        description=(
+            "Your competitive record. **Always present, never `null`** — "
+            "`show_statistics` governs what *strangers* see on "
+            "`GET /profiles/{username}`, not what you see of yourself. A "
+            "privacy control that hid a setting from the person who set it "
+            "would be one nobody could verify they had applied."
+        ),
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -193,19 +204,44 @@ class MyProfileResponse(BaseResponseDTO):
                     "avatar_url": None,
                     "thumbnail_url": None,
                     "joined_at": "2026-08-01T12:00:00Z",
+                    "statistics": {
+                        "games_played": 0,
+                        "wins": 0,
+                        "losses": 0,
+                        "draws": 0,
+                        "win_rate": 0.0,
+                        "current_rating": 1500,
+                        "highest_rating": 1500,
+                        "current_streak": 0,
+                        "best_win_streak": 0,
+                    },
                 }
             ]
         }
     }
 
     @classmethod
-    def of(cls, profile: OwnUserProfile, avatar: AvatarLinks | None) -> "MyProfileResponse":
+    def of(
+        cls,
+        profile: OwnUserProfile,
+        avatar: AvatarLinks | None,
+        statistics: PlayerStatistics,
+    ) -> "MyProfileResponse":
         """Renders the published owner view.
 
         Field by field rather than `model_validate(profile)`, for the
         reason `users.application.mappers` gives — and `avatar` arrives
         already rendered, so this schema holds no `StorageProvider` and
         knows no object-key layout, exactly as `ProfileResponse` does.
+
+        `statistics` arrives the same way: already read, through the same
+        `StatisticsProvider` the public path uses, and **unredacted**. This
+        schema holds no privacy flag it could apply and no provider it
+        could call — the owner-always-sees-their-own rule is a property of
+        who calls this, not a branch inside it.
+
+        Required rather than optional, unlike `ProfileResponse.statistics`.
+        The public shape has to express "hidden"; this one never does.
         """
         return cls(
             id=profile.id,
@@ -216,4 +252,5 @@ class MyProfileResponse(BaseResponseDTO):
             avatar_url=avatar.avatar_url if avatar else None,
             thumbnail_url=avatar.thumbnail_url if avatar else None,
             joined_at=profile.created_at,
+            statistics=StatisticsResponse.of(statistics),
         )

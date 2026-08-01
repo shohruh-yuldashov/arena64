@@ -404,6 +404,8 @@ class TestReadOwnProfile:
         # No `language` and no `timezone` since A64-012.5: this response
         # reports the fields `PATCH /profile` can change, and it can no
         # longer change those two. `GET /profile/preferences` has them.
+        # `statistics` since A64-012.6: an owner always sees their own
+        # record, whatever `show_statistics` says about strangers.
         assert set(data) == {
             "id",
             "username",
@@ -413,6 +415,7 @@ class TestReadOwnProfile:
             "avatar_url",
             "thumbnail_url",
             "joined_at",
+            "statistics",
         }
 
     async def test_no_view_of_a_profile_publishes_a_timezone(

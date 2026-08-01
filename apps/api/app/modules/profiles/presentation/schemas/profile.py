@@ -38,6 +38,7 @@ from app.core.enums import Locale
 from app.modules.avatars.public import AvatarLinks
 from app.modules.profiles.domain.profile import PublicProfile
 from app.modules.profiles.domain.ratings import RatingCategory, RatingSnapshot
+from app.modules.statistics.public import PlayerStatistics
 from app.modules.users.domain.validators import BIO_MAX_LENGTH
 
 
@@ -120,7 +121,21 @@ class RatingsResponse(BaseResponseDTO):
 
 
 class StatisticsResponse(BaseResponseDTO):
-    """A player's aggregate match record, across every category."""
+    """A player's aggregate competitive record, across every category.
+
+    Rendered wherever a record is shown: on `GET /profiles/{username}` for
+    a player who has not hidden it, and on `GET /profile/me` always. One
+    schema for both, so the two views cannot drift into reporting different
+    fields for the same numbers.
+
+    A64-012.6 widened this from four counts to nine fields. Every addition
+    is a value the `statistics` projection stores; nothing here is computed
+    by this module and nothing is computed by `profiles`.
+
+    `.of()` below is the single mapping. It takes the published
+    `PlayerStatistics` and names every field, so a field added to that
+    value object never reaches an anonymous response by accident.
+    """
 
     games_played: int = Field(
         description="Matches finished, rated and unrated, in every category.",
@@ -135,10 +150,71 @@ class StatisticsResponse(BaseResponseDTO):
             "**Draws are in the denominator**, so this is the proportion of "
             "games won rather than a chess score percentage — a player with "
             "40 wins, 40 draws and 20 losses has a `win_rate` of `0.4`. "
-            "`0.0` for a player who has finished no matches."
+            "`0.0` for a player who has finished no matches. Derived on read, "
+            "never stored — a stored copy can disagree with the counts printed "
+            "beside it."
         ),
         examples=[0.0],
     )
+    current_rating: int = Field(
+        description=(
+            "The player's headline rating. **Read it together with the "
+            "`ratings` block**, which reports the same player per speed "
+            "category and marks a provisional rating as provisional; this "
+            "single number carries no such marker yet because nothing "
+            "computes it. Both start at 1500 for a player who has never "
+            "played."
+        ),
+        examples=[1500],
+    )
+    highest_rating: int = Field(
+        description=(
+            "The highest rating this player has ever held. Never below "
+            "`current_rating`. Equal to it for a player who has never played."
+        ),
+        examples=[1500],
+    )
+    current_streak: int = Field(
+        description=(
+            "The active run, **signed**: positive counts consecutive wins, "
+            "negative counts consecutive losses, `0` means the last finished "
+            "match was a draw or there is no history. One number rather than a "
+            "length plus a kind, so the two can never disagree."
+        ),
+        examples=[0],
+    )
+    best_win_streak: int = Field(
+        description=(
+            "The longest run of consecutive wins this player has ever had. "
+            "Never negative — there is no losing equivalent."
+        ),
+        examples=[0],
+    )
+
+    @classmethod
+    def of(cls, statistics: PlayerStatistics) -> "StatisticsResponse":
+        """Renders the published record.
+
+        Field by field rather than `model_validate(statistics)`, for the
+        reason `users.application.mappers` gives: this shape is served to
+        anonymous callers, and an implicit conversion would publish
+        whatever the `statistics` context adds next — a source watermark, a
+        rebuild timestamp, an opponent id — without anyone deciding to.
+        """
+        return cls(
+            games_played=statistics.games_played,
+            wins=statistics.wins,
+            losses=statistics.losses,
+            draws=statistics.draws,
+            # Computed by the domain, never stored — see
+            # `statistics.domain.statistics` on why a persisted win rate is
+            # a number that can disagree with the counts beside it.
+            win_rate=statistics.win_rate,
+            current_rating=statistics.current_rating,
+            highest_rating=statistics.highest_rating,
+            current_streak=statistics.current_streak,
+            best_win_streak=statistics.best_win_streak,
+        )
 
 
 class ProfileResponse(BaseResponseDTO):
@@ -280,6 +356,10 @@ class ProfileResponse(BaseResponseDTO):
                         "losses": 0,
                         "draws": 0,
                         "win_rate": 0.0,
+                        "current_rating": 1500,
+                        "highest_rating": 1500,
+                        "current_streak": 0,
+                        "best_win_streak": 0,
                     },
                 }
             ]
@@ -324,18 +404,5 @@ class ProfileResponse(BaseResponseDTO):
             # `ProfileService`, which never fetched it. This schema holds no
             # flag it could get backwards, exactly as it holds no
             # `StorageProvider` it could build a URL with.
-            statistics=(
-                StatisticsResponse(
-                    games_played=statistics.games_played,
-                    wins=statistics.wins,
-                    losses=statistics.losses,
-                    draws=statistics.draws,
-                    # Computed by the domain, never stored — see
-                    # `domain/statistics.py` on why a persisted win rate is
-                    # a number that can disagree with the counts beside it.
-                    win_rate=statistics.win_rate,
-                )
-                if statistics is not None
-                else None
-            ),
+            statistics=(StatisticsResponse.of(statistics) if statistics is not None else None),
         )

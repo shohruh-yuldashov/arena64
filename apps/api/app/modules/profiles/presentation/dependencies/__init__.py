@@ -41,18 +41,22 @@ wiring modules together). `ProfileService` itself sees only
 exists.
 """
 
+import logging
 from typing import Annotated
 
 from fastapi import Depends
 
-from app.api.deps import ClockDep, DbSessionDep
+from app.api.deps import ClockDep, DbSessionDep, StatisticsSettingsDep
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.profiles.application.ports import RatingProvider, StatisticsProvider
 from app.modules.profiles.application.services import ProfileService
 from app.modules.profiles.infrastructure import (
+    DatabaseStatisticsProvider,
     NoMatchesStatisticsProvider,
     UnratedRatingProvider,
 )
+from app.modules.statistics.application.services import StatisticsService
+from app.modules.statistics.infrastructure.repositories import SqlAlchemyStatisticsRepository
 from app.modules.users.application.services import UserService
 from app.modules.users.application.services.preferences_service import PreferencesService
 from app.modules.users.application.services.privacy_settings_service import (
@@ -67,6 +71,8 @@ from app.modules.users.public import (
     ProfileEditor,
     PublicProfileReader,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def get_public_profile_reader(session: DbSessionDep, clock: ClockDep) -> PublicProfileReader:
@@ -180,10 +186,49 @@ def get_rating_provider() -> RatingProvider:
 RatingProviderDep = Annotated[RatingProvider, Depends(get_rating_provider)]
 
 
-def get_statistics_provider() -> StatisticsProvider:
-    """Match counts — **placeholder until the `statistics` module
-    exists.** Returns zeroes, and therefore a `win_rate` of `0.0`."""
-    return NoMatchesStatisticsProvider()
+def get_statistics_provider(
+    session: DbSessionDep, settings: StatisticsSettingsDep
+) -> StatisticsProvider:
+    """A player's competitive record — **real since A64-012.6.**
+
+    This is the selection point A64-012.6 asks to be logged, and it is the
+    only place that knows a *choice* was made: neither provider can say
+    what it was chosen instead of.
+
+    ## The two branches
+
+    `DatabaseStatisticsProvider` is the default. It is handed a
+    `StatisticsReader` — `statistics`' published port, assembled here from
+    that module's own service and repository, because a composition root is
+    the one place permitted to know how to construct things (BR-6 forbids a
+    *module* reaching for the container, not the root wiring modules
+    together). `ProfileService` sees only
+    `profiles.application.ports.StatisticsProvider` and never learns that a
+    `statistics` schema exists.
+
+    `NoMatchesStatisticsProvider` is the fallback, wired when
+    `STATISTICS_ENABLED=false`. It exists for a store being rebuilt or a
+    store that is unhealthy — `player_statistics` is a projection and
+    rebuildable by definition (database.md C5), so the sane failure mode is
+    a profile page without numbers rather than no profile page at all,
+    which is the platform's highest-volume public read (§1436).
+
+    ## Why the fallback logs at WARNING and the normal path does not
+
+    Serving blank statistics to everybody is a degradation nobody can see
+    from a response — a player with a real record looks exactly like a new
+    account. `WARNING` on every request makes "we are currently serving
+    blank statistics" an alertable condition; an `INFO` line on the healthy
+    path would fire on every profile read and be no signal at all
+    (services.md §7.1).
+    """
+    if not settings.enabled:
+        logger.warning("statistics_provider_fallback", extra={"provider": "no_matches"})
+        return NoMatchesStatisticsProvider()
+
+    logger.debug("statistics_provider_selected", extra={"provider": "database"})
+    reader = StatisticsService(SqlAlchemyStatisticsRepository(session))
+    return DatabaseStatisticsProvider(reader)
 
 
 StatisticsProviderDep = Annotated[StatisticsProvider, Depends(get_statistics_provider)]

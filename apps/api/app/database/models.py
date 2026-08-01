@@ -23,6 +23,7 @@ first table, is a cost of exactly one line.
 # Each import is load-bearing: it registers that module's tables onto
 # `app.database.base.Base.metadata` as a side effect of class definition.
 from app.modules.auth.infrastructure import models as _auth_models  # noqa: F401
+from app.modules.statistics.infrastructure import models as _statistics_models  # noqa: F401
 from app.modules.users.infrastructure import models as _users_models  # noqa: F401
 
 __all__: list[str] = []

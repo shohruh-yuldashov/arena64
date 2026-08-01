@@ -12,32 +12,24 @@ The numbers live on `RateLimitSettings` rather than here, for the reason
 that class gives: a limit that can only be changed by a deploy cannot be
 tightened during an incident.
 
-## Why per IP on an authenticated endpoint, and what that costs
+## Both writes are counted per authenticated user
 
-`RateLimitScope` offers two dimensions: the caller's network address, and
-an email address in the request body. `PATCH /profile/privacy` carries no
-email, so per-IP is the only rule this endpoint can currently express.
+`PATCH /profile/preferences` was the first USER-scoped limit on the
+platform (A64-012.5, which added the scope); `PATCH /profile/privacy`
+joined it in A64-012.6.
 
-**Per user would be the better dimension**, and the gap is worth recording
-rather than glossing. The caller here is *authenticated* — the platform
-knows exactly whose account is being written, which is a far better subject
-than a network address shared by everyone behind one NAT. Per-IP on this
-endpoint has the failure mode `RateLimitSettings.trusted_proxy_count`
-describes: an office, a university or a mobile carrier NAT is one bucket, so
-twenty settings changes across all of its users exhausts it for everyone.
-The limit here is set generously for that reason, which is a mitigation
-rather than a fix.
+The dimension is the point. Both endpoints sit behind a token, so the
+platform knows exactly whose account is being written — a far better
+subject than a network address shared by everyone behind one NAT. Per-IP on
+a settings endpoint has the failure mode `RateLimitSettings.trusted_proxy_count`
+describes: an office, a university or a mobile carrier is one bucket, so
+twenty changes across all of its users exhausts it for everyone.
 
-Adding a `RateLimitScope.USER` is not a line of code — it is a design
-decision about where an authenticated principal reaches the rate-limit
-dependency. `app/api/rate_limiting.py` deliberately imports no module
-(dependency-injection.md §3.2 keeps `app/api/` free of module presentation
-layers), so it cannot depend on `auth`'s `CurrentUser`; making it do so, or
-threading the principal through `request.state` and relying on dependency
-ordering, are both real changes to shared machinery with security
-consequences for six existing endpoints. That belongs in its own task with
-its own tests, not in a privacy feature. It is A64-012.5's first
-recommendation.
+Neither carries a per-IP companion rule. Adding one would reintroduce
+exactly the shared-NAT problem the user scope removes, and there is no
+attack it would catch that the per-user rule does not — an attacker holding
+N stolen tokens already holds N compromised accounts, and rate limiting is
+not the control for that.
 
 ## Why the guard is on the write and not the read
 
@@ -77,9 +69,15 @@ def build_rules(settings: RateLimitSettings) -> dict[str, tuple[RateLimitRule, .
                 # Distinct from every `auth` rule name, which is what keeps
                 # this endpoint's traffic out of another endpoint's bucket
                 # — see `RateLimitRule.name`.
-                name="privacy_update_ip",
-                scope=RateLimitScope.IP,
-                limit=settings.privacy_update_ip_limit,
+                #
+                # `_user`, not `_ip`, since A64-012.6 migrated it. The
+                # rename matters as much as the scope change: the old
+                # buckets were keyed on hashed addresses and the new ones
+                # on account ids, so sharing a name would have made every
+                # live IP bucket look like a user bucket until it expired.
+                name="privacy_update_user",
+                scope=RateLimitScope.USER,
+                limit=settings.privacy_update_user_limit,
                 window=timedelta(seconds=settings.privacy_update_window_seconds),
             ),
         ),
@@ -109,17 +107,64 @@ def _guard(endpoint: str) -> RateLimit:
     return RateLimit(endpoint, rules_for)
 
 
-#: Attached in `self_router.py` as `dependencies=[Depends(...)]`.
+#: The two guards. Both are USER-scoped, so neither is attachable as a bare
+#: `Depends(...)` — each has a wrapper below that resolves the principal.
 PRIVACY_UPDATE_RATE_LIMIT = _guard("privacy_update")
-
-
-# --- PATCH /profile/preferences (A64-012.5) ---------------------------------
-#
-# The first USER-scoped limit on the platform, and the endpoint that made
-# the scope worth building. Everything above about per-IP being the only
-# dimension available to an authenticated route stops being true here.
-
 PREFERENCES_UPDATE_RATE_LIMIT = _guard("preferences_update")
+
+
+async def _enforce(
+    guard: RateLimit,
+    request: Request,
+    response: Response,
+    user: CurrentUser,
+    limiter: RateLimiterDep,
+    settings: RateLimitSettingsDep,
+) -> None:
+    """Resolve the authenticated principal and spend one unit against
+    `guard`.
+
+    The shared body of the two dependencies below, which differ only in
+    which guard they carry. Two thin wrappers rather than one parametrised
+    dependency because FastAPI identifies a route dependency by the
+    function object — a single shared callable would make
+    "is this route rate limited, and by which policy" unanswerable from the
+    route decorator, and untestable without sending requests.
+
+    `user.id`, not the username: a handle can be changed (UP-2, once that
+    exists) and an id cannot, so counting the handle would make a rename a
+    way to reset a limit.
+
+    **The 401 comes first**, which is the ordering to want. `CurrentUser`
+    resolves before this body runs, so an unauthenticated request is refused
+    without spending anybody's allowance — and, more to the point, without a
+    principal there would be nothing to spend it against.
+    """
+    await guard.enforce(
+        request,
+        response,
+        limiter=limiter,
+        settings=settings,
+        principal=str(user.id),
+    )
+
+
+async def enforce_privacy_update_limit(
+    request: Request,
+    response: Response,
+    user: CurrentUser,
+    limiter: RateLimiterDep,
+    settings: RateLimitSettingsDep,
+) -> None:
+    """The `PATCH /profile/privacy` guard, counting per account.
+
+    Added by A64-012.6, replacing the bare
+    `Depends(PRIVACY_UPDATE_RATE_LIMIT)` A64-012.4 shipped. That form still
+    works for an IP-scoped guard and cannot work for a USER-scoped one —
+    `resolve_subjects` raises without a principal rather than silently
+    counting nothing, so the migration could not half-happen.
+    """
+    await _enforce(PRIVACY_UPDATE_RATE_LIMIT, request, response, user, limiter, settings)
 
 
 async def enforce_preferences_update_limit(
@@ -141,24 +186,6 @@ async def enforce_preferences_update_limit(
     `auth`'s `CurrentUser` there would make `app/api/` depend on a module's
     presentation layer (dependency-injection.md §3.2). **This** file is a
     module presentation layer, so it may import `CurrentUser` — and that is
-    the only reason this function exists. It resolves the principal and
-    hands it to `RateLimit.enforce`, which does every part of the check:
-    the same all-or-nothing acquire, the same headers, the same WARNING on
-    a block, the same `TooManyRequests`. Nothing is reimplemented here.
-
-    **The 401 comes first**, which is the ordering to want. `CurrentUser`
-    is resolved before this body runs, so an unauthenticated request is
-    refused without spending anybody's allowance — and, more importantly,
-    without a principal there is nothing to spend it against.
-
-    `user.id`, not the username: a handle can be changed (UP-2, once that
-    exists) and an id cannot, so counting the handle would make a rename a
-    way to reset a limit.
+    the only reason these two wrappers exist.
     """
-    await PREFERENCES_UPDATE_RATE_LIMIT.enforce(
-        request,
-        response,
-        limiter=limiter,
-        settings=settings,
-        principal=str(user.id),
-    )
+    await _enforce(PREFERENCES_UPDATE_RATE_LIMIT, request, response, user, limiter, settings)

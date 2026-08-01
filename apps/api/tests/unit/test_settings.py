@@ -18,6 +18,7 @@ from app.config.settings import (
     RedisSettings,
     SessionSettings,
     Settings,
+    StatisticsSettings,
     StorageSettings,
     get_settings,
 )
@@ -92,6 +93,7 @@ class TestSettings:
             email=EmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
+            statistics=StatisticsSettings(),
         )
         assert settings.environment is Environment.TEST
 
@@ -117,6 +119,7 @@ class TestSettings:
                 email=EmailSettings(),
                 storage=StorageSettings(),
                 rate_limit=RateLimitSettings(),
+                statistics=StatisticsSettings(),
             )
 
     def test_production_rejects_a_left_default_redis_role(self) -> None:
@@ -134,6 +137,7 @@ class TestSettings:
                 email=EmailSettings(),
                 storage=StorageSettings(),
                 rate_limit=RateLimitSettings(),
+                statistics=StatisticsSettings(),
             )
 
     def test_production_accepts_fully_explicit_configuration(self) -> None:
@@ -156,6 +160,7 @@ class TestSettings:
             email=EmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
+            statistics=StatisticsSettings(),
         )
         assert settings.environment is Environment.PRODUCTION
 
@@ -171,6 +176,7 @@ class TestSettings:
             email=EmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
+            statistics=StatisticsSettings(),
         )
         with pytest.raises(PydanticValidationError):
             settings.environment = Environment.PRODUCTION  # type: ignore[misc]
@@ -276,6 +282,7 @@ class TestJWTProductionGuard:
             email=EmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
+            statistics=StatisticsSettings(),
             jwt=JWTSettings(**jwt_overrides),  # type: ignore[arg-type]
         )
 
@@ -305,6 +312,7 @@ class TestJWTProductionGuard:
             email=EmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
+            statistics=StatisticsSettings(),
             jwt=JWTSettings(),
         )
 

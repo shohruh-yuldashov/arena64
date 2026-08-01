@@ -1,5 +1,5 @@
-"""The `friends` relations — `friend_request` (database.md §7.1) and
-`friendship` (§7.3).
+"""The `friends` relations — `friend_request` (database.md §7.1),
+`block` (§7.2) and `friendship` (§7.3).
 
 The only place in this module that knows SQLAlchemy exists. Nothing above
 `infrastructure/` imports this file, and the aggregate it maps to holds no
@@ -261,4 +261,64 @@ class FriendshipModel(UUIDPrimaryKeyMixin, Base):
     ended_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     ended_reason: Mapped[FriendshipEndReason | None] = mapped_column(
         _END_REASON_ENUM, nullable=True
+    )
+
+
+class BlockedPlayerModel(UUIDPrimaryKeyMixin, Base):
+    """The `friends.blocked_player` row — database.md §7.2.
+
+    **"Deliberately minimal and deliberately hard-deleted on unblock."**
+    §7.2's own words, and the reasoning is a performance one rather than a
+    philosophical one: "a block has no history worth keeping, and retaining
+    released blocks would make BL-2's matchmaking filter — already the most
+    performance-sensitive use of this relation — read rows it must then
+    exclude."
+
+    So no `ended_at`, no soft delete, and no `TimestampMixin`: there is no
+    second timestamp, because a block is created and destroyed and never
+    modified.
+
+    ## The name
+
+    database.md §7.2 calls the relation `block`. A64-013.5 specifies
+    `blocked_players`. The table is `blocked_player` — the brief's noun,
+    the platform's singular convention (database.md §142: "Table:
+    `snake_case`, **singular**"). The divergence from the design document is
+    recorded here rather than resolved silently, because a document and a
+    schema disagreeing without a note is how somebody later "fixes" one of
+    them.
+
+    ## Ordered, unlike `friendship`
+
+    `(blocker_id, blocked_id)` as given, not canonicalised. A block is
+    directional — A blocking B and B blocking A are two different facts,
+    both of which can be true — so DB-12's canonical-pair pattern does not
+    apply and would actively lose information here.
+    """
+
+    __tablename__ = "blocked_player"
+    __table_args__ = (
+        CheckConstraint("blocker_id <> blocked_id", name="ck_blocked_player__not_self"),
+        # One block per ordered pair. **Not partial**, unlike the friendship
+        # and friend-request uniqueness constraints: those cover only live
+        # rows because ended ones must not prevent a new relationship, and
+        # here there are no ended rows to exclude — unblocking deletes.
+        Index("uq_blocked_player__pair", "blocker_id", "blocked_id", unique=True),
+        # "Who have I blocked" — the block list, and the exclusion set user
+        # search subtracts on every query. `created_at` and `id` follow the
+        # blocker because that read is a keyset page ordered by them.
+        Index("ix_blocked_player__blocker", "blocker_id", "created_at", "id"),
+        # "Who has blocked me" — the other half of the symmetric visibility
+        # consequence, and the leg BL-2's matchmaking filter will read on
+        # every pairing tick. It carries no ordering columns because nothing
+        # pages it: it is always consumed as a set.
+        Index("ix_blocked_player__blocked", "blocked_id"),
+        {"schema": FRIENDS_SCHEMA},
+    )
+
+    blocker_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    blocked_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, server_default=text("now()")
     )

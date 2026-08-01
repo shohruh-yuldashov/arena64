@@ -112,7 +112,9 @@ class ProfileService:
         # this attribute is where that would otherwise stop being true.
         self._presence = presence
 
-    async def get_public_profile(self, username: str) -> PublicProfile:
+    async def get_public_profile(
+        self, username: str, *, viewer_id: UUID | None = None
+    ) -> PublicProfile:
         """Composes the public view of the player holding `username`.
 
         **Case-insensitive** (UP-1). `Alice`, `alice` and `ALICE` resolve
@@ -124,6 +126,16 @@ class ProfileService:
         whether the username was never registered, or belongs to a
         deactivated account. The two are deliberately indistinguishable;
         see this module's docstring.
+
+        `viewer_id` is the authenticated caller, or `None` for an anonymous
+        one — A64-013.5's optional authentication. It is what makes
+        `VisibilityLevel.FRIENDS` and blocking work on this endpoint: before
+        it, every reader of a public profile was composed as a stranger, so
+        a friend saw a friend's friends-only fields hidden and a blocked
+        player saw everything.
+
+        `None` costs no relationship query, which matters because the
+        anonymous path is the platform's highest-volume read.
         """
         identity = await self._profiles.find_public_profile(username)
 
@@ -147,7 +159,7 @@ class ProfileService:
         # composer.** A64-013.1 moved it there when user search became a
         # second path that has to produce the same view — see
         # `PublicProfileComposer` on why the gate has exactly one home.
-        return await self._composer.compose(identity)
+        return await self._composer.compose(identity, viewer_id=viewer_id)
 
     async def get_own_statistics(self, player_id: UUID) -> PlayerStatistics:
         """The account holder's own record — **never redacted.**

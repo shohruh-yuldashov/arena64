@@ -19,9 +19,11 @@ from uuid import UUID
 
 import pytest
 
+from app.modules.friends.domain.block import Block
 from app.modules.friends.domain.exceptions import (
     FriendshipAlreadyEnded,
     NotFriendshipParticipant,
+    SelfBlock,
     SelfFriendship,
 )
 from app.modules.friends.domain.friendship import (
@@ -31,9 +33,10 @@ from app.modules.friends.domain.friendship import (
 )
 from app.modules.profiles.infrastructure import (
     FriendshipRelationshipProvider,
+    NoBlockedPlayersProvider,
     NoRelationshipsProvider,
 )
-from app.modules.users.domain.visibility import ViewerRelationship
+from app.modules.users.domain.visibility import ViewerRelationship, VisibilityLevel
 
 FORMED_AT = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 ENDED_AT = datetime(2026, 8, 2, 9, 30, tzinfo=UTC)
@@ -172,27 +175,30 @@ class TestOtherThan:
             friendship.other_than(STRANGER)
 
 
-class _StubFriendshipReader:
-    """The published port, answering from a fixed set.
+class _StubSocialGraph:
+    """The published port, answering from fixed sets.
 
-    A stub rather than the real repository because what is under test here
-    is the *mapping* from a set of ids to `ViewerRelationship` — the query
-    itself is PostgreSQL's and is covered in
-    `tests/contract/test_friends_api.py`.
+    A stub rather than the real repositories because what is under test here
+    is the *ranking* of a friendship against a block — the queries are
+    PostgreSQL's and are covered in `tests/contract/test_blocking_api.py`.
     """
 
-    def __init__(self, friends: set[UUID]) -> None:
+    def __init__(self, friends: set[UUID], blocked: set[UUID] | None = None) -> None:
         self._friends = friends
+        self._blocked = blocked or set()
         self.calls = 0
 
     async def friend_ids_among(self, player_id: UUID, others: Sequence[UUID]) -> set[UUID]:
         self.calls += 1
         return {other for other in others if other in self._friends}
 
+    async def blocked_ids_for(self, player_id: UUID) -> frozenset[UUID]:
+        return frozenset(self._blocked)
+
 
 class TestRelationshipProviders:
     async def test_a_friend_resolves_to_friend_and_everybody_else_to_stranger(self) -> None:
-        provider = FriendshipRelationshipProvider(_StubFriendshipReader({HIGH}))
+        provider = FriendshipRelationshipProvider(_StubSocialGraph({HIGH}))
 
         resolved = await provider.relationships_for(LOW, [HIGH, STRANGER])
 
@@ -204,7 +210,7 @@ class TestRelationshipProviders:
         writing a fallback at each site — the line somebody eventually
         writes as `.get(id)` alone and then treats `None` as truthy on a
         privacy path."""
-        provider = FriendshipRelationshipProvider(_StubFriendshipReader(set()))
+        provider = FriendshipRelationshipProvider(_StubSocialGraph(set()))
 
         resolved = await provider.relationships_for(LOW, [HIGH, STRANGER])
 
@@ -214,7 +220,7 @@ class TestRelationshipProviders:
         """The batch read behind every profile render. A per-player form
         would multiply the composition path by the page size — CLAUDE.md
         §10.4's N+1, on the hottest read on the platform."""
-        reader = _StubFriendshipReader({HIGH})
+        reader = _StubSocialGraph({HIGH})
         provider = FriendshipRelationshipProvider(reader)
 
         await provider.relationships_for(LOW, [HIGH, STRANGER, LOW])
@@ -222,7 +228,7 @@ class TestRelationshipProviders:
         assert reader.calls == 1
 
     async def test_an_empty_page_costs_no_query(self) -> None:
-        reader = _StubFriendshipReader({HIGH})
+        reader = _StubSocialGraph({HIGH})
         provider = FriendshipRelationshipProvider(reader)
 
         assert await provider.relationships_for(LOW, []) == {}
@@ -236,3 +242,88 @@ class TestRelationshipProviders:
         resolved = await NoRelationshipsProvider().relationships_for(LOW, [HIGH, STRANGER])
 
         assert set(resolved.values()) == {ViewerRelationship.STRANGER}
+
+
+class TestBlockedRelationship:
+    """A64-013.5: `BLOCKED` is the highest-priority relationship."""
+
+    def test_a_block_outranks_every_visibility_level(self) -> None:
+        """**Including `EVERYONE`**, and that is the assertion that matters.
+
+        A player who set a field public and then blocked somebody has not
+        made it public *to them*. A `permits` that checked the level before
+        the relationship would publish it anyway — silently, to the one
+        person it was withheld from.
+        """
+        for level in VisibilityLevel:
+            assert level.permits(ViewerRelationship.BLOCKED) is False, level
+
+    def test_a_block_outranks_a_friendship(self) -> None:
+        """It should never arise — `BlockingService.block` ends the
+        friendship in the same transaction that places the block (FS-3) —
+        but a visibility gate is the wrong place to assume another module's
+        transaction held."""
+        assert VisibilityLevel.FRIENDS.permits(ViewerRelationship.BLOCKED) is False
+
+    async def test_the_provider_ranks_blocked_above_friend(self) -> None:
+        reader = _StubSocialGraph(friends={HIGH}, blocked={HIGH})
+        provider = FriendshipRelationshipProvider(reader)
+
+        resolved = await provider.relationships_for(LOW, [HIGH])
+
+        assert resolved[HIGH] is ViewerRelationship.BLOCKED
+
+    async def test_the_provider_resolves_all_three(self) -> None:
+        stranger = UUID("019fb9ea-3d3f-7fff-9d82-735a5af64d29")
+        provider = FriendshipRelationshipProvider(
+            _StubSocialGraph(friends={HIGH}, blocked={STRANGER})
+        )
+
+        resolved = await provider.relationships_for(LOW, [HIGH, STRANGER, stranger])
+
+        assert resolved[HIGH] is ViewerRelationship.FRIEND
+        assert resolved[STRANGER] is ViewerRelationship.BLOCKED
+        assert resolved[stranger] is ViewerRelationship.STRANGER
+
+    async def test_the_relationship_fallback_never_fabricates_a_block(self) -> None:
+        """A64-013.5 states it outright, and the reason is the direction a
+        fallback must fail in: inventing restrictions from missing data is
+        how a kill switch becomes an outage."""
+        resolved = await NoRelationshipsProvider().relationships_for(LOW, [HIGH, STRANGER])
+
+        assert set(resolved.values()) == {ViewerRelationship.STRANGER}
+        assert ViewerRelationship.BLOCKED not in set(resolved.values())
+
+    async def test_the_exclusion_fallback_blocks_nobody(self) -> None:
+        """The other half, and it fails in the opposite direction for the
+        same reason: with the graph unavailable, excluding everybody would
+        hide the platform from itself."""
+        assert await NoBlockedPlayersProvider().blocked_ids_for(LOW) == frozenset()
+
+
+class TestBlockAggregate:
+    def test_a_block_records_both_parties_and_the_instant(self) -> None:
+        block = Block.place(blocker_id=LOW, blocked_id=HIGH, at=FORMED_AT)
+
+        assert block.blocker_id == LOW
+        assert block.blocked_id == HIGH
+        assert block.created_at == FORMED_AT
+
+    def test_the_pair_is_not_canonicalised(self) -> None:
+        """Unlike `Friendship`. A block is directional — A blocking B and B
+        blocking A are two different facts, both of which can be true — so
+        sorting the pair would lose the only thing the row records."""
+        block = Block.place(blocker_id=HIGH, blocked_id=LOW, at=FORMED_AT)
+
+        assert block.blocker_id == HIGH
+        assert block.blocked_id == LOW
+
+    def test_a_self_block_is_refused(self) -> None:
+        with pytest.raises(SelfBlock):
+            Block.place(blocker_id=LOW, blocked_id=LOW, at=FORMED_AT)
+
+    def test_a_rehydrated_self_block_is_refused_too(self) -> None:
+        """The repository constructs instances directly when reading rows,
+        so this is what stops a hand-written `INSERT` reaching a response."""
+        with pytest.raises(SelfBlock):
+            Block(blocker_id=LOW, blocked_id=LOW)

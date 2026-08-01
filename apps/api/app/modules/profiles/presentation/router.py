@@ -20,12 +20,28 @@ username is a client error, while a name that is possible and unclaimed is
 a 404. Neither reveals more than the other — see `ProfileNotFound` on why a
 404 here is not the membership oracle it would be on a credential path.
 
-## Unauthenticated, by design
+## Optionally authenticated — A64-013.5
 
-No `CurrentUser`, no `RequireAuthentication`. A public profile is public:
+Anonymous callers work exactly as before: a public profile is public, and
 requiring a token would break every link a player shares and every
-server-rendered page AD-24 anticipates. The response carries nothing that
-authentication would gate — no email, no account state, no activity.
+server-rendered page AD-24 anticipates.
+
+A caller who *does* present a token is composed against their **relationship**
+to the player they are reading, which is what makes two features real on this
+endpoint for the first time:
+
+  - a friend sees fields restricted to friends (`VisibilityLevel.FRIENDS`);
+  - a blocked player — in either direction — sees none of the audience-valued
+    fields at all (BL-2).
+
+Before this the endpoint had no `CurrentUser` at all, so every reader was
+composed as a stranger. A friend saw a friend's friends-only fields hidden,
+which was merely wrong; a blocked player saw everything, which was the leak.
+
+`OptionalCurrentUser` rather than `CurrentUser`: a **missing** token is
+anonymous, and an **invalid** one is still a `401`. Treating a malformed
+token as anonymous would turn every client bug into a silently degraded
+response.
 
 That does make this the platform's most enumerable surface, and it is
 deliberately **not** rate limited, because A64-012.1's scope does not
@@ -41,6 +57,7 @@ from fastapi import APIRouter, Depends, Path, status
 from app.api.openapi import Responses, error_response
 from app.api.responses import build_response
 from app.core.responses import ApiResponse
+from app.modules.auth.presentation.dependencies import OptionalCurrentUser
 from app.modules.avatars.presentation.dependencies import AvatarLinkBuilderDep
 from app.modules.profiles.presentation.dependencies import ProfileServiceDep
 from app.modules.profiles.presentation.rate_limits import PROFILE_READ_RATE_LIMIT
@@ -95,6 +112,7 @@ async def get_profile(
     ],
     service: ProfileServiceDep,
     avatar_links: AvatarLinkBuilderDep,
+    viewer: OptionalCurrentUser = None,
 ) -> ApiResponse[ProfileResponse]:
     """Returns the public profile of the player holding `username`.
 
@@ -104,9 +122,14 @@ async def get_profile(
     response is the casing that player chose, which is what a client should
     render.
 
-    **Public and unauthenticated.** No token is required and none changes
-    the response. Nothing here is gated: the body carries no email, no
-    account state and no activity data.
+    **Public, and optionally authenticated.** No token is required. If you
+    present one, the response is composed against your *relationship* to
+    this player: a friend sees fields restricted to friends, and somebody
+    either party has blocked sees none of the audience-valued fields at all.
+
+    An anonymous read is always the most restrictive view. Nothing here is
+    gated behind authentication itself — the body carries no email, no
+    account state and no activity data whoever asks.
 
     `404` when there is no visible profile — whether the username was never
     registered or the account has been deactivated. The two are
@@ -155,7 +178,7 @@ async def get_profile(
     one unmarked misleads both the viewer and any opponent deciding whether
     to accept a challenge (domain-model.md PR-6).
     """
-    profile = await service.get_public_profile(username)
+    profile = await service.get_public_profile(username, viewer_id=viewer.id if viewer else None)
 
     # The avatar URL is composed here, at the edge, from the reference the
     # profile carries — see `ProfileResponse.of` on why the schema is

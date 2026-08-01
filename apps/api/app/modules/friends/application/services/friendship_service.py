@@ -212,32 +212,3 @@ class FriendshipService:
         is a question for whoever eventually publishes it.
         """
         return await self._friendships.mutual_friend_count(player_id, other_id)
-
-
-class FriendshipReaderService:
-    """The implementation behind `friends.public.ports.FriendshipReader`.
-
-    The same shape as `users`' published-port adapters: a thin translation
-    with no rule of its own. It exists so that `profiles` depends on a
-    published *port* rather than on this module's repository (R-1), and so
-    that the capability crossing the boundary is exactly one read.
-
-    Deliberately **not** a method on `FriendshipService` above. That service
-    can end friendships; this adapter cannot, and a consumer granted one
-    should not thereby hold the other — the narrowing `users.public` makes
-    twelve times over.
-    """
-
-    def __init__(self, friendships: FriendshipRepository) -> None:
-        self._friendships = friendships
-
-    async def friend_ids_among(self, player_id: UUID, others: Sequence[UUID]) -> set[UUID]:
-        """Which of `others` are currently friends with `player_id`.
-
-        Straight delegation. The seam is the point rather than the code:
-        `profiles` sees a port it can only read through, and this module
-        keeps the freedom to change how the answer is computed — a cache
-        under `friends:v1:` is the obvious next form, and it lands here
-        without `profiles` learning that it happened.
-        """
-        return await self._friendships.friend_ids_among(player_id, others)

@@ -60,11 +60,13 @@ from app.api.deps import (
     StatisticsSettingsDep,
 )
 from app.database.unit_of_work import SessionUnitOfWork
-from app.modules.friends.application.services.friendship_service import (
-    FriendshipReaderService,
+from app.modules.friends.application.services import SocialGraphReaderService
+from app.modules.friends.infrastructure.repositories import (
+    SqlAlchemyBlockedPlayerRepository,
+    SqlAlchemyFriendshipRepository,
 )
-from app.modules.friends.infrastructure.repositories import SqlAlchemyFriendshipRepository
 from app.modules.profiles.application.ports import (
+    BlockedPlayersProvider,
     RatingProvider,
     StatisticsProvider,
     ViewerRelationshipProvider,
@@ -78,8 +80,10 @@ from app.modules.profiles.application.services.profile_search_service import Pro
 from app.modules.profiles.infrastructure import (
     DatabaseStatisticsProvider,
     FriendshipRelationshipProvider,
+    NoBlockedPlayersProvider,
     NoMatchesStatisticsProvider,
     NoRelationshipsProvider,
+    SocialGraphBlockedPlayersProvider,
     UnratedRatingProvider,
 )
 from app.modules.statistics.application.services import StatisticsService
@@ -329,6 +333,23 @@ def get_presence_provider(
 PresenceProviderDep = Annotated[PresenceProvider, Depends(get_presence_provider)]
 
 
+def _social_graph(session: DbSessionDep) -> SocialGraphReaderService:
+    """`friends`' published reader, assembled over this request's session.
+
+    A helper because two providers need the same object, and building it
+    twice would mean two identity maps over the same rows in one request.
+
+    Not a `Depends` factory of its own: it returns `friends`' type, and a
+    dependency yielding it would publish that module's service into this
+    module's dependency namespace for no caller's benefit. What the two
+    providers below expose are `profiles`' own ports.
+    """
+    return SocialGraphReaderService(
+        friendships=SqlAlchemyFriendshipRepository(session),
+        blocks=SqlAlchemyBlockedPlayerRepository(session),
+    )
+
+
 def get_relationship_provider(
     session: DbSessionDep, settings: FriendsSettingsDep
 ) -> ViewerRelationshipProvider:
@@ -370,12 +391,41 @@ def get_relationship_provider(
         return NoRelationshipsProvider()
 
     logger.debug("relationship_provider_selected", extra={"provider": "friendship"})
-    return FriendshipRelationshipProvider(
-        FriendshipReaderService(SqlAlchemyFriendshipRepository(session))
-    )
+    return FriendshipRelationshipProvider(_social_graph(session))
 
 
 RelationshipProviderDep = Annotated[ViewerRelationshipProvider, Depends(get_relationship_provider)]
+
+
+def get_blocked_players_provider(
+    session: DbSessionDep, settings: FriendsSettingsDep
+) -> BlockedPlayersProvider:
+    """Who a viewer must never be shown — A64-013.5.
+
+    Chosen by the same switch as the relationship provider, because they
+    read the same graph and a deployment cannot sensibly have one without
+    the other.
+
+    `NoBlockedPlayersProvider` is the fallback and it **never fabricates a
+    block**: with the graph off, nobody is excluded from search. That is the
+    lesser harm and the only honest option — a fallback that invented
+    restrictions from missing data would hide the platform from itself
+    during an incident. The *visibility* consequence still holds anyway,
+    because `NoRelationshipsProvider` reports `STRANGER` rather than
+    `FRIEND`, so every friends-only field stays hidden.
+
+    `WARNING` on the fallback and `DEBUG` on the healthy path, for the
+    reason every selection point on this module gives.
+    """
+    if not settings.enabled:
+        logger.warning("blocked_players_provider_fallback", extra={"provider": "none"})
+        return NoBlockedPlayersProvider()
+
+    logger.debug("blocked_players_provider_selected", extra={"provider": "social_graph"})
+    return SocialGraphBlockedPlayersProvider(_social_graph(session))
+
+
+BlockedPlayersProviderDep = Annotated[BlockedPlayersProvider, Depends(get_blocked_players_provider)]
 
 
 def get_profile_composer(
@@ -479,6 +529,7 @@ ProfileDirectoryDep = Annotated[ProfileDirectoryService, Depends(get_profile_dir
 def get_profile_search_service(
     searcher: PublicProfileSearcherDep,
     composer: ProfileComposerDep,
+    blocked_players: BlockedPlayersProviderDep,
 ) -> ProfileSearchService:
     """The search use case — A64-013.1.
 
@@ -487,7 +538,9 @@ def get_profile_search_service(
     one is the searcher's; this service holds the exclusion set and the
     logging contract and nothing else.
     """
-    return ProfileSearchService(searcher=searcher, composer=composer)
+    return ProfileSearchService(
+        searcher=searcher, composer=composer, blocked_players=blocked_players
+    )
 
 
 ProfileSearchServiceDep = Annotated[ProfileSearchService, Depends(get_profile_search_service)]
@@ -502,6 +555,7 @@ __all__ = [
     "PrivacySettingsEditorDep",
     "ProfileEditorDep",
     "ProfileComposerDep",
+    "BlockedPlayersProviderDep",
     "RelationshipProviderDep",
     "ProfileDirectoryDep",
     "ProfileSearchServiceDep",
@@ -515,6 +569,7 @@ __all__ = [
     "get_privacy_settings_editor",
     "get_profile_editor",
     "get_profile_composer",
+    "get_blocked_players_provider",
     "get_relationship_provider",
     "get_profile_directory",
     "get_profile_search_service",

@@ -1,7 +1,8 @@
-"""HTTP routes for friends — requests (A64-013.2) and the friend list
-(A64-013.3).
+"""HTTP routes for the social graph — friend requests (A64-013.2), the
+friend list (A64-013.3), management (A64-013.4) and blocking (A64-013.5).
 
-Nine endpoints and **no business logic in any of them**. Each translates a
+Twelve endpoints across two routers and **no business logic in any of
+them**. Each translates a
 request into a service call and the result into a wire schema. The
 transition rules and the ownership checks are `FriendRequest`'s, the
 cross-row rules are `FriendRequestValidator`'s, uniqueness is the database's,
@@ -76,6 +77,7 @@ from app.modules.auth.presentation.dependencies import CurrentUser
 from app.modules.avatars.presentation.dependencies import AvatarLinkBuilderDep
 from app.modules.friends.domain.friend_request import FriendRequest
 from app.modules.friends.presentation.dependencies import (
+    BlockingServiceDep,
     FriendRequestServiceDep,
     FriendshipServiceDep,
 )
@@ -84,6 +86,8 @@ from app.modules.friends.presentation.rate_limits import (
     enforce_friend_request_send_limit,
 )
 from app.modules.friends.presentation.schemas import (
+    BlockedPlayerResponse,
+    BlockPlayerRequest,
     FriendCountResponse,
     FriendRequestResponse,
     FriendResponse,
@@ -721,3 +725,190 @@ async def remove_friend(
     again later.
     """
     await service.remove_friend(player_id=user.id, other_id=player_id)
+
+
+# --- blocking (A64-013.5) ----------------------------------------------------
+#
+# A third resource on the same router. `friends_router` is one bounded
+# context's HTTP surface, and a `blocks_router` beside it would split one
+# module's routes across two files sharing every dependency and every error
+# mapping.
+#
+# The paths are `/blocks`, not `/friends/blocks`: a block is not a kind of
+# friendship, and nesting it under one would suggest you must be friends to
+# block somebody.
+
+blocks_router = APIRouter(prefix="/blocks", tags=["blocks"])
+
+_ALREADY_BLOCKED: Responses = error_response(409, "You have already blocked that player.")
+_SELF_BLOCK: Responses = error_response(422, "You cannot block yourself.")
+
+
+@blocks_router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    summary="Block a player",
+    response_description="The block as created, with the blocked player's profile.",
+    responses={
+        **_UNAUTHORIZED,
+        **_ALREADY_BLOCKED,
+        **_SELF_BLOCK,
+        **_TOO_MANY_REQUESTS,
+    },
+    dependencies=[Depends(enforce_friend_request_respond_limit)],
+)
+async def block_player(
+    payload: BlockPlayerRequest,
+    user: CurrentUser,
+    service: BlockingServiceDep,
+    directory: ProfileDirectoryDep,
+    avatar_links: AvatarLinkBuilderDep,
+) -> ApiResponse[BlockedPlayerResponse]:
+    """Blocks `player_id` on your behalf, and applies the consequences at
+    once.
+
+    **The blocked player is never told** (BL-1). Nothing notifies them, no
+    response of theirs changes shape, and there is no endpoint anywhere that
+    reports being blocked. A visible block is an invitation to retaliate
+    from a second account.
+
+    ## What happens in the same transaction
+
+    | Effect | Rule |
+    | --- | --- |
+    | any friendship between you ends, reason `blocked` | FS-3 |
+    | any pending friend request, either direction, is voided | FR-2 |
+    | they disappear from your search results, and you from theirs | BL-2 |
+    | neither of you sees the other's presence or friends-only fields | BL-2 |
+
+    All of it commits together. A block that suppressed future contact while
+    leaving the friendship live would be the block silently not working.
+
+    **Not idempotent** — a second block is a `409`. Blocking runs a cascade,
+    and reporting success for a repeat would claim a cascade ran that did
+    not. Contrast `DELETE /blocks/{player_id}`, which has no cascade and is
+    idempotent.
+
+    **Nothing is restored on unblock.** A friendship this ended stays ended
+    and you must send a fresh request. BL-3: blocks do not rewrite history,
+    in either direction.
+    """
+    block = await service.block(blocker_id=user.id, blocked_id=payload.player_id)
+
+    # Composed as the *blocker* sees them, which is what they could see
+    # before blocking — see `BlockedPlayerResponse` on why a block list that
+    # hid its own entries would be unusable.
+    profiles = await directory.profiles_for(
+        [block.blocked_id],
+        viewer_id=user.id,
+        known_relationship=ViewerRelationship.STRANGER,
+    )
+    profile = profiles[block.blocked_id]
+
+    return build_response(
+        BlockedPlayerResponse.of(
+            block, ProfileResponse.of(profile, avatar_links.links_for(profile.identity.avatar))
+        )
+    )
+
+
+@blocks_router.get(
+    "",
+    status_code=status.HTTP_200_OK,
+    summary="List the players you have blocked",
+    response_description="A page of blocked players, most recently blocked first.",
+    responses={**_UNAUTHORIZED, **_UNPROCESSABLE},
+)
+async def list_blocked_players(
+    user: CurrentUser,
+    service: BlockingServiceDep,
+    directory: ProfileDirectoryDep,
+    avatar_links: AvatarLinkBuilderDep,
+    limit: Annotated[
+        int, Query(ge=1, le=MAX_PAGE_SIZE, description="Blocked players per page.")
+    ] = DEFAULT_PAGE_SIZE,
+    cursor: Annotated[
+        str | None,
+        Query(description="Opaque cursor from a previous page. Pass it back unchanged."),
+    ] = None,
+) -> ApiResponse[CursorPage[BlockedPlayerResponse]]:
+    """Returns the players **you have blocked**, most recently first.
+
+    **Only blocks you placed.** Blocks placed *on* you never appear here or
+    anywhere else — that invisibility is the whole reason a block is worth
+    placing (BL-1), and it is a property of this query rather than a filter
+    somebody remembers to apply.
+
+    **Your own list, always.** The account comes from your access token and
+    no parameter could name a different one, so there is no ownership check
+    here because another player's block list is not addressable.
+
+    **Keyset pagination, never offset.** Follow `page.next_cursor` until it
+    is `null`.
+    """
+    blocks, next_cursor = await service.list_blocked(blocker_id=user.id, limit=limit, cursor=cursor)
+
+    player_ids = [block.blocked_id for block in blocks]
+    # One batch for the whole page — never `compose` in a loop.
+    #
+    # `STRANGER` is stated rather than resolved, and it is the one place on
+    # the platform that overrides a `BLOCKED` relationship: resolving would
+    # return `BLOCKED` for every row and compose a page of profiles with
+    # every audience-valued field hidden, which is a block list nobody can
+    # use. The blocker is a party to their own block and sees what they
+    # could see before placing it — never more.
+    profiles = await directory.profiles_for(
+        player_ids,
+        viewer_id=user.id,
+        known_relationship=ViewerRelationship.STRANGER,
+    )
+
+    items = [
+        BlockedPlayerResponse.of(
+            block,
+            ProfileResponse.of(
+                profiles[player_id], avatar_links.links_for(profiles[player_id].identity.avatar)
+            ),
+        )
+        for block, player_id in zip(blocks, player_ids, strict=True)
+        if player_id in profiles
+    ]
+
+    return build_response(
+        CursorPage(
+            items=items,
+            page=CursorPageInfo(next_cursor=next_cursor, has_more=next_cursor is not None),
+        )
+    )
+
+
+@blocks_router.delete(
+    "/{player_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Unblock a player",
+    response_description="The block has been lifted.",
+    responses={**_UNAUTHORIZED, **_TOO_MANY_REQUESTS},
+    dependencies=[Depends(enforce_friend_request_respond_limit)],
+)
+async def unblock_player(
+    player_id: Annotated[UUID, Path(description="The player to unblock.")],
+    user: CurrentUser,
+    service: BlockingServiceDep,
+) -> None:
+    """Lifts your block on `player_id`.
+
+    **Only your own blocks.** The block comes from your token plus the path,
+    so a block you did not place is not addressable — including one placed
+    on you, which you cannot see and cannot lift.
+
+    **Idempotent.** Unblocking somebody you have not blocked returns `204`
+    and changes nothing. A `DELETE` is idempotent by HTTP semantics, and one
+    answer for both cases keeps this from reporting your own block-list
+    state back to you differently depending on it.
+
+    **Restores nothing.** A friendship the block ended stays ended and a
+    friend request it voided stays voided — you must start again. BL-3 cuts
+    both ways: the block did not erase the friendship, and lifting it does
+    not resurrect one.
+    """
+    await service.unblock(blocker_id=user.id, blocked_id=player_id)

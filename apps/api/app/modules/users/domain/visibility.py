@@ -66,18 +66,36 @@ class ViewerRelationship(StrEnum):
     """
 
     STRANGER = "stranger"
-    """No relationship. What every viewer is today, because no friendship
-    exists to be computed — `friends` ships the graph in A64-013.3."""
+    """No relationship. The default, and what every anonymous viewer is."""
 
     FRIEND = "friend"
     """An active, mutual friendship (domain-model.md FS-1).
 
-    Nothing produces this value yet, and that is stated rather than hidden:
-    A64-013.2 builds the *requests*, and a friendship only exists once
-    A64-013.3 folds an accepted request into one. Until then `permits`
-    treats `FRIENDS` and `NOBODY` identically for every real caller, which
-    is why this task can change the storage model without changing a single
-    response.
+    Produced since A64-013.3, which folds an accepted request into a
+    `Friendship` and wires the graph into profile composition.
+    """
+
+    BLOCKED = "blocked"
+    """Either player has blocked the other — A64-013.5.
+
+    **Not "less than a stranger", and that is why this is an enum rather
+    than a boolean `is_friend`.** BL-2 makes a block suppress things a
+    stranger can still see: presence, direct challenges, direct messages,
+    matchmaking pairing. It is a different answer, not a smaller one, and
+    `permits` treats it as such by checking the *relationship* before the
+    level.
+
+    **Symmetric in effect, asymmetric in origin.** A block is one-directional
+    — BL-1: "asymmetric and one-directional; the blocked player is never
+    told" — but the *visibility* consequence runs both ways, because a
+    blocker who kept seeing the person they blocked would have gained
+    nothing. So this value is produced when either party has blocked the
+    other, and neither can tell which.
+
+    That indistinguishability is the point. A blocked player sees the same
+    thing they would see from somebody with restrictive privacy settings,
+    which is what stops "am I blocked" from being answerable — and a visible
+    block is an invitation to retaliate from a second account.
     """
 
 
@@ -118,14 +136,23 @@ class VisibilityLevel(StrEnum):
         """Whether a viewer in `relationship` may see the field.
 
         The single place the audience model is *applied*. Every read path
-        that gates a field calls this rather than comparing members, so
-        adding `BLOCKED` in A64-013.5 is a change here and nowhere else —
-        which is the whole reason this is a method on the value object
-        rather than an `if level is EVERYONE` at each site.
+        that gates a field calls this rather than comparing members, which
+        is why A64-013.5 added `BLOCKED` here and nowhere else — the whole
+        reason this is a method on the value object rather than an
+        `if level is EVERYONE` at each call site.
+
+        **The relationship is checked before the level**, and the ordering
+        is the feature rather than an optimisation: a block outranks every
+        setting, including `EVERYONE`. A player who set a field public and
+        then blocked somebody has not made it public *to them*, and a
+        version of this method that checked the level first would publish it
+        anyway — silently, to the one person it was withheld from.
 
         Total by construction: every combination of the two enums has an
         answer, so there is no state in which a caller has to invent one.
         """
+        if relationship is ViewerRelationship.BLOCKED:
+            return False
         if self is VisibilityLevel.EVERYONE:
             return True
         if self is VisibilityLevel.FRIENDS:

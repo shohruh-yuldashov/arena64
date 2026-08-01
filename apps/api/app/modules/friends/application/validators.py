@@ -24,27 +24,37 @@ documented as a no-op that A64-013.5 fills.
 The checks run cheapest-first and most-informative-last, and both matter:
 
     1. self          no I/O at all
-    2. blocked       will be one indexed read; must precede the pending
-                     checks so a blocked sender learns nothing about
-                     whether a request exists (FR-2)
+    2. reachable     two indexed reads — blocked pair, then existence. Must
+                     precede the pending checks so a blocked sender learns
+                     nothing about whether a request exists (FR-2)
     3. duplicate     one indexed read
     4. opposite      one indexed read, and the only one whose rejection
                      tells the caller to do something else
 
-Putting the block check after the pending ones would leak: a blocked player
-sending twice would get "duplicate" the second time, which confirms their
-first request exists — the thing FR-2 exists to hide.
+Putting the reachability check after the pending ones would leak: a blocked
+player sending twice would get "duplicate" the second time, which confirms
+their first request exists — the thing FR-2 exists to hide.
 """
 
 import logging
 from uuid import UUID
 
-from app.modules.friends.application.ports import FriendRequestRepository
+from app.modules.friends.application.ports import (
+    BlockedPlayerRepository,
+    FriendRequestRepository,
+)
 from app.modules.friends.domain.exceptions import (
     DuplicateFriendRequest,
+    FriendRequestRecipientUnavailable,
     OppositeFriendRequestPending,
     SelfFriendRequest,
 )
+from app.modules.users.public import PublicProfileReader
+
+#: One message for two causes — see `_ensure_recipient_reachable`. A single
+#: constant rather than two identical literals, because two would eventually
+#: be edited apart and the difference would be a disclosure.
+_UNREACHABLE_RECIPIENT = "That player cannot receive friend requests."
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +68,20 @@ class FriendRequestValidator:
     class gains a fifth check; that is a constructor change, not a redesign.
     """
 
-    def __init__(self, requests: FriendRequestRepository) -> None:
+    def __init__(
+        self,
+        requests: FriendRequestRepository,
+        *,
+        blocks: BlockedPlayerRepository,
+        players: PublicProfileReader,
+    ) -> None:
         self._requests = requests
+        self._blocks = blocks
+        # `users`' published port, for the existence half of FR-2. The
+        # narrowest thing that answers "does this account exist and is it
+        # visible" — it returns `PublicUserProfile`, which has no email
+        # field, so this validator cannot leak an address even in principle.
+        self._players = players
 
     async def ensure_can_send(self, *, requester_id: UUID, addressee_id: UUID) -> None:
         """Raises the first rule this pair violates, or returns.
@@ -76,7 +98,7 @@ class FriendRequestValidator:
         to produce a good error cheaply, not to be the guard.
         """
         self._ensure_not_self(requester_id, addressee_id)
-        await self._ensure_not_blocked(requester_id, addressee_id)
+        await self._ensure_recipient_reachable(requester_id, addressee_id)
         await self._ensure_no_duplicate(requester_id, addressee_id)
         await self._ensure_no_opposite(requester_id, addressee_id)
 
@@ -95,26 +117,48 @@ class FriendRequestValidator:
         if requester_id == addressee_id:
             raise SelfFriendRequest("A player cannot send a friend request to themselves.")
 
-    async def _ensure_not_blocked(self, requester_id: UUID, addressee_id: UUID) -> None:
-        """FR-2 and BL-2 — **the A64-013.5 extension point.**
+    async def _ensure_recipient_reachable(self, requester_id: UUID, addressee_id: UUID) -> None:
+        """FR-2 and BL-2 — **filled in by A64-013.5.**
 
-        A no-op today, and deliberately a *named, called* no-op rather than
-        a comment saying where the check will go. The ordering argument in
-        this module's docstring only holds if this runs before the pending
-        checks, and the cheapest way to guarantee that is for the call to
-        already be in the sequence.
+        Two failures, **one exception, one message**, and that is the whole
+        requirement rather than an economy:
 
-        When blocks exist this becomes one read of `friends.block` for
-        either direction, and the rejection must be **indistinguishable from
-        a request to a player who does not exist** (FR-2) — a distinguishable
-        one tells the sender they were blocked, which is exactly what the
-        blocker was avoiding. That is why it cannot simply raise a new
-        `PlayerBlocked` type: the shape of the refusal is the requirement.
+            blocked pair       either party has blocked the other
+            no such player     the id belongs to nobody, or to a
+                               deactivated account
 
-        The parameters are already correct for it, which is the point of
-        writing the signature now.
+        FR-2: "a request to a blocked or blocking player is rejected —
+        indistinguishably from a request to a non-existent player.
+        Distinguishable rejection tells the sender they were blocked, which
+        is exactly what the blocker was avoiding." A `PlayerBlocked` type
+        would have satisfied the letter of "reject" and defeated the point.
+
+        ## Why the existence check is here now and was not before
+
+        A64-013.2 deliberately did *not* check that the addressee exists,
+        on the grounds that a read whose timing answers "is there an account
+        with this id" is an existence oracle on an endpoint taking an id.
+
+        That argument does not survive blocking: this method now performs a
+        read regardless, so the timing signal exists either way — and
+        without the existence check the two rejections would be
+        distinguishable by *outcome*, which is worse. A request to a
+        non-existent player used to succeed and create an inert row; it now
+        fails exactly as a blocked one does.
+
+        Ordered blocked-first so a blocked sender never reaches a query
+        about the addressee's account.
         """
-        return None
+        blocked = await self._blocks.blocked_ids_for(requester_id)
+        if addressee_id in blocked:
+            raise FriendRequestRecipientUnavailable(_UNREACHABLE_RECIPIENT)
+
+        recipients = await self._players.find_public_profiles([addressee_id])
+        if addressee_id not in recipients:
+            # `find_public_profiles` omits deactivated accounts, so a
+            # withdrawn player is unreachable here for the same reason they
+            # have no public profile — and reports it the same way.
+            raise FriendRequestRecipientUnavailable(_UNREACHABLE_RECIPIENT)
 
     async def _ensure_no_duplicate(self, requester_id: UUID, addressee_id: UUID) -> None:
         """FR-1: at most one pending request per *ordered* pair.

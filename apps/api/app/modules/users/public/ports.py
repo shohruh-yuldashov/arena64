@@ -22,7 +22,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.modules.users.public.credentials import UserCredentials
-from app.modules.users.public.dtos import UserRead
+from app.modules.users.public.dtos import PublicUserProfile, UserRead
 
 
 class NewUserAccount(Protocol):
@@ -249,5 +249,59 @@ class PasswordResetter(Protocol):
         **Does not verify, sanitise or inspect `new_hash`.** It is an
         opaque already-hashed credential, exactly as on `NewUserAccount`.
         The password policy is `auth`'s, applied before hashing.
+        """
+        ...
+
+
+class PublicProfileReader(Protocol):
+    """Reads the view a stranger may see, by username.
+
+    The sixth narrow port, added by A64-012.1 for `GET /profiles/{username}`.
+
+    **Separate from `UserProfileReader` even though both read profiles**,
+    and the split is the whole security design of that endpoint rather
+    than bookkeeping. `UserProfileReader` returns `UserRead`, which carries
+    the account holder's own email; it exists for `GET /auth/me` and for
+    the refresh path, where the caller has already proven the identity it
+    is reading. This one is reached by an anonymous request naming somebody
+    else, so it returns `PublicUserProfile` — a type with no email field at
+    all.
+
+    The consequence worth stating: the `profiles` module cannot leak an
+    address, because it is never handed one. That is a stronger guarantee
+    than a code review, and it survives a `model_dump()` written by
+    somebody who has not read this docstring.
+
+    Read-only by construction, like `UserProfileReader`. There is no way
+    here to change anything, which is what makes it safe to hand to a
+    module serving unauthenticated traffic.
+    """
+
+    async def find_public_profile(self, username: str) -> PublicUserProfile | None:
+        """The public view of the account holding `username`, or `None`.
+
+        **Case-insensitive** (UP-1): matching is on the folded form, the
+        same one uniqueness is enforced on, so `Alice`, `alice` and `ALICE`
+        resolve to one account. The returned `username` preserves the
+        casing the player chose.
+
+        Returns `None` rather than raising, and that is a deliberate
+        difference from `UserProfileReader.get_profile`. The difference is
+        what the caller knows: `get_profile` takes an identifier the caller
+        has already authenticated, so absence is a genuine failure. This
+        takes a name a stranger typed into a URL, where absence is the most
+        ordinary outcome there is — and an exception is a branch, which on
+        a public endpoint is a thing that can be timed.
+
+        **A deactivated account has no public profile** and is reported as
+        `None`, identically to a username nobody registered — the same
+        return, with nothing for a caller to branch on.
+
+        That rule is enforced here rather than by the consumer because
+        `users` owns `is_active`. The alternative would be publishing the
+        flag on `PublicUserProfile` so a consumer could apply it, and
+        "which accounts are deactivated" is itself a disclosure — see
+        `PublicProfileService` for the argument. A consumer of this port
+        cannot render a withdrawn account even if it tries.
         """
         ...

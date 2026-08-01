@@ -25,6 +25,11 @@ What is published, and why only this much:
   `EmailVerifier`        marks an address verified (A64-011.6)
   `PasswordResetter`     replaces a password hash, and can do nothing
                          else — not even read one (A64-011.7)
+  `PublicProfileReader`  reads the view a *stranger* may see, by username
+                         (A64-012.1)
+  `PublicUserProfile`    that port's output — deliberately has no `email`
+                         field, so the module serving anonymous traffic
+                         cannot leak one
   `UserCredentials`      that port's output — an account view plus the
                          stored hash, and nothing that would let a
                          consumer read or edit a profile
@@ -47,11 +52,12 @@ from app.modules.users.domain.exceptions import (
     UserNotFound,
 )
 from app.modules.users.public.credentials import UserCredentials
-from app.modules.users.public.dtos import UserRead, UserSummary
+from app.modules.users.public.dtos import PublicUserProfile, UserRead, UserSummary
 from app.modules.users.public.ports import (
     EmailVerifier,
     NewUserAccount,
     PasswordResetter,
+    PublicProfileReader,
     UserAccountCreator,
     UserCredentialStore,
     UserProfileReader,
@@ -70,6 +76,8 @@ __all__ = [
     "InvalidUsername",
     "NewUserAccount",
     "PasswordResetter",
+    "PublicProfileReader",
+    "PublicUserProfile",
     "UserAccountCreator",
     "UserCredentialStore",
     "UserCredentials",

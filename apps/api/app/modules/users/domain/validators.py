@@ -28,6 +28,8 @@ from zoneinfo import available_timezones
 
 from app.core.enums import Locale
 from app.modules.users.domain.exceptions import (
+    InvalidBio,
+    InvalidCountryCode,
     InvalidEmail,
     InvalidLanguage,
     InvalidTimezone,
@@ -289,3 +291,114 @@ def validate_timezone(value: str) -> str:
         )
 
     return value
+
+
+# --- biography (A64-012.1) --------------------------------------------------
+
+#: A64-012.1's figure. Bounded for two independent reasons, and it is worth
+#: separating them because only one is about product taste.
+#:
+#: The product reason is that a profile blurb is a blurb.
+#:
+#: The security reason is that this is the first free-text field on the
+#: platform that one player writes and *other* players read. Every such
+#: field is a storage-amplification surface (a row per account, unbounded)
+#: and a rendering surface. The bound is the cheap half of the defence; the
+#: character rules below are the other half.
+BIO_MAX_LENGTH = 500
+
+#: Newline and tab survive; every other C0/C1 control character does not.
+#:
+#: Not aesthetic. A bio is rendered into a terminal by an admin tool, into
+#: a log line by an abuse report, and into a web page by the client. `\x1b`
+#: is an ANSI escape — enough to rewrite what a moderator sees in their own
+#: terminal. `‮` (RIGHT-TO-LEFT OVERRIDE) reverses the rendering of
+#: everything after it, which is a known display-spoofing primitive.
+#:
+#: Stripping silently would be worse than refusing: the player would see
+#: text they did not write. This rejects and says which character.
+_BIO_FORBIDDEN_CHARACTERS = frozenset(
+    chr(codepoint)
+    for codepoint in [*range(0x00, 0x20), 0x7F, *range(0x80, 0xA0), 0x200B, 0x200E, 0x200F, 0x202A]
+    + list(range(0x202B, 0x2030))
+) - {"\n", "\t"}
+
+
+def validate_bio(value: str) -> str:
+    """Returns the biography unchanged if it is acceptable plain text.
+
+    **Plain text, and this module is where that means something.**
+    A64-012.1 specifies that Markdown is not supported, which is a decision
+    about *rendering* — but a field documented as plain text and stored
+    without checking is one that a client will eventually render as
+    something else. Nothing here escapes or transforms the value: escaping
+    is the renderer's job and doing it at the boundary produces `&amp;amp;`
+    the second time somebody escapes it again. What this does is keep the
+    value *inert* — no control characters, no bidirectional overrides — so
+    that a plain-text renderer is safe and a careless one is merely wrong.
+
+    Trailing whitespace is stripped, because a bio that differs from
+    another only by a trailing newline is the same bio, and leaving it
+    makes the length bound depend on invisible characters.
+
+    Empty is not an error and is not a value: it normalises to `None` at
+    the *caller*, which is what makes "no bio" one state rather than two
+    (`None` and `""`) that every renderer would have to check separately.
+    """
+    stripped = value.strip()
+
+    if len(stripped) > BIO_MAX_LENGTH:
+        raise InvalidBio(f"Bio must be at most {BIO_MAX_LENGTH} characters.")
+
+    offending = sorted(_BIO_FORBIDDEN_CHARACTERS.intersection(stripped))
+    if offending:
+        # Names the codepoint, never echoes the whole bio — an error
+        # message is a place user-supplied text reaches logs and screens
+        # (services.md §8.5), and this one is reachable by anyone.
+        raise InvalidBio(
+            f"Bio must not contain control or bidirectional characters "
+            f"(found U+{ord(offending[0]):04X})."
+        )
+
+    return stripped
+
+
+# --- country ----------------------------------------------------------------
+
+#: ISO 3166-1 alpha-2. Two uppercase ASCII letters, stored as `char(2)`.
+COUNTRY_CODE_LENGTH = 2
+
+_COUNTRY_CODE_PATTERN = re.compile(r"^[A-Z]{2}$")
+
+
+def validate_country_code(value: str) -> str:
+    """Validates the *shape* of an ISO 3166-1 alpha-2 code and upper-cases
+    it. Does **not** check that the code is assigned.
+
+    That gap is deliberate and is worth stating rather than leaving for
+    somebody to discover: `XX` and `ZZ` pass this. Checking membership
+    needs the list, and the list belongs in the `reference.country` table
+    database.md §201 already specifies ("Variants, time controls, rating
+    categories, locales and countries are referenced by ... reference
+    data"), precisely so that operations can correct a code without a
+    deploy — countries are added, renamed and split more often than a
+    hardcoded set would survive.
+
+    Adding a Python dependency to hold that list would be the wrong fix in
+    two ways: it duplicates a table the design already calls for, and it
+    makes a data question into a release question. Until `reference.country`
+    exists, the format check plus the `char(2)` column is what the platform
+    has, and the only field it protects is one no endpoint writes yet.
+
+    Upper-casing rather than rejecting lowercase: `gb` and `GB` are the
+    same country, and a form that rejected the first would be rejecting a
+    keyboard rather than a value.
+    """
+    normalised = value.strip().upper()
+
+    if not _COUNTRY_CODE_PATTERN.match(normalised):
+        raise InvalidCountryCode(
+            f"Country must be a two-letter ISO 3166-1 alpha-2 code such as 'GB'; got {value!r}."
+        )
+
+    return normalised

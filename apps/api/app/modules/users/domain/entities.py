@@ -25,7 +25,7 @@ from uuid import UUID
 
 from app.core.enums import Locale
 from app.core.identifiers import generate_uuid7
-from app.modules.users.domain.value_objects import Email, Timezone, Username
+from app.modules.users.domain.value_objects import Bio, CountryCode, Email, Timezone, Username
 
 
 @dataclass(slots=True)
@@ -55,6 +55,19 @@ class User:
     updated_at: datetime | None = None
     display_name: str | None = None
     avatar_url: str | None = None
+
+    # Presentational identity — domain-model.md §7: `UserProfile` owns
+    # "display name, avatar reference, country, biography, join date".
+    # Added by A64-012.1, which needs them for the public profile view.
+    #
+    # Both are `None` for every account today: no endpoint writes them yet
+    # (A64-012.1's brief excludes editing). They are real columns rather
+    # than hardcoded nulls in the response because the response contract
+    # requires the fields, and a column is where the value will come from
+    # when the edit endpoint arrives — the alternative is a view that lies
+    # about having a data model behind it.
+    bio: Bio | None = None
+    country: CountryCode | None = None
 
     # Sign-in is refused until this instant passes. `None` means unlocked.
     #

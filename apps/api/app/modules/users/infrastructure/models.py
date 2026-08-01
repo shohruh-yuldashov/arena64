@@ -40,7 +40,7 @@ page render.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, Computed, Index, String, text
+from sqlalchemy import CHAR, Boolean, CheckConstraint, Computed, Index, String, text
 from sqlalchemy.dialects.postgresql import ENUM as PgEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,6 +50,8 @@ from app.database.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 from app.database.types import UtcDateTime
 from app.modules.users.domain.validators import (
     AVATAR_URL_MAX_LENGTH,
+    BIO_MAX_LENGTH,
+    COUNTRY_CODE_LENGTH,
     DISPLAY_NAME_MAX_LENGTH,
     EMAIL_MAX_LENGTH,
     USERNAME_MAX_LENGTH,
@@ -112,6 +114,13 @@ class UserModel(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             name="username_length",
         ),
         CheckConstraint("char_length(email) > 0", name="email_not_empty"),
+        # Interpolated from the domain's constant so the database's
+        # authoritative bound (BE-06) cannot drift from the validator's,
+        # exactly as `username_length` above does.
+        CheckConstraint(f"char_length(bio) <= {BIO_MAX_LENGTH}", name="bio_length"),
+        # Format only — membership is `reference.country`'s job once that
+        # table exists. `~` is PostgreSQL's regex match.
+        CheckConstraint("country_code ~ '^[A-Z]{2}$'", name="country_code_format"),
         {"schema": USERS_SCHEMA},
     )
 
@@ -176,6 +185,26 @@ class UserModel(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     display_name: Mapped[str | None] = mapped_column(String(DISPLAY_NAME_MAX_LENGTH), nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(AVATAR_URL_MAX_LENGTH), nullable=True)
+
+    # A64-012.1's presentational identity. Both nullable and both `None`
+    # for every row today — nothing writes them until profile editing
+    # exists (that task's brief excludes it).
+    bio: Mapped[str | None] = mapped_column(String(BIO_MAX_LENGTH), nullable=True)
+
+    country_code: Mapped[str | None] = mapped_column(
+        # `char(2)`, not `varchar`: an ISO 3166-1 alpha-2 code is exactly
+        # two characters, and a fixed-width column is the database saying
+        # so rather than accepting "United Kingdom" and discovering it at
+        # render time. database.md §4.6 specifies this type for the column.
+        #
+        # Deliberately **no foreign key** to `reference.country`, because
+        # that table does not exist yet (§201 specifies it as reference
+        # data). When it arrives this gains the FK; until then the CHECK
+        # below is the database's half of the guarantee and
+        # `validate_country_code` is the application's.
+        CHAR(COUNTRY_CODE_LENGTH),
+        nullable=True,
+    )
 
     # Explicit re-declarations so the reader sees the full row shape here
     # rather than having to open two mixins. Types match the mixins exactly.

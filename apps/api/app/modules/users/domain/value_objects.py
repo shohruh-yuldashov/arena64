@@ -17,6 +17,8 @@ from dataclasses import dataclass
 
 from app.modules.users.domain.validators import (
     fold_username,
+    validate_bio,
+    validate_country_code,
     validate_email,
     validate_timezone,
     validate_username,
@@ -78,6 +80,53 @@ class Timezone:
 
     def __post_init__(self) -> None:
         validate_timezone(self.value)
+
+    def __str__(self) -> str:
+        return self.value
+
+
+@dataclass(frozen=True, slots=True)
+class Bio:
+    """A player's self-description — plain text, bounded, inert.
+
+    Normalises on construction like `Email` rather than merely validating
+    like `Username`, because the stored form *is* the trimmed form: a bio
+    that differs only by trailing whitespace is the same bio, and keeping
+    both would make the length bound depend on invisible characters.
+
+    There is deliberately no `is_empty` or `or_none` helper. "No bio" is
+    `None` at the field, not an empty `Bio` — one absent state rather than
+    two that every renderer would have to check separately. Constructing
+    `Bio("")` is legal and yields an empty value; it is the *entity* that
+    decides an empty string means absence, and it does so in one place.
+    """
+
+    value: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "value", validate_bio(self.value))
+
+    def __str__(self) -> str:
+        return self.value
+
+
+@dataclass(frozen=True, slots=True)
+class CountryCode:
+    """An ISO 3166-1 alpha-2 country code, upper-cased.
+
+    Validated for *shape* only — see `validate_country_code` on why
+    membership belongs to the `reference.country` table rather than to a
+    constant in this file.
+
+    A value object rather than a bare `str` for the reason the module
+    docstring gives: a function taking `CountryCode` cannot be handed
+    `"United Kingdom"`, `"gbr"`, or a display name someone read off a form.
+    """
+
+    value: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "value", validate_country_code(self.value))
 
     def __str__(self) -> str:
         return self.value

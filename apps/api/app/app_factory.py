@@ -69,6 +69,18 @@ OPENAPI_TAGS: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "profiles",
+        "description": (
+            "Public player profiles, read by handle and by anyone. A profile is a "
+            "*composition* rather than a record: identity comes from `users`, ratings "
+            "from the rating system and match counts from statistics.\n\n"
+            "Ratings and statistics currently report placeholder values — a provisional "
+            "starting rating and zero matches — because no game has been played on this "
+            "platform yet. The **shape** is final, so a client written against it today "
+            "needs no change when real values arrive."
+        ),
+    },
+    {
         "name": "health",
         "description": (
             "Liveness and readiness probes for load balancers and orchestrators. "

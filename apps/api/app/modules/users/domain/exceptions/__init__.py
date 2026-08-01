@@ -68,8 +68,30 @@ class InvalidTimezone(ValidationError):
     """Not an IANA timezone name known to this system."""
 
 
+# --- presentational identity (A64-012.1) -------------------------------------
+#
+# Neither carries a wire code of its own, and that is the rule in
+# `app.core.error_codes.ErrorCode` applied rather than an omission: a code
+# is earned when a client must *behave* differently and the status plus the
+# endpoint cannot say which field was wrong. Both of these are only ever
+# reachable from a future profile-edit form, which submits several fields
+# at once — so when that endpoint exists they will need codes, and adding
+# them is the edit task's to do alongside the form that needs them.
+
+
+class InvalidBio(ValidationError):
+    """Too long, or carrying characters a plain-text field must not —
+    see `domain/validators.py::validate_bio`."""
+
+
+class InvalidCountryCode(ValidationError):
+    """Not a two-letter ISO 3166-1 alpha-2 code."""
+
+
 __all__ = [
     "EmailAlreadyExists",
+    "InvalidBio",
+    "InvalidCountryCode",
     "InvalidEmail",
     "InvalidLanguage",
     "InvalidTimezone",

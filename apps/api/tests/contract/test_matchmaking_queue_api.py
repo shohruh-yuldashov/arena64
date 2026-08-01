@@ -152,6 +152,112 @@ class TestJoin:
         assert events[0].aggregate_type == "queue_ticket"
 
 
+class TestVariantSelection:
+    """Which game a player may queue for — A64-015.2.
+
+    The engine plays three variants and the platform offers one. The
+    distinction is a `ProductVariant` at the boundary rather than a
+    validator over the engine's `BoardVariant`, so an unoffered variant is
+    refused by the schema and never appears in the document as an accepted
+    value.
+    """
+
+    async def test_the_russian_pool_is_accepted(self, client: AsyncClient, alice: Player) -> None:
+        response = await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"variant": "russian_8x8", "queue_type": "ranked"},
+        )
+
+        assert response.status_code == 201, response.text
+        assert response.json()["data"]["variant"] == "russian_8x8"
+
+    async def test_the_english_pool_is_rejected(self, client: AsyncClient, alice: Player) -> None:
+        """A testing and configuration fixture, not a product
+        (`specs/game-engine/audit.md` §9). It carries the engine's only
+        external perft oracle, so it cannot be deleted — and it must not be
+        reachable from an HTTP body."""
+        response = await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"variant": "english_8x8", "queue_type": "ranked"},
+        )
+
+        assert response.status_code == 422, response.text
+
+    async def test_a_rejected_variant_writes_no_ticket(
+        self, client: AsyncClient, alice: Player
+    ) -> None:
+        await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"variant": "english_8x8", "queue_type": "ranked"},
+        )
+
+        response = await client.get(MY_TICKET_URL, headers=alice.auth)
+        assert response.status_code == 404, response.text
+
+    async def test_the_international_pool_is_rejected(
+        self, client: AsyncClient, alice: Player
+    ) -> None:
+        """Its draw rules are a placeholder rather than a claim
+        (`specs/game-engine.md` §7.7). Offering it would ship Russian's
+        rules under another name."""
+        response = await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"variant": "international_10x10", "queue_type": "ranked"},
+        )
+
+        assert response.status_code == 422, response.text
+
+    async def test_the_variant_defaults_to_the_one_on_offer(
+        self, client: AsyncClient, alice: Player
+    ) -> None:
+        """So a client written against A64-015.1's two-field body keeps
+        working, and so the default is a decision rather than an accident
+        of whichever member is first."""
+        response = await client.post(QUEUE_URL, headers=alice.auth, json={"queue_type": "casual"})
+
+        assert response.status_code == 201, response.text
+        assert response.json()["data"]["variant"] == "russian_8x8"
+
+    async def test_the_ticket_reads_back_with_its_variant(
+        self, client: AsyncClient, alice: Player
+    ) -> None:
+        """It survives the round trip through PostgreSQL's own
+        `queue_variant` enum — the column, not just the request."""
+        await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"variant": "russian_8x8", "queue_type": "casual", "region": "asia"},
+        )
+
+        response = await client.get(MY_TICKET_URL, headers=alice.auth)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["variant"] == "russian_8x8"
+        assert response.json()["data"]["region"] == "asia"
+
+    async def test_a_response_names_no_variant_the_platform_does_not_offer(
+        self, client: AsyncClient, alice: Player
+    ) -> None:
+        """The refusal lists what *is* offered — a client that guessed
+        wrong needs that — and names nothing else. An error message
+        assembled from `BoardVariant` would advertise the fixture in the
+        act of rejecting it."""
+        response = await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"variant": "english_8x8", "queue_type": "ranked"},
+        )
+
+        body = response.text
+        assert "russian_8x8" in body
+        assert "english_8x8" not in body
+        assert "international_10x10" not in body
+
+
 class TestDuplicateJoin:
     async def test_a_second_join_conflicts(self, client: AsyncClient, alice: Player) -> None:
         await client.post(QUEUE_URL, headers=alice.auth, json={"queue_type": "ranked"})
@@ -296,6 +402,28 @@ class TestOpenApi:
 
         described = {tag["name"] for tag in schema["tags"] if tag.get("description")}
         assert "matchmaking" in described
+
+    async def test_the_document_advertises_only_offered_variants(
+        self, contract_session: AsyncSession
+    ) -> None:
+        """A generated client should be unable to *express* a request for a
+        variant the platform does not run. A validator over the engine's
+        wider enum would have produced the opposite: the fixture documented
+        as an accepted value and refused at runtime."""
+        schema = build_contract_app(contract_session).openapi()
+        variants = schema["components"]["schemas"]["ProductVariant"]["enum"]
+
+        assert variants == ["russian_8x8"]
+
+    async def test_neither_request_nor_response_names_the_engine_s_enum(
+        self, contract_session: AsyncSession
+    ) -> None:
+        """`BoardVariant` is `engine`'s, and `matchmaking` does not import
+        it (R-2). If it ever reached the document, the boundary that keeps
+        the fixture off the menu would already be gone."""
+        schema = build_contract_app(contract_session).openapi()
+
+        assert "BoardVariant" not in schema["components"]["schemas"]
 
     async def test_the_join_body_forbids_unknown_fields(
         self, contract_session: AsyncSession

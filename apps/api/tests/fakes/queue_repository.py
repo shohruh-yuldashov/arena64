@@ -25,13 +25,12 @@ from datetime import datetime
 from uuid import UUID
 
 from app.modules.matchmaking.domain.exceptions import AlreadyQueued
+from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType
 from app.modules.matchmaking.domain.queue_ticket import (
     PROVISIONAL_RATING,
     QueueSnapshot,
     QueueStatus,
     QueueTicket,
-    QueueType,
-    Region,
 )
 from app.modules.users.domain.presence import DeviceType, Presence
 from app.platform.events import DomainEvent
@@ -85,28 +84,17 @@ class InMemoryQueueRepository:
                 return ticket
         return None
 
-    async def queue_snapshot(
-        self,
-        *,
-        queue_type: QueueType,
-        region: Region,
-        now: datetime,
-        limit: int,
-    ) -> QueueSnapshot:
+    async def queue_snapshot(self, *, pool: QueuePool, now: datetime, limit: int) -> QueueSnapshot:
         live = sorted(
             (
                 ticket
                 for ticket in self.tickets.values()
-                if ticket.queue_type is queue_type
-                and ticket.region is region
-                and ticket.is_waiting
-                and not ticket.is_due(now)
+                if ticket.pool == pool and ticket.is_waiting and not ticket.is_due(now)
             ),
             key=lambda ticket: (ticket.entered_at, ticket.id),
         )
         return QueueSnapshot(
-            queue_type=queue_type,
-            region=region,
+            pool=pool,
             taken_at=now,
             # The count is over the whole predicate and the page is bounded —
             # the real adapter's two statements, modelled so a test can

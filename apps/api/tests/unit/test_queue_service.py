@@ -19,9 +19,12 @@ from uuid import UUID
 import pytest
 
 from app.core.identifiers import generate_uuid7
+from app.modules.game.public import ProductVariant
+from app.modules.matchmaking.application.eligibility import PresenceEligibilityPolicy
 from app.modules.matchmaking.application.services import QueueService
-from app.modules.matchmaking.domain.exceptions import AlreadyQueued, PlayerNotPresent
-from app.modules.matchmaking.domain.queue_ticket import QueueStatus, QueueType, Region
+from app.modules.matchmaking.domain.exceptions import AlreadyQueued, QueueNotPermitted
+from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType, Region
+from app.modules.matchmaking.domain.queue_ticket import QueueStatus
 from tests.fakes.outbox import NullUnitOfWork
 from tests.fakes.presence_redis import MovableClock
 from tests.fakes.queue_repository import (
@@ -44,6 +47,11 @@ def clock() -> MovableClock:
 @pytest.fixture
 def tickets() -> InMemoryQueueRepository:
     return InMemoryQueueRepository()
+
+
+def pool(queue_type: QueueType, region: Region = Region.GLOBAL) -> QueuePool:
+    """A pool for the one variant Arena64 offers."""
+    return QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=queue_type, region=region)
 
 
 @pytest.fixture
@@ -72,7 +80,7 @@ def service(
     return QueueService(
         tickets=tickets,
         ratings=FixedRatingProvider(1500),
-        presence=presence,
+        eligibility=PresenceEligibilityPolicy(presence),
         events=events,
         unit_of_work=unit_of_work,
         clock=clock,
@@ -82,16 +90,14 @@ def service(
 
 
 async def _join(service: QueueService, player_id: UUID = PLAYER) -> None:
-    await service.join(player_id=player_id, queue_type=QueueType.RANKED, region=Region.EUROPE)
+    await service.join(player_id=player_id, pool=pool(QueueType.RANKED, Region.EUROPE))
 
 
 class TestJoin:
     async def test_joining_issues_a_waiting_ticket(
         self, service: QueueService, clock: MovableClock
     ) -> None:
-        ticket = await service.join(
-            player_id=PLAYER, queue_type=QueueType.RANKED, region=Region.EUROPE
-        )
+        ticket = await service.join(player_id=PLAYER, pool=pool(QueueType.RANKED, Region.EUROPE))
 
         assert ticket.status is QueueStatus.WAITING
         assert ticket.player_id == PLAYER
@@ -113,7 +119,7 @@ class TestJoin:
         service = QueueService(
             tickets=tickets,
             ratings=FixedRatingProvider(2140),
-            presence=presence,
+            eligibility=PresenceEligibilityPolicy(presence),
             events=events,
             unit_of_work=unit_of_work,
             clock=clock,
@@ -121,9 +127,7 @@ class TestJoin:
             snapshot_limit=200,
         )
 
-        ticket = await service.join(
-            player_id=PLAYER, queue_type=QueueType.RANKED, region=Region.GLOBAL
-        )
+        ticket = await service.join(player_id=PLAYER, pool=pool(QueueType.RANKED, Region.GLOBAL))
 
         assert ticket.rating_snapshot == 2140
 
@@ -150,7 +154,7 @@ class TestJoin:
         absence, and it is the only thing that refuses a join."""
         presence.offline(PLAYER, at=NOW)
 
-        with pytest.raises(PlayerNotPresent):
+        with pytest.raises(QueueNotPermitted):
             await _join(service)
 
     async def test_a_player_recorded_online_is_admitted(
@@ -175,7 +179,7 @@ class TestJoin:
     ) -> None:
         presence.offline(PLAYER, at=NOW)
 
-        with pytest.raises(PlayerNotPresent):
+        with pytest.raises(QueueNotPermitted):
             await _join(service)
 
         assert tickets.tickets == {}
@@ -199,7 +203,7 @@ class TestDuplicateJoin:
         await _join(service)
 
         with pytest.raises(AlreadyQueued):
-            await service.join(player_id=PLAYER, queue_type=QueueType.CASUAL, region=Region.ASIA)
+            await service.join(player_id=PLAYER, pool=pool(QueueType.CASUAL, Region.ASIA))
 
     async def test_a_refused_duplicate_publishes_nothing(
         self, service: QueueService, events: RecordingPublisher
@@ -235,9 +239,7 @@ class TestLeave:
     async def test_leaving_cancels_the_ticket(
         self, service: QueueService, tickets: InMemoryQueueRepository, clock: MovableClock
     ) -> None:
-        ticket = await service.join(
-            player_id=PLAYER, queue_type=QueueType.RANKED, region=Region.EUROPE
-        )
+        ticket = await service.join(player_id=PLAYER, pool=pool(QueueType.RANKED, Region.EUROPE))
         clock.advance(30)
 
         assert await service.leave(player_id=PLAYER) is True
@@ -290,9 +292,7 @@ class TestLeave:
 
 class TestActiveTicket:
     async def test_a_live_ticket_is_reported(self, service: QueueService) -> None:
-        ticket = await service.join(
-            player_id=PLAYER, queue_type=QueueType.RANKED, region=Region.EUROPE
-        )
+        ticket = await service.join(player_id=PLAYER, pool=pool(QueueType.RANKED, Region.EUROPE))
 
         found = await service.active_ticket(player_id=PLAYER)
 
@@ -319,11 +319,9 @@ class TestSnapshot:
     async def test_a_snapshot_counts_only_its_own_pool(self, service: QueueService) -> None:
         await _join(service, generate_uuid7())
         await _join(service, generate_uuid7())
-        await service.join(
-            player_id=generate_uuid7(), queue_type=QueueType.CASUAL, region=Region.EUROPE
-        )
+        await service.join(player_id=generate_uuid7(), pool=pool(QueueType.CASUAL, Region.EUROPE))
 
-        snapshot = await service.snapshot(queue_type=QueueType.RANKED, region=Region.EUROPE)
+        snapshot = await service.snapshot(pool=pool(QueueType.RANKED, Region.EUROPE))
 
         assert snapshot.waiting == 2
 
@@ -334,7 +332,7 @@ class TestSnapshot:
         clock.advance(TTL_SECONDS)
         await _join(service, generate_uuid7())
 
-        snapshot = await service.snapshot(queue_type=QueueType.RANKED, region=Region.EUROPE)
+        snapshot = await service.snapshot(pool=pool(QueueType.RANKED, Region.EUROPE))
 
         assert snapshot.waiting == 1
 
@@ -352,7 +350,7 @@ class TestSnapshot:
         service = QueueService(
             tickets=tickets,
             ratings=FixedRatingProvider(),
-            presence=presence,
+            eligibility=PresenceEligibilityPolicy(presence),
             events=events,
             unit_of_work=unit_of_work,
             clock=clock,
@@ -362,7 +360,7 @@ class TestSnapshot:
         for _ in range(5):
             await _join(service, generate_uuid7())
 
-        snapshot = await service.snapshot(queue_type=QueueType.RANKED, region=Region.EUROPE)
+        snapshot = await service.snapshot(pool=pool(QueueType.RANKED, Region.EUROPE))
 
         assert snapshot.waiting == 5
         assert len(snapshot.tickets) == 2
@@ -372,9 +370,7 @@ class TestExpiry:
     async def test_a_due_ticket_is_expired(
         self, service: QueueService, tickets: InMemoryQueueRepository, clock: MovableClock
     ) -> None:
-        ticket = await service.join(
-            player_id=PLAYER, queue_type=QueueType.RANKED, region=Region.EUROPE
-        )
+        ticket = await service.join(player_id=PLAYER, pool=pool(QueueType.RANKED, Region.EUROPE))
         clock.advance(TTL_SECONDS)
 
         sweep = await service.expire_due(limit=50, claimed_by="w1")
@@ -399,9 +395,7 @@ class TestExpiry:
         """`occurred_at` is the ticket's own `expires_at`, not the sweep's
         instant: the fact became true when the window closed, and the
         outbox orders by causation (database.md §12.5)."""
-        ticket = await service.join(
-            player_id=PLAYER, queue_type=QueueType.RANKED, region=Region.EUROPE
-        )
+        ticket = await service.join(player_id=PLAYER, pool=pool(QueueType.RANKED, Region.EUROPE))
         clock.advance(TTL_SECONDS + 120)
 
         await service.expire_due(limit=50, claimed_by="w1")
@@ -438,9 +432,7 @@ class TestExpiry:
         """The `status = 'waiting'` predicate on both writes. Without it a
         sweep would re-stamp a cancellation as an expiry, and the row would
         report a departure the player did not make."""
-        ticket = await service.join(
-            player_id=PLAYER, queue_type=QueueType.RANKED, region=Region.EUROPE
-        )
+        ticket = await service.join(player_id=PLAYER, pool=pool(QueueType.RANKED, Region.EUROPE))
         await service.leave(player_id=PLAYER)
         clock.advance(TTL_SECONDS)
 
@@ -448,6 +440,55 @@ class TestExpiry:
 
         assert sweep.is_idle
         assert tickets.tickets[ticket.id].status is QueueStatus.CANCELLED
+
+    async def test_sweeping_the_same_ticket_twice_expires_it_once(
+        self, service: QueueService, tickets: InMemoryQueueRepository, clock: MovableClock
+    ) -> None:
+        """A64-015.2 §9: repeated expiration must be safe. The sweep is a
+        periodic task, so it *will* run again over a table whose due rows
+        it has already resolved — and a worker that died between its claim
+        and its commit leaves rows a later tick claims for a second time.
+        """
+        ticket = await service.join(player_id=PLAYER, pool=pool(QueueType.RANKED, Region.EUROPE))
+        clock.advance(TTL_SECONDS)
+        await service.expire_due(limit=50, claimed_by="w1")
+
+        second = await service.expire_due(limit=50, claimed_by="w1")
+
+        assert second.is_idle
+        assert tickets.tickets[ticket.id].status is QueueStatus.EXPIRED
+
+    async def test_a_second_sweep_publishes_no_second_event(
+        self, service: QueueService, events: RecordingPublisher, clock: MovableClock
+    ) -> None:
+        """The consequence that matters. A duplicate `QueueTicketExpired`
+        is a subscriber told twice that a player left a queue they were
+        already out of — and once pairing exists, a second event for a
+        ticket that has since been matched."""
+        await _join(service)
+        clock.advance(TTL_SECONDS)
+        await service.expire_due(limit=50, claimed_by="w1")
+        published_after_one_sweep = len(events.published)
+
+        await service.expire_due(limit=50, claimed_by="w1")
+
+        assert len(events.published) == published_after_one_sweep
+
+    async def test_a_ticket_expired_by_one_worker_is_not_re_expired_by_another(
+        self, service: QueueService, tickets: InMemoryQueueRepository, clock: MovableClock
+    ) -> None:
+        """Horizontal workers, which is what `FOR UPDATE SKIP LOCKED`
+        exists for. Sequenced here rather than raced, because the fake
+        cannot hold a row lock — the contract test against real PostgreSQL
+        is what exercises the locking itself."""
+        ticket = await service.join(player_id=PLAYER, pool=pool(QueueType.RANKED, Region.EUROPE))
+        clock.advance(TTL_SECONDS)
+        await service.expire_due(limit=50, claimed_by="w1")
+
+        sweep = await service.expire_due(limit=50, claimed_by="w2")
+
+        assert sweep.expired == 0
+        assert tickets.tickets[ticket.id].resolved_at == ticket.expires_at
 
     async def test_an_idle_sweep_publishes_nothing(
         self, service: QueueService, events: RecordingPublisher

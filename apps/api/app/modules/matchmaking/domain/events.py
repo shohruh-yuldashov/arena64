@@ -45,7 +45,8 @@ from datetime import datetime
 from typing import Any, ClassVar
 from uuid import UUID
 
-from app.modules.matchmaking.domain.queue_ticket import QueueType, Region
+from app.modules.game.public import ProductVariant
+from app.modules.matchmaking.domain.queue_pool import QueueType, Region
 from app.platform.events import DomainEvent
 
 #: The `aggregate_type` every event here carries — domain-model.md §10.2's
@@ -70,6 +71,14 @@ class _QueueTicketEvent(DomainEvent):
 
     ticket_id: UUID
     player_id: UUID
+    variant: ProductVariant
+    """Which rule set the pool plays — A64-015.2.
+
+    On the payload for the same reason `queue_type` and `region` are: a
+    consumer routes by pool, and a pairing worker for one variant must be
+    able to ignore an event for another without a lookup.
+    """
+
     queue_type: QueueType
     region: Region
 
@@ -81,6 +90,7 @@ class _QueueTicketEvent(DomainEvent):
         return {
             "ticket_id": str(self.ticket_id),
             "player_id": str(self.player_id),
+            "variant": self.variant.value,
             "queue_type": self.queue_type.value,
             "region": self.region.value,
         }

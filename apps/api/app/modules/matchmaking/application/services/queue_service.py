@@ -11,22 +11,19 @@ acceptance and realtime updates, and nothing in this class approaches any of
 them: there is no method that reads two tickets, and `queue_snapshot` is a
 read that returns a value rather than a scan that decides anything.
 
-## Why `join` checks presence, and why it almost never refuses
+## Why eligibility is a port and not an `if` — A64-015.2
 
-A64-014.1 requires the queue to depend on the existing presence abstraction
-rather than a new online index, and the only place a presence question
-belongs in this task is at entry: a pool of people who are not there is a
-pool whose matches are abandoned at the join deadline.
+A64-015.1 asked one question at entry, inline: is this player positively
+recorded as offline. It was the only question any module could answer.
 
-The rule is one-sided on purpose. `PresenceProvider.presence_for` collapses
-three situations into `None` — the window expired, nothing was ever
-recorded, Redis was unreachable — and its own docstring says a caller "must
-not try" to tell them apart. So `None` is permitted, and the only refusal is
-a record that positively says `online: false`, which is a *recorded* sign-out
-and the platform's only evidence of absence. Refusing on `None` would mean a
-Redis blip stopped anybody queueing, which is the self-inflicted outage
-system-design.md T-2 warns about, in exchange for excluding players the
-platform never observed in the first place.
+There will be more — a suspended account, a live sanction, an unfinished
+match — and each comes from a different module, most of which do not exist.
+A service that grew one `if` per module would end up holding five ports and
+answering a question none of them is about. So it holds
+`QueueEligibilityPolicy`, which is one port with one method, and the
+presence rule moved behind it unchanged. See
+`application/eligibility.py` for the rule and for why the refusal names no
+cause.
 
 ## Where the transactions are
 
@@ -47,20 +44,16 @@ from uuid import UUID
 
 from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork
+from app.modules.matchmaking.application.eligibility import QueueEligibilityPolicy
 from app.modules.matchmaking.application.ports import QueueRepository, RatingSnapshotProvider
 from app.modules.matchmaking.domain.events import (
     QueueTicketCancelled,
     QueueTicketEnqueued,
     QueueTicketExpired,
 )
-from app.modules.matchmaking.domain.exceptions import AlreadyQueued, PlayerNotPresent
-from app.modules.matchmaking.domain.queue_ticket import (
-    QueueSnapshot,
-    QueueTicket,
-    QueueType,
-    Region,
-)
-from app.modules.users.public import PresenceProvider
+from app.modules.matchmaking.domain.exceptions import AlreadyQueued
+from app.modules.matchmaking.domain.queue_pool import QueuePool
+from app.modules.matchmaking.domain.queue_ticket import QueueSnapshot, QueueTicket
 from app.platform.outbox import EventPublisher
 
 logger = logging.getLogger(__name__)
@@ -85,12 +78,13 @@ class ExpirySweep:
 class QueueService:
     """The four queue use cases.
 
-    Holds ports only — a repository, a rating provider, a presence reader, a
-    publisher, a unit of work and a clock — so every rule below is testable
-    with no database, no Redis and no timer.
+    Holds ports only — a repository, a rating provider, an eligibility
+    policy, a publisher, a unit of work and a clock — so every rule below is
+    testable with no database, no Redis and no timer.
 
-    Notably **not** a `PresenceRecorder`: this service must not be able to
-    write presence, and the port it does not hold is what guarantees it.
+    Notably **not** a presence port of any kind any more: presence moved
+    behind `QueueEligibilityPolicy`, so this class cannot read it, cannot
+    write it, and cannot grow a second opinion about who is online.
     """
 
     def __init__(
@@ -98,7 +92,7 @@ class QueueService:
         *,
         tickets: QueueRepository,
         ratings: RatingSnapshotProvider,
-        presence: PresenceProvider,
+        eligibility: QueueEligibilityPolicy,
         events: EventPublisher,
         unit_of_work: UnitOfWork,
         clock: Clock,
@@ -107,19 +101,23 @@ class QueueService:
     ) -> None:
         self._tickets = tickets
         self._ratings = ratings
-        self._presence = presence
+        self._eligibility = eligibility
         self._events = events
         self._unit_of_work = unit_of_work
         self._clock = clock
         self._ticket_ttl_seconds = ticket_ttl_seconds
         self._snapshot_limit = snapshot_limit
 
-    async def join(self, *, player_id: UUID, queue_type: QueueType, region: Region) -> QueueTicket:
+    async def join(self, *, player_id: UUID, pool: QueuePool) -> QueueTicket:
         """Enters `player_id` into a pool and returns their ticket.
 
         Raises `AlreadyQueued` (409) when they already hold a live one —
-        **in any pool**, per QT-1 — and `PlayerNotPresent` (422) when
-        presence positively says they are offline.
+        **in any pool**, per QT-1 — and `QueueNotPermitted` (422) when the
+        eligibility policy refuses.
+
+        The pool is validated by `QueuePool` itself: a variant that is not
+        offered cannot be constructed into one, so an unsupported pool never
+        reaches this method.
 
         The duplicate check runs before any write so the common rejection
         costs one indexed read, and the partial unique index is what
@@ -134,17 +132,16 @@ class QueueService:
         something nobody can reason about, and a partial failure would leave
         one side committed with no record that reconciliation is owed.
         """
-        await self._ensure_present(player_id)
+        await self._eligibility.require_eligible(player_id, pool=pool)
 
         if await self._tickets.active_ticket(player_id, now=self._clock.now()) is not None:
             raise AlreadyQueued("You are already in a matchmaking queue.")
 
-        rating = await self._ratings.rating_for(player_id, queue_type=queue_type)
+        rating = await self._ratings.rating_for(player_id, queue_type=pool.queue_type)
         at = self._clock.now()
         ticket = QueueTicket.enter(
             player_id=player_id,
-            queue_type=queue_type,
-            region=region,
+            pool=pool,
             rating_snapshot=rating,
             at=at,
             ttl=self._ticket_ttl_seconds,
@@ -157,6 +154,7 @@ class QueueService:
                     occurred_at=stored.entered_at,
                     ticket_id=stored.id,
                     player_id=stored.player_id,
+                    variant=stored.pool.variant,
                     queue_type=stored.queue_type,
                     region=stored.region,
                     rating_snapshot=stored.rating_snapshot,
@@ -174,8 +172,7 @@ class QueueService:
             extra={
                 "ticket_id": str(stored.id),
                 "player_id": str(stored.player_id),
-                "queue_type": stored.queue_type.value,
-                "region": stored.region.value,
+                "pool": stored.pool.identifier(),
                 "rating_snapshot": stored.rating_snapshot,
             },
         )
@@ -226,6 +223,7 @@ class QueueService:
                     occurred_at=at,
                     ticket_id=cancelled.id,
                     player_id=cancelled.player_id,
+                    variant=cancelled.pool.variant,
                     queue_type=cancelled.queue_type,
                     region=cancelled.region,
                     waited_for_seconds=_waited(cancelled, at),
@@ -238,7 +236,7 @@ class QueueService:
             extra={
                 "ticket_id": str(cancelled.id),
                 "player_id": str(cancelled.player_id),
-                "queue_type": cancelled.queue_type.value,
+                "pool": cancelled.pool.identifier(),
                 "waited_for_seconds": _waited(cancelled, at),
             },
         )
@@ -258,7 +256,7 @@ class QueueService:
         """
         return await self._tickets.active_ticket(player_id, now=self._clock.now())
 
-    async def snapshot(self, *, queue_type: QueueType, region: Region) -> QueueSnapshot:
+    async def snapshot(self, *, pool: QueuePool) -> QueueSnapshot:
         """One pool as it stands — its depth and its oldest live tickets.
 
         Bounded by `MATCHMAKING_SNAPSHOT_LIMIT`. Used today to tell a
@@ -267,8 +265,7 @@ class QueueService:
         caller rather than a new query.
         """
         return await self._tickets.queue_snapshot(
-            queue_type=queue_type,
-            region=region,
+            pool=pool,
             now=self._clock.now(),
             limit=self._snapshot_limit,
         )
@@ -313,6 +310,7 @@ class QueueService:
                             occurred_at=ticket.expires_at,
                             ticket_id=ticket.id,
                             player_id=ticket.player_id,
+                            variant=ticket.pool.variant,
                             queue_type=ticket.queue_type,
                             region=ticket.region,
                             waited_for_seconds=_waited(ticket, ticket.expires_at),
@@ -348,17 +346,6 @@ class QueueService:
             claimed = await self._tickets.claim_due(now=now, limit=limit, claimed_by=claimed_by)
             await self._unit_of_work.commit()
         return claimed
-
-    async def _ensure_present(self, player_id: UUID) -> None:
-        """Refuses a player the platform has positively recorded as offline.
-
-        See this module's docstring on why unknown presence is permitted.
-        The read never raises (`PresenceProvider.presence_for`), so this
-        cannot be the thing that fails a join.
-        """
-        presence = await self._presence.presence_for(player_id)
-        if presence is not None and not presence.is_online:
-            raise PlayerNotPresent("You appear to be signed out. Reconnect before joining a queue.")
 
 
 def _waited(ticket: QueueTicket, until: datetime) -> float:

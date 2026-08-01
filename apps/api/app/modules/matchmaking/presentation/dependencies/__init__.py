@@ -7,10 +7,12 @@ The graph assembled per request:
     AsyncSession                        one per request (`app.api.deps`)
       -> SqlAlchemyQueueRepository
       -> ProvisionalRatingProvider      until `rating` exists
-      -> PresenceProvider               `users`' adapter, or the inert one
+      -> QueueEligibilityPolicy         presence-backed, or the permissive one
       -> OutboxEventPublisher           over the same session (AD-16)
       -> SessionUnitOfWork
       -> QueueService
+
+    GameEngineServices                  one per **process**, not per request
 
 One factory, because there is one service. A64-014.2 adds a second for
 pairing rather than widening this one — see
@@ -54,6 +56,11 @@ from app.api.outbox_deps import EventPublisherDep
 from app.config.settings import MatchmakingSettings
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
+from app.modules.game.public import GameEngineServices, engine_services
+from app.modules.matchmaking.application.eligibility import (
+    PresenceEligibilityPolicy,
+    QueueEligibilityPolicy,
+)
 from app.modules.matchmaking.application.services import QueueService
 from app.modules.matchmaking.infrastructure import (
     ProvisionalRatingProvider,
@@ -94,10 +101,48 @@ def get_presence_reader(
 PresenceReaderDep = Annotated[PresenceProvider, Depends(get_presence_reader)]
 
 
+def build_eligibility_policy(presence: PresenceProvider) -> QueueEligibilityPolicy:
+    """The checks a player must pass to enter a pool — A64-015.2.
+
+    One implementation today, backed by the presence reader above. It is
+    built here rather than inside `QueueService` for the reason every
+    adapter is: the service depends on the port, and the root decides which
+    adapter satisfies it.
+    """
+    return PresenceEligibilityPolicy(presence)
+
+
+def get_eligibility_policy(presence: PresenceReaderDep) -> QueueEligibilityPolicy:
+    return build_eligibility_policy(presence)
+
+
+EligibilityPolicyDep = Annotated[QueueEligibilityPolicy, Depends(get_eligibility_policy)]
+
+
+def get_engine_services() -> GameEngineServices:
+    """The **process-wide** engine collaborators — A64-015.2.
+
+    Every one is stateless, so one instance serves every request; `Depends`
+    hands out the same object rather than building a graph per call.
+    `specs/game-engine/audit.md` §14 asks for exactly this, and §3 of
+    A64-015.2 forbids the alternative — a route handler or a queue service
+    constructing its own.
+
+    **Nothing consumes it yet**, and that is stated rather than hidden: this
+    task creates no match, so no queue code calls the engine. It is wired
+    now because the seam is much cheaper to establish than to retrofit once
+    a pairing worker exists and has already made its own.
+    """
+    return engine_services()
+
+
+EngineServicesDep = Annotated[GameEngineServices, Depends(get_engine_services)]
+
+
 def build_queue_service(
     session: AsyncSession,
     *,
-    presence: PresenceProvider,
+    eligibility: QueueEligibilityPolicy,
     events: EventPublisher,
     settings: MatchmakingSettings,
     clock: Clock,
@@ -118,7 +163,7 @@ def build_queue_service(
         # Until `rating` exists. See `ProvisionalRatingProvider` on why the
         # port is here rather than a constant inside the service.
         ratings=ProvisionalRatingProvider(),
-        presence=presence,
+        eligibility=eligibility,
         # Built over the **same** session as the repository, which is what
         # puts the outbox row in the ticket's transaction rather than beside
         # it (AD-16).
@@ -135,12 +180,12 @@ def get_queue_service(
     clock: ClockDep,
     events: EventPublisherDep,
     settings: SettingsDep,
-    presence: PresenceReaderDep,
+    eligibility: EligibilityPolicyDep,
 ) -> QueueService:
     """The per-request `QueueService`."""
     return build_queue_service(
         session,
-        presence=presence,
+        eligibility=eligibility,
         events=events,
         settings=settings.matchmaking,
         clock=clock,
@@ -151,9 +196,14 @@ QueueServiceDep = Annotated[QueueService, Depends(get_queue_service)]
 
 
 __all__ = [
+    "EligibilityPolicyDep",
+    "EngineServicesDep",
     "PresenceReaderDep",
     "QueueServiceDep",
+    "build_eligibility_policy",
     "build_queue_service",
+    "get_eligibility_policy",
+    "get_engine_services",
     "get_presence_reader",
     "get_queue_service",
 ]

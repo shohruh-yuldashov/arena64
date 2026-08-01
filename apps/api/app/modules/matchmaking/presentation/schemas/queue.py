@@ -19,28 +19,39 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.matchmaking.domain.queue_ticket import (
-    QueueSnapshot,
-    QueueStatus,
-    QueueTicket,
-    QueueType,
-    Region,
-)
+from app.modules.game.public import ProductVariant
+from app.modules.matchmaking.domain.queue_pool import QueueType, Region
+from app.modules.matchmaking.domain.queue_ticket import QueueSnapshot, QueueStatus, QueueTicket
 
 
 class JoinQueueRequest(BaseModel):
     """What `POST /matchmaking/queue` accepts.
 
-    **Two fields, and neither of them is a rating.** QT-2 makes the rating
+    **Three fields, and none of them is a rating.** QT-2 makes the rating
     snapshot the platform's to record, and a client-supplied one would be a
     self-reported skill level on the endpoint that decides who you play —
     the single most valuable field on the platform to lie about.
 
     Nor is there a `player_id`: the account comes from the access token, so
     queueing as somebody else is not something this API can express.
+
+    `variant` is a `ProductVariant` and not the engine's `BoardVariant`, so
+    the generated OpenAPI schema lists only variants a player may choose.
+    The English 8x8 fixture the engine uses for its perft oracle
+    (`specs/game-engine/audit.md` §9) is not an accepted value and does not
+    appear in the document — a validator on a wider enum would have kept it
+    out of responses and left it advertised as input.
     """
 
     model_config = ConfigDict(extra="forbid")
+
+    variant: ProductVariant = Field(
+        default=ProductVariant.RUSSIAN_8X8,
+        description=(
+            "Which rules to play under. Only the variants Arena64 offers are "
+            "accepted — the engine can play others, and they are not on the menu."
+        ),
+    )
 
     queue_type: QueueType = Field(
         description=(
@@ -72,6 +83,7 @@ class QueueTicketResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ticket_id: UUID
+    variant: ProductVariant
     queue_type: QueueType
     region: Region
     status: QueueStatus
@@ -110,6 +122,7 @@ class QueueTicketResponse(BaseModel):
         """
         return cls(
             ticket_id=ticket.id,
+            variant=ticket.pool.variant,
             queue_type=ticket.queue_type,
             region=ticket.region,
             status=ticket.status,

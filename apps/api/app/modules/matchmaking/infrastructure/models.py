@@ -145,7 +145,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.database.base import Base
 from app.database.mixins.uuid_pk import UUIDPrimaryKeyMixin
 from app.database.types import UtcDateTime
-from app.modules.matchmaking.domain.queue_ticket import QueueStatus, QueueType, Region
+from app.modules.game.public import ProductVariant
+from app.modules.matchmaking.domain.queue_pool import QueueType, Region
+from app.modules.matchmaking.domain.queue_ticket import QueueStatus
 
 #: database.md §222 — one schema per bounded context. `challenge` (§8.1)
 #: joins it when direct invitations are built.
@@ -176,6 +178,7 @@ def _enum(python_type: type, name: str) -> PgEnum:
     )
 
 
+_VARIANT_ENUM = _enum(ProductVariant, "queue_variant")
 _QUEUE_TYPE_ENUM = _enum(QueueType, "queue_type")
 _REGION_ENUM = _enum(Region, "queue_region")
 _STATUS_ENUM = _enum(QueueStatus, "queue_ticket_status")
@@ -231,6 +234,7 @@ class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
         # about the few hundred people currently waiting by scanning a year.
         Index(
             "ix_queue_ticket__pool",
+            "variant",
             "queue_type",
             "region",
             "entered_at",
@@ -272,6 +276,22 @@ class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
     player_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     """Opaque across contexts (DM-06) — see this module's docstring on why
     there is no foreign key."""
+
+    variant: Mapped[ProductVariant] = mapped_column(_VARIANT_ENUM, nullable=False)
+    """Which rule set a game from this ticket's pool would be played under
+    — A64-015.2.
+
+    A native enum over `game.public.ProductVariant`, so the column can only
+    hold something a player may actually choose: `english_8x8` is a
+    `BoardVariant` and is deliberately not a `ProductVariant`, and the
+    database is therefore incapable of storing a ticket for it
+    (`specs/game-engine/audit.md` §9).
+
+    Added before any ticket existed in production, which is the only cheap
+    moment. A pool is `(variant, mode, region)` — see `QueuePool` — and a
+    ticket that did not record which game it was waiting for could not be
+    excluded from the wrong pairing scan.
+    """
 
     queue_type: Mapped[QueueType] = mapped_column(_QUEUE_TYPE_ENUM, nullable=False)
     region: Mapped[Region] = mapped_column(_REGION_ENUM, nullable=False)

@@ -107,7 +107,10 @@ def upgrade() -> None:
         sa.Column("addressee_id", sa.Uuid(as_uuid=True), nullable=False),
         sa.Column("status", _STATUS, server_default="pending", nullable=False),
         sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
         ),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("responded_at", sa.DateTime(timezone=True), nullable=True),

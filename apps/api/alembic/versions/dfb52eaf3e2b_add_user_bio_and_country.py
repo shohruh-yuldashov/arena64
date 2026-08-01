@@ -97,9 +97,7 @@ def downgrade() -> None:
     # brief excludes editing, so every row is `NULL`). Once an edit
     # endpoint exists, reversing this migration is a data-loss event and
     # should be treated as one.
-    op.drop_constraint(
-        op.f("ck_user__country_code_format"), TABLE, type_="check", schema=SCHEMA
-    )
+    op.drop_constraint(op.f("ck_user__country_code_format"), TABLE, type_="check", schema=SCHEMA)
     op.drop_constraint(op.f("ck_user__bio_length"), TABLE, type_="check", schema=SCHEMA)
     op.drop_column(TABLE, "country_code", schema=SCHEMA)
     op.drop_column(TABLE, "bio", schema=SCHEMA)

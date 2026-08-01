@@ -14,7 +14,7 @@ kind on the endpoint that produces it:
 
     AlreadyQueued      the one `409` on `POST /matchmaking/queue`
     NotQueued          the one `404` on `GET /matchmaking/queue/me`
-    PlayerNotPresent   the one `422` on `POST /matchmaking/queue`
+    QueueNotPermitted   the one `422` on `POST /matchmaking/queue`
 
 A client reading `409` from the join endpoint knows exactly one thing can
 have happened. Adding `already_queued` would grow the enum by a member that
@@ -66,15 +66,24 @@ class TicketNotWaiting(ConflictError):
     """
 
 
-class PlayerNotPresent(ValidationError):
-    """The player is recorded as offline and may not queue.
+class QueueNotPermitted(ValidationError):
+    """This player may not enter a queue — A64-015.2.
 
-    `422` rather than `409`: nothing about the queue refused this, and
-    retrying will not help until the client reconnects.
+    `422` rather than `409`: nothing about the queue's *state* refused
+    this, and retrying will not help until whatever is true of the player
+    stops being true.
 
-    **Only a recorded offline refuses.** Presence that is unknown — the
-    window expired, nothing was ever written, Redis was unreachable — is
-    permitted, because those three are indistinguishable by design
-    (`users.public.PresenceProvider`) and refusing on them would make a
-    Redis blip an outage of matchmaking. See `QueueService.join`.
+    **One exception for every cause, and the message names none of them.**
+    Today the only cause is a positively recorded offline; the checks
+    `QueueEligibilityPolicy` will grow include sanctions and, eventually,
+    rules that touch the block graph — and a refusal that varied by cause
+    would let a player probe that graph by queueing repeatedly, which is
+    exactly what BL-1's "the blocked player is never told" prevents. The
+    same reasoning `FriendRequestRecipientUnavailable` applies.
+
+    The *operator* still learns which check fired: the policy logs it with
+    the player and the pool before raising.
+
+    Replaces A64-015.1's `QueueNotPermitted`, which named its cause in its
+    own class name and so could not survive a second check.
     """

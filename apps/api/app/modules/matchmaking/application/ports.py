@@ -21,12 +21,8 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from app.modules.matchmaking.domain.queue_ticket import (
-    QueueSnapshot,
-    QueueTicket,
-    QueueType,
-    Region,
-)
+from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType
+from app.modules.matchmaking.domain.queue_ticket import QueueSnapshot, QueueTicket
 
 
 class QueueRepository(Protocol):
@@ -83,14 +79,7 @@ class QueueRepository(Protocol):
         """
         ...
 
-    async def queue_snapshot(
-        self,
-        *,
-        queue_type: QueueType,
-        region: Region,
-        now: datetime,
-        limit: int,
-    ) -> QueueSnapshot:
+    async def queue_snapshot(self, *, pool: QueuePool, now: datetime, limit: int) -> QueueSnapshot:
         """One pool as it stands: its depth, and its oldest live tickets.
 
         The read A64-014.2's pairing scan runs, declared now so the shape

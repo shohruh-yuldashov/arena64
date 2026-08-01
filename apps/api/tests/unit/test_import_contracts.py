@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-
 #: API project root, where ``.importlinter`` lives.
 _API_ROOT = Path(__file__).resolve().parents[2]
 

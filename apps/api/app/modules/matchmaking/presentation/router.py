@@ -23,7 +23,7 @@ Every failure is a typed exception on the platform hierarchy, and
 `try`/`except` in this file:
 
     AlreadyQueued        -> 409  conflict
-    PlayerNotPresent     -> 422  validation_error
+    QueueNotPermitted     -> 422  validation_error
     NotQueued            -> 404  not_found
     MissingToken         -> 401  authentication_required
     TooManyRequests      -> 429  rate_limited
@@ -51,6 +51,7 @@ from app.api.responses import build_response
 from app.core.responses import ApiResponse
 from app.modules.auth.presentation.dependencies import CurrentUser
 from app.modules.matchmaking.domain.exceptions import NotQueued
+from app.modules.matchmaking.domain.queue_pool import QueuePool
 from app.modules.matchmaking.presentation.dependencies import QueueServiceDep
 from app.modules.matchmaking.presentation.rate_limits import enforce_queue_limit
 from app.modules.matchmaking.presentation.schemas import JoinQueueRequest, QueueTicketResponse
@@ -151,10 +152,9 @@ async def join_queue(
     platform and no rating system exists yet — so every ticket records the
     same starting value.
     """
-    ticket = await service.join(
-        player_id=user.id, queue_type=payload.queue_type, region=payload.region
-    )
-    snapshot = await service.snapshot(queue_type=ticket.queue_type, region=ticket.region)
+    pool = QueuePool(variant=payload.variant, queue_type=payload.queue_type, region=payload.region)
+    ticket = await service.join(player_id=user.id, pool=pool)
+    snapshot = await service.snapshot(pool=ticket.pool)
     return build_response(QueueTicketResponse.of(ticket, snapshot))
 
 
@@ -233,5 +233,5 @@ async def read_my_ticket(
     if ticket is None:
         raise NotQueued("You are not currently in a matchmaking queue.")
 
-    snapshot = await service.snapshot(queue_type=ticket.queue_type, region=ticket.region)
+    snapshot = await service.snapshot(pool=ticket.pool)
     return build_response(QueueTicketResponse.of(ticket, snapshot))

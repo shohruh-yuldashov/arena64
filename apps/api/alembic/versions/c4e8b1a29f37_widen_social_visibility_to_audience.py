@@ -135,7 +135,7 @@ def downgrade() -> None:
                 ALTER COLUMN {old_name} TYPE boolean
                     USING ({old_name} = 'everyone'),
                 ALTER COLUMN {old_name} SET DEFAULT
-                    {'true' if _DEFAULTS[new_name] == 'everyone' else 'false'}
+                    {"true" if _DEFAULTS[new_name] == "everyone" else "false"}
             """
         )
 

@@ -27,17 +27,22 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.core.identifiers import generate_uuid7
+from app.modules.game.public import ProductVariant
 from app.modules.matchmaking.domain.exceptions import AlreadyQueued
+from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType, Region
 from app.modules.matchmaking.domain.queue_ticket import (
     QueueStatus,
     QueueTicket,
-    QueueType,
-    Region,
 )
 from app.modules.matchmaking.infrastructure import QueueTicketModel, SqlAlchemyQueueRepository
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 TTL = 600.0
+
+
+def _pool(queue_type: QueueType = QueueType.RANKED, region: Region = Region.EUROPE) -> QueuePool:
+    """A pool for the one variant Arena64 offers."""
+    return QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=queue_type, region=region)
 
 
 def _ticket(
@@ -50,8 +55,7 @@ def _ticket(
 ) -> QueueTicket:
     return QueueTicket.enter(
         player_id=player_id or generate_uuid7(),
-        queue_type=queue_type,
-        region=region,
+        pool=_pool(queue_type, region),
         rating_snapshot=1500,
         at=at,
         ttl=ttl,
@@ -194,7 +198,7 @@ class TestQueueSnapshot:
         await contract_session.flush()
 
         snapshot = await tickets.queue_snapshot(
-            queue_type=QueueType.RANKED, region=Region.EUROPE, now=NOW, limit=10
+            pool=_pool(QueueType.RANKED, Region.EUROPE), now=NOW, limit=10
         )
 
         assert snapshot.waiting == 2
@@ -210,7 +214,7 @@ class TestQueueSnapshot:
         await contract_session.flush()
 
         snapshot = await tickets.queue_snapshot(
-            queue_type=QueueType.RANKED, region=Region.EUROPE, now=NOW, limit=10
+            pool=_pool(QueueType.RANKED, Region.EUROPE), now=NOW, limit=10
         )
 
         assert [ticket.id for ticket in snapshot.tickets] == [earlier.id, later.id]
@@ -225,7 +229,7 @@ class TestQueueSnapshot:
         await contract_session.flush()
 
         snapshot = await tickets.queue_snapshot(
-            queue_type=QueueType.RANKED, region=Region.EUROPE, now=NOW, limit=2
+            pool=_pool(QueueType.RANKED, Region.EUROPE), now=NOW, limit=2
         )
 
         assert snapshot.waiting == 4
@@ -238,8 +242,11 @@ class TestQueueSnapshot:
         await contract_session.flush()
 
         snapshot = await tickets.queue_snapshot(
-            queue_type=QueueType.RANKED,
-            region=Region.EUROPE,
+            pool=QueuePool(
+                variant=ProductVariant.RUSSIAN_8X8,
+                queue_type=QueueType.RANKED,
+                region=Region.EUROPE,
+            ),
             now=ticket.expires_at,
             limit=10,
         )

@@ -1,0 +1,167 @@
+"""`game.public` — the boundary `matchmaking` reaches `game` through.
+
+A64-015.2 gives the package its first contents, and what is tested here is
+mostly what it *refuses* to publish: the engine plays three variants and a
+player may choose one.
+
+The other half is the wiring rule. Every engine collaborator is stateless
+(`specs/game-engine/audit.md` §14), so one instance serves the process —
+and a test that the accessor returns the same object is what stops the
+first pairing worker building its own.
+"""
+
+import inspect
+
+import pytest
+
+from app.modules.engine import CURRENT_ENGINE_VERSION, BoardVariant
+from app.modules.game import public as game_public
+from app.modules.game.public import (
+    GameEngineServices,
+    ProductVariant,
+    VariantNotOffered,
+    board_variant_of,
+    engine_services,
+    game_engine_version,
+    is_offered,
+    require_offered,
+    variant_catalogue,
+)
+
+
+class TestTheCatalogue:
+    def test_russian_8x8_is_selectable(self) -> None:
+        assert ProductVariant.RUSSIAN_8X8 in variant_catalogue()
+
+    def test_english_8x8_is_not_selectable(self) -> None:
+        """It is a testing and configuration fixture, not a product —
+        `specs/game-engine/audit.md` §9. The engine plays it, the perft
+        oracle depends on it, and no player is offered it."""
+        assert not is_offered(BoardVariant.ENGLISH_8X8.value)
+
+    def test_international_10x10_is_not_selectable_either(self) -> None:
+        """Its draw rules are a placeholder, not a claim (§7.7). Offering it
+        would ship Russian's rules under another name."""
+        assert not is_offered(BoardVariant.INTERNATIONAL_10X10.value)
+
+    def test_an_unsupported_variant_is_refused_by_name(self) -> None:
+        with pytest.raises(VariantNotOffered, match="english_8x8"):
+            require_offered("english_8x8")
+
+    def test_the_refusal_lists_what_is_offered(self) -> None:
+        """A client that guessed wrong needs the list, and there is nothing
+        sensitive in it."""
+        with pytest.raises(VariantNotOffered, match="russian_8x8"):
+            require_offered("draughts_64")
+
+    def test_an_offered_variant_comes_back_as_a_product_variant(self) -> None:
+        assert require_offered("russian_8x8") is ProductVariant.RUSSIAN_8X8
+
+    def test_the_catalogue_order_is_stable(self) -> None:
+        assert variant_catalogue() == variant_catalogue()
+
+
+class TestTheTwoEnumsAreOneIdentifier:
+    def test_every_product_variant_is_a_board_variant(self) -> None:
+        """Not two identifiers for one rule set — a stored ticket, a wire
+        payload and an engine call all spell it the same way."""
+        for variant in ProductVariant:
+            assert variant.value in {member.value for member in BoardVariant}
+
+    def test_the_conversion_is_total(self) -> None:
+        for variant in ProductVariant:
+            assert board_variant_of(variant).value == variant.value
+
+    def test_the_product_catalogue_is_a_strict_subset(self) -> None:
+        """Strict, and that is the point: a `ProductVariant` that covered
+        every `BoardVariant` would be a distinction with no content."""
+        offered = {variant.value for variant in ProductVariant}
+        playable = {variant.value for variant in BoardVariant}
+
+        assert offered < playable
+
+
+class TestEngineVersion:
+    def test_it_is_the_engine_s_own_constant(self) -> None:
+        """Read from one place, never derived from a date or a build
+        (GE-55). A future match request stamps it (AD-15)."""
+        assert game_engine_version() == CURRENT_ENGINE_VERSION
+
+    def test_it_serialises_to_an_integer(self) -> None:
+        assert isinstance(game_engine_version().as_primitive(), int)
+
+
+class TestStatelessCollaboratorsAreSharedOnce:
+    def test_the_accessor_returns_one_instance(self) -> None:
+        """Wired once per process. A route handler or a queue service
+        constructing its own is what §3 of A64-015.2 forbids and what a
+        composition root exists to prevent."""
+        assert engine_services() is engine_services()
+
+    def test_every_collaborator_is_shared_too(self) -> None:
+        one, other = engine_services(), engine_services()
+
+        assert one.generator is other.generator
+        assert one.validator is other.validator
+        assert one.applier is other.applier
+        assert one.terminal is other.terminal
+        assert one.draw_rules is other.draw_rules
+        assert one.replay is other.replay
+
+    def test_the_bundle_is_immutable(self) -> None:
+        """Shared state that could be reassigned is mutable global state
+        however stateless its members are."""
+        with pytest.raises(AttributeError):
+            engine_services().generator = None  # type: ignore[misc, assignment]
+
+    def test_a_fresh_bundle_wires_the_dependency_graph(self) -> None:
+        """A validator needs a generator, an applier needs a validator, and
+        the replay engine needs all three — built once, in that order."""
+        services = GameEngineServices.create()
+
+        assert isinstance(services, GameEngineServices)
+        assert services.applier is not None
+        assert services.replay is not None
+
+
+class TestTheSurfaceIsDeliberate:
+    PUBLISHED = {
+        "GameEngineServices",
+        "ProductVariant",
+        "VariantNotOffered",
+        "board_variant_of",
+        "engine_services",
+        "game_engine_version",
+        "is_offered",
+        "require_offered",
+        "variant_catalogue",
+    }
+
+    def test_nothing_is_published_by_accident(self) -> None:
+        """R-1 makes this the only door into `game`. A name that arrives
+        here without a decision is a dependency a consumer can take that
+        nobody intended."""
+        assert set(game_public.__all__) == self.PUBLISHED
+
+    def test_the_match_aggregate_is_not_published(self) -> None:
+        """R-3: the modules that care about matches subscribe to events
+        rather than calling in. `matchmaking`'s edge points the other way —
+        it will *ask* `game` to create a match."""
+        for withheld in ("Match", "MatchStatus", "MatchResult", "MoveRecord", "ReplayData"):
+            assert withheld not in game_public.__all__
+
+    def test_every_published_name_resolves(self) -> None:
+        for name in game_public.__all__:
+            assert hasattr(game_public, name), name
+
+    def test_the_module_imports_nothing_from_matchmaking(self) -> None:
+        """The edge is one-directional. `game` importing a queue type would
+        make the two modules mutually dependent, and no contract in
+        `.importlinter` could then express either direction.
+
+        Checked against imports rather than against the prose, which
+        mentions `matchmaking` by name to explain why the package exists.
+        """
+        source = inspect.getsource(game_public)
+
+        assert "app.modules.matchmaking" not in source

@@ -25,7 +25,14 @@ from uuid import UUID
 
 from app.core.enums import Locale
 from app.core.identifiers import generate_uuid7
-from app.modules.users.domain.value_objects import Bio, CountryCode, Email, Timezone, Username
+from app.modules.users.domain.value_objects import (
+    Bio,
+    CountryCode,
+    DisplayName,
+    Email,
+    Timezone,
+    Username,
+)
 
 
 @dataclass(slots=True)
@@ -53,7 +60,7 @@ class User:
     is_verified: bool
     created_at: datetime
     updated_at: datetime | None = None
-    display_name: str | None = None
+    display_name: DisplayName | None = None
 
     # --- avatar (A64-012.2) -------------------------------------------------
     # database.md §4.6: "`avatar_object_key` | `text` | Object-storage key,
@@ -124,7 +131,7 @@ class User:
         preferred_language: Locale,
         timezone: Timezone,
         created_at: datetime,
-        display_name: str | None = None,
+        display_name: DisplayName | None = None,
     ) -> "User":
         """Builds a new, never-persisted user.
 
@@ -213,7 +220,7 @@ class User:
         which is the kind of trivial rule that gets written five different
         ways in five templates if the domain does not state it once.
         """
-        return self.display_name or self.username.value
+        return self.display_name.value if self.display_name else self.username.value
 
     def activate(self) -> None:
         self.is_active = True

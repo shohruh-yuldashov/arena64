@@ -73,6 +73,8 @@ def account() -> UserRead:
         username="player_one",
         email=EMAIL,
         display_name="Player One",
+        bio=None,
+        country=None,
         avatar=AvatarReference(
             object_key="avatars/019fb9ea-0a0c-7cec-9c5f-402727c31a96/abc.webp",
             version=2,

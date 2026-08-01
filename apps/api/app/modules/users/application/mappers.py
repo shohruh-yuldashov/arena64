@@ -18,6 +18,7 @@ hash is worth the extra lines.
 from app.modules.users.domain.entities import User
 from app.modules.users.public.dtos import (
     AvatarReference,
+    OwnUserProfile,
     PublicUserProfile,
     UserRead,
     UserSummary,
@@ -29,7 +30,9 @@ def to_user_read(user: User) -> UserRead:
         id=user.id,
         username=user.username.value,
         email=user.email.value,
-        display_name=user.display_name,
+        display_name=_display_name_of(user),
+        bio=user.bio.value if user.bio else None,
+        country=user.country.value if user.country else None,
         avatar=to_avatar_reference(user),
         preferred_language=user.preferred_language,
         timezone=user.timezone.value,
@@ -44,7 +47,7 @@ def to_user_summary(user: User) -> UserSummary:
     return UserSummary(
         id=user.id,
         username=user.username.value,
-        display_name=user.display_name,
+        display_name=_display_name_of(user),
         avatar=to_avatar_reference(user),
     )
 
@@ -65,7 +68,7 @@ def to_public_profile(user: User) -> PublicUserProfile:
     return PublicUserProfile(
         id=user.id,
         username=user.username.value,
-        display_name=user.display_name,
+        display_name=_display_name_of(user),
         avatar=to_avatar_reference(user),
         country=user.country.value if user.country else None,
         preferred_language=user.preferred_language,
@@ -87,4 +90,31 @@ def to_avatar_reference(user: User) -> AvatarReference:
         object_key=user.avatar_object_key,
         version=user.avatar_version,
         uploaded_at=user.avatar_uploaded_at,
+    )
+
+
+def _display_name_of(user: User) -> str | None:
+    """Unwraps the value object for the wire. `None` stays `None` —
+    absence is one state, not an empty string."""
+    return user.display_name.value if user.display_name else None
+
+
+def to_own_profile(user: User) -> OwnUserProfile:
+    """The account holder's own editable view — A64-012.3.
+
+    Explicit field by field like the others. Here the discipline guards a
+    specific mistake: this shape is returned from the *edit* endpoint, and
+    a `model_validate(user)` would publish whatever the entity gains next —
+    including `password_hash`, which sits on the same object.
+    """
+    return OwnUserProfile(
+        id=user.id,
+        username=user.username.value,
+        display_name=_display_name_of(user),
+        bio=user.bio.value if user.bio else None,
+        country=user.country.value if user.country else None,
+        preferred_language=user.preferred_language,
+        timezone=user.timezone.value,
+        avatar=to_avatar_reference(user),
+        created_at=user.created_at,
     )

@@ -29,6 +29,12 @@ What is published, and why only this much:
                          (A64-012.1)
   `AvatarStore`          reads and writes the avatar *reference* — never
                          image data (A64-012.2)
+  `ProfileEditor`        reads and updates the owner's own editable
+                         fields — never the username (A64-012.3)
+  `ProfileEdits`         that port's input: five optional fields and no
+                         others, which is the mass-assignment defence
+  `OwnUserProfile`       the owner's view — the editable fields plus
+                         identity, and no account state
   `AvatarReference`      an object key, a version and a timestamp. No URL:
                          composing one is `StorageProvider`'s
   `PublicUserProfile`    that port's output — deliberately has no `email`
@@ -50,6 +56,9 @@ from uuid import UUID
 
 from app.modules.users.domain.exceptions import (
     EmailAlreadyExists,
+    InvalidBio,
+    InvalidCountryCode,
+    InvalidDisplayName,
     InvalidEmail,
     InvalidUsername,
     UsernameAlreadyExists,
@@ -58,15 +67,18 @@ from app.modules.users.domain.exceptions import (
 from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import (
     AvatarReference,
+    OwnUserProfile,
     PublicUserProfile,
     UserRead,
     UserSummary,
 )
+from app.modules.users.public.edits import ProfileEdits
 from app.modules.users.public.ports import (
     AvatarStore,
     EmailVerifier,
     NewUserAccount,
     PasswordResetter,
+    ProfileEditor,
     PublicProfileReader,
     UserAccountCreator,
     UserCredentialStore,
@@ -82,8 +94,14 @@ type UserId = UUID
 __all__ = [
     "AvatarReference",
     "AvatarStore",
+    "OwnUserProfile",
+    "ProfileEditor",
+    "ProfileEdits",
     "EmailAlreadyExists",
     "EmailVerifier",
+    "InvalidBio",
+    "InvalidCountryCode",
+    "InvalidDisplayName",
     "InvalidEmail",
     "InvalidUsername",
     "NewUserAccount",

@@ -24,14 +24,13 @@ the one thing in this file that must never regress.
 
 from typing import Annotated
 
-from pydantic import AfterValidator, Field, model_validator
+from pydantic import AfterValidator, Field
 
 from app.core.dto import BaseRequestDTO
 from app.core.enums import Locale
 from app.core.pagination import CursorPage
-from app.modules.users.domain.exceptions import InvalidLanguage, InvalidTimezone
 from app.modules.users.domain.validators import (
-    DISPLAY_NAME_MAX_LENGTH,
+    validate_display_name,
     validate_email,
     validate_timezone,
     validate_username,
@@ -45,7 +44,24 @@ from app.modules.users.public.dtos import UserSummary
 UsernameField = Annotated[str, AfterValidator(validate_username)]
 EmailField = Annotated[str, AfterValidator(validate_email)]
 TimezoneField = Annotated[str, AfterValidator(validate_timezone)]
-DisplayNameField = Annotated[str, Field(min_length=1, max_length=DISPLAY_NAME_MAX_LENGTH)]
+#: A64-012.3 gave this field a real domain validator, so this annotation
+#: wraps it like `UsernameField` and `EmailField` do rather than restating
+#: a bare length bound. The bound moved with it (1-64 -> 3-50) and now
+#: lives in exactly one place; trimming and the control-character rules
+#: come along for free, which the previous `Field(min_length=1, ...)` had
+#: no way to express.
+DisplayNameField = Annotated[str, AfterValidator(validate_display_name)]
+
+
+# --- removed in A64-012.3: `UserUpdate` --------------------------------------
+#
+# The request body of `PATCH /users/{user_id}`, which A64-012.3 retired —
+# see `presentation/router.py` for why an unauthenticated edit-any-player
+# endpoint could not coexist with "only the profile owner may edit".
+#
+# Its replacement is `profiles.presentation.schemas.ProfileUpdateRequest`,
+# which carries two more editable fields (`bio`, `country`) and is reached
+# only through an authenticated, self-scoped route.
 
 
 class UserCreate(BaseRequestDTO):
@@ -70,58 +86,6 @@ class UserCreate(BaseRequestDTO):
     preferred_language: Locale = Locale.EN
     timezone: TimezoneField = "UTC"
     display_name: DisplayNameField | None = None
-
-
-class UserUpdate(BaseRequestDTO):
-    """Partial profile update — every field optional.
-
-    All four are `| None` *and* default to unset, which are different
-    states: omitting `display_name` leaves it alone, sending
-    `"display_name": null` clears it. The route reads
-    `model_fields_set` to tell them apart and maps to `UNSET` accordingly
-    (`app.core.sentinels`).
-
-    `username`, `email`, `is_active` and `is_verified` are absent by
-    design — see `application/commands.py::UpdateUserProfile` for why each
-    is its own use case rather than a PATCH field.
-
-    **`avatar_url` was removed by A64-012.2** and is not coming back in
-    this shape. The platform no longer stores a URL at all: it stores an
-    object key that it wrote itself, and the only way to change one is to
-    upload an image to `POST /api/v1/profile/avatar`, which validates and
-    re-encodes it. A client-supplied URL would have been a way to point a
-    player's avatar at any address on the internet — including one that
-    serves different bytes to different viewers — which is an open redirect
-    and a tracking pixel wearing a profile picture.
-    """
-
-    display_name: DisplayNameField | None = None
-    preferred_language: Locale | None = None
-    timezone: TimezoneField | None = None
-
-    @model_validator(mode="after")
-    def _reject_explicit_null_on_non_clearable(self) -> "UserUpdate":
-        """`display_name` is nullable on the entity, so an explicit
-        `null` legitimately clears it. `preferred_language`
-        and `timezone` are `NOT NULL` with defaults — there is no state
-        for `null` to mean, so accepting it would force a silent choice
-        between "leave alone" and "reset to default", and a client could
-        never tell which it got. Rejecting is the only unambiguous answer
-        (CLAUDE.md §9 rule 1: reject invalid input at the edge).
-
-        Raises this module's own domain errors rather than a `ValueError`
-        so the failure carries the same typed code and envelope as every
-        other error on the platform — Pydantic only intercepts
-        `ValueError`/`AssertionError`, so an `Arena64Error` propagates
-        cleanly to the platform handler.
-        """
-        if "preferred_language" in self.model_fields_set and self.preferred_language is None:
-            raise InvalidLanguage(
-                "preferred_language cannot be null; omit the field to leave it unchanged."
-            )
-        if "timezone" in self.model_fields_set and self.timezone is None:
-            raise InvalidTimezone("timezone cannot be null; omit the field to leave it unchanged.")
-        return self
 
 
 # The paginated listing shape. A plain alias over the platform's

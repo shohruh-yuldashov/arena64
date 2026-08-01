@@ -79,6 +79,11 @@ class InvalidTimezone(ValidationError):
 # them is the edit task's to do alongside the form that needs them.
 
 
+class InvalidDisplayName(ValidationError):
+    """Too short, too long, or carrying characters a rendered name must
+    not — see `domain/validators.py::validate_display_name`."""
+
+
 class InvalidBio(ValidationError):
     """Too long, or carrying characters a plain-text field must not —
     see `domain/validators.py::validate_bio`."""
@@ -92,6 +97,7 @@ __all__ = [
     "EmailAlreadyExists",
     "InvalidBio",
     "InvalidCountryCode",
+    "InvalidDisplayName",
     "InvalidEmail",
     "InvalidLanguage",
     "InvalidTimezone",

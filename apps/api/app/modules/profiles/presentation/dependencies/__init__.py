@@ -54,9 +54,10 @@ from app.modules.profiles.infrastructure import (
     UnratedRatingProvider,
 )
 from app.modules.users.application.services import UserService
+from app.modules.users.application.services.profile_editing_service import ProfileEditingService
 from app.modules.users.application.services.public_profile_service import PublicProfileService
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
-from app.modules.users.public import PublicProfileReader
+from app.modules.users.public import ProfileEditor, PublicProfileReader
 
 
 def get_public_profile_reader(session: DbSessionDep, clock: ClockDep) -> PublicProfileReader:
@@ -79,6 +80,28 @@ def get_public_profile_reader(session: DbSessionDep, clock: ClockDep) -> PublicP
 
 
 PublicProfileReaderDep = Annotated[PublicProfileReader, Depends(get_public_profile_reader)]
+
+
+def get_profile_editor(session: DbSessionDep, clock: ClockDep) -> ProfileEditor:
+    """`users`' side of self-service profile editing, behind its eighth
+    published port.
+
+    Assembled separately from `get_public_profile_reader` above even though
+    both read a profile, for the reason every port pair on this platform is
+    separate: that one serves anonymous callers and returns a shape with no
+    timezone and no email; this one serves the owner, returns `OwnUserProfile`,
+    and can *write*. A single factory returning something that satisfied
+    both would hand the anonymous-traffic path a write capability.
+    """
+    users = UserService(
+        users=SqlAlchemyUserRepository(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )
+    return ProfileEditingService(users)
+
+
+ProfileEditorDep = Annotated[ProfileEditor, Depends(get_profile_editor)]
 
 
 def get_rating_provider() -> RatingProvider:
@@ -123,10 +146,12 @@ ProfileServiceDep = Annotated[ProfileService, Depends(get_profile_service)]
 
 
 __all__ = [
+    "ProfileEditorDep",
     "ProfileServiceDep",
     "PublicProfileReaderDep",
     "RatingProviderDep",
     "StatisticsProviderDep",
+    "get_profile_editor",
     "get_profile_service",
     "get_public_profile_reader",
     "get_rating_provider",

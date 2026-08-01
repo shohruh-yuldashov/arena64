@@ -38,7 +38,14 @@ from app.modules.users.domain.exceptions import (
     UserNotFound,
 )
 from app.modules.users.domain.validators import validate_language
-from app.modules.users.domain.value_objects import Email, Timezone, Username
+from app.modules.users.domain.value_objects import (
+    Bio,
+    CountryCode,
+    DisplayName,
+    Email,
+    Timezone,
+    Username,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +155,7 @@ class UserService:
             preferred_language=language,
             timezone=timezone,
             created_at=self._clock.now(),
-            display_name=command.display_name,
+            display_name=DisplayName(command.display_name) if command.display_name else None,
         )
 
         async with self._uow:
@@ -174,8 +181,16 @@ class UserService:
         """
         user = await self.get_user(user_id)
 
+        # Each value object validates on construction, so an invalid
+        # field raises before anything is assigned and the entity is never
+        # left half-updated. `None` clears the field rather than
+        # constructing an empty value — absence is one state.
         if is_set(command.display_name):
-            user.display_name = command.display_name
+            user.display_name = DisplayName(command.display_name) if command.display_name else None
+        if is_set(command.bio):
+            user.bio = Bio(command.bio) if command.bio else None
+        if is_set(command.country):
+            user.country = CountryCode(command.country) if command.country else None
         if is_set(command.preferred_language):
             user.preferred_language = command.preferred_language
         if is_set(command.timezone):

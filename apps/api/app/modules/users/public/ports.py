@@ -18,11 +18,19 @@ arbitrary user, list users, or change a profile. The value of a published
 surface is entirely in what it withholds.
 """
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
+if TYPE_CHECKING:
+    from app.modules.users.public.edits import ProfileEdits
+
 from app.modules.users.public.credentials import UserCredentials
-from app.modules.users.public.dtos import AvatarReference, PublicUserProfile, UserRead
+from app.modules.users.public.dtos import (
+    AvatarReference,
+    OwnUserProfile,
+    PublicUserProfile,
+    UserRead,
+)
 
 
 class NewUserAccount(Protocol):
@@ -374,5 +382,66 @@ class AvatarStore(Protocol):
         the version anyway. A caller retrying after a dropped response must
         not receive an error for the retry, and a spurious cache bust costs
         one refetch while a missed one costs correctness.
+        """
+        ...
+
+
+class ProfileEditor(Protocol):
+    """Reads and updates the account holder's own editable profile.
+
+    The eighth narrow port, added by A64-012.3, and the first published one
+    that *writes* a field a player chose rather than a credential or a
+    reference the platform computed.
+
+    **Separate from `PublicProfileReader` even though both read a profile.**
+    That one serves anonymous callers and returns a shape with no email and
+    no timezone; this one serves the owner and returns `OwnUserProfile`,
+    which carries the timezone precisely because it is the owner's to see.
+    A single port with a "is this the owner" flag would put the disclosure
+    decision on the caller, which is where it must never live.
+
+    **No `username` anywhere on this port**, and that is the architectural
+    preparation A64-012.3 asks for rather than an omission. A rename is not
+    a profile edit: UP-2 requires the old handle to be recorded and UP-3
+    requires a reuse cooldown, so it needs its own use case, its own
+    conflict handling and its own rate limit. When it arrives it is a new
+    method (`change_username`) or a new port — not a field on `ProfileEdits`
+    — so that nothing which merely edits a profile can rename an account.
+
+    Read-only fields cannot be smuggled in either: `ProfileEdits` has five
+    attributes and no others, so a caller has nothing to set beyond them.
+    """
+
+    async def get_own_profile(self, user_id: UUID) -> OwnUserProfile:
+        """The owner's view of their own profile.
+
+        Raises `UserNotFound` rather than returning `None`: the caller
+        holds an identifier it has already authenticated, so absence is a
+        genuine failure — an account deleted while a valid token was still
+        in flight — rather than an ordinary outcome.
+        """
+        ...
+
+    async def update_own_profile(self, user_id: UUID, edits: "ProfileEdits") -> OwnUserProfile:
+        """Applies a partial update and returns the resulting profile.
+
+        **Partial in the PATCH sense**: every field on `ProfileEdits`
+        defaults to `UNSET`, and only the ones a caller actually set are
+        touched. That distinction is not cosmetic — it is what separates
+        "leave the bio alone" from "clear the bio", which a shape using
+        `None` for both could not express.
+
+        Returns the updated profile so a client renders the result without
+        a second round trip, and so the response reflects **normalised**
+        values: a display name arrives padded and comes back trimmed, a
+        country arrives `uz` and comes back `UZ`. A caller that echoed its
+        own request would show the player something the platform did not
+        store.
+
+        Raises `InvalidDisplayName`, `InvalidBio`, `InvalidCountryCode`,
+        `InvalidLanguage` or `InvalidTimezone` — all published from this
+        package — when a value fails validation, and `UserNotFound` if the
+        account is gone. Nothing is written when any field is rejected: the
+        values are validated before the entity is touched.
         """
         ...

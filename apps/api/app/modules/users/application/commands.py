@@ -55,9 +55,27 @@ class UpdateUserProfile:
 
     Also excludes `is_active` and `is_verified`: those are state
     transitions with their own service methods and their own meaning, not
-    values a client sets.
+    values a client sets. And `avatar_object_key`, which A64-012.2 made
+    writable only by uploading an image that the platform itself validates
+    and stores — a client-supplied key would point an avatar at any object
+    in the bucket.
+
+    Three of the five fields are nullable (`display_name`, `bio`,
+    `country`) and two are not (`preferred_language`, `timezone`). That is
+    the difference between a decoration a player may remove and a setting
+    that must always have a value — the schema enforces it at the boundary
+    so an explicit `null` on the latter two is a 422 rather than a silent
+    no-op.
+
+    **Raw strings, not value objects.** The command is the boundary
+    between a caller and the service, and a caller that had to construct
+    `Bio`/`CountryCode`/`DisplayName` would be doing the validation this
+    service exists to guarantee. `update_profile` constructs them, so
+    every path — HTTP, a future CLI, a test — is validated identically.
     """
 
     display_name: str | None | UnsetType = UNSET
+    bio: str | None | UnsetType = UNSET
+    country: str | None | UnsetType = UNSET
     preferred_language: Locale | UnsetType = UNSET
     timezone: str | UnsetType = UNSET

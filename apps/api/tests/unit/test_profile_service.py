@@ -37,7 +37,14 @@ from app.modules.profiles.infrastructure import (
 from app.modules.users.application.services import UserService
 from app.modules.users.application.services.public_profile_service import PublicProfileService
 from app.modules.users.domain.entities import User
-from app.modules.users.domain.value_objects import Bio, CountryCode, Email, Timezone, Username
+from app.modules.users.domain.value_objects import (
+    Bio,
+    CountryCode,
+    DisplayName,
+    Email,
+    Timezone,
+    Username,
+)
 from tests.fakes.user_repository import FakeUserRepository
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
@@ -75,8 +82,8 @@ def account(*, username: str = "Player_One", is_active: bool = True) -> User:
         preferred_language=Locale.EN,
         timezone=Timezone("Europe/London"),
         created_at=NOW,
-        display_name="Player One",
     )
+    user.display_name = DisplayName("Player One")
     user.bio = Bio("I play chess.")
     user.country = CountryCode("GB")
     user.is_active = is_active

@@ -31,7 +31,12 @@ from app.core.enums import Locale
 from app.database.unit_of_work import SessionUnitOfWork  # noqa: F401 — see _NullUnitOfWork
 from app.modules.users.application.services import UserService
 from app.modules.users.domain.entities import User
-from app.modules.users.domain.value_objects import Email, Timezone, Username
+from app.modules.users.domain.value_objects import (
+    DisplayName,
+    Email,
+    Timezone,
+    Username,
+)
 from app.modules.users.presentation.dependencies import get_user_service
 from tests.fakes.user_repository import FakeUserRepository
 
@@ -84,7 +89,7 @@ def make_user(
         preferred_language=Locale.EN,
         timezone=Timezone("UTC"),
         created_at=_NOW,
-        display_name=display_name,
+        display_name=DisplayName(display_name) if display_name else None,
     )
 
 
@@ -217,113 +222,18 @@ class TestListUsers:
         assert response.json()["code"] == "validation_error"
 
 
-class TestUpdateUser:
-    async def test_updates_a_field(
-        self, client: TestClient, repository: FakeUserRepository
-    ) -> None:
-        user = await repository.create(make_user())
-
-        response = client.patch(f"/api/v1/users/{user.id}", json={"display_name": "New Name"})
-
-        assert response.status_code == 200
-        assert response.json()["data"]["display_name"] == "New Name"
-
-    async def test_an_omitted_field_is_left_alone(
-        self, client: TestClient, repository: FakeUserRepository
-    ) -> None:
-        user = await repository.create(make_user(display_name="Keep Me"))
-
-        response = client.patch(f"/api/v1/users/{user.id}", json={"timezone": "Europe/London"})
-
-        body = response.json()["data"]
-        assert body["display_name"] == "Keep Me"
-        assert body["timezone"] == "Europe/London"
-
-    async def test_an_explicit_null_clears_a_nullable_field(
-        self, client: TestClient, repository: FakeUserRepository
-    ) -> None:
-        # The end-to-end proof that `UNSET` is doing its job: this request
-        # and the one above differ only in what they send, and must
-        # produce different outcomes.
-        user = await repository.create(make_user(display_name="Bye"))
-
-        response = client.patch(f"/api/v1/users/{user.id}", json={"display_name": None})
-
-        assert response.json()["data"]["display_name"] is None
-
-    async def test_an_empty_body_is_accepted(
-        self, client: TestClient, repository: FakeUserRepository
-    ) -> None:
-        user = await repository.create(make_user())
-        assert client.patch(f"/api/v1/users/{user.id}", json={}).status_code == 200
-
-    def test_404_for_an_unknown_id(self, client: TestClient) -> None:
-        response = client.patch(f"/api/v1/users/{uuid4()}", json={"display_name": "x"})
-
-        assert response.status_code == 404
-        assert response.json()["code"] == "not_found"
-
-    async def test_422_for_an_unknown_timezone(
-        self, client: TestClient, repository: FakeUserRepository
-    ) -> None:
-        user = await repository.create(make_user())
-
-        response = client.patch(f"/api/v1/users/{user.id}", json={"timezone": "Mars/Olympus"})
-
-        assert response.status_code == 422
-        assert response.json()["code"] == "validation_error"
-
-    async def test_422_for_an_unsupported_language(
-        self, client: TestClient, repository: FakeUserRepository
-    ) -> None:
-        user = await repository.create(make_user())
-
-        response = client.patch(f"/api/v1/users/{user.id}", json={"preferred_language": "de"})
-
-        assert response.status_code == 422
-
-    async def test_422_for_an_unknown_field(
-        self, client: TestClient, repository: FakeUserRepository
-    ) -> None:
-        # `BaseRequestDTO` forbids extras (services.md §6 Tier 1): a
-        # misspelled field is far more often a client bug than a
-        # forwards-compatible extension, and silently dropping it hides
-        # that from the caller.
-        user = await repository.create(make_user())
-
-        response = client.patch(f"/api/v1/users/{user.id}", json={"displayname": "typo"})
-
-        assert response.status_code == 422
-        assert "displayname" in response.json()["message"]
-
-    async def test_422_for_an_explicit_null_on_a_non_clearable_field(
-        self, client: TestClient, repository: FakeUserRepository
-    ) -> None:
-        user = await repository.create(make_user())
-
-        response = client.patch(f"/api/v1/users/{user.id}", json={"timezone": None})
-
-        assert response.status_code == 422
-        assert "cannot be null" in response.json()["message"]
-
-    async def test_cannot_change_username_or_email_through_patch(
-        self, client: TestClient, repository: FakeUserRepository
-    ) -> None:
-        # Both are excluded from `UserUpdate` deliberately (handle history
-        # UP-2 / email re-verification), and `extra="forbid"` is what makes
-        # that exclusion enforced rather than merely documented.
-        user = await repository.create(make_user())
-
-        assert (
-            client.patch(f"/api/v1/users/{user.id}", json={"username": "hijacked"}).status_code
-            == 422
-        )
-        assert (
-            client.patch(
-                f"/api/v1/users/{user.id}", json={"email": "hijack@example.com"}
-            ).status_code
-            == 422
-        )
+# --- removed in A64-012.3 ----------------------------------------------------
+#
+# This file previously covered `PATCH /users/{user_id}`, which A64-012.3
+# retired: it was unauthenticated, keyed on a public id, and would have made
+# "only the profile owner may edit" false the moment `PATCH /profile`
+# shipped beside it (see `users/presentation/router.py`).
+#
+# Every behaviour those tests asserted now lives in
+# `tests/contract/test_profile_editing_api.py` against the replacement
+# endpoint, including the two worth keeping by name: an unknown field is
+# rejected rather than ignored, and `username` cannot be changed through a
+# profile update.
 
 
 class TestOpenApi:

@@ -30,6 +30,7 @@ from app.core.enums import Locale
 from app.modules.users.domain.exceptions import (
     InvalidBio,
     InvalidCountryCode,
+    InvalidDisplayName,
     InvalidEmail,
     InvalidLanguage,
     InvalidTimezone,
@@ -209,14 +210,98 @@ def validate_email(value: str) -> str:
     return normalized
 
 
-# --- optional profile fields ------------------------------------------------
-# No validator function: unlike the four fields above, these have no rule
-# beyond a length bound, and a `validate_display_name` that only checked
-# `len()` would be indirection with nothing in it. The constants are still
-# defined here — and only here — so the ORM column, the Pydantic schema and
-# any future check all read the same number instead of three literals that
-# drift apart (CLAUDE.md §2.1, one source of truth per concept).
-DISPLAY_NAME_MAX_LENGTH = 64
+# --- shared text hygiene -----------------------------------------------------
+
+#: Characters no player-authored text field on this platform may contain.
+#: Newline and tab survive; every other C0/C1 control character does not.
+#:
+#: Not aesthetic. This text is rendered into a terminal by an admin tool,
+#: into a log line by an abuse report, and into a web page by the client.
+#: `\x1b` is an ANSI escape — enough to rewrite what a moderator sees in
+#: their own terminal. `\u202e` (RIGHT-TO-LEFT OVERRIDE) reverses the
+#: rendering of everything after it, which is a known display-spoofing
+#: primitive.
+#:
+#: Stripping silently would be worse than refusing: the player would see
+#: text they did not write. Both validators reject and name the character.
+#:
+#: Shared by `validate_bio` (A64-012.1) and `validate_display_name`
+#: (A64-012.3) — one definition, because a display name shown in every
+#: match list is a *better* place to hide an override than a biography
+#: nobody scrolls to, and two copies is how one of them misses a codepoint.
+_FORBIDDEN_TEXT_CHARACTERS = frozenset(
+    chr(codepoint)
+    for codepoint in [*range(0x00, 0x20), 0x7F, *range(0x80, 0xA0), 0x200B, 0x200E, 0x200F, 0x202A]
+    + list(range(0x202B, 0x2030))
+) - {"\n", "\t"}
+
+
+# --- display name -----------------------------------------------------------
+
+#: A64-012.3's figures. **Narrowed from A64-010's 1-64**, which was a bare
+#: Pydantic bound with no domain rule behind it — the field is now editable,
+#: so it needs one.
+#:
+#: The minimum is the interesting half. Three characters is what stops a
+#: display name from being a single character or an invisible one, which is
+#: the shape of an impersonation attempt: a one-character name renders as
+#: near-nothing beside an avatar, and a player cannot tell two of them apart
+#: in a match list. UP-1 makes the *handle* confusable-safe; this is the
+#: much weaker guard on the free-form name shown next to it.
+DISPLAY_NAME_MIN_LENGTH = 3
+DISPLAY_NAME_MAX_LENGTH = 50
+
+
+def validate_display_name(value: str) -> str:
+    """Returns the display name trimmed, or raises `InvalidDisplayName`.
+
+    **Unicode is fully supported**, deliberately and by requirement: the
+    platform's own locales include Uzbek and Russian, and a rule that
+    restricted this to ASCII would tell a large share of the player base
+    that their own name is invalid. Length is therefore counted in
+    *characters*, not bytes — `len()` on a `str` in Python 3 already does
+    that, which is worth stating because the equivalent check in many
+    languages does not, and "Жанибек" is 7 characters and 14 bytes.
+
+    Trimmed rather than rejected for surrounding whitespace: a name pasted
+    from another application routinely carries a trailing space, and
+    refusing it teaches nothing. Trimming happens **before** the length
+    check, so `"  a  "` is two characters and fails rather than passing on
+    padding.
+
+    Control and bidirectional characters are refused on exactly the same
+    grounds as `validate_bio`, and by the same predicate — see
+    `_FORBIDDEN_TEXT_CHARACTERS`. A display name is rendered beside an
+    avatar in every match list and chat line on the platform, which makes
+    it a *more* attractive place to hide a right-to-left override than a
+    biography nobody scrolls to.
+
+    Empty is not this function's concern: "no display name" is `None` at
+    the field, and the caller normalises. Passing `""` here fails the
+    minimum, which is the honest answer to "is this a valid name".
+    """
+    trimmed = value.strip()
+
+    if len(trimmed) < DISPLAY_NAME_MIN_LENGTH:
+        raise InvalidDisplayName(
+            f"Display name must be at least {DISPLAY_NAME_MIN_LENGTH} characters."
+        )
+    if len(trimmed) > DISPLAY_NAME_MAX_LENGTH:
+        raise InvalidDisplayName(
+            f"Display name must be at most {DISPLAY_NAME_MAX_LENGTH} characters."
+        )
+
+    offending = sorted(_FORBIDDEN_TEXT_CHARACTERS.intersection(trimmed))
+    if offending:
+        raise InvalidDisplayName(
+            "Display name must not contain control or bidirectional characters "
+            f"(found U+{ord(offending[0]):04X})."
+        )
+
+    return trimmed
+
+
+# --- other optional profile fields -------------------------------------------
 #: A64-012.2 replaced the stored URL with an object key. Keys this
 #: platform generates are ~60 characters (`avatars/{uuid}/{uuid}.webp`);
 #: 512 is generous room for a provider prefix without letting the column
@@ -311,22 +396,6 @@ def validate_timezone(value: str) -> str:
 #: character rules below are the other half.
 BIO_MAX_LENGTH = 500
 
-#: Newline and tab survive; every other C0/C1 control character does not.
-#:
-#: Not aesthetic. A bio is rendered into a terminal by an admin tool, into
-#: a log line by an abuse report, and into a web page by the client. `\x1b`
-#: is an ANSI escape — enough to rewrite what a moderator sees in their own
-#: terminal. `‮` (RIGHT-TO-LEFT OVERRIDE) reverses the rendering of
-#: everything after it, which is a known display-spoofing primitive.
-#:
-#: Stripping silently would be worse than refusing: the player would see
-#: text they did not write. This rejects and says which character.
-_BIO_FORBIDDEN_CHARACTERS = frozenset(
-    chr(codepoint)
-    for codepoint in [*range(0x00, 0x20), 0x7F, *range(0x80, 0xA0), 0x200B, 0x200E, 0x200F, 0x202A]
-    + list(range(0x202B, 0x2030))
-) - {"\n", "\t"}
-
 
 def validate_bio(value: str) -> str:
     """Returns the biography unchanged if it is acceptable plain text.
@@ -354,7 +423,7 @@ def validate_bio(value: str) -> str:
     if len(stripped) > BIO_MAX_LENGTH:
         raise InvalidBio(f"Bio must be at most {BIO_MAX_LENGTH} characters.")
 
-    offending = sorted(_BIO_FORBIDDEN_CHARACTERS.intersection(stripped))
+    offending = sorted(_FORBIDDEN_TEXT_CHARACTERS.intersection(stripped))
     if offending:
         # Names the codepoint, never echoes the whole bio — an error
         # message is a place user-supplied text reaches logs and screens
@@ -374,35 +443,318 @@ COUNTRY_CODE_LENGTH = 2
 
 _COUNTRY_CODE_PATTERN = re.compile(r"^[A-Z]{2}$")
 
+#: Every officially assigned ISO 3166-1 alpha-2 code.
+#:
+#: A64-012.1 validated only the *shape* and said so plainly: `XX` and `ZZ`
+#: passed, and the note recorded that membership belongs in the
+#: `reference.country` table database.md §201 specifies. A64-012.3 makes
+#: the field editable by anyone with an account and requires unknown codes
+#: to be rejected, so the check can no longer wait for that table.
+#:
+#: **A frozen set here rather than a dependency**, per CLAUDE.md §2.6 ("do
+#: not add a dependency for what the standard library or an existing
+#: dependency does"): `pycountry` would pull the whole ISO corpus —
+#: subdivisions, historic codes, translations — to answer one membership
+#: question, and would make a data update a release.
+#:
+#: The cost is honest and worth naming: this list ages. ISO assigns and
+#: retires codes a handful of times a decade (`SS` in 2011, `XK` still
+#: unassigned for Kosovo), so a country that appears next year needs a
+#: code change here. That is the trade `reference.country` eventually
+#: fixes — this set moves into a seeded table, `validate_country_code`
+#: takes the set as an argument, and operations correct it without a
+#: deploy. Until then a stale entry fails *closed*, which is the safe
+#: direction: a player from a brand-new country cannot set their flag,
+#: rather than an arbitrary two letters being stored as if valid.
+#:
+#: Deliberately excludes user-assigned ranges (`AA`, `QM`-`QZ`, `XA`-`XZ`,
+#: `ZZ`) and exceptional reservations. Those are *legal* ISO values for
+#: private use, and accepting them would put arbitrary two-letter strings
+#: back in the column by the front door.
+ISO_3166_1_ALPHA_2: frozenset[str] = frozenset(
+    [
+        "AD",
+        "AE",
+        "AF",
+        "AG",
+        "AI",
+        "AL",
+        "AM",
+        "AO",
+        "AQ",
+        "AR",
+        "AS",
+        "AT",
+        "AU",
+        "AW",
+        "AX",
+        "AZ",
+        "BA",
+        "BB",
+        "BD",
+        "BE",
+        "BF",
+        "BG",
+        "BH",
+        "BI",
+        "BJ",
+        "BL",
+        "BM",
+        "BN",
+        "BO",
+        "BQ",
+        "BR",
+        "BS",
+        "BT",
+        "BV",
+        "BW",
+        "BY",
+        "BZ",
+        "CA",
+        "CC",
+        "CD",
+        "CF",
+        "CG",
+        "CH",
+        "CI",
+        "CK",
+        "CL",
+        "CM",
+        "CN",
+        "CO",
+        "CR",
+        "CU",
+        "CV",
+        "CW",
+        "CX",
+        "CY",
+        "CZ",
+        "DE",
+        "DJ",
+        "DK",
+        "DM",
+        "DO",
+        "DZ",
+        "EC",
+        "EE",
+        "EG",
+        "EH",
+        "ER",
+        "ES",
+        "ET",
+        "FI",
+        "FJ",
+        "FK",
+        "FM",
+        "FO",
+        "FR",
+        "GA",
+        "GB",
+        "GD",
+        "GE",
+        "GF",
+        "GG",
+        "GH",
+        "GI",
+        "GL",
+        "GM",
+        "GN",
+        "GP",
+        "GQ",
+        "GR",
+        "GS",
+        "GT",
+        "GU",
+        "GW",
+        "GY",
+        "HK",
+        "HM",
+        "HN",
+        "HR",
+        "HT",
+        "HU",
+        "ID",
+        "IE",
+        "IL",
+        "IM",
+        "IN",
+        "IO",
+        "IQ",
+        "IR",
+        "IS",
+        "IT",
+        "JE",
+        "JM",
+        "JO",
+        "JP",
+        "KE",
+        "KG",
+        "KH",
+        "KI",
+        "KM",
+        "KN",
+        "KP",
+        "KR",
+        "KW",
+        "KY",
+        "KZ",
+        "LA",
+        "LB",
+        "LC",
+        "LI",
+        "LK",
+        "LR",
+        "LS",
+        "LT",
+        "LU",
+        "LV",
+        "LY",
+        "MA",
+        "MC",
+        "MD",
+        "ME",
+        "MF",
+        "MG",
+        "MH",
+        "MK",
+        "ML",
+        "MM",
+        "MN",
+        "MO",
+        "MP",
+        "MQ",
+        "MR",
+        "MS",
+        "MT",
+        "MU",
+        "MV",
+        "MW",
+        "MX",
+        "MY",
+        "MZ",
+        "NA",
+        "NC",
+        "NE",
+        "NF",
+        "NG",
+        "NI",
+        "NL",
+        "NO",
+        "NP",
+        "NR",
+        "NU",
+        "NZ",
+        "OM",
+        "PA",
+        "PE",
+        "PF",
+        "PG",
+        "PH",
+        "PK",
+        "PL",
+        "PM",
+        "PN",
+        "PR",
+        "PS",
+        "PT",
+        "PW",
+        "PY",
+        "QA",
+        "RE",
+        "RO",
+        "RS",
+        "RU",
+        "RW",
+        "SA",
+        "SB",
+        "SC",
+        "SD",
+        "SE",
+        "SG",
+        "SH",
+        "SI",
+        "SJ",
+        "SK",
+        "SL",
+        "SM",
+        "SN",
+        "SO",
+        "SR",
+        "SS",
+        "ST",
+        "SV",
+        "SX",
+        "SY",
+        "SZ",
+        "TC",
+        "TD",
+        "TF",
+        "TG",
+        "TH",
+        "TJ",
+        "TK",
+        "TL",
+        "TM",
+        "TN",
+        "TO",
+        "TR",
+        "TT",
+        "TV",
+        "TW",
+        "TZ",
+        "UA",
+        "UG",
+        "UM",
+        "US",
+        "UY",
+        "UZ",
+        "VA",
+        "VC",
+        "VE",
+        "VG",
+        "VI",
+        "VN",
+        "VU",
+        "WF",
+        "WS",
+        "YE",
+        "YT",
+        "ZA",
+        "ZM",
+        "ZW",
+    ]
+)
+
 
 def validate_country_code(value: str) -> str:
-    """Validates the *shape* of an ISO 3166-1 alpha-2 code and upper-cases
-    it. Does **not** check that the code is assigned.
+    """Returns an upper-cased ISO 3166-1 alpha-2 code, or raises
+    `InvalidCountryCode`.
 
-    That gap is deliberate and is worth stating rather than leaving for
-    somebody to discover: `XX` and `ZZ` pass this. Checking membership
-    needs the list, and the list belongs in the `reference.country` table
-    database.md §201 already specifies ("Variants, time controls, rating
-    categories, locales and countries are referenced by ... reference
-    data"), precisely so that operations can correct a code without a
-    deploy — countries are added, renamed and split more often than a
-    hardcoded set would survive.
-
-    Adding a Python dependency to hold that list would be the wrong fix in
-    two ways: it duplicates a table the design already calls for, and it
-    makes a data question into a release question. Until `reference.country`
-    exists, the format check plus the `char(2)` column is what the platform
-    has, and the only field it protects is one no endpoint writes yet.
+    Two checks, and the second is what A64-012.3 added: the value must be
+    two ASCII letters **and** must be a code ISO has actually assigned.
+    `XX`, `ZZ` and `QQ` are all well-formed and all rejected — see
+    `ISO_3166_1_ALPHA_2` on why the private-use ranges are excluded rather
+    than tolerated.
 
     Upper-casing rather than rejecting lowercase: `gb` and `GB` are the
     same country, and a form that rejected the first would be rejecting a
     keyboard rather than a value.
+
+    The error names one valid example and never enumerates the set. A
+    249-entry list in a 422 body is unreadable, and the client rendering
+    this field has its own country picker — the message is for a developer
+    who sent something odd, not a menu.
     """
     normalised = value.strip().upper()
 
     if not _COUNTRY_CODE_PATTERN.match(normalised):
         raise InvalidCountryCode(
             f"Country must be a two-letter ISO 3166-1 alpha-2 code such as 'GB'; got {value!r}."
+        )
+
+    if normalised not in ISO_3166_1_ALPHA_2:
+        raise InvalidCountryCode(
+            f"{normalised!r} is not an assigned ISO 3166-1 alpha-2 country code."
         )
 
     return normalised

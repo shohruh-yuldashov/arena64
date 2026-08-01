@@ -59,9 +59,11 @@ from app.modules.friends.application.ports import (
     SocialGraphCache,
 )
 from app.modules.friends.application.validators import FriendRequestValidator
+from app.modules.friends.domain.events import FriendRequestAccepted
 from app.modules.friends.domain.exceptions import FriendRequestNotFound
 from app.modules.friends.domain.friend_request import FriendRequest, FriendRequestStatus
 from app.modules.friends.domain.friendship import Friendship
+from app.platform.outbox import EventPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +83,7 @@ class FriendRequestService:
         requests: FriendRequestRepository,
         friendships: FriendshipRepository,
         cache: SocialGraphCache,
+        events: EventPublisher,
         validator: FriendRequestValidator,
         unit_of_work: UnitOfWork,
         clock: Clock,
@@ -98,6 +101,10 @@ class FriendRequestService:
         # only way a friendship comes into existence, so it is the only way
         # a cached friend set can gain a member.
         self._cache = cache
+        # A64-013.7. Published inside `_create_friendship`, which is inside
+        # the acceptance's transaction — so the request, the friendship and
+        # the event are one fact (FR-4 and AD-16 agreeing).
+        self._events = events
         self._validator = validator
         self._unit_of_work = unit_of_work
         self._clock = clock
@@ -253,12 +260,26 @@ class FriendRequestService:
         accepted, and two `clock.now()` calls would record two answers to
         one question.
         """
-        await self._friendships.create(
+        friendship = await self._friendships.create(
             Friendship.between(
                 request.requester_id,
                 request.addressee_id,
                 created_at=at,
                 source_request_id=request.id,
+            )
+        )
+
+        # A64-013.7. The third write in this transaction, and the reason
+        # there is no fourth anywhere else: an acceptance that committed
+        # without its event would be a friendship nobody is ever told about,
+        # with nothing recording that a notification was owed (AD-16).
+        await self._events.publish(
+            FriendRequestAccepted(
+                occurred_at=at,
+                request_id=request.id,
+                requester_id=request.requester_id,
+                addressee_id=request.addressee_id,
+                friendship_id=friendship.id,
             )
         )
 

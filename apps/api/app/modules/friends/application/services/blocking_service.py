@@ -66,8 +66,10 @@ from app.modules.friends.application.ports import (
     SocialGraphCache,
 )
 from app.modules.friends.domain.block import Block
+from app.modules.friends.domain.events import PlayerBlocked, PlayerUnblocked
 from app.modules.friends.domain.exceptions import AlreadyBlocked, NotBlocked, SelfBlock
 from app.modules.friends.domain.friendship import FriendshipEndReason
+from app.platform.outbox import EventPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -80,10 +82,16 @@ class BlockingService:
         friendships: FriendshipRepository,
         requests: FriendRequestRepository,
         cache: SocialGraphCache,
+        events: EventPublisher,
         unit_of_work: UnitOfWork,
         clock: Clock,
     ) -> None:
         self._blocks = blocks
+        # A64-013.7. Both writes below publish inside their own unit of work,
+        # which is AD-16 exactly: the event is as durable as the block, and a
+        # rollback takes both. Contrast `_invalidate`, which runs *after* the
+        # commit — a cache drop is not a fact and must not be undone by one.
+        self._events = events
         # Two of the four `friends:v1:` invalidation triggers live in this
         # class — see `_invalidate` on why they fire after the commit.
         self._cache = cache
@@ -126,6 +134,19 @@ class BlockingService:
             stored = await self._blocks.add(block)
             ended = await self._end_friendship(blocker_id, blocked_id, at=at)
             voided = await self._requests.void_pending_between(blocker_id, blocked_id, at=at)
+            # Inside the transaction, after the cascade, so the event records
+            # what actually happened rather than what was intended — and so
+            # a failure anywhere above leaves neither the block nor its
+            # announcement behind.
+            await self._events.publish(
+                PlayerBlocked(
+                    occurred_at=at,
+                    blocker_id=blocker_id,
+                    blocked_id=blocked_id,
+                    friendship_ended=ended,
+                    requests_voided=voided,
+                )
+            )
             await self._unit_of_work.commit()
 
         await self._invalidate(blocker_id, blocked_id)
@@ -166,9 +187,17 @@ class BlockingService:
         request it voided stays voided; the two must start again. BL-3 cuts
         both ways.
         """
+        at = self._clock.now()
         try:
             async with self._unit_of_work:
                 await self._blocks.remove(blocker_id, blocked_id)
+                # `remove` raises `NotBlocked` when there was nothing to lift,
+                # so reaching this line means the state genuinely changed —
+                # which is what stops a retried `DELETE` emitting a second
+                # event for one unblock.
+                await self._events.publish(
+                    PlayerUnblocked(occurred_at=at, blocker_id=blocker_id, blocked_id=blocked_id)
+                )
                 await self._unit_of_work.commit()
         except NotBlocked:
             # Nothing to lift, and therefore nothing to invalidate. DEBUG

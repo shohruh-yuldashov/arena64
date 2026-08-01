@@ -123,7 +123,9 @@ from app.modules.auth.presentation.schemas import (
     VerificationAccepted,
     VerifyEmailRequest,
 )
-from app.modules.users.presentation.dependencies import PresenceServiceDep
+from app.modules.notifications.presentation.dependencies import (
+    PresenceNotificationServiceDep,
+)
 from app.modules.users.public import UserRead
 
 logger = logging.getLogger(__name__)
@@ -278,7 +280,7 @@ async def login(
     authentication: AuthenticationServiceDep,
     access_tokens: AccessTokenServiceDep,
     sessions: SessionServiceDep,
-    presence: PresenceServiceDep,
+    presence: PresenceNotificationServiceDep,
 ) -> ApiResponse[TokenPair]:
     """Verifies credentials and starts a session.
 
@@ -313,11 +315,17 @@ async def login(
     # issue one records no presence — and never before, because presence
     # asserts a player is here and a failed login has not established that.
     #
-    # `PresenceService` never raises (`PresenceRecorder`'s contract), so a
-    # Redis blip costs an online indicator and not a sign-in. See that
-    # service on why authentication is a legitimate presence signal without
-    # a socket.
-    await presence.mark_online(account.id, session_id=issued_session.session.id)
+    # `PresenceNotificationService` never raises: the presence write cannot
+    # (`PresenceRecorder`'s contract) and the event write is guarded, so a
+    # Redis or an outbox failure costs an online indicator and not a
+    # sign-in.
+    #
+    # A64-013.7 replaced `PresenceService` here with the coordinator that
+    # wraps it, so that a sign-in by a player who was **already** online
+    # records presence and emits nothing. The route asks for neither
+    # behaviour and gets both — which is the point of the brief's "do NOT
+    # call [PresenceService] directly from controllers".
+    await presence.record_online(account.id, session_id=issued_session.session.id)
 
     logger.info(
         "login_completed",
@@ -338,7 +346,7 @@ async def refresh(
     sessions: SessionServiceDep,
     access_tokens: AccessTokenServiceDep,
     profiles: UserProfileReaderDep,
-    presence: PresenceServiceDep,
+    presence: PresenceNotificationServiceDep,
 ) -> ApiResponse[TokenPair]:
     """Rotates the refresh token and issues a fresh access token.
 
@@ -383,7 +391,12 @@ async def refresh(
     # still there, so this is what keeps a signed-in player online: the
     # presence record's TTL restarts on every refresh, and a player who
     # closes the tab stops refreshing and goes quiet on its own.
-    await presence.mark_online(rotated.session.user_id, session_id=rotated.session.id)
+    #
+    # A64-013.7: the refresh is the case transition detection exists for. It
+    # runs on a timer for as long as a player is signed in, and every one of
+    # those would otherwise be a fan-out to every friend about a state that
+    # did not change.
+    await presence.record_online(rotated.session.user_id, session_id=rotated.session.id)
 
     logger.info(
         "refresh_completed",
@@ -442,7 +455,7 @@ async def logout(payload: RefreshRequest, sessions: SessionServiceDep) -> Respon
     responses=_UNAUTHORIZED,
 )
 async def logout_all(
-    user: CurrentUser, sessions: SessionServiceDep, presence: PresenceServiceDep
+    user: CurrentUser, sessions: SessionServiceDep, presence: PresenceNotificationServiceDep
 ) -> Response:
     """Revokes every session for the authenticated account.
 
@@ -473,10 +486,11 @@ async def logout_all(
     # A64-013.6. **The one place a player is marked offline**, because it is
     # the one place that revokes every session — there is no device left
     # that could be present. `POST /auth/logout` deliberately does not; see
-    # its docstring.
+    # its docstring. A64-013.7 makes it the `PresenceOffline` edge too, and
+    # emits nothing for a player who was already absent.
     #
     # After the revocation, so a failed sign-out publishes nothing.
-    await presence.mark_offline(user.id)
+    await presence.record_offline(user.id)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

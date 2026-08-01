@@ -14,6 +14,7 @@ from app.config.settings import (
     EmailSettings,
     FriendsSettings,
     JWTSettings,
+    OutboxSettings,
     PostgresSettings,
     PresenceSettings,
     RateLimitSettings,
@@ -98,6 +99,7 @@ class TestSettings:
             statistics=StatisticsSettings(),
             presence=PresenceSettings(),
             friends=FriendsSettings(),
+            outbox=OutboxSettings(),
         )
         assert settings.environment is Environment.TEST
 
@@ -126,6 +128,7 @@ class TestSettings:
                 statistics=StatisticsSettings(),
                 presence=PresenceSettings(),
                 friends=FriendsSettings(),
+                outbox=OutboxSettings(),
             )
 
     def test_production_rejects_a_left_default_redis_role(self) -> None:
@@ -146,6 +149,7 @@ class TestSettings:
                 statistics=StatisticsSettings(),
                 presence=PresenceSettings(),
                 friends=FriendsSettings(),
+                outbox=OutboxSettings(),
             )
 
     def test_production_accepts_fully_explicit_configuration(self) -> None:
@@ -171,6 +175,7 @@ class TestSettings:
             statistics=StatisticsSettings(),
             presence=PresenceSettings(),
             friends=FriendsSettings(),
+            outbox=OutboxSettings(),
         )
         assert settings.environment is Environment.PRODUCTION
 
@@ -189,6 +194,7 @@ class TestSettings:
             statistics=StatisticsSettings(),
             presence=PresenceSettings(),
             friends=FriendsSettings(),
+            outbox=OutboxSettings(),
         )
         with pytest.raises(PydanticValidationError):
             settings.environment = Environment.PRODUCTION  # type: ignore[misc]
@@ -297,6 +303,7 @@ class TestJWTProductionGuard:
             statistics=StatisticsSettings(),
             presence=PresenceSettings(),
             friends=FriendsSettings(),
+            outbox=OutboxSettings(),
             jwt=JWTSettings(**jwt_overrides),  # type: ignore[arg-type]
         )
 
@@ -329,6 +336,7 @@ class TestJWTProductionGuard:
             statistics=StatisticsSettings(),
             presence=PresenceSettings(),
             friends=FriendsSettings(),
+            outbox=OutboxSettings(),
             jwt=JWTSettings(),
         )
 

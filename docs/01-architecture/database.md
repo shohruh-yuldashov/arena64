@@ -229,7 +229,7 @@ variant were governed by different rules — the exact class of corruption AD-15
 | `notifications` | `notifications` | `notification`, `notification_delivery`, `device_registration` | |
 | `fairplay` | `fairplay` | `analysis_run`, `integrity_signal` | |
 | `admin` | `admin` | `role_assignment`, `report`, `moderation_case`, `case_evidence`, `sanction`, `audit_entry` | |
-| `platform` | *(platform)* | `outbox`, `processed_event`, `erasure_request`, `data_export_request` | Plus Alembic's version table |
+| `platform` | *(platform)* | `outbox`, `processed_event`, `erasure_request`, `data_export_request` | Plus Alembic's version table. The first two exist since A64-013.7; the code that owns them is `apps/api/app/platform/outbox/`, which is deliberately outside `app/modules/` because no bounded context owns them |
 | *(none)* | `leaderboard` | — | **Redis only.** A leaderboard is an ordering over `rating`, rebuildable in seconds; a PostgreSQL copy would be a second source of rank that can disagree |
 | *(reserved)* | `tournaments` | — | §18.3 — created empty when the feature is specified |
 
@@ -1127,7 +1127,21 @@ inaction, and inaction is the harm. `expires_at` in the past simply means not ac
 
 **`outbox`** — `id uuid` (v7), `aggregate_type`, `aggregate_id uuid`, `event_type`,
 `event_version smallint`, `payload jsonb`, `occurred_at`, `correlation_id`, `causation_id`,
-`published_at`, `attempt_count`, `claimed_at`, `claimed_by`.
+`published_at`, `attempt_count`, `next_attempt_at`, `claimed_at`, `claimed_by`, `last_error`.
+
+Created by A64-013.7. Two columns were added to this specification in the same
+change, both required by CLAUDE.md §9.10's bounded retry:
+
+| Column | Why |
+| --- | --- |
+| `next_attempt_at` | Exponential backoff needs a "not before" instant. Without one, retry is a tight loop against whatever is failing — a transient outage plus a thundering herd. Null means due, so a row that has never been tried has no schedule to respect |
+| `last_error` | The failure is otherwise only in a log line, whose retention nobody chose for this purpose. This is the column an operator queries when asked why an event never arrived. Truncated by the writer; it holds an exception type and message, never a payload |
+
+**An exhausted entry stays unpublished.** When `attempt_count` reaches the
+configured ceiling the relay stops claiming it, and there is deliberately no
+`failed_at` column and no dead-letter table: "oldest unpublished row" is the
+number an operator already watches (`system-design.md §9`), and an event that
+gave up should make that number grow rather than tidy itself away.
 
 **`processed_event`** — PK `(consumer, event_id)`, plus `processed_at`. The consumer-side ledger
 that makes at-least-once delivery safe (`system-design.md §7`).

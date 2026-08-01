@@ -38,6 +38,7 @@ from typing import Annotated
 from fastapi import Depends
 
 from app.api.deps import ClockDep, DbSessionDep, FriendsSettingsDep, RedisPoolsDep
+from app.api.outbox_deps import EventPublisherDep
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.friends.application.ports import SocialGraphCache
 from app.modules.friends.application.services import (
@@ -114,7 +115,10 @@ PresenceAudienceServiceDep = Annotated[
 
 
 def get_friend_request_service(
-    session: DbSessionDep, clock: ClockDep, cache: SocialGraphCacheDep
+    session: DbSessionDep,
+    clock: ClockDep,
+    cache: SocialGraphCacheDep,
+    events: EventPublisherDep,
 ) -> FriendRequestService:
     """The friend-request use cases, assembled for this request.
 
@@ -140,6 +144,10 @@ def get_friend_request_service(
         # The fourth `friends:v1:` invalidation trigger — acceptance is the
         # only way a friendship comes into existence.
         cache=cache,
+        # A64-013.7. Built over the **same** session as the repositories
+        # above, which is what puts the outbox row in the acceptance's
+        # transaction rather than beside it.
+        events=events,
         # The validator now reaches three relations: requests, blocks, and
         # `users` for the existence half of FR-2 — see
         # `_ensure_recipient_reachable` on why a blocked pair and an
@@ -164,7 +172,10 @@ FriendRequestServiceDep = Annotated[FriendRequestService, Depends(get_friend_req
 
 
 def get_blocking_service(
-    session: DbSessionDep, clock: ClockDep, cache: SocialGraphCacheDep
+    session: DbSessionDep,
+    clock: ClockDep,
+    cache: SocialGraphCacheDep,
+    events: EventPublisherDep,
 ) -> BlockingService:
     """The blocking use cases — A64-013.5.
 
@@ -187,6 +198,7 @@ def get_blocking_service(
         friendships=SqlAlchemyFriendshipRepository(session),
         requests=SqlAlchemyFriendRequestRepository(session),
         cache=cache,
+        events=events,
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
     )
@@ -196,7 +208,10 @@ BlockingServiceDep = Annotated[BlockingService, Depends(get_blocking_service)]
 
 
 def get_friendship_service(
-    session: DbSessionDep, clock: ClockDep, cache: SocialGraphCacheDep
+    session: DbSessionDep,
+    clock: ClockDep,
+    cache: SocialGraphCacheDep,
+    events: EventPublisherDep,
 ) -> FriendshipService:
     """The friend-list use cases — A64-013.3.
 
@@ -212,6 +227,7 @@ def get_friendship_service(
     return FriendshipService(
         friendships=SqlAlchemyFriendshipRepository(session),
         cache=cache,
+        events=events,
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
     )

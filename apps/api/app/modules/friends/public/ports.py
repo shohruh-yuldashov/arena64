@@ -1,6 +1,6 @@
-"""The port other modules may depend on — BE-03's published surface.
+"""The ports other modules may depend on — BE-03's published surface.
 
-One port, two methods. `profiles` is the only consumer and needs exactly
+`SocialGraphReader` is two methods over one graph. `profiles` needs exactly
 these: which of a page of players the viewer is friends with (A64-013.3),
 and which players they cannot interact with at all (A64-013.5).
 
@@ -16,6 +16,20 @@ block half, which is precisely the leak BL-1 forbids.
 The *consumer-side* narrowing still happens, in `profiles.application.ports`:
 `ViewerRelationshipProvider` and `BlockedPlayersProvider` are separate there,
 because the search path needs the exclusion set and not the relationships.
+
+## `PresenceAudience` is a second port, and the split is by *question*
+
+A64-013.7 gave `friends` a consumer that asks something the reader above
+cannot express: not "what is this pair to each other" but "who may be told
+about this player". That is one composed answer — friends minus blocked —
+and publishing it as a port rather than as its two ingredients is what keeps
+the subtraction in `friends`, where BL-1 is enforced, instead of in every
+consumer that fans anything out.
+
+Handing `notifications` the reader instead would mean handing it the job of
+combining the two sets correctly, forever, in every future fan-out. The
+first one to forget the subtraction would deliver a presence frame to
+somebody who had been blocked, and it would look exactly like working code.
 """
 
 from collections.abc import Sequence
@@ -78,5 +92,38 @@ class SocialGraphReader(Protocol):
 
         Never raises. An empty set means no blocks, which is the common
         case.
+        """
+        ...
+
+
+class PresenceAudience(Protocol):
+    """Who may be told that a player's presence changed — A64-013.7.
+
+    Satisfied by `PresenceAudienceService`. Published so that a fan-out
+    lives outside `friends` while the *rule* stays inside it.
+
+    **Guarantees exactly one thing: nobody in the returned set is blocked**,
+    in either direction. It guarantees nothing about privacy — a member of
+    this set may still have no right to see the field being pushed, which is
+    `VisibilityLevel`'s question and `PublicProfileComposer`'s to answer.
+    A64-013.7 states the same rule as "audience membership does NOT imply
+    permission", and the two halves are deliberately in different modules so
+    that neither can be mistaken for the other.
+
+    Resolved at **delivery**, never at enqueue. A block placed between the
+    two is the case this whole design exists for.
+    """
+
+    async def observers_of(self, player_id: UUID) -> frozenset[UUID]:
+        """The player's friends, minus everyone either of them has blocked.
+
+        Two set reads whatever the answer's size, and none at all for a
+        player with no friends — the common case, and the one where a
+        fan-out has nothing to do.
+
+        An empty set means *send nothing*. A caller that treated it as
+        "unfiltered" would broadcast a player's comings and goings to the
+        platform, which is why this returns the audience rather than a
+        predicate to filter with.
         """
         ...

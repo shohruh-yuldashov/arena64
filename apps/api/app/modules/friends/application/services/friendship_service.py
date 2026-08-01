@@ -40,12 +40,14 @@ from uuid import UUID
 from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork
 from app.modules.friends.application.ports import FriendshipRepository, SocialGraphCache
+from app.modules.friends.domain.events import FriendRemoved
 from app.modules.friends.domain.exceptions import FriendshipNotFound
 from app.modules.friends.domain.friendship import (
     Friendship,
     FriendshipEndReason,
     FriendshipMetadata,
 )
+from app.platform.outbox import EventPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +58,13 @@ class FriendshipService:
         *,
         friendships: FriendshipRepository,
         cache: SocialGraphCache,
+        events: EventPublisher,
         unit_of_work: UnitOfWork,
         clock: Clock,
     ) -> None:
         self._friendships = friendships
+        # A64-013.7. Published inside the removal's transaction — AD-16.
+        self._events = events
         # One of the four `friends:v1:` invalidation triggers. See
         # `BlockingService._invalidate` for why it fires after the commit.
         self._cache = cache
@@ -142,14 +147,24 @@ class FriendshipService:
             logger.debug("friendship_removal_noop", extra={"actor_id": str(player_id)})
             return
 
-        friendship.end(
-            by=player_id,
-            at=self._clock.now(),
-            reason=FriendshipEndReason.REMOVED,
-        )
+        at = self._clock.now()
+        friendship.end(by=player_id, at=at, reason=FriendshipEndReason.REMOVED)
 
         async with self._unit_of_work:
             removed = await self._friendships.remove(friendship)
+            # A64-013.7. The event is emitted; the *notification* is not —
+            # FS-2 makes removal silent, so `SocialNotificationDispatcher`
+            # resolves an empty audience for it. Recording the fact and
+            # declining to announce it are different decisions with
+            # different owners, which is why the producer does not suppress.
+            await self._events.publish(
+                FriendRemoved(
+                    occurred_at=at,
+                    friendship_id=removed.id,
+                    removed_by=player_id,
+                    removed_player_id=other_id,
+                )
+            )
             await self._unit_of_work.commit()
 
         # Both parties: a friendship is a fact about a pair, so both cached

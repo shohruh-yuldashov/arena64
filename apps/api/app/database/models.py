@@ -28,6 +28,12 @@ from app.modules.statistics.infrastructure import models as _statistics_models  
 from app.modules.users.infrastructure import models as _users_models  # noqa: F401
 from app.modules.users.infrastructure.search_ddl import register_search_ddl
 
+# A64-013.7. Not a module: `platform.outbox` and `platform.processed_event`
+# belong to the platform rather than to a bounded context (database.md
+# §232), so this import sits apart from the four above rather than pretending
+# to be a fifth module.
+from app.platform.outbox import models as _outbox_models  # noqa: F401,E402
+
 # A64-013.1. Schema objects a table definition cannot express — two
 # extensions, a function and two expression indexes — attached to
 # `after_create` so that `create_all` produces a *searchable* schema and not

@@ -50,6 +50,10 @@ What is published, and why only this much:
                          (A64-012.7). Read-only, and separate from the
                          recorder so that the module serving anonymous
                          traffic cannot mark anybody online
+  `PresenceOnline`,      the two presence edges this context makes durable
+  `PresenceOffline`      through the outbox (A64-013.7). Emitted on
+                         transitions only — a token refresh by a player who
+                         was already online is not an event
   `PresenceRecorder`     writes what was observed of a player. Held only by
                          `PresenceService`, which `auth`'s lifecycle routes
                          resolve (A64-013.6) — and by AD-09's gateway when
@@ -103,6 +107,7 @@ through `UserAccountCreator`, not the whole class.
 
 from uuid import UUID
 
+from app.modules.users.domain.events import PresenceOffline, PresenceOnline
 from app.modules.users.domain.exceptions import (
     EmailAlreadyExists,
     InvalidBio,
@@ -203,6 +208,8 @@ __all__ = [
     "PreferencesEditor",
     "PreferencesView",
     "Presence",
+    "PresenceOffline",
+    "PresenceOnline",
     "PresenceProvider",
     "PresenceRecorder",
     "PrivacyEdits",

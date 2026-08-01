@@ -602,6 +602,16 @@ objects, and AD-13 requires it to have no identity, no storage, and no time.
 **Why `Board` and `Piece` are not entities:** see §16.1. This is the most common modelling error
 in board-game platforms and it is worth rejecting explicitly.
 
+**As implemented (A64-014.1, A64-014.2).** `Position` and `Move` exist in
+`apps/api/app/modules/engine/`, with the content this table specifies: a position is a board plus
+the side to move and compares by value, and a move is an ordered path plus captured squares plus
+a promotion result. `Variant` is split across `BoardVariant` (the name) and `BoardGeometry` (the
+axes), because a variant's rule set is what a move generator reads and an enum member is not.
+`LegalMoveSet` is the ordered tuple `MoveGenerator.legal_moves` returns rather than a named type
+— "a derived answer, not a thing", as the table says. `PositionHash` is `Position.fingerprint`
+reduced by `__hash__`; an incremental Zobrist hash belongs with a measurement, not with this.
+`TerminalState` and `EngineVersion` do not exist yet. Details in `specs/game-engine.md`.
+
 ### 10.2 `QueueTicket` — aggregate root, Redis-authoritative
 
 **Purpose.** A player's standing request to be paired, under one time control and variant.

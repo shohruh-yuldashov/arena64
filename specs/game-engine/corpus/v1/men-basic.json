@@ -1,0 +1,128 @@
+{
+  "corpus_version": 1,
+  "scope": "Quiet moves, single captures, mandatory-capture priority and promotion detection for men (A64-014.2). No kings, no capture sequences longer than one jump, no maximum-capture selection. Every case is a complete legal move set for the position given.",
+  "cases": [
+    {
+      "id": "russian-initial-position-light-to-move",
+      "description": "The opening position offers LIGHT seven moves, all from the third rank.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "a1", "side": "light", "rank": "man" },
+        { "square": "c1", "side": "light", "rank": "man" },
+        { "square": "e1", "side": "light", "rank": "man" },
+        { "square": "g1", "side": "light", "rank": "man" },
+        { "square": "b2", "side": "light", "rank": "man" },
+        { "square": "d2", "side": "light", "rank": "man" },
+        { "square": "f2", "side": "light", "rank": "man" },
+        { "square": "h2", "side": "light", "rank": "man" },
+        { "square": "a3", "side": "light", "rank": "man" },
+        { "square": "c3", "side": "light", "rank": "man" },
+        { "square": "e3", "side": "light", "rank": "man" },
+        { "square": "g3", "side": "light", "rank": "man" },
+        { "square": "b6", "side": "dark", "rank": "man" },
+        { "square": "d6", "side": "dark", "rank": "man" },
+        { "square": "f6", "side": "dark", "rank": "man" },
+        { "square": "h6", "side": "dark", "rank": "man" },
+        { "square": "a7", "side": "dark", "rank": "man" },
+        { "square": "c7", "side": "dark", "rank": "man" },
+        { "square": "e7", "side": "dark", "rank": "man" },
+        { "square": "g7", "side": "dark", "rank": "man" },
+        { "square": "b8", "side": "dark", "rank": "man" },
+        { "square": "d8", "side": "dark", "rank": "man" },
+        { "square": "f8", "side": "dark", "rank": "man" },
+        { "square": "h8", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [
+        { "path": ["a3", "b4"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "b4"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "d4"], "captured": [], "promotes_to": null },
+        { "path": ["e3", "d4"], "captured": [], "promotes_to": null },
+        { "path": ["e3", "f4"], "captured": [], "promotes_to": null },
+        { "path": ["g3", "f4"], "captured": [], "promotes_to": null },
+        { "path": ["g3", "h4"], "captured": [], "promotes_to": null }
+      ]
+    },
+    {
+      "id": "light-man-quiet-moves-both-diagonals",
+      "description": "A lone LIGHT man in open space steps forward along either diagonal, and never backward.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [{ "square": "c3", "side": "light", "rank": "man" }],
+      "expected_moves": [
+        { "path": ["c3", "b4"], "captured": [], "promotes_to": null },
+        { "path": ["c3", "d4"], "captured": [], "promotes_to": null }
+      ]
+    },
+    {
+      "id": "dark-man-quiet-moves-run-the-other-way",
+      "description": "DARK advances toward rank 1, which is the same rule read through the opposite forward direction.",
+      "variant": "russian_8x8",
+      "side_to_move": "dark",
+      "pieces": [{ "square": "c5", "side": "dark", "rank": "man" }],
+      "expected_moves": [
+        { "path": ["c5", "b4"], "captured": [], "promotes_to": null },
+        { "path": ["c5", "d4"], "captured": [], "promotes_to": null }
+      ]
+    },
+    {
+      "id": "blocked-man-has-no-moves",
+      "description": "A LIGHT man walled in by opponents whose landing squares are occupied has neither a quiet move nor a capture.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c3", "side": "light", "rank": "man" },
+        { "square": "b4", "side": "dark", "rank": "man" },
+        { "square": "d4", "side": "dark", "rank": "man" },
+        { "square": "a5", "side": "dark", "rank": "man" },
+        { "square": "e5", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": []
+    },
+    {
+      "id": "single-forward-capture",
+      "description": "A man jumps the adjacent opponent and lands beyond it; the quiet move to b4 is suppressed.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c3", "side": "light", "rank": "man" },
+        { "square": "d4", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [{ "path": ["c3", "e5"], "captured": ["d4"], "promotes_to": null }]
+    },
+    {
+      "id": "capture-suppresses-every-other-piece-quiet-moves",
+      "description": "Mandatory capture binds the player, not the piece: the man on a1 loses its quiet move because a different man can jump.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "a1", "side": "light", "rank": "man" },
+        { "square": "c3", "side": "light", "rank": "man" },
+        { "square": "d4", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [{ "path": ["c3", "e5"], "captured": ["d4"], "promotes_to": null }]
+    },
+    {
+      "id": "man-captures-backward-when-the-variant-allows-it",
+      "description": "Russian draughts lets a man jump an opponent standing behind it, even though it may never step backward.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [
+        { "square": "c5", "side": "light", "rank": "man" },
+        { "square": "b4", "side": "dark", "rank": "man" }
+      ],
+      "expected_moves": [{ "path": ["c5", "a3"], "captured": ["b4"], "promotes_to": null }]
+    },
+    {
+      "id": "quiet-move-onto-the-crownhead-promotes",
+      "description": "A LIGHT man reaching the eighth rank is crowned; the move records the resulting rank without the piece changing.",
+      "variant": "russian_8x8",
+      "side_to_move": "light",
+      "pieces": [{ "square": "g7", "side": "light", "rank": "man" }],
+      "expected_moves": [
+        { "path": ["g7", "f8"], "captured": [], "promotes_to": "king" },
+        { "path": ["g7", "h8"], "captured": [], "promotes_to": "king" }
+      ]
+    }
+  ]
+}

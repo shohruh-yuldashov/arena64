@@ -50,6 +50,16 @@ dev = [
     "httpx>=0.27,<1.0",
     "ruff>=0.7,<1.0",
     "mypy>=1.13,<2.0",
+    # Architecture validation (A64-013.8). The boundaries this codebase is
+    # built around — `app/platform` importing no module, a module reachable
+    # only through its `public/` package — were prose until this task, and
+    # prose does not stop the hundredth pull request. `import-linter` turns
+    # each rule into a contract that fails CI, which is the only form of an
+    # architecture rule that survives contact with a deadline.
+    #
+    # A dev dependency, never a runtime one: it reads the import graph and
+    # ships in no image.
+    "import-linter>=2.0,<3.0",
 ]
 
 # --- Build backend -----------------------------------------------------------

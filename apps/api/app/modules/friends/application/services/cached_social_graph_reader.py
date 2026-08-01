@@ -42,11 +42,10 @@ import logging
 from collections.abc import Sequence
 from uuid import UUID
 
-from app.modules.friends.application.ports import SocialGraphCache
+from app.modules.friends.application.ports import SocialGraphCache, SocialGraphEntry
 from app.modules.friends.application.services.social_graph_reader import (
     SocialGraphReaderService,
 )
-from app.modules.friends.infrastructure.cache.keys import blocked_ids_key, friend_ids_key
 
 logger = logging.getLogger(__name__)
 
@@ -72,14 +71,12 @@ class CachedSocialGraphReader:
         per-viewer, so one key answers a page of any length, and it changes
         only when the viewer blocks or unblocks.
         """
-        key = blocked_ids_key(player_id)
-
-        cached = await self._cache.get_ids(key)
+        cached = await self._cache.get_ids(player_id, SocialGraphEntry.BLOCKED)
         if cached is not None:
             return cached
 
         blocked = await self._reader.blocked_ids_for(player_id)
-        await self._cache.put_ids(key, blocked)
+        await self._cache.put_ids(player_id, SocialGraphEntry.BLOCKED, blocked)
         return blocked
 
     async def friend_ids_among(self, player_id: UUID, others: Sequence[UUID]) -> set[UUID]:
@@ -105,9 +102,9 @@ class CachedSocialGraphReader:
             # result of a search nobody matched.
             return set()
 
-        cached = await self._cache.get_ids(friend_ids_key(player_id))
+        cached = await self._cache.get_ids(player_id, SocialGraphEntry.FRIENDS)
         if cached is None:
             cached = await self._reader.friend_ids_for(player_id)
-            await self._cache.put_ids(friend_ids_key(player_id), cached)
+            await self._cache.put_ids(player_id, SocialGraphEntry.FRIENDS, cached)
 
         return {other for other in others if other in cached}

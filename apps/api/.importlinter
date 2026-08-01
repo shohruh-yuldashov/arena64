@@ -1,0 +1,305 @@
+# Architecture contracts — A64-013.8.
+#
+# Every rule below was already written down, in architecture.md, in
+# `docs/03-backend/`, or in a package docstring. What this file adds is
+# enforcement: `lint-imports` reads the real import graph and fails, which is
+# the difference between a rule and an aspiration. CLAUDE.md §3.11 asks that
+# the implementation and the documented architecture not drift; this is the
+# mechanism that notices.
+#
+# Run: `lint-imports` (from apps/api). Wired into the same gate as ruff and
+# mypy — see `docs/02-development/testing.md`.
+#
+# ## On `ignore_imports`
+#
+# Every entry is a **documented, argued exception**, not a silenced failure.
+# Adding one without the argument beside it defeats the file: a contract that
+# can be quieted is a contract nobody trusts. There are three.
+
+[importlinter]
+root_packages =
+    app
+include_external_packages = True
+
+
+# ---------------------------------------------------------------------------
+# 1. The platform layer is infrastructure, and knows nothing about the domain
+# ---------------------------------------------------------------------------
+# A64-013.7 created `app/platform` for the transactional outbox, which
+# database.md §232 assigns to an owner that is not a bounded context. The rule
+# that makes that placement meaningful is one-directional: any module may
+# import the outbox; the outbox may import no module.
+#
+# Without it the first producer to need "just one type" from `friends` would
+# make every future producer — `game`, `ratings`, `chat` — depend on `friends`
+# transitively, and the package would become a module with a misleading name.
+[importlinter:contract:platform-imports-no-module]
+name = app.platform must not import any bounded context
+type = forbidden
+source_modules =
+    app.platform
+forbidden_modules =
+    app.modules
+
+
+# ---------------------------------------------------------------------------
+# 2. A module is reachable only through its `public/` package — BE-03, R-1
+# ---------------------------------------------------------------------------
+# architecture.md R-1: a module reaches another module through its published
+# surface, never through its storage. Each contract below says the same thing
+# for one owner: nothing outside it may import its `domain`, `application` or
+# `infrastructure` packages.
+#
+# ## Why `presentation` is not forbidden, and is not a loophole
+#
+# `presentation/dependencies/` is the **composition root** for its module
+# (dependency-injection.md DI-01, BR-6: a *module* must not reach for the
+# container; the root wiring modules together is the root's job). It is where
+# `profiles` builds `friends`' reader, where `auth` builds `users`' services,
+# and where the graph is assembled — so it necessarily names other modules'
+# concrete classes.
+#
+# The contracts therefore constrain **who may import**, not what a composition
+# root may construct: the `source_modules` below are the domain, application
+# and infrastructure layers, which are exactly the layers that must depend on
+# contracts rather than on classes. A service that imported another module's
+# repository would be caught; a dependency factory that constructs one is the
+# arrangement every module already documents.
+#
+# The remaining risk is a composition root that grows logic. That is a review
+# question, not an import-graph one, and is recorded in A64-013.8's technical
+# debt rather than pretended to be enforced here.
+#
+# ## `allow_indirect_imports` on all four
+#
+# A `public/` package re-exports its own module's domain types — that is what
+# makes it a surface rather than a duplicate set of DTOs. So
+# `friends.application -> users.public -> users.domain` is a chain the rules
+# *require*, and a contract counting indirect imports would flag every correct
+# consumer on the platform.
+#
+# What is being forbidden is the **direct** import: a service naming
+# `users.domain.privacy` itself. That is the reachable-by-typing mistake, and
+# it is the one the graph can see.
+
+[importlinter:contract:users-internals-are-private]
+name = users internals are reachable only through users.public
+type = forbidden
+source_modules =
+    app.modules.auth.domain
+    app.modules.auth.application
+    app.modules.avatars.domain
+    app.modules.avatars.application
+    app.modules.avatars.infrastructure
+    app.modules.friends.domain
+    app.modules.friends.application
+    app.modules.friends.infrastructure
+    app.modules.notifications.domain
+    app.modules.notifications.application
+    app.modules.notifications.infrastructure
+    app.modules.profiles.domain
+    app.modules.profiles.application
+    app.modules.profiles.infrastructure
+    app.modules.statistics
+forbidden_modules =
+    app.modules.users.domain
+    app.modules.users.application
+    app.modules.users.infrastructure
+ignore_imports =
+    # ACCEPTED EXCEPTION 1 — `auth.infrastructure.models` -> `USERS_SCHEMA`.
+    #
+    # `auth.user_session`, `auth.email_verification_token` and
+    # `auth.password_reset_token` carry a real `FOREIGN KEY` to `users.user`
+    # with `ON DELETE CASCADE`: an account's credentials and sessions are
+    # part of its security state (domain-model.md §14.1), and unlike a
+    # cross-*context* reference (DM-06's opaque `player_id`) this is one
+    # aggregate's storage referring to the account it belongs to.
+    #
+    # Given the FK exists, the import is of the *schema name* — the least
+    # coupled way to express a constraint that already names the table. The
+    # alternative, publishing `USERS_SCHEMA` from `users.public`, would put a
+    # storage detail on a contract surface, which is worse: a published
+    # schema name invites the next consumer to write SQL against it.
+    #
+    # Reviewed and accepted A64-013.8. If `auth` ever stops sharing a
+    # database with `users`, this import is the thing that breaks first —
+    # which is the correct place for the breakage.
+    app.modules.auth.infrastructure.models -> app.modules.users.infrastructure.models
+allow_indirect_imports = True
+
+[importlinter:contract:friends-internals-are-private]
+name = friends internals are reachable only through friends.public
+type = forbidden
+source_modules =
+    app.modules.auth.domain
+    app.modules.auth.application
+    app.modules.auth.infrastructure
+    app.modules.avatars
+    app.modules.notifications.domain
+    app.modules.notifications.application
+    app.modules.notifications.infrastructure
+    app.modules.profiles.domain
+    app.modules.profiles.application
+    app.modules.profiles.infrastructure
+    app.modules.statistics
+    app.modules.users
+forbidden_modules =
+    app.modules.friends.domain
+    app.modules.friends.application
+    app.modules.friends.infrastructure
+allow_indirect_imports = True
+
+[importlinter:contract:profiles-internals-are-private]
+name = profiles internals are reachable only through profiles.public
+type = forbidden
+source_modules =
+    app.modules.auth
+    app.modules.avatars
+    app.modules.friends.domain
+    app.modules.friends.application
+    app.modules.friends.infrastructure
+    app.modules.notifications.domain
+    app.modules.notifications.application
+    app.modules.notifications.infrastructure
+    app.modules.statistics
+    app.modules.users
+forbidden_modules =
+    app.modules.profiles.domain
+    app.modules.profiles.application
+    app.modules.profiles.infrastructure
+allow_indirect_imports = True
+
+[importlinter:contract:statistics-internals-are-private]
+name = statistics internals are reachable only through statistics.public
+type = forbidden
+source_modules =
+    app.modules.auth
+    app.modules.avatars
+    app.modules.friends.domain
+    app.modules.friends.application
+    app.modules.friends.infrastructure
+    app.modules.notifications
+    app.modules.profiles.domain
+    app.modules.profiles.application
+    app.modules.profiles.infrastructure
+    app.modules.users
+forbidden_modules =
+    app.modules.statistics.domain
+    app.modules.statistics.application
+    app.modules.statistics.infrastructure
+allow_indirect_imports = True
+
+
+# ---------------------------------------------------------------------------
+# 3. Dependencies point inward — CLAUDE.md §3.1, architecture.md §8
+# ---------------------------------------------------------------------------
+# "transport -> service -> domain, and a layer never imports from the layer
+# above it." One `layers` contract per module, each read top-to-bottom as
+# high-level-to-low-level.
+#
+# `infrastructure` sits **beside** `application` rather than above or below it,
+# and import-linter expresses that with a colon-separated "independent siblings
+# at one level" — an adapter implements an application port (so it imports
+# `application`) while an application service must never import an adapter.
+# Listing them as siblings would forbid the first; listing infrastructure above
+# application permits it and forbids the reverse, which is the actual rule.
+
+[importlinter:contract:layers-users]
+name = users layers point inward
+type = layers
+layers =
+    app.modules.users.presentation
+    app.modules.users.infrastructure
+    app.modules.users.application
+    app.modules.users.domain
+
+[importlinter:contract:layers-auth]
+name = auth layers point inward
+type = layers
+layers =
+    app.modules.auth.presentation
+    app.modules.auth.infrastructure
+    app.modules.auth.application
+    app.modules.auth.domain
+
+[importlinter:contract:layers-friends]
+name = friends layers point inward
+type = layers
+layers =
+    app.modules.friends.presentation
+    app.modules.friends.infrastructure
+    app.modules.friends.application
+    app.modules.friends.domain
+
+[importlinter:contract:layers-profiles]
+name = profiles layers point inward
+type = layers
+layers =
+    app.modules.profiles.presentation
+    app.modules.profiles.infrastructure
+    app.modules.profiles.application
+    app.modules.profiles.domain
+
+[importlinter:contract:layers-notifications]
+name = notifications layers point inward
+type = layers
+layers =
+    app.modules.notifications.presentation
+    app.modules.notifications.infrastructure
+    app.modules.notifications.application
+    app.modules.notifications.domain
+
+[importlinter:contract:layers-avatars]
+name = avatars layers point inward
+type = layers
+layers =
+    app.modules.avatars.presentation
+    app.modules.avatars.infrastructure
+    app.modules.avatars.application
+    app.modules.avatars.domain
+
+# `statistics` has no `presentation` layer and needs none: it is consumed
+# entirely through `statistics.public` by `profiles`, and has no endpoint of
+# its own. Listing a layer that does not exist is an error rather than a
+# no-op, so the contract names the three that do.
+[importlinter:contract:layers-statistics]
+name = statistics layers point inward
+type = layers
+layers =
+    app.modules.statistics.infrastructure
+    app.modules.statistics.application
+    app.modules.statistics.domain
+
+
+# ---------------------------------------------------------------------------
+# 4. The domain is framework-free — architecture.md §8
+# ---------------------------------------------------------------------------
+# "Business rules must not import HTTP, ORM, or UI framework types. If the
+# framework changed tomorrow, the domain should not."
+#
+# The one that would be violated silently is SQLAlchemy: an aggregate that
+# imported a `Mapped` type would still pass every test, and the coupling would
+# only be discovered by whoever tried to unit-test it without a database.
+#
+# This is the contract that forces `include_external_packages = True` in the
+# header: import-linter only builds edges to third-party packages when asked,
+# and a contract naming `sqlalchemy` would otherwise pass by finding no edges
+# at all — the worst kind of green.
+[importlinter:contract:domain-is-framework-free]
+name = domain layers import no framework
+type = forbidden
+source_modules =
+    app.modules.auth.domain
+    app.modules.avatars.domain
+    app.modules.friends.domain
+    app.modules.notifications.domain
+    app.modules.profiles.domain
+    app.modules.statistics.domain
+    app.modules.users.domain
+    app.platform.events
+forbidden_modules =
+    sqlalchemy
+    fastapi
+    starlette
+    redis
+allow_indirect_imports = True

@@ -1049,6 +1049,14 @@ Each is owned by the context that owns the fact and published through that
 context's `public/` surface — a central event catalogue would make every module
 import a file every other module writes to.
 
+**The `offline` edge nobody observes is emitted by a sweeper** (A64-013.8).
+A player whose presence window closes without signing out produces no
+observation at all — an expired key cannot be scanned for. `presence:v1:roster`
+records who is *due* to lapse, and `PresenceSweeper` turns each closed window
+into the `PresenceOffline` event that would otherwise never exist. It is the
+one producer on the platform that emits an event for something that did not
+happen in a request.
+
 **A payload carries identity and nothing derived from it.** Not usernames, not
 avatars, not the recipient list. Everything relationship-dependent is re-read at
 delivery, because the interval between recording an event and delivering it is

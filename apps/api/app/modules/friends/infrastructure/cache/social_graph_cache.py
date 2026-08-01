@@ -49,7 +49,8 @@ from uuid import UUID
 from redis.asyncio import Redis
 
 from app.config.settings import FriendsSettings
-from app.modules.friends.infrastructure.cache.keys import keys_for
+from app.modules.friends.application.ports import SocialGraphEntry
+from app.modules.friends.infrastructure.cache.keys import key_for, keys_for
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ class RedisSocialGraphCache:
         self._redis = redis
         self._settings = settings
 
-    async def get_ids(self, key: str) -> frozenset[UUID] | None:
+    async def get_ids(self, player_id: UUID, entry: SocialGraphEntry) -> frozenset[UUID] | None:
         """The cached id set, or `None` on a miss.
 
         **Never raises.** An unreachable or slow Redis is a miss, bounded by
@@ -85,7 +86,8 @@ class RedisSocialGraphCache:
         """
         try:
             raw = await asyncio.wait_for(
-                self._redis.get(key), timeout=self._settings.cache_timeout_ms / 1000
+                self._redis.get(key_for(player_id, entry)),
+                timeout=self._settings.cache_timeout_ms / 1000,
             )
         except Exception as error:  # noqa: BLE001 — a cache miss is the only outcome
             # DEBUG, not WARNING. A cache that is down degrades the platform
@@ -109,7 +111,7 @@ class RedisSocialGraphCache:
             logger.warning("social_graph_cache_malformed")
             return None
 
-    async def put_ids(self, key: str, ids: frozenset[UUID]) -> None:
+    async def put_ids(self, player_id: UUID, entry: SocialGraphEntry, ids: frozenset[UUID]) -> None:
         """Stores an id set with the configured TTL.
 
         `SET key value EX ttl` — one command, so no sequence of crashes can
@@ -123,7 +125,7 @@ class RedisSocialGraphCache:
         try:
             await asyncio.wait_for(
                 self._redis.set(
-                    key,
+                    key_for(player_id, entry),
                     json.dumps([str(value) for value in ids]),
                     ex=self._settings.cache_ttl_seconds,
                 ),
@@ -191,10 +193,10 @@ class NoSocialGraphCache:
     imported the thing it replaces would fail for the reasons it exists.
     """
 
-    async def get_ids(self, key: str) -> frozenset[UUID] | None:
+    async def get_ids(self, player_id: UUID, entry: SocialGraphEntry) -> frozenset[UUID] | None:
         return None
 
-    async def put_ids(self, key: str, ids: frozenset[UUID]) -> None:
+    async def put_ids(self, player_id: UUID, entry: SocialGraphEntry, ids: frozenset[UUID]) -> None:
         return None
 
     async def invalidate(self, player_ids: Sequence[UUID]) -> None:

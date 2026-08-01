@@ -42,7 +42,49 @@ _TBD._
 
 ## CI Quality Gates
 
-_TBD._
+> Filled in by A64-013.8 for the gates that **exist and run today**. The rest
+> of this document is still a placeholder; this section is not, and a gate
+> listed here has been verified to fail on a real violation.
+
+Every one of these runs from `apps/api/`, and a red result blocks a merge
+(CLAUDE.md §5.10 — "green before merge").
+
+| Gate | Command | Fails on |
+| --- | --- | --- |
+| Formatting | `ruff format --check app tests` | A file that would be reformatted |
+| Lint | `ruff check app tests` | Any configured rule |
+| Types | `mypy app` | Strict-mode error, including an unused `type: ignore` |
+| **Architecture** | `lint-imports` | Any contract in `apps/api/.importlinter` |
+| Tests | `pytest` | A failing or erroring test |
+| Migrations | `alembic upgrade head` then `alembic downgrade -1` | An irreversible or non-applying revision |
+
+### The architecture gate — A64-013.8
+
+`import-linter` reads the real import graph and checks thirteen contracts.
+They encode rules that were already written down and, until this task, were
+enforced only by review:
+
+- **`app.platform` imports no bounded context.** The outbox belongs to the
+  platform (database.md §232), and the moment it imports `friends` for "just
+  one type", every future producer depends on `friends` transitively.
+- **A module is reachable only through its `public/` package** — one contract
+  per owner (BE-03, architecture.md R-1). The *source* modules are each
+  module's `domain`, `application` and `infrastructure` layers;
+  `presentation/dependencies` is the composition root and is deliberately
+  outside the rule, because assembling other modules' concrete classes is
+  what a composition root is for.
+- **Dependencies point inward** — one `layers` contract per module.
+- **Domain layers import no framework** — no SQLAlchemy, FastAPI, Starlette
+  or Redis reachable from an aggregate (architecture.md §8).
+
+Three imports are exempted, each with the argument recorded beside it in the
+config rather than merely silenced. Adding a fourth without one defeats the
+file.
+
+**Why an import graph and not a review checklist.** Both were in place before
+this task; only one of them found the three violations A64-013.8 fixed —
+including a cache port that had the application layer building Redis keys,
+which had passed review twice.
 
 ## TODO
 

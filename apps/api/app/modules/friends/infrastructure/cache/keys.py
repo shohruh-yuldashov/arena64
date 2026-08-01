@@ -47,6 +47,8 @@ which are a social graph.
 from typing import Final
 from uuid import UUID
 
+from app.modules.friends.application.ports import SocialGraphEntry
+
 #: The keyspace this build reads and writes. Bumped only when the *shape*
 #: changes — see this module's docstring.
 KEY_VERSION: Final = "v1"
@@ -54,14 +56,22 @@ KEY_VERSION: Final = "v1"
 _PREFIX: Final = f"friends:{KEY_VERSION}:"
 
 
-def friend_ids_key(player_id: UUID) -> str:
-    """Where this player's live friend ids are cached."""
-    return f"{_PREFIX}friends:{player_id}"
+def key_for(player_id: UUID, entry: SocialGraphEntry) -> str:
+    """Where this entry for this player lives — A64-013.8.
 
+    The one function that turns the application's vocabulary (`which set`)
+    into this module's (`which key`). It is a formatted string rather than a
+    dispatch table because there is exactly one shape:
+    `friends:<version>:<entry>:<player>`, and a table would let two entries
+    diverge into two layouts nobody chose.
 
-def blocked_ids_key(player_id: UUID) -> str:
-    """Where this player's block set — both directions — is cached."""
-    return f"{_PREFIX}blocked:{player_id}"
+    `SocialGraphEntry`'s values *are* the segment, which is why the enum is a
+    `StrEnum` — the alternative is a mapping between the member and the
+    segment, which is one more place for them to disagree. It is also what
+    makes `keys_for` below a loop over the enum rather than a hand-written
+    list, so a third entry is invalidated the moment it is declared.
+    """
+    return f"{_PREFIX}{entry.value}:{player_id}"
 
 
 def keys_for(player_id: UUID) -> tuple[str, ...]:
@@ -73,4 +83,4 @@ def keys_for(player_id: UUID) -> tuple[str, ...]:
     about: not an undocumented key, but a documented key somebody forgot to
     expire.
     """
-    return (friend_ids_key(player_id), blocked_ids_key(player_id))
+    return tuple(key_for(player_id, entry) for entry in SocialGraphEntry)

@@ -53,8 +53,7 @@ from app.modules.profiles.application.ports import BlockedPlayersProvider
 from app.modules.profiles.application.services.profile_composer import PublicProfileComposer
 from app.modules.profiles.domain.profile import PublicProfile
 from app.modules.profiles.domain.search import ProfileSearchResults
-from app.modules.users.domain.search import SearchTerm
-from app.modules.users.public import PublicProfileSearcher, UserSearchQuery
+from app.modules.users.public import PublicProfileSearcher, SearchTerm, UserSearchQuery
 
 logger = logging.getLogger(__name__)
 

@@ -693,8 +693,11 @@ update is a permanent corruption of the competitive record.
 **Consequence:** delivery is at-least-once, so **every consumer must be idempotent**, keyed
 on event id. This is a hard requirement, not a recommendation — see `system-design.md §7`.
 
-**Implemented by A64-013.7**, in `apps/api/app/platform/outbox/`. Three notes on
-what the first implementation settled:
+**Implemented by A64-013.7**, in `apps/api/app/platform/outbox/`, and its
+placement is **enforced** since A64-013.8: `apps/api/.importlinter` fails CI
+if anything under `app/platform` imports a bounded context. See
+`docs/02-development/testing.md`. Three notes on what the first
+implementation settled:
 
 - **The producer cannot deliver.** `EventPublisher` stages an `INSERT` into the
   caller's transaction and has no other method, so "did this service fan out

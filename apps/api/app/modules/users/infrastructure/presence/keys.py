@@ -72,6 +72,44 @@ FIELD_SESSION_ID: Final = "session_id"
 FIELD_DEVICE_TYPE: Final = "device_type"
 
 
+def roster_key() -> str:
+    """The sorted set naming every player whose window is still open —
+    A64-013.8.
+
+    `presence:v1:roster`, one member per online player, scored by the
+    **millisecond their record is due to expire**.
+
+    ## Why a record of who is online, when there is already a key per player
+
+    Because an expired key is *gone*. A64-013.7 left a real gap: a player
+    who closes the tab produces no `PresenceOffline` event, because nothing
+    observes the expiry — and a `SCAN` cannot find a key that no longer
+    exists. The roster is the only thing that survives the lapse, so it is
+    the only thing a sweeper can read.
+
+    ## Why a sorted set and not a set
+
+    The score *is* the query. `ZRANGEBYSCORE roster 0 <now>` returns exactly
+    the players whose window has closed, in one command, bounded by `LIMIT`
+    — where a plain set would mean fetching every online player and checking
+    each against Redis.
+
+    ## Bounded by construction
+
+    One member per *currently online* player, which is bounded by
+    concurrency rather than by history. Members leave three ways: an explicit
+    offline (`ZREM`), a sweep, or the next sign-in overwriting the score. A
+    member whose player never returns is removed by the first sweep that
+    sees it, so the set cannot accumulate the way an unswept index would.
+
+    **Derived, and losing it costs a notification rather than a fact.** The
+    per-player keys remain the record of who is online; this only decides
+    who gets *told* that somebody left. That is why the write is ordered
+    after the record's and why neither raises.
+    """
+    return f"{_KEY_PREFIX}roster"
+
+
 def presence_key(player_id: UUID) -> str:
     """The key holding this player's presence record.
 

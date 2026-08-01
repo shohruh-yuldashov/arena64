@@ -959,6 +959,43 @@ class PresenceSettings(BaseSettings):
     trade a page load for.
     """
 
+    sweep_interval_seconds: float = Field(default=15.0, ge=1.0, le=600.0)
+    """How often the presence sweeper looks for lapsed records — A64-013.8.
+
+    This is the **worst-case delay on an `offline` notification** for a
+    player who closed the tab: their window closes, and up to one interval
+    later the sweeper notices. Fifteen seconds against a sixty-second window
+    means a departure is announced within a quarter of the time the record
+    was already stale for, which is well inside what "friend went offline"
+    is worth.
+
+    Shorter is not free. Each tick is one `ZRANGEBYSCORE` with a limit, so
+    the cost is small — but it is a database session and a Redis round trip
+    per tick per process, and a one-second sweeper on a quiet platform is
+    almost entirely empty ticks.
+    """
+
+    sweep_batch_size: int = Field(default=200, ge=1, le=2000)
+    """How many lapsed players one sweep may announce.
+
+    Bounded for the reason every batch on this platform is (CLAUDE.md §10.5):
+    the interesting case is a *deploy*, where a node restarting takes every
+    player it held offline at once. Two hundred per tick drains that in a few
+    seconds without one transaction holding thousands of outbox inserts.
+    """
+
+    sweeper_enabled: bool = True
+    """Whether *this process* runs the sweeper.
+
+    Per-process, exactly like `OUTBOX_WORKER_ENABLED`, and for the same
+    deployment shape: one API tier with it off, one worker tier with it on.
+
+    It is a separate switch from `enabled` because they mean different
+    things. `PRESENCE_ENABLED=false` makes the roster permanently empty, so
+    the sweeper is harmlessly idle either way; this one decides which
+    *process* does the work.
+    """
+
     @property
     def ttl_ms(self) -> int:
         """`ttl_seconds` in the unit Redis's `PX` takes.

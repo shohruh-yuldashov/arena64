@@ -61,6 +61,11 @@ class FakePresenceRedis:
     def __init__(self, clock: Clock) -> None:
         self._clock = clock
         self._values: dict[str, tuple[str, datetime]] = {}
+        #: The roster (A64-013.8). Deliberately **not** expiry-aware: the
+        #: real sorted set has no TTL either, and its members are removed by
+        #: an explicit offline or by the sweeper — which is exactly the
+        #: behaviour that makes a sweeper necessary and testable.
+        self._sorted_sets: dict[str, dict[str, float]] = {}
 
     async def get(self, key: str) -> bytes | None:
         """The stored value, or `None` once its window has passed.
@@ -95,6 +100,62 @@ class FakePresenceRedis:
         self._values[key] = (value, self._clock.now() + timedelta(milliseconds=px))
         return True
 
+    async def mget(self, keys: list[str]) -> list[bytes | None]:
+        """`MGET` — the batch read behind `presence_for_many`.
+
+        Delegates to `get` per key rather than reaching into the dict, so the
+        lazy-expiry behaviour modelled there applies to a batch read exactly
+        as it does to a single one. A player whose window closed is `None` in
+        both, which is what the sweeper's re-check depends on.
+        """
+        return [await self.get(key) for key in keys]
+
+    def pipeline(self, *, transaction: bool = True) -> "FakePipeline":
+        """The batched form the adapter uses since A64-013.8.
+
+        The record and the roster entry are written together, so this fake
+        has to model a pipeline or the write it is standing in for silently
+        does nothing. Returns a recorder that replays onto this instance —
+        which is what a non-transactional pipeline *is*: a way to send
+        several independent commands in one round trip, with no atomicity.
+        """
+        return FakePipeline(self)
+
+    async def zadd(self, key: str, mapping: dict[str, float]) -> int:
+        """Adds or re-scores members. Returns how many were new, like Redis.
+
+        Re-scoring rather than duplicating is the behaviour the roster
+        depends on: a token refresh moves a player's deadline instead of
+        leaving a second entry behind at the old one.
+        """
+        members = self._sorted_sets.setdefault(key, {})
+        added = sum(1 for member in mapping if member not in members)
+        members.update(mapping)
+        return added
+
+    async def zrem(self, key: str, *members: str) -> int:
+        entries = self._sorted_sets.get(key, {})
+        return sum(1 for member in members if entries.pop(member, None) is not None)
+
+    async def zrangebyscore(
+        self, key: str, *, min: float, max: float, start: int, num: int, withscores: bool
+    ) -> list[tuple[bytes, float]]:
+        """Members scored within the range, lowest first, windowed.
+
+        Returns `bytes` members like the real client, because the adapter
+        decodes them — a `str`-returning fake would hide a decode bug.
+        """
+        entries = self._sorted_sets.get(key, {})
+        due = sorted(
+            ((member, score) for member, score in entries.items() if min <= score <= max),
+            key=lambda item: (item[1], item[0]),
+        )
+        return [(member.encode(), score) for member, score in due[start : start + num]]
+
+    def roster(self, key: str) -> dict[str, float]:
+        """The sorted set as a dict — a test helper, not a Redis command."""
+        return dict(self._sorted_sets.get(key, {}))
+
     def poison(self, key: str, value: str, *, ttl_seconds: int = 60) -> None:
         """Writes a value the adapter did not produce.
 
@@ -118,6 +179,73 @@ class UnreachablePresenceRedis:
         raise ConnectionError("presence redis is unreachable")
 
     async def set(self, key: str, value: str, *, px: int) -> bool:
+        raise ConnectionError("presence redis is unreachable")
+
+    async def mget(self, keys: list[str]) -> list[bytes | None]:
+        raise ConnectionError("presence redis is unreachable")
+
+    def pipeline(self, *, transaction: bool = True) -> "UnreachablePipeline":
+        return UnreachablePipeline()
+
+    async def zadd(self, key: str, mapping: dict[str, float]) -> int:
+        raise ConnectionError("presence redis is unreachable")
+
+    async def zrem(self, key: str, *members: str) -> int:
+        raise ConnectionError("presence redis is unreachable")
+
+    async def zrangebyscore(
+        self, key: str, *, min: float, max: float, start: int, num: int, withscores: bool
+    ) -> list[tuple[bytes, float]]:
+        raise ConnectionError("presence redis is unreachable")
+
+
+class FakePipeline:
+    """Buffers commands and replays them on `execute`.
+
+    Synchronous `set`/`zadd`/`zrem` returning `self`, like redis-py's — a
+    pipeline queues rather than awaits, and a fake whose methods were
+    coroutines would let an adapter that forgot `execute()` pass.
+    """
+
+    def __init__(self, redis: FakePresenceRedis) -> None:
+        self._redis = redis
+        self._queued: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    def set(self, key: str, value: str, *, px: int) -> "FakePipeline":
+        self._queued.append(("set", (key, value), {"px": px}))
+        return self
+
+    def zadd(self, key: str, mapping: dict[str, float]) -> "FakePipeline":
+        self._queued.append(("zadd", (key, mapping), {}))
+        return self
+
+    def zrem(self, key: str, *members: str) -> "FakePipeline":
+        self._queued.append(("zrem", (key, *members), {}))
+        return self
+
+    async def execute(self) -> list[object]:
+        results: list[object] = []
+        for name, args, kwargs in self._queued:
+            results.append(await getattr(self._redis, name)(*args, **kwargs))
+        self._queued.clear()
+        return results
+
+
+class UnreachablePipeline:
+    """Queues happily and fails on `execute`, like a real one against a dead
+    server: the commands are buffered locally, so only the round trip can
+    fail."""
+
+    def set(self, key: str, value: str, *, px: int) -> "UnreachablePipeline":
+        return self
+
+    def zadd(self, key: str, mapping: dict[str, float]) -> "UnreachablePipeline":
+        return self
+
+    def zrem(self, key: str, *members: str) -> "UnreachablePipeline":
+        return self
+
+    async def execute(self) -> list[object]:
         raise ConnectionError("presence redis is unreachable")
 
 

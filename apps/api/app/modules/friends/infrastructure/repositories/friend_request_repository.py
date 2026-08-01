@@ -32,8 +32,8 @@ from app.modules.friends.domain.exceptions import (
     FriendRequestAlreadyResolved,
 )
 from app.modules.friends.domain.friend_request import FriendRequest, FriendRequestStatus
+from app.modules.friends.infrastructure.list_cursor import ListCursor
 from app.modules.friends.infrastructure.models import FriendRequestModel
-from app.modules.friends.infrastructure.request_cursor import RequestCursor
 
 logger = logging.getLogger(__name__)
 
@@ -225,13 +225,13 @@ class SqlAlchemyFriendRequestRepository:
         )
 
         if cursor is not None:
-            position = RequestCursor.decode(cursor)
+            position = ListCursor.decode(cursor)
             statement = statement.where(
                 or_(
                     FriendRequestModel.created_at < position.created_at,
                     and_(
                         FriendRequestModel.created_at == position.created_at,
-                        FriendRequestModel.id < position.request_id,
+                        FriendRequestModel.id < position.row_id,
                     ),
                 )
             )
@@ -248,7 +248,7 @@ class SqlAlchemyFriendRequestRepository:
         next_cursor: str | None = None
         if has_more and page:
             last = page[-1]
-            next_cursor = RequestCursor(created_at=last.created_at, request_id=last.id).encode()
+            next_cursor = ListCursor(created_at=last.created_at, row_id=last.id).encode()
 
         return [self._to_domain(row) for row in page], next_cursor
 

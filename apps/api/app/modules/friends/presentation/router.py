@@ -1,6 +1,7 @@
-"""HTTP routes for friend requests — A64-013.2.
+"""HTTP routes for friends — requests (A64-013.2) and the friend list
+(A64-013.3).
 
-Six endpoints and **no business logic in any of them**. Each translates a
+Nine endpoints and **no business logic in any of them**. Each translates a
 request into a service call and the result into a wire schema. The
 transition rules and the ownership checks are `FriendRequest`'s, the
 cross-row rules are `FriendRequestValidator`'s, uniqueness is the database's,
@@ -36,11 +37,27 @@ Every failure is a typed exception on the platform hierarchy, and
 
 ## Batch composition, never a loop
 
-Both list handlers resolve the whole page's players in one call to
-`ProfileDirectoryService.profiles_for`, which is four round trips regardless
-of page size. A64-013.2 requires it by name, and the service has no
-singular method to reach for — see `ProfileDirectoryService` on why that
-absence is the design rather than an omission.
+All three list handlers resolve the whole page's players in one call to
+`ProfileDirectoryService.profiles_for`, which is a fixed number of round
+trips regardless of page size. Both tasks require it by name, and the
+service has no singular method to reach for — see `ProfileDirectoryService`
+on why that absence is the design rather than an omission.
+
+## The viewer is passed into composition, and on the friend list it matters
+
+Every list handler passes `viewer_id=user.id`, so the composer resolves what
+the caller is to each player rendered. On the friend list that resolution is
+always `FRIEND` — which is what makes `VisibilityLevel.FRIENDS` visibly work
+for the first time: a field a friend restricted to friends appears here and
+is hidden from the same profile read by a stranger.
+
+## Route ordering
+
+`/friends/requests/...` is registered before `/friends/{player_id}`.
+Starlette matches in registration order, and while the two happen to differ
+in segment count today, `GET /friends/count` and a future
+`GET /friends/{player_id}` would not — so the specific paths lead, and a
+contract test asserts the resolution rather than trusting this note.
 """
 
 import logging
@@ -58,13 +75,18 @@ from app.core.responses import ApiResponse
 from app.modules.auth.presentation.dependencies import CurrentUser
 from app.modules.avatars.presentation.dependencies import AvatarLinkBuilderDep
 from app.modules.friends.domain.friend_request import FriendRequest
-from app.modules.friends.presentation.dependencies import FriendRequestServiceDep
+from app.modules.friends.presentation.dependencies import (
+    FriendRequestServiceDep,
+    FriendshipServiceDep,
+)
 from app.modules.friends.presentation.rate_limits import (
     enforce_friend_request_respond_limit,
     enforce_friend_request_send_limit,
 )
 from app.modules.friends.presentation.schemas import (
+    FriendCountResponse,
     FriendRequestResponse,
+    FriendResponse,
     SendFriendRequestRequest,
 )
 from app.modules.profiles.presentation.dependencies import ProfileDirectoryDep
@@ -160,7 +182,13 @@ async def send_friend_request(
     request = await service.send(requester_id=user.id, addressee_id=payload.player_id)
 
     return build_response(
-        await _render(request, other=request.addressee_id, directory=directory, links=avatar_links)
+        await _render(
+            request,
+            other=request.addressee_id,
+            viewer_id=user.id,
+            directory=directory,
+            links=avatar_links,
+        )
     )
 
 
@@ -203,6 +231,7 @@ async def list_incoming(
             requests,
             other=lambda request: request.requester_id,
             next_cursor=next_cursor,
+            viewer_id=user.id,
             directory=directory,
             links=avatar_links,
         )
@@ -243,6 +272,7 @@ async def list_outgoing(
             requests,
             other=lambda request: request.addressee_id,
             next_cursor=next_cursor,
+            viewer_id=user.id,
             directory=directory,
             links=avatar_links,
         )
@@ -287,7 +317,13 @@ async def accept_friend_request(
     request = await service.accept(request_id=request_id, actor_id=user.id)
 
     return build_response(
-        await _render(request, other=request.requester_id, directory=directory, links=avatar_links)
+        await _render(
+            request,
+            other=request.requester_id,
+            viewer_id=user.id,
+            directory=directory,
+            links=avatar_links,
+        )
     )
 
 
@@ -326,7 +362,13 @@ async def decline_friend_request(
     request = await service.decline(request_id=request_id, actor_id=user.id)
 
     return build_response(
-        await _render(request, other=request.requester_id, directory=directory, links=avatar_links)
+        await _render(
+            request,
+            other=request.requester_id,
+            viewer_id=user.id,
+            directory=directory,
+            links=avatar_links,
+        )
     )
 
 
@@ -368,7 +410,13 @@ async def cancel_friend_request(
     request = await service.cancel(request_id=request_id, actor_id=user.id)
 
     return build_response(
-        await _render(request, other=request.addressee_id, directory=directory, links=avatar_links)
+        await _render(
+            request,
+            other=request.addressee_id,
+            viewer_id=user.id,
+            directory=directory,
+            links=avatar_links,
+        )
     )
 
 
@@ -376,6 +424,7 @@ async def _render(
     request: FriendRequest,
     *,
     other: UUID,
+    viewer_id: UUID,
     directory: ProfileDirectoryDep,
     links: AvatarLinkBuilderDep,
 ) -> FriendRequestResponse:
@@ -392,7 +441,7 @@ async def _render(
     inventing a placeholder would publish that an account was withdrawn.
     The list path takes the opposite route — see `_render_page`.
     """
-    profiles = await directory.profiles_for([other])
+    profiles = await directory.profiles_for([other], viewer_id=viewer_id)
     profile = profiles[other]
     return FriendRequestResponse.of(
         request, ProfileResponse.of(profile, links.links_for(profile.identity.avatar))
@@ -404,6 +453,7 @@ async def _render_page(
     *,
     other: Callable[[FriendRequest], UUID],
     next_cursor: str | None,
+    viewer_id: UUID,
     directory: ProfileDirectoryDep,
     links: AvatarLinkBuilderDep,
 ) -> CursorPage[FriendRequestResponse]:
@@ -427,7 +477,7 @@ async def _render_page(
     the thing to follow.
     """
     player_ids = [other(request) for request in requests]
-    profiles = await directory.profiles_for(player_ids)
+    profiles = await directory.profiles_for(player_ids, viewer_id=viewer_id)
 
     items = [
         FriendRequestResponse.of(
@@ -444,3 +494,156 @@ async def _render_page(
         items=items,
         page=CursorPageInfo(next_cursor=next_cursor, has_more=next_cursor is not None),
     )
+
+
+# --- the friend list (A64-013.3) --------------------------------------------
+#
+# A second resource on the same router rather than a router of its own.
+# `friends_router` is one bounded context's HTTP surface, and a
+# `friendships_router` beside it would split one module's routes across two
+# files that share every dependency and every error mapping.
+
+_FRIENDSHIP_NOT_FOUND: Responses = error_response(
+    404,
+    (
+        "You are not friends with that player. Returned identically whether you never "
+        "were or the friendship has already ended — which of the two applies is not "
+        "something an endpoint should answer."
+    ),
+)
+
+
+@friends_router.get(
+    "/count",
+    status_code=status.HTTP_200_OK,
+    summary="Count your friends",
+    response_description="How many friends you currently have.",
+    responses={**_UNAUTHORIZED},
+)
+async def count_friends(
+    user: CurrentUser,
+    service: FriendshipServiceDep,
+) -> ApiResponse[FriendCountResponse]:
+    """Returns your current number of friends.
+
+    **Your own count, always.** There is no path segment or parameter that
+    could name another player, so this needs no ownership check — another
+    account's friend count is not addressable here.
+
+    Counts **live** friendships only: one that ended is not included, in
+    either direction.
+
+    A real count rather than the length of a page, so it stays correct past
+    the first one. It is deliberately **not cached** — `friends:v1:` is
+    reserved for exactly this, and a count with no invalidation trigger goes
+    wrong on the first removal.
+    """
+    return build_response(FriendCountResponse(total=await service.count_friends(player_id=user.id)))
+
+
+@friends_router.get(
+    "",
+    status_code=status.HTTP_200_OK,
+    summary="List your friends",
+    response_description="A page of your friends, most recently added first.",
+    responses={**_UNAUTHORIZED, **_UNPROCESSABLE},
+)
+async def list_friends(
+    user: CurrentUser,
+    service: FriendshipServiceDep,
+    directory: ProfileDirectoryDep,
+    avatar_links: AvatarLinkBuilderDep,
+    limit: Annotated[
+        int, Query(ge=1, le=MAX_PAGE_SIZE, description="Friends per page.")
+    ] = DEFAULT_PAGE_SIZE,
+    cursor: Annotated[
+        str | None,
+        Query(description="Opaque cursor from a previous page. Pass it back unchanged."),
+    ] = None,
+) -> ApiResponse[CursorPage[FriendResponse]]:
+    """Returns your friends, most recently added first.
+
+    **Your own list, always.** The account comes from your access token and
+    no parameter could name a different one, so there is no ownership check
+    here because another player's friend list is not addressable.
+
+    Each `player` is the full public profile — and because you are a friend,
+    **fields they restricted to friends are visible to you**. The same
+    profile read by a stranger hides them. That is `VisibilityLevel.FRIENDS`
+    working end to end, and it needs nothing from a client.
+
+    **Keyset pagination, never offset.** Follow `page.next_cursor` until it
+    is `null`; `page.has_more` says whether there is one. There is
+    deliberately no total in the page — `GET /friends/count` is the endpoint
+    for that, and computing it on every page would pay for a number most
+    callers do not read.
+    """
+    friendships, next_cursor = await service.list_friends(
+        player_id=user.id, limit=limit, cursor=cursor
+    )
+
+    player_ids = [friendship.other_than(user.id) for friendship in friendships]
+    # One batch for the whole page — never `compose` in a loop. Four round
+    # trips regardless of page size, and the viewer is passed in so every
+    # profile is composed as a *friend* sees it.
+    profiles = await directory.profiles_for(player_ids, viewer_id=user.id)
+
+    items = [
+        FriendResponse.of(
+            friendship,
+            ProfileResponse.of(
+                profiles[player_id], avatar_links.links_for(profiles[player_id].identity.avatar)
+            ),
+        )
+        for friendship, player_id in zip(friendships, player_ids, strict=True)
+        if player_id in profiles
+    ]
+
+    return build_response(
+        CursorPage(
+            items=items,
+            page=CursorPageInfo(next_cursor=next_cursor, has_more=next_cursor is not None),
+        )
+    )
+
+
+@friends_router.delete(
+    "/{player_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove a friend",
+    response_description="The friendship has ended.",
+    responses={**_UNAUTHORIZED, **_FRIENDSHIP_NOT_FOUND, **_TOO_MANY_REQUESTS},
+    dependencies=[Depends(enforce_friend_request_respond_limit)],
+)
+async def remove_friend(
+    player_id: Annotated[UUID, Path(description="The friend to remove.")],
+    user: CurrentUser,
+    service: FriendshipServiceDep,
+) -> None:
+    """Ends your friendship with `player_id`.
+
+    **Unilateral and silent** (FS-2). You do not need their agreement, and
+    they are not told — "requiring mutual agreement to stop being friends is
+    not a feature anyone wants", and a notified removal turns a withdrawal
+    into a confrontation.
+
+    **Only your own friendships.** The other party comes from the path and
+    *you* come from the token, so the only friendship addressable here is
+    one you are part of. A player who is not in the pair gets `404`, not
+    `403` — there is no friendship between them and the caller to speak of.
+
+    `404` when you are not currently friends, and deliberately the same
+    answer whether you never were or the friendship has already ended. Which
+    of the two applies is exactly what a friends-only visibility setting
+    exists to control, so an endpoint that distinguished them would be a way
+    to ask.
+
+    `204` with no body, unlike `DELETE /friends/requests/{id}`, and the
+    difference is real rather than inconsistent: cancelling a request
+    returns the request in its resolved state because a client shows it in a
+    list; a removed friendship simply leaves the list, and there is nothing
+    left to render. The row is still kept — database.md §1221: a friendship
+    that ended is a fact with a date, and it is what lets the two be friends
+    again later.
+    """
+    await service.remove_friend(player_id=user.id, other_id=player_id)

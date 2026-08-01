@@ -18,14 +18,26 @@ handler A64-013.5 adds and the expiry sweep after it.
 This service does not contain the string `addressee_id ==` anywhere, and
 that is the property to preserve.
 
-## Transactions
+## Transactions, and the one that carries two writes
 
 Each write is one unit of work, committed before the method returns.
-Resolution is a single-row `UPDATE` guarded by a version, so there is
-nothing to coordinate — which stops being true in A64-013.3, where FR-4
-requires acceptance and friendship creation to share a transaction. The
-`async with self._unit_of_work` below is where that second write goes, and
-it is written that way now so adding it is not a restructure.
+
+**Acceptance is the exception, and it is the point of A64-013.3.** FR-4:
+"acceptance creates the `Friendship` in the same transaction that resolves
+the request — two transactions permit a state where the request is accepted
+and no friendship exists." So `accept` resolves the request *and* creates
+the friendship inside one `async with self._unit_of_work`, with one
+`commit()` at the end.
+
+The failure this prevents is not hypothetical and is not self-correcting: a
+request that says `accepted` with no friendship row is a pair who believe
+they are friends and are not, and nothing in the system would ever notice —
+there is no reconciliation pass, because the accepted request is a
+perfectly valid terminal state on its own.
+
+`_transition` takes an optional `on_resolved` hook that runs **inside** that
+block, which is how the second write gets there without `accept` growing its
+own copy of the read-transition-write-log shape.
 
 ## Reads open no transaction
 
@@ -35,16 +47,17 @@ call `ProfileService` makes.
 """
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 from uuid import UUID
 
 from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork
-from app.modules.friends.application.ports import FriendRequestRepository
+from app.modules.friends.application.ports import FriendRequestRepository, FriendshipRepository
 from app.modules.friends.application.validators import FriendRequestValidator
 from app.modules.friends.domain.exceptions import FriendRequestNotFound
 from app.modules.friends.domain.friend_request import FriendRequest, FriendRequestStatus
+from app.modules.friends.domain.friendship import Friendship
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +75,20 @@ class FriendRequestService:
         self,
         *,
         requests: FriendRequestRepository,
+        friendships: FriendshipRepository,
         validator: FriendRequestValidator,
         unit_of_work: UnitOfWork,
         clock: Clock,
     ) -> None:
         self._requests = requests
+        # Held so that `accept` can write the friendship inside the unit of
+        # work it already opens (FR-4). Deliberately the *repository* rather
+        # than `FriendshipService`: that service opens transactions of its
+        # own, and calling it from here would produce the nested,
+        # two-transaction shape A64-013.3 forbids. What is needed here is a
+        # write that joins the caller's transaction, which is exactly what a
+        # repository is.
+        self._friendships = friendships
         self._validator = validator
         self._unit_of_work = unit_of_work
         self._clock = clock
@@ -115,23 +137,36 @@ class FriendRequestService:
         return stored
 
     async def accept(self, *, request_id: UUID, actor_id: UUID) -> FriendRequest:
-        """The addressee agrees.
+        """The addressee agrees, **and the friendship is created with it**.
 
         Raises `FriendRequestNotFound` (404), `NotRequestAddressee` (403) or
         `FriendRequestAlreadyResolved` (409).
 
-        **A64-013.3 creates the `Friendship` here**, inside the same
-        `async with` (FR-4: "acceptance creates the Friendship in the same
-        transaction that resolves the request" — two transactions permit a
-        state where the request is accepted and no friendship exists).
-        Accepting today resolves the request and nothing else, which is why
-        this task ships no friend list.
+        ## One transaction, two writes — FR-4
+
+        The resolved request and the new `Friendship` are written inside the
+        same unit of work and committed once. Anything else permits a state
+        where the request says `accepted` and no friendship exists, which is
+        a pair who believe they are friends and are not — and which nothing
+        would ever notice, because an accepted request is a valid terminal
+        state on its own.
+
+        The friendship's `created_at` is the *same instant* as the request's
+        `responded_at`, because both come from one `self._clock.now()` in
+        `_transition`. They are one event.
+
+        `FriendshipAlreadyExists` (409) is possible in principle — two
+        acceptances racing — and is what the partial unique index refuses.
+        In practice FR-1 makes it hard to reach, since a pair cannot have
+        two pending requests; the constraint is what makes it impossible
+        rather than unlikely.
         """
         return await self._transition(
             request_id=request_id,
             actor_id=actor_id,
             apply=lambda request, at: request.accept(by=actor_id, at=at),
             event="friend_request_accepted",
+            on_resolved=self._create_friendship,
         )
 
     async def decline(self, *, request_id: UUID, actor_id: UUID) -> FriendRequest:
@@ -192,6 +227,46 @@ class FriendRequestService:
             requester_id, statuses=_LIVE_ONLY, limit=limit, cursor=cursor
         )
 
+    async def _create_friendship(self, request: FriendRequest, at: datetime) -> None:
+        """Creates the friendship an acceptance implies.
+
+        Called by `_transition` **inside** the unit of work, after the
+        request has been resolved and before the commit — which is the whole
+        of FR-4. It is a method rather than a lambda so the transaction
+        boundary it depends on is documented where it runs.
+
+        `Friendship.between` sorts the pair, so this passes requester and
+        addressee in whatever order the request happened to have and never
+        has to know about `low` and `high` (DB-12).
+
+        `at` is the instant the request was resolved, threaded through
+        rather than read again: the friendship began when the request was
+        accepted, and two `clock.now()` calls would record two answers to
+        one question.
+        """
+        await self._friendships.create(
+            Friendship.between(
+                request.requester_id,
+                request.addressee_id,
+                created_at=at,
+                source_request_id=request.id,
+            )
+        )
+
+        # Ids only, and both parties — unlike the removal log, which names
+        # one. A friendship is mutual and both sides consented to it, so
+        # recording who is now friends with whom is an audit fact rather
+        # than a disclosure about somebody's choices (contrast
+        # `friendship_removed`, where FS-2's silence applies).
+        logger.info(
+            "friendship_created",
+            extra={
+                "request_id": str(request.id),
+                "requester_id": str(request.requester_id),
+                "addressee_id": str(request.addressee_id),
+            },
+        )
+
     async def _transition(
         self,
         *,
@@ -199,6 +274,7 @@ class FriendRequestService:
         actor_id: UUID,
         apply: Callable[[FriendRequest, datetime], None],
         event: str,
+        on_resolved: Callable[[FriendRequest, datetime], Awaitable[None]] | None = None,
     ) -> FriendRequest:
         """Read, transition, write, log — the shape all three resolutions
         share.
@@ -220,10 +296,22 @@ class FriendRequestService:
         if request is None:
             raise FriendRequestNotFound("No friend request with that identifier.")
 
-        apply(request, self._clock.now())
+        # One instant for the whole resolution. `responded_at` and, on the
+        # acceptance path, the friendship's `created_at` are the same event
+        # and must carry the same timestamp — two `now()` calls would record
+        # two answers to one question.
+        at = self._clock.now()
+        apply(request, at)
 
         async with self._unit_of_work:
             stored = await self._requests.resolve(request)
+            if on_resolved is not None:
+                # **Inside** the unit of work, after the resolution and
+                # before the commit — FR-4. Moving this one line below the
+                # `async with` is the bug A64-013.3 exists to prevent, which
+                # is why the hook is invoked here rather than by `accept`
+                # after it returns.
+                await on_resolved(stored, at)
             await self._unit_of_work.commit()
 
         # The actor, not both parties. An acceptance already implies who the

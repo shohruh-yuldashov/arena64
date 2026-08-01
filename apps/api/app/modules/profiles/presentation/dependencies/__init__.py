@@ -54,12 +54,21 @@ from fastapi import Depends
 from app.api.deps import (
     ClockDep,
     DbSessionDep,
+    FriendsSettingsDep,
     PresenceSettingsDep,
     RedisPoolsDep,
     StatisticsSettingsDep,
 )
 from app.database.unit_of_work import SessionUnitOfWork
-from app.modules.profiles.application.ports import RatingProvider, StatisticsProvider
+from app.modules.friends.application.services.friendship_service import (
+    FriendshipReaderService,
+)
+from app.modules.friends.infrastructure.repositories import SqlAlchemyFriendshipRepository
+from app.modules.profiles.application.ports import (
+    RatingProvider,
+    StatisticsProvider,
+    ViewerRelationshipProvider,
+)
 from app.modules.profiles.application.services import ProfileService
 from app.modules.profiles.application.services.profile_composer import PublicProfileComposer
 from app.modules.profiles.application.services.profile_directory_service import (
@@ -68,7 +77,9 @@ from app.modules.profiles.application.services.profile_directory_service import 
 from app.modules.profiles.application.services.profile_search_service import ProfileSearchService
 from app.modules.profiles.infrastructure import (
     DatabaseStatisticsProvider,
+    FriendshipRelationshipProvider,
     NoMatchesStatisticsProvider,
+    NoRelationshipsProvider,
     UnratedRatingProvider,
 )
 from app.modules.statistics.application.services import StatisticsService
@@ -318,10 +329,60 @@ def get_presence_provider(
 PresenceProviderDep = Annotated[PresenceProvider, Depends(get_presence_provider)]
 
 
+def get_relationship_provider(
+    session: DbSessionDep, settings: FriendsSettingsDep
+) -> ViewerRelationshipProvider:
+    """What a viewer is to the players they are reading — A64-013.3.
+
+    The third selection point on this module, and it is logged for the
+    reason the other two are: this is the only place that knows a *choice*
+    was made, because neither provider can say what it was chosen instead
+    of.
+
+    ## The two branches
+
+    `FriendshipRelationshipProvider` is the default. It is handed
+    `friends.public.FriendshipReader` — that module's published port,
+    assembled here from its own repository, because a composition root is
+    the one place permitted to know how to construct things (BR-6 forbids a
+    *module* reaching for the container, not the root wiring modules
+    together). `PublicProfileComposer` sees only
+    `profiles.application.ports.ViewerRelationshipProvider` and never learns
+    that a `friends` schema exists.
+
+    `NoRelationshipsProvider` is the fallback, wired when
+    `FRIENDS_ENABLED=false` — for a social graph being migrated or one that
+    is unhealthy.
+
+    ## The degradation narrows, which is why it is safe
+
+    With every viewer a stranger, a field set to `FRIENDS` is hidden from
+    everyone including actual friends. That is a visible loss of
+    functionality and not a disclosure — the correct direction for a privacy
+    control to fail in, and the opposite of what "everybody is a friend"
+    would do during an incident.
+
+    `WARNING` at selection, because nothing in a response says the graph is
+    off: a friends-only field simply looks hidden.
+    """
+    if not settings.enabled:
+        logger.warning("relationship_provider_fallback", extra={"provider": "none"})
+        return NoRelationshipsProvider()
+
+    logger.debug("relationship_provider_selected", extra={"provider": "friendship"})
+    return FriendshipRelationshipProvider(
+        FriendshipReaderService(SqlAlchemyFriendshipRepository(session))
+    )
+
+
+RelationshipProviderDep = Annotated[ViewerRelationshipProvider, Depends(get_relationship_provider)]
+
+
 def get_profile_composer(
     ratings: RatingProviderDep,
     statistics: StatisticsProviderDep,
     presence: PresenceProviderDep,
+    relationships: RelationshipProviderDep,
 ) -> PublicProfileComposer:
     """The public view, assembled from three sources with privacy applied —
     A64-013.1.
@@ -331,7 +392,12 @@ def get_profile_composer(
     *same object*, so there is no arrangement of dependencies in which one
     of them could be composed differently from the other.
     """
-    return PublicProfileComposer(ratings=ratings, statistics=statistics, presence=presence)
+    return PublicProfileComposer(
+        ratings=ratings,
+        statistics=statistics,
+        presence=presence,
+        relationships=relationships,
+    )
 
 
 ProfileComposerDep = Annotated[PublicProfileComposer, Depends(get_profile_composer)]
@@ -436,6 +502,7 @@ __all__ = [
     "PrivacySettingsEditorDep",
     "ProfileEditorDep",
     "ProfileComposerDep",
+    "RelationshipProviderDep",
     "ProfileDirectoryDep",
     "ProfileSearchServiceDep",
     "ProfileServiceDep",
@@ -448,6 +515,7 @@ __all__ = [
     "get_privacy_settings_editor",
     "get_profile_editor",
     "get_profile_composer",
+    "get_relationship_provider",
     "get_profile_directory",
     "get_profile_search_service",
     "get_profile_service",

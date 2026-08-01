@@ -109,12 +109,67 @@ class FriendRequestNotPending(ConflictError):
     """
 
 
-class InvalidFriendRequestCursor(ValidationError):
+class InvalidFriendsCursor(ValidationError):
     """The pagination cursor is malformed — A64-013.2.
 
     A `422` rather than an empty page: a corrupted cursor is malformed
     input, and silently restarting from the first page would make a client
     loop forever without noticing.
+
+    Shared by the request lists and the friend list, because they share a
+    cursor: both are keyset pages over `(created_at, id)` on a relation
+    scoped to the authenticated caller, so there is one encoding and one way
+    for it to be wrong. A64-013.3 renamed it from
+    `InvalidFriendRequestCursor` when the second list arrived.
+    """
+
+
+class SelfFriendship(ValidationError):
+    """A player was paired with themselves — A64-013.3.
+
+    Unreachable through the request flow, which refuses a self-request in
+    the aggregate, in the validator and in `ck_friend_request__not_self`.
+    This is the guard for the aggregate that would have to be wrong for it
+    to happen anyway, and for any future path that creates a friendship
+    without a request.
+    """
+
+
+class FriendshipAlreadyExists(ConflictError):
+    """The two players already have a live friendship — A64-013.3.
+
+    `409`. Reachable in practice only by two acceptances racing, since the
+    request flow refuses a second pending request for a pair (FR-1); the
+    partial unique index is what makes it impossible rather than unlikely.
+    """
+
+
+class FriendshipNotFound(NotFoundError):
+    """No live friendship exists between the two players.
+
+    `404`, and deliberately the same answer whether the two were never
+    friends or the friendship has already ended. The distinction is not a
+    caller's to learn: "are these two people friends" is exactly what
+    `VisibilityLevel.FRIENDS` exists to control, and an endpoint that
+    answered it differently for the two cases would be a way to ask.
+    """
+
+
+class FriendshipAlreadyEnded(ConflictError):
+    """The friendship is no longer live.
+
+    `409` and not `404`: the row exists and the caller's view of it is
+    stale rather than wrong — the same distinction `FriendRequestAlreadyResolved`
+    draws, and reachable the same way, by two devices removing at once.
+    """
+
+
+class NotFriendshipParticipant(PermissionDeniedError):
+    """Somebody who is not one of the two tried to act on a friendship.
+
+    `403`. The message names neither participant — a rejection that did
+    would turn a guessed identifier into a way to learn who is friends with
+    whom.
     """
 
 
@@ -141,7 +196,12 @@ __all__ = [
     "FriendRequestAlreadyResolved",
     "FriendRequestNotFound",
     "FriendRequestNotPending",
-    "InvalidFriendRequestCursor",
+    "FriendshipAlreadyEnded",
+    "FriendshipAlreadyExists",
+    "FriendshipNotFound",
+    "InvalidFriendsCursor",
+    "NotFriendshipParticipant",
+    "SelfFriendship",
     "NotRequestAddressee",
     "NotRequestRequester",
     "OppositeFriendRequestPending",

@@ -12,6 +12,7 @@ from app.config.settings import (
     AppSettings,
     AuthSettings,
     EmailSettings,
+    FriendsSettings,
     JWTSettings,
     PostgresSettings,
     PresenceSettings,
@@ -96,6 +97,7 @@ class TestSettings:
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
             presence=PresenceSettings(),
+            friends=FriendsSettings(),
         )
         assert settings.environment is Environment.TEST
 
@@ -123,6 +125,7 @@ class TestSettings:
                 rate_limit=RateLimitSettings(),
                 statistics=StatisticsSettings(),
                 presence=PresenceSettings(),
+                friends=FriendsSettings(),
             )
 
     def test_production_rejects_a_left_default_redis_role(self) -> None:
@@ -142,6 +145,7 @@ class TestSettings:
                 rate_limit=RateLimitSettings(),
                 statistics=StatisticsSettings(),
                 presence=PresenceSettings(),
+                friends=FriendsSettings(),
             )
 
     def test_production_accepts_fully_explicit_configuration(self) -> None:
@@ -166,6 +170,7 @@ class TestSettings:
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
             presence=PresenceSettings(),
+            friends=FriendsSettings(),
         )
         assert settings.environment is Environment.PRODUCTION
 
@@ -183,6 +188,7 @@ class TestSettings:
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
             presence=PresenceSettings(),
+            friends=FriendsSettings(),
         )
         with pytest.raises(PydanticValidationError):
             settings.environment = Environment.PRODUCTION  # type: ignore[misc]
@@ -290,6 +296,7 @@ class TestJWTProductionGuard:
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
             presence=PresenceSettings(),
+            friends=FriendsSettings(),
             jwt=JWTSettings(**jwt_overrides),  # type: ignore[arg-type]
         )
 
@@ -321,6 +328,7 @@ class TestJWTProductionGuard:
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
             presence=PresenceSettings(),
+            friends=FriendsSettings(),
             jwt=JWTSettings(),
         )
 

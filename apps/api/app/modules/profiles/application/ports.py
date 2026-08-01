@@ -68,6 +68,7 @@ from uuid import UUID
 
 from app.modules.profiles.domain.ratings import PlayerRatings
 from app.modules.statistics.public import PlayerStatistics
+from app.modules.users.public import ViewerRelationship
 
 
 class RatingProvider(Protocol):
@@ -141,5 +142,57 @@ class StatisticsProvider(Protocol):
         module serves that returns a collection.
 
         Never raises, and an empty sequence costs no round trip.
+        """
+        ...
+
+
+class ViewerRelationshipProvider(Protocol):
+    """Answers what a viewer is to each of a page of players — A64-013.3.
+
+    The port that makes `VisibilityLevel.FRIENDS` real. Before this task
+    every viewer was a `STRANGER` because nothing could compute anything
+    else; `PublicProfileComposer` now resolves the relationship per player
+    and every privacy gate honours it without changing.
+
+    ## Why `profiles` declares this rather than consuming `friends.public`
+
+    `PublicProfileReader` and `PresenceProvider` are consumed directly from
+    `users.public`, so the obvious move is to consume `FriendshipReader`
+    from `friends.public` the same way. This module declares its own port
+    instead, for the reason `StatisticsProvider` exists beside
+    `StatisticsReader`:
+
+    **the fallback must not depend on the module it replaces.**
+    `NoRelationshipsProvider` has to keep working when `friends` is
+    unreachable or switched off, and a port defined in terms of
+    `friends.public` could not. It also keeps the *direction* of the
+    dependency clean — `profiles.application` and `profiles.domain` never
+    name `friends`, and only `profiles.infrastructure` and the composition
+    root do, which is what stops the two modules from becoming mutually
+    entangled at the layers that matter.
+
+    ## Batch only
+
+    There is no single-player form, and its absence is deliberate: this runs
+    on the composition path, so a per-player call would multiply every
+    profile render on the platform (CLAUDE.md §10.4).
+    """
+
+    async def relationships_for(
+        self, viewer_id: UUID, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, ViewerRelationship]:
+        """What `viewer_id` is to each of `player_ids`.
+
+        **Complete**: every id asked for has an entry, defaulting to
+        `STRANGER`, so a caller indexes rather than writing a fallback at
+        each site — the line somebody eventually writes as `.get(id)` alone
+        and then treats `None` as truthy.
+
+        Never raises. A relationship that cannot be determined is
+        `STRANGER`, which is the safe direction: an unavailable social graph
+        must narrow what a viewer sees, never widen it.
+
+        An empty `player_ids` returns an empty mapping without touching
+        anything.
         """
         ...

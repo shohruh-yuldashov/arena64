@@ -22,12 +22,13 @@ from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 if TYPE_CHECKING:
-    from app.modules.users.public.edits import ProfileEdits
+    from app.modules.users.public.edits import PrivacyEdits, ProfileEdits
 
 from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import (
     AvatarReference,
     OwnUserProfile,
+    PrivacySettingsView,
     PublicUserProfile,
     UserRead,
 )
@@ -443,5 +444,73 @@ class ProfileEditor(Protocol):
         package — when a value fails validation, and `UserNotFound` if the
         account is gone. Nothing is written when any field is rejected: the
         values are validated before the entity is touched.
+        """
+        ...
+
+
+class PrivacySettingsEditor(Protocol):
+    """Reads and updates the account holder's own privacy controls.
+
+    The ninth narrow port, added by A64-012.4.
+
+    **Separate from `ProfileEditor` even though both are self-service edits
+    reached from the same settings screen.** The split is the one this
+    module makes eight times over, and here it separates two things with
+    genuinely different consequences: `ProfileEditor` writes what a player
+    says about themselves, and this writes what strangers may learn about
+    them. A component granted the first — a future onboarding wizard, a
+    moderation tool fixing an abusive display name — must not thereby be
+    able to publish an account's activity.
+
+    It is also the port that would be wrong to widen. `PrivacyEdits` has
+    five attributes; there is no `is_active`, no way to read another
+    account's settings, and no way to set somebody *else's* — the user id a
+    caller passes is one it has already authenticated, exactly as on
+    `ProfileEditor`.
+
+    ## Why the read is here rather than on `ProfileEditor`
+
+    `OwnUserProfile` deliberately carries no privacy flags. A settings
+    screen loads the two independently and a profile edit should not
+    restate five booleans it did not touch — but the real reason is the
+    same as the split above: a component that may read a biography has no
+    claim to know which parts of the account are hidden.
+    """
+
+    async def get_privacy_settings(self, user_id: UUID) -> PrivacySettingsView:
+        """The owner's own privacy controls.
+
+        Raises `UserNotFound` rather than returning `None`, for the reason
+        every other read on this surface does: the caller holds an
+        identifier it has already authenticated, so absence means the
+        account was deleted while a valid token was in flight.
+
+        Never returns a partial or absent settings object. An account
+        always has all five answers — the columns are `NOT NULL` and the
+        entity defaults them — so there is no state in which a consumer
+        would have to invent one.
+        """
+        ...
+
+    async def update_privacy_settings(
+        self, user_id: UUID, edits: "PrivacyEdits"
+    ) -> PrivacySettingsView:
+        """Applies a partial update and returns the resulting settings.
+
+        **Partial in the PATCH sense**: every field on `PrivacyEdits`
+        defaults to `UNSET`, and only the flags a caller actually set are
+        touched. Sending `{"show_country": false}` does not silently reset
+        the other four to their defaults — which is the failure mode that
+        matters here, because the value it would silently reset
+        `show_last_seen` to is the one the player deliberately turned off.
+
+        Returns the full settings rather than an acknowledgement, so a
+        client renders every toggle from the response instead of applying
+        its own optimistic update and drifting from what was stored.
+
+        Raises `UserNotFound` if the account is gone. Nothing else: there
+        is no invalid combination of five independent booleans, so there is
+        no validation error this can produce. A malformed *body* is
+        rejected at the HTTP boundary before reaching here.
         """
         ...

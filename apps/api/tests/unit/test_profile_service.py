@@ -230,8 +230,41 @@ class TestPlaceholderRatingsAndStatistics:
     ) -> None:
         statistics = (await service.get_public_profile("Player_One")).statistics
 
+        # Not `None`: this account is on the default `show_statistics=True`.
+        # The assertion is part of the test rather than a type-checker
+        # appeasement — A64-012.4 made this field nullable, and a `None`
+        # here would mean the default had flipped to hiding every record.
+        assert statistics is not None
         assert statistics.games_played == 0
         assert statistics.win_rate == 0.0
+
+    async def test_statistics_are_none_when_the_player_hides_them(self) -> None:
+        """A64-012.4, at the composition layer rather than over HTTP.
+
+        `None` and not a zeroed record: zeroes are what a genuine beginner
+        has, so publishing them for somebody who opted out would misinform
+        the opponent deciding whether to accept a challenge.
+
+        Ratings stay visible in the same response — UP-5, and the reason
+        the flag is `show_statistics` rather than `show_ratings`.
+        """
+        hidden = account()
+        hidden.privacy = hidden.privacy.updated(show_statistics=False)
+        users = UserService(
+            users=FakeUserRepository([hidden]),
+            unit_of_work=_NullUnitOfWork(),
+            clock=_FixedClock(),
+        )
+        service = ProfileService(
+            profiles=PublicProfileService(users),
+            ratings=UnratedRatingProvider(),
+            statistics=NoMatchesStatisticsProvider(),
+        )
+
+        profile = await service.get_public_profile("Player_One")
+
+        assert profile.statistics is None
+        assert profile.ratings.as_map()[RatingCategory.BLITZ].rating == STARTING_RATING
 
 
 class TestWinRate:

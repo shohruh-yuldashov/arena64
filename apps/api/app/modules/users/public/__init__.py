@@ -33,6 +33,15 @@ What is published, and why only this much:
                          fields — never the username (A64-012.3)
   `ProfileEdits`         that port's input: five optional fields and no
                          others, which is the mass-assignment defence
+  `PrivacySettingsEditor` reads and updates who may see what (A64-012.4).
+                         Separate from `ProfileEditor` because editing a
+                         biography and publishing an account's activity
+                         are different authorities
+  `PrivacyEdits`         that port's input: five optional booleans
+  `PrivacySettingsView`  that port's output — the owner's own five flags
+  `ProfileVisibility`    the *four* a consumer needs to render somebody
+                         else. No `show_country`: that one is applied
+                         inside `users`, so it never has to travel
   `OwnUserProfile`       the owner's view — the editable fields plus
                          identity, and no account state
   `AvatarReference`      an object key, a version and a timestamp. No URL:
@@ -68,16 +77,19 @@ from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import (
     AvatarReference,
     OwnUserProfile,
+    PrivacySettingsView,
+    ProfileVisibility,
     PublicUserProfile,
     UserRead,
     UserSummary,
 )
-from app.modules.users.public.edits import ProfileEdits
+from app.modules.users.public.edits import PrivacyEdits, ProfileEdits
 from app.modules.users.public.ports import (
     AvatarStore,
     EmailVerifier,
     NewUserAccount,
     PasswordResetter,
+    PrivacySettingsEditor,
     ProfileEditor,
     PublicProfileReader,
     UserAccountCreator,
@@ -106,6 +118,10 @@ __all__ = [
     "InvalidUsername",
     "NewUserAccount",
     "PasswordResetter",
+    "PrivacyEdits",
+    "PrivacySettingsEditor",
+    "PrivacySettingsView",
+    "ProfileVisibility",
     "PublicProfileReader",
     "PublicUserProfile",
     "UserAccountCreator",

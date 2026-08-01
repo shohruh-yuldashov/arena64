@@ -33,6 +33,7 @@ from app.modules.users.domain.exceptions import (
     UsernameAlreadyExists,
     UserNotFound,
 )
+from app.modules.users.domain.privacy import PrivacySettings
 from app.modules.users.domain.value_objects import (
     Bio,
     CountryCode,
@@ -89,6 +90,17 @@ class SqlAlchemyUserRepository:
             # absence is one state, not an empty `Bio`.
             bio=Bio(row.bio) if row.bio else None,
             country=CountryCode(row.country_code) if row.country_code else None,
+            # The five columns become one value object here and split back
+            # into five in `_to_model` — which is the whole reason the
+            # entity holds a `PrivacySettings` rather than five booleans.
+            # Every consumer above this line takes the group or none of it.
+            privacy=PrivacySettings(
+                show_country=row.show_country,
+                show_last_seen=row.show_last_seen,
+                show_statistics=row.show_statistics,
+                show_online_status=row.show_online_status,
+                show_activity=row.show_activity,
+            ),
             locked_until=row.locked_until,
         )
 
@@ -114,6 +126,11 @@ class SqlAlchemyUserRepository:
             avatar_version=user.avatar_version,
             bio=user.bio.value if user.bio else None,
             country_code=user.country.value if user.country else None,
+            show_country=user.privacy.show_country,
+            show_last_seen=user.privacy.show_last_seen,
+            show_statistics=user.privacy.show_statistics,
+            show_online_status=user.privacy.show_online_status,
+            show_activity=user.privacy.show_activity,
             locked_until=user.locked_until,
         )
 
@@ -140,6 +157,11 @@ class SqlAlchemyUserRepository:
         row.avatar_version = user.avatar_version
         row.bio = user.bio.value if user.bio else None
         row.country_code = user.country.value if user.country else None
+        row.show_country = user.privacy.show_country
+        row.show_last_seen = user.privacy.show_last_seen
+        row.show_statistics = user.privacy.show_statistics
+        row.show_online_status = user.privacy.show_online_status
+        row.show_activity = user.privacy.show_activity
         row.locked_until = user.locked_until
 
     # --- error translation --------------------------------------------------

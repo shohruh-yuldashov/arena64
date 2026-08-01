@@ -43,15 +43,46 @@ class PublicProfile:
 
     identity: PublicUserProfile
     ratings: PlayerRatings
-    statistics: PlayerStatistics
+    """Always present, for every player, whatever their privacy settings.
+
+    Not an oversight and not a gap in A64-012.4: `show_statistics` covers
+    the *record* — games, wins, losses, draws — and a rating is a different
+    thing. It is what pairing is computed from, what every leaderboard
+    already publishes, and what UP-5 keeps visible to the opponents whose
+    results produced it. A player who could hide their rating while still
+    accepting rated games would be sandbagging with the platform's help.
+    See `users.domain.privacy.PrivacySettings.show_statistics`.
+    """
+
+    statistics: PlayerStatistics | None
+    """The aggregate match record, or `None` when this player has hidden it.
+
+    **`None` rather than zeroes.** A64-012.4 requires a hidden field to be
+    null and forbids a placeholder, and zeroes would be the worst possible
+    placeholder here — indistinguishable from a genuine beginner, which
+    turns a privacy setting into a lie about a player's experience and
+    misleads exactly the opponent deciding whether to accept a challenge.
+
+    Nullable rather than absent so the field stays in the contract for
+    every player. A client renders "not shown" from a `null`; it cannot
+    render anything sensible from a key that sometimes exists.
+    """
 
     last_seen: datetime | None = None
-    """When this player was last observed online. **Always `None` today.**
+    """When this player was last observed online. **Always `None` today**,
+    and `None` for anyone who has hidden it once it is not.
 
     A64-012.1 lists `last_seen` in the response and excludes "online
     status" from the scope, which is not a contradiction so much as a line:
     the field is part of the contract, and the presence tracking that would
     fill it is not this task's.
+
+    A64-012.4 added the control before the data: `show_last_seen` is the
+    one privacy flag that defaults to *off*, and `ProfileService` already
+    refuses to fill this field for a player who has it off. So the release
+    that ships presence tracking cannot be the release that publishes a
+    sleep schedule — the enforcement is in place and untested only because
+    there is nothing yet to enforce it against.
 
     It cannot be faked from anything already stored, and the near misses
     are worth naming because each is wrong in a different way.

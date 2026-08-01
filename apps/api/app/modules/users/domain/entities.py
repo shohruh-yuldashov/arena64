@@ -25,6 +25,7 @@ from uuid import UUID
 
 from app.core.enums import Locale
 from app.core.identifiers import generate_uuid7
+from app.modules.users.domain.privacy import PrivacySettings
 from app.modules.users.domain.value_objects import (
     Bio,
     CountryCode,
@@ -108,6 +109,22 @@ class User:
     # about having a data model behind it.
     bio: Bio | None = None
     country: CountryCode | None = None
+
+    # Which of the above a stranger may see — A64-012.4. One value object
+    # rather than five booleans, because domain-model.md §7.1 puts privacy
+    # preferences *inside* the profile as a named group and a type is what
+    # keeps that grouping true in code. See `domain/privacy.py`.
+    #
+    # A frozen default is safe as a dataclass field default precisely
+    # because it is frozen — every account starts on the platform defaults
+    # and shares one instance until it changes something, at which point
+    # `updated()` returns a new one.
+    #
+    # **Nothing here consults these flags.** The entity holds them; the
+    # mappers that build the *published* views apply them (UP-4 — enforced
+    # server-side on every read path). An entity that redacted itself
+    # would also redact the owner's own view of their own profile.
+    privacy: PrivacySettings = PrivacySettings()
 
     # Sign-in is refused until this instant passes. `None` means unlocked.
     #

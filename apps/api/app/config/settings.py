@@ -535,7 +535,14 @@ class StorageSettings(BaseSettings):
 
 class RateLimitSettings(BaseSettings):
     """`rate_limit` — abuse prevention on the authentication endpoints
-    (A64-011.8).
+    (A64-011.8), and since A64-012.4 on the privacy settings endpoint too.
+
+    One settings class for the whole platform rather than one per module:
+    the *policy* — which rules an endpoint carries — belongs to the module
+    that owns the endpoint (`auth.presentation.rate_limits`,
+    `profiles.presentation.rate_limits`), but the numbers belong in the one
+    file an operator edits during an incident. Two of them would mean
+    finding out during the incident which one applied.
 
     Every limit is configurable rather than constant, for the reason
     `AuthSettings` gives about Argon2's cost: a control that can only be
@@ -696,6 +703,25 @@ class RateLimitSettings(BaseSettings):
     # — that is 256 bits.
     password_reset_ip_limit: int = Field(default=10, ge=1)
     password_reset_window_seconds: int = Field(default=60 * 60, ge=1)
+
+    # --- PATCH /profile/privacy ---------------------------------------------
+    # **A64-012.4 requires this endpoint to be rate limited and specifies no
+    # figure**, so both the number and the dimension are chosen rather than
+    # given, and are flagged as such.
+    #
+    # Per IP, because it is the only dimension the limiter can express for
+    # an authenticated endpoint: `RateLimitScope` has `IP` and `EMAIL`, and
+    # an email does not appear in this request. Per *user* would be the
+    # right dimension and is a recommendation for A64-012.5 rather than an
+    # extension invented here — see `profiles.presentation.rate_limits` for
+    # what it would take and what per-IP costs behind a corporate NAT.
+    #
+    # 20 per 5 minutes is generous against the legitimate pattern (a person
+    # working through a settings screen, toggling five switches and
+    # changing their mind) and still bounds what the endpoint actually
+    # risks: an unbounded authenticated write to the account row.
+    privacy_update_ip_limit: int = Field(default=20, ge=1)
+    privacy_update_window_seconds: int = Field(default=5 * 60, ge=1)
 
 
 class Settings(BaseModel):

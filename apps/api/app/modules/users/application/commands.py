@@ -79,3 +79,31 @@ class UpdateUserProfile:
     country: str | None | UnsetType = UNSET
     preferred_language: Locale | UnsetType = UNSET
     timezone: str | UnsetType = UNSET
+
+
+@dataclass(frozen=True, slots=True)
+class UpdatePrivacySettings:
+    """Partial privacy update — A64-012.4. Every flag defaults to `UNSET`.
+
+    A separate command from `UpdateUserProfile` rather than five more
+    fields on it, mirroring the split between `ProfileEdits` and
+    `PrivacyEdits` on the published surface. The two are written by
+    different use cases with different rate limits and different
+    consequences, and a single command would make "which of these did the
+    caller mean to touch" a question with ten answers instead of five.
+
+    **No `None` in any union**, unlike `UpdateUserProfile`. A boolean flag
+    has no cleared state, so the three-state problem collapses to two: set,
+    or absent. That is also what lets `PrivacySettings.updated()` use
+    `None` for "unchanged" without ambiguity — see `domain/privacy.py`.
+
+    Deliberately carries no user id. It says *what* to change, not *whose*;
+    the account comes from the identifier the caller has already
+    authenticated, exactly as `UpdateUserProfile` does.
+    """
+
+    show_country: bool | UnsetType = UNSET
+    show_last_seen: bool | UnsetType = UNSET
+    show_statistics: bool | UnsetType = UNSET
+    show_online_status: bool | UnsetType = UNSET
+    show_activity: bool | UnsetType = UNSET

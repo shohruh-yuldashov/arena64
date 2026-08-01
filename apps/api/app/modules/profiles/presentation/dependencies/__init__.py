@@ -54,10 +54,17 @@ from app.modules.profiles.infrastructure import (
     UnratedRatingProvider,
 )
 from app.modules.users.application.services import UserService
+from app.modules.users.application.services.privacy_settings_service import (
+    PrivacySettingsService,
+)
 from app.modules.users.application.services.profile_editing_service import ProfileEditingService
 from app.modules.users.application.services.public_profile_service import PublicProfileService
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
-from app.modules.users.public import ProfileEditor, PublicProfileReader
+from app.modules.users.public import (
+    PrivacySettingsEditor,
+    ProfileEditor,
+    PublicProfileReader,
+)
 
 
 def get_public_profile_reader(session: DbSessionDep, clock: ClockDep) -> PublicProfileReader:
@@ -104,6 +111,33 @@ def get_profile_editor(session: DbSessionDep, clock: ClockDep) -> ProfileEditor:
 ProfileEditorDep = Annotated[ProfileEditor, Depends(get_profile_editor)]
 
 
+def get_privacy_settings_editor(session: DbSessionDep, clock: ClockDep) -> PrivacySettingsEditor:
+    """`users`' side of the privacy controls, behind its ninth published
+    port.
+
+    A third factory over the same three objects, and the third one is not
+    redundant for the reason the second was not: what differs is the
+    *capability* the caller receives, not the graph underneath it. This one
+    can read and write five booleans and can do nothing else — it cannot
+    read a biography, cannot rename anybody, and cannot see another
+    account's settings.
+
+    Collapsing the three into one factory returning a `UserService` would
+    save twenty lines and would hand every route on this module the union
+    of every capability, which is the whole thing the published ports
+    exist to prevent.
+    """
+    users = UserService(
+        users=SqlAlchemyUserRepository(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )
+    return PrivacySettingsService(users)
+
+
+PrivacySettingsEditorDep = Annotated[PrivacySettingsEditor, Depends(get_privacy_settings_editor)]
+
+
 def get_rating_provider() -> RatingProvider:
     """Ratings — **placeholder until the `rating` module exists.**
 
@@ -146,11 +180,13 @@ ProfileServiceDep = Annotated[ProfileService, Depends(get_profile_service)]
 
 
 __all__ = [
+    "PrivacySettingsEditorDep",
     "ProfileEditorDep",
     "ProfileServiceDep",
     "PublicProfileReaderDep",
     "RatingProviderDep",
     "StatisticsProviderDep",
+    "get_privacy_settings_editor",
     "get_profile_editor",
     "get_profile_service",
     "get_public_profile_reader",

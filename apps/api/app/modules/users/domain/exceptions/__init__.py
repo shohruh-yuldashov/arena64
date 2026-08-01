@@ -93,6 +93,31 @@ class InvalidCountryCode(ValidationError):
     """Not a two-letter ISO 3166-1 alpha-2 code."""
 
 
+class InvalidSearchTerm(ValidationError):
+    """The search term is empty, out of bounds, a wildcard attempt, or
+    carries nothing that could identify a player — A64-013.1.
+
+    Carries no `default_code`, so it lands on the platform's generic
+    `validation_error`. **Deliberate**: a distinct code per rejection reason
+    would let a caller enumerate the input filter itself, and every one of
+    these is the same answer to the client — *fix the term* — with a
+    message that already says which rule fired. See `domain/search.py` for
+    the rules and their ordering.
+    """
+
+
+class InvalidSearchCursor(ValidationError):
+    """The pagination cursor is malformed, or belongs to a different search
+    term — A64-013.1.
+
+    The second case is the one worth having a type for. A search cursor
+    encodes a *rank* computed against one particular term, so replaying it
+    against another term would resume at an offset that means nothing and
+    silently skip or repeat people. Rejecting is the only honest outcome,
+    and it is a client error rather than an empty page.
+    """
+
+
 class InvalidPreference(ValidationError):
     """A stored preference document holds a value this application cannot
     have written — A64-012.5.
@@ -119,6 +144,8 @@ __all__ = [
     "InvalidDisplayName",
     "InvalidEmail",
     "InvalidPreference",
+    "InvalidSearchCursor",
+    "InvalidSearchTerm",
     "InvalidLanguage",
     "InvalidTimezone",
     "InvalidUsername",

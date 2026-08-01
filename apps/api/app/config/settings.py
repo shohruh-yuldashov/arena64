@@ -746,6 +746,34 @@ class RateLimitSettings(BaseSettings):
     preferences_update_user_limit: int = Field(default=30, ge=1)
     preferences_update_window_seconds: int = Field(default=5 * 60, ge=1)
 
+    # --- GET /users/search ---------------------------------------------------
+    # **Per authenticated user**, which A64-013.1 specifies. The dimension is
+    # doing more work here than on the two settings endpoints above: those
+    # are writes only the account holder can reach, while this is a *read*
+    # whose abuse is enumeration — building a list of who is on the platform,
+    # a page at a time.
+    #
+    # Per-user is what makes that bounded rather than merely inconvenient. A
+    # per-IP limit is defeated by a botnet and punishes a shared campus
+    # connection; counting the account means an enumerator has to hold as
+    # many accounts as they want multiples of this budget, and registration
+    # is itself rate limited (3/hour per address).
+    #
+    # 30 per minute is chosen rather than given, and is set against the
+    # legitimate pattern rather than the abusive one: a person typing into a
+    # search box with a debounced client issues a handful of requests per
+    # name they look up, and a friend-adding session is a few names. Thirty
+    # absorbs an undebounced client typing a whole username character by
+    # character; it does not absorb a script.
+    #
+    # The window is deliberately short. A minute-long window with a modest
+    # limit refuses a burst quickly and forgives it quickly, which is the
+    # right shape for an interactive read — an hour-long window with the
+    # same rate would lock a legitimate user out for fifty-nine minutes over
+    # one stuck key.
+    search_user_limit: int = Field(default=30, ge=1)
+    search_window_seconds: int = Field(default=60, ge=1)
+
 
 class StatisticsSettings(BaseSettings):
     """`statistics` — the competitive-record projection (A64-012.6).

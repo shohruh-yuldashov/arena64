@@ -31,7 +31,20 @@ attack it would catch that the per-user rule does not — an attacker holding
 N stolen tokens already holds N compromised accounts, and rate limiting is
 not the control for that.
 
-## Why the guard is on the write and not the read
+## Why search is the one read that is limited
+
+Every other read on this module is unlimited, and A64-013.1 makes search
+the exception rather than reversing the rule. The difference is what an
+unbounded caller can *accumulate*: reading your own privacy settings a
+thousand times yields your own privacy settings, while reading search a
+thousand times yields a substantial fraction of the player directory.
+
+That is also why the limit is per user and the endpoint is authenticated at
+all. An anonymous search would make the enumeration free; behind a token,
+the budget is attached to something that costs an attacker a registration
+to obtain, and registration is itself limited.
+
+## Why the guard is on the write and not the read, elsewhere
 
 `GET /profile/privacy` is unlimited. It is a single indexed read of a row
 the caller already authenticated as, it changes nothing, and its output is
@@ -89,6 +102,19 @@ def build_rules(settings: RateLimitSettings) -> dict[str, tuple[RateLimitRule, .
                 window=timedelta(seconds=settings.preferences_update_window_seconds),
             ),
         ),
+        # A64-013.1. The first **read** on this module to carry a limit, and
+        # the reason is different from the two writes above: those are
+        # bounded because an unbounded authenticated write hammers a row,
+        # while this is bounded because an unbounded search *enumerates the
+        # platform*. See `RateLimitSettings.search_user_limit`.
+        "search": (
+            RateLimitRule(
+                name="user_search_user",
+                scope=RateLimitScope.USER,
+                limit=settings.search_user_limit,
+                window=timedelta(seconds=settings.search_window_seconds),
+            ),
+        ),
     }
 
 
@@ -111,6 +137,7 @@ def _guard(endpoint: str) -> RateLimit:
 #: `Depends(...)` — each has a wrapper below that resolves the principal.
 PRIVACY_UPDATE_RATE_LIMIT = _guard("privacy_update")
 PREFERENCES_UPDATE_RATE_LIMIT = _guard("preferences_update")
+SEARCH_RATE_LIMIT = _guard("search")
 
 
 async def _enforce(
@@ -165,6 +192,28 @@ async def enforce_privacy_update_limit(
     counting nothing, so the migration could not half-happen.
     """
     await _enforce(PRIVACY_UPDATE_RATE_LIMIT, request, response, user, limiter, settings)
+
+
+async def enforce_search_limit(
+    request: Request,
+    response: Response,
+    user: CurrentUser,
+    limiter: RateLimiterDep,
+    settings: RateLimitSettingsDep,
+) -> None:
+    """The `GET /users/search` guard, counting per account — A64-013.1.
+
+    A third wrapper for the reason the second exists: FastAPI identifies a
+    route dependency by the function object, so one shared parametrised
+    callable would make "is this route limited, and by which policy"
+    unanswerable from the decorator and untestable without sending requests.
+
+    `CurrentUser` resolving first is what makes the whole design work here
+    rather than merely being tidy: an unauthenticated search is refused with
+    a `401` before any allowance is spent, and — more to the point — before
+    the query runs. An enumerator without a token never reaches PostgreSQL.
+    """
+    await _enforce(SEARCH_RATE_LIMIT, request, response, user, limiter, settings)
 
 
 async def enforce_preferences_update_limit(

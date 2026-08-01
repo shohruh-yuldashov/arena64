@@ -21,6 +21,7 @@ incorrectly:
 """
 
 import copy
+from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
@@ -32,6 +33,7 @@ from app.modules.users.domain.exceptions import (
     UserNotFound,
 )
 from app.modules.users.domain.value_objects import Email, Username
+from app.modules.users.public.search import UserSearchQuery
 
 
 class FakeUserRepository:
@@ -41,6 +43,31 @@ class FakeUserRepository:
             self._users[user.id] = copy.deepcopy(user)
 
     # --- reads --------------------------------------------------------------
+
+    async def search(self, query: UserSearchQuery) -> tuple[Sequence[User], str | None]:
+        """**Deliberately not implemented**, and this is not a gap.
+
+        Unlike every other method on this fake, search cannot be usefully
+        reimplemented here. Its behaviour *is* PostgreSQL's: accent folding
+        by `unaccent`, case folding by `lower()`, substring matching by a
+        trigram index, and a four-bucket ranking expressed as SQL. A Python
+        version would agree with itself and with nothing else — and the
+        first thing it would get wrong is the folding, which
+        `fold_username`'s docstring already records `lower()` and `casefold()`
+        disagreeing about.
+
+        A fake that quietly diverged would be worse than none: application
+        tests would pass against a ranking the database does not implement.
+        So this raises, and search is covered end to end against real
+        PostgreSQL in `tests/contract/test_user_search_api.py`, with the
+        plan itself asserted in `test_user_search_repository.py`.
+
+        The same argument `tests/fakes/rate_limiter.py` makes about the
+        limiter's Lua script, applied to a query.
+        """
+        raise NotImplementedError(
+            "search is PostgreSQL's behaviour — see tests/contract/test_user_search_api.py"
+        )
 
     async def get_by_id(self, user_id: UUID) -> User | None:
         found = self._users.get(user_id)

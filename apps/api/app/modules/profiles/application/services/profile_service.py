@@ -2,13 +2,13 @@
 owner's own record.
 
 Orchestrates; does not compute (services.md §3.2). Identity comes from
-`users` through a published port, ratings and counts from two more, and
-`win_rate` is the domain's. What lives here is the sequencing and two
-decisions that are nowhere else: **who is visible**, and **what a missing
-player looks like**.
+`users` through a published port and the public view is assembled by
+`PublicProfileComposer`. What lives here is a username lookup and two
+decisions that are nowhere else: **what a missing player looks like**, and
+**what an account holder may see of themselves that a stranger may not**.
 
 Read-only. Opens no transaction — there is nothing to commit, and a unit
-of work around three reads would be ceremony that suggests otherwise.
+of work around a read would be ceremony that suggests otherwise.
 
 ## Deactivated accounts have no public profile
 
@@ -28,74 +28,54 @@ username nobody ever registered.
 Identical rather than merely similar matters. A distinct 403, or a 404 with
 a different message, would still answer the question.
 
-## Privacy is applied here, and the endpoint knows nothing about it
+## Privacy is applied by the composer, and nothing here knows about it
 
 A64-012.4 requires that "privacy filtering must happen inside the
 PublicProfileReader / mapper layer" and that "endpoints must not manually
-hide fields". This module is the second half of that, and the split with
-`users` follows ownership exactly:
+hide fields". The split with `users` follows ownership exactly:
 
-    country          `users` redacts it before it crosses the port. This
-                     module never sees a hidden one.
-    statistics       composed here, from a source `users` does not own —
-                     so `users` publishes the decision on
-                     `PublicUserProfile.visibility` and this service
-                     declines to fetch it.
+    country          `users` redacts it before it crosses the port. Nothing
+                     outside `users` ever sees a hidden one.
+    statistics       composed from a source `users` does not own — so
+                     `users` publishes the *decision* on
+                     `PublicUserProfile.visibility` and the composer
+                     declines to fetch the value.
     is_online        same shape, from `PresenceProvider` (A64-012.7).
     last_seen        same shape, from the same single read.
 
-By the time `ProfileResponse.of` runs there is nothing left to hide: a
-hidden statistic is already `None`, and the router does not receive a flag
-it could act on even if it wanted to. That is what makes "endpoints must
-not manually hide fields" structural rather than a rule somebody has to
-remember — see `presentation/router.py`, which has no privacy logic in it.
+**A64-013.1 moved the second half out of this class.** It used to live in
+`get_public_profile` as four lines that decided which flag gated which
+field; it now lives in `PublicProfileComposer`, because user search became a
+second path producing the same view and a privacy gate with two
+implementations is a privacy gate that eventually disagrees with itself.
 
-## Presence is two flags over one read
+By the time `ProfileResponse.of` runs there is still nothing left to hide,
+and the router still receives no flag it could act on. What changed is that
+there is now exactly one place to look for the rule rather than one place
+per endpoint.
 
-`show_online_status` and `show_last_seen` govern different fields of the
-same record and have different defaults — the second is the only privacy
-flag on the platform that is off out of the box, because "online now" is
-momentary while a published `last_seen` is a sleep schedule.
+## Why identity is resolved before anything else
 
-So presence is fetched when *either* flag is on and each field is gated
-separately afterwards, rather than fetched per field. Two reads of the same
-key to answer one question would be a round trip spent to reach the same
-answer, and the alternative — one flag governing both — would either publish
-a timestamp for a player who only agreed to an indicator, or withhold the
-indicator from the great majority of accounts that run on the defaults.
+Identity is fetched first and the composition runs only if it resolved.
+That ordering is not incidental: composing a profile for a username that
+does not exist would be work done on behalf of a scraper, and on the
+platform's most enumerable endpoint the cheapest possible rejection is the
+right one.
 
-When both are off, nothing is fetched at all. That is the statistics rule
-applied again: a value never loaded cannot be leaked by a later mapper that
-forgets a flag, and it means the platform does no work at all on behalf of a
-player who opted out.
+What the composition then costs, and in what order, is
+`PublicProfileComposer`'s business rather than this module's.
 
-## Why the three reads are sequential rather than concurrent
-
-Identity is fetched first and the other two only if it resolved. That
-ordering is not incidental: fetching ratings for a username that does not
-exist would be work done on behalf of a scraper, and on the platform's most
-enumerable endpoint the cheapest possible rejection is the right one.
-
-The two remaining reads are independent and could run concurrently with
-`asyncio.gather`. They do not, today, because both are in-process constants
-— gathering them would add a scheduling round trip to save nothing. When
-either becomes a real network read this is the place that changes, and the
-comment at the call site says so.
 """
 
 import logging
 from uuid import UUID
 
-from app.modules.profiles.application.ports import RatingProvider, StatisticsProvider
+from app.modules.profiles.application.ports import StatisticsProvider
+from app.modules.profiles.application.services.profile_composer import PublicProfileComposer
 from app.modules.profiles.domain.exceptions import ProfileNotFound
 from app.modules.profiles.domain.profile import PublicProfile
 from app.modules.statistics.public import PlayerStatistics
-from app.modules.users.public import (
-    Presence,
-    PresenceProvider,
-    ProfileVisibility,
-    PublicProfileReader,
-)
+from app.modules.users.public import Presence, PresenceProvider, PublicProfileReader
 
 logger = logging.getLogger(__name__)
 
@@ -107,21 +87,29 @@ class ProfileService:
         self,
         *,
         profiles: PublicProfileReader,
-        ratings: RatingProvider,
+        composer: PublicProfileComposer,
         statistics: StatisticsProvider,
         presence: PresenceProvider,
     ) -> None:
         self._profiles = profiles
-        self._ratings = ratings
+        # Composition and every privacy gate. A64-013.1 replaced the three
+        # providers this service used to hold with the one object that
+        # already holds them, because search needs the identical
+        # composition and two copies of a privacy gate is one copy too
+        # many. This service is left with what is genuinely its own: the
+        # username lookup, and the two decisions in this module's docstring.
+        self._composer = composer
+        # Kept **beside** the composer rather than reached through it,
+        # because the two owner-only reads below are not compositions: they
+        # deliberately bypass every privacy flag, which is the one thing the
+        # composer must never do. Routing them through it would mean giving
+        # it an "ignore privacy" mode, and a gate with a bypass is not a
+        # gate.
         self._statistics = statistics
         # The **reader**, never `PresenceRecorder`. The two are separate
         # published ports precisely so that the module behind the platform's
         # only anonymous endpoint cannot assert that somebody is online, and
         # this attribute is where that would otherwise stop being true.
-        #
-        # Typed as the port, so nothing here can learn that Redis is
-        # involved: this service cannot name a key, cannot reach a client and
-        # cannot tell `RedisPresenceProvider` from `NoPresenceProvider`.
         self._presence = presence
 
     async def get_public_profile(self, username: str) -> PublicProfile:
@@ -149,82 +137,17 @@ class ProfileService:
             logger.info("profile_lookup_missed")
             raise ProfileNotFound(_GENERIC_REJECTION)
 
-        visibility = identity.visibility
-
-        # Both reads are in-process today. When either becomes a network
-        # call, this is where `asyncio.gather` belongs — they are
-        # independent of each other and both depend only on the id.
-        ratings = await self._ratings.ratings_for(identity.id)
-
-        # **Not fetched at all when hidden**, rather than fetched and
-        # discarded. Two reasons, and the second is the one that lasts: a
-        # value that is never loaded cannot be leaked by a later mapper
-        # that forgets the flag, and once `statistics` is a real service
-        # this is a cross-context read skipped entirely for every player
-        # who opted out.
-        statistics = (
-            await self._statistics.statistics_for(identity.id) if visibility.statistics else None
-        )
-
-        presence = await self._visible_presence(identity.id, visibility)
-
         # The player id, never the username. An id joins to everything for
         # anyone entitled to see it, and keeps a permanent access record
         # from being a searchable index of who looked at whom
         # (services.md §8.5).
         logger.info("profile_lookup_succeeded", extra={"user_id": str(identity.id)})
 
-        return PublicProfile(
-            identity=identity,
-            ratings=ratings,
-            statistics=statistics,
-            # Each field gated by its own flag, from the one read above. A
-            # player showing an indicator but not a timestamp — which is what
-            # the platform defaults produce — gets `is_online` and a `None`
-            # `last_seen`, and nothing in the response says which of the four
-            # reasons for that `None` applies.
-            last_seen=presence.last_seen if presence and visibility.last_seen else None,
-            is_online=presence.is_online if presence and visibility.online_status else None,
-        )
-
-    async def _visible_presence(
-        self, player_id: UUID, visibility: ProfileVisibility
-    ) -> Presence | None:
-        """The presence record, or `None` when there is nothing to show.
-
-        **Not fetched at all when both flags are off**, rather than fetched
-        and discarded — the rule the statistics read above follows, for the
-        same two reasons. A value that is never loaded cannot be leaked by a
-        later mapper that forgets a flag, and the platform does no work on
-        behalf of a player who opted out of both.
-
-        Returns the whole record rather than a pre-gated pair, because the
-        two fields have independent flags and the caller is the one place
-        that holds both. Splitting the gate across two helpers would be two
-        reads of one key.
-        """
-        if not (visibility.online_status or visibility.last_seen):
-            # DEBUG: this fires on every profile read for every account with
-            # presence hidden, which the defaults make a substantial share of
-            # them. Diagnostic detail, off in production (CLAUDE.md §8.2) —
-            # the alertable presence conditions are the provider's
-            # `presence_unavailable` and the composition root's fallback
-            # warning, neither of which is this.
-            logger.debug("presence_lookup_skipped", extra={"user_id": str(player_id)})
-            return None
-
-        presence = await self._presence.presence_for(player_id)
-
-        # No `is_online` value and no timestamp — only whether there was
-        # anything to report. Presence is behind a privacy flag, and a log
-        # line recording who was online when is the behavioural history that
-        # flag exists to withhold, in a system with broader read access and
-        # different retention than the store it came from (services.md §8.5).
-        logger.debug(
-            "presence_lookup",
-            extra={"user_id": str(player_id), "observed": presence is not None},
-        )
-        return presence
+        # **Composition, including every privacy gate, lives in the
+        # composer.** A64-013.1 moved it there when user search became a
+        # second path that has to produce the same view — see
+        # `PublicProfileComposer` on why the gate has exactly one home.
+        return await self._composer.compose(identity)
 
     async def get_own_statistics(self, player_id: UUID) -> PlayerStatistics:
         """The account holder's own record — **never redacted.**

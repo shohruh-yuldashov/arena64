@@ -46,6 +46,7 @@ could not be computed would convert a cosmetic defect (system-design.md
 import asyncio
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -136,6 +137,59 @@ class RedisPresenceProvider:
             return None
 
         return self._decode(raw, player_id)
+
+    async def presence_for_many(self, player_ids: Sequence[UUID]) -> Mapping[UUID, Presence]:
+        """A page of players in one `MGET` — A64-013.1.
+
+        The read `presence_for` does, for many keys, in one round trip.
+        Twenty search results rendered through `presence_for` would be
+        twenty round trips to draw an indicator (CLAUDE.md §10.4).
+
+        `MGET` rather than a pipeline of `GET`s: it is a single command
+        Redis answers atomically per key, it is one network turnaround
+        regardless of page size, and — the part that matters on a cluster —
+        it is the shape a future hash-tagged keyspace can keep working with.
+
+        Absent, expired and undecodable keys are simply **not in the
+        result**. `MGET` returns a positionally aligned array with `None`
+        for a missing key, and the zip below drops those, so a caller's
+        `.get(id)` yields the same `None` `presence_for` would.
+
+        Never raises, exactly as the single read does not. A whole page
+        degrades to unknown together rather than one search failing.
+        """
+        if not player_ids:
+            # No command at all for an empty page — the ordinary outcome of
+            # a search nobody matched, and a zero-key `MGET` is a round trip
+            # that can only return nothing.
+            return {}
+
+        keys = [presence_key(player_id) for player_id in player_ids]
+        try:
+            raw_values = await asyncio.wait_for(
+                self._redis.mget(keys),
+                timeout=self._settings.redis_timeout_ms / 1000,
+            )
+        except Exception as error:  # noqa: BLE001 — every failure is one outcome here
+            # WARNING, and **one line for the whole page** rather than one
+            # per player: a failing Redis would otherwise emit twenty
+            # identical records per search and bury the incident in its own
+            # noise (CLAUDE.md §8.8). The count is the useful part.
+            logger.warning(
+                "presence_unavailable",
+                extra={"player_count": len(keys), "error": type(error).__name__},
+                exc_info=error,
+            )
+            return {}
+
+        found: dict[UUID, Presence] = {}
+        for player_id, raw in zip(player_ids, raw_values, strict=True):
+            if raw is None:
+                continue
+            presence = self._decode(raw, player_id)
+            if presence is not None:
+                found[player_id] = presence
+        return found
 
     async def record_presence(
         self,
@@ -279,6 +333,15 @@ class NoPresenceProvider:
 
     async def presence_for(self, player_id: UUID) -> Presence | None:
         return None
+
+    async def presence_for_many(self, player_ids: Sequence[UUID]) -> Mapping[UUID, Presence]:
+        """An empty mapping — nobody is observed, so nobody has an entry.
+
+        The same answer the Redis adapter gives for a page of players whose
+        windows have all expired, which is what keeps this a legitimate
+        degradation rather than a special case a client has to know about.
+        """
+        return {}
 
     async def record_presence(
         self,

@@ -25,6 +25,7 @@ serving the platform's highest-volume anonymous read cannot mark anybody
 online.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
@@ -41,6 +42,7 @@ from app.modules.users.public.dtos import (
     PublicUserProfile,
     UserRead,
 )
+from app.modules.users.public.search import UserSearchPage, UserSearchQuery
 
 
 class NewUserAccount(Protocol):
@@ -591,6 +593,61 @@ class PreferencesEditor(Protocol):
         ...
 
 
+class PublicProfileSearcher(Protocol):
+    """Finds players by username or display name — A64-013.1.
+
+    The thirteenth narrow port, and the second read path by which a caller
+    obtains a `PublicUserProfile`. It returns **exactly the type
+    `PublicProfileReader` returns**, which is the whole design rather than a
+    convenience: A64-013.1 requires that "search results use the same public
+    representation as profile pages", and sharing the DTO is the form of
+    that requirement which cannot be undone downstream.
+
+    A second, search-shaped identity type would be a second place every
+    privacy rule has to be applied — `show_country` is applied by
+    `to_public_profile` before either port returns, and a parallel mapper
+    would eventually forget it.
+
+    ## What this port refuses to do
+
+    **It does not compose.** No statistics, no presence, no ratings: those
+    come from contexts `users` does not own, and this port publishes the
+    same `visibility` flags `PublicProfileReader` does so the consumer can
+    apply them. `profiles` composes both paths through one code path — see
+    `PublicProfileComposer`.
+
+    **It does not rank by anything a caller supplies.** The ordering is
+    fixed (exact username, then username prefix, then display-name prefix,
+    then partial) and is not a parameter. A client-supplied sort over a
+    partial-match query is a way to ask "who exists" from several angles,
+    which is the enumeration this endpoint is rate limited against.
+
+    **It never returns a deactivated account**, exactly as
+    `PublicProfileReader.find_public_profile` never does, and for the same
+    reason: `users` owns `is_active`, and which handles belong to withdrawn
+    accounts is itself a disclosure.
+    """
+
+    async def search_public_profiles(self, query: UserSearchQuery) -> UserSearchPage:
+        """One page of matches, ranked and keyset-paginated.
+
+        Returns an **empty page** for a term nobody matches — never raising,
+        and never distinguishable from a term that matched only people the
+        caller may not see. A 404 here would answer "does anybody called
+        this exist", which is the question an enumeration probe asks.
+
+        Raises `InvalidSearchTerm` when the term fails the rules in
+        `users.domain.search`, and `InvalidSearchCursor` when the cursor is
+        malformed or was issued for a different term. Both are `422`.
+
+        **Case-insensitive and accent-insensitive**, to the extent the
+        database supports it: matching is on a normalised form of both
+        sides, and the normalisation is PostgreSQL's own so the term and
+        the column can never drift apart.
+        """
+        ...
+
+
 class PresenceProvider(Protocol):
     """Reads whether a player is here right now — A64-012.7.
 
@@ -649,6 +706,37 @@ class PresenceProvider(Protocol):
 
         Takes a `UUID` — DM-06's `player_id`. Deliberately not a username or
         a profile: a presence store has no business receiving a display name.
+        """
+        ...
+
+    async def presence_for_many(self, player_ids: Sequence[UUID]) -> Mapping[UUID, Presence]:
+        """The same answer for a page of players, in **one** round trip.
+
+        Added by A64-013.1, which is the first caller that renders more than
+        one player at a time. Calling `presence_for` in a loop over twenty
+        search results is twenty round trips to render an indicator, which
+        is exactly the N+1 access pattern CLAUDE.md §10.4 names as "the
+        single most common cause of slow endpoints" — and it would arrive
+        again with friend lists, match cards and leaderboards.
+
+        **Absence is omission, not a `None` value.** The returned mapping
+        contains an entry only for players with something to report, so a
+        caller writes `presence.get(player_id)` and gets the same `None`
+        that `presence_for` returns for an unobserved player. A mapping
+        padded with explicit `None`s would carry the same information in a
+        shape that invites `presence[player_id]` to raise on the ordinary
+        case.
+
+        **Never raises**, and degrades to an empty mapping — the promise
+        `presence_for` makes, applied to a page. A search that failed
+        because an online indicator could not be computed would be a far
+        worse outcome than one that renders without it.
+
+        An empty `player_ids` returns an empty mapping without touching the
+        store. That is not a special case for its own sake: an empty page is
+        the ordinary result of a search nobody matches, and issuing a
+        zero-key `MGET` to learn nothing is a round trip spent on the most
+        common failed query.
         """
         ...
 

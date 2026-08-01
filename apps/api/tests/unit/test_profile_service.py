@@ -27,6 +27,7 @@ production. Substituting a provider would leave the composition untested,
 which is the one thing this file exists to test.
 """
 
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Self, cast
@@ -38,6 +39,7 @@ from redis.asyncio import Redis
 from app.config.settings import PresenceSettings
 from app.core.enums import Locale
 from app.modules.profiles.application.services import ProfileService
+from app.modules.profiles.application.services.profile_composer import PublicProfileComposer
 from app.modules.profiles.domain.exceptions import ProfileNotFound
 from app.modules.profiles.domain.ratings import STARTING_RATING, PlayerRatings, RatingCategory
 from app.modules.profiles.infrastructure import (
@@ -57,7 +59,7 @@ from app.modules.users.domain.value_objects import (
     Username,
 )
 from app.modules.users.infrastructure.presence import RedisPresenceProvider
-from app.modules.users.public import PresenceProvider
+from app.modules.users.public import Presence, PresenceProvider
 from tests.fakes.presence_redis import FakePresenceRedis, MovableClock
 from tests.fakes.user_repository import FakeUserRepository
 
@@ -154,10 +156,18 @@ def build_service(accounts: list[User], presence: PresenceProvider) -> ProfileSe
         unit_of_work=_NullUnitOfWork(),
         clock=_FixedClock(),
     )
+    statistics = NoMatchesStatisticsProvider()
     return ProfileService(
         profiles=PublicProfileService(users),
-        ratings=UnratedRatingProvider(),
-        statistics=NoMatchesStatisticsProvider(),
+        # The real composer over the real providers — A64-013.1 moved the
+        # privacy gate there, and substituting it would leave the thing
+        # these tests exist to assert untested.
+        composer=PublicProfileComposer(
+            ratings=UnratedRatingProvider(),
+            statistics=statistics,
+            presence=presence,
+        ),
+        statistics=statistics,
         presence=presence,
     )
 
@@ -459,6 +469,11 @@ class _ExplodingPresenceProvider:
 
     async def presence_for(self, player_id: UUID) -> None:
         raise AssertionError("presence must not be read for a player who has hidden both fields")
+
+    async def presence_for_many(self, player_ids: Sequence[UUID]) -> Mapping[UUID, Presence]:
+        """The batch half of the same trap — the composer must not consult
+        presence for a page whose every member has hidden it either."""
+        raise AssertionError("presence must not be read for players who have hidden both fields")
 
 
 class TestWinRate:

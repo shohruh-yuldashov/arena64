@@ -120,6 +120,24 @@ OPENAPI_TAGS: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "search",
+        "description": (
+            "Finding players by handle or display name — the entry point to everything "
+            "social.\n\n"
+            "**The one profile read that requires a token.** Every other public view of "
+            "a player is anonymous: if you know a handle, you can read that profile "
+            "signed out. Discovering handles you do not know is different, and is what "
+            "this endpoint is, so it sits behind authentication and a per-account rate "
+            "limit — which together make building a directory cost an attacker a "
+            "registration per budget.\n\n"
+            "Results are the **same** representation `GET /profiles/{username}` "
+            "returns, field for field, including every privacy behaviour: a hidden "
+            "country, record or presence is `null` here exactly as it is there, and a "
+            "`null` never says which of its reasons applies. Deactivated accounts "
+            "appear at no rank under any term."
+        ),
+    },
+    {
         "name": "avatars",
         "description": (
             "Self-service avatar management for the authenticated account. Every "

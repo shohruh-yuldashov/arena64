@@ -19,10 +19,26 @@ assigns here explicitly:
 """
 
 import logging
+from collections.abc import Sequence
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, Select, exists, select, update
+from sqlalchemy import (
+    CursorResult,
+    Select,
+    Text,
+    case,
+    exists,
+    func,
+    literal,
+    or_,
+    select,
+    tuple_,
+    update,
+)
+from sqlalchemy import (
+    cast as sql_cast,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +55,7 @@ from app.modules.users.domain.preferences import (
     Preferences,
 )
 from app.modules.users.domain.privacy import PrivacySettings
+from app.modules.users.domain.search import SearchTerm
 from app.modules.users.domain.value_objects import (
     Bio,
     CountryCode,
@@ -48,6 +65,8 @@ from app.modules.users.domain.value_objects import (
     Username,
 )
 from app.modules.users.infrastructure.models import UserModel
+from app.modules.users.infrastructure.search_cursor import SearchCursor
+from app.modules.users.public.search import UserSearchQuery
 from app.repositories.pagination import paginate_cursor
 
 logger = logging.getLogger(__name__)
@@ -61,6 +80,34 @@ _CONSTRAINT_ERRORS: dict[str, type[UsernameAlreadyExists | EmailAlreadyExists]] 
     "uq_user__username_folded": UsernameAlreadyExists,
     "uq_user__email": EmailAlreadyExists,
 }
+
+
+#: The four ranking buckets, smallest first — `ORDER BY` is ascending, so a
+#: lower number sorts earlier. Named constants rather than bare integers in
+#: the `CASE` because the numbers also travel in the pagination cursor, and
+#: a magic `2` in two files is a magic `2` somebody renumbers in one of them.
+_RANK_EXACT_USERNAME = 0
+_RANK_USERNAME_PREFIX = 1
+_RANK_DISPLAY_NAME_PREFIX = 2
+_RANK_PARTIAL = 3
+
+
+def _search_normalise(expression: Any) -> Any:
+    """`users.search_normalise(x)` — the one normalisation both the indexes
+    and the query are built on.
+
+    A helper rather than four inline `func` calls, so that the expression
+    the GIN indexes were created on is written **once** on this side too.
+    The indexes and these calls must render identically or PostgreSQL plans
+    a sequential scan, which fails no test that is not looking for it —
+    hence `test_user_search_repository.py`'s plan assertion.
+
+    Typed as `Text` explicitly. Without it SQLAlchemy treats the result as
+    untyped and `func.concat` composes it into something PostgreSQL rejects
+    as `unknown`; with it, the `LIKE` and `||` below are unambiguously
+    string operations.
+    """
+    return func.users.search_normalise(expression, type_=Text)
 
 
 class SqlAlchemyUserRepository:
@@ -274,6 +321,170 @@ class SqlAlchemyUserRepository:
             id_column=UserModel.id,
         )
         return [self._to_domain(row) for row in rows], page
+
+    async def search(self, query: UserSearchQuery) -> tuple[Sequence[User], str | None]:
+        """Ranked, keyset-paginated search over username and display name —
+        A64-013.1.
+
+        ## One normalisation, applied three times
+
+        `users.search_normalise(text)` — created by migration `a7c31f5d9e04`
+        — is `unaccent(lower(normalize(x, NFKC)))` behind an `IMMUTABLE`
+        wrapper. It is applied to the username, to the display name, and to
+        the term, and **the two GIN indexes are built on exactly these
+        expressions**.
+
+        That is the whole reason the term is not normalised in Python.
+        Matching requires both sides to agree character-for-character, and
+        two implementations in two languages drift — `fold_username`'s
+        docstring records that PostgreSQL's `lower()` and Python's
+        `casefold()` already disagree about `ß`. A drift here would not
+        raise; it would silently return nothing for the affected characters,
+        and nobody reports a search that found no one. One function, called
+        from one place, cannot drift.
+
+        The index expressions must match these calls exactly or PostgreSQL
+        will plan a sequential scan — a silent performance regression rather
+        than an error. `tests/contract/test_user_search_repository.py`
+        asserts the plan, which is the only way to catch it.
+
+        ## The ranking
+
+            0  exact username
+            1  username prefix
+            2  display-name prefix
+            3  partial match anywhere
+
+        `ORDER BY rank, username_folded, id`. Deterministic for a given
+        term and dataset, which is what "stable ordering" requires and what
+        the cursor depends on: `username_folded` is unique platform-wide, so
+        the ordering is total before `id` is even considered.
+
+        The `CASE` is evaluated twice — once to order, once inside the
+        keyset predicate — because PostgreSQL cannot reference a `SELECT`
+        alias in `WHERE`. The alternative is a subquery or CTE wrapping the
+        ORM entity, which costs an `aliased()` indirection through the whole
+        mapping for an expression the planner computes on rows it has
+        already fetched.
+
+        ## Why `LIKE` and not full-text search
+
+        `to_tsvector` matches *words*, and a handle is not a word: nobody
+        searching for `alic` expects to miss `alice`, and a tsquery prefix
+        match cannot find `ice` inside it at all. Trigram similarity over
+        `LIKE` is the shape that answers what a person typing into a search
+        box means, and pg_trgm's GIN operator class makes `LIKE '%x%'`
+        index-accelerated rather than the scan it is without one.
+
+        The honest cost: at the two-character minimum a trigram index has
+        one trigram to work with and its selectivity is poor, so short terms
+        do more work than long ones. That is bounded by the rate limit and
+        by the page size rather than by the query, and it is why the minimum
+        is two rather than one.
+
+        Returns the page's rows and the cursor for the next page, or `None`
+        when this is the last one. A `Sequence` rather than a `list`, and
+        not only because `list` is shadowed by the method above: callers
+        iterate the page in rank order and must not reorder it in place.
+
+        Raises `InvalidSearchCursor` for a cursor that is malformed or was
+        issued for a different term.
+        """
+        statement = self.build_search_statement(query)
+
+        rows = (await self._session.execute(statement)).all()
+
+        has_more = len(rows) > query.limit
+        page = rows[: query.limit]
+
+        next_cursor: str | None = None
+        if has_more and page:
+            last_row, last_rank = page[-1]
+            next_cursor = SearchCursor(
+                rank=last_rank,
+                username_folded=last_row.username_folded,
+                player_id=last_row.id,
+            ).encode(term=SearchTerm.parse(query.term).value)
+
+        return [self._to_domain(row) for row, _ in page], next_cursor
+
+    def build_search_statement(self, query: UserSearchQuery) -> Select[tuple[UserModel, int]]:
+        """The search statement, built but not executed.
+
+        Separated from `search` above so that
+        `tests/contract/test_user_search_repository.py` can `EXPLAIN` the
+        **real** query rather than a hand-written copy of it. That matters
+        more than it sounds: the failure that test exists to catch is the
+        repository's expression drifting away from the index's, and a test
+        holding its own copy of the SQL could not catch it — the copy would
+        drift with the index and agree with nothing.
+
+        Public rather than underscore-prefixed for the same reason. It is
+        part of what this adapter offers its own contract suite, and a
+        leading underscore would be a claim that reaching for it is a
+        violation when it is the point.
+        """
+        term = SearchTerm.parse(query.term)
+
+        username_key = _search_normalise(UserModel.username)
+        display_key = _search_normalise(UserModel.display_name)
+        # The exact-match form and the `LIKE` form are separate binds and
+        # must be: `pattern` carries backslashes in front of every `LIKE`
+        # metacharacter, so comparing it with `=` would never match a
+        # username containing an underscore — which is most of them.
+        term_value = _search_normalise(literal(term.value))
+        term_pattern = _search_normalise(literal(term.pattern))
+
+        contains = func.concat("%", term_pattern, "%")
+        starts_with = func.concat(term_pattern, "%")
+
+        rank = case(
+            (username_key == term_value, _RANK_EXACT_USERNAME),
+            (username_key.like(starts_with, escape="\\"), _RANK_USERNAME_PREFIX),
+            (display_key.like(starts_with, escape="\\"), _RANK_DISPLAY_NAME_PREFIX),
+            else_=_RANK_PARTIAL,
+        )
+
+        statement = (
+            select(UserModel, rank.label("search_rank"))
+            .where(
+                # Deactivated accounts are invisible here exactly as they
+                # are on `GET /profiles/{username}` — `users` owns
+                # `is_active`, and which handles belong to withdrawn
+                # accounts is itself a disclosure.
+                UserModel.is_active.is_(True),
+                or_(
+                    username_key.like(contains, escape="\\"),
+                    display_key.like(contains, escape="\\"),
+                ),
+            )
+            .order_by(rank, UserModel.username_folded, UserModel.id)
+            # Over-fetch by one to learn whether a further page exists
+            # without a second count — RP-03's reason, and here also
+            # because counting a `LIKE` match gets slower the more it
+            # matches.
+            .limit(query.limit + 1)
+        )
+
+        if query.exclude_player_ids:
+            # The blocking seam. Non-empty on every request today because
+            # the searcher never appears in their own results, so this
+            # branch is exercised rather than reserved — see
+            # `UserSearchQuery.exclude_player_ids`.
+            statement = statement.where(UserModel.id.notin_(query.exclude_player_ids))
+
+        if query.cursor is not None:
+            cursor = SearchCursor.decode(query.cursor, term=term.value)
+            statement = statement.where(
+                tuple_(rank, UserModel.username_folded, UserModel.id)
+                > tuple_(
+                    literal(cursor.rank),
+                    literal(cursor.username_folded),
+                    sql_cast(literal(cursor.player_id), UserModel.id.type),
+                )
+            )
+
+        return statement
 
     # --- writes -------------------------------------------------------------
 

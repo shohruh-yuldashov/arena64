@@ -27,6 +27,13 @@ What is published, and why only this much:
                          else — not even read one (A64-011.7)
   `PublicProfileReader`  reads the view a *stranger* may see, by username
                          (A64-012.1)
+  `PublicProfileSearcher` finds players by username or display name
+                         (A64-013.1), returning the *same* type — which is
+                         what makes search results and profile pages one
+                         representation rather than two
+  `UserSearchQuery`      that port's input, including the exclusion set
+                         blocking will fill
+  `UserSearchPage`       that port's output: ranked identities and a cursor
   `AvatarStore`          reads and writes the avatar *reference* — never
                          image data (A64-012.2)
   `ProfileEditor`        reads and updates the owner's own editable
@@ -140,10 +147,12 @@ from app.modules.users.public.ports import (
     PrivacySettingsEditor,
     ProfileEditor,
     PublicProfileReader,
+    PublicProfileSearcher,
     UserAccountCreator,
     UserCredentialStore,
     UserProfileReader,
 )
+from app.modules.users.public.search import UserSearchPage, UserSearchQuery
 
 # The cross-context player identifier. An alias rather than a `NewType`
 # because it crosses a JSON boundary in both directions and every consumer
@@ -190,7 +199,10 @@ __all__ = [
     "PrivacySettingsView",
     "ProfileVisibility",
     "PublicProfileReader",
+    "PublicProfileSearcher",
     "PublicUserProfile",
+    "UserSearchPage",
+    "UserSearchQuery",
     "UserAccountCreator",
     "UserCredentialStore",
     "UserCredentials",

@@ -45,6 +45,7 @@ a genuinely new player. It is a degradation, not a transparent one, and the
 """
 
 import logging
+from collections.abc import Mapping, Sequence
 from uuid import UUID
 
 from app.modules.statistics.public import NO_MATCHES_PLAYED, PlayerStatistics, StatisticsReader
@@ -99,6 +100,17 @@ class DatabaseStatisticsProvider:
         """
         return await self._statistics.for_player(player_id)
 
+    async def statistics_for_many(
+        self, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, PlayerStatistics]:
+        """A page of stored records, delegating the batch straight through.
+
+        Three lines again, and the seam earns its place for the reason the
+        single read's does: `NoMatchesStatisticsProvider` below satisfies
+        this without depending on `statistics` at all, which a fallback must.
+        """
+        return await self._statistics.for_players(player_ids)
+
 
 class NoMatchesStatisticsProvider:
     """Every player has finished no matches — the fallback.
@@ -122,3 +134,15 @@ class NoMatchesStatisticsProvider:
 
     async def statistics_for(self, player_id: UUID) -> PlayerStatistics:
         return NO_MATCHES_PLAYED
+
+    async def statistics_for_many(
+        self, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, PlayerStatistics]:
+        """The empty record for everyone asked about.
+
+        Complete rather than empty, matching `StatisticsService.for_players`:
+        a caller indexing this mapping must not have to know which provider
+        it was handed. Sharing the frozen singleton across every entry is
+        safe because `PlayerStatistics` is immutable.
+        """
+        return dict.fromkeys(player_ids, NO_MATCHES_PLAYED)

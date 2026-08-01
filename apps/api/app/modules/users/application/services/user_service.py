@@ -23,6 +23,7 @@ service as an opaque string it never inspects.
 """
 
 import logging
+from collections.abc import Sequence
 from dataclasses import replace
 from uuid import UUID
 
@@ -52,6 +53,7 @@ from app.modules.users.domain.value_objects import (
     Timezone,
     Username,
 )
+from app.modules.users.public.search import UserSearchQuery
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +126,18 @@ class UserService:
     ) -> tuple[list[User], CursorPageInfo]:
         """Read-only: opens no transaction. Keyset-paginated (RP-03)."""
         return await self._users.list(params, is_active=is_active)
+
+    async def search_users(self, query: UserSearchQuery) -> tuple[Sequence[User], str | None]:
+        """Ranked search over username and display name — A64-013.1.
+
+        Read-only: opens no transaction. Delegates entirely, and the absence
+        of anything else in this method is the design — ranking is the
+        query's (it is expressed in SQL, over indexes built for it), term
+        validation is the domain's (`SearchTerm`), and exclusion is the
+        caller's. There is no rule left for a service to enforce, and adding
+        one here would put half the search in Python and half in PostgreSQL.
+        """
+        return await self._users.search(query)
 
     # --- creation -----------------------------------------------------------
 

@@ -61,6 +61,8 @@ from app.api.deps import (
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.profiles.application.ports import RatingProvider, StatisticsProvider
 from app.modules.profiles.application.services import ProfileService
+from app.modules.profiles.application.services.profile_composer import PublicProfileComposer
+from app.modules.profiles.application.services.profile_search_service import ProfileSearchService
 from app.modules.profiles.infrastructure import (
     DatabaseStatisticsProvider,
     NoMatchesStatisticsProvider,
@@ -74,6 +76,9 @@ from app.modules.users.application.services.privacy_settings_service import (
     PrivacySettingsService,
 )
 from app.modules.users.application.services.profile_editing_service import ProfileEditingService
+from app.modules.users.application.services.public_profile_search_service import (
+    PublicProfileSearchService,
+)
 from app.modules.users.application.services.public_profile_service import PublicProfileService
 from app.modules.users.infrastructure.presence import (
     NoPresenceProvider,
@@ -86,6 +91,7 @@ from app.modules.users.public import (
     PrivacySettingsEditor,
     ProfileEditor,
     PublicProfileReader,
+    PublicProfileSearcher,
 )
 
 logger = logging.getLogger(__name__)
@@ -309,9 +315,51 @@ def get_presence_provider(
 PresenceProviderDep = Annotated[PresenceProvider, Depends(get_presence_provider)]
 
 
+def get_profile_composer(
+    ratings: RatingProviderDep,
+    statistics: StatisticsProviderDep,
+    presence: PresenceProviderDep,
+) -> PublicProfileComposer:
+    """The public view, assembled from three sources with privacy applied —
+    A64-013.1.
+
+    Built once per request and shared by both read paths, which is the
+    point: `GET /profiles/{username}` and `GET /users/search` are handed the
+    *same object*, so there is no arrangement of dependencies in which one
+    of them could be composed differently from the other.
+    """
+    return PublicProfileComposer(ratings=ratings, statistics=statistics, presence=presence)
+
+
+ProfileComposerDep = Annotated[PublicProfileComposer, Depends(get_profile_composer)]
+
+
+def get_public_profile_searcher(session: DbSessionDep, clock: ClockDep) -> PublicProfileSearcher:
+    """`users`' side of the player search, behind its thirteenth published
+    port — A64-013.1.
+
+    Assembled separately from `get_public_profile_reader` above even though
+    both read public profiles and both return the same DTO, for the reason
+    every port pair on this platform is separate: what differs is the
+    *capability*. That one resolves a handle a caller already has; this one
+    enumerates handles a caller does not. They are the same data and very
+    different authority, which is why only this one sits behind
+    authentication and a rate limit.
+    """
+    users = UserService(
+        users=SqlAlchemyUserRepository(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )
+    return PublicProfileSearchService(users)
+
+
+PublicProfileSearcherDep = Annotated[PublicProfileSearcher, Depends(get_public_profile_searcher)]
+
+
 def get_profile_service(
     profiles: PublicProfileReaderDep,
-    ratings: RatingProviderDep,
+    composer: ProfileComposerDep,
     statistics: StatisticsProviderDep,
     presence: PresenceProviderDep,
 ) -> ProfileService:
@@ -321,13 +369,35 @@ def get_profile_service(
     inline, so this factory cannot accidentally construct a second
     `UserService` on a different session — the mistake `auth`'s
     `get_password_reset_service` documents at length.
+
+    The two providers arrive *beside* the composer rather than only inside
+    it because `ProfileService` serves two owner-only reads that bypass
+    privacy entirely — see its constructor on why those must not go through
+    a gate that exists to apply it.
     """
     return ProfileService(
         profiles=profiles,
-        ratings=ratings,
+        composer=composer,
         statistics=statistics,
         presence=presence,
     )
+
+
+def get_profile_search_service(
+    searcher: PublicProfileSearcherDep,
+    composer: ProfileComposerDep,
+) -> ProfileSearchService:
+    """The search use case — A64-013.1.
+
+    Two collaborators and no providers of its own. Everything about
+    *rendering* a player is the composer's, and everything about *finding*
+    one is the searcher's; this service holds the exclusion set and the
+    logging contract and nothing else.
+    """
+    return ProfileSearchService(searcher=searcher, composer=composer)
+
+
+ProfileSearchServiceDep = Annotated[ProfileSearchService, Depends(get_profile_search_service)]
 
 
 ProfileServiceDep = Annotated[ProfileService, Depends(get_profile_service)]
@@ -338,7 +408,10 @@ __all__ = [
     "PresenceProviderDep",
     "PrivacySettingsEditorDep",
     "ProfileEditorDep",
+    "ProfileComposerDep",
+    "ProfileSearchServiceDep",
     "ProfileServiceDep",
+    "PublicProfileSearcherDep",
     "PublicProfileReaderDep",
     "RatingProviderDep",
     "StatisticsProviderDep",
@@ -346,7 +419,10 @@ __all__ = [
     "get_presence_provider",
     "get_privacy_settings_editor",
     "get_profile_editor",
+    "get_profile_composer",
+    "get_profile_search_service",
     "get_profile_service",
+    "get_public_profile_searcher",
     "get_public_profile_reader",
     "get_rating_provider",
     "get_statistics_provider",

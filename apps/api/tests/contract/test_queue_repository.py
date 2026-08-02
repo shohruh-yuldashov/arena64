@@ -39,6 +39,11 @@ from app.modules.matchmaking.infrastructure import QueueTicketModel, SqlAlchemyQ
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 TTL = 600.0
 
+#: A64-015.4's reservation deadline — thirty seconds, the default
+#: `MATCHMAKING_RESERVATION_TTL_SECONDS`, and deliberately far inside `TTL`
+#: so that a reserved ticket in these tests is stranded rather than expired.
+RESERVED_UNTIL = NOW + timedelta(seconds=30)
+
 
 def _pool(queue_type: QueueType = QueueType.RANKED, region: Region = Region.EUROPE) -> QueuePool:
     """A pool for the one variant Arena64 offers."""
@@ -372,7 +377,9 @@ class TestPairingTransitions:
         one = await tickets.enqueue(_ticket())
         other = await tickets.enqueue(_ticket(player_id=generate_uuid7()))
 
-        applied = await tickets.reserve([one.reserved(), other.reserved()])
+        applied = await tickets.reserve(
+            [one.reserved(until=RESERVED_UNTIL), other.reserved(until=RESERVED_UNTIL)]
+        )
 
         assert applied
         assert (await _status(contract_session, one.id)) is QueueStatus.RESERVED
@@ -384,7 +391,7 @@ class TestPairingTransitions:
         live, so a reservation that stamped one would be refused by the
         database and not merely by the aggregate."""
         one = await tickets.enqueue(_ticket())
-        await tickets.reserve([one.reserved()])
+        await tickets.reserve([one.reserved(until=RESERVED_UNTIL)])
 
         row = await contract_session.get(QueueTicketModel, one.id)
         assert row is not None
@@ -397,7 +404,7 @@ class TestPairingTransitions:
         being paired is still queued, and a second join must still be
         refused."""
         one = await tickets.enqueue(_ticket())
-        await tickets.reserve([one.reserved()])
+        await tickets.reserve([one.reserved(until=RESERVED_UNTIL)])
 
         with pytest.raises(AlreadyQueued):
             await tickets.enqueue(_ticket(player_id=one.player_id))
@@ -408,7 +415,7 @@ class TestPairingTransitions:
         """`ix_queue_ticket__pool` still says `waiting`, which is what makes
         a reserved pair invisible to every other worker's next scan."""
         one = await tickets.enqueue(_ticket())
-        await tickets.reserve([one.reserved()])
+        await tickets.reserve([one.reserved(until=RESERVED_UNTIL)])
 
         snapshot = await tickets.queue_snapshot(pool=_pool(), now=NOW, limit=10)
 
@@ -421,7 +428,7 @@ class TestPairingTransitions:
         """The compare-and-set: a second worker's reservation finds the row
         no longer `waiting` and applies nothing."""
         one = await tickets.enqueue(_ticket())
-        reserved = one.reserved()
+        reserved = one.reserved(until=RESERVED_UNTIL)
         await tickets.reserve([reserved])
 
         assert not await tickets.reserve([reserved])
@@ -435,7 +442,9 @@ class TestPairingTransitions:
         other = await tickets.enqueue(_ticket(player_id=generate_uuid7()))
         await tickets.cancel(other.cancelled(NOW))
 
-        applied = await tickets.reserve([one.reserved(), other.reserved()])
+        applied = await tickets.reserve(
+            [one.reserved(until=RESERVED_UNTIL), other.reserved(until=RESERVED_UNTIL)]
+        )
 
         assert not applied
         assert (await _status(contract_session, one.id)) is QueueStatus.WAITING
@@ -444,7 +453,7 @@ class TestPairingTransitions:
         self, tickets: SqlAlchemyQueueRepository, contract_session: AsyncSession
     ) -> None:
         one = await tickets.enqueue(_ticket())
-        reserved = one.reserved()
+        reserved = one.reserved(until=RESERVED_UNTIL)
         await tickets.reserve([reserved])
 
         assert await tickets.release([reserved.released()])
@@ -457,7 +466,7 @@ class TestPairingTransitions:
         line. `release` writes `status` and `resolved_at`, and `entered_at`
         is not in the statement at all."""
         one = await tickets.enqueue(_ticket())
-        reserved = one.reserved()
+        reserved = one.reserved(until=RESERVED_UNTIL)
         await tickets.reserve([reserved])
         await tickets.release([reserved.released()])
 
@@ -480,7 +489,7 @@ class TestPairingTransitions:
     ) -> None:
         one = await tickets.enqueue(_ticket())
         other = await tickets.enqueue(_ticket(player_id=generate_uuid7()))
-        reserved = [one.reserved(), other.reserved()]
+        reserved = [one.reserved(until=RESERVED_UNTIL), other.reserved(until=RESERVED_UNTIL)]
         await tickets.reserve(reserved)
 
         at = NOW + timedelta(seconds=3)
@@ -494,7 +503,7 @@ class TestPairingTransitions:
         self, tickets: SqlAlchemyQueueRepository, contract_session: AsyncSession
     ) -> None:
         one = await tickets.enqueue(_ticket())
-        reserved = one.reserved()
+        reserved = one.reserved(until=RESERVED_UNTIL)
         await tickets.reserve([reserved])
 
         at = NOW + timedelta(seconds=3)
@@ -510,7 +519,7 @@ class TestPairingTransitions:
         """`matched` is terminal, so it leaves QT-1's index — the player is
         free to queue for their next game once this one ends."""
         one = await tickets.enqueue(_ticket())
-        reserved = one.reserved()
+        reserved = one.reserved(until=RESERVED_UNTIL)
         await tickets.reserve([reserved])
         at = NOW + timedelta(seconds=3)
         await tickets.complete([reserved.matched(at)], at=at)
@@ -540,7 +549,7 @@ class TestAbandonedReservations:
         self, tickets: SqlAlchemyQueueRepository
     ) -> None:
         one = await tickets.enqueue(_ticket())
-        await tickets.reserve([one.reserved()])
+        await tickets.reserve([one.reserved(until=RESERVED_UNTIL)])
 
         claimed = await tickets.claim_due(
             now=NOW + timedelta(seconds=TTL + 1), limit=10, claimed_by="w1"
@@ -554,7 +563,7 @@ class TestAbandonedReservations:
         """A live reservation is a pairing in flight. Only one past its own
         queue deadline is abandoned by any measure."""
         one = await tickets.enqueue(_ticket())
-        await tickets.reserve([one.reserved()])
+        await tickets.reserve([one.reserved(until=RESERVED_UNTIL)])
 
         claimed = await tickets.claim_due(now=NOW, limit=10, claimed_by="w1")
 
@@ -564,7 +573,7 @@ class TestAbandonedReservations:
         self, tickets: SqlAlchemyQueueRepository, contract_session: AsyncSession
     ) -> None:
         one = await tickets.enqueue(_ticket())
-        await tickets.reserve([one.reserved()])
+        await tickets.reserve([one.reserved(until=RESERVED_UNTIL)])
 
         at = NOW + timedelta(seconds=TTL + 1)
         assert await tickets.expire([one.id], at=at) == 1
@@ -576,7 +585,7 @@ class TestAbandonedReservations:
         """The whole point: an abandoned reservation must not be a
         permanent lockout."""
         one = await tickets.enqueue(_ticket())
-        await tickets.reserve([one.reserved()])
+        await tickets.reserve([one.reserved(until=RESERVED_UNTIL)])
         await tickets.expire([one.id], at=NOW + timedelta(seconds=TTL + 1))
 
         await tickets.enqueue(_ticket(player_id=one.player_id))

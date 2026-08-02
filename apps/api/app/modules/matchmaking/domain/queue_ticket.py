@@ -54,6 +54,16 @@ covered by QT-1's uniqueness index, and `active_ticket` reports it — a
 player being paired is still queued, and must not be able to join a second
 pool while a worker is creating their match.
 
+**A reservation has its own, much shorter deadline — A64-015.4.** A64-015.3
+left a crashed worker's two reserved tickets to the ordinary ten-minute
+expiry sweep, which meant two players stood in a queue that had already
+stopped considering them for the rest of their window. `reserved_until`
+closes that: it is written at the claim, it is the instant the reconciler
+acts on, and it is **the same value** the match carries as its
+`acceptance_deadline`. One number, in two rows, read by both halves of the
+handshake — see `PairingService._claim` and
+`game.domain.match_record`.
+
 **A released ticket keeps its `entered_at`.** Compensation restores the
 row's status and nothing else, so a player whose match creation failed
 returns to exactly the place in line they held — not to the back of it for
@@ -202,6 +212,23 @@ class QueueTicket:
     instant.
     """
 
+    reserved_until: datetime | None = None
+    """How long this reservation may stand before it is reconciled —
+    A64-015.4 §5.
+
+    Set exactly when `status` is `reserved`, and a database CHECK enforces
+    the same pairing. Absolute rather than a duration, for the reason
+    `expires_at` is: a reservation written under one
+    `MATCHMAKING_RESERVATION_TTL_SECONDS` must not be silently re-dated by
+    a deploy that changes it.
+
+    **Much shorter than `expires_at`**, and a settings validator enforces
+    that too. The two answer different questions — "how long will this
+    player wait for an opponent" and "how long may a worker hold their
+    ticket while creating a match" — and the second is measured in seconds
+    because it is a crash-recovery grace rather than a wait.
+    """
+
     id: UUID = field(default_factory=generate_uuid7)
     """UUIDv7, application-generated (DB-07). Last so every other field can
     be passed positionally by the repository's rehydration."""
@@ -218,6 +245,8 @@ class QueueTicket:
             raise ValueError("rating_snapshot cannot be negative")
         if self.status.is_terminal != (self.resolved_at is not None):
             raise ValueError("resolved_at is set exactly when the ticket is no longer live")
+        if (self.status is QueueStatus.RESERVED) != (self.reserved_until is not None):
+            raise ValueError("reserved_until is set exactly when the ticket is reserved")
 
     @property
     def queue_type(self) -> QueueType:
@@ -287,6 +316,21 @@ class QueueTicket:
     def is_reserved(self) -> bool:
         return self.status is QueueStatus.RESERVED
 
+    def reservation_lapsed(self, at: datetime) -> bool:
+        """Whether this reservation has stood past its deadline by `at`.
+
+        A *question*, not a transition — the same shape as `is_due`, and
+        for the same reason: a lapsed reservation is still `reserved` until
+        the reconciler records otherwise, and what it records depends on
+        whether a match was created.
+
+        `False` for a ticket that is not reserved, so a caller filtering a
+        mixed batch does not have to check the status first. Non-strict on
+        the boundary (`>=`), like `is_due`, so a reservation is lapsed at
+        exactly its deadline rather than one clock tick after it.
+        """
+        return self.reserved_until is not None and at >= self.reserved_until
+
     def cancelled(self, at: datetime) -> "QueueTicket":
         """The ticket a player withdrew. Raises `TicketNotWaiting`."""
         return self._resolve(QueueStatus.CANCELLED, at)
@@ -302,14 +346,18 @@ class QueueTicket:
         """
         return self._resolve(QueueStatus.EXPIRED, at)
 
-    def reserved(self) -> "QueueTicket":
+    def reserved(self, *, until: datetime) -> "QueueTicket":
         """This ticket, claimed by a pairing worker — A64-015.3.
 
-        `waiting -> reserved`, and it takes **no instant**: nothing has
-        resolved, the ticket is still live, and `resolved_at` stays `None`
-        so the CHECK that pairs the two holds. A `reserved_at` would be a
-        column with one reader that does not exist yet — the acceptance
-        deadline A64-015.4 introduces.
+        `waiting -> reserved`. It takes **no resolution instant**: nothing
+        has resolved, the ticket is still live, and `resolved_at` stays
+        `None` so the CHECK that pairs the two holds.
+
+        What it does take is `until` — the deadline A64-015.3 predicted and
+        A64-015.4 supplies. It is the same instant the match created from
+        this pairing carries as its `acceptance_deadline`, which is what
+        makes the reservation and the acceptance one window rather than
+        two.
 
         Raises `TicketNotWaiting` when the ticket is anything else, which
         is the aggregate's half of "no ticket can be paired twice". The
@@ -319,7 +367,9 @@ class QueueTicket:
         """
         if not self.is_waiting:
             raise TicketNotWaiting("That queue ticket is no longer waiting.")
-        return self._with(status=QueueStatus.RESERVED, resolved_at=None)
+        if until <= self.entered_at:
+            raise ValueError("a reservation cannot expire before its ticket was entered")
+        return self._with(status=QueueStatus.RESERVED, resolved_at=None, reserved_until=until)
 
     def released(self) -> "QueueTicket":
         """This ticket, returned to the queue — A64-015.3's compensation.
@@ -334,10 +384,14 @@ class QueueTicket:
         Raises `TicketNotWaiting` unless the ticket is reserved: releasing
         something nobody reserved would be a compensation for an action
         that did not happen.
+
+        `reserved_until` is cleared, because a waiting ticket has no
+        reservation to be lapsed — and a stale deadline left behind would
+        make the next scan's claim look already-overdue to the reconciler.
         """
         if not self.is_reserved:
             raise TicketNotWaiting("That queue ticket is not reserved.")
-        return self._with(status=QueueStatus.WAITING, resolved_at=None)
+        return self._with(status=QueueStatus.WAITING, resolved_at=None, reserved_until=None)
 
     def matched(self, at: datetime) -> "QueueTicket":
         """The ticket a pairing consumed — the end of its life.
@@ -354,7 +408,7 @@ class QueueTicket:
         """
         if not self.is_reserved:
             raise TicketNotWaiting("That queue ticket has not been reserved for a match.")
-        return self._with(status=QueueStatus.MATCHED, resolved_at=at)
+        return self._with(status=QueueStatus.MATCHED, resolved_at=at, reserved_until=None)
 
     def _resolve(self, status: QueueStatus, at: datetime) -> "QueueTicket":
         """The terminal transition, two names.
@@ -369,12 +423,24 @@ class QueueTicket:
             raise TicketNotWaiting(
                 "That queue ticket has already been resolved.",
             )
-        return self._with(status=status, resolved_at=at)
+        return self._with(status=status, resolved_at=at, reserved_until=None)
 
-    def _with(self, *, status: QueueStatus, resolved_at: datetime | None) -> "QueueTicket":
+    def _with(
+        self,
+        *,
+        status: QueueStatus,
+        resolved_at: datetime | None,
+        reserved_until: datetime | None,
+    ) -> "QueueTicket":
         """This ticket with a different status. Every other field is carried
         across verbatim, which is what makes `entered_at` survive a release
-        without anybody having to remember to preserve it."""
+        without anybody having to remember to preserve it.
+
+        All three arguments are required rather than defaulted, so a fifth
+        transition cannot leave `reserved_until` behind by omission — which
+        would be a waiting ticket the reconciler believes is a lapsed
+        reservation.
+        """
         return QueueTicket(
             id=self.id,
             player_id=self.player_id,
@@ -384,6 +450,7 @@ class QueueTicket:
             expires_at=self.expires_at,
             status=status,
             resolved_at=resolved_at,
+            reserved_until=reserved_until,
         )
 
 

@@ -28,6 +28,11 @@ from app.modules.matchmaking.domain.queue_ticket import (
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 TTL_SECONDS = 600.0
 
+#: A64-015.4's reservation deadline. Thirty seconds, the default
+#: `MATCHMAKING_RESERVATION_TTL_SECONDS`, and well inside the ticket's own
+#: window — a reservation is a crash-recovery grace, not a wait.
+RESERVED_UNTIL = NOW + timedelta(seconds=30)
+
 
 def _ticket(*, at: datetime = NOW, ttl: float = TTL_SECONDS) -> QueueTicket:
     return QueueTicket.enter(
@@ -191,7 +196,7 @@ class TestTransitions:
         from `reserved`. §8 forbids marking a ticket matched before `game`
         has accepted the request, and requiring the reservation is how that
         is enforced rather than remembered."""
-        ticket = _ticket().reserved()
+        ticket = _ticket().reserved(until=RESERVED_UNTIL)
 
         matched = ticket.matched(NOW + timedelta(seconds=5))
 

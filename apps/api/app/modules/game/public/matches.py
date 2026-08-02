@@ -31,7 +31,23 @@ visibly ignoring a field, not merely failing to be told.
 A retry of the same pairing must return the **same** `match_id` with
 `created=False`. That sentence is the whole idempotency contract, and
 `MatchCreationUseCase.create_match` states it again where an implementer
-will read it.
+will read it. Since A64-015.4 it is held by a **unique index** on
+`game.match.pairing_id` rather than by an implementation's good intentions
+— see `game.infrastructure.models`.
+
+## The acceptance deadline arrives on the request
+
+A64-015.4 §5 asks for the reservation deadline and the acceptance timeout
+to be one coherent model rather than two timers. They are made one *here*:
+`matchmaking` computes a single instant from its clock and
+`MATCHMAKING_RESERVATION_TTL_SECONDS`, writes it onto both reserved tickets
+as `reserved_until`, and sends the same value as `acceptance_deadline`.
+
+`game` therefore does not own the duration and does not read a clock to
+derive it. That is deliberate: whoever owns the reservation owns the
+window, and a `game` setting for "how long may a player take to accept"
+would be a second number that has to be kept below the queue's own — a
+constraint nothing could enforce across two settings classes.
 
 ## What is deliberately absent: time control
 
@@ -50,6 +66,7 @@ component and this request gains a field, in one change.
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -70,17 +87,6 @@ class MatchCreationRefused(DomainError):
     a decision `game` made — a variant withdrawn mid-flight, a player
     already in a live match. An unreachable database raises what a database
     raises, and `matchmaking` compensates for both the same way.
-    """
-
-
-class MatchCreationUnavailable(MatchCreationRefused):
-    """No implementation of `MatchCreationUseCase` is wired.
-
-    Its own type rather than a bare refusal, because the operator response
-    is completely different: a refusal is a match that legitimately should
-    not exist, and this is a deployment that cannot create any match at
-    all. See `UnavailableMatchCreation` on why this ships rather than a
-    stub that pretends.
     """
 
 
@@ -147,6 +153,15 @@ class CreateMatchRequest:
     Stamped by `matchmaking` from `game_engine_version()` at the moment of
     pairing, so a match records the rules it will actually be played by
     even if the process is upgraded mid-game.
+    """
+
+    acceptance_deadline: datetime
+    """When an unanswered match stops being offered — A64-015.4 §5.
+
+    Supplied by the caller rather than computed here, and it is the *same
+    instant* `matchmaking` wrote onto both reserved queue tickets as
+    `reserved_until`. See this module's docstring on why the window's owner
+    is the module that owns the reservation.
     """
 
     light: MatchParticipant
@@ -227,44 +242,11 @@ class MatchCreationUseCase(Protocol):
         ...
 
 
-class UnavailableMatchCreation:
-    """The implementation this repository ships until matches are stored.
-
-    A64-015.3 §9 says plainly: "If actual Match persistence is not ready,
-    provide an explicit application port and test adapter. **Do not fake
-    persistence.**" `game` has a complete rules kernel and a `Match`
-    aggregate (A64-014.6) and no repository, no table and no migration for
-    one — so there is nothing this class could honestly return.
-
-    What it does instead is fail in the one way that is true, and the
-    failure is *useful*: it drives A64-015.3 §10's compensation path in
-    production exactly as a real refusal would, so the path that returns
-    two players to the queue is exercised by the deployment rather than
-    only by a test.
-
-    The alternative — returning a fabricated `match_id` — would mark two
-    tickets `matched` and delete two players from the queue in exchange for
-    a game that does not exist. That is worse than not pairing at all,
-    which is why pairing is wired but **not scheduled** (see
-    `MATCHMAKING_PAIRING_ENABLED`).
-
-    A64-015.4 replaces this with the real use case and nothing else in the
-    graph changes.
-    """
-
-    async def create_match(self, request: CreateMatchRequest) -> CreateMatchResult:
-        raise MatchCreationUnavailable(
-            "Match creation is not available in this build; no match was created."
-        )
-
-
 __all__ = [
     "CreateMatchRequest",
     "CreateMatchResult",
     "MatchCreationRefused",
-    "MatchCreationUnavailable",
     "MatchCreationUseCase",
     "MatchParticipant",
     "PlayerSide",
-    "UnavailableMatchCreation",
 ]

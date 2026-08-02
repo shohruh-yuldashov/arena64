@@ -56,8 +56,17 @@ def _modules_under(package: Path) -> list[Path]:
 class TestMatchmakingReachesGameThroughItsPublicSurface:
     def test_no_module_imports_a_game_internal(self) -> None:
         """R-1: a module's `public/` package is the whole of what other
-        modules may depend on. `Match`, `MoveRecord` and the draw-rule set
-        are `game`'s to change without consulting anybody."""
+        modules may depend on. `Match`, `MatchRecord`, `MoveRecord` and the
+        draw-rule set are `game`'s to change without consulting anybody.
+
+        The composition root is excluded, exactly as it is from the
+        `friends` check below and from every privacy contract in
+        `.importlinter`. A64-015.4 has it name four `game` classes — a
+        repository and three services — because assembling another module's
+        graph is what a root is for (BR-6). What the rule protects is every
+        *other* file: a service that imported `SqlAlchemyMatchRecordRepository`
+        would be caught here.
+        """
         offenders = {
             str(module.relative_to(_APP)): sorted(
                 name
@@ -66,10 +75,56 @@ class TestMatchmakingReachesGameThroughItsPublicSurface:
                 and not name.startswith("app.modules.game.public")
             )
             for module in _modules_under(_MATCHMAKING)
+            if "dependencies" not in module.parts
         }
         offenders = {path: names for path, names in offenders.items() if names}
 
         assert offenders == {}
+
+    def test_the_composition_root_is_the_only_file_that_names_a_game_class(self) -> None:
+        """The other half of the exclusion above, and what stops it being a
+        hole: exactly one file may reach past `game.public`, and it is the
+        root.
+
+        Without this, "exclude `dependencies`" would silently permit a
+        second composition root — which is how a module ends up with two
+        object graphs that drift.
+        """
+        reachers = [
+            str(module.relative_to(_APP))
+            for module in _modules_under(_MATCHMAKING)
+            if any(
+                name.startswith("app.modules.game")
+                and not name.startswith("app.modules.game.public")
+                for name in _imported_modules(module)
+            )
+        ]
+
+        assert reachers == ["modules/matchmaking/presentation/dependencies/__init__.py"]
+
+    def test_the_acceptance_routes_reach_game_only_through_its_public_surface(self) -> None:
+        """A64-015.4 §2 and §7. The endpoints that accept and decline a
+        match hold `MatchAcceptanceUseCase` and a view — no `MatchRecord`,
+        no repository, no session."""
+        router = _MATCHMAKING / "presentation" / "router.py"
+        from_game = sorted(
+            name for name in _imported_modules(router) if name.startswith("app.modules.game")
+        )
+
+        assert all(name.startswith("app.modules.game.public") for name in from_game)
+        assert "app.modules.game.public.PendingMatchView" in from_game
+
+    def test_the_reconciler_reaches_game_only_through_published_reads(self) -> None:
+        """A64-015.4 §9. Recovery needs one fact `matchmaking` cannot hold —
+        did this ticket's match get created — and it asks for it rather than
+        querying `game.match`."""
+        service = _MATCHMAKING / "application" / "services" / "reconciliation_service.py"
+        from_game = sorted(
+            name for name in _imported_modules(service) if name.startswith("app.modules.game")
+        )
+
+        assert all(name.startswith("app.modules.game.public") for name in from_game)
+        assert "app.modules.game.public.PairingReconciliationReader" in from_game
 
     def test_the_public_surface_is_actually_used(self) -> None:
         """Otherwise the rule above is vacuous — a boundary nobody crosses

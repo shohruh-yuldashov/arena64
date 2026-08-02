@@ -846,6 +846,30 @@ class RateLimitSettings(BaseSettings):
     matchmaking_queue_user_limit: int = Field(default=30, ge=1)
     matchmaking_queue_window_seconds: int = Field(default=5 * 60, ge=1)
 
+    # --- match acceptance (A64-015.4) ----------------------------------------
+    # **Per authenticated user**, and a separate budget from the queue's, which
+    # is the one place these two endpoint groups differ from the join/leave
+    # pair that shares one. The argument for sharing there was that joining
+    # and leaving are *one behaviour* — nobody joins two hundred times, they
+    # join and leave two hundred times. Accepting is not that behaviour: a
+    # player who has spent their queue budget must still be able to answer the
+    # match they already have, and a shared counter would mean the platform
+    # pairing somebody and then refusing to let them say yes.
+    #
+    # 20 per 5 minutes is chosen rather than given. A player answers at most
+    # one match per pairing and a pairing takes at least the reservation
+    # window, so twenty absorbs a client that retries a dropped response
+    # several times across several matches. What it bounds is a stuck client
+    # hammering an endpoint that takes a row lock on a match — which is the
+    # realistic failure on a write only two accounts can reach.
+    #
+    # `GET /matchmaking/matches/pending` carries no limit, for the reason
+    # `GET /matchmaking/queue/me` does not: it is the endpoint a client polls
+    # while deciding, and throttling it would make a working handshake look
+    # broken in exactly the situation it is working.
+    matchmaking_acceptance_user_limit: int = Field(default=20, ge=1)
+    matchmaking_acceptance_window_seconds: int = Field(default=5 * 60, ge=1)
+
 
 class StatisticsSettings(BaseSettings):
     """`statistics` — the competitive-record projection (A64-012.6).
@@ -1259,13 +1283,15 @@ class OutboxSettings(BaseSettings):
 
 
 class MatchmakingSettings(BaseSettings):
-    """`matchmaking` — the queue domain (A64-014.1) and the pairing scan
-    (A64-015.3).
+    """`matchmaking` — the queue domain (A64-014.1), the pairing scan
+    (A64-015.3), and the acceptance handshake (A64-015.4).
 
-    Two groups. The first governs how long a player may wait before the
+    Three groups. The first governs how long a player may wait before the
     platform stops asserting they are waiting, and which process notices.
     The second governs how a scan decides who plays whom — QT-5's widening
-    rating window, and how much of a pool one pass reads.
+    rating window, and how much of a pool one pass reads. The third governs
+    the window between "you have been paired" and "you are playing", and
+    who cleans up when nobody answers.
     """
 
     model_config = SettingsConfigDict(env_prefix="MATCHMAKING_", frozen=True, extra="forbid")
@@ -1334,24 +1360,28 @@ class MatchmakingSettings(BaseSettings):
     never turns into a wrong number.
     """
 
-    pairing_enabled: bool = False
+    pairing_enabled: bool = True
     """Whether *this process* scans pools for pairings — A64-015.3.
 
-    **Off by default, which is the only honest setting today.** `game` has
-    no match persistence, so a scan reaches
-    `game.public.UnavailableMatchCreation` and every pairing it found would
-    be reserved, refused and released. That is the compensation path
-    working exactly as designed, and it is still churn: two writes and a
-    `WARNING` per tick, forever, for no match.
+    **On since A64-015.4.** It shipped `False` for one task, because `game`
+    had no match persistence: every pairing a scan found would have been
+    reserved, refused, and released, several times a second forever. That
+    was the compensation path working exactly as designed, and it was still
+    churn for no match.
 
-    A64-015.4 replaces the match-creation adapter, and this default becomes
-    `True` in the same change. Until then an operator can switch it on to
-    watch the scan and its compensation against a real pool, which is what
-    it is for.
+    The five things A64-015.4 §12 required before this could flip are all
+    true, and each is a thing rather than an assertion:
+
+        durable match creation   `PersistentMatchCreation` over `game.match`
+        pairing_id uniqueness    `uq_match__pairing_id`
+        ticket settlement        `PairingService._complete`, unchanged
+        reconciliation wired     `MATCHMAKING_RECONCILIATION_ENABLED`
+        acceptance timeout       `reservation_ttl_seconds`, below
 
     Per-process, like `expiry_enabled` and `OUTBOX_WORKER_ENABLED` — one
     API tier with it off, one worker tier with it on, running the same
-    image.
+    image. Turning it off everywhere stops new pairings and leaves the rest
+    of the queue working: players still join, wait, and expire.
     """
 
     pairing_interval_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
@@ -1406,6 +1436,83 @@ class MatchmakingSettings(BaseSettings):
     and then expires honestly rather than being handed a hopeless game.
     """
 
+    reservation_ttl_seconds: int = Field(default=30, ge=5, le=300)
+    """How long a claimed pairing may stand before it is reconciled, and
+    how long a player has to accept it — A64-015.4 §5.
+
+    **One number for both**, which is what §5 means by "model reservation
+    and acceptance timeout coherently instead of creating two unrelated
+    timers". `PairingService._claim` computes `now + this` once, writes it
+    to both reserved tickets as `reserved_until`, and sends the same instant
+    to `game` as the match's `acceptance_deadline`. There is exactly one
+    arithmetic expression on this platform that produces the window, and
+    every row that carries it carries the same value.
+
+    Thirty seconds is chosen rather than given, and it is set against the
+    only thing it is really about: **how long the opponent stares at a
+    spinner while somebody decides**. A player who has been waiting for a
+    match answers in a second or two; thirty absorbs a phone waking up, a
+    page still loading, and a distracted glance away, and it is short enough
+    that a player whose opponent walked off is back in the queue before they
+    have thought about leaving.
+
+    The floor of five seconds is a guard rather than a range: below a
+    plausible round trip this is not a tighter window, it is a handshake
+    that expires before the offer arrives.
+
+    A validator below keeps it strictly under `ticket_ttl_seconds` — §5
+    requires "shorter than the normal queue-ticket lifetime", and a
+    reservation that could outlive its own ticket would leave the two
+    deadlines racing.
+    """
+
+    reconciliation_enabled: bool = True
+    """Whether *this process* recovers stranded pairings — A64-015.4 §9.
+
+    **On by default, and this one is closer to a correctness switch than a
+    kill switch.** With it off everywhere, a worker that dies mid-pairing
+    leaves two tickets `reserved` until their ordinary ten-minute window
+    closes and the expiry sweep takes them — so the two players wait out a
+    queue that stopped considering them, and a match that was created but
+    not settled stays that way. Nothing is corrupted; recovery simply stops
+    being automatic, which is the state A64-015.3 shipped in.
+
+    It is a switch at all for the reason `OUTBOX_RETENTION_ENABLED` is one:
+    an operator investigating an incident needs to be able to stop a job
+    that rewrites rows, and the alternative to a documented switch is
+    somebody commenting out a scheduler under pressure.
+
+    Per-process, like every other job flag on this platform.
+    """
+
+    reconciliation_interval_seconds: float = Field(default=5.0, ge=1.0, le=600.0)
+    """How often stranded pairings are looked for.
+
+    Five seconds, between the pairing scan's one and the expiry sweep's
+    fifteen, and it is set by what is *waiting* on it: a match whose
+    acceptance window closed is two players who need to be told, and a
+    reservation with no match is a player standing in a queue that cannot
+    see them. Both are measured against a thirty-second window, so five
+    seconds is a sixth of the time anybody could be affected.
+
+    Cheaper than it looks. A healthy platform's tick is two indexed reads
+    against partial indexes that are empty — `ix_queue_ticket__stale_reservation`
+    and `ix_match__pending_deadline` both carry only rows currently in
+    flight — which is the same property that makes `ix_outbox__unpublished`
+    a direct measure of relay health.
+    """
+
+    reconciliation_batch_size: int = Field(default=100, ge=1, le=1000)
+    """How many stranded reservations, and how many overdue matches, one
+    pass may resolve.
+
+    Bounded for the reason every batch on this platform is (CLAUDE.md
+    §10.5). The interesting case is a *deploy*: a rolling restart that
+    kills workers mid-pairing strands a burst of reservations at once, and
+    a hundred per tick drains that in seconds without one transaction
+    holding hundreds of row locks and as many outbox inserts.
+    """
+
     @model_validator(mode="after")
     def _rating_window_widens(self) -> "MatchmakingSettings":
         """The maximum cannot be below the starting width.
@@ -1420,6 +1527,26 @@ class MatchmakingSettings(BaseSettings):
             raise ValueError(
                 "MATCHMAKING_RATING_WINDOW_MAXIMUM cannot be below "
                 "MATCHMAKING_RATING_WINDOW_INITIAL"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reservation_is_shorter_than_the_ticket(self) -> "MatchmakingSettings":
+        """A64-015.4 §5: the reservation deadline is shorter than the queue
+        ticket's own lifetime.
+
+        Not a preference. A reservation that could outlive its ticket would
+        put the two deadlines in a race the reconciler has to arbitrate —
+        release a ticket that has already expired, or expire one whose
+        match is about to be created — and the arbitration would depend on
+        which sweeper ran first. Refusing the configuration at startup
+        (DI-06) is cheaper than making that decision correct.
+        """
+        if self.reservation_ttl_seconds >= self.ticket_ttl_seconds:
+            raise ValueError(
+                "MATCHMAKING_RESERVATION_TTL_SECONDS must be shorter than "
+                "MATCHMAKING_TICKET_TTL_SECONDS — a reservation that can outlive "
+                "the ticket it holds leaves the two deadlines racing"
             )
         return self
 

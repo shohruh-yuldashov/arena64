@@ -38,7 +38,7 @@ this rides the generic `conflict` code and the task that gives it one can
 judge otherwise.
 """
 
-from app.core.exceptions import ConflictError, DomainError
+from app.core.exceptions import ConflictError, DomainError, NotFoundError
 
 
 class InvalidMatchTransition(ConflictError):
@@ -116,10 +116,67 @@ class ReplayResultMismatch(ReplayError):
     """
 
 
+class MatchNotFound(NotFoundError):
+    """No match with that identifier is visible to this caller — A64-015.4.
+
+    `404`, and it is deliberately the **same** answer a caller gets for a
+    match that exists and is somebody else's: `MatchAcceptanceService`
+    translates `NotAMatchParticipant` into this before it reaches a route.
+    A distinct status would let anybody enumerate live match identifiers by
+    the difference between `403` and `404`, which is exactly the disclosure
+    `GET /profiles/{username}` already refuses to make for deactivated
+    accounts.
+    """
+
+
+class NotAMatchParticipant(NotFoundError):
+    """The caller is not one of the match's two players.
+
+    Raised by `MatchRecord.side_of`, and a `NotFoundError` rather than a
+    `PermissionDeniedError` for the reason above: "that match is not
+    yours" and "there is no such match" must be indistinguishable on the
+    wire. It keeps its own class because *server* code branches on it —
+    the acceptance service logs it differently from a genuinely unknown id
+    (CLAUDE.md §9.7: operators get the detail, callers get the safe
+    answer).
+    """
+
+
+class MatchNotPending(ConflictError):
+    """The match is no longer awaiting acceptance — A64-015.4 §6.
+
+    `409`: the request was well formed and the caller's view was stale.
+    Covers every way the handshake can already be over — the opponent
+    declined, the window expired, or both sides already accepted and the
+    match is active.
+
+    One type for all four, and the caller's recourse is identical in every
+    case: re-read the pending match and stop. Splitting them would tell a
+    declining player whether their opponent had already declined, which is
+    a fact about somebody else's behaviour.
+    """
+
+
+class AcceptanceWindowClosed(ConflictError):
+    """The answer arrived after the acceptance deadline.
+
+    Distinct from `MatchNotPending` because the row is still *pending* when
+    this fires — the reconciler simply has not reached it yet. A caller
+    cannot tell the two apart on the wire (both are `409`), and that is
+    intentional; the distinction exists so the service does not have to
+    depend on a background job having run before it can refuse a late
+    answer.
+    """
+
+
 __all__ = [
+    "AcceptanceWindowClosed",
     "CorruptMoveLog",
     "InvalidMatchTransition",
     "MalformedMoveLog",
+    "MatchNotFound",
+    "MatchNotPending",
+    "NotAMatchParticipant",
     "PositionHashMismatch",
     "ReplayError",
     "ReplayResultMismatch",

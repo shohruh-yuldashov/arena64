@@ -42,6 +42,7 @@ that is allowed to be gone.
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Any, ClassVar
 from uuid import UUID
 
@@ -238,4 +239,86 @@ class PlayersPaired(DomainEvent):
             "light_ticket_id": str(self.light_ticket_id),
             "dark_ticket_id": str(self.dark_ticket_id),
             "waited_for_seconds": self.waited_for_seconds,
+        }
+
+
+class ReconciliationAction(StrEnum):
+    """What a reconciler did with one stranded reservation — A64-015.4 §9.
+
+    Three actions, and they are the three durable states a lapsed
+    reservation can be in. An operator reading this enum in the outbox is
+    reading a direct account of which failure happened:
+
+        settled     a match exists and the ticket had not caught up. The
+                    ordinary crash: `game` committed and the worker died
+                    before it could mark the tickets matched.
+        released    no match was created and the ticket's own window is
+                    still open, so the player goes back in line with the
+                    `entered_at` they always had.
+        expired     no match, and the ticket's window closed while it was
+                    reserved. Releasing it would put a ticket back into
+                    `waiting` past its own deadline.
+    """
+
+    SETTLED = "settled"
+    RELEASED = "released"
+    EXPIRED = "expired"
+
+
+@dataclass(frozen=True)
+class PairingReconciled(DomainEvent):
+    """A stranded reservation was resolved without a human — A64-015.4 §9.
+
+    ## Why this is published at all
+
+    Nothing subscribes to it, and it is the one event on this platform
+    whose primary reader is an **operator** rather than a consumer. A
+    reconciliation is by definition evidence that something else failed
+    halfway — a worker died between two transactions, a pairing lost a race
+    with the expiry sweep — and the durable record of how often that
+    happens is what turns "we think the recovery path works" into a number.
+
+    A64-015.3 shipped the same information as a `pairing_settle_failed` log
+    line at `ERROR`, with a human on the end of it. This is the replacement,
+    and it is deliberately an event rather than a metric: the *reason* a
+    given pairing was reconciled is only reconstructible from the ticket,
+    the match and the action together, and a counter loses all three.
+
+    ## Its aggregate is the ticket
+
+    One event per **reservation**, not per pairing. The reconciler claims
+    whatever bounded batch it locks and may well see one half of a pair
+    without the other, so a per-pairing event would either be published
+    twice or wait for a partner that another worker has already handled.
+    `PlayersPaired` makes the opposite choice for the opposite reason —
+    there, both halves are always in hand.
+    """
+
+    event_type: ClassVar[str] = "matchmaking.pairing_reconciled"
+    aggregate_type: ClassVar[str] = QUEUE_TICKET_AGGREGATE
+
+    ticket_id: UUID
+    player_id: UUID
+    action: ReconciliationAction
+
+    match_id: UUID | None
+    """The match this ticket turned out to have, or `None` when it had
+    none. Non-null exactly when `action` is `settled`."""
+
+    reserved_until: datetime
+    """The deadline the reservation overran. Carried because "how far past
+    its window did this sit" is the number that says whether the reconciler
+    is running often enough."""
+
+    @property
+    def aggregate_id(self) -> UUID:
+        return self.ticket_id
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "ticket_id": str(self.ticket_id),
+            "player_id": str(self.player_id),
+            "action": self.action.value,
+            "match_id": None if self.match_id is None else str(self.match_id),
+            "reserved_until": self.reserved_until.isoformat(),
         }

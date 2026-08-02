@@ -357,6 +357,27 @@ layers =
     app.modules.statistics.application
     app.modules.statistics.domain
 
+# `game` gained `application` and `infrastructure` in A64-015.4 — match
+# persistence is what earned them, and A64-014.6 had recorded their absence
+# in the module docstring. It has no `presentation` layer and needs none:
+# every endpoint that touches a match today is a *matchmaking* endpoint,
+# because a player who has not accepted yet is still being matched. Listing
+# a layer that does not exist is an error rather than a no-op, so this names
+# the three that do.
+#
+# `public` is deliberately outside the ordering. It is a published surface
+# rather than a layer — `game.domain.match_record` reads `ProductVariant`
+# from `public.variants`, and `public.acceptance` re-exports
+# `MatchRecordStatus` from the domain — and a `layers` contract would have
+# to forbid one direction or the other.
+[importlinter:contract:layers-game]
+name = game layers point inward
+type = layers
+layers =
+    app.modules.game.infrastructure
+    app.modules.game.application
+    app.modules.game.domain
+
 
 # ---------------------------------------------------------------------------
 # 4. The rules kernel is dependency-free — architecture.md §11, AD-13

@@ -1,9 +1,23 @@
-"""HTTP routes for the matchmaking queue — A64-014.1.
+"""HTTP routes for the matchmaking queue and the acceptance handshake —
+A64-014.1 and A64-015.4.
 
-Three endpoints and **no business logic in any of them**. Each translates a
+Six endpoints and **no business logic in any of them**. Each translates a
 request into a service call and the result into a wire schema. QT-1 is the
-index's, the state machine is `QueueTicket`'s, the presence rule is
-`QueueService`'s, and the atomic claim is the repository's.
+index's, the ticket state machine is `QueueTicket`'s, the presence rule is
+`QueueService`'s, the atomic claim is the repository's, and the acceptance
+lifecycle is `game`'s — reached through `game.public` and nothing else.
+
+## Why acceptance lives under `/matchmaking`
+
+The match is `game`'s aggregate, and these three routes are on the queue's
+prefix rather than a `/matches` one. That is a product judgement stated
+here so it is not mistaken for a layering accident: a player who has been
+paired and has not answered is, as far as anybody using the product is
+concerned, **still being matched**. The handshake is the last step of
+matchmaking, not the first step of a game — there is no game until both
+sides say yes.
+
+`game` gains routes of its own when there is something to play.
 
 ## Every endpoint is authenticated, and the actor is never a parameter
 
@@ -22,11 +36,14 @@ Every failure is a typed exception on the platform hierarchy, and
 `app/api/exception_handlers.py` maps them by MRO walk. There is not one
 `try`/`except` in this file:
 
-    AlreadyQueued        -> 409  conflict
-    QueueNotPermitted     -> 422  validation_error
-    NotQueued            -> 404  not_found
-    MissingToken         -> 401  authentication_required
-    TooManyRequests      -> 429  rate_limited
+    AlreadyQueued          -> 409  conflict
+    QueueNotPermitted      -> 422  validation_error
+    NotQueued              -> 404  not_found
+    MatchNotFound          -> 404  not_found
+    MatchNotPending        -> 409  conflict
+    AcceptanceWindowClosed -> 409  conflict
+    MissingToken           -> 401  authentication_required
+    TooManyRequests        -> 429  rate_limited
 
 ## Why joining returns the pool's depth
 
@@ -43,18 +60,33 @@ count does not grow with the response.
 """
 
 import logging
+from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Path, status
 
 from app.api.openapi import Responses, error_response
 from app.api.responses import build_response
 from app.core.responses import ApiResponse
 from app.modules.auth.presentation.dependencies import CurrentUser
+from app.modules.game.public import MatchNotFound, PendingMatchView
 from app.modules.matchmaking.domain.exceptions import NotQueued
 from app.modules.matchmaking.domain.queue_pool import QueuePool
-from app.modules.matchmaking.presentation.dependencies import QueueServiceDep
-from app.modules.matchmaking.presentation.rate_limits import enforce_queue_limit
-from app.modules.matchmaking.presentation.schemas import JoinQueueRequest, QueueTicketResponse
+from app.modules.matchmaking.presentation.dependencies import (
+    MatchAcceptanceDep,
+    OpponentDirectoryDep,
+    QueueServiceDep,
+)
+from app.modules.matchmaking.presentation.rate_limits import (
+    enforce_acceptance_limit,
+    enforce_queue_limit,
+)
+from app.modules.matchmaking.presentation.schemas import (
+    JoinQueueRequest,
+    PendingMatchResponse,
+    QueueTicketResponse,
+)
+from app.modules.users.public import PublicProfileReader
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +121,29 @@ _TOO_MANY_REQUESTS: Responses = error_response(
         "`Retry-After` says how long to wait."
     ),
 )
+_NO_PENDING_MATCH: Responses = error_response(
+    404,
+    (
+        "No match is waiting for your answer. Returned identically whether you "
+        "were never paired, already answered, or the offer expired."
+    ),
+)
+_UNKNOWN_MATCH: Responses = error_response(
+    404,
+    (
+        "No such match, **or** it is not yours. The two are deliberately "
+        "indistinguishable — a different status for somebody else's match would "
+        "make live match identifiers enumerable."
+    ),
+)
+_MATCH_ANSWERED: Responses = error_response(
+    409,
+    (
+        "That match is no longer awaiting your answer — your opponent declined, "
+        "the window closed, or you both already accepted. Read "
+        "`GET /matchmaking/matches/pending` to see where things stand."
+    ),
+)
 
 
 @matchmaking_router.post(
@@ -114,12 +169,15 @@ async def join_queue(
     `201`, because a ticket is a new resource with an identifier the
     response carries.
 
-    **No match is created.** A64-014.1 builds the queue and nothing that
-    consumes it: your ticket waits until you leave or it expires, and
-    pairing arrives in a later task. That is the honest state of this
-    endpoint and not a temporary defect — a client written against it needs
-    no change when pairing lands, because the ticket is the thing pairing
-    will consume.
+    **Your ticket may become a match.** Since A64-015.4 a background scan
+    pairs waiting players and creates a match for them, so a ticket ends in
+    one of four ways: you leave, it expires, or it is consumed by a pairing
+    — at which point `GET /matchmaking/queue/me` answers `404` and
+    `GET /matchmaking/matches/pending` has your offer.
+
+    Poll both, or poll the queue and follow its `404` to the match. A
+    client written against A64-014.1's three endpoints still works; it
+    simply cannot see the match it has been given.
 
     ## One ticket, across every pool
 
@@ -235,3 +293,167 @@ async def read_my_ticket(
 
     snapshot = await service.snapshot(pool=ticket.pool)
     return build_response(QueueTicketResponse.of(ticket, snapshot))
+
+
+#: The path parameter both answers take. One definition, so the two routes
+#: cannot describe the same identifier differently in the generated document.
+MatchIdPath = Annotated[UUID, Path(description="The match you were offered.")]
+
+
+@matchmaking_router.get(
+    "/matches/pending",
+    status_code=status.HTTP_200_OK,
+    summary="Read the match awaiting your answer",
+    response_description="Your pending match, with a preview of your opponent.",
+    responses={**_UNAUTHORIZED, **_NO_PENDING_MATCH},
+)
+async def read_pending_match(
+    user: CurrentUser,
+    acceptance: MatchAcceptanceDep,
+    players: OpponentDirectoryDep,
+) -> ApiResponse[PendingMatchResponse]:
+    """Returns the match you have been paired into and not yet answered.
+
+    **Yours, always** — the account comes from your access token and no
+    parameter could name a different one. There is deliberately no endpoint
+    that reads somebody else's pending match: who is being paired with whom
+    right now is exactly what would let a player wait for a favourable draw.
+
+    **At most one, by construction.** You hold one live queue ticket, a
+    ticket produces at most one match, and a pending match holds you until
+    it settles — so this is singular without needing a rule of its own.
+
+    `404` when there is none, covering "never paired", "already answered"
+    and "the offer expired" indistinguishably. Which applies is not
+    something this endpoint should answer, and your next move is the same
+    for all three: rejoin the queue.
+
+    ## Answer inside `acceptance_deadline`
+
+    It is an instant rather than a countdown, so a slow response cannot make
+    your timer wrong. An answer that arrives after it is refused, and the
+    match is expired for both of you shortly afterwards by a background job
+    — the deadline is the rule, and the job is only the bookkeeping.
+
+    **Not rate limited**, unlike the two answers. This is the endpoint a
+    client polls while deciding, and throttling it would make a working
+    handshake look broken in exactly the situation it is working.
+    """
+    view = await acceptance.pending_match(user.id)
+    if view is None:
+        raise MatchNotFound("No match is waiting for your answer.")
+
+    return build_response(await _render(view, players))
+
+
+@matchmaking_router.post(
+    "/matches/{match_id}/accept",
+    status_code=status.HTTP_200_OK,
+    summary="Accept a match you have been offered",
+    response_description="The match, including whether your opponent has answered.",
+    responses={
+        **_UNAUTHORIZED,
+        **_UNKNOWN_MATCH,
+        **_MATCH_ANSWERED,
+        **_TOO_MANY_REQUESTS,
+    },
+    dependencies=[Depends(enforce_acceptance_limit)],
+)
+async def accept_match(
+    user: CurrentUser,
+    match_id: MatchIdPath,
+    acceptance: MatchAcceptanceDep,
+    players: OpponentDirectoryDep,
+) -> ApiResponse[PendingMatchResponse]:
+    """Says yes to a match you were paired into.
+
+    **For yourself only.** There is no side or player field anywhere in the
+    request — which seat you hold is derived from your access token — so
+    accepting on your opponent's behalf is not something this API can
+    express.
+
+    The match becomes `active` when *both* of you have accepted, and not
+    before. Until then the response reports `status: pending_acceptance`
+    with `you_accepted: true`, which is the honest state: you have agreed
+    and are waiting.
+
+    **Idempotent.** Accepting twice returns the same match rather than a
+    `409` — a client retrying after a dropped response asked for something
+    that is already true, and telling it otherwise would make a network
+    blip look like a lost game.
+
+    `404` for a match that does not exist **and** for one that is not
+    yours. `409` once the handshake is over — your opponent declined, or
+    the window closed — and `409` for an answer that arrives after
+    `acceptance_deadline`, whether or not a background job has recorded the
+    expiry yet.
+    """
+    view = await acceptance.accept(player_id=user.id, match_id=match_id)
+    return build_response(await _render(view, players))
+
+
+@matchmaking_router.post(
+    "/matches/{match_id}/decline",
+    status_code=status.HTTP_200_OK,
+    summary="Decline a match you have been offered",
+    response_description="The match, now cancelled.",
+    responses={
+        **_UNAUTHORIZED,
+        **_UNKNOWN_MATCH,
+        **_MATCH_ANSWERED,
+        **_TOO_MANY_REQUESTS,
+    },
+    dependencies=[Depends(enforce_acceptance_limit)],
+)
+async def decline_match(
+    user: CurrentUser,
+    match_id: MatchIdPath,
+    acceptance: MatchAcceptanceDep,
+    players: OpponentDirectoryDep,
+) -> ApiResponse[PendingMatchResponse]:
+    """Says no to a match you were paired into.
+
+    **One decline ends it**, whatever your opponent did. The match is
+    `cancelled` and no game is created.
+
+    ## Neither of you goes back in the queue
+
+    Your queue ticket was consumed the moment the match was created, and
+    declining does not restore it — for you or for an opponent who had
+    already accepted. Both of you must join the queue again.
+
+    That is the platform's current behaviour and it is a **stated choice
+    rather than a finished policy**: `specs/matchmaking.md` lists what a
+    declined acceptance should do to both tickets as an open specification
+    item, and re-queueing somebody automatically raises four product
+    questions nobody has answered — whose place in line survives, whether
+    the decliner waits, what rating snapshot the new ticket carries, and
+    what happens if they have already re-queued by hand.
+
+    `200` rather than `204`: the response carries the settled match, so a
+    client can render "cancelled" without a second read.
+
+    A second decline is a `409`, not a repeat — by then the match is
+    already cancelled and there is nothing left to refuse. A client that
+    needs to be safe against its own retry reads the match instead.
+    """
+    view = await acceptance.decline(player_id=user.id, match_id=match_id)
+    return build_response(await _render(view, players))
+
+
+async def _render(view: PendingMatchView, players: PublicProfileReader) -> PendingMatchResponse:
+    """One pending match plus its opponent's public identity.
+
+    **One batched lookup of one id**, which is worth saying plainly because
+    §7 asks for no N+1 profile composition: a player has at most one pending
+    match and a match has exactly one opponent, so there is no list here to
+    loop over and no per-item read to accumulate. `find_public_profiles`
+    takes a sequence because its other callers render pages; this one hands
+    it a single element.
+
+    A missing entry means the account was deactivated between the pairing
+    and this read, and `None` is the same answer every other surface on this
+    platform gives for a withdrawn account.
+    """
+    profiles = await players.find_public_profiles([view.opponent_player_id])
+    return PendingMatchResponse.of(view, profiles.get(view.opponent_player_id))

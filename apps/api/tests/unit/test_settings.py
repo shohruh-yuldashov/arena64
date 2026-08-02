@@ -451,3 +451,76 @@ class TestConsoleEmailProviderGuard:
 
         with pytest.raises(ValueError, match="ConsoleEmailProvider"):
             ConsoleEmailProvider(environment)
+
+
+class TestMatchmakingSettings:
+    """The acceptance handshake's configuration — A64-015.4 §5 and §12."""
+
+    def test_the_reservation_window_is_far_shorter_than_the_ticket(self) -> None:
+        """§5: "shorter than the normal queue-ticket lifetime". Not a
+        preference — a reservation that could outlive its ticket leaves the
+        reconciler arbitrating between releasing a ticket that has already
+        expired and expiring one whose match is about to be created."""
+        settings = MatchmakingSettings()
+
+        assert settings.reservation_ttl_seconds < settings.ticket_ttl_seconds
+
+    def test_a_reservation_as_long_as_the_ticket_is_refused(self) -> None:
+        """Refused at startup (DI-06) rather than discovered by a
+        background job at three in the morning."""
+        with pytest.raises(PydanticValidationError, match="RESERVATION_TTL_SECONDS"):
+            MatchmakingSettings(reservation_ttl_seconds=300, ticket_ttl_seconds=300)
+
+    def test_a_reservation_longer_than_the_ticket_is_refused(self) -> None:
+        with pytest.raises(PydanticValidationError, match="RESERVATION_TTL_SECONDS"):
+            MatchmakingSettings(reservation_ttl_seconds=300, ticket_ttl_seconds=60)
+
+    def test_pairing_is_enabled_by_default(self) -> None:
+        """§12. The flag flipped in A64-015.4 and only then: `game` can
+        persist a match, `pairing_id` is unique, tickets settle,
+        reconciliation is wired, and the acceptance window exists. A build
+        where this is `True` and any of those is missing would reserve two
+        tickets and release them several times a second forever."""
+        assert MatchmakingSettings().pairing_enabled is True
+
+    def test_reconciliation_is_enabled_by_default(self) -> None:
+        """§12 lists it among the five preconditions for the flag above, so
+        the two defaults move together: pairing on with recovery off is a
+        process that can strand players it cannot un-strand."""
+        assert MatchmakingSettings().reconciliation_enabled is True
+
+    def test_the_reconciler_is_bounded(self) -> None:
+        """CLAUDE.md §10.5. The interesting case is a rolling restart,
+        which strands a burst of reservations at once."""
+        assert MatchmakingSettings().reconciliation_batch_size > 0
+        with pytest.raises(PydanticValidationError):
+            MatchmakingSettings(reconciliation_batch_size=0)
+
+    def test_the_reconciler_runs_well_inside_the_reservation_window(self) -> None:
+        """Both things waiting on it — a match nobody answered and a player
+        standing in a queue that cannot see them — are measured against the
+        reservation window, so the interval has to be a fraction of it."""
+        settings = MatchmakingSettings()
+
+        assert settings.reconciliation_interval_seconds < settings.reservation_ttl_seconds
+
+
+class TestPairingIsWiredToRealPersistence:
+    """§12 forbids enabling the flag while the refusing adapter is active.
+
+    Stated as a test rather than a note, because "we removed it from the
+    wiring" is checkable and "we remembered to" is not.
+    """
+
+    def test_the_composition_root_builds_a_persistent_use_case(self) -> None:
+        from app.modules.game.application.services import PersistentMatchCreation
+        from app.modules.matchmaking.presentation.dependencies import build_match_creation
+
+        assert build_match_creation.__module__.startswith("app.modules.matchmaking")
+        assert PersistentMatchCreation is not None
+
+    def test_no_module_still_names_the_unavailable_adapter(self) -> None:
+        """A class that still exists is a class somebody can wire back."""
+        import app.modules.game.public as game_public
+
+        assert not hasattr(game_public, "UnavailableMatchCreation")

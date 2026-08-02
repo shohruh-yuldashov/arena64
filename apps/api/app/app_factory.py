@@ -34,21 +34,30 @@ from app.modules.friends.infrastructure.cache import (
     NoSocialGraphCache,
     RedisSocialGraphCache,
 )
-from app.modules.matchmaking.application.services import PairingService, QueueService
+from app.modules.matchmaking.application.services import (
+    PairingReconciliationService,
+    PairingService,
+    QueueService,
+)
 from app.modules.matchmaking.domain.queue_pool import every_pool
 from app.modules.matchmaking.infrastructure import (
+    PairingReconciliationTask,
     PairingTask,
     QueueExpiryTask,
     expiry_request,
     pairing_request,
+    reconciliation_request,
 )
 from app.modules.matchmaking.presentation.dependencies import (
     build_eligibility_policy,
+    build_match_acceptance,
     build_match_creation,
     build_pairing_exclusions,
     build_pairing_service,
+    build_pairing_settlements,
     build_queue_service,
     build_recent_opponents,
+    build_reconciliation_service,
 )
 from app.modules.notifications.application.services import (
     CONSUMER_NAME,
@@ -254,12 +263,18 @@ OPENAPI_TAGS: list[dict[str, Any]] = [
     {
         "name": "matchmaking",
         "description": (
-            "Waiting for an opponent — the queue, and only the queue (A64-014.1).\n\n"
-            "**No match is created yet.** Joining puts a ticket in a pool and nothing "
-            "consumes it: your ticket waits until you leave or it expires. Pairing, "
-            "rating-window expansion, acceptance and game creation are later tasks, and "
-            "each is a consumer of the ticket rather than a change to it — a client "
-            "written against these three endpoints needs no change when they land.\n\n"
+            "Waiting for an opponent, and answering when one is found (A64-014.1, "
+            "A64-015.4).\n\n"
+            "**Two halves, and a client needs both.** Joining puts a ticket in a pool; "
+            "a background scan pairs waiting players and creates a match for them. "
+            "When that happens your ticket stops existing — `GET /matchmaking/queue/me` "
+            "answers `404` — and the offer appears at "
+            "`GET /matchmaking/matches/pending`, where you have a few seconds to accept "
+            "or decline. A match starts only when **both** of you accept.\n\n"
+            "**A declined or unanswered match returns nobody to the queue.** Your "
+            "ticket was consumed when the match was created, so both players rejoin by "
+            "hand. That is deliberate and provisional: what a declined acceptance "
+            "should cost each side is an open product question.\n\n"
             "**One ticket per player, across every pool.** Joining `casual` while "
             "waiting in `ranked` is a `409`, not a second ticket: being paired into two "
             "simultaneous matches means abandoning one, which looks to that opponent "
@@ -411,14 +426,17 @@ def build_presence_sweeper(
 def build_task_schedulers(
     db: DatabaseSessionManager, redis_pools: RedisPools, settings: Settings
 ) -> list[PeriodicTaskScheduler]:
-    """This process's periodic background work — A64-014.1.
+    """This process's periodic background work — A64-014.1 onwards.
 
-    Two jobs today, both dispatched through `InlineTaskDispatcher` rather
-    than called directly:
+    Four jobs, all dispatched through `InlineTaskDispatcher` rather than
+    called directly:
 
-        platform.outbox.prune      the retention horizon A64-013.7 shipped
-                                   without
-        matchmaking.queue.expire   the background half of `expires_at`
+        platform.outbox.prune          the retention horizon A64-013.7
+                                       shipped without
+        matchmaking.queue.expire       the background half of `expires_at`
+        matchmaking.queue.pair         one pool's pairing scan (A64-015.3)
+        matchmaking.pairing.reconcile  the recovery A64-015.3 left to a
+                                       human (A64-015.4)
 
     Assembled here rather than in either owner because building a
     `QueueService` means naming a repository, a rating provider, a presence
@@ -491,12 +509,33 @@ def build_task_schedulers(
             )
         )
     else:
-        # `INFO`, not `WARNING`: pairing is off by default and the reason is
-        # recorded on the setting — `game` cannot persist a match yet, so a
-        # scan would reserve, be refused and release, several times a second
-        # forever. An operator seeing this on every restart is being told
-        # the expected state, not a misconfiguration.
+        # `INFO`, not `WARNING`: this is a per-process switch and the
+        # intended deployment has it off on the API tier. An operator seeing
+        # it there is being told the expected state.
         logger.info("queue_pairing_disabled", extra={"reason": "configuration"})
+
+    if settings.matchmaking.reconciliation_enabled:
+        handlers.append(
+            PairingReconciliationTask(
+                session_factory=db.session_factory,
+                service_factory=lambda session: _reconciliation_service_for(
+                    session, settings, clock
+                ),
+            )
+        )
+    elif settings.matchmaking.pairing_enabled:
+        # `WARNING`, and the pairing of the two flags is why: a process that
+        # creates pairings and does not reconcile them is one whose crashed
+        # scans strand two players until their ordinary ten-minute window
+        # closes. Off *without* pairing is an ordinary API tier and is
+        # unremarkable; off *with* it is a tier that can break things it
+        # cannot fix.
+        logger.warning(
+            "pairing_reconciliation_disabled",
+            extra={"reason": "configuration", "pairing_enabled": True},
+        )
+    else:
+        logger.info("pairing_reconciliation_disabled", extra={"reason": "configuration"})
 
     if not handlers:
         return schedulers
@@ -533,6 +572,17 @@ def build_task_schedulers(
             )
             for pool in every_pool()
         )
+    if settings.matchmaking.reconciliation_enabled:
+        # **One scheduler, not one per pool.** A stranded reservation is a
+        # stranded reservation whatever pool produced it, and the claim that
+        # finds them is pool-blind — the same shape the expiry sweep has.
+        schedulers.append(
+            PeriodicTaskScheduler(
+                dispatcher=dispatcher,
+                request=reconciliation_request(),
+                interval_seconds=settings.matchmaking.reconciliation_interval_seconds,
+            )
+        )
     return schedulers
 
 
@@ -562,23 +612,61 @@ def _queue_service_for(
 def _pairing_service_for(
     session: AsyncSession, settings: Settings, clock: SystemClock
 ) -> PairingService:
-    """A `PairingService` over one scan's session — A64-015.3.
+    """A `PairingService` over one scan's session — A64-015.3, A64-015.4.
 
     Goes through `matchmaking`'s own `build_pairing_service` for the same
     reason `_queue_service_for` does: one object graph, defined once, so a
     hand-built copy here cannot drift.
 
     The three collaborators this root chooses are the three that cross a
-    module boundary — `friends`' block read over this same session, `game`'s
-    command port, and the deferred rematch guard. Two of them are today's
-    honest answer rather than a final one, and both say so in their own
-    docstrings.
+    module boundary — `friends`' block read, `game`'s command port and
+    `game`'s rematch guard — and as of A64-015.4 all three are real. The
+    publisher is built over this **same session**, which is what puts
+    `game.match_created` in the match's own transaction and `PlayersPaired`
+    in the tickets' (AD-16); they are two transactions because BE-05
+    forbids collapsing them, and `_reconciliation_service_for` below is what
+    closes the window between.
     """
     return build_pairing_service(
         session,
         exclusions=build_pairing_exclusions(session),
-        opponents=build_recent_opponents(),
-        matches=build_match_creation(),
+        opponents=build_recent_opponents(session),
+        matches=build_match_creation(
+            session,
+            events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
+            clock=clock,
+        ),
+        events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
+        settings=settings.matchmaking,
+        clock=clock,
+    )
+
+
+def _reconciliation_service_for(
+    session: AsyncSession, settings: Settings, clock: SystemClock
+) -> PairingReconciliationService:
+    """A `PairingReconciliationService` over one pass's session —
+    A64-015.4 §9.
+
+    The two `game` collaborators are the published *reads* and the
+    published *sweep*, never a repository: this module recovers its own
+    tickets and asks `game` to expire its own matches, and neither reaches
+    into the other's table.
+
+    The acceptance service is built here rather than shared with the HTTP
+    path deliberately — it holds a session, and a session must not outlive
+    the unit of work it serves. What is shared is the *factory*, so the
+    route's graph and the task's are provably the same objects over
+    different sessions.
+    """
+    return build_reconciliation_service(
+        session,
+        settlements=build_pairing_settlements(session),
+        acceptance=build_match_acceptance(
+            session,
+            events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
+            clock=clock,
+        ),
         events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
         settings=settings.matchmaking,
         clock=clock,

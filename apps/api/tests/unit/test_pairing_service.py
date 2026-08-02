@@ -38,6 +38,12 @@ from tests.fakes.queue_repository import InMemoryQueueRepository, RecordingPubli
 NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 TTL = timedelta(minutes=10)
 
+#: A64-015.4's reservation window — the default
+#: `MATCHMAKING_RESERVATION_TTL_SECONDS`, and two orders of magnitude inside
+#: `TTL` so that nothing in this file confuses a stranded reservation with an
+#: expired ticket.
+RESERVATION_TTL = 30.0
+
 POOL = QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED)
 OTHER_POOL = QueuePool(
     variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED, region=Region.ASIA
@@ -107,6 +113,7 @@ def _service(
         unit_of_work=unit_of_work,
         clock=clock,
         candidate_batch_size=50,
+        reservation_ttl_seconds=RESERVATION_TTL,
     )
 
 
@@ -445,7 +452,7 @@ class _RaceLosingRepository(InMemoryQueueRepository):
         # recorded and the assertions ask about *the other one*.
         stolen = self.tickets[ticket_ids[0]]
         self.stolen = stolen.id
-        self.tickets[stolen.id] = stolen.reserved()
+        self.tickets[stolen.id] = stolen.reserved(until=NOW + timedelta(seconds=RESERVATION_TTL))
         return await super().claim_pair(ticket_ids, now=now)
 
     def survivor(self) -> QueueTicket:
@@ -544,7 +551,9 @@ class TestTheAtomicClaim:
         elsewhere, rather than selecting the same pair."""
         _queued(tickets)
         other = _queued(tickets)
-        tickets.tickets[other.id] = tickets.tickets[other.id].reserved()
+        tickets.tickets[other.id] = tickets.tickets[other.id].reserved(
+            until=NOW + timedelta(seconds=RESERVATION_TTL)
+        )
 
         assert (await service.pair_once(pool=POOL)).scanned == 1
 
@@ -652,7 +661,7 @@ class TestCompensation:
     async def test_a_refused_match_returns_both_tickets_to_waiting(
         self, refusing: PairingService, tickets: InMemoryQueueRepository
     ) -> None:
-        """§15.14, and the path `UnavailableMatchCreation` drives in
+        """§15.14 — the path a genuine refusal from `game` drives in
         production today."""
         one, other = _queued(tickets), _queued(tickets)
 
@@ -808,4 +817,9 @@ def _reserved_again(store: InMemoryQueueRepository, ticket_id: UUID) -> QueueTic
         entered_at=matched.entered_at,
         expires_at=matched.expires_at,
         status=QueueStatus.RESERVED,
+        # A64-015.4: a reserved ticket carries the deadline both it and its
+        # match were given. The rewind has to restore it, because the CHECK
+        # and the aggregate both refuse a reservation without one — which is
+        # exactly the property that lets the reconciler find this state.
+        reserved_until=NOW + timedelta(seconds=RESERVATION_TTL),
     )

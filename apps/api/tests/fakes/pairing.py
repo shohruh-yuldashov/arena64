@@ -57,9 +57,11 @@ class StubExclusions:
 class StubRecentOpponents:
     """A `RecentOpponentProvider` a test dictates the answers of.
 
-    The port `NoRecentOpponents` leaves empty in production. A test that
-    fills it is asserting the *seam* holds — that a non-empty answer really
-    does veto a pairing — rather than asserting a rule nothing implements.
+    The port `GameRecentOpponents` satisfies in production since A64-015.4.
+    A stub here rather than the real reader for the same reason `game`'s
+    match creation is stubbed: what this file's suite is about is what
+    `PairingService` does with an answer, not how `game` arrives at one —
+    which is `tests/unit/test_recent_opponents.py`'s.
     """
 
     def __init__(self) -> None:
@@ -115,9 +117,10 @@ class RecordingMatchCreation:
 class RefusingMatchCreation:
     """A `MatchCreationUseCase` that always refuses.
 
-    `UnavailableMatchCreation`'s behaviour with a name a test reads
-    correctly: what is under test is §10's compensation, not which refusal
-    fired.
+    A `game` that declines — a variant withdrawn mid-flight, a player
+    already in a live match. What is under test is A64-015.3 §10's
+    compensation, not which refusal fired, so the name says the behaviour
+    rather than the cause.
     """
 
     def __init__(self) -> None:

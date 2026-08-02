@@ -127,10 +127,18 @@ class TestTheWalkerItself:
         assert paths >= set(LIMITED_PATHS)
         assert "/api/v1/auth/me" in paths
 
-    def test_the_walker_finds_the_ten_auth_endpoints(self, app: FastAPI) -> None:
+    def test_the_walker_finds_every_one_of_the_eleven_auth_endpoints(self, app: FastAPI) -> None:
+        """Eleven since A64-016.1's `POST /auth/ws-ticket`.
+
+        It is deliberately **not** in `LIMITED_PATHS`: a client legitimately
+        mints one ticket per socket and reconnects on a flaky network, so a
+        rule tuned for sign-in attempts would refuse ordinary reconnection.
+        The platform-wide limit is what bounds it, and this count is what
+        notices if an endpoint is added and nobody decides either way.
+        """
         auth_paths = {path for path, _ in api_routes(app) if path.startswith("/api/v1/auth/")}
 
-        assert len(auth_paths) == 10
+        assert len(auth_paths) == 11
 
 
 class TestEveryListedEndpointIsGuarded:

@@ -593,6 +593,67 @@ allow_indirect_imports = True
 #
 # The handlers are deliberately *not* covered: `OutboxRetentionTask` and
 # `QueueExpiryTask` hold session factories and belong to the layers that may.
+# ---------------------------------------------------------------------------
+# The gateway is a transport tier, not a context — R-7, AD-09
+# ---------------------------------------------------------------------------
+# architecture.md R-7: "The gateway contains no domain logic. It validates,
+# authenticates, rate-limits, routes, and fans out. It never decides whether a
+# move is legal."
+#
+# That rule is worth exactly nothing as prose, because the way it breaks is
+# gradual and each step looks reasonable: a route needs one type from `game`,
+# then a helper needs a repository, and eventually the tier that "contains no
+# domain logic" is where a move is validated because that is where the socket
+# is. This contract makes the first step fail instead.
+#
+# `app.gateway` therefore reaches every module the same way `app/api/` does —
+# through `public/` for capabilities and through `presentation/dependencies`
+# for composition. Concretely it holds three things: `users.public`'s
+# `PresenceRecorder`, `auth.presentation.dependencies`' ticket service (because
+# `auth.public` deliberately publishes nothing that can mint or inspect a
+# credential, and says so), and its own Redis registry.
+#
+# The gateway is deliberately **not** `app.platform` either: that package must
+# import no bounded context at all, and this tier's entire job is to call two.
+#
+# `allow_indirect_imports` for the reason every privacy contract above sets it:
+# a `public/` package re-exports its own module's domain types, so
+# `gateway -> users.public -> users.domain` is a chain the rules require.
+[importlinter:contract:gateway-reaches-modules-through-public]
+name = the gateway reaches every module only through its published surface
+type = forbidden
+source_modules =
+    app.gateway
+forbidden_modules =
+    app.modules.auth.domain
+    app.modules.auth.application
+    app.modules.auth.infrastructure
+    app.modules.avatars.domain
+    app.modules.avatars.application
+    app.modules.avatars.infrastructure
+    app.modules.engine
+    app.modules.friends.domain
+    app.modules.friends.application
+    app.modules.friends.infrastructure
+    app.modules.game.domain
+    app.modules.game.application
+    app.modules.game.infrastructure
+    app.modules.matchmaking.domain
+    app.modules.matchmaking.application
+    app.modules.matchmaking.infrastructure
+    app.modules.notifications.domain
+    app.modules.notifications.application
+    app.modules.notifications.infrastructure
+    app.modules.profiles.domain
+    app.modules.profiles.application
+    app.modules.profiles.infrastructure
+    app.modules.statistics
+    app.modules.users.domain
+    app.modules.users.application
+    app.modules.users.infrastructure
+allow_indirect_imports = True
+
+
 [importlinter:contract:domain-is-framework-free]
 name = domain layers import no framework
 type = forbidden

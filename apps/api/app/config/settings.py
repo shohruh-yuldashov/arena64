@@ -1783,6 +1783,105 @@ class MatchmakingSettings(BaseSettings):
         return self
 
 
+class GatewaySettings(BaseSettings):
+    """`gateway` — the realtime WebSocket transport (A64-016.1, AD-09).
+
+    Four numbers, and every one of them is a *liveness* parameter rather
+    than a tuning knob. Nothing tells this platform that a browser tab was
+    closed abruptly, that a phone went through a tunnel, or that a gateway
+    node was killed mid-deploy: every one of those looks identical to a
+    quiet connection. So the only thing standing between a dead socket and
+    a player who is online forever is a bound that expires on its own, and
+    these are those bounds.
+
+    They are also **not independent**, which is why they live together and
+    are validated together below. `heartbeat_timeout_seconds` must exceed
+    the interval clients actually ping at, `connection_ttl_seconds` must
+    exceed the heartbeat timeout, and both must sit inside
+    `PRESENCE_TTL_SECONDS` — a connection the registry still believes in,
+    attached to a presence record that has already lapsed, is a player the
+    platform reports as offline while holding their socket open.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="GATEWAY_", frozen=True, extra="forbid")
+
+    ticket_ttl_seconds: int = Field(default=30, ge=5, le=300)
+    """How long a WebSocket ticket may be redeemed for — AD-09.
+
+    **Thirty seconds**, and the decision is the whole point of the ticket
+    existing. AD-09's reasoning is that a browser cannot set headers on a
+    WebSocket handshake, so the credential lands in the query string and
+    therefore in load balancer logs, proxy logs and browser history. A
+    ticket that is valid for seconds and redeemable once makes that leakage
+    worthless: by the time anybody reads the log line, the value in it has
+    both expired and been spent.
+
+    Thirty is the window between "the client called `POST /auth/ws-ticket`"
+    and "the socket is open", which is one round trip plus a TLS handshake
+    on a bad mobile connection. The floor of five seconds is a guard rather
+    than a range — below a plausible round trip this is not a tighter
+    window, it is a ticket that expires before it can be presented.
+    """
+
+    connection_ttl_seconds: int = Field(default=90, ge=15, le=600)
+    """How long the registry believes in a connection without a heartbeat.
+
+    This is what makes a **crashed gateway node** self-healing. Its
+    connections are entries in a sorted set scored by expiry, so a node
+    that dies stops refreshing and its entries fall out of every count on
+    the next operation by any other node — rather than pinning its players
+    online until somebody notices.
+
+    It must exceed `heartbeat_timeout_seconds`, because a connection the
+    server is still willing to wait for must not have already been dropped
+    from the registry by its own node.
+    """
+
+    heartbeat_timeout_seconds: float = Field(default=45.0, ge=5.0, le=300.0)
+    """How long a connection may say nothing before it is closed.
+
+    A **receive deadline**, not a poll: the read is `wait_for(receive(),
+    this)`, so an idle connection costs nothing until the deadline actually
+    lapses. A polling loop at this frequency across 40,000 sockets would be
+    40,000 wakeups per interval spent discovering that nothing happened.
+
+    Roughly half of `connection_ttl_seconds` deliberately, which leaves a
+    client one missed heartbeat before the server gives up on it.
+    """
+
+    max_frame_bytes: int = Field(default=8 * 1024, ge=512, le=1024 * 1024)
+    """The largest frame this gateway will decode.
+
+    Eight kilobytes, against a protocol whose largest legitimate message
+    today is a few hundred bytes. The bound exists because parsing is the
+    first thing an unauthenticated-shaped attacker reaches: without it, one
+    socket can make the server allocate and parse whatever it is willing to
+    send, which is a memory amplification rather than a protocol error.
+
+    Generous relative to today's messages on purpose — A64-016.2's move
+    frames are still small, and a limit that has to be raised for every new
+    message type is a limit somebody eventually raises without thinking.
+    """
+
+    @model_validator(mode="after")
+    def _bounds_are_ordered(self) -> "GatewaySettings":
+        """The three timers must nest, and a misordering is silent.
+
+        Checked here rather than left to a comment because every one of
+        these failures produces a *working* gateway with a subtly wrong
+        liveness model — sockets that flap, or players who are reported
+        offline while connected — and the symptom appears under load, days
+        later, on somebody else's dashboard.
+        """
+        if self.connection_ttl_seconds <= self.heartbeat_timeout_seconds:
+            raise ValueError(
+                "GATEWAY_CONNECTION_TTL_SECONDS must exceed "
+                "GATEWAY_HEARTBEAT_TIMEOUT_SECONDS — a connection the server is "
+                "still waiting on must not already have left the registry"
+            )
+        return self
+
+
 class Settings(BaseModel):
     """The composed, immutable configuration for this process."""
 
@@ -1803,6 +1902,7 @@ class Settings(BaseModel):
     friends: FriendsSettings
     outbox: OutboxSettings
     matchmaking: MatchmakingSettings
+    gateway: GatewaySettings
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":
@@ -1889,4 +1989,5 @@ def get_settings() -> Settings:
         friends=FriendsSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         outbox=OutboxSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         matchmaking=MatchmakingSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        gateway=GatewaySettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

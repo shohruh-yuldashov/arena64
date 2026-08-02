@@ -29,6 +29,7 @@ from app.database.rate_limiter import RedisRateLimiter
 from app.database.redis import RedisPools, create_redis_pools
 from app.database.session_manager import DatabaseSessionManager
 from app.database.unit_of_work import SessionUnitOfWork
+from app.gateway.router import gateway_router
 from app.modules.friends.application.ports import SocialGraphCache
 from app.modules.friends.infrastructure.cache import (
     NoSocialGraphCache,
@@ -1095,5 +1096,12 @@ def create_app() -> FastAPI:
     # resolve (app/api/v1/health.py's docstring).
     app.include_router(health_router)
     app.include_router(api_router, prefix=API_PREFIX)
+
+    # A64-016.1. Unversioned in the path, like the health probe and for a
+    # different reason: a WebSocket negotiates its protocol version *in
+    # band* (`gateway.protocol.PROTOCOL_VERSION`), so a version in the URL
+    # would pin a connection that lives for an hour to a number chosen at
+    # connect time. See `app/gateway/router.py`.
+    app.include_router(gateway_router)
 
     return app

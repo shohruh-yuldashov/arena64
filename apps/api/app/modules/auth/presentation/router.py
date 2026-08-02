@@ -103,6 +103,7 @@ from app.modules.auth.presentation.dependencies import (
     RegistrationServiceDep,
     SessionServiceDep,
     UserProfileReaderDep,
+    WebSocketTicketServiceDep,
 )
 from app.modules.auth.presentation.rate_limits import (
     FORGOT_PASSWORD_RATE_LIMIT,
@@ -122,6 +123,7 @@ from app.modules.auth.presentation.schemas import (
     TokenPair,
     VerificationAccepted,
     VerifyEmailRequest,
+    WebSocketTicketRead,
 )
 from app.modules.notifications.presentation.dependencies import (
     PresenceNotificationServiceDep,
@@ -493,6 +495,42 @@ async def logout_all(
     await presence.record_offline(user.id)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@auth_router.post(
+    "/ws-ticket",
+    status_code=status.HTTP_201_CREATED,
+    summary="Mint a single-use WebSocket ticket",
+    response_description="A ticket valid for seconds, redeemable once.",
+    responses={**_UNAUTHORIZED},
+)
+async def websocket_ticket(
+    user: CurrentUser, tickets: WebSocketTicketServiceDep
+) -> ApiResponse[WebSocketTicketRead]:
+    """Issues the credential `GET /ws` accepts — AD-09.
+
+    An ordinary authenticated route, and that is the design rather than an
+    implementation detail: browsers cannot set headers on a WebSocket
+    handshake, so the socket's credential has to survive a query string —
+    and the only safe thing to put there is a value that is worthless
+    seconds later and cannot be replayed.
+
+    **This is not a second authentication mechanism.** The caller has
+    already been authenticated by `TokenValidator` in the ordinary way
+    (`CurrentUser`); a ticket is downstream of that check rather than
+    alongside it, so there remains exactly one thing on this platform that
+    decides whether a credential is valid.
+
+    `201`, because a ticket is a resource this call brings into existence
+    and each call makes a different one. No `Location` header: the ticket
+    is not addressable, which is the point of it.
+
+    Not throttled by its own rule. A client legitimately mints one per
+    socket and reconnects on a flaky network; the platform-wide limit is
+    what bounds abuse, and a second policy here would be a second place to
+    get one number right.
+    """
+    return build_response(WebSocketTicketRead.of(await tickets.issue(user.id)))
 
 
 @auth_router.get(

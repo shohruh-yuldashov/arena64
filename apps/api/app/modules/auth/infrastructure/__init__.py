@@ -20,11 +20,13 @@ from app.modules.auth.infrastructure.repositories import (
     SqlAlchemySessionRepository,
     SqlAlchemyVerificationTokenRepository,
 )
+from app.modules.auth.infrastructure.websocket_ticket_store import RedisWebSocketTicketStore
 
 __all__ = [
     "Argon2idPasswordHasher",
     "ConsoleEmailProvider",
     "JwtTokenProvider",
+    "RedisWebSocketTicketStore",
     "SqlAlchemyPasswordResetTokenRepository",
     "SqlAlchemySessionRepository",
     "SqlAlchemyVerificationTokenRepository",

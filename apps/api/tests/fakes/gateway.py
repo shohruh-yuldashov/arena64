@@ -31,8 +31,10 @@ import asyncio
 from collections.abc import Sequence
 from uuid import UUID
 
-from app.gateway.ports import ConnectionClosed
+from app.gateway.ports import ConnectionClosed, ConnectionRoute
 from app.gateway.protocol import GatewayMessage, MessageType
+from app.gateway.rooms import RoomMember
+from app.modules.game.public import MatchRecordStatus, MatchRoster
 from app.modules.users.public import DeviceType
 
 
@@ -131,33 +133,60 @@ class FakeConnectionRegistry:
     """
 
     def __init__(self) -> None:
-        self.connections: dict[UUID, set[UUID]] = {}
+        self.connections: dict[UUID, dict[UUID, str]] = {}
         #: Makes every write raise, for the registration-failure path.
         self.fails = False
         self.unregister_calls: list[tuple[UUID, UUID]] = []
 
-    async def register(self, player_id: UUID, connection_id: UUID, *, ttl_seconds: int) -> int:
+    async def register(
+        self, player_id: UUID, connection_id: UUID, *, node_id: str, ttl_seconds: int
+    ) -> int:
         if self.fails:
             raise RuntimeError("the registry is unreachable")
-        # A set, so registering the same connection twice leaves one entry —
-        # which is what `ZADD` on an existing member does.
-        self.connections.setdefault(player_id, set()).add(connection_id)
+        # A dict keyed on the connection, so registering the same one twice
+        # leaves one entry — which is what `ZADD` on an existing member does
+        # — and so the node is recorded beside it, which is `gwconn:v2:`'s
+        # whole point (A64-016.2 §2).
+        self.connections.setdefault(player_id, {})[connection_id] = node_id
         return len(self.connections[player_id])
 
     async def unregister(self, player_id: UUID, connection_id: UUID) -> int:
         self.unregister_calls.append((player_id, connection_id))
-        live = self.connections.setdefault(player_id, set())
-        # `discard`, not `remove`: unregistering something already gone is a
-        # no-op that still reports the true remaining count, which is what
-        # makes the real adapter's cleanup idempotent.
-        live.discard(connection_id)
+        live = self.connections.setdefault(player_id, {})
+        # `pop` with a default, not `del`: unregistering something already
+        # gone is a no-op that still reports the true remaining count, which
+        # is what makes the real adapter's cleanup idempotent.
+        live.pop(connection_id, None)
         return len(live)
 
-    async def refresh(self, player_id: UUID, connection_id: UUID, *, ttl_seconds: int) -> bool:
-        return connection_id in self.connections.get(player_id, set())
+    async def refresh(
+        self, player_id: UUID, connection_id: UUID, *, node_id: str, ttl_seconds: int
+    ) -> bool:
+        return connection_id in self.connections.get(player_id, {})
 
     async def active_count(self, player_id: UUID) -> int:
-        return len(self.connections.get(player_id, set()))
+        return len(self.connections.get(player_id, {}))
+
+    async def routes_for(self, player_id: UUID) -> Sequence[ConnectionRoute]:
+        """Every connection and where it is — the read the router runs on.
+
+        No expiry modelling, for the reason this class has never modelled
+        one: every test here drives the lifecycle explicitly, and a fake
+        clock in the registry would make "the entry lapsed" a property of
+        the fake rather than of Redis.
+        """
+        return tuple(
+            ConnectionRoute(
+                player_id=player_id,
+                connection_id=connection_id,
+                node_id=node_id,
+                expires_at=0.0,
+            )
+            for connection_id, node_id in self.connections.get(player_id, {}).items()
+        )
+
+    async def node_for(self, player_id: UUID, connection_id: UUID) -> str | None:
+        return self.connections.get(player_id, {}).get(connection_id)
 
 
 class RecordingPresence:
@@ -189,6 +218,96 @@ class RecordingPresence:
 __all__ = [
     "FakeConnectionRegistry",
     "FakeGatewaySocket",
+    "FakeRoomMemberStore",
     "FakeTicketRedeemer",
     "RecordingPresence",
+    "StubMatchRosters",
 ]
+
+
+class FakeRoomMemberStore:
+    """The `gwroom:v1:` sorted set and its reverse index, as two dicts.
+
+    Models the two properties the room lifecycle actually rests on, and
+    nothing else:
+
+    **Membership is the `(player, connection)` pair.** So one tab leaving
+    cannot take another out of the room — A64-016.2 §8's requirement, and
+    the one a store keyed on the player alone would silently break.
+
+    **Leave is idempotent.** Detaching an absent member removes nothing and
+    still reports the truth, which is what the real `ZREM` plus read
+    produces and what makes a disconnect racing an explicit `room.leave`
+    safe.
+
+    Not modelled: expiry, and the atomicity of "add then read the members".
+    Both belong to Redis, and both are asserted against it in
+    `tests/contract/test_gateway_redis.py` — the same line every fake on
+    this platform draws.
+    """
+
+    def __init__(self) -> None:
+        self.rooms: dict[UUID, list[RoomMember]] = {}
+        self.rooms_of_connection: dict[UUID, set[UUID]] = {}
+
+    async def join(
+        self, match_id: UUID, member: RoomMember, *, ttl_seconds: int
+    ) -> Sequence[RoomMember]:
+        members = self.rooms.setdefault(match_id, [])
+        if member not in members:
+            members.append(member)
+        self.rooms_of_connection.setdefault(member.connection_id, set()).add(match_id)
+        return tuple(members)
+
+    async def leave(self, match_id: UUID, member: RoomMember) -> Sequence[RoomMember]:
+        members = self.rooms.setdefault(match_id, [])
+        if member in members:
+            members.remove(member)
+        self.rooms_of_connection.get(member.connection_id, set()).discard(match_id)
+        return tuple(members)
+
+    async def members_of(self, match_id: UUID) -> Sequence[RoomMember]:
+        return tuple(self.rooms.get(match_id, []))
+
+    async def leave_all(self, member: RoomMember) -> Sequence[UUID]:
+        left = tuple(self.rooms_of_connection.pop(member.connection_id, set()))
+        for match_id in left:
+            members = self.rooms.setdefault(match_id, [])
+            if member in members:
+                members.remove(member)
+        return left
+
+
+class StubMatchRosters:
+    """A `game.public.MatchRosterReader` a test dictates the answers of.
+
+    A stub rather than the real `GameMatchRoster` for the reason `game`'s
+    match creation is stubbed in the pairing suite: what these tests are
+    about is what the *gateway* does with an answer, not how `game` arrives
+    at one. The read itself is a primary-key lookup and a projection, and
+    exercising it here would make every room test also a database test.
+
+    Returns `None` for an unknown match, which is the published contract —
+    and the case §7's "non-participant cannot join" shares with a match that
+    does not exist, deliberately.
+    """
+
+    def __init__(self) -> None:
+        self.rosters: dict[UUID, MatchRoster] = {}
+
+    def add(
+        self,
+        match_id: UUID,
+        light: UUID,
+        dark: UUID,
+        *,
+        status: MatchRecordStatus = MatchRecordStatus.ACTIVE,
+    ) -> MatchRoster:
+        roster = MatchRoster(
+            match_id=match_id, light_player_id=light, dark_player_id=dark, status=status
+        )
+        self.rosters[match_id] = roster
+        return roster
+
+    async def roster_of(self, match_id: UUID) -> MatchRoster | None:
+        return self.rosters.get(match_id)

@@ -120,6 +120,7 @@ from app.modules.game.public.reconciliation import (
     PairingSettlement,
 )
 from app.modules.game.public.retention import AbandonedMatchRetention
+from app.modules.game.public.rooms import MatchRoster, MatchRosterReader
 
 __all__ = [
     "MATCH_AGGREGATE",
@@ -145,6 +146,8 @@ __all__ = [
     "MatchOutcome",
     "MatchParticipant",
     "MatchRecordStatus",
+    "MatchRoster",
+    "MatchRosterReader",
     "NotAMatchParticipant",
     "PairingReconciliationReader",
     "PairingSettlement",

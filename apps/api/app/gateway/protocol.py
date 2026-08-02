@@ -49,9 +49,11 @@ The server knows precisely what happened and says so in its logs.
 """
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Final
+from uuid import UUID
 
 #: The protocol this build speaks. A client sending a different version is
 #: refused rather than best-guessed — see `decode`.
@@ -68,6 +70,7 @@ _VERSION: Final = "v"
 _TYPE: Final = "type"
 _REQUEST_ID: Final = "request_id"
 _PAYLOAD: Final = "payload"
+_CHANNEL: Final = "channel"
 
 #: The longest `request_id` this gateway will echo.
 #:
@@ -77,6 +80,41 @@ _PAYLOAD: Final = "payload"
 #: amplification primitive. Sixty-four characters is a UUID with room to
 #: spare.
 MAX_REQUEST_ID_LENGTH: Final = 64
+
+
+class Channel(StrEnum):
+    """Which logical stream a frame belongs to — AD-11, A64-016.2 §4.
+
+    AD-11 puts **one socket per client, multiplexed by channel**, and gives
+    two reasons: browsers limit concurrent connections per origin and mobile
+    clients pay a battery cost per socket, but more importantly separate
+    sockets for moves and chat would make cross-stream ordering undefined —
+    a resignation and a chat message sent in that order must arrive in that
+    order.
+
+    So the channel is a **field**, not a connection. Three members, each
+    owned by a different producer, which is what makes the split worth
+    having:
+
+        system       the connection itself — readiness, heartbeat, errors
+        matchmaking  queue and pairing notifications (A64-015.5's pending
+                     match delivery is the first thing that will use it)
+        game         one live match's traffic
+
+    Deliberately not per-match. A channel is a *kind* of traffic; which
+    match a frame concerns is in the payload, because a member per live
+    match would make this enum unbounded — and an unbounded label is exactly
+    what §11 forbids on a metric.
+
+    **Defaults to `system` when a frame omits it**, which is what makes this
+    a backwards-compatible addition rather than a protocol bump: an
+    A64-016.1 client sends no channel and every frame it sends is a system
+    frame, so `PROTOCOL_VERSION` stays at 1.
+    """
+
+    SYSTEM = "system"
+    MATCHMAKING = "matchmaking"
+    GAME = "game"
 
 
 class MessageType(StrEnum):
@@ -103,6 +141,25 @@ class MessageType(StrEnum):
     PONG = "pong"
     """Server to client, in answer to a `ping`. Echoes the `request_id`."""
 
+    ROOM_JOIN = "room.join"
+    """Client to server, on the `game` channel — A64-016.2 §5.
+
+    Asks to enter one match's routing scope. Carries `match_id` and
+    **nothing else**: the player is the socket's authenticated identity, and
+    a client-supplied player id would be a client choosing whose room it
+    joins (§7)."""
+
+    ROOM_LEAVE = "room.leave"
+    """Client to server. Leaves a room this connection is in. Idempotent —
+    leaving one it is not in is not an error."""
+
+    ROOM_JOINED = "room.joined"
+    """Server to client, confirming a join, with the room as it now
+    stands."""
+
+    ROOM_LEFT = "room.left"
+    """Server to client, confirming a leave."""
+
     ERROR = "error"
     """Server to client. Always carries a `GatewayErrorCode`, never prose."""
 
@@ -123,6 +180,21 @@ class GatewayErrorCode(StrEnum):
     """The frame could not be decoded: not JSON, not an object, too large,
     an unknown type, or the wrong protocol version. The connection **stays
     open** — see `GatewayConnectionService`."""
+
+    NOT_A_PARTICIPANT = "not_a_participant"
+    """The socket asked to join a room for a match it is not in — or one
+    that does not exist. **One code for both**, for the reason
+    `INVALID_TICKET` covers three: distinguishing them makes live match
+    identifiers enumerable by response, which is the same argument
+    `MatchAcceptanceUseCase.accept` makes for collapsing them into
+    `MatchNotFound`."""
+
+    ROOM_UNAVAILABLE = "room_unavailable"
+    """The match exists and this player is in it, but it is not in a state
+    that has a room — see `GameRoomService`. Distinct from
+    `NOT_A_PARTICIPANT` because it discloses nothing the caller does not
+    already know (they are a participant) and because the client's response
+    differs: wait, rather than stop asking."""
 
     INTERNAL_ERROR = "internal_error"
     """Something failed that the client cannot act on. Matches the platform's
@@ -160,6 +232,13 @@ class GatewayMessage:
     type: MessageType
     payload: dict[str, Any] = field(default_factory=dict)
     request_id: str | None = None
+    channel: Channel = Channel.SYSTEM
+    """Which stream this frame belongs to — AD-11.
+
+    Defaulted rather than required, so every A64-016.1 call site that
+    constructs a system frame is unchanged and cannot accidentally be
+    stamped with somebody else's channel."""
+
     version: int = PROTOCOL_VERSION
 
     def to_json(self) -> str:
@@ -173,6 +252,7 @@ class GatewayMessage:
         frame: dict[str, Any] = {
             _VERSION: self.version,
             _TYPE: self.type.value,
+            _CHANNEL: self.channel.value,
             _PAYLOAD: self.payload,
         }
         if self.request_id is not None:
@@ -203,10 +283,66 @@ def pong(*, request_id: str | None) -> GatewayMessage:
     return GatewayMessage(type=MessageType.PONG, request_id=request_id)
 
 
-def error(code: GatewayErrorCode, *, request_id: str | None = None) -> GatewayMessage:
-    """A refusal the client can branch on."""
+def error(
+    code: GatewayErrorCode,
+    *,
+    request_id: str | None = None,
+    channel: Channel = Channel.SYSTEM,
+) -> GatewayMessage:
+    """A refusal the client can branch on.
+
+    Carries the channel the failing frame arrived on, so a client
+    multiplexing three streams knows which of its requests was refused —
+    an error that always came back on `system` would be an error a `game`
+    handler could not attribute.
+    """
     return GatewayMessage(
-        type=MessageType.ERROR, payload={"code": code.value}, request_id=request_id
+        type=MessageType.ERROR,
+        payload={"code": code.value},
+        request_id=request_id,
+        channel=channel,
+    )
+
+
+def room_joined(
+    *, match_id: UUID, participants: Sequence[UUID], both_connected: bool, request_id: str | None
+) -> GatewayMessage:
+    """Confirmation that this connection is in a match's routing scope.
+
+    Carries the **participants**, which a client already knows — it is one
+    of them and `PendingMatchView` named the other — and `both_connected`,
+    which it cannot know and is the whole reason to send anything back
+    beyond an acknowledgement.
+
+    Carries **no connection ids and no node id** (§3): which sockets the
+    other player holds, and which process holds them, is internal topology
+    that a browser cannot act on and that maps the fleet for anyone who
+    collects it.
+    """
+    return GatewayMessage(
+        type=MessageType.ROOM_JOINED,
+        payload={
+            "match_id": str(match_id),
+            "participants": [str(player_id) for player_id in participants],
+            "both_connected": both_connected,
+        },
+        request_id=request_id,
+        channel=Channel.GAME,
+    )
+
+
+def room_left(*, match_id: UUID, request_id: str | None) -> GatewayMessage:
+    """Confirmation that this connection has left a room.
+
+    Sent for an idempotent leave as well as a real one — see
+    `GameRoomService.leave` on why a client asking to leave a room it is
+    not in gets the outcome it asked for rather than an error.
+    """
+    return GatewayMessage(
+        type=MessageType.ROOM_LEFT,
+        payload={"match_id": str(match_id)},
+        request_id=request_id,
+        channel=Channel.GAME,
     )
 
 
@@ -255,8 +391,32 @@ def decode(raw: str, *, max_bytes: int) -> GatewayMessage:
         type=message_type,
         payload=payload,
         request_id=_request_id_of(frame),
+        channel=_channel_of(frame),
         version=PROTOCOL_VERSION,
     )
+
+
+def _channel_of(frame: dict[str, Any]) -> Channel:
+    """Which stream the client says this frame is on.
+
+    An absent channel is `system`, which is what makes the field a
+    backwards-compatible addition — an A64-016.1 client sends none and every
+    frame it sends is a system frame.
+
+    An **unknown** one is refused rather than defaulted, and the asymmetry
+    is deliberate: absent means "an older client", which is a thing to
+    support, while `"chat"` from a build that does not have chat means the
+    two ends disagree about what this socket can carry, and silently
+    treating it as `system` would deliver it somewhere nobody intended.
+    """
+    raw = frame.get(_CHANNEL)
+    if raw is None:
+        return Channel.SYSTEM
+
+    try:
+        return Channel(raw)
+    except ValueError as exc:
+        raise MalformedFrame(GatewayErrorCode.MALFORMED_MESSAGE, "unknown channel") from exc
 
 
 def _request_id_of(frame: dict[str, Any]) -> str | None:
@@ -278,6 +438,7 @@ def _request_id_of(frame: dict[str, Any]) -> str | None:
 __all__ = [
     "MAX_REQUEST_ID_LENGTH",
     "PROTOCOL_VERSION",
+    "Channel",
     "GatewayErrorCode",
     "GatewayMessage",
     "MalformedFrame",
@@ -286,4 +447,6 @@ __all__ = [
     "decode",
     "error",
     "pong",
+    "room_joined",
+    "room_left",
 ]

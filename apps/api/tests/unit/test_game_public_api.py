@@ -184,6 +184,12 @@ class TestTheSurfaceIsDeliberate:
         "MatchCreated",
         "MatchDeclined",
         "MatchOutcome",
+        # A64-016.2 — the gateway's one question. A room admits a socket
+        # only if `game` says the player is in the match, and the reader
+        # published for it has exactly one method: a transport tier that was
+        # compromised could enumerate nothing and change nothing.
+        "MatchRoster",
+        "MatchRosterReader",
     }
 
     def test_nothing_is_published_by_accident(self) -> None:

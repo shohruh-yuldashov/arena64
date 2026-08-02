@@ -182,3 +182,27 @@ class ErrorCode(StrEnum):
     # file*. Those two share the generic `validation_error`, which the
     # message qualifies.
     AVATAR_TOO_LARGE = "avatar_too_large"
+
+    # `matchmaking` (A64-015.5). **One** code, and it is earned by the rule
+    # in this class's docstring rather than bending it: `POST
+    # /matchmaking/queue` already answers `409` for "you are already
+    # queued", and a decline cooldown is a second, entirely different `409`
+    # on the same endpoint with a different client action.
+    #
+    #   AlreadyQueued          leave the queue you are in, or wait for the
+    #                          match you already have
+    #   QUEUE_COOLDOWN_ACTIVE  you cannot queue for a stated number of
+    #                          seconds — show a countdown, disable the
+    #                          button, retry after
+    #
+    # A client that could not tell them apart would render "you are already
+    # in a queue" to somebody who is not in one, and would offer a "leave
+    # queue" action that does nothing. That is precisely the case
+    # `DUPLICATE_FRIEND_REQUEST` and `OPPOSITE_FRIEND_REQUEST_PENDING` were
+    # split for.
+    #
+    # It names its own cause, unlike every other queue refusal, and that
+    # asymmetry is deliberate — see `QueueCooldownActive` on why a bar the
+    # player earned by their own action may be explained while one that
+    # depends on the block graph may not.
+    QUEUE_COOLDOWN_ACTIVE = "queue_cooldown_active"

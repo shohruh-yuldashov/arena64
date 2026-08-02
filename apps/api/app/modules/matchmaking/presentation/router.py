@@ -37,6 +37,7 @@ Every failure is a typed exception on the platform hierarchy, and
 `try`/`except` in this file:
 
     AlreadyQueued          -> 409  conflict
+    QueueCooldownActive    -> 409  queue_cooldown_active, + Retry-After
     QueueNotPermitted      -> 422  validation_error
     NotQueued              -> 404  not_found
     MatchNotFound          -> 404  not_found
@@ -98,8 +99,12 @@ _UNAUTHORIZED: Responses = error_response(
 _ALREADY_QUEUED: Responses = error_response(
     409,
     (
-        "You already hold a live queue ticket. One ticket per player, **across all "
-        "pools** — leave the queue before joining a different one."
+        "You already hold a live queue ticket, **or** you declined a match recently "
+        "and are in a short cooldown. The `code` distinguishes them: `conflict` means "
+        "leave the queue you are in; `queue_cooldown_active` means wait, and "
+        "`Retry-After` says how long.\n\n"
+        "One ticket per player, **across all pools** — leave the queue before joining "
+        "a different one."
     ),
 )
 _NOT_QUEUED: Responses = error_response(
@@ -175,9 +180,18 @@ async def join_queue(
     — at which point `GET /matchmaking/queue/me` answers `404` and
     `GET /matchmaking/matches/pending` has your offer.
 
-    Poll both, or poll the queue and follow its `404` to the match. A
-    client written against A64-014.1's three endpoints still works; it
-    simply cannot see the match it has been given.
+    Since A64-015.5 that offer is **pushed** to a connected client rather
+    than waited for; the polling endpoint is the reconnect fallback.
+
+    ## Two `409`s, and they mean different things
+
+    `conflict` — you already hold a live ticket. Leave it, or answer the
+    match you have.
+
+    `queue_cooldown_active` — you declined a match recently. Nothing to
+    undo; `Retry-After` says how many seconds until you may queue again.
+    Declining is the only thing that earns this: letting a match's window
+    close in silence does not.
 
     ## One ticket, across every pool
 
@@ -335,9 +349,31 @@ async def read_pending_match(
     match is expired for both of you shortly afterwards by a background job
     — the deadline is the rule, and the job is only the bookkeeping.
 
+    ## This is the fallback, not the primary delivery
+
+    Since A64-015.5 a pending match is **pushed**: `game.match_created`
+    reaches a realtime consumer through the transactional outbox, which
+    re-reads the match, re-checks the block graph and hands it to the
+    gateway. A connected client learns about its match without asking.
+
+    This endpoint remains, and is deliberately not deprecated. It is what a
+    client uses to **recover**:
+
+    | Situation | Why polling is the answer |
+    | --- | --- |
+    | Reconnect | The push happened while the socket was down |
+    | Cold start | A client that has just opened does not know what it missed |
+    | Push disabled | `MATCHMAKING_REALTIME_DELIVERY_ENABLED=false` is a real deployment |
+    | Doubt | The authoritative state is the database, and this reads it |
+
+    A client that only polls still works correctly; it simply learns later.
+    A client that only listens is correct until the first dropped
+    connection, which is why this must not become optional.
+
     **Not rate limited**, unlike the two answers. This is the endpoint a
-    client polls while deciding, and throttling it would make a working
-    handshake look broken in exactly the situation it is working.
+    client polls while deciding *and* the one it calls on every reconnect,
+    and throttling it would make a working handshake look broken in exactly
+    the situation it is working.
     """
     view = await acceptance.pending_match(user.id)
     if view is None:

@@ -81,16 +81,26 @@ non-HOT are predicated on `status`, which is exactly the column an
 acceptance writes, so reserving free space would cost storage and buy
 nothing. The same argument `queue_ticket` records, and the same conclusion.
 
-## Retention: none, deliberately
+## Retention applies to the churn, never to a game — A64-015.5
 
-Unlike `queue_ticket`, this relation is **meant** to grow without bound. A
-match is the permanent competitive record A-4 is about, and DM-13's
+A64-015.4 shipped this relation with no horizon and said why: "a match is
+the permanent competitive record A-4 is about, and DM-13's
 anonymise-don't-delete position exists precisely so that it survives
-erasure. What will need a horizon is the pending-acceptance *churn* —
-cancelled and expired rows that were never games — and that is a product
-decision (how long is "why did my opponent decline" answerable?) rather
-than a capacity one. Recorded in the recommendations rather than guessed
-at here.
+erasure." That is still true, and it was only ever true of matches that were
+*played*.
+
+The same docstring named what would need bounding — "the pending-acceptance
+**churn**: cancelled and expired rows that were never games" — and
+A64-015.5 §8 supplies the horizon. `ix_match__abandoned` is the index it
+claims through, and the predicate is the safety property: an `active` match
+is not in it, so no configuration can reach one.
+
+The sweep is driven by `matchmaking`, through
+`game.public.AbandonedMatchRetention`. `game` owns the rows; the horizon is
+the same product judgement as the queue's own ("how long is *why did my
+opponent decline* answerable?"), so the module with the opinion supplies
+it — the same division that already has `matchmaking` driving
+`MatchAcceptanceExpiryUseCase`.
 """
 
 from datetime import datetime
@@ -105,7 +115,7 @@ from app.database.mixins.uuid_pk import UUIDPrimaryKeyMixin
 from app.database.types import UtcDateTime
 from app.modules.engine import PlayerSide
 from app.modules.game.domain.match_record import MatchRecordStatus
-from app.modules.game.public.variants import ProductVariant
+from app.modules.game.domain.variants import ProductVariant
 
 #: database.md §222 — one schema per bounded context.
 GAME_SCHEMA = "game"
@@ -139,6 +149,15 @@ def _enum(python_type: type, name: str) -> PgEnum:
 #: two — which would be a constraint and an index disagreeing about whether
 #: a match is still awaiting an answer.
 _PENDING_PREDICATE = f"status = '{MatchRecordStatus.PENDING_ACCEPTANCE.value}'"
+
+#: The SQL spelling of "this match never became a game" — A64-015.5 §8.
+#:
+#: Derived from the enum like the predicate above, so a fifth status cannot
+#: silently join the set retention deletes. That is the one change to
+#: `MatchRecordStatus` that needs a decision rather than a migration.
+_ABANDONED_PREDICATE = (
+    f"status IN ('{MatchRecordStatus.CANCELLED.value}', '{MatchRecordStatus.EXPIRED.value}')"
+)
 
 _VARIANT_ENUM = _enum(ProductVariant, "match_variant")
 _STATUS_ENUM = _enum(MatchRecordStatus, "match_status")
@@ -200,6 +219,22 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
         # the player and carrying the instant.
         Index("ix_match__light_player_recent", "light_player_id", "created_at"),
         Index("ix_match__dark_player_recent", "dark_player_id", "created_at"),
+        # Retention's claim — A64-015.5 §8: "matches that never became
+        # games, settled before X, oldest first".
+        #
+        # Partial on the two statuses a match reaches **without being
+        # played**, which is the property that makes the job safe: an
+        # `active` match is not in this index, so a retention sweep cannot
+        # reach one however its horizon is configured. A `pending_acceptance`
+        # one is excluded too — a pairing still awaiting an answer is not
+        # abandoned however old it looks, and one that is old *and* pending
+        # is a reconciliation failure the sweep must surface rather than
+        # delete.
+        Index(
+            "ix_match__abandoned",
+            "settled_at",
+            postgresql_where=text(_ABANDONED_PREDICATE),
+        ),
         # `settled_at` is set exactly when the handshake is over — the same
         # shape as `ck_queue_ticket__resolved_iff_terminal`, and enforced
         # here as well as in `MatchRecord.__post_init__` so a row written

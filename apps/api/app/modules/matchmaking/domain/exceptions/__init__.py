@@ -21,7 +21,15 @@ have happened. Adding `already_queued` would grow the enum by a member that
 nothing switches on.
 """
 
-from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from typing import ClassVar
+
+from app.core.error_codes import ErrorCode
+from app.core.exceptions import (
+    ConflictError,
+    NotFoundError,
+    TemporaryConflictError,
+    ValidationError,
+)
 
 
 class AlreadyQueued(ConflictError):
@@ -87,3 +95,49 @@ class QueueNotPermitted(ValidationError):
     Replaces A64-015.1's `QueueNotPermitted`, which named its cause in its
     own class name and so could not survive a second check.
     """
+
+
+class QueueCooldownActive(TemporaryConflictError):
+    """This player declined a match recently and may not queue yet —
+    A64-015.5 §3.
+
+    `409` rather than `422`, and beside `AlreadyQueued` rather than under
+    `QueueNotPermitted`, for one reason: it is the platform's *state* that
+    refused this, it will stop being true on its own, and the caller's next
+    move is to wait a stated number of seconds. That is a conflict, and it
+    is the same shape `AlreadyQueued` has.
+
+    ## It carries its own wire code, and it names its cause
+
+    Every other queue refusal on this platform deliberately says nothing
+    about *why* — see `QueueNotPermitted`, whose docstring argues that a
+    refusal varying by cause would let a player probe the block graph by
+    queueing repeatedly. That argument does not reach this one, and the
+    difference is worth stating rather than treating as an inconsistency:
+
+      - `QueueNotPermitted`'s future causes are facts about **other
+        people** — a block, a sanction somebody filed. Naming them leaks.
+      - This one is a fact about **the caller's own action, taken seconds
+        ago, that they were told about at the time**. There is nothing here
+        they do not already know.
+
+    So it is the one refusal that may be explained, and it must be: a client
+    that could not distinguish it from `AlreadyQueued` would render "you are
+    already in a queue" to somebody who is not, and offer a "leave queue"
+    button that does nothing.
+
+    ## `retry_after_seconds`, and what it is not
+
+    The remaining window, floored at zero. It is on the exception rather
+    than only in the message so a client can render a countdown without
+    parsing prose, and it is **derived from the stored `expires_at`** rather
+    than from the configured duration — a cooldown extended by a second
+    decline reports its real end, not the length of one decline.
+
+    It deliberately does **not** say how many declines produced it, when
+    they happened, or which matches they were. That would be a behavioural
+    record on an error response, and the cooldown is a delay rather than a
+    disciplinary file — see `QueueCooldown` on why this is not moderation.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.QUEUE_COOLDOWN_ACTIVE

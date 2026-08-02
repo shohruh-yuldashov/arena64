@@ -1,11 +1,11 @@
 """`matchmaking`'s adapters — the only layer here that knows PostgreSQL,
 SQLAlchemy or a session exists.
 
-    models.py            the `matchmaking` schema and `queue_ticket`
-    repositories/        `SqlAlchemyQueueRepository`, incl. the SKIP LOCKED claims
-    rating_providers.py  the provisional `RatingSnapshotProvider`
-    tasks.py             `QueueExpiryTask`, `PairingTask` and
-                         `PairingReconciliationTask`
+    models.py               the schema, `queue_ticket` and `queue_cooldown`
+    repositories/           the three adapters, incl. the SKIP LOCKED claims
+    rating_providers.py     the provisional `RatingSnapshotProvider`
+    pending_match_sinks.py  where a realtime offer goes (A64-015.5 §4)
+    tasks.py                the four `platform.tasks` handlers
 
 Everything satisfies a port declared in `application/` (AD-06), so a use
 case names a contract and never one of these classes.
@@ -20,46 +20,70 @@ swap A64-015.3 predicted, one line in the composition root and nothing in
 
 from app.modules.matchmaking.infrastructure.models import (
     MATCHMAKING_SCHEMA,
+    QueueCooldownModel,
     QueueTicketModel,
 )
+from app.modules.matchmaking.infrastructure.pending_match_sinks import (
+    LoggingPendingMatchSink,
+    NullPendingMatchSink,
+)
 from app.modules.matchmaking.infrastructure.rating_providers import ProvisionalRatingProvider
-from app.modules.matchmaking.infrastructure.repositories import SqlAlchemyQueueRepository
+from app.modules.matchmaking.infrastructure.repositories import (
+    SqlAlchemyCooldownRepository,
+    SqlAlchemyQueueRepository,
+    SqlAlchemyQueueRetentionStore,
+)
 from app.modules.matchmaking.infrastructure.tasks import (
+    MAINTENANCE_QUEUE,
     MATCHMAKING_QUEUE,
     PAIRING_POOL_KEY,
     PAIRING_TASK,
     QUEUE_EXPIRY_TASK,
+    QUEUE_RETENTION_TASK,
     RECONCILIATION_TASK,
     PairingReconciliationTask,
     PairingServiceFactory,
     PairingTask,
     QueueExpiryTask,
+    QueueRetentionServiceFactory,
+    QueueRetentionTask,
     QueueServiceFactory,
     ReconciliationServiceFactory,
     expiry_request,
     pairing_request,
+    queue_retention_request,
     reconciliation_request,
     worker_identity,
 )
 
 __all__ = [
+    "MAINTENANCE_QUEUE",
     "MATCHMAKING_QUEUE",
     "MATCHMAKING_SCHEMA",
     "PAIRING_POOL_KEY",
     "PAIRING_TASK",
     "QUEUE_EXPIRY_TASK",
+    "QUEUE_RETENTION_TASK",
     "RECONCILIATION_TASK",
+    "LoggingPendingMatchSink",
+    "NullPendingMatchSink",
     "PairingReconciliationTask",
     "PairingServiceFactory",
     "PairingTask",
     "ProvisionalRatingProvider",
     "QueueExpiryTask",
+    "QueueRetentionServiceFactory",
+    "QueueRetentionTask",
     "QueueServiceFactory",
+    "QueueCooldownModel",
     "QueueTicketModel",
     "ReconciliationServiceFactory",
+    "SqlAlchemyCooldownRepository",
     "SqlAlchemyQueueRepository",
+    "SqlAlchemyQueueRetentionStore",
     "expiry_request",
     "pairing_request",
+    "queue_retention_request",
     "reconciliation_request",
     "worker_identity",
 ]

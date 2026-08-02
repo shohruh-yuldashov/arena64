@@ -1,9 +1,9 @@
 # Matchmaking
 
-> **Status:** Partial — §1–§10 specify the **queue domain**, its boundary with
-> `game`, and **pairing**, and are implemented (A64-014.1, A64-015.2,
-> A64-015.3). Challenges and acceptance are still unspecified, and no match is
-> persisted yet — see §9.8.
+> **Status:** Partial — §1–§12 specify the **queue domain**, its boundary with
+> `game`, **pairing**, **match persistence and acceptance**, and **recovery,
+> realtime delivery and retention**. All are implemented (A64-014.1 through
+> A64-015.5). Challenges remain unspecified.
 > **Owner:** _Unassigned_
 > **Related:** `templates/feature-spec.md`,
 > [`domain-model.md §9.2`](../docs/01-architecture/domain-model.md),
@@ -311,7 +311,19 @@ all (R-1, R-2) — enforced by two import-linter contracts and asserted by
 | `game_engine_version()` | The engine version a new match would be stamped with (AD-15) |
 | `GameEngineServices`, `engine_services()` | The engine's stateless collaborators, wired once |
 | `CreateMatchRequest`, `CreateMatchResult`, `MatchParticipant`, `PlayerSide` | The command `matchmaking` sends to create a match — A64-015.3 |
-| `MatchCreationUseCase`, `MatchCreationRefused`, `MatchCreationUnavailable`, `UnavailableMatchCreation` | The port that accepts it, its refusals, and the implementation that ships until matches are stored |
+| `MatchCreationUseCase`, `MatchCreationRefused` | The port that accepts it, and its one expected refusal |
+| `PendingMatchView`, `MatchRecordStatus`, `MatchAcceptanceUseCase` | The acceptance handshake — accept, decline, read your own (A64-015.4) |
+| `MatchAcceptanceExpiryUseCase` | The sweep that expires unanswered pairings |
+| `RecentOpponentReader` | QT-3's rematch guard, as a batch read |
+| `PairingReconciliationReader`, `PairingSettlement` | Did this reserved queue ticket produce a match |
+| `AbandonedMatchRetention` | Deleting the pairings that never became games (A64-015.5) |
+| `MatchCreated`, `MatchAcceptedByPlayer`, `MatchActivated`, `MatchDeclined`, `MatchAcceptanceExpired` | The five durable match events (A64-015.5) |
+| `MATCH_ANSWER_LATENCY`, `MATCH_OUTCOMES`, `AnswerLatency`, `MatchOutcome` | The two measurements that inform `MATCHMAKING_RESERVATION_TTL_SECONDS` (A64-015.5) |
+| `MatchNotFound`, `MatchNotPending`, `NotAMatchParticipant`, `AcceptanceWindowClosed` | The acceptance refusals |
+
+`MatchCreationUnavailable` and `UnavailableMatchCreation` were published here
+until A64-015.4 and are **deleted**: `game` can persist a match, so an adapter
+that refused every request is one somebody could wire back.
 
 `Match`, `MoveRecord`, `MatchResult` and the draw-rule set are **not**
 published, and A64-015.3 did not change that. R-3 keeps the modules that care
@@ -550,26 +562,28 @@ assigns the same sides as the attempt that crashed. "The longer wait moves
 first" was rejected: light moves first in Russian draughts, so it would be a
 measurable permanent edge handed to whoever the pool made wait.
 
-### 9.8 What is wired and not switched on
+### 9.8 Switched on since A64-015.4
 
-`MATCHMAKING_PAIRING_ENABLED` defaults to **`false`**, and that is the only
-honest setting today.
+`MATCHMAKING_PAIRING_ENABLED` defaults to **`true`**.
 
-`game` has a `Match` aggregate (A64-014.6) and no repository, no table and no
-migration for one. `game.public.UnavailableMatchCreation` is therefore what a
-scan reaches, and every pairing it found would be reserved, refused and
-released — the compensation path working exactly as designed, several times a
-second, forever, for no match.
+It shipped `false` for exactly one task, and the reason was concrete: `game`
+had a `Match` aggregate (A64-014.6) and no repository, no table and no
+migration for one, so a scan reached `UnavailableMatchCreation` and every
+pairing it found would have been reserved, refused and released — several
+times a second, forever, for no match.
 
-So the engine, the service, the task and the whole object graph ship and are
-tested; the schedule does not run. A64-015.4 replaces the match-creation
-adapter and flips the default in the same change.
+A64-015.4 supplied the five things required before the flag could flip, and
+each is an object rather than an assertion:
 
-The **previous-opponent** exclusion is deferred for the same reason: there is
-no match history to read. `NoRecentOpponents` excludes nobody, which is the
-safe direction — a rematch is a disappointment and an empty pool is an outage.
-When `game` publishes the read, `RecentOpponentProvider` is satisfied by
-`game.public` and nothing else in the graph changes.
+| Requirement | What satisfies it |
+| --- | --- |
+| Durable match creation | `game.match`, written by `PersistentMatchCreation` |
+| `pairing_id` idempotency | `uq_match__pairing_id` |
+| Ticket settlement | `PairingService._complete`, unchanged from A64-015.3 |
+| Automatic reconciliation | `MATCHMAKING_RECONCILIATION_ENABLED`, §10.5 |
+| Acceptance timeout | `MATCHMAKING_RESERVATION_TTL_SECONDS`, §10.3 |
+
+The **previous-opponent** exclusion landed with them — see §10.6.
 
 ### 9.9 Performance
 
@@ -588,7 +602,328 @@ measurement, and `QueuePool.identifier()` is what makes adding one cheap.
 
 ---
 
-## 10. Unresolved rules decisions blocking persisted games
+## 10. Match persistence and acceptance — A64-015.4
+
+A pairing was, until A64-015.4, an event and two settled tickets. It is now a
+**row two people have to agree to**.
+
+### 10.1 The persistence boundary
+
+`game` owns the match; `matchmaking` owns the queue tickets. Neither reads the
+other's table, and the edge is `game.public` in both directions — §8.1 lists
+the whole surface.
+
+The aggregate is still not published. R-3 has not moved: a consumer holding a
+`MatchRecord` could activate a match nobody accepted, so what crosses is
+**commands `game` accepts** and **views it hands out**.
+
+**Two match lifecycles, and they are not a duplication.** `game.domain.match`
+holds the *rules* state machine — has a move been played, has the game ended —
+and `game.domain.match_record` holds the *platform* one: does this contest
+exist and may it be played. `MatchStatus.CREATED` means "no move has been
+played", which a match only reaches once acceptance has already succeeded;
+`MatchRecordStatus.PENDING_ACCEPTANCE` is the state before that, in which no
+rules-bearing `Match` exists at all.
+
+### 10.2 `pairing_id` idempotency
+
+`uq_match__pairing_id` — a **unique index**, not a check-then-insert.
+
+`pairing_id` is derived from the two claimed ticket ids (§9.7), so a retry
+re-derives it exactly. The repository inserts inside a `SAVEPOINT`, lets the
+index refuse the loser, and re-reads by `pairing_id` — so two workers retrying
+one pairing at the same instant both come away with the same `match_id`, and
+the second is told `created=False`.
+
+The alternative fails under precisely the traffic it exists for: both read no
+row, both insert, and two players who agreed to one game have two. A-4 makes
+that permanent.
+
+### 10.3 One deadline, two rows
+
+`MATCHMAKING_RESERVATION_TTL_SECONDS` (default **30**) is the reservation
+deadline *and* the acceptance deadline. `PairingService._claim` computes
+`now + this` once, writes it to both reserved tickets as `reserved_until`, and
+sends the same instant to `game` as the match's `acceptance_deadline`.
+
+It must be strictly shorter than `MATCHMAKING_TICKET_TTL_SECONDS`, and a
+settings validator refuses the process otherwise (DI-06).
+
+### 10.4 Acceptance state transitions
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending_acceptance: a pairing created the match
+    pending_acceptance --> pending_acceptance: one player accepts
+    pending_acceptance --> active: both players have accepted
+    pending_acceptance --> cancelled: a player declines
+    pending_acceptance --> expired: the window closed unanswered
+    active --> [*]
+    cancelled --> [*]
+    expired --> [*]
+```
+
+| Rule | Enforced by |
+| --- | --- |
+| A newly paired match is never `active` | `MatchRecord`'s default, and `ck_match__active_iff_both_accepted` |
+| Only a participant may respond | the side is *derived* from the caller's id; there is no side parameter |
+| A repeat acceptance is idempotent | `MatchRecord.accepted_by` returns the same value |
+| Both accepted activates | in the same value that records the second answer |
+| One decline cancels | whatever the other side did |
+| A late answer is refused | by the *instant*, not by the sweep having run |
+| Two answers at once | `SELECT ... FOR UPDATE` — **not** `SKIP LOCKED` |
+
+### 10.5 Ticket settlement and reconciliation
+
+Match creation and ticket settlement do **not** share a transaction
+(services.md BE-05). The sequence is:
+
+    claim + reserve both tickets      transaction 1  (matchmaking)
+    create the match                  transaction 2  (game)
+    settle both tickets, publish      transaction 3  (matchmaking)
+
+`matchmaking.pairing.reconcile` closes the gap. It claims reservations past
+`reserved_until` with `SELECT ... FOR UPDATE SKIP LOCKED`, asks `game` whether
+each produced a match, and acts:
+
+| Durable state | Action |
+| --- | --- |
+| Reservation, match exists | settle as `matched`, with the match's `created_at` |
+| Reservation, no match, ticket in date | return to `waiting` with its original `entered_at` |
+| Reservation, no match, ticket due | expire it |
+| Pending match past its deadline | expire the match, through `game`'s published sweep |
+
+Every write is a compare-and-set: **running it twice is running it once**.
+
+### 10.6 Recent opponents — QT-3
+
+`GameRecentOpponents` satisfies `matchmaking`'s own `RecentOpponentProvider`
+structurally, so the composition root wires one object with no adapter.
+
+Its current definition is **wider than QT-3's, knowingly**: it excludes the
+most recent match that is no longer awaiting acceptance, rather than the most
+recent *completed* one, because no match can complete yet. The error is in the
+safe direction.
+
+### 10.7 API
+
+Three endpoints, on the queue's prefix — a player who has been paired and has
+not answered is, as far as the product is concerned, still being matched.
+
+| Method | Path | Success | Failures |
+| --- | --- | --- | --- |
+| `GET` | `/matchmaking/matches/pending` | `200` — the offer, with an opponent preview | `401`, `404` none |
+| `POST` | `/matchmaking/matches/{match_id}/accept` | `200`, **idempotent** | `401`, `404`, `409`, `429` |
+| `POST` | `/matchmaking/matches/{match_id}/decline` | `200` — the cancelled match | `401`, `404`, `409`, `429` |
+
+`404` covers "no such match" **and** "not yours", indistinguishably.
+
+The response is named from the reader's seat — `your_side`, `you_accepted`,
+`opponent_accepted` — and carries no `pairing_id`, no queue ticket id, no
+`reserved_until` and no `settled_at`. **No `time_control`**: that is §2.1's
+recorded gap, not a policy.
+
+---
+
+## 11. Recovery, realtime status and retention — A64-015.5
+
+A64-015.4 left three things open, and each is closed here: the
+acceptance-failure policy, the poll-only delivery of a pending match, and the
+two relations the handshake fills without bound.
+
+### 11.1 The acceptance-failure policy
+
+**A participant who accepted is requeued; a participant who explicitly
+declined earns a cooldown. Silence earns neither.**
+
+| What happened | The accepting player | The other player |
+| --- | --- | --- |
+| One accepted, one declined | requeued, original `entered_at` | cooldown, not requeued |
+| One accepted, one stayed silent | requeued, original `entered_at` | nothing |
+| Neither answered | — (nobody accepted) | nothing, for both |
+
+Three properties, each a decision:
+
+**The accepting player keeps their priority, not just their place.**
+`entered_at` is the pairing order's sort key *and* the input to QT-5's widening
+window, so a fresh instant would cost them both — and the second is the one
+that hurts, because they would be re-entered with a narrow search after
+already waiting. §11.2's requeue therefore preserves `entered_at`, the pool
+and the rating snapshot, and takes a **fresh** `expires_at`.
+
+**Silence is not a decline.** A decline is an observed decision; silence has a
+dozen causes the platform cannot distinguish. Punishing all of them for the
+one that deserves it would make the queue hostile to anybody on a train.
+
+**Neither player is told what happened to the other.** The requeued player
+gets a ticket; they are not told whether their opponent refused them or simply
+vanished.
+
+It is enforced by `MatchOutcomeService`, an **outbox consumer** on
+`game.match_declined` and `game.match_acceptance_expired` — not a branch inside
+acceptance. Three reasons: the decline happens in `game` and the requeue is a
+`matchmaking` write; the expiry path has no request at all; and a failed
+requeue must not fail a player's `200` on decline.
+
+### 11.2 Requeue semantics
+
+`QueueService.requeue(ticket_id)` returns the new ticket, or `None` when it
+**correctly did not apply** — the source is gone, it never produced a match,
+the player already holds a live ticket, they are no longer eligible, or
+somebody already requeued it.
+
+| Field | Requeued | Why |
+| --- | --- | --- |
+| `entered_at` | **preserved** | The whole policy |
+| `pool` | preserved | They asked for that game |
+| `rating_snapshot` | preserved | QT-2 fixes it at entry, and no game was played |
+| `expires_at` | **fresh** | The original window has usually closed |
+| `source_ticket_id` | set | Provenance, and the idempotency key |
+
+**Idempotency is the index**, `uq_queue_ticket__requeued_from`. The event
+ledger stops most redeliveries and cannot stop two workers processing one
+entry concurrently; a partial unique index can.
+
+**Eligibility is re-asked.** A player may have signed out in the intervening
+thirty seconds, or — the case that matters — declined a *different* match and
+earned a cooldown. Requeueing anyway would let a decline be laundered through
+somebody else's.
+
+### 11.3 The decline cooldown
+
+`MATCHMAKING_DECLINE_COOLDOWN_SECONDS` (default **60**). Durable
+(`matchmaking.queue_cooldown`), enforced on the join path by
+`CooldownEligibilityPolicy`, and **extended rather than accumulated** by a
+repeat — one `INSERT ... ON CONFLICT DO UPDATE ... GREATEST`, which is what
+makes "a repeated decline does not bypass the cooldown" a constraint under
+concurrency rather than a read-then-write.
+
+It is **not** a sanction: no appeal, no record beyond its own expiry, no
+escalation. Anything that should escalate belongs to `admin`.
+
+`QueueCooldownActive` is a `409` carrying `queue_cooldown_active` and
+`Retry-After`. It is the **one queue refusal that names its cause**, and the
+line is whose fact it is: `QueueNotPermitted` stays silent because its future
+causes are facts about other people (a block, a sanction), and this one is the
+caller's own action taken seconds ago. *A refusal may name its cause only when
+the cause is something the caller already knows they did.*
+
+### 11.4 Realtime delivery, and polling as fallback
+
+A pending match is **pushed**:
+
+    business transaction  the match and `game.match_created`, one commit
+    outbox                the relay claims the entry, ledger-deduplicated
+    PendingMatchNotifier  re-reads, authorises, renders
+    PendingMatchSink      the gateway delivery port
+
+`GET /matchmaking/matches/pending` **remains**, and is the recovery path: a
+reconnect, a cold start, a deployment with
+`MATCHMAKING_REALTIME_DELIVERY_ENABLED=false`, or simple doubt. A client that
+only polls still works; a client that only listens is correct until the first
+dropped connection.
+
+**Nothing is trusted from the payload except identity** (§6). Every question
+is asked at delivery: still a participant, still pending, deadline not passed,
+block state now. A block that appeared inside the window withholds the
+opponent's **name** and never the match — withholding the offer would leave a
+player holding a match they cannot see, which the deadline would then expire
+against them.
+
+The sink is `LoggingPendingMatchSink` until AD-09's gateway exists. That is a
+seam rather than a stub: everything upstream is real, and only the socket is
+missing.
+
+### 11.5 Answer-latency metrics
+
+The thirty-second deadline is a **product assumption**, and §7 forbids moving
+it on intuition. Two measurements, published from `game.public.metrics`
+because the setting they inform is `matchmaking`'s:
+
+| Metric | Labels | Answers |
+| --- | --- | --- |
+| `game.match_answer_latency_seconds` | `first_response`, `both_accepted`, `declined`, `expired` | how long players actually take |
+| `game.match_outcomes_total` | `both_accepted`, `declined`, `expired` | how often each ending happens |
+
+**The tuning process.** Let the histogram run over a period that covers a
+weekend — acceptance latency is a human behaviour. Then:
+
+- `p99` of `first_response` well inside the window → the deadline may come
+  down, provided the `expired` share does not rise;
+- `expired` material **and** a long `first_response` tail → the window is too
+  short and people are being timed out mid-decision;
+- `expired` material and **no** tail → the players are not there at all, and
+  the answer is presence rather than a longer deadline.
+
+The third case is the one a shorter deadline would misdiagnose, which is why
+the counter and the histogram must be read together.
+
+### 11.6 Reconciliation observability
+
+`matchmaking.reconciliation_actions_total`, labelled by
+`ReconciliationAction`. Seven values, and together they answer §9's real
+question — *where do workers fail?*
+
+| Label | Meaning |
+| --- | --- |
+| `settled` | a match existed and its ticket caught up |
+| `released` | an orphaned reservation went back to `waiting` |
+| `expired` | a reservation whose ticket had itself fallen due |
+| `requeued` | §11.1's policy put an accepting player back |
+| `pending_match_cancelled` | a match nobody answered was expired |
+| `no_action` | a healthy, empty tick |
+| `reconciliation_failed` | the claim, the read or the write failed |
+
+    before match creation           `released` rises
+    after creation, before settle   `settled` rises
+    during acceptance handling      `pending_match_cancelled` and `requeued`
+    during cleanup                  `reconciliation_failed` rises
+    nothing is wrong                `no_action` rises, the rest are flat
+
+Beside it, `matchmaking.acceptance_failure_actions_total` counts the same
+handshakes **per player** (`requeued`, `requeue_skipped`, `cooldown_applied`,
+`no_action`) — the policy's view rather than the ticket funnel's.
+
+**No label carries an identifier.** Every value comes from a `StrEnum`, so the
+number of time series each metric can produce is fixed at import time, and a
+test asserts it.
+
+### 11.7 Retention
+
+| Relation | Horizon | Measured on |
+| --- | --- | --- |
+| `matchmaking.queue_ticket`, terminal rows | 72h | `resolved_at` |
+| `game.match`, cancelled and expired | 168h | `settled_at` |
+| `matchmaking.queue_cooldown`, lapsed | 1h | `expires_at` |
+
+One job (`matchmaking.queue.prune`, on the `maintenance` queue), bounded
+batches, `SKIP LOCKED`, idempotent. `game` owns the match rows and publishes
+the sweep; the *horizon* is the same product judgement as the queue's, so the
+module with the opinion supplies it.
+
+**The safety property is the predicate, not the horizon.** A live queue ticket
+(`resolved_at IS NOT NULL` excludes it) and an `active` or `pending_acceptance`
+match are unreachable from the deletes **however they are configured**. A
+misconfigured window can delete too much history; it cannot delete a player
+out of the queue, cannot delete the reservation reconciliation is about to
+recover, and cannot delete a game.
+
+Two counts are reported and acted on by nobody: `live_tickets_past_horizon`
+and `unresolved_matches_past_horizon`. Both are zero on a healthy platform and
+each is otherwise the only signal that a sweep has stopped.
+
+### 11.8 The shared acceptance factory
+
+`build_match_acceptance(session, events=, clock=, metrics=)` is the single
+construction site, reached by four callers: the three HTTP routes, the
+reconciliation task's expiry sweep, the realtime consumer's re-read, and the
+composition root. What is hoisted is the **factory, not the service** — a
+shared instance would hold a session that outlives the unit of work it serves.
+
+
+---
+
+## 12. Unresolved rules decisions blocking persisted games
 
 Games are **not** persisted in A64-015.2 and no `Match` is created, so none of
 the following blocks the queue. All of them block the first stored game, because
@@ -614,15 +949,21 @@ Resolving any threshold above is a rules change and must bump it.
 
 ## TODO
 
-- [ ] Resolve §9's two research items and one product decision **before any game is persisted**
-- [ ] Ship **match persistence** in `game` and replace `UnavailableMatchCreation`, then default `MATCHMAKING_PAIRING_ENABLED` to `true` (§9.8)
-- [ ] Satisfy `RecentOpponentProvider` from `game.public` once match history exists (§9.7)
-- [ ] Add `time_control` to `QueuePool` and to `CreateMatchRequest` when `reference.time_control` ships (§2.1, §8.1)
-- [ ] Give a stored match a durable link back to its queue tickets, so `pairing_settle_failed` becomes reconcilable rather than manual (§9.6)
+- [ ] Resolve §12's two research items and one product decision **before any game is played**
+- [ ] **Tune `MATCHMAKING_RESERVATION_TTL_SECONDS` from the histogram** (§11.5), once it has run over a weekend. Thirty seconds is still an assumption; it is now a measurable one
+- [ ] Replace `LoggingPendingMatchSink` with AD-09's gateway (§11.4). Everything upstream is real; only the socket is missing
+- [ ] Add `time_control` to `QueuePool`, `CreateMatchRequest`, `game.match` and the acceptance response when `reference.time_control` ships (§2.1, §8.1, §10.7)
+- [ ] Narrow `RecentOpponentReader` to *completed* matches once a match can carry a result (§10.6)
 - [ ] Replace `every_pool()` with a scan of pools that actually have waiting tickets, when the pool count makes it worth a query (§9.1)
-- [ ] Specify **acceptance**: the `reserved` state, its deadline, and what a declined acceptance does to both tickets
 - [ ] Specify **challenges** — `matchmaking.challenge` (database.md §8.1), direct and open
-- [ ] Define the `matchmaking → game` match-creation port with `game`
-- [ ] Decide a retention horizon for resolved tickets (database.md §8.1a's known gap)
-- [ ] Define realtime queue updates over the gateway (AD-09)
+- [ ] Revisit the decline cooldown once there is a fair-play signal to feed (§11.3). It is deliberately not a sanction, and `admin` is where escalation belongs
 - [ ] Assign a document owner and promote the status
+
+**Done since A64-015.3:** match persistence and the `pairing_id` unique index
+(§10.2); `MATCHMAKING_PAIRING_ENABLED` defaulted to `true` (§9.8);
+`RecentOpponentProvider` satisfied from `game.public` (§10.6); a durable link
+from a match back to its queue tickets, which made `pairing_settle_failed`
+reconcilable rather than manual (§10.5); acceptance specified and implemented
+(§10.4); **the acceptance-failure policy resolved** (§11.1); realtime delivery
+with polling as its fallback (§11.4); retention for resolved tickets and
+abandoned matches (§11.7).

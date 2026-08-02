@@ -10,6 +10,7 @@ lives under `app/api/` and not `app/core/` (dependency-injection.md §3.2:
 """
 
 import logging
+from math import ceil
 
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -35,6 +36,7 @@ from app.core.exceptions import (
     PreconditionFailedError,
     RateLimitedError,
     RuleViolationError,
+    TemporaryConflictError,
     TooManyRequests,
     TransientInfrastructureError,
     ValidationError,
@@ -179,6 +181,20 @@ def _headers_for(exc: Arena64Error) -> dict[str, str]:
         headers[RATE_LIMIT_LIMIT_HEADER] = str(exc.limit)
         headers[RATE_LIMIT_REMAINING_HEADER] = str(exc.remaining)
         headers[RATE_LIMIT_RESET_HEADER] = str(exc.reset_after)
+
+    # A64-015.5. A decline cooldown is a `409` rather than a `429` — it is
+    # the platform's state refusing the request, not a budget the caller
+    # spent — and it still carries `Retry-After`, because the header's
+    # meaning is "come back after this many seconds" and that is exactly
+    # true here. RFC 9110 defines it on any response, not only on 429 and
+    # 503, and a client that already backs off on the header gets the right
+    # behaviour with no new branch.
+    #
+    # Rounded **up**: a client that retried at the floor of a fractional
+    # second would be refused again for the remainder, which is the one
+    # thing a retry hint must not do.
+    if isinstance(exc, TemporaryConflictError):
+        headers[RETRY_AFTER_HEADER] = str(max(1, ceil(exc.retry_after_seconds)))
 
     return headers
 

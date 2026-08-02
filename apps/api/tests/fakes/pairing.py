@@ -35,6 +35,10 @@ class StubExclusions:
     def __init__(self) -> None:
         self.blocked: dict[UUID, set[UUID]] = {}
         self.calls: list[tuple[UUID, ...]] = []
+        #: A64-015.5. Makes the read raise, so a consumer's "an unreadable
+        #: block graph must not stop delivery" path is exercised rather
+        #: than asserted.
+        self.fails = False
 
     def block(self, one: UUID, other: UUID) -> None:
         """Records a block. Stored one-directionally, exactly as the table
@@ -46,6 +50,8 @@ class StubExclusions:
         self, player_ids: Sequence[UUID]
     ) -> Mapping[UUID, frozenset[UUID]]:
         self.calls.append(tuple(player_ids))
+        if self.fails:
+            raise RuntimeError("the social graph is unreachable")
         batch = set(player_ids)
         return {
             player_id: frozenset(others & batch)

@@ -72,7 +72,7 @@ from uuid import UUID
 
 from app.core.exceptions import DomainError
 from app.modules.engine import EngineVersion, PlayerSide
-from app.modules.game.public.variants import ProductVariant
+from app.modules.game.domain.variants import ProductVariant
 
 
 class MatchCreationRefused(DomainError):

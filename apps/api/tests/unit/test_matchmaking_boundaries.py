@@ -287,3 +287,62 @@ class TestTheDomainStaysFrameworkFree:
         }
 
         assert all(name.startswith("app.modules.game.public") for name in cross_module)
+
+
+class TestOneSharedAcceptanceFactory:
+    """A64-015.5 §10: the route path and every background path construct
+    the acceptance service through one function.
+
+    Asserted structurally rather than by comparing objects, because the
+    thing that must be shared is the **factory, not the instance**: each
+    caller gets its own graph over its own session — a single shared service
+    would hold a session that outlives the unit of work it serves — and what
+    they share is the definition, so a collaborator added there reaches all
+    of them at once.
+    """
+
+    ROOT = _MATCHMAKING / "presentation" / "dependencies" / "__init__.py"
+
+    def test_the_factory_is_defined_once(self) -> None:
+        source = self.ROOT.read_text()
+
+        assert source.count("def build_match_acceptance(") == 1
+
+    def test_nothing_else_constructs_the_service(self) -> None:
+        """`MatchAcceptanceService(` appearing outside the factory would be
+        a second construction site, and the two would drift on the first
+        collaborator either gained."""
+        constructors = [
+            str(module.relative_to(_APP))
+            for module in _modules_under(_APP)
+            if "MatchAcceptanceService(" in module.read_text()
+            and module.name != "match_acceptance_service.py"
+        ]
+
+        assert constructors == ["modules/matchmaking/presentation/dependencies/__init__.py"]
+
+    def test_every_caller_goes_through_it(self) -> None:
+        """Four today — the routes, the reconciler, the realtime notifier,
+        and the composition root's own wiring. A fifth needs no new code.
+        """
+        callers = sorted(
+            str(module.relative_to(_APP))
+            for module in _modules_under(_APP)
+            if "build_match_acceptance(" in module.read_text()
+        )
+
+        assert callers == [
+            "app_factory.py",
+            "modules/matchmaking/presentation/dependencies/__init__.py",
+        ]
+
+    def test_the_route_and_the_task_share_the_definition(self) -> None:
+        """The two §10 names explicitly. `get_match_acceptance` is the
+        `Depends` wrapper the routes resolve; `build_reconciliation_service`
+        is what the recovery task's expiry sweep is built from — and both
+        reach the same function."""
+        source = self.ROOT.read_text()
+        after_factory = source.split("def build_match_acceptance(", 1)[1]
+
+        assert "build_match_acceptance(" in after_factory
+        assert "def get_match_acceptance(" in source

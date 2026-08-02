@@ -68,7 +68,7 @@ from app.modules.game.domain.exceptions import (
     MatchNotPending,
     NotAMatchParticipant,
 )
-from app.modules.game.public.variants import ProductVariant
+from app.modules.game.domain.variants import ProductVariant
 
 
 class MatchRecordStatus(StrEnum):

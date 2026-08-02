@@ -245,9 +245,13 @@ class PlayersPaired(DomainEvent):
 class ReconciliationAction(StrEnum):
     """What a reconciler did with one stranded reservation — A64-015.4 §9.
 
-    Three actions, and they are the three durable states a lapsed
-    reservation can be in. An operator reading this enum in the outbox is
-    reading a direct account of which failure happened:
+    Seven actions, in two groups. The first three are the durable states a
+    lapsed reservation can be in and are the only ones that reach an
+    **event payload**; the rest are counted (A64-015.5 §9) and describe the
+    job or the handshake rather than one ticket.
+
+    An operator reading the first three in the outbox is reading a direct
+    account of which failure happened:
 
         settled     a match exists and the ticket had not caught up. The
                     ordinary crash: `game` committed and the worker died
@@ -258,11 +262,53 @@ class ReconciliationAction(StrEnum):
         expired     no match, and the ticket's window closed while it was
                     reserved. Releasing it would put a ticket back into
                     `waiting` past its own deadline.
+
+    The remaining four exist to answer §9's real question — *where do
+    workers fail?* — which no single one of them can:
+
+        before match creation           `released` rises
+        after creation, before settle   `settled` rises
+        during acceptance handling      `pending_match_cancelled` and
+                                        `requeued` rise together
+        during cleanup                  `reconciliation_failed` rises
+        nothing is wrong                `no_action` rises and the rest are
+                                        flat
     """
 
     SETTLED = "settled"
     RELEASED = "released"
     EXPIRED = "expired"
+
+    MATCH_CANCELLED = "pending_match_cancelled"
+    """A pending match whose window closed was expired by `game`'s own
+    sweep. Not a ticket outcome at all — the tickets were settled as
+    `matched` when the match was created — and counted in this enum because
+    it is the *cause* of the requeues and no-actions beside it, and an
+    operator reading the funnel needs the numerator."""
+
+    NO_ACTION = "no_action"
+    """A tick that found nothing stranded. The healthy steady state, and
+    counted because its **rate** is what says the job is running — a
+    counter that only moved when something was wrong would be
+    indistinguishable from a scheduler that had stopped."""
+
+    FAILED = "reconciliation_failed"
+    """A tick that could not complete: the claim, the cross-context read or
+    the write failed. Nothing was lost — the reservations are still stale
+    and the next tick claims them again — and a sustained rate here is the
+    signal that recovery itself is broken, which nothing else would say."""
+
+    REQUEUED = "requeued"
+    """A64-015.5 §1: the ticket's match failed through somebody else's
+    answer, and its player was put back in the queue with the `entered_at`
+    they always had.
+
+    Not produced by the reconciler — `MatchOutcomeService` produces it,
+    reacting to a decline or an expiry — and it is a member of *this* enum
+    rather than of a second one because the question every value here
+    answers is the same: **what became of this queue ticket after its
+    pairing did not end in a game.** Splitting it would give an operator two
+    dashboards for one funnel."""
 
 
 @dataclass(frozen=True)

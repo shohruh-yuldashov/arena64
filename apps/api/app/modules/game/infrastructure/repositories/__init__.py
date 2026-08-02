@@ -3,5 +3,8 @@
 from app.modules.game.infrastructure.repositories.match_record_repository import (
     SqlAlchemyMatchRecordRepository,
 )
+from app.modules.game.infrastructure.repositories.match_retention_store import (
+    SqlAlchemyMatchRetentionStore,
+)
 
-__all__ = ["SqlAlchemyMatchRecordRepository"]
+__all__ = ["SqlAlchemyMatchRecordRepository", "SqlAlchemyMatchRetentionStore"]

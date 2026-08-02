@@ -1,4 +1,4 @@
-"""The `matchmaking` schema — `queue_ticket`.
+"""The `matchmaking` schema — `queue_ticket` and `queue_cooldown`.
 
 The only place in this module that knows SQLAlchemy exists. Nothing above
 `infrastructure/` imports this file, and the aggregate it maps to holds no
@@ -146,6 +146,7 @@ from app.database.base import Base
 from app.database.mixins.uuid_pk import UUIDPrimaryKeyMixin
 from app.database.types import UtcDateTime
 from app.modules.game.public import ProductVariant
+from app.modules.matchmaking.domain.cooldown import CooldownReason
 from app.modules.matchmaking.domain.queue_pool import QueueType, Region
 from app.modules.matchmaking.domain.queue_ticket import QueueStatus
 
@@ -318,6 +319,36 @@ class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
             f"(status = '{QueueStatus.RESERVED.value}') = (reserved_until IS NOT NULL)",
             name="ck_queue_ticket__reserved_iff_deadline",
         ),
+        # **A64-015.5 §2's idempotency.** A partial unique index on the
+        # ticket a requeue replaced: two deliveries of one `match_declined`
+        # event both read "no live ticket" and both insert, and only one
+        # row survives. `QueueService.requeue` reports the loser as
+        # "already done" rather than as an error.
+        #
+        # Partial because almost every ticket has no source — a player
+        # entered it themselves — and a plain unique on a mostly-null
+        # column would index every row to constrain a handful.
+        Index(
+            "uq_queue_ticket__requeued_from",
+            "source_ticket_id",
+            unique=True,
+            postgresql_where=text("source_ticket_id IS NOT NULL"),
+        ),
+        # Retention's claim — A64-015.5 §8: "terminal tickets resolved
+        # before X, oldest first".
+        #
+        # Partial on the **terminal** statuses, which is the complement of
+        # every other index on this relation and is the property that makes
+        # the job safe: a live ticket is not in this index, so a retention
+        # sweep cannot reach one however its horizon is configured. The
+        # predicate is expressed through `resolved_at IS NOT NULL`, which
+        # `ck_queue_ticket__resolved_iff_terminal` makes equivalent to
+        # "terminal" — one fact, not two that could disagree.
+        Index(
+            "ix_queue_ticket__retention",
+            "resolved_at",
+            postgresql_where=text("resolved_at IS NOT NULL"),
+        ),
         # A ticket that expired before it was entered is not a short
         # window, it is a ticket the sweeper takes on its first pass. The
         # aggregate refuses to construct one; this is the copy that also
@@ -377,6 +408,19 @@ class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
     """When the ticket left `waiting`. Null while it has not — see the
     CHECK above, which makes the pairing unrepresentable otherwise."""
 
+    source_ticket_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    """The ticket this one replaced, when the platform requeued a player
+    whose match failed through no fault of theirs — A64-015.5 §2.
+
+    No foreign key, though it names a row in this same relation. Retention
+    (§8) deletes terminal tickets on a horizon, and a self-referential FK
+    would either block that or cascade it into the *live* ticket that
+    replaced them — which is the one row on this table that must never be
+    deleted by a cleanup job. The link is provenance, and provenance that
+    outlives its subject is answered with a null rather than a constraint
+    violation.
+    """
+
     reserved_until: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     """How long this reservation may stand before it is reconciled —
     A64-015.4 §5.
@@ -386,3 +430,80 @@ class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
     so the reservation window and the acceptance window cannot drift apart.
     See `QueueTicket.reserved_until`.
     """
+
+
+_COOLDOWN_REASON_ENUM = _enum(CooldownReason, "queue_cooldown_reason")
+
+
+class QueueCooldownModel(Base):
+    """The `matchmaking.queue_cooldown` row — A64-015.5 §3.
+
+    ## The player is the primary key
+
+    Not a surrogate id, which is the convention every other relation on this
+    platform follows (DB-07) — and the departure is the design rather than
+    an oversight.
+
+    A cooldown is not a *record of an event*; it is a **current fact about a
+    player**, of which there is at most one. Keying on the player makes
+    "extend rather than accumulate" a single `INSERT ... ON CONFLICT DO
+    UPDATE`, which is what makes §3's "repeated decline does not bypass the
+    cooldown" a constraint under concurrency instead of a read-then-write
+    two declines can interleave inside.
+
+    With a surrogate key the same rule needs a partial unique index on
+    `player_id WHERE expires_at > now()` — which is not a legal index
+    predicate, because `now()` is not immutable. The alternative is a
+    `SELECT ... FOR UPDATE` before every write, on the queue-join path, for
+    a row that usually does not exist. The primary key is cheaper and
+    stronger.
+
+    What it costs is history: a second decline overwrites the first's
+    `expires_at` and nothing records that there were two. That is
+    deliberate — see `QueueCooldown` on why this is a delay rather than a
+    disciplinary file, and why anything that should accumulate belongs to
+    `admin`.
+
+    ## No `TimestampMixin`
+
+    `created_at` is here and `updated_at` would be a column that only ever
+    equals `expires_at - the configured window`, which is derivable and
+    would be a second place for it to be wrong. The same reasoning
+    `QueueTicketModel` and `FriendshipModel` both record.
+
+    ## No foreign key on `player_id`
+
+    DM-06's opaque cross-context identifier, exactly as on `queue_ticket`.
+    """
+
+    __tablename__ = "queue_cooldown"
+    __table_args__ = (
+        # A cooldown that lifts before it was applied is not a short bar, it
+        # is a row the retention sweep takes on its first pass. The
+        # aggregate refuses to construct one; this is the copy that also
+        # binds anything writing SQL directly (BE-06).
+        CheckConstraint("expires_at > created_at", name="ck_queue_cooldown__window_positive"),
+        # Retention's claim, and the eligibility read's index. One index
+        # serves both because they ask the same question from opposite
+        # sides — "has this lifted yet" — and the read is by primary key
+        # anyway, so this exists for the sweep.
+        Index("ix_queue_cooldown__expiry", "expires_at"),
+        {"schema": MATCHMAKING_SCHEMA},
+    )
+
+    player_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    """Whose bar it is, and the key — see this class's docstring."""
+
+    reason: Mapped[CooldownReason] = mapped_column(_COOLDOWN_REASON_ENUM, nullable=False)
+    """Why. One value today (`declined_match`), and a native enum so a
+    second one costs a migration and a decision — which is the right price
+    for adding a way to keep somebody out of the queue."""
+
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    """When the bar lifts. Absolute, so a deploy that changes
+    `MATCHMAKING_DECLINE_COOLDOWN_SECONDS` does not re-date cooldowns
+    already in force."""
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    """Written from the injected clock (AD-07), never `server_default=now()`
+    — a test that cannot move this instant cannot test the window."""

@@ -431,9 +431,17 @@ Rating, statistics, achievements, leaderboard, notifications, replay, fairplay a
 
 `matchmaking` is the one exception the diagram already drew, and it is not a weakening: it is
 *upstream* of a match rather than downstream of one, so there is no event that could carry
-its request. It sends a command `game` accepts (`game.public.MatchCreationUseCase`) and holds
-no match type at all — see `specs/matchmaking.md` §8.1. Every other module reacts to
-something that already happened; this one asks for something to start.
+its request. It sends commands `game` accepts — `MatchCreationUseCase`, and since A64-015.4
+`MatchAcceptanceUseCase` — and holds no match aggregate at all. See `specs/matchmaking.md`
+§8.1 and §10.1. Every other module reacts to something that already happened; this one asks
+for something to start, and then asks again on behalf of the two players who have to agree
+to it.
+
+What it receives back is a **view**, never the record: `PendingMatchView` is a projection with
+the pairing internals removed, so a caller can render an offer and cannot activate a match
+nobody accepted. `game`'s five match events are published (A64-015.5) precisely because R-3
+requires downstream modules to subscribe rather than call, and a subscriber that cannot name
+its event has to match on a string literal.
 
 *Why:* two independent benefits. It keeps the move hot path free of their latency, and it makes them
 *non-critical* — a rating outage degrades a scoreboard, it does not stop people from

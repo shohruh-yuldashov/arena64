@@ -678,19 +678,33 @@ What Redis keeps is the *index*: a sorted set per pool scored by rating remains 
 for QT-5's widening-window scan, derived from the table and rebuildable from it (AD-19). Nothing
 about matchmaking is Redis-authoritative.
 
-### What A64-014.1 implemented, and what it did not
+### What is implemented, and what is not
 
-The lifecycle above has seven states; the implementation has four — `waiting`, `matched`,
-`cancelled`, `expired` — and the three absences are decisions rather than omissions:
+The lifecycle above has seven states; the implementation has five — `waiting`, `reserved`,
+`matched`, `cancelled`, `expired`. `Reserved` arrived with A64-015.3's two-phase claim, exactly
+where this section predicted: between `waiting` and `matched`, changing neither, and joined to
+the partial unique index that enforces QT-1. The two remaining absences are decisions rather
+than omissions:
 
 | Absent | Why |
 | --- | --- |
 | `Widening` | QT-5's window is a property of a *pairing scan*, not of a ticket: the ticket carries `entered_at` and the scan derives the window from its age. A state whose only content is "the scan has looked at this a few times" is state the scan can recompute |
-| `Reserved` | QT-4's two-phase claim needs something to reserve, and there is no pairing yet. It inserts between `waiting` and `matched` without changing either, and joins the partial unique index that enforces QT-1 |
 | `Abandoned` | It is `Expired` with a different cause, and the cause is only knowable once presence is watched continuously rather than checked at entry |
 
-`matched` has a transition (`QueueTicket.matched`) and no caller: a status the database can hold
-and the domain cannot reach is a status nothing can explain.
+`matched` has had a caller since A64-015.3 and a durable match behind it since A64-015.4.
+
+**A reservation is bounded by its own, much shorter deadline.** `reserved_until` (A64-015.4) is
+seconds rather than the ticket's ten minutes, and a reservation past it is reconciled from
+durable state: settled as `matched` if its match exists, returned to `waiting` if it does not,
+expired if the ticket's own window closed meanwhile. It is the same instant the match carries as
+its acceptance deadline — `specs/matchmaking.md` §10.3.
+
+**A ticket can also be replaced rather than merely resolved — A64-015.5.** When a match fails
+through the *other* player's decline or silence, the participant who accepted is put back in the
+queue with a **new** ticket that preserves their `entered_at`, pool and rating snapshot, and
+records the one it replaced in `source_ticket_id`. That is a second edge out of `matched`, and
+it is a new row rather than a transition because the original ticket did produce a match — which
+is true and stays true. See `specs/matchmaking.md` §11.1.
 
 ### 10.3 `Challenge` — aggregate root, PostgreSQL
 
@@ -810,12 +824,35 @@ history MT-12 requires — how often each position has occurred, and how many pl
 or a man's move. Statuses are `CREATED`, `ACTIVE`, `COMPLETED` and `ABORTED`, which are the four
 of system-design.md §3 a match reaches by the rules alone.
 
-Still absent, and each named here so the gap is a decision rather than a discovery: the two
-`MatchParticipant` seats (MT-1, MT-4), the append-only move log (MT-5, MT-6), `ClockState` and
-time control (MT-8, MT-9), `Offer`, the per-match sequence number (MT-13), and the five domain
-events. None of them is a rules concern, and each needs the task that owns clocks, transport or
-persistence. There is no `application/`, `infrastructure/` or `presentation/` layer in `game`
-yet — A64-014.6 is pure domain.
+**As persisted (A64-015.4).** `game.domain.match_record.MatchRecord` is the *platform* half of
+this aggregate and `game.match` is its relation: who is playing whom, under which rule set, for a
+rating or not, on which sides, from which two queue tickets, and whether both players have agreed
+to it. Its statuses are `pending_acceptance`, `active`, `cancelled` and `expired`.
+
+The two lifecycles are **not** a duplication, and the split is worth stating because it looks
+like one. `MatchStatus` answers "has a move been played, and has the game ended"; every
+transition is a consequence of the rules kernel. `MatchRecordStatus` answers "does this contest
+exist and may it be played"; every transition is a consequence of a *person* — accepting,
+declining, or failing to answer. They never model the same fact: `CREATED` means "no move has
+been played", which a match only reaches once acceptance has already succeeded, and
+`PENDING_ACCEPTANCE` is the state before that, in which no rules-bearing `Match` exists at all.
+They meet when live gameplay ships: an `active` record is a contest whose `Match` is `CREATED`,
+waiting for its first move.
+
+Still absent, and each named here so the gap is a decision rather than a discovery: the
+`MatchParticipant` *entity* (MT-1, MT-4 — A64-015.4 inlines two seats as columns, which is a
+closed set of exactly two and becomes §10.5's relation when a seat gains a clock and an outcome),
+the append-only move log (MT-5, MT-6), `ClockState` and time control (MT-8, MT-9), `Offer`, the
+per-match sequence number (MT-13), and the result. None of them is a rules concern, and each
+needs the task that owns clocks or transport. `game` gained `application/` and `infrastructure/`
+layers in A64-015.4 and still has no `presentation/`: every endpoint that touches a match today
+is a *matchmaking* endpoint, because a player who has not accepted yet is still being matched.
+
+The **five domain events** exist and are published through `game.public` (A64-015.5) —
+`match_created`, `match_accepted_by_player`, `match_activated`, `match_declined`,
+`match_acceptance_expired`. R-3 requires downstream modules to subscribe rather than call, and
+`matchmaking` is the first subscriber: realtime delivery of a pending match, and the
+acceptance-failure policy.
 
 ### 10.5 `MatchParticipant` — entity within `Match`
 

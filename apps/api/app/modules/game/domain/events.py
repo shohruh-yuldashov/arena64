@@ -57,7 +57,7 @@ from typing import Any, ClassVar
 from uuid import UUID
 
 from app.modules.engine import PlayerSide
-from app.modules.game.public.variants import ProductVariant
+from app.modules.game.domain.variants import ProductVariant
 from app.platform.events import DomainEvent
 
 #: The `aggregate_type` every event here carries — domain-model.md §10.4's
@@ -79,6 +79,20 @@ class _MatchEvent(DomainEvent):
     `pairing_id` is on every payload because a consumer that sees an event
     twice — a relay redelivery — can then tell it is one pairing rather
     than two, which is the same argument `PlayersPaired` records.
+
+    ## The two queue ticket ids, added by A64-015.5
+
+    Provenance, and the reason it has to be *on the event* rather than
+    looked up: A64-015.5 §1's acceptance-failure policy is enforced by a
+    `matchmaking` consumer that reacts to a decline or an expiry by putting
+    the player who accepted back in the queue, **with the `entered_at` they
+    always had**. That means finding the original ticket, and the only
+    durable link from a match to its tickets lives in `game`'s own table —
+    which a consumer in another module must not read (R-1).
+
+    Carrying them is additive and needs no `event_version` bump
+    (`DomainEvent`): a consumer written before this change ignores two
+    fields it does not know about.
     """
 
     aggregate_type: ClassVar[str] = MATCH_AGGREGATE
@@ -87,6 +101,8 @@ class _MatchEvent(DomainEvent):
     pairing_id: UUID
     light_player_id: UUID
     dark_player_id: UUID
+    light_ticket_id: UUID
+    dark_ticket_id: UUID
 
     @property
     def aggregate_id(self) -> UUID:
@@ -98,6 +114,8 @@ class _MatchEvent(DomainEvent):
             "pairing_id": str(self.pairing_id),
             "light_player_id": str(self.light_player_id),
             "dark_player_id": str(self.dark_player_id),
+            "light_ticket_id": str(self.light_ticket_id),
+            "dark_ticket_id": str(self.dark_ticket_id),
         }
 
 
@@ -179,6 +197,13 @@ class MatchDeclined(_MatchEvent):
     a fair-play signal in somebody who declines nine offers in an hour is
     the first consumer this will have, and it cannot be computed from a
     match id.
+
+    It also carries **who had already accepted**, added by A64-015.5. That
+    is what A64-015.5 §1's policy turns on: the participant who said yes and
+    lost the match to somebody else's refusal is requeued with their
+    original place in line, and the one who refused is not. A consumer that
+    had to re-read the match to learn which was which would be reading
+    `game`'s table from another module.
     """
 
     event_type: ClassVar[str] = "game.match_declined"
@@ -186,11 +211,23 @@ class MatchDeclined(_MatchEvent):
     side: PlayerSide
     player_id: UUID
 
+    light_accepted: bool
+    dark_accepted: bool
+    """Which sides had answered when the decline landed.
+
+    The decliner's own flag is `False` by construction — a player who
+    accepted and then declined is refused by `MatchRecord.declined`, which
+    only leaves `pending_acceptance` once. So at most one of these is
+    `True`, and it names the player the policy owes a requeue.
+    """
+
     def payload(self) -> dict[str, Any]:
         return {
             **self._match_payload(),
             "side": self.side.value,
             "player_id": str(self.player_id),
+            "light_accepted": self.light_accepted,
+            "dark_accepted": self.dark_accepted,
         }
 
 

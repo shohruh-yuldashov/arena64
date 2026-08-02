@@ -46,7 +46,14 @@ from app.modules.game.domain.events import (
 from app.modules.game.domain.exceptions import MatchNotFound, NotAMatchParticipant
 from app.modules.game.domain.match_record import MatchRecord, MatchRecordStatus
 from app.modules.game.public.acceptance import PendingMatchView
+from app.modules.game.public.metrics import (
+    MATCH_ANSWER_LATENCY,
+    MATCH_OUTCOMES,
+    AnswerLatency,
+    MatchOutcome,
+)
 from app.platform.events import DomainEvent
+from app.platform.metrics import MetricsRecorder
 from app.platform.outbox import EventPublisher
 
 logger = logging.getLogger(__name__)
@@ -62,11 +69,13 @@ class MatchAcceptanceService:
         events: EventPublisher,
         unit_of_work: UnitOfWork,
         clock: Clock,
+        metrics: MetricsRecorder,
     ) -> None:
         self._matches = matches
         self._events = events
         self._unit_of_work = unit_of_work
         self._clock = clock
+        self._metrics = metrics
 
     async def pending_match(self, player_id: UUID) -> PendingMatchView | None:
         """The match this player must answer, or `None`.
@@ -157,6 +166,7 @@ class MatchAcceptanceService:
                 await self._events.publish(event)
             await self._unit_of_work.commit()
 
+        self._record_answer(record, answered, at=at, accepting=accepting)
         logger.info(
             "match_answered",
             extra={
@@ -168,6 +178,55 @@ class MatchAcceptanceService:
             },
         )
         return view_of(answered, player_id)
+
+    def _record_answer(
+        self, before: MatchRecord, after: MatchRecord, *, at: datetime, accepting: bool
+    ) -> None:
+        """A64-015.5 §7 — the measurement the deadline must be tuned from.
+
+        Taken **after** the commit, so a rolled-back answer is never
+        counted, and from the injected clock rather than a second reading,
+        so the latency is measured against the instant the transition was
+        actually stamped with.
+
+        `first_response` fires when neither side had answered before this
+        one. It is a property of the *match* rather than of the player, so
+        it is recorded once per pairing however many answers follow — which
+        is what makes its count comparable with `match_outcomes_total`.
+        """
+        latency = (at - after.created_at).total_seconds()
+        if not (before.light.has_accepted or before.dark.has_accepted):
+            self._metrics.observe(
+                MATCH_ANSWER_LATENCY, latency, labels={"outcome": AnswerLatency.FIRST_RESPONSE}
+            )
+
+        if not accepting:
+            self._metrics.observe(
+                MATCH_ANSWER_LATENCY, latency, labels={"outcome": AnswerLatency.DECLINED}
+            )
+            self._metrics.increment(MATCH_OUTCOMES, labels={"outcome": MatchOutcome.DECLINED})
+            return
+
+        if after.status is MatchRecordStatus.ACTIVE:
+            self._metrics.observe(
+                MATCH_ANSWER_LATENCY, latency, labels={"outcome": AnswerLatency.BOTH_ACCEPTED}
+            )
+            self._metrics.increment(MATCH_OUTCOMES, labels={"outcome": MatchOutcome.BOTH_ACCEPTED})
+
+    def _record_outcome(self, record: MatchRecord, *, outcome: MatchOutcome, at: datetime) -> None:
+        """An ending nobody answered for — the expiry sweep's half of §7.
+
+        The latency recorded is to the **deadline**, not to the instant the
+        sweep noticed: how late the reconciler was is the job's property,
+        and mixing it into this histogram would make the tail a measure of
+        the scheduler rather than of the players. See `MatchAcceptanceExpired`
+        on the same choice for `occurred_at`.
+        """
+        latency = (record.acceptance_deadline - record.created_at).total_seconds()
+        self._metrics.observe(
+            MATCH_ANSWER_LATENCY, latency, labels={"outcome": AnswerLatency.EXPIRED}
+        )
+        self._metrics.increment(MATCH_OUTCOMES, labels={"outcome": outcome})
 
     async def expire_overdue(self, *, limit: int) -> Sequence[UUID]:
         """Expires up to `limit` pending matches whose window has closed.
@@ -201,6 +260,7 @@ class MatchAcceptanceService:
                         # this match simply is not expired.
                         continue
                     expired.append(settled.id)
+                    self._record_outcome(settled, outcome=MatchOutcome.EXPIRED, at=now)
                     await self._events.publish(
                         MatchAcceptanceExpired(
                             # The match's own deadline, not the sweep's
@@ -212,6 +272,8 @@ class MatchAcceptanceService:
                             pairing_id=settled.pairing_id,
                             light_player_id=settled.light.player_id,
                             dark_player_id=settled.dark.player_id,
+                            light_ticket_id=settled.light.queue_ticket_id,
+                            dark_ticket_id=settled.dark.queue_ticket_id,
                             light_accepted=settled.light.has_accepted,
                             dark_accepted=settled.dark.has_accepted,
                         )
@@ -246,26 +308,33 @@ def _events_for(
     needs to announce a created `Match` adds an entry here rather than a
     branch at the call site.
     """
+    identity = {
+        "match_id": record.id,
+        "pairing_id": record.pairing_id,
+        "light_player_id": record.light.player_id,
+        "dark_player_id": record.dark.player_id,
+        "light_ticket_id": record.light.queue_ticket_id,
+        "dark_ticket_id": record.dark.queue_ticket_id,
+    }
     if not accepting:
         return (
             MatchDeclined(
                 occurred_at=_settled_at(record),
-                match_id=record.id,
-                pairing_id=record.pairing_id,
-                light_player_id=record.light.player_id,
-                dark_player_id=record.dark.player_id,
+                **identity,
                 side=side,
                 player_id=player_id,
+                # Which sides had said yes when the refusal landed. At most
+                # one is `True` — see `MatchDeclined` — and it names the
+                # player A64-015.5 §1 owes a requeue to.
+                light_accepted=record.light.has_accepted,
+                dark_accepted=record.dark.has_accepted,
             ),
         )
     if record.status is MatchRecordStatus.ACTIVE:
         return (
             MatchActivated(
                 occurred_at=_settled_at(record),
-                match_id=record.id,
-                pairing_id=record.pairing_id,
-                light_player_id=record.light.player_id,
-                dark_player_id=record.dark.player_id,
+                **identity,
                 variant=record.variant,
                 rated=record.rated,
             ),
@@ -274,10 +343,7 @@ def _events_for(
     return (
         MatchAcceptedByPlayer(
             occurred_at=accepted_at if accepted_at is not None else record.created_at,
-            match_id=record.id,
-            pairing_id=record.pairing_id,
-            light_player_id=record.light.player_id,
-            dark_player_id=record.dark.player_id,
+            **identity,
             side=side,
             player_id=player_id,
         ),

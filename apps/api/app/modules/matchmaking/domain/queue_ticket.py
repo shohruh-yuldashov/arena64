@@ -212,6 +212,26 @@ class QueueTicket:
     instant.
     """
 
+    source_ticket_id: UUID | None = None
+    """The ticket this one replaced, when it was created by a requeue —
+    A64-015.5 §2.
+
+    `None` for a ticket a player entered themselves, which is almost all of
+    them. Non-null when the platform put somebody back in the queue after
+    their opponent declined or fell silent, and it is doing three jobs at
+    once:
+
+      - **idempotency.** A partial unique index on this column means two
+        deliveries of one `match_declined` event produce one ticket, not
+        two. The event ledger makes redelivery rare; this makes it harmless
+        (§11).
+      - **provenance.** "Why do I have a ticket I did not create" is
+        answerable, and the chain is walkable.
+      - **fairness, audited.** A requeued ticket carries an `entered_at`
+        that predates its own row, which looks wrong to anybody reading the
+        table until they see this column and understand why.
+    """
+
     reserved_until: datetime | None = None
     """How long this reservation may stand before it is reconciled —
     A64-015.4 §5.
@@ -330,6 +350,62 @@ class QueueTicket:
         exactly its deadline rather than one clock tick after it.
         """
         return self.reserved_until is not None and at >= self.reserved_until
+
+    def requeued(self, *, at: datetime, ttl: float) -> "QueueTicket":
+        """A **new** ticket restoring this player's place in line —
+        A64-015.5 §1 and §2.
+
+        Returned by the aggregate rather than assembled by a service,
+        because what makes a requeue fair is exactly which fields survive
+        it, and that is a rule about a ticket:
+
+            entered_at       **preserved.** The whole policy. A player who
+                             accepted promptly and lost the match to
+                             somebody else's refusal keeps the priority
+                             they had earned — pairing order is oldest
+                             first, and QT-5's window is a function of this
+                             instant, so a fresh one would cost them both
+                             their place and their widened search.
+            pool             preserved. They asked for that game.
+            rating_snapshot  preserved. QT-2 fixes it at entry, and the
+                             entry being restored is the original one. It
+                             is also the honest value: nothing about them
+                             has changed since, because no game was played.
+            expires_at       **fresh.** `at + ttl`, not the original, and
+                             this is the one field that must not be
+                             preserved — the original window has usually
+                             closed by now, and restoring it would produce
+                             a ticket the expiry sweep takes on its first
+                             pass.
+            status           `waiting`. A requeue produces a live ticket
+                             or it produces nothing.
+
+        The result is a ticket whose `expires_at - entered_at` exceeds the
+        configured TTL, which is legal (the CHECK requires only that the
+        window is positive) and is the visible shape of the policy: this
+        player has been waiting longer than anybody who joined normally,
+        because they *have*.
+
+        **A new identity, not a mutation.** The original ticket is
+        `matched` and terminal — it produced a match, which is true and
+        stays true. This is its successor, and `source_ticket_id` is the
+        link.
+
+        Raises `TicketNotWaiting` unless this ticket is `matched`:
+        requeueing a ticket that never produced a match would be
+        compensating for something that did not happen, and requeueing a
+        cancelled one would override a player's own decision to leave.
+        """
+        if self.status is not QueueStatus.MATCHED:
+            raise TicketNotWaiting("Only a ticket that produced a match can be requeued.")
+        return QueueTicket(
+            player_id=self.player_id,
+            pool=self.pool,
+            rating_snapshot=self.rating_snapshot,
+            entered_at=self.entered_at,
+            expires_at=at + timedelta(seconds=ttl),
+            source_ticket_id=self.id,
+        )
 
     def cancelled(self, at: datetime) -> "QueueTicket":
         """The ticket a player withdrew. Raises `TicketNotWaiting`."""
@@ -450,6 +526,7 @@ class QueueTicket:
             expires_at=self.expires_at,
             status=status,
             resolved_at=resolved_at,
+            source_ticket_id=self.source_ticket_id,
             reserved_until=reserved_until,
         )
 

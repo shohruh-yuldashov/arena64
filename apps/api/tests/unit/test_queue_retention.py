@@ -31,9 +31,16 @@ from app.modules.matchmaking.application.services import (
     QueueRetentionService,
     queue_retention_policy,
 )
-from app.modules.matchmaking.domain.cooldown import QueueCooldown
+from app.modules.matchmaking.domain.cooldown import CooldownReason, QueueCooldown
+from app.modules.matchmaking.domain.cooldown_audit import CooldownRecord
+from app.modules.matchmaking.domain.events import ReconciliationAction
 from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType
 from app.modules.matchmaking.domain.queue_ticket import QueueStatus, QueueTicket
+from app.modules.matchmaking.domain.reconciliation_timeline import ReconciliationEntry
+from tests.fakes.audit import (
+    InMemoryCooldownAuditRepository,
+    InMemoryReconciliationTimelineRepository,
+)
 from tests.fakes.cooldowns import InMemoryCooldownRepository
 from tests.fakes.metrics import RecordingMetrics
 from tests.fakes.outbox import NullUnitOfWork
@@ -45,6 +52,12 @@ TTL = timedelta(minutes=10)
 
 TICKET_HORIZON = timedelta(hours=72)
 MATCH_HORIZON = timedelta(hours=168)
+
+#: A64-015.6 §9. Both longer than the rows they explain — ninety days for the
+#: cooldown audit against the bar's one hour, fourteen days for the timeline
+#: against the ticket's three.
+AUDIT_HORIZON = timedelta(hours=2160)
+TIMELINE_HORIZON = timedelta(hours=336)
 
 POOL = QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED)
 
@@ -70,6 +83,16 @@ def cooldowns() -> InMemoryCooldownRepository:
 
 
 @pytest.fixture
+def cooldown_audit() -> InMemoryCooldownAuditRepository:
+    return InMemoryCooldownAuditRepository()
+
+
+@pytest.fixture
+def timeline() -> InMemoryReconciliationTimelineRepository:
+    return InMemoryReconciliationTimelineRepository()
+
+
+@pytest.fixture
 def metrics() -> RecordingMetrics:
     return RecordingMetrics()
 
@@ -79,6 +102,8 @@ def retention(
     tickets: InMemoryQueueRetentionStore,
     matches: InMemoryAbandonedMatches,
     cooldowns: InMemoryCooldownRepository,
+    cooldown_audit: InMemoryCooldownAuditRepository,
+    timeline: InMemoryReconciliationTimelineRepository,
     clock: MovableClock,
     metrics: RecordingMetrics,
 ) -> QueueRetentionService:
@@ -86,6 +111,8 @@ def retention(
         tickets=tickets,
         matches=matches,
         cooldowns=cooldowns,
+        cooldown_audit=cooldown_audit,
+        timeline=timeline,
         unit_of_work=NullUnitOfWork(),
         clock=clock,
         metrics=metrics,
@@ -93,6 +120,8 @@ def retention(
             ticket_retention_hours=72,
             abandoned_match_retention_hours=168,
             cooldown_retention_hours=1,
+            cooldown_audit_retention_hours=2160,
+            timeline_retention_hours=336,
             batch_size=100,
             max_batches=5,
         ),
@@ -176,6 +205,8 @@ class TestTerminalTicketsAreCleaned:
             tickets=tickets,
             matches=matches,
             cooldowns=cooldowns,
+            cooldown_audit=InMemoryCooldownAuditRepository(),
+            timeline=InMemoryReconciliationTimelineRepository(),
             unit_of_work=NullUnitOfWork(),
             clock=clock,
             metrics=metrics,
@@ -183,6 +214,8 @@ class TestTerminalTicketsAreCleaned:
                 ticket_retention_hours=72,
                 abandoned_match_retention_hours=168,
                 cooldown_retention_hours=1,
+                cooldown_audit_retention_hours=2160,
+                timeline_retention_hours=336,
                 batch_size=2,
                 max_batches=2,
             ),
@@ -372,6 +405,9 @@ class TestTheRunItself:
         assert metrics.counts(RETENTION_DELETIONS) == {
             RetentionRelation.QUEUE_TICKET.value: 1.0,
             RetentionRelation.ABANDONED_MATCH.value: 1.0,
+            RetentionRelation.QUEUE_COOLDOWN.value: 0.0,
+            RetentionRelation.COOLDOWN_AUDIT.value: 0.0,
+            RetentionRelation.PAIRING_TIMELINE.value: 0.0,
         }
 
     async def test_the_labels_are_bounded(
@@ -385,3 +421,194 @@ class TestTheRunItself:
         await retention.prune_once()
 
         assert metrics.label_values() <= {member.value for member in RetentionRelation}
+
+
+def _recorded(store: InMemoryCooldownAuditRepository, *, age: timedelta) -> CooldownRecord:
+    """An audit row applied `age` ago."""
+    applied_at = NOW - age
+    record = CooldownRecord(
+        player_id=generate_uuid7(),
+        reason=CooldownReason.DECLINED_MATCH,
+        source_match_id=generate_uuid7(),
+        applied_at=applied_at,
+        expires_at=applied_at + timedelta(seconds=60),
+        extended_existing=False,
+    )
+    store.records.append(record)
+    return record
+
+
+def _projected(
+    store: InMemoryReconciliationTimelineRepository, *, age: timedelta
+) -> ReconciliationEntry:
+    """A timeline entry for something that happened `age` ago."""
+    occurred_at = NOW - age
+    entry = ReconciliationEntry(
+        event_id=generate_uuid7(),
+        ticket_id=generate_uuid7(),
+        player_id=generate_uuid7(),
+        action=ReconciliationAction.REQUEUED,
+        match_id=None,
+        pairing_id=None,
+        occurred_at=occurred_at,
+        recorded_at=occurred_at,
+    )
+    store.entries.append(entry)
+    return entry
+
+
+class TestTheAuditTrailOutlivesWhatItExplains:
+    """A64-015.6 §9. The two audit relations are bounded like everything
+    else, on **longer** horizons than the operational rows they describe —
+    which is the whole reason they are separate relations."""
+
+    async def test_an_audit_row_past_its_horizon_is_deleted(
+        self,
+        retention: QueueRetentionService,
+        cooldown_audit: InMemoryCooldownAuditRepository,
+    ) -> None:
+        _recorded(cooldown_audit, age=AUDIT_HORIZON + timedelta(hours=1))
+
+        result = await retention.prune_once()
+
+        assert result.cooldown_audits_deleted == 1
+        assert cooldown_audit.records == []
+
+    async def test_an_audit_row_inside_its_horizon_is_kept(
+        self,
+        retention: QueueRetentionService,
+        cooldown_audit: InMemoryCooldownAuditRepository,
+    ) -> None:
+        """Ninety days, against the cooldown's one hour: the dispute arrives
+        long after the bar lifted, and an audit trail pruned with the thing
+        it explains answers nothing."""
+        _recorded(cooldown_audit, age=timedelta(days=30))
+
+        result = await retention.prune_once()
+
+        assert result.cooldown_audits_deleted == 0
+        assert len(cooldown_audit.records) == 1
+
+    async def test_the_audit_outlives_the_bar_it_describes(
+        self,
+        retention: QueueRetentionService,
+        cooldowns: InMemoryCooldownRepository,
+        cooldown_audit: InMemoryCooldownAuditRepository,
+    ) -> None:
+        """The asymmetry, asserted as one run rather than two facts: the
+        enforcement row goes and the record of it stays."""
+        lapsed = QueueCooldown(
+            player_id=generate_uuid7(),
+            reason=CooldownReason.DECLINED_MATCH,
+            created_at=NOW - timedelta(days=2),
+            expires_at=NOW - timedelta(days=2) + timedelta(seconds=60),
+        )
+        cooldowns.cooldowns[lapsed.player_id] = lapsed
+        _recorded(cooldown_audit, age=timedelta(days=2))
+
+        result = await retention.prune_once()
+
+        assert result.cooldowns_deleted == 1
+        assert len(cooldown_audit.records) == 1
+
+    async def test_a_timeline_entry_past_its_horizon_is_deleted(
+        self,
+        retention: QueueRetentionService,
+        timeline: InMemoryReconciliationTimelineRepository,
+    ) -> None:
+        _projected(timeline, age=TIMELINE_HORIZON + timedelta(hours=1))
+
+        result = await retention.prune_once()
+
+        assert result.timeline_entries_deleted == 1
+        assert timeline.entries == []
+
+    async def test_a_timeline_entry_inside_its_horizon_is_kept(
+        self,
+        retention: QueueRetentionService,
+        timeline: InMemoryReconciliationTimelineRepository,
+    ) -> None:
+        _projected(timeline, age=timedelta(days=7))
+
+        result = await retention.prune_once()
+
+        assert result.timeline_entries_deleted == 0
+        assert len(timeline.entries) == 1
+
+    async def test_the_timeline_outlives_the_ticket_it_is_about(
+        self,
+        retention: QueueRetentionService,
+        tickets: InMemoryQueueRetentionStore,
+        timeline: InMemoryReconciliationTimelineRepository,
+    ) -> None:
+        """The question is asked about a ticket that is gone — which is why
+        the entry carries the ticket id rather than a foreign key to it."""
+        _resolved(tickets, age=TICKET_HORIZON + timedelta(hours=1))
+        _projected(timeline, age=TICKET_HORIZON + timedelta(hours=1))
+
+        result = await retention.prune_once()
+
+        assert result.tickets_deleted == 1
+        assert len(timeline.entries) == 1
+
+    async def test_both_relations_are_counted_by_the_metric(
+        self,
+        retention: QueueRetentionService,
+        cooldown_audit: InMemoryCooldownAuditRepository,
+        timeline: InMemoryReconciliationTimelineRepository,
+        metrics: RecordingMetrics,
+    ) -> None:
+        """§9's observability half. A relation the run deletes from but does
+        not count is one whose growth is invisible until it is the
+        incident."""
+        _recorded(cooldown_audit, age=AUDIT_HORIZON + timedelta(hours=1))
+        _projected(timeline, age=TIMELINE_HORIZON + timedelta(hours=1))
+
+        await retention.prune_once()
+
+        counted = metrics.counts(RETENTION_DELETIONS)
+        assert counted[RetentionRelation.COOLDOWN_AUDIT.value] == 1.0
+        assert counted[RetentionRelation.PAIRING_TIMELINE.value] == 1.0
+
+    async def test_every_relation_reports_even_when_it_deleted_nothing(
+        self, retention: QueueRetentionService, metrics: RecordingMetrics
+    ) -> None:
+        """A series that reads zero says "the job ran and found nothing"; an
+        absent series says "the job did not run". Telling those apart is the
+        operational value of a retention metric."""
+        await retention.prune_once()
+
+        assert set(metrics.counts(RETENTION_DELETIONS)) == {
+            member.value for member in RetentionRelation
+        }
+
+    async def test_the_audit_horizons_are_bounded(self) -> None:
+        """Not unbounded retention wearing an audit label. §9 asks for a
+        stated horizon on every relation, and a policy that let one grow
+        forever would be the growth these tests exist to prevent."""
+        policy = queue_retention_policy(
+            ticket_retention_hours=72,
+            abandoned_match_retention_hours=168,
+            cooldown_retention_hours=1,
+            cooldown_audit_retention_hours=2160,
+            timeline_retention_hours=336,
+            batch_size=100,
+            max_batches=5,
+        )
+
+        assert policy.cooldown_audit_retention == AUDIT_HORIZON
+        assert policy.timeline_retention == TIMELINE_HORIZON
+
+    async def test_an_audit_horizon_shorter_than_the_bar_is_refused(self) -> None:
+        """The one ordering that would defeat the relation's purpose, caught
+        at construction rather than discovered when the data is gone."""
+        with pytest.raises(ValueError, match="cooldown_audit_retention must exceed"):
+            queue_retention_policy(
+                ticket_retention_hours=72,
+                abandoned_match_retention_hours=168,
+                cooldown_retention_hours=48,
+                cooldown_audit_retention_hours=1,
+                timeline_retention_hours=336,
+                batch_size=100,
+                max_batches=5,
+            )

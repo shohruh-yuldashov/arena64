@@ -11,7 +11,6 @@ with no enforced pairing.
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from functools import lru_cache
 from typing import Any
 
 from fastapi import FastAPI
@@ -56,6 +55,12 @@ from app.modules.matchmaking.application.services.pending_match_notifier import 
 from app.modules.matchmaking.application.services.pending_match_notifier import (
     SUBSCRIBED_EVENT_TYPES as PENDING_MATCH_EVENTS,
 )
+from app.modules.matchmaking.application.services.reconciliation_timeline_service import (
+    CONSUMER_NAME as TIMELINE_CONSUMER,
+)
+from app.modules.matchmaking.application.services.reconciliation_timeline_service import (
+    SUBSCRIBED_EVENT_TYPES as TIMELINE_EVENTS,
+)
 from app.modules.matchmaking.domain.queue_pool import every_pool
 from app.modules.matchmaking.infrastructure import (
     LoggingPendingMatchSink,
@@ -81,6 +86,7 @@ from app.modules.matchmaking.presentation.dependencies import (
     build_queue_service,
     build_recent_opponents,
     build_reconciliation_service,
+    build_timeline_projector,
 )
 from app.modules.notifications.application.services import (
     CONSUMER_NAME,
@@ -101,8 +107,15 @@ from app.modules.users.infrastructure.presence import (
     NoPresenceProvider,
     RedisPresenceProvider,
 )
-from app.platform.metrics import LoggingMetrics, MetricsRecorder
+from app.platform.metrics import (
+    AggregatingMetrics,
+    MetricsFlushTask,
+    flush_request,
+    process_metrics,
+)
 from app.platform.outbox import (
+    ConsumerPolicies,
+    ConsumerPolicy,
     OutboxEventPublisher,
     OutboxRetentionTask,
     OutboxWorker,
@@ -421,6 +434,14 @@ def build_outbox_worker(
             event_types=ACCEPTANCE_FAILURE_EVENTS,
         )
     )
+    handlers.append(
+        SessionScopedNotificationHandler(
+            session_factory=db.session_factory,
+            dispatcher_factory=lambda session: build_timeline_projector(session, clock=clock),
+            consumer=TIMELINE_CONSUMER,
+            event_types=TIMELINE_EVENTS,
+        )
+    )
     if settings.matchmaking.realtime_delivery_enabled:
         handlers.append(
             SessionScopedNotificationHandler(
@@ -440,6 +461,26 @@ def build_outbox_worker(
 
     return OutboxWorker(
         session_factory=db.session_factory,
+        # A64-015.6 §5. Per-consumer budgets, so a slow sibling fails its own
+        # slice rather than delaying everybody else's tick. The numbers are
+        # ordered by what each consumer *does*, not by importance:
+        #
+        #   the timeline    one indexed insert per entry, no network
+        #   the policy      queue writes, still local
+        #   notifications   renders profiles, reads the social graph
+        #   realtime        the only one that will talk to a socket (AD-09),
+        #                   and the reason this exists at all
+        #
+        # Every one is a runaway guard rather than a latency target: a
+        # consumer that exceeds these is stuck, not slow.
+        policies=ConsumerPolicies.of(
+            [
+                ConsumerPolicy(TIMELINE_CONSUMER, timeout_seconds=10.0),
+                ConsumerPolicy(ACCEPTANCE_FAILURE_CONSUMER, timeout_seconds=15.0),
+                ConsumerPolicy(CONSUMER_NAME, timeout_seconds=20.0),
+                ConsumerPolicy(PENDING_MATCH_CONSUMER, timeout_seconds=10.0),
+            ]
+        ),
         # One handler today. The list is the extension point: a second
         # consumer — moderation, audit, statistics — is an entry here and
         # its own `processed_event` partition, with nothing above it
@@ -621,6 +662,11 @@ def build_task_schedulers(
         # in cache.
         logger.warning("queue_retention_disabled", extra={"reason": "configuration"})
 
+    # A64-015.6 §6. Always registered — there is no switch, because the
+    # accumulator is filled by services that are always wired and a process
+    # that never drained it would hold counters forever and report none.
+    handlers.append(MetricsFlushTask(metrics=_metrics()))
+
     if not handlers:
         return schedulers
 
@@ -656,6 +702,13 @@ def build_task_schedulers(
             )
             for pool in every_pool()
         )
+    schedulers.append(
+        PeriodicTaskScheduler(
+            dispatcher=dispatcher,
+            request=flush_request(),
+            interval_seconds=settings.app.metrics_flush_interval_seconds,
+        )
+    )
     if settings.matchmaking.retention_enabled:
         schedulers.append(
             PeriodicTaskScheduler(
@@ -733,6 +786,7 @@ def _pairing_service_for(
         events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
         settings=settings.matchmaking,
         clock=clock,
+        metrics=_metrics(),
     )
 
 
@@ -825,16 +879,20 @@ def _queue_retention_for(
     )
 
 
-@lru_cache(maxsize=1)
-def _metrics() -> MetricsRecorder:
-    """The process-wide metrics recorder.
+def _metrics() -> AggregatingMetrics:
+    """The process-wide metrics recorder — A64-015.6 §6 and §10.
 
-    Cached rather than rebuilt, for the reason `engine_services()` is: it is
-    stateless, so one instance serves every worker and every request, and
-    building one per relay tick would be pure waste. `Depends` hands the
-    same object to the HTTP path through `get_metrics`.
+    Delegates to `platform.metrics.process_metrics` rather than constructing
+    one, which is the point: the request path reaches the same accessor
+    through `matchmaking`'s `get_metrics`, so both halves of the process
+    count into one accumulator and `MetricsFlushTask` drains all of it. See
+    that module for what the two-recorder arrangement was losing.
+
+    It stays a named function here because every wiring site below reads
+    `metrics=_metrics()` and the indirection is the composition root's own
+    vocabulary.
     """
-    return LoggingMetrics()
+    return process_metrics()
 
 
 def _presence_adapter(

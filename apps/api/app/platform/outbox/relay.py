@@ -47,6 +47,7 @@ independent. Adding randomness would make the backoff untestable without
 injecting a random source, for a herd that cannot form.
 """
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -56,6 +57,7 @@ from uuid import UUID
 from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork
 from app.platform.outbox.entry import OutboxEntry
+from app.platform.outbox.isolation import ConsumerPolicies
 from app.platform.outbox.ports import EventHandler, OutboxRepository, ProcessedEventStore
 
 logger = logging.getLogger(__name__)
@@ -113,6 +115,7 @@ class OutboxRelay:
         max_attempts: int,
         retry_base_seconds: int,
         retry_max_seconds: int,
+        policies: ConsumerPolicies | None = None,
     ) -> None:
         self._outbox = outbox
         self._processed = processed
@@ -124,6 +127,11 @@ class OutboxRelay:
         self._max_attempts = max_attempts
         self._retry_base_seconds = retry_base_seconds
         self._retry_max_seconds = retry_max_seconds
+        # A64-015.6 §5. Defaulted rather than required, so every existing
+        # construction site keeps working and a caller that names no policy
+        # still gets a timeout — see `ConsumerPolicies.timeout_for` on why
+        # the default must not be "no bound".
+        self._policies = policies or ConsumerPolicies.of()
 
     async def run_once(self) -> RelayTick:
         """Processes at most `batch_size` due entries. Never raises.
@@ -137,19 +145,106 @@ class OutboxRelay:
         if not entries:
             return RelayTick(claimed=0, published=0, failed=0, skipped=0)
 
+        return await self._record(entries, await self._dispatch(entries))
+
+    async def _dispatch(self, entries: Sequence[OutboxEntry]) -> dict[UUID, str]:
+        """Hands the batch to every interested consumer, **concurrently** —
+        A64-015.6 §5.
+
+        Sequential delivery made a tick cost the *sum* of its consumers, so a
+        slow one delayed every other one's work by its own duration, and
+        which consumer suffered was decided by the order of a list literal at
+        the composition root. `gather` makes a tick cost the slowest one
+        instead.
+
+        Safe because the consumers share nothing: each opens its own session
+        (`SessionScopedNotificationHandler`), writes its own
+        `processed_event` partition, and reports failures per entry. Two
+        handlers on one session would interleave statements on one
+        connection, which asyncpg does not permit — and is the reason that
+        adapter exists.
+
+        `return_exceptions=True` because `_deliver` already converts a
+        handler's exception into per-entry failures; anything that still
+        escapes is a defect in the relay rather than in a consumer, and one
+        such defect must not take the other consumers' results with it.
+        """
+        wanted = [
+            (handler, [entry for entry in entries if handler.handles(entry.event_type)])
+            for handler in self._handlers
+        ]
+        interested = [(handler, batch) for handler, batch in wanted if batch]
+        if not interested:
+            return {}
+
+        results = await asyncio.gather(
+            *(self._deliver_within_budget(handler, batch) for handler, batch in interested),
+            return_exceptions=True,
+        )
+
         failures: dict[UUID, str] = {}
-        for handler in self._handlers:
-            wanted = [entry for entry in entries if handler.handles(entry.event_type)]
-            if not wanted:
-                continue
-            for failure in await self._deliver(handler, wanted):
-                # First failure wins. A second handler's error against the
+        for (handler, batch), result in zip(interested, results, strict=True):
+            if isinstance(result, BaseException):
+                logger.error(
+                    "event_dispatch_crashed",
+                    extra={"consumer": handler.consumer, "error": type(result).__name__},
+                    exc_info=result,
+                )
+                reported: Sequence[DeliveryFailure] = [
+                    DeliveryFailure(entry.id, type(result).__name__) for entry in batch
+                ]
+            else:
+                reported = result
+
+            for failure in reported:
+                # First failure wins. A second consumer's error against the
                 # same entry does not overwrite the first, so `last_error`
-                # names the consumer that failed *first* — which is the one
-                # an operator should look at.
+                # names one consumer rather than whichever finished last.
+                #
+                # Under `gather` "first" is no longer a deterministic
+                # *order*, and that is an acceptable loss: the field is a
+                # diagnostic hint, the per-consumer log lines above carry the
+                # whole picture, and nothing branches on it.
                 failures.setdefault(failure.entry_id, failure.reason)
 
-        return await self._record(entries, failures)
+        return failures
+
+    async def _deliver_within_budget(
+        self, handler: EventHandler, entries: Sequence[OutboxEntry]
+    ) -> Sequence[DeliveryFailure]:
+        """One consumer's delivery, bounded by its policy — §5.
+
+        A consumer that exceeds its budget fails **its own** slice: those
+        entries are retried, and every other consumer's work in this tick has
+        already committed. Before this there was no bound at all, so a
+        consumer that hung — not failed, hung — stopped the relay for the
+        whole process indefinitely.
+
+        The timeout cancels the handler mid-`await`. That is safe for the
+        consumers on this platform because each commits its own transaction
+        and reports per-entry failures; a cancelled one has either committed
+        its work or rolled it back, and the retry finds the ledger telling it
+        which. A consumer that could not tolerate cancellation would need to
+        shield its own critical section, which is its business rather than
+        the relay's.
+        """
+        timeout = self._policies.timeout_for(handler.consumer)
+        try:
+            return await asyncio.wait_for(self._deliver(handler, entries), timeout)
+        except TimeoutError:
+            # `WARNING` rather than `ERROR`: the entries are retried and the
+            # other consumers were unaffected, which is the isolation
+            # working. A *sustained* rate here is the alert, and it is
+            # visible as this consumer's entries repeatedly failing.
+            logger.warning(
+                "event_delivery_timed_out",
+                extra={
+                    "consumer": handler.consumer,
+                    "event_count": len(entries),
+                    "timeout_seconds": timeout,
+                },
+            )
+            return [DeliveryFailure(entry.id, "delivery_timeout") for entry in entries]
 
     async def _claim(self) -> Sequence[OutboxEntry]:
         """Transaction A. Committed immediately so the claim is visible to

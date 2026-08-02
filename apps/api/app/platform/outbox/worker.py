@@ -50,6 +50,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.config.settings import OutboxSettings
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
+from app.platform.outbox.isolation import ConsumerPolicies
 from app.platform.outbox.ports import EventHandler
 from app.platform.outbox.relay import OutboxRelay
 from app.platform.outbox.repository import (
@@ -87,11 +88,16 @@ class OutboxWorker:
         settings: OutboxSettings,
         clock: Clock,
         worker_id: str | None = None,
+        policies: ConsumerPolicies | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._handlers = handlers
         self._settings = settings
         self._clock = clock
+        # A64-015.6 §5. Passed straight through to the relay it builds per
+        # tick. Defaulted, so every existing construction site keeps working
+        # and a caller naming no policy still gets a bounded consumer.
+        self._policies = policies or ConsumerPolicies.of()
         self._worker_id = worker_id or worker_identity()
         self._task: asyncio.Task[None] | None = None
 
@@ -152,6 +158,7 @@ class OutboxWorker:
                 max_attempts=self._settings.max_attempts,
                 retry_base_seconds=self._settings.retry_base_seconds,
                 retry_max_seconds=self._settings.retry_max_seconds,
+                policies=self._policies,
             )
             await relay.run_once()
 

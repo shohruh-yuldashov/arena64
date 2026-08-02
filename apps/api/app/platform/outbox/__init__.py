@@ -16,6 +16,11 @@ composition root's.
 """
 
 from app.platform.outbox.entry import OutboxEntry
+from app.platform.outbox.isolation import (
+    DEFAULT_CONSUMER_TIMEOUT_SECONDS,
+    ConsumerPolicies,
+    ConsumerPolicy,
+)
 from app.platform.outbox.models import PLATFORM_SCHEMA, OutboxModel, ProcessedEventModel
 from app.platform.outbox.ports import (
     EventFailure,
@@ -45,6 +50,9 @@ from app.platform.outbox.retention import (
 from app.platform.outbox.worker import OutboxWorker, worker_identity
 
 __all__ = [
+    "DEFAULT_CONSUMER_TIMEOUT_SECONDS",
+    "ConsumerPolicies",
+    "ConsumerPolicy",
     "MAINTENANCE_QUEUE",
     "OUTBOX_PRUNE_TASK",
     "PLATFORM_SCHEMA",

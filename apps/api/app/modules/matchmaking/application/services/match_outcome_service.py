@@ -73,7 +73,9 @@ Three layers, and each covers what the others cannot:
 
 The cooldown needs none of them: `CooldownRepository.apply` is an upsert
 that takes the later expiry, so applying the same cooldown twice is applying
-it once.
+it once. Its **audit row** (A64-015.6 §3) is idempotent on
+`(player_id, source_match_id)` for the same reason, and rides in the same
+transaction as the bar it explains.
 """
 
 import logging
@@ -89,9 +91,13 @@ from app.modules.matchmaking.application.metrics import (
     RECONCILIATION_ACTIONS,
     AcceptanceFailureAction,
 )
-from app.modules.matchmaking.application.ports import CooldownRepository
+from app.modules.matchmaking.application.ports import (
+    CooldownAuditRepository,
+    CooldownRepository,
+)
 from app.modules.matchmaking.application.services.queue_service import QueueService
 from app.modules.matchmaking.domain.cooldown import QueueCooldown
+from app.modules.matchmaking.domain.cooldown_audit import CooldownRecord
 from app.modules.matchmaking.domain.events import ReconciliationAction
 from app.platform.metrics import MetricsRecorder
 from app.platform.outbox import OutboxEntry
@@ -156,6 +162,7 @@ class MatchOutcomeService:
         *,
         queue: QueueService,
         cooldowns: CooldownRepository,
+        audit: CooldownAuditRepository,
         unit_of_work: UnitOfWork,
         clock: Clock,
         metrics: MetricsRecorder,
@@ -163,6 +170,7 @@ class MatchOutcomeService:
     ) -> None:
         self._queue = queue
         self._cooldowns = cooldowns
+        self._audit = audit
         self._unit_of_work = unit_of_work
         self._clock = clock
         self._metrics = metrics
@@ -253,10 +261,10 @@ class MatchOutcomeService:
             )
             return
 
-        await self._cool_down(handshake.declined_by_player_id)
+        await self._cool_down(handshake.declined_by_player_id, match_id=handshake.match_id)
 
-    async def _cool_down(self, player_id: UUID) -> None:
-        """Bars the decliner from the queue for the configured window.
+    async def _cool_down(self, player_id: UUID, *, match_id: UUID) -> None:
+        """Bars the decliner from the queue, and records why — A64-015.6 §3.
 
         Its own transaction rather than the requeue's, and they are
         deliberately not one: the two writes are about **different
@@ -265,6 +273,25 @@ class MatchOutcomeService:
         opponent being cooled down is a policy that under-applied by one
         window; rolling the requeue back would be a policy that punished the
         wrong person.
+
+        The **audit row shares that transaction**, and that pairing is the
+        one thing here that must not be relaxed: a bar with no record of why
+        is precisely what A64-015.6 §3 exists to prevent, and two
+        transactions would make it a crash away.
+
+        `extended_existing` is read **before** the write rather than derived
+        from it, and the difference is not cosmetic: comparing the stored
+        expiry against the requested one only detects the case where the
+        *old* bar outlasted the new one, which is the rarer half. A decline
+        thirty seconds into a sixty-second window pushes the expiry out and
+        leaves stored and requested identical — the ordinary repeat offender,
+        and the one a support answer is actually about.
+
+        So the check is "was a bar in force when this landed", answered by a
+        primary-key read inside the same transaction. It costs one indexed
+        lookup on a path that runs once per declined match. That is the fact
+        A64-015.5's one-row-per-player enforcement discards, and the whole
+        reason the audit relation is append-only.
         """
         at = self._clock.now()
         cooldown = QueueCooldown.after_decline(
@@ -272,7 +299,18 @@ class MatchOutcomeService:
         )
 
         async with self._unit_of_work:
+            # Inside the transaction, so the answer cannot be invalidated by
+            # a concurrent decline between the read and the write.
+            in_force = await self._cooldowns.active_for(player_id, now=at)
             stored = await self._cooldowns.apply(cooldown)
+            await self._audit.record(
+                CooldownRecord.of(
+                    stored,
+                    source_match_id=match_id,
+                    applied_at=at,
+                    extended_existing=in_force is not None,
+                )
+            )
             await self._unit_of_work.commit()
 
         self._metrics.increment(

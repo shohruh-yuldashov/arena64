@@ -125,9 +125,11 @@ from app.modules.matchmaking.application.eligibility import (
     QueueEligibilityPolicy,
 )
 from app.modules.matchmaking.application.ports import (
+    CooldownAuditRepository,
     CooldownRepository,
     PendingMatchSink,
     RecentOpponentProvider,
+    ReconciliationTimelineRepository,
 )
 from app.modules.matchmaking.application.services import (
     MatchOutcomeService,
@@ -136,21 +138,24 @@ from app.modules.matchmaking.application.services import (
     PendingMatchNotifier,
     QueueRetentionService,
     QueueService,
+    ReconciliationTimelineProjector,
     queue_retention_policy,
 )
 from app.modules.matchmaking.domain.pairing import PairingEngine, RatingWindowPolicy
 from app.modules.matchmaking.infrastructure import (
     ProvisionalRatingProvider,
+    SqlAlchemyCooldownAuditRepository,
     SqlAlchemyCooldownRepository,
     SqlAlchemyQueueRepository,
     SqlAlchemyQueueRetentionStore,
+    SqlAlchemyReconciliationTimelineRepository,
 )
 from app.modules.users.application.services.public_profile_service import PublicProfileService
 from app.modules.users.application.services.user_service import UserService
 from app.modules.users.infrastructure.presence import NoPresenceProvider, RedisPresenceProvider
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
 from app.modules.users.public import PresenceProvider, PublicProfileReader
-from app.platform.metrics import LoggingMetrics, MetricsRecorder
+from app.platform.metrics import MetricsRecorder, process_metrics
 from app.platform.outbox import EventPublisher
 
 logger = logging.getLogger(__name__)
@@ -419,6 +424,41 @@ def build_cooldowns(session: AsyncSession) -> CooldownRepository:
     return SqlAlchemyCooldownRepository(session)
 
 
+def build_cooldown_audit(session: AsyncSession) -> CooldownAuditRepository:
+    """The cooldown audit trail, over one session — A64-015.6 §3.
+
+    A separate factory from `build_cooldowns` because the two are separate
+    capabilities: the eligibility check holds the enforcement store and must
+    not be able to write history, and only the policy that applies a bar
+    holds both.
+    """
+    return SqlAlchemyCooldownAuditRepository(session)
+
+
+def build_reconciliation_timeline(
+    session: AsyncSession,
+) -> ReconciliationTimelineRepository:
+    """The recovery timeline, over one session — A64-015.6 §4."""
+    return SqlAlchemyReconciliationTimelineRepository(session)
+
+
+def build_timeline_projector(
+    session: AsyncSession, *, clock: Clock
+) -> ReconciliationTimelineProjector:
+    """The `pairing_reconciled` consumer, over one relay tick's session.
+
+    The cheapest consumer on the relay: one repository, one unit of work, one
+    clock, and no cross-module port at all — which is what makes it the one
+    least able to be slow, and the reason its `ConsumerPolicy` needs no
+    special budget.
+    """
+    return ReconciliationTimelineProjector(
+        timeline=build_reconciliation_timeline(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )
+
+
 def build_match_outcome_service(
     session: AsyncSession,
     *,
@@ -443,6 +483,7 @@ def build_match_outcome_service(
             session, eligibility=eligibility, events=events, settings=settings, clock=clock
         ),
         cooldowns=build_cooldowns(session),
+        audit=build_cooldown_audit(session),
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
         metrics=metrics,
@@ -501,6 +542,8 @@ def build_queue_retention_service(
             unit_of_work=SessionUnitOfWork(session),
         ),
         cooldowns=build_cooldowns(session),
+        cooldown_audit=build_cooldown_audit(session),
+        timeline=build_reconciliation_timeline(session),
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
         metrics=metrics,
@@ -508,6 +551,8 @@ def build_queue_retention_service(
             ticket_retention_hours=settings.ticket_retention_hours,
             abandoned_match_retention_hours=settings.abandoned_match_retention_hours,
             cooldown_retention_hours=settings.cooldown_retention_hours,
+            cooldown_audit_retention_hours=settings.cooldown_audit_retention_hours,
+            timeline_retention_hours=settings.timeline_retention_hours,
             batch_size=settings.retention_batch_size,
             max_batches=settings.retention_max_batches,
         ),
@@ -541,6 +586,7 @@ def build_pairing_service(
     events: EventPublisher,
     settings: MatchmakingSettings,
     clock: Clock,
+    metrics: MetricsRecorder,
 ) -> PairingService:
     """One pairing scan's object graph, over one session.
 
@@ -567,6 +613,7 @@ def build_pairing_service(
         events=events,
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
+        metrics=metrics,
         candidate_batch_size=settings.candidate_batch_size,
         reservation_ttl_seconds=settings.reservation_ttl_seconds,
     )
@@ -609,14 +656,19 @@ def build_reconciliation_service(
 
 
 def get_metrics() -> MetricsRecorder:
-    """The **process-wide** metrics recorder — A64-015.5 §7.
+    """The **process-wide** metrics recorder — A64-015.5 §7, A64-015.6 §10.
 
-    Stateless, so one instance serves every request and every worker;
-    `Depends` hands out the same object rather than building one per call.
-    The same lifetime `get_engine_services` gives the engine collaborators,
-    and for the same reason.
+    `platform.metrics.process_metrics()`, which is the same object the
+    composition root wires into every worker path. It used to be a
+    `LoggingMetrics` built here, and once A64-015.6 made the recorder
+    stateful that second instance stopped being redundancy and started being
+    lost counters — see `app/platform/metrics/runtime.py`.
+
+    Returned as the **port**, so a route holding this dependency cannot
+    reach `flush()`. Draining is the scheduled task's job and nothing on the
+    request path should be able to do it.
     """
-    return LoggingMetrics()
+    return process_metrics()
 
 
 MetricsDep = Annotated[MetricsRecorder, Depends(get_metrics)]
@@ -658,6 +710,7 @@ __all__ = [
     "PresenceReaderDep",
     "QueueServiceDep",
     "build_eligibility_policy",
+    "build_cooldown_audit",
     "build_cooldowns",
     "build_match_acceptance",
     "build_match_creation",
@@ -668,10 +721,12 @@ __all__ = [
     "build_pairing_settlements",
     "build_pending_match_notifier",
     "build_queue_retention_service",
+    "build_reconciliation_timeline",
     "build_queue_service",
     "build_rating_window",
     "build_recent_opponents",
     "build_reconciliation_service",
+    "build_timeline_projector",
     "get_eligibility_policy",
     "get_engine_services",
     "get_match_acceptance",

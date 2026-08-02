@@ -9,6 +9,7 @@ from uuid import UUID
 
 from app.modules.auth.domain.password_reset import PasswordResetToken
 from app.modules.auth.domain.sessions import RevocationReason, UserSession
+from app.modules.auth.domain.tickets import RedeemedTicket
 from app.modules.auth.domain.tokens import TokenClaims, TokenType
 from app.modules.auth.domain.verification import EmailVerificationToken
 
@@ -384,5 +385,63 @@ class PasswordResetTokenRepository(Protocol):
         partial unique index enforces, and for A64-011.8's throttle. Takes
         `at` rather than reading the clock (AD-07) — "active" is a question
         about an instant.
+        """
+        ...
+
+
+class WebSocketTicketStore(Protocol):
+    """Where a WebSocket ticket lives between minting and redemption —
+    A64-016.1, AD-09.
+
+    Its own port rather than a method on `SessionRepository`, and the split
+    is the one every port pair on this platform makes: what differs is the
+    **storage posture**, not just the capability. A session is a durable row
+    with a revocation history; a ticket is a value with a thirty-second life
+    whose only interesting property is that it can be spent exactly once.
+    Putting the second in PostgreSQL would mean an insert and a delete per
+    socket opened, on the write primary, for a fact that is irrelevant a
+    minute later (AD-18's own argument).
+
+    **`redeem` is the only read.** There is deliberately no `get` and no
+    `exists`: a non-destructive lookup is precisely the operation that makes
+    single-use accidental rather than structural, because it invites a
+    caller to check first and consume later, with a window in between that
+    two connections can both pass through.
+    """
+
+    async def issue(
+        self, digest: bytes, *, player_id: UUID, session_id: UUID | None, ttl_seconds: int
+    ) -> None:
+        """Stores one ticket under its digest, with its expiry.
+
+        Takes the **digest**, never the plaintext — the caller hashes, so
+        this port cannot become a second place where the hashing decision
+        lives (DB-24). An implementation that could reproduce a ticket value
+        would defeat the reason it is hashed at all.
+
+        `bytes`, matching `OpaqueTokenService.hash`, so no caller handles a
+        hex rendering of the same value — the failure that module warns
+        about is two representations that silently never compare equal.
+
+        The TTL is an argument rather than a policy this holds, because
+        "how long may a ticket be redeemed for" is a security decision that
+        belongs to configuration and must be visible at the call site.
+        """
+        ...
+
+    async def redeem(self, digest: bytes) -> RedeemedTicket | None:
+        """Spends a ticket, or reports that there was nothing to spend.
+
+        **Atomic and destructive in one operation.** A second call with the
+        same digest returns `None` whether the first was a millisecond or a
+        minute ago, and two concurrent calls on two gateway nodes resolve so
+        that exactly one receives the identity. That is the whole of AD-09's
+        "redeemable once", and it is an implementation guarantee rather than
+        a convention this docstring asks for.
+
+        `None` covers unknown, already-spent and expired **without
+        distinguishing them**, for the reason `InvalidToken` gives: telling
+        a caller which of the three it was is a step-by-step oracle for
+        anyone probing the ticket format.
         """
         ...

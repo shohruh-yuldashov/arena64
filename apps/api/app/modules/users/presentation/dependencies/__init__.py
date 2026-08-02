@@ -120,3 +120,28 @@ def get_presence_service(
 
 
 PresenceServiceDep = Annotated[PresenceService, Depends(get_presence_service)]
+
+
+def get_presence_recorder(
+    pools: RedisPoolsDep, settings: PresenceSettingsDep, clock: ClockDep
+) -> PresenceRecorder:
+    """The presence **write port**, alone — A64-016.1.
+
+    `PresenceService` bundles the recorder with the reader because `auth`'s
+    lifecycle routes want both: a sign-in records presence and `GET
+    /profile/me` reads the caller's own back. The gateway wants only the
+    write half, and the difference is a capability rather than a
+    convenience — a transport tier that could *read* presence could answer
+    "is this player online" without going through the privacy composition
+    that decides who may know, which is the exact split `profiles` already
+    keeps by holding the reader alone.
+
+    Same two branches and the same `cache` role as `get_presence_service`,
+    because it is the same adapter behind a narrower type.
+    """
+    if not settings.enabled:
+        return NoPresenceProvider()
+    return RedisPresenceProvider(pools.cache, settings=settings, clock=clock)
+
+
+PresenceRecorderDep = Annotated[PresenceRecorder, Depends(get_presence_recorder)]

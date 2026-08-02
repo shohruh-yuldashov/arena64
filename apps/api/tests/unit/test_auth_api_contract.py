@@ -199,5 +199,8 @@ class TestAppWiring:
         assert users_clock is platform_clock
 
     def test_the_app_builds(self, spec: dict[str, Any]) -> None:
+        # Eleven since A64-016.1 added `POST /auth/ws-ticket` — AD-09's
+        # credential is minted over HTTP, because a browser cannot set
+        # headers on a WebSocket handshake.
         assert isinstance(create_app(), FastAPI)
-        assert len([p for p in spec["paths"] if "/auth/" in p]) == 10
+        assert len([p for p in spec["paths"] if "/auth/" in p]) == 11

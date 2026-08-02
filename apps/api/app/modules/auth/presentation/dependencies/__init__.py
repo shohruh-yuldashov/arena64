@@ -55,7 +55,7 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from app.api.deps import ClockDep, DbSessionDep, SettingsDep
+from app.api.deps import ClockDep, DbSessionDep, RedisPoolsDep, SettingsDep
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.auth.application.email import EmailProvider
@@ -70,9 +70,11 @@ from app.modules.auth.application.services import (
     SessionService,
 )
 from app.modules.auth.application.services.opaque_tokens import OpaqueTokenService
+from app.modules.auth.application.services.websocket_tickets import WebSocketTicketService
 from app.modules.auth.infrastructure import (
     ConsoleEmailProvider,
     JwtTokenProvider,
+    RedisWebSocketTicketStore,
     SqlAlchemyPasswordResetTokenRepository,
     SqlAlchemySessionRepository,
     SqlAlchemyVerificationTokenRepository,
@@ -206,6 +208,37 @@ def get_refresh_token_service(settings: SettingsDep) -> RefreshTokenService:
 
 
 RefreshTokenServiceDep = Annotated[RefreshTokenService, Depends(get_refresh_token_service)]
+
+
+def get_websocket_ticket_service(
+    pools: RedisPoolsDep, clock: ClockDep, settings: SettingsDep
+) -> WebSocketTicketService:
+    """AD-09's ticket issuer and redeemer — A64-016.1.
+
+    Resolved by two very different callers, and that is the point of it
+    being one factory: `POST /auth/ws-ticket` mints, and the gateway's
+    `/ws` handshake redeems. A second construction site would be two
+    places that decide how a ticket is hashed and how long it lives.
+
+    Redis rather than a session-backed repository, and the **`cache`**
+    role — see `RedisWebSocketTicketStore` for the AD-03 argument and for
+    why redemption is a single `GETDEL`.
+
+    No kill switch. Presence and the friends cache have one because they
+    degrade to a working platform with a feature missing; a gateway that
+    could not redeem a ticket cannot accept a connection at all, and a
+    switch whose off position is "no realtime" is a deploy decision rather
+    than a runtime one.
+    """
+    return WebSocketTicketService(
+        store=RedisWebSocketTicketStore(pools.cache),
+        tokens=OpaqueTokenService(),
+        clock=clock,
+        ttl_seconds=settings.gateway.ticket_ttl_seconds,
+    )
+
+
+WebSocketTicketServiceDep = Annotated[WebSocketTicketService, Depends(get_websocket_ticket_service)]
 
 
 def get_session_service(
@@ -408,6 +441,7 @@ __all__ = [
     "RegistrationServiceDep",
     "TokenValidatorDep",
     "SessionServiceDep",
+    "WebSocketTicketServiceDep",
     "UserAccountCreatorDep",
     "UserCredentialStoreDep",
     "UserProfileReaderDep",

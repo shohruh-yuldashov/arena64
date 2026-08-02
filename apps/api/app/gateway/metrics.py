@@ -58,6 +58,77 @@ CONNECTIONS_CLOSED: Final = "gateway.connections_closed_total"
 CONNECTION_DURATION: Final = "gateway.connection_duration_seconds"
 
 
+#: Room joins that were admitted — §11's "room join success".
+ROOM_JOINS: Final = "gateway.room_joins_total"
+
+#: Room joins that were refused, by why — §11's "room join rejection".
+ROOM_JOIN_REJECTIONS: Final = "gateway.room_join_rejections_total"
+
+#: Connections detached from a room, by how — §11's "room leave".
+ROOM_LEAVES: Final = "gateway.room_leaves_total"
+
+#: Rooms this connection's join found in each state — §11's "active rooms".
+#:
+#: Counted as a **transition into a state** rather than published as a gauge,
+#: for the reason `CONNECTIONS_ACCEPTED` is: `MetricsRecorder` has no gauge,
+#: because a gauge is read at scrape time and needs the exporter to call into
+#: the process. `rate(room_states{state=ready})` is the question an operator
+#: actually has — how often does a room complete — and it is answerable from
+#: a counter where "how many rooms exist right now" is not.
+ROOM_STATES: Final = "gateway.room_states_total"
+
+#: Recipient connections resolved, by whether this node holds them — §11's
+#: "local versus remote route resolution".
+#:
+#: **Never labelled by node** (§11). One series per node is a cardinality
+#: that grows with the fleet, and a node identifier in a metric is internal
+#: topology in a system with broader read access than the registry. The
+#: ratio is the operational question: a rising remote share is what says a
+#: cross-node transport is now actually needed.
+ROUTE_RESOLUTIONS: Final = "gateway.route_resolutions_total"
+
+
+class RouteLocality(StrEnum):
+    """Whether a recipient connection is held by this process."""
+
+    LOCAL = "local"
+    """Deliverable now, by writing to a socket this node holds."""
+
+    REMOTE = "remote"
+    """Held elsewhere. Undeliverable until A64-016.3's transport exists —
+    which is what makes this counter the measure of how much that transport
+    is worth."""
+
+
+class RoomRejectionReason(StrEnum):
+    """Why a socket was refused a room.
+
+    Two members, matching the two error codes a client can act on. It is
+    deliberately **not** three: "no such match" and "not your match" are one
+    reason here for the same reason they are one code on the wire — a metric
+    that separated them would let anybody with a dashboard confirm that a
+    match id exists.
+    """
+
+    NOT_A_PARTICIPANT = "not_a_participant"
+    """The match does not exist, or this player is not in it."""
+
+    ROOM_UNAVAILABLE = "room_unavailable"
+    """The player is a participant and the match is not in a state that has
+    a room yet."""
+
+
+class RoomLeaveReason(StrEnum):
+    """How a connection left a room."""
+
+    CLIENT = "client"
+    """An explicit `room.leave`."""
+
+    DISCONNECT = "disconnect"
+    """The socket closed. The common case by a wide margin — most players
+    close the tab rather than leaving politely."""
+
+
 class RejectionReason(StrEnum):
     """Why a handshake never became a connection.
 

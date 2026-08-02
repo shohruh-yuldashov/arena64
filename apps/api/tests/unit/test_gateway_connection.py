@@ -40,17 +40,29 @@ from app.gateway.connections import (
     GatewayPolicy,
 )
 from app.gateway.metrics import CloseReason
-from app.gateway.protocol import PROTOCOL_VERSION, GatewayErrorCode, MessageType
+from app.gateway.protocol import (
+    PROTOCOL_VERSION,
+    Channel,
+    GatewayErrorCode,
+    MessageType,
+)
+from app.gateway.room_service import GameRoomService
 from tests.fakes.gateway import (
     FakeConnectionRegistry,
     FakeGatewaySocket,
+    FakeRoomMemberStore,
     FakeTicketRedeemer,
     RecordingPresence,
+    StubMatchRosters,
 )
 from tests.fakes.metrics import RecordingMetrics
 from tests.fakes.presence_redis import MovableClock
 
 NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
+
+#: A64-016.2. Every connection this "process" opens is registered under it,
+#: which is what makes the routing seam's local/remote split meaningful.
+NODE_ID = "test-node"
 
 POLICY = GatewayPolicy(
     connection_ttl_seconds=90,
@@ -58,13 +70,19 @@ POLICY = GatewayPolicy(
     # would make every test a race against its own scripted frames.
     heartbeat_timeout_seconds=30.0,
     max_frame_bytes=8 * 1024,
+    node_id=NODE_ID,
 )
 
 VALID_TICKET = "a-ticket-a-client-was-handed"
 
 
 def _frame(message_type: str, **fields: object) -> str:
-    """One client frame, encoded the way a browser would send it."""
+    """One client frame, encoded the way a browser would send it.
+
+    `channel` is optional at the call site as it is on the wire — an
+    A64-016.1 client sends none and every frame it sends is a system frame,
+    which is what makes the field a backwards-compatible addition.
+    """
     return json.dumps({"v": PROTOCOL_VERSION, "type": message_type, **fields})
 
 
@@ -83,14 +101,34 @@ def tickets() -> FakeTicketRedeemer:
     return FakeTicketRedeemer()
 
 
+def _rooms(
+    rosters: StubMatchRosters | None = None, members: FakeRoomMemberStore | None = None
+) -> GameRoomService:
+    """The real room service over in-memory storage.
+
+    Real, not stubbed: the membership rule is what §7 is about, and a test
+    that substituted it would assert that the lifecycle calls something
+    rather than that only participants get in.
+    """
+    return GameRoomService(
+        rosters=rosters if rosters is not None else StubMatchRosters(),
+        members=members if members is not None else FakeRoomMemberStore(),
+        metrics=RecordingMetrics(),
+        clock=MovableClock(NOW),
+        room_ttl_seconds=3600,
+    )
+
+
 def _service(
     tickets: FakeTicketRedeemer,
     registry: FakeConnectionRegistry,
     presence: RecordingPresence,
+    rooms: GameRoomService | None = None,
 ) -> GatewayConnectionService:
     return GatewayConnectionService(
         tickets=tickets,
         registry=registry,
+        rooms=rooms if rooms is not None else _rooms(),
         presence=presence,
         metrics=RecordingMetrics(),
         clock=MovableClock(NOW),
@@ -369,6 +407,7 @@ class TestCleanup:
         service = GatewayConnectionService(
             tickets=tickets,
             registry=registry,
+            rooms=_rooms(),
             presence=presence,
             metrics=RecordingMetrics(),
             clock=MovableClock(NOW),
@@ -376,6 +415,7 @@ class TestCleanup:
                 connection_ttl_seconds=90,
                 heartbeat_timeout_seconds=0.001,
                 max_frame_bytes=8 * 1024,
+                node_id=NODE_ID,
             ),
         )
 
@@ -385,3 +425,177 @@ class TestCleanup:
         assert socket.closed_with[1] == CloseReason.HEARTBEAT_TIMEOUT.value
         assert presence.states_for(player_id) == [True, False]
         assert await registry.active_count(player_id) == 0
+
+
+class TestGameRooms:
+    """A64-016.2 §7 and §8 — who may attach a socket to a match.
+
+    The room service runs **for real** here, over in-memory storage: the
+    membership rule is the whole subject, and a stub in its place would
+    assert that the lifecycle calls something rather than that only
+    participants get in.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_match_participant_joins_and_the_room_reports_who_is_there(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§12.5, and the channel half of §12.8 with it.
+
+        Three things at once, because none of them is worth a connection of
+        its own: the join is admitted for a participant, the confirmation
+        comes back on the **`game` channel** rather than `system` (which is
+        what makes AD-11's multiplexing observable), and `both_connected` is
+        `False` while the opponent has not arrived — the state a client
+        renders as "waiting for your opponent".
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters = StubMatchRosters()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [_frame("room.join", channel="game", payload={"match_id": str(match_id)})]
+        )
+
+        await _service(tickets, registry, presence, _rooms(rosters)).run(
+            socket, ticket=VALID_TICKET
+        )
+
+        joined = next(m for m in socket.sent if m.type is MessageType.ROOM_JOINED)
+        assert joined.channel is Channel.GAME
+        assert joined.payload["both_connected"] is False
+        assert set(joined.payload["participants"]) == {str(player_id), str(opponent_id)}
+
+    @pytest.mark.asyncio
+    async def test_a_player_who_is_not_in_the_match_is_refused(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§12.6, and the disclosure rule with it.
+
+        A non-participant and an unknown match get the **same** code, which
+        is deliberate: a client that could tell them apart could enumerate
+        live match identifiers by sending join frames — the argument
+        `MatchAcceptanceUseCase.accept` makes for collapsing both into
+        `MatchNotFound`.
+
+        Nothing is attached in either case, asserted against the store
+        rather than the reply, because a refusal that still wrote a member
+        would leave the room reporting a participant who was never admitted.
+        """
+        outsider, match_id = generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=generate_uuid7(), dark=generate_uuid7())
+
+        tickets.add(VALID_TICKET, outsider)
+        socket = FakeGatewaySocket(
+            [
+                _frame("room.join", channel="game", payload={"match_id": str(match_id)}),
+                _frame("room.join", channel="game", payload={"match_id": str(generate_uuid7())}),
+            ]
+        )
+
+        await _service(tickets, registry, presence, _rooms(rosters, members)).run(
+            socket, ticket=VALID_TICKET
+        )
+
+        refusals = [m for m in socket.sent if m.type is MessageType.ERROR]
+        assert len(refusals) == 2
+        assert all(
+            m.payload == {"code": GatewayErrorCode.NOT_A_PARTICIPANT.value} for m in refusals
+        )
+        assert MessageType.ROOM_JOINED not in socket.types()
+        assert members.rooms.get(match_id, []) == []
+
+    @pytest.mark.asyncio
+    async def test_one_connection_leaving_keeps_the_players_other_connection_in_the_room(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§12.7, and §8's "disconnecting one connection must not remove the
+        player's other connections".
+
+        Two real lifecycles for one player, concurrently — the second tab
+        joins and then closes while the first is still open. The first must
+        still be in the room afterwards, which is only true because a member
+        is the `(player, connection)` pair: a store keyed on the player
+        alone would have removed the player entirely on the second tab's
+        disconnect, and the opponent would see them leave.
+
+        Asserted against the store, because the room's own view is what
+        would be wrong if this broke.
+        """
+        player_id, match_id = generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=generate_uuid7())
+        rooms = _rooms(rosters, members)
+        service = _service(tickets, registry, presence, rooms)
+
+        join = _frame("room.join", channel="game", payload={"match_id": str(match_id)})
+        tickets.add("first-tab", player_id)
+        tickets.add("second-tab", player_id)
+        first = FakeGatewaySocket([join], holds_open=True)
+        second = FakeGatewaySocket([join])
+
+        held = asyncio.create_task(service.run(first, ticket="first-tab"))
+        await asyncio.sleep(0)
+        await service.run(second, ticket="second-tab")
+
+        assert len(members.rooms[match_id]) == 1
+        assert (await rooms.room_of(match_id)).connections_of(player_id) != ()
+
+        first.hang_up()
+        await held
+
+        assert members.rooms[match_id] == []
+
+    @pytest.mark.asyncio
+    async def test_a_leave_is_idempotent_and_answers_on_the_game_channel(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§8's "repeated leave is idempotent", and the rest of §12.8.
+
+        Three leaves for one join. A client that retries after a dropped
+        response, or whose disconnect cleanup races its own `room.leave`,
+        must get the outcome it asked for rather than an error — it asked to
+        be out and it is out.
+
+        Every answer comes back on the `game` channel, including the ones
+        for a room the connection was never in: a client multiplexing three
+        streams attributes a reply by its channel, and an idempotent
+        acknowledgement arriving on `system` would be unattributable.
+        """
+        player_id, match_id = generate_uuid7(), generate_uuid7()
+        rosters = StubMatchRosters()
+        rosters.add(match_id, light=player_id, dark=generate_uuid7())
+
+        leave = _frame("room.leave", channel="game", payload={"match_id": str(match_id)})
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [
+                _frame("room.join", channel="game", payload={"match_id": str(match_id)}),
+                leave,
+                leave,
+                leave,
+            ]
+        )
+
+        await _service(tickets, registry, presence, _rooms(rosters)).run(
+            socket, ticket=VALID_TICKET
+        )
+
+        left = [m for m in socket.sent if m.type is MessageType.ROOM_LEFT]
+        assert len(left) == 3
+        assert all(m.channel is Channel.GAME for m in left)
+        assert MessageType.ERROR not in socket.types()

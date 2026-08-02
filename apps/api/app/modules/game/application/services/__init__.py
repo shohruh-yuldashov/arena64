@@ -26,6 +26,7 @@ from app.modules.game.application.services.match_acceptance_service import (
 from app.modules.game.application.services.match_creation_service import (
     PersistentMatchCreation,
 )
+from app.modules.game.application.services.match_roster_service import GameMatchRoster
 from app.modules.game.application.services.pairing_settlement_service import (
     GamePairingSettlements,
 )
@@ -34,6 +35,7 @@ from app.modules.game.application.services.recent_opponent_service import (
 )
 
 __all__ = [
+    "GameMatchRoster",
     "GameAbandonedMatchRetention",
     "GamePairingSettlements",
     "GameRecentOpponents",

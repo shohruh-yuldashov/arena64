@@ -150,6 +150,18 @@ class SqlAlchemyMatchRecordRepository:
         )
         return self._to_domain(row) if row is not None else None
 
+    async def by_id(self, match_id: UUID) -> MatchRecord | None:
+        """The match by its own key, without a lock — A64-016.2.
+
+        A primary-key lookup, which is the cheapest read this relation
+        has. See the port on why the room-join path must not take the
+        `FOR UPDATE` that `lock` does.
+        """
+        row = await self._session.scalar(
+            select(MatchRecordModel).where(MatchRecordModel.id == match_id)
+        )
+        return self._to_domain(row) if row is not None else None
+
     async def lock(self, match_id: UUID) -> MatchRecord | None:
         """The match, with its row locked for the caller's transaction.
 

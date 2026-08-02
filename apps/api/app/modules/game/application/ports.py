@@ -69,6 +69,21 @@ class MatchRecordRepository(Protocol):
         """
         ...
 
+    async def by_id(self, match_id: UUID) -> MatchRecord | None:
+        """The match, read without locking it — A64-016.2.
+
+        Deliberately beside `lock` rather than instead of it, because the
+        two callers want opposite things. `accept` must lock: two players
+        answering at the same instant have nowhere else to go, so the
+        second must wait and see what the first wrote. A room join is not
+        a contest — nothing about admitting a socket depends on what
+        another socket is doing — so locking there would serialise every
+        join on one match to protect an invariant that does not exist.
+
+        `None` for a match that does not exist.
+        """
+        ...
+
     async def lock(self, match_id: UUID) -> MatchRecord | None:
         """The match, with its row locked for the caller's transaction.
 

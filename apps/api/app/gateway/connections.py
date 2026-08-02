@@ -66,6 +66,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Final
 from uuid import UUID, uuid4
 
 from app.core.clock import Clock
@@ -76,6 +77,7 @@ from app.gateway.metrics import (
     CONNECTIONS_REJECTED,
     CloseReason,
     RejectionReason,
+    RoomRejectionReason,
 )
 from app.gateway.ports import (
     ConnectionClosed,
@@ -92,7 +94,10 @@ from app.gateway.protocol import (
     decode,
     error,
     pong,
+    room_joined,
+    room_left,
 )
+from app.gateway.room_service import GameRoomService, RoomJoinRefused
 from app.modules.users.public import DeviceType, PresenceRecorder
 from app.platform.metrics import MetricsRecorder
 
@@ -124,6 +129,14 @@ class GatewayPolicy:
     heartbeat_timeout_seconds: float
     max_frame_bytes: int
 
+    node_id: str
+    """Which gateway process this is — A64-016.2 §3.
+
+    On the policy rather than resolved per connection, which is §3's
+    "stable for the process lifetime" expressed where it cannot be got
+    wrong: the lifecycle has no way to mint one, so every connection this
+    process accepts is registered under the same node."""
+
 
 class GatewayConnectionService:
     """One authenticated connection, from handshake to cleanup.
@@ -140,6 +153,7 @@ class GatewayConnectionService:
         *,
         tickets: TicketRedeemer,
         registry: ConnectionRegistry,
+        rooms: GameRoomService,
         presence: PresenceRecorder,
         metrics: MetricsRecorder,
         clock: Clock,
@@ -147,6 +161,7 @@ class GatewayConnectionService:
     ) -> None:
         self._tickets = tickets
         self._registry = registry
+        self._rooms = rooms
         self._presence = presence
         self._metrics = metrics
         self._clock = clock
@@ -173,6 +188,7 @@ class GatewayConnectionService:
             live = await self._registry.register(
                 identity.player_id,
                 connection_id,
+                node_id=self._policy.node_id,
                 ttl_seconds=self._policy.connection_ttl_seconds,
             )
         except Exception as exc:  # noqa: BLE001 — a failed claim must close, not crash
@@ -266,11 +282,12 @@ class GatewayConnectionService:
     ) -> bool:
         """One frame. `False` when the connection should stop.
 
-        **Not a router.** A64-016.1 forbids arbitrary message routing, so
-        this is a two-branch match rather than a dispatch table: `ping` is
-        answered, and everything else the decoder let through is refused.
-        The dispatch table arrives with A64-016.2, when there is something
-        to dispatch to.
+        **Still not a dispatch table**, and A64-016.2 §5 says to keep it
+        that way while the branching stays clear: four cases, each two
+        lines, reading top to bottom in the order a connection meets them.
+        A table would add a registration step and an indirection to save
+        nothing — it earns its place when a handler needs its own
+        collaborators, which is A64-016.3's move submission.
         """
         try:
             message = decode(raw, max_bytes=self._policy.max_frame_bytes)
@@ -288,6 +305,16 @@ class GatewayConnectionService:
             await self._heartbeat(player_id=player_id, connection_id=connection_id)
             return await self._try_send(socket, pong(request_id=message.request_id))
 
+        if message.type is MessageType.ROOM_JOIN:
+            return await self._join_room(
+                message, socket, player_id=player_id, connection_id=connection_id
+            )
+
+        if message.type is MessageType.ROOM_LEAVE:
+            return await self._leave_room(
+                message, socket, player_id=player_id, connection_id=connection_id
+            )
+
         # A well-formed frame of a type only the *server* sends —
         # `connection.ready`, `pong`, `error`. Decodable, and not something
         # a client may send, so it is refused with the same code rather
@@ -300,6 +327,87 @@ class GatewayConnectionService:
         return await self._try_send(
             socket,
             error(GatewayErrorCode.MALFORMED_MESSAGE, request_id=message.request_id),
+        )
+
+    async def _join_room(
+        self,
+        message: GatewayMessage,
+        socket: GatewaySocket,
+        *,
+        player_id: UUID,
+        connection_id: UUID,
+    ) -> bool:
+        """`room.join` — attaches this connection to a match's routing scope.
+
+        **The player is `player_id`, the socket's proven identity**, never
+        anything from the payload. §7 requires it and the frame makes it
+        structural: `room.join` carries a match id and has no field a client
+        could put a player in.
+        """
+        match_id = _match_id_of(message)
+        if match_id is None:
+            return await self._try_send(
+                socket,
+                error(
+                    GatewayErrorCode.MALFORMED_MESSAGE,
+                    request_id=message.request_id,
+                    channel=message.channel,
+                ),
+            )
+
+        try:
+            room = await self._rooms.join(
+                match_id, player_id=player_id, connection_id=connection_id
+            )
+        except RoomJoinRefused as refused:
+            return await self._try_send(
+                socket,
+                error(
+                    _REFUSAL_CODES[refused.reason],
+                    request_id=message.request_id,
+                    channel=message.channel,
+                ),
+            )
+
+        return await self._try_send(
+            socket,
+            room_joined(
+                match_id=room.match_id,
+                participants=room.participants,
+                both_connected=room.both_connected,
+                request_id=message.request_id,
+            ),
+        )
+
+    async def _leave_room(
+        self,
+        message: GatewayMessage,
+        socket: GatewaySocket,
+        *,
+        player_id: UUID,
+        connection_id: UUID,
+    ) -> bool:
+        """`room.leave` — detaches this connection.
+
+        Answered with `room.left` whether or not the connection was in the
+        room, because §8 makes a repeated leave idempotent and a client that
+        asked to be out and is out has got what it asked for. An error there
+        would make a retry after a dropped response look like a failure.
+        """
+        match_id = _match_id_of(message)
+        if match_id is None:
+            return await self._try_send(
+                socket,
+                error(
+                    GatewayErrorCode.MALFORMED_MESSAGE,
+                    request_id=message.request_id,
+                    channel=message.channel,
+                ),
+            )
+
+        await self._rooms.leave(match_id, player_id=player_id, connection_id=connection_id)
+        return await self._try_send(
+            socket, room_left(match_id=match_id, request_id=message.request_id)
         )
 
     async def _heartbeat(self, *, player_id: UUID, connection_id: UUID) -> None:
@@ -316,12 +424,18 @@ class GatewayConnectionService:
         connection over bookkeeping would be the worse outcome.
         """
         refreshed = await self._registry.refresh(
-            player_id, connection_id, ttl_seconds=self._policy.connection_ttl_seconds
+            player_id,
+            connection_id,
+            node_id=self._policy.node_id,
+            ttl_seconds=self._policy.connection_ttl_seconds,
         )
         if not refreshed:
             logger.warning("gateway_connection_lapsed", extra={"user_id": str(player_id)})
             await self._registry.register(
-                player_id, connection_id, ttl_seconds=self._policy.connection_ttl_seconds
+                player_id,
+                connection_id,
+                node_id=self._policy.node_id,
+                ttl_seconds=self._policy.connection_ttl_seconds,
             )
 
         await self._mark_online(player_id)
@@ -348,6 +462,13 @@ class GatewayConnectionService:
         anywhere would still be safe: `unregister` on an absent entry
         removes nothing and returns the true remaining count.
         """
+        # Before the unregister, so a connection is out of every room while
+        # it is still a known connection. The other order would leave a
+        # window in which the fleet has forgotten the socket and a room
+        # still reports it as attached — which is the one thing
+        # `both_connected` must never do.
+        await self._rooms.detach(player_id=player_id, connection_id=connection_id)
+
         remaining = 0
         try:
             remaining = await self._registry.unregister(player_id, connection_id)
@@ -443,6 +564,33 @@ class GatewayConnectionService:
         except ConnectionClosed:
             return False
         return True
+
+
+#: Which wire code each refusal becomes. A mapping rather than a branch, so
+#: a reason added to `RoomRejectionReason` without a code fails at import
+#: rather than silently reaching a client as an internal error.
+_REFUSAL_CODES: Final[dict[RoomRejectionReason, GatewayErrorCode]] = {
+    RoomRejectionReason.NOT_A_PARTICIPANT: GatewayErrorCode.NOT_A_PARTICIPANT,
+    RoomRejectionReason.ROOM_UNAVAILABLE: GatewayErrorCode.ROOM_UNAVAILABLE,
+}
+
+
+def _match_id_of(message: GatewayMessage) -> UUID | None:
+    """The match a room frame names, or `None` if it named none usably.
+
+    Validated here rather than in `decode`, because the envelope decoder
+    knows nothing about what any particular payload should contain — and
+    making it know would be the beginning of a schema registry inside the
+    codec. `None` becomes a `malformed_message`, which is the same answer
+    the decoder gives for every other unusable frame.
+    """
+    raw = message.payload.get("match_id")
+    if not isinstance(raw, str):
+        return None
+    try:
+        return UUID(raw)
+    except ValueError:
+        return None
 
 
 __all__ = [

@@ -1863,6 +1863,48 @@ class GatewaySettings(BaseSettings):
     message type is a limit somebody eventually raises without thinking.
     """
 
+    node_id: str | None = None
+    """Which gateway process this is — A64-016.2 §3.
+
+    **Set it in any deployment with more than one gateway replica.** With
+    nothing configured the process draws a random identifier once at
+    startup, which is *correct* for the connection registry — the identity
+    that matters there is "this process instance", and a restart genuinely
+    is a different one — and is illegible: a route resolving to `d4f1a2b8`
+    says the connection is elsewhere just as well as `gateway-3` does, but
+    only the second can be found on a dashboard.
+
+    So the fallback keeps local development working with no configuration
+    and loses nothing but legibility. See `app/gateway/node.py`, which also
+    holds the length bound and the one forbidden character — the value is
+    written into every connection record in `gwconn:v2:`, so its length is
+    multiplied by the number of live sockets and its spelling has to survive
+    being parsed back out.
+
+    Never reaches a client (§3): no message type carries it, and
+    `GatewayMessage` has no field it could land in. Never a metric label
+    either (§11) — one series per node is a cardinality that grows with the
+    fleet.
+    """
+
+    room_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
+    """How long a room membership stands without being renewed —
+    A64-016.2 §8's "empty room expires after TTL".
+
+    **An hour, and it is measured against a game rather than a heartbeat.**
+    Every other bound in this class is a liveness parameter of seconds; this
+    one is the outer limit on how long a match's routing scope may sit
+    around after everyone stopped talking to it, and a draughts game is
+    played in minutes to tens of minutes.
+
+    Much longer than `connection_ttl_seconds` on purpose. A member is
+    removed when its connection closes — explicitly on `room.leave`, and by
+    `GameRoomService.detach` on disconnect — so the TTL is not the primary
+    mechanism, it is the backstop for a node that died between the two. A
+    short one would evict a live room whose players are thinking; a much
+    longer one would keep a stale one past any plausible game.
+    """
+
     @model_validator(mode="after")
     def _bounds_are_ordered(self) -> "GatewaySettings":
         """The three timers must nest, and a misordering is silent.

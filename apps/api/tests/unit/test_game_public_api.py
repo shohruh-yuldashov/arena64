@@ -143,11 +143,31 @@ class TestTheSurfaceIsDeliberate:
         "CreateMatchRequest",
         "CreateMatchResult",
         "MatchCreationRefused",
-        "MatchCreationUnavailable",
         "MatchCreationUseCase",
         "MatchParticipant",
         "PlayerSide",
-        "UnavailableMatchCreation",
+        # A64-015.4 — the second half of that same edge. Two commands
+        # `game` accepts (accept, decline), one view it hands out, the
+        # sweep the reconciler drives, and the two reads the pairing scan
+        # and the recovery job need.
+        #
+        # `MatchCreationUnavailable` and `UnavailableMatchCreation` are
+        # **gone**, and their absence is the acceptance criterion rather
+        # than a tidy-up: A64-015.3 shipped an adapter that refused every
+        # request because `game` could not store a match, and a build that
+        # still published it would be one where the refusal is still
+        # reachable.
+        "AcceptanceWindowClosed",
+        "MatchAcceptanceExpiryUseCase",
+        "MatchAcceptanceUseCase",
+        "MatchNotFound",
+        "MatchNotPending",
+        "MatchRecordStatus",
+        "NotAMatchParticipant",
+        "PairingReconciliationReader",
+        "PairingSettlement",
+        "PendingMatchView",
+        "RecentOpponentReader",
     }
 
     def test_nothing_is_published_by_accident(self) -> None:
@@ -159,9 +179,34 @@ class TestTheSurfaceIsDeliberate:
     def test_the_match_aggregate_is_not_published(self) -> None:
         """R-3: the modules that care about matches subscribe to events
         rather than calling in. `matchmaking`'s edge points the other way —
-        it will *ask* `game` to create a match."""
-        for withheld in ("Match", "MatchStatus", "MatchResult", "MoveRecord", "ReplayData"):
+        it *asks* `game` to create a match, and asks again to accept one.
+
+        `MatchRecord` joins the withheld list in A64-015.4. Its *status* is
+        published, because a client must be able to tell "still waiting"
+        from "your opponent declined"; the record itself is not, because a
+        consumer holding it could activate a match nobody accepted.
+        """
+        for withheld in (
+            "Match",
+            "MatchStatus",
+            "MatchResult",
+            "MatchRecord",
+            "MatchSeat",
+            "MoveRecord",
+            "ReplayData",
+        ):
             assert withheld not in game_public.__all__
+
+    def test_the_adapter_that_refused_every_match_is_gone(self) -> None:
+        """A64-015.4's acceptance criterion, as a test rather than a note.
+
+        `UnavailableMatchCreation` existed because `game` had no table, and
+        it refused every pairing on purpose. Removing it from the *wiring*
+        is not enough — a class that still exists is one somebody can wire
+        back — so the type and its refusal are deleted outright.
+        """
+        assert not hasattr(game_public, "UnavailableMatchCreation")
+        assert not hasattr(game_public, "MatchCreationUnavailable")
 
     def test_every_published_name_resolves(self) -> None:
         for name in game_public.__all__:

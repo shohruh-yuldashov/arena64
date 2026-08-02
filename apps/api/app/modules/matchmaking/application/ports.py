@@ -176,6 +176,31 @@ class QueueRepository(Protocol):
         """
         ...
 
+    async def claim_stale_reservations(self, *, now: datetime, limit: int) -> Sequence[QueueTicket]:
+        """Takes up to `limit` reservations that have stood past their
+        `reserved_until`, oldest deadline first — A64-015.4 §9.
+
+        **The third method that must be safe under concurrency**, and it
+        reuses `claim_due`'s mechanism rather than inventing one:
+        `SELECT ... FOR UPDATE SKIP LOCKED`. Two reconcilers calling this
+        simultaneously receive disjoint sets.
+
+        The rows stay `reserved` — claiming is not a transition — so a
+        worker that dies before it decides what to do leaves tickets the
+        next tick claims again. What the reconciler then writes depends on
+        a fact this repository cannot see: whether `game` created a match
+        for the ticket. See `PairingReconciliationService`.
+
+        Distinct from `claim_due` even though both claim live tickets on a
+        deadline, because the deadlines mean different things and produce
+        different actions: a ticket past `expires_at` is a player who has
+        waited long enough and is expired, while a ticket past
+        `reserved_until` is a *pairing* that did not finish and may well go
+        back into the queue. Collapsing them would make the recovery path
+        expire people whose match creation merely crashed.
+        """
+        ...
+
     async def reserve(self, tickets: Sequence[QueueTicket]) -> bool:
         """Moves claimed tickets from `waiting` to `reserved`. All or
         nothing.
@@ -194,6 +219,9 @@ class QueueRepository(Protocol):
         same reason: the row lock from `claim_pair` makes this safe within
         one transaction, and the predicate is what makes it safe if the two
         are ever separated.
+
+        Writes `reserved_until` from the tickets, which carry the deadline
+        the caller computed — see `QueueTicket.reserved`.
         """
         ...
 
@@ -284,18 +312,22 @@ class RecentOpponentProvider(Protocol):
 
     ## Why this is declared here and not imported from `game.public`
 
-    AD-06: a port is declared by the layer that needs it. When `game` gains
-    durable match history this is satisfied by `game.public` and no use
-    case, no engine and no test changes — exactly the path
-    `RatingSnapshotProvider` is already on. Declaring it there first would
-    mean `game` publishing a read for a consumer that had not asked.
+    AD-06: a port is declared by the layer that needs it. A64-015.3 said
+    this would be "satisfied by `game.public` ... and no use case, no
+    engine and no test changes", and A64-015.4 is where that happened:
+    `game.public.RecentOpponentReader` has the same shape, so
+    `GameRecentOpponents` satisfies *this* protocol structurally and the
+    composition root wires one object with no adapter between them.
 
-    **Deferred, and stated rather than hidden.** `game` has a `Match`
-    aggregate and no repository, no table and no migration for one (see
-    `game.public.UnavailableMatchCreation`), so there is no match history
-    to read. `NoRecentOpponents` is the implementation until there is, and
-    it excludes nothing — which is the safe direction: the failure mode is
-    an occasional rematch, not a player who cannot be paired at all.
+    The two are not a duplication. This states what the pairing scan needs
+    and belongs to the module that needs it; the other states what `game`
+    is prepared to answer and belongs to the module that publishes it.
+    Collapsing them would make every `PairingService` test depend on `game`,
+    including the ones that have no matches at all.
+
+    **The prediction that the no-op could be swapped for one line held**:
+    `NoRecentOpponents` is gone, `build_recent_opponents` names `game`'s
+    classes instead, and `PairingService` is unchanged.
     """
 
     async def recent_opponents_among(

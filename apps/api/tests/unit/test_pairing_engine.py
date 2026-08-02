@@ -28,6 +28,11 @@ from app.modules.matchmaking.domain.queue_ticket import QueueTicket
 NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 TTL = timedelta(minutes=10)
 
+#: A64-015.4's reservation deadline. Thirty seconds, the default
+#: `MATCHMAKING_RESERVATION_TTL_SECONDS`, and well inside the ticket's own
+#: window — a reservation is a crash-recovery grace, not a wait.
+RESERVED_UNTIL = NOW + timedelta(seconds=30)
+
 POOL = QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED)
 
 #: Narrow, so a rating rule fails on its own rather than being masked by a
@@ -326,7 +331,7 @@ class TestWhatIsNotPairable:
         """Another worker is already creating its match. This is the whole
         reason `reserved` exists as a status a scan cannot see."""
         live = _ticket(rating=1500)
-        reserved = _ticket(rating=1500).reserved()
+        reserved = _ticket(rating=1500).reserved(until=RESERVED_UNTIL)
 
         assert engine.select([live, reserved], now=NOW) is None
 

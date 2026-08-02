@@ -144,6 +144,28 @@ class InMemoryQueueRepository:
         ]
         return claimed if len(claimed) == 2 else ()
 
+    async def claim_stale_reservations(self, *, now: datetime, limit: int) -> Sequence[QueueTicket]:
+        """Reservations past their own deadline, oldest first — A64-015.4.
+
+        The predicate is modelled and the **row lock is not**, the same line
+        `claim_due` and `claim_pair` above draw: `SKIP LOCKED`'s behaviour
+        under two workers belongs to PostgreSQL, and is asserted in
+        `tests/contract/test_queue_repository.py` with two real sessions.
+
+        What is modelled is the part the reconciler's correctness depends
+        on: a ticket that is no longer `reserved`, or whose window is still
+        open, is not claimed — which is what stops the recovery job from
+        breaking a pairing a live worker is in the middle of.
+        """
+        return sorted(
+            (
+                ticket
+                for ticket in self.tickets.values()
+                if ticket.is_reserved and ticket.reservation_lapsed(now)
+            ),
+            key=lambda ticket: (ticket.reserved_until or now, ticket.id),
+        )[:limit]
+
     async def reserve(self, tickets: Sequence[QueueTicket]) -> bool:
         return self._transition(tickets, expected=QueueStatus.WAITING)
 

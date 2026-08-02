@@ -31,15 +31,23 @@ a race.
 ## What a crash costs, at each point
 
     before the claim commits      nothing; the tickets were never touched
-    after it, before `game`       two reserved tickets, released by the
-                                  next expiry sweep once their window
-                                  closes (`claim_due` covers `reserved`)
+    after it, before `game`       two reserved tickets, returned to
+                                  `waiting` by the reconciler once
+                                  `reserved_until` passes — seconds, not
+                                  the ten minutes A64-015.3 left them to
     after `game`, before settle   a match exists and its tickets say
-                                  `reserved`. The retry re-derives the
-                                  same `pairing_id`, `game` returns the
-                                  same match with `created=False`, and the
-                                  settle completes. This is the case
-                                  §11's idempotency contract exists for.
+                                  `reserved`. The reconciler finds the
+                                  match through `PairingReconciliationReader`
+                                  and settles them. A retry of the whole
+                                  scan reaches the same place by a
+                                  different route: it re-derives the same
+                                  `pairing_id`, `game` returns the same
+                                  match with `created=False`, and the
+                                  settle completes.
+
+A64-015.4 §9 is what turned the second and third rows from "an operator
+reads `pairing_settle_failed` and repairs it" into a scheduled task. See
+`PairingReconciliationService`.
 
 ## No pool enumeration here
 
@@ -53,7 +61,7 @@ per-pool worker both need.
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from app.core.clock import Clock
@@ -130,6 +138,7 @@ class PairingService:
         unit_of_work: UnitOfWork,
         clock: Clock,
         candidate_batch_size: int,
+        reservation_ttl_seconds: float,
     ) -> None:
         self._tickets = tickets
         self._engine = engine
@@ -140,6 +149,7 @@ class PairingService:
         self._unit_of_work = unit_of_work
         self._clock = clock
         self._candidate_batch_size = candidate_batch_size
+        self._reservation_ttl_seconds = reservation_ttl_seconds
 
     async def pair_once(self, *, pool: QueuePool) -> PairingOutcome:
         """Scans one pool and creates at most one match.
@@ -192,16 +202,20 @@ class PairingService:
     async def _settle(self, pair: TicketPair, *, pool: QueuePool, scanned: int) -> PairingOutcome:
         """Claim, create, and record — the three steps after a pair is
         chosen. Split out so `pair_once` reads as the decision it is."""
-        claimed = await self._claim(pair)
-        if claimed is None:
+        reservation = await self._claim(pair)
+        if reservation is None:
             logger.info(
                 "pairing_claim_lost",
                 extra={"pool": pool.identifier(), "pairing_id": str(pair.pairing_id)},
             )
             return PairingOutcome(scanned=scanned, pairing_id=pair.pairing_id, claim_lost=True)
 
+        claimed, deadline = reservation
+
         try:
-            result = await self._matches.create_match(self._request_for(claimed, pool=pool))
+            result = await self._matches.create_match(
+                self._request_for(claimed, pool=pool, acceptance_deadline=deadline)
+            )
         except MatchCreationRefused as refusal:
             await self._release(claimed, pool=pool, reason=type(refusal).__name__)
             return PairingOutcome(
@@ -247,26 +261,43 @@ class PairingService:
             scanned=scanned, pairing_id=claimed.pairing_id, match_id=result.match_id
         )
 
-    async def _claim(self, pair: TicketPair) -> TicketPair | None:
+    async def _claim(self, pair: TicketPair) -> tuple[TicketPair, datetime] | None:
         """Locks both tickets and reserves them, in one transaction.
 
-        Returns the pair **as reserved** — rebuilt from the rows the claim
-        actually locked rather than from the snapshot, because those are
-        the values whose `status` the compare-and-set below will match
-        against. Returns `None` when either ticket was gone, which is the
-        ordinary outcome of two workers scanning one pool.
+        Returns the pair **as reserved**, with the deadline both rows now
+        carry — rebuilt from the rows the claim actually locked rather than
+        from the snapshot, because those are the values whose `status` the
+        compare-and-set below will match against. Returns `None` when
+        either ticket was gone, which is the ordinary outcome of two
+        workers scanning one pool.
+
+        The deadline is returned beside the pair rather than read back off
+        it, so the caller cannot be handed a reservation without one — the
+        alternative is an optional the caller has to narrow inside a method
+        that promises never to raise.
 
         The sides survive the rebuild: `TicketPair.of` derives them from
         the two ticket ids, which the claim cannot change.
+
+        ## The one deadline, computed here
+
+        `reserved_until` is computed **once for the pair** and written to
+        both rows, and the same value is then sent to `game` as the match's
+        `acceptance_deadline`. That is A64-015.4 §5's "model reservation and
+        acceptance timeout coherently" made structural rather than
+        remembered: there is one arithmetic expression on this platform that
+        produces the window, and every row that carries it carries the same
+        number.
         """
         now = self._clock.now()
+        until = now + timedelta(seconds=self._reservation_ttl_seconds)
         async with self._unit_of_work:
             claimed = await self._tickets.claim_pair(list(pair.ticket_ids()), now=now)
             if len(claimed) != 2:
                 await self._unit_of_work.rollback()
                 return None
 
-            reserved = [ticket.reserved() for ticket in claimed]
+            reserved = [ticket.reserved(until=until) for ticket in claimed]
             if not await self._tickets.reserve(reserved):
                 # Unreachable while the claim holds the row locks, and
                 # checked anyway: the day this method is split from the
@@ -276,20 +307,28 @@ class PairingService:
 
             await self._unit_of_work.commit()
 
-        return TicketPair.of(reserved[0], reserved[1])
+        return TicketPair.of(reserved[0], reserved[1]), until
 
-    def _request_for(self, pair: TicketPair, *, pool: QueuePool) -> CreateMatchRequest:
+    def _request_for(
+        self, pair: TicketPair, *, pool: QueuePool, acceptance_deadline: datetime
+    ) -> CreateMatchRequest:
         """The command `game` receives.
 
         The engine version is stamped here, at the moment of pairing, from
         `game.public.game_engine_version()` — AD-15, and read through the
         published surface so `matchmaking` never imports the engine (R-2).
+
+        The deadline is **read off the reserved ticket** rather than
+        recomputed, so the match's acceptance window and the reservation's
+        are the same value by construction rather than by two calls to the
+        same clock a few milliseconds apart.
         """
         return CreateMatchRequest(
             pairing_id=pair.pairing_id,
             variant=pool.variant,
             rated=pool.queue_type is QueueType.RANKED,
             engine_version=game_engine_version(),
+            acceptance_deadline=acceptance_deadline,
             light=MatchParticipant(player_id=pair.light.player_id, queue_ticket_id=pair.light.id),
             dark=MatchParticipant(player_id=pair.dark.player_id, queue_ticket_id=pair.dark.id),
         )
@@ -307,14 +346,19 @@ class PairingService:
         async with self._unit_of_work:
             if not await self._tickets.complete(matched, at=at):
                 await self._unit_of_work.rollback()
-                # The one genuinely bad outcome: `game` has the match and
-                # the tickets do not say so. Reachable only if a reserved
-                # ticket was resolved underneath us — today, by an expiry
-                # sweep taking a reservation whose window closed
-                # mid-pairing. `ERROR` with both identifiers, because the
-                # reconciliation is manual until a match carries a durable
-                # link back to its tickets (A64-015.4).
-                logger.error(
+                # `game` has the match and the tickets do not say so.
+                # Reachable if a reserved ticket was resolved underneath us
+                # — by an expiry sweep taking a reservation whose window
+                # closed mid-pairing, or by a reconciler that got there
+                # first.
+                #
+                # **No longer a page.** A64-015.4 gave the match a durable
+                # link back to its tickets (`MatchSeat.queue_ticket_id`),
+                # so `PairingReconciliationService` finds this pairing on
+                # its next tick and settles it. `WARNING` rather than
+                # `ERROR`: recovery is automatic, and what an operator
+                # wants to know is how often it is needed.
+                logger.warning(
                     "pairing_settle_failed",
                     extra={
                         "pool": pool.identifier(),

@@ -2,7 +2,9 @@
 
 The **only** package another module may import. A64-015.2 gave it its first
 contents, because `matchmaking` was the first module that needed something
-from `game`; A64-015.3 adds the command that edge exists for.
+from `game`; A64-015.3 added the command that edge exists for; A64-015.4
+adds the three reads and the second command that turn a created match into
+an accepted one.
 
 The types live in submodules and this file re-exports them, which is the
 shape `friends/public/` already uses — one file per question, one import
@@ -18,22 +20,51 @@ site for consumers.
 
 `matches.py` — `CreateMatchRequest`, `CreateMatchResult`,
     `MatchParticipant`, `MatchCreationUseCase`, `MatchCreationRefused`,
-    `MatchCreationUnavailable`, `UnavailableMatchCreation`, `PlayerSide`.
-    The "creates match" edge architecture.md §7 draws from `matchmaking`.
+    `PlayerSide`. The "creates match" edge architecture.md §7 draws from
+    `matchmaking`.
+
+`acceptance.py` — `PendingMatchView`, `MatchAcceptanceUseCase`,
+    `MatchAcceptanceExpiryUseCase`, `MatchRecordStatus` and the three
+    refusals. The second half of that same edge: a pairing is finished when
+    both players have answered.
+
+`opponents.py` — `RecentOpponentReader`. QT-3's rematch guard, which
+    A64-015.3 declared and could not implement.
+
+`reconciliation.py` — `PairingSettlement`, `PairingReconciliationReader`.
+    The one fact `matchmaking` cannot hold: did this reserved ticket's
+    match get created.
 
 ## What is deliberately not published
 
-`Match`, `MatchStatus`, `MatchResult`, the move log, `ReplayData`. R-3 is
-explicit that the modules which care about matches "**never call into
-`game` to change anything**; they subscribe to its events", and publishing
-the aggregate would let a consumer take a dependency none of
-architecture.md §7's four inbound edges intends.
+`Match`, `MatchRecord`, `MatchStatus`, `MatchResult`, the move log,
+`ReplayData`. R-3 is explicit that the modules which care about matches
+"**never call into `game` to change anything**; they subscribe to its
+events", and publishing an aggregate would let a consumer take a dependency
+none of architecture.md §7's four inbound edges intends.
 
-`matchmaking`'s edge is the one that points inward, and A64-015.3 answers
-it the way R-3 permits: with a **command** it accepts, not a type it hands
-out. A caller can ask for a match to exist; it cannot advance one.
+`matchmaking`'s edge is the one that points inward, and it is answered the
+way R-3 permits: with **commands `game` accepts** and **views it hands
+out**, never a type that can advance a game. `PendingMatchView` is a
+projection of `MatchRecord` with the pairing internals removed — no
+`pairing_id`, no queue ticket ids — for the same reason.
+
+`MatchRecordStatus` is the one domain type re-exported, and it is a closed
+enum on a published view rather than a capability: a client has to be able
+to tell "still waiting" from "your opponent declined", and a second enum
+mirroring it would be two places that answer diverges.
 """
 
+from app.modules.game.public.acceptance import (
+    AcceptanceWindowClosed,
+    MatchAcceptanceExpiryUseCase,
+    MatchAcceptanceUseCase,
+    MatchNotFound,
+    MatchNotPending,
+    MatchRecordStatus,
+    NotAMatchParticipant,
+    PendingMatchView,
+)
 from app.modules.game.public.engine_services import (
     GameEngineServices,
     engine_services,
@@ -43,11 +74,14 @@ from app.modules.game.public.matches import (
     CreateMatchRequest,
     CreateMatchResult,
     MatchCreationRefused,
-    MatchCreationUnavailable,
     MatchCreationUseCase,
     MatchParticipant,
     PlayerSide,
-    UnavailableMatchCreation,
+)
+from app.modules.game.public.opponents import RecentOpponentReader
+from app.modules.game.public.reconciliation import (
+    PairingReconciliationReader,
+    PairingSettlement,
 )
 from app.modules.game.public.variants import (
     ProductVariant,
@@ -59,16 +93,25 @@ from app.modules.game.public.variants import (
 )
 
 __all__ = [
+    "AcceptanceWindowClosed",
     "CreateMatchRequest",
     "CreateMatchResult",
     "GameEngineServices",
+    "MatchAcceptanceExpiryUseCase",
+    "MatchAcceptanceUseCase",
     "MatchCreationRefused",
-    "MatchCreationUnavailable",
     "MatchCreationUseCase",
+    "MatchNotFound",
+    "MatchNotPending",
     "MatchParticipant",
+    "MatchRecordStatus",
+    "NotAMatchParticipant",
+    "PairingReconciliationReader",
+    "PairingSettlement",
+    "PendingMatchView",
     "PlayerSide",
     "ProductVariant",
-    "UnavailableMatchCreation",
+    "RecentOpponentReader",
     "VariantNotOffered",
     "board_variant_of",
     "engine_services",

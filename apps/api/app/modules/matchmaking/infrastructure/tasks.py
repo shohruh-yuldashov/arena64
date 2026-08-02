@@ -1,10 +1,11 @@
-"""`matchmaking`'s background work — two `platform.tasks` handlers.
+"""`matchmaking`'s background work — three `platform.tasks` handlers.
 
 `QueueExpiryTask` is the background half of `expires_at`; `PairingTask`
-(A64-015.3) scans one pool for a match. Both are dispatched by a
-`PeriodicTaskScheduler` and wired at the composition root, and both are
-four lines of body over a service that takes ports — which is the whole
-point of AD-17's seam.
+(A64-015.3) scans one pool for a match; `PairingReconciliationTask`
+(A64-015.4) recovers the pairings that did not finish. All three are
+dispatched by a `PeriodicTaskScheduler` and wired at the composition root,
+and all three are four lines of body over a service that takes ports —
+which is the whole point of AD-17's seam.
 
 ## `QueueExpiryTask` — the background half of `expires_at`
 
@@ -45,7 +46,11 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.modules.matchmaking.application.services import PairingService, QueueService
+from app.modules.matchmaking.application.services import (
+    PairingReconciliationService,
+    PairingService,
+    QueueService,
+)
 from app.modules.matchmaking.domain.queue_pool import QueuePool
 from app.platform.tasks import TaskRequest
 
@@ -174,14 +179,13 @@ class PairingTask:
     replaces the first two and touches neither this class nor
     `PairingService`.
 
-    ## It is registered and, by default, not scheduled
+    ## It is scheduled since A64-015.4
 
-    `MATCHMAKING_PAIRING_ENABLED` is `False` until `game` can persist a
-    match. With it off this handler exists, is wired, and is never
-    dispatched — which is deliberate rather than incomplete: a scan that
-    ran today would reserve two tickets, be refused by
-    `UnavailableMatchCreation`, and release them, several times a second
-    forever. The setting's docstring records when that changes.
+    `MATCHMAKING_PAIRING_ENABLED` was `False` for one task, because `game`
+    could not persist a match and every scan would have reserved two
+    tickets, been refused, and released them several times a second
+    forever. `PersistentMatchCreation` is what changed, and the setting's
+    docstring records the five things that had to be true first.
     """
 
     def __init__(
@@ -214,3 +218,74 @@ class PairingTask:
         pool = QueuePool.from_identifier(str(payload[PAIRING_POOL_KEY]))
         async with self._session_factory() as session:
             await self._service_factory(session).pair_once(pool=pool)
+
+
+#: The name a reconciliation pass is dispatched under — A64-015.4 §9.
+RECONCILIATION_TASK = "matchmaking.pairing.reconcile"
+
+#: What the composition root supplies: a reconciler over one session.
+ReconciliationServiceFactory = Callable[[AsyncSession], PairingReconciliationService]
+
+
+def reconciliation_request() -> TaskRequest:
+    """The request that asks for one reconciliation pass.
+
+    An empty payload, for the reason `expiry_request` carries none: the
+    batch size is configuration and the instant is the service's clock. A
+    request carrying a cutoff would let a stale schedule reconcile against
+    yesterday's `now`, which on the one job that rewrites a pairing's
+    outcome is a way to release reservations that are still live.
+
+    **Pool-blind**, unlike `pairing_request`. A stranded reservation is a
+    stranded reservation whatever pool it came from, and one worker draining
+    every pool is the same shape `QueueExpiryTask` already has — a pass per
+    pool would be fourteen mostly-empty ticks for one that finds anything.
+    """
+    return TaskRequest(name=RECONCILIATION_TASK, queue=MATCHMAKING_QUEUE)
+
+
+class PairingReconciliationTask:
+    """`platform.tasks.TaskHandler` — one reconciliation pass, over one
+    session.
+
+    The same shape as the two handlers above and the same division: the
+    *schedule* is `PeriodicTaskScheduler`'s, the *routing* is the
+    dispatcher's, and what is left here is "build a service over a session
+    and call one method". A64-015.4 §9 forbids a direct Celery dependency,
+    and this file has none — moving matchmaking's background work onto a
+    Celery worker replaces the scheduler and the dispatcher and touches
+    neither this class nor `PairingReconciliationService`.
+
+    ## Duplicate delivery is safe
+
+    AD-17's contract is at-least-once, so this handler will occasionally run
+    twice for one scheduled tick. Every write the service makes is a
+    compare-and-set on the status it read, and the claim underneath is
+    `SKIP LOCKED`, so the second run claims what the first left and finds
+    nothing to do — see `PairingReconciliationService` on why running it
+    twice is running it once.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        service_factory: ReconciliationServiceFactory,
+    ) -> None:
+        self._session_factory = session_factory
+        self._service_factory = service_factory
+
+    @property
+    def name(self) -> str:
+        return RECONCILIATION_TASK
+
+    async def run(self, payload: Mapping[str, Any]) -> None:
+        """Ignores the payload — see `reconciliation_request` on why there
+        is none.
+
+        Does not catch: `PairingReconciliationService.reconcile_once`
+        records its own failures and never raises, so a `try` here would be
+        a second swallow with nothing left to swallow.
+        """
+        async with self._session_factory() as session:
+            await self._service_factory(session).reconcile_once()

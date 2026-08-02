@@ -23,7 +23,19 @@ own row, it is the endpoint a client polls while waiting, and throttling it
 would make the queue *look* broken in exactly the situation it is working —
 a player watching a spinner. What it costs is bounded by two indexed reads
 against a partial index, which is the cheapest authenticated read on the
-platform.
+platform. `GET /matchmaking/matches/pending` carries none for the same
+reason and is even cheaper: one indexed read.
+
+## Acceptance has its own budget, and does not share the queue's
+
+A64-015.4 adds a second group, and the decision worth recording is that it
+is *separate* rather than a third endpoint on `matchmaking_queue`. The
+argument for sharing there was that joining and leaving are one behaviour;
+accepting is not that behaviour. A player who has spent their queue budget
+churning pools must still be able to answer the match the platform has
+already paired them into — a shared counter would mean the queue creating a
+match and then refusing to let one of its two players say yes, which turns
+a rate limit into a stuck game for somebody else.
 
 ## Per authenticated user, not per IP
 
@@ -70,6 +82,14 @@ def build_rules(settings: RateLimitSettings) -> dict[str, tuple[RateLimitRule, .
                 window=timedelta(seconds=settings.matchmaking_queue_window_seconds),
             ),
         ),
+        "matchmaking_acceptance": (
+            RateLimitRule(
+                name="matchmaking_acceptance_user",
+                scope=RateLimitScope.USER,
+                limit=settings.matchmaking_acceptance_user_limit,
+                window=timedelta(seconds=settings.matchmaking_acceptance_window_seconds),
+            ),
+        ),
     }
 
 
@@ -89,6 +109,7 @@ def _guard(endpoint: str) -> RateLimit:
 
 
 QUEUE_RATE_LIMIT = _guard("matchmaking_queue")
+ACCEPTANCE_RATE_LIMIT = _guard("matchmaking_acceptance")
 
 
 async def enforce_queue_limit(
@@ -110,5 +131,29 @@ async def enforce_queue_limit(
     against.
     """
     await QUEUE_RATE_LIMIT.enforce(
+        request, response, limiter=limiter, settings=settings, principal=str(user.id)
+    )
+
+
+async def enforce_acceptance_limit(
+    request: Request,
+    response: Response,
+    user: CurrentUser,
+    limiter: RateLimiterDep,
+    settings: RateLimitSettingsDep,
+) -> None:
+    """The shared guard for accepting and declining a match — A64-015.4.
+
+    One budget across both answers, exactly as joining and leaving share
+    one: a client stuck in a retry loop spends them in lockstep, and two
+    counters would be two numbers to tune and neither could be exhausted
+    without the other. Unlike that pair, this one does **not** share with
+    the queue — see this module's docstring.
+
+    `user.id`, not the username, and the 401 comes first: `CurrentUser`
+    resolves before this body runs, so an unauthenticated request is
+    refused without spending anybody's allowance.
+    """
+    await ACCEPTANCE_RATE_LIMIT.enforce(
         request, response, limiter=limiter, settings=settings, principal=str(user.id)
     )

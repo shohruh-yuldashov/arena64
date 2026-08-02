@@ -89,6 +89,7 @@ class SqlAlchemyQueueRepository:
             expires_at=row.expires_at,
             status=row.status,
             resolved_at=row.resolved_at,
+            reserved_until=row.reserved_until,
         )
 
     async def enqueue(self, ticket: QueueTicket) -> QueueTicket:
@@ -116,6 +117,7 @@ class SqlAlchemyQueueRepository:
             expires_at=ticket.expires_at,
             status=ticket.status,
             resolved_at=ticket.resolved_at,
+            reserved_until=ticket.reserved_until,
         )
         self._session.add(row)
 
@@ -146,7 +148,11 @@ class SqlAlchemyQueueRepository:
                     QueueTicketModel.id == ticket.id,
                     QueueTicketModel.status == QueueStatus.WAITING,
                 )
-                .values(status=ticket.status, resolved_at=ticket.resolved_at)
+                .values(
+                    status=ticket.status,
+                    resolved_at=ticket.resolved_at,
+                    reserved_until=None,
+                )
             ),
         )
         return int(result.rowcount) == 1
@@ -290,7 +296,7 @@ class SqlAlchemyQueueRepository:
                     QueueTicketModel.id.in_(ticket_ids),
                     QueueTicketModel.status.in_(_LIVE_STATUSES),
                 )
-                .values(status=QueueStatus.EXPIRED, resolved_at=at)
+                .values(status=QueueStatus.EXPIRED, resolved_at=at, reserved_until=None)
             ),
         )
         return int(result.rowcount)
@@ -340,10 +346,64 @@ class SqlAlchemyQueueRepository:
         )
         return [self._to_domain(row) for row in rows]
 
+    async def claim_stale_reservations(self, *, now: datetime, limit: int) -> Sequence[QueueTicket]:
+        """Takes up to `limit` reservations past their deadline — §9.
+
+        `SELECT ... FOR UPDATE SKIP LOCKED`, the same mechanism `claim_due`
+        and `claim_pair` use. Nothing new is invented here, which is what
+        A64-015.4 §14 asks for.
+
+        Two conditions, and each excludes a different row:
+
+            status = 'reserved'      a waiting ticket has no reservation to
+                                     recover, and a resolved one is finished
+            reserved_until <= now    the window a live worker was given has
+                                     closed, so whoever holds it is gone
+
+        Ordered by `reserved_until` so a backlog drains in deadline order,
+        and served by `ix_queue_ticket__stale_reservation`, whose predicate
+        matches the first condition exactly.
+
+        **Claiming is not a transition**, exactly as it is not for the
+        expiry sweep: the rows come back `reserved` and stay that way until
+        the reconciler decides what they should be.
+        """
+        stale = (
+            select(QueueTicketModel.id)
+            .where(
+                QueueTicketModel.status == QueueStatus.RESERVED,
+                QueueTicketModel.reserved_until <= now,
+            )
+            .order_by(QueueTicketModel.reserved_until, QueueTicketModel.id)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+
+        claimed_ids = list((await self._session.scalars(stale)).all())
+        if not claimed_ids:
+            return ()
+
+        rows = await self._session.scalars(
+            select(QueueTicketModel)
+            .where(QueueTicketModel.id.in_(claimed_ids))
+            .order_by(QueueTicketModel.reserved_until, QueueTicketModel.id)
+        )
+        return [self._to_domain(row) for row in rows]
+
     async def reserve(self, tickets: Sequence[QueueTicket]) -> bool:
-        """`waiting -> reserved` for every ticket, or none of them."""
+        """`waiting -> reserved` for every ticket, or none of them.
+
+        The deadline comes from the tickets rather than from an argument,
+        and both carry the same one — `PairingService._claim` computes it
+        once for the pair, which is what makes a pairing's two reservations
+        lapse together rather than a moment apart.
+        """
         return await self._transition(
-            tickets, expected=QueueStatus.WAITING, status=QueueStatus.RESERVED, resolved_at=None
+            tickets,
+            expected=QueueStatus.WAITING,
+            status=QueueStatus.RESERVED,
+            resolved_at=None,
+            reserved_until=tickets[0].reserved_until if tickets else None,
         )
 
     async def release(self, tickets: Sequence[QueueTicket]) -> bool:
@@ -355,13 +415,21 @@ class SqlAlchemyQueueRepository:
         not cost a player their wait.
         """
         return await self._transition(
-            tickets, expected=QueueStatus.RESERVED, status=QueueStatus.WAITING, resolved_at=None
+            tickets,
+            expected=QueueStatus.RESERVED,
+            status=QueueStatus.WAITING,
+            resolved_at=None,
+            reserved_until=None,
         )
 
     async def complete(self, tickets: Sequence[QueueTicket], *, at: datetime) -> bool:
         """`reserved -> matched`, with the instant the match was created."""
         return await self._transition(
-            tickets, expected=QueueStatus.RESERVED, status=QueueStatus.MATCHED, resolved_at=at
+            tickets,
+            expected=QueueStatus.RESERVED,
+            status=QueueStatus.MATCHED,
+            resolved_at=at,
+            reserved_until=None,
         )
 
     async def _transition(
@@ -371,6 +439,7 @@ class SqlAlchemyQueueRepository:
         expected: QueueStatus,
         status: QueueStatus,
         resolved_at: datetime | None,
+        reserved_until: datetime | None,
     ) -> bool:
         """One compare-and-set over a set of tickets. All or nothing.
 
@@ -424,7 +493,7 @@ class SqlAlchemyQueueRepository:
                     QueueTicketModel.status == expected,
                     movable == len(ticket_ids),
                 )
-                .values(status=status, resolved_at=resolved_at)
+                .values(status=status, resolved_at=resolved_at, reserved_until=reserved_until)
             ),
         )
         return int(result.rowcount) == len(tickets)

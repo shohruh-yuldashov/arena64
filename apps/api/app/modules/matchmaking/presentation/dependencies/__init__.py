@@ -18,16 +18,45 @@ The graph assembled per request:
       -> SqlAlchemyQueueRepository
       -> PairingEngine                   pure, from RatingWindowPolicy
       -> PairingExclusionService         `friends`' BL-2 read
-      -> NoRecentOpponents               until `game` has match history
-      -> MatchCreationUseCase            `game`'s command port
+      -> GameRecentOpponents             `game`'s QT-3 read (A64-015.4)
+      -> PersistentMatchCreation         `game`'s command port
       -> OutboxEventPublisher / SessionUnitOfWork
       -> PairingService
 
-Two factories, because there are two services and they differ in
+    AsyncSession                        one per **task run**, not a request
+      -> SqlAlchemyQueueRepository
+      -> GamePairingSettlements          did this ticket get a match
+      -> MatchAcceptanceService          `game`'s overdue-match sweep
+      -> OutboxEventPublisher / SessionUnitOfWork
+      -> PairingReconciliationService
+
+    AsyncSession                        one per request
+      -> SqlAlchemyMatchRecordRepository
+      -> MatchAcceptanceService          accept, decline, read your own
+      -> PublicProfileService            the opponent preview, one id
+
+Five factories, because there are five services and they differ in
 capability rather than in wiring — see `application/services/__init__.py`.
-`build_pairing_service` has **no `Depends` wrapper**: nothing HTTP calls a
-pairing scan, so a route-layer accessor for it would be an entry point
-nobody should have.
+`build_pairing_service` and `build_reconciliation_service` have **no
+`Depends` wrapper**: nothing HTTP calls a pairing scan or a recovery pass,
+so a route-layer accessor for either would be an entry point nobody should
+have.
+
+## `game`'s concrete classes are named here, and that is the pattern
+
+A64-015.4 wires four `game` classes — a repository and three services —
+from this file. That is the same arrangement `build_pairing_exclusions`
+already uses for `friends`' `SqlAlchemyBlockedPlayerRepository`, and it is
+why `.importlinter`'s privacy contracts take each module's `domain`,
+`application` and `infrastructure` as sources and leave
+`presentation/dependencies` outside them: a *service* that imported another
+module's repository would be caught, and a composition root that constructs
+one is what a root is for (BR-6).
+
+Everything above the root still holds only ports. `PairingService` has a
+`MatchCreationUseCase` and a `RecentOpponentProvider`; the acceptance route
+has a `MatchAcceptanceUseCase`; the reconciler has two published reads. No
+service on either side of the boundary can name a class from the other.
 
 ## The presence adapter is built here, not imported from `users`
 
@@ -70,10 +99,19 @@ from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.friends.application.services import PairingExclusionService
 from app.modules.friends.infrastructure.repositories import SqlAlchemyBlockedPlayerRepository
 from app.modules.friends.public import PairingExclusions
+from app.modules.game.application.services import (
+    GamePairingSettlements,
+    GameRecentOpponents,
+    MatchAcceptanceService,
+    PersistentMatchCreation,
+)
+from app.modules.game.infrastructure.repositories import SqlAlchemyMatchRecordRepository
 from app.modules.game.public import (
     GameEngineServices,
+    MatchAcceptanceExpiryUseCase,
+    MatchAcceptanceUseCase,
     MatchCreationUseCase,
-    UnavailableMatchCreation,
+    PairingReconciliationReader,
     engine_services,
 )
 from app.modules.matchmaking.application.eligibility import (
@@ -81,15 +119,21 @@ from app.modules.matchmaking.application.eligibility import (
     QueueEligibilityPolicy,
 )
 from app.modules.matchmaking.application.ports import RecentOpponentProvider
-from app.modules.matchmaking.application.services import PairingService, QueueService
+from app.modules.matchmaking.application.services import (
+    PairingReconciliationService,
+    PairingService,
+    QueueService,
+)
 from app.modules.matchmaking.domain.pairing import PairingEngine, RatingWindowPolicy
 from app.modules.matchmaking.infrastructure import (
-    NoRecentOpponents,
     ProvisionalRatingProvider,
     SqlAlchemyQueueRepository,
 )
+from app.modules.users.application.services.public_profile_service import PublicProfileService
+from app.modules.users.application.services.user_service import UserService
 from app.modules.users.infrastructure.presence import NoPresenceProvider, RedisPresenceProvider
-from app.modules.users.public import PresenceProvider
+from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
+from app.modules.users.public import PresenceProvider, PublicProfileReader
 from app.platform.outbox import EventPublisher
 
 logger = logging.getLogger(__name__)
@@ -243,20 +287,89 @@ def build_pairing_exclusions(session: AsyncSession) -> PairingExclusions:
     return PairingExclusionService(SqlAlchemyBlockedPlayerRepository(session))
 
 
-def build_match_creation() -> MatchCreationUseCase:
-    """`game`'s side of the pairing handshake.
+def build_match_creation(
+    session: AsyncSession, *, events: EventPublisher, clock: Clock
+) -> MatchCreationUseCase:
+    """`game`'s side of the pairing handshake — A64-015.4.
 
-    One implementation today, and it refuses every request — see
-    `game.public.UnavailableMatchCreation` on why that ships instead of a
-    stub that fabricates a match id. A64-015.4 replaces this one line.
+    Real persistence, over the **same session** as the pairing scan's own
+    repository. That is not a shortcut: the match's insert and its
+    `game.match_created` outbox row must share one transaction (AD-16), and
+    a second session would put them in two.
+
+    It is emphatically *not* the same transaction as the ticket
+    reservation, and cannot be — `PairingService` commits the claim before
+    it calls this, because services.md BE-05 forbids holding two row locks
+    across another module's work. The window that opens between them is
+    what `PairingReconciliationService` exists to close.
+
+    Replaces `UnavailableMatchCreation`, which A64-015.3 shipped because
+    `game` had no table. It predicted this would be one line; it was.
     """
-    return UnavailableMatchCreation()
+    return PersistentMatchCreation(
+        matches=SqlAlchemyMatchRecordRepository(session),
+        events=events,
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )
 
 
-def build_recent_opponents() -> RecentOpponentProvider:
-    """The rematch guard. Excludes nobody until `game` has match history —
-    `matchmaking.infrastructure.opponent_providers`."""
-    return NoRecentOpponents()
+def build_recent_opponents(session: AsyncSession) -> RecentOpponentProvider:
+    """QT-3's rematch guard, read through `game.public` — A64-015.4 §11.
+
+    `GameRecentOpponents` satisfies `matchmaking`'s own
+    `RecentOpponentProvider` structurally, so there is no adapter between
+    the two ports — see `application/ports.py` on why the shapes match
+    deliberately.
+
+    No unit of work and no publisher: it is a read, and a read that could
+    write would be a capability nothing needs.
+    """
+    return GameRecentOpponents(SqlAlchemyMatchRecordRepository(session))
+
+
+def build_pairing_settlements(session: AsyncSession) -> PairingReconciliationReader:
+    """The reconciler's "did this ticket get a match" read — A64-015.4 §9."""
+    return GamePairingSettlements(SqlAlchemyMatchRecordRepository(session))
+
+
+def build_match_acceptance(
+    session: AsyncSession, *, events: EventPublisher, clock: Clock
+) -> MatchAcceptanceService:
+    """`game`'s acceptance handshake, over one session — A64-015.4 §6.
+
+    One object satisfying two published ports —
+    `MatchAcceptanceUseCase` for the three routes and
+    `MatchAcceptanceExpiryUseCase` for the reconciler — because they are
+    two capabilities of one aggregate's lifecycle and splitting the
+    *implementation* would mean two objects racing for the same rows. The
+    **consumers** still hold one port each, which is where the split that
+    matters is: a route cannot expire anybody's match.
+    """
+    return MatchAcceptanceService(
+        matches=SqlAlchemyMatchRecordRepository(session),
+        events=events,
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )
+
+
+def build_opponent_directory(session: AsyncSession, *, clock: Clock) -> PublicProfileReader:
+    """How a pending match resolves its opponent to a handle.
+
+    `users`' concrete classes, named here for the reason
+    `build_pairing_exclusions` names `friends`': assembling another
+    module's graph is what a composition root is for. The route holds
+    `PublicProfileReader`, which has no way to read an email — see that
+    port on why the leak is unreachable rather than merely avoided.
+    """
+    return PublicProfileService(
+        UserService(
+            users=SqlAlchemyUserRepository(session),
+            unit_of_work=SessionUnitOfWork(session),
+            clock=clock,
+        )
+    )
 
 
 def build_pairing_service(
@@ -295,23 +408,90 @@ def build_pairing_service(
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
         candidate_batch_size=settings.candidate_batch_size,
+        reservation_ttl_seconds=settings.reservation_ttl_seconds,
     )
+
+
+def build_reconciliation_service(
+    session: AsyncSession,
+    *,
+    settlements: PairingReconciliationReader,
+    acceptance: MatchAcceptanceExpiryUseCase,
+    events: EventPublisher,
+    settings: MatchmakingSettings,
+    clock: Clock,
+) -> PairingReconciliationService:
+    """One reconciliation pass's object graph, over one session — §9.
+
+    Plain arguments and **no `Depends` wrapper**, exactly like
+    `build_pairing_service`: the only caller is a background task, and a
+    route that could trigger a recovery pass is an entry point nothing on
+    this platform should have. A64-015.4 §9 is explicit that the manual
+    repair path must not be the primary mechanism, and the way to make that
+    structural is to give the manual path no door.
+
+    Both `game` reads are built over the **same session**, so the sweep
+    that expires overdue matches and the writes that settle their tickets
+    are one connection's work rather than two — which is what lets the
+    outbox rows for both land in one transaction each.
+    """
+    return PairingReconciliationService(
+        tickets=SqlAlchemyQueueRepository(session),
+        settlements=settlements,
+        acceptance=acceptance,
+        events=events,
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+        batch_size=settings.reconciliation_batch_size,
+    )
+
+
+def get_match_acceptance(
+    session: DbSessionDep, clock: ClockDep, events: EventPublisherDep
+) -> MatchAcceptanceUseCase:
+    """The per-request acceptance use case.
+
+    Typed as the **port**, never as `MatchAcceptanceService` — so a route
+    annotating this dependency holds three methods and cannot reach
+    `expire_overdue` even by accident, though the object in its hand has
+    it.
+    """
+    return build_match_acceptance(session, events=events, clock=clock)
+
+
+MatchAcceptanceDep = Annotated[MatchAcceptanceUseCase, Depends(get_match_acceptance)]
+
+
+def get_opponent_directory(session: DbSessionDep, clock: ClockDep) -> PublicProfileReader:
+    """The per-request opponent lookup."""
+    return build_opponent_directory(session, clock=clock)
+
+
+OpponentDirectoryDep = Annotated[PublicProfileReader, Depends(get_opponent_directory)]
 
 
 __all__ = [
     "EligibilityPolicyDep",
     "EngineServicesDep",
+    "MatchAcceptanceDep",
+    "OpponentDirectoryDep",
     "PresenceReaderDep",
     "QueueServiceDep",
     "build_eligibility_policy",
+    "build_match_acceptance",
     "build_match_creation",
+    "build_opponent_directory",
     "build_pairing_exclusions",
     "build_pairing_service",
+    "build_pairing_settlements",
     "build_queue_service",
     "build_rating_window",
     "build_recent_opponents",
+    "build_reconciliation_service",
     "get_eligibility_policy",
     "get_engine_services",
+    "get_match_acceptance",
+    "get_opponent_directory",
     "get_presence_reader",
     "get_queue_service",
 ]

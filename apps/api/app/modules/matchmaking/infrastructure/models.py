@@ -276,6 +276,25 @@ class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
             "expires_at",
             postgresql_where=text(_LIVE_PREDICATE),
         ),
+        # The reconciler's claim: "reservations that have stood past their
+        # own deadline, oldest first" — A64-015.4 §9.
+        #
+        # Its own index rather than a reuse of `ix_queue_ticket__due`,
+        # because it leads with a different column and answers a different
+        # question. `expires_at` is when a *player* has waited long enough;
+        # `reserved_until` is when a *worker* was supposed to have finished,
+        # and it is two orders of magnitude shorter. A sweep that had to
+        # scan the first to find the second would read every waiting ticket
+        # in the queue to find the two that crashed.
+        #
+        # Partial on `reserved` alone, which is narrower than
+        # `_LIVE_PREDICATE`: `reserved_until` is null on every other status
+        # by CHECK, so the index would carry nothing but nulls for them.
+        Index(
+            "ix_queue_ticket__stale_reservation",
+            "reserved_until",
+            postgresql_where=text(f"status = '{QueueStatus.RESERVED.value}'"),
+        ),
         # `resolved_at` is set exactly when the ticket is no longer live —
         # the same shape as `ck_friend_request__responded_iff_resolved`, and
         # enforced here as well as in `QueueTicket.__post_init__` so a row
@@ -288,6 +307,16 @@ class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
         CheckConstraint(
             f"({_LIVE_PREDICATE}) = (resolved_at IS NULL)",
             name="ck_queue_ticket__resolved_iff_terminal",
+        ),
+        # A reservation deadline exists exactly while there is a
+        # reservation — A64-015.4 §5. Without it a released ticket could
+        # keep the deadline it was reserved under, and the reconciler would
+        # then see a `waiting` row it believes is a stranded reservation;
+        # and a reserved row could carry none, which would make it
+        # invisible to the recovery job forever.
+        CheckConstraint(
+            f"(status = '{QueueStatus.RESERVED.value}') = (reserved_until IS NOT NULL)",
+            name="ck_queue_ticket__reserved_iff_deadline",
         ),
         # A ticket that expired before it was entered is not a short
         # window, it is a ticket the sweeper takes on its first pass. The
@@ -347,3 +376,13 @@ class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
     resolved_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     """When the ticket left `waiting`. Null while it has not — see the
     CHECK above, which makes the pairing unrepresentable otherwise."""
+
+    reserved_until: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    """How long this reservation may stand before it is reconciled —
+    A64-015.4 §5.
+
+    The same instant the match created from this pairing carries as its
+    `acceptance_deadline`: one number, written to two rows in two schemas,
+    so the reservation window and the acceptance window cannot drift apart.
+    See `QueueTicket.reserved_until`.
+    """

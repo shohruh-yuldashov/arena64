@@ -3,6 +3,21 @@ A64-015.2.
 
 Split out of `public/__init__.py` by A64-015.3 alongside `variants.py`;
 nothing here changed in the move.
+
+## Why the two domain imports name submodules
+
+`from app.modules.game.domain import DrawRuleSet, ReplayEngine` is the
+obvious spelling and it deadlocks the package. A64-015.4 put a
+`ProductVariant` on `MatchRecord` and on `game`'s events, so
+`game.domain -> game.public.variants` is now a real edge; importing the
+domain *package* from here closes the loop, and Python raises
+`ImportError: partially initialized module` for whichever side happens to
+be entered first — which is the migration runner, whose entry point is
+`game.infrastructure.models`.
+
+Naming the two submodules this file actually needs breaks it, and is
+narrower besides: `public` reaches exactly `draws` and `replay` rather than
+pulling in every domain type to obtain two.
 """
 
 from dataclasses import dataclass
@@ -16,7 +31,8 @@ from app.modules.engine import (
     MoveValidator,
     TerminalStateEvaluator,
 )
-from app.modules.game.domain import DrawRuleSet, ReplayEngine
+from app.modules.game.domain.draws import DrawRuleSet
+from app.modules.game.domain.replay import ReplayEngine
 
 
 def game_engine_version() -> EngineVersion:

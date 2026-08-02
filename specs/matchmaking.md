@@ -1,11 +1,17 @@
 # Matchmaking
 
-> **Status:** Partial — §1–§12 specify the **queue domain**, its boundary with
-> `game`, **pairing**, **match persistence and acceptance**, and **recovery,
-> realtime delivery and retention**. All are implemented (A64-014.1 through
-> A64-015.5). Challenges remain unspecified.
+> **Status:** Partial — §1–§13 specify the **queue domain**, its boundary with
+> `game`, **pairing**, **match persistence and acceptance**, **recovery,
+> realtime delivery and retention**, and the **audit and operational
+> hardening** that closed the epic. All are implemented (A64-014.1 through
+> A64-015.6). Challenges remain unspecified.
+> **Readiness:** **READY WITH DOCUMENTED LIMITATIONS**. See
+> [`specs/matchmaking/audit.md`](matchmaking/audit.md) for the evidence and the four
+> limitations, of which the acceptance deadline (§12, §2 of the audit) is the first
+> worth revisiting.
 > **Owner:** _Unassigned_
 > **Related:** `templates/feature-spec.md`,
+> [`specs/matchmaking/audit.md`](matchmaking/audit.md),
 > [`domain-model.md §9.2`](../docs/01-architecture/domain-model.md),
 > [`database.md §8.1a`](../docs/01-architecture/database.md),
 > [`specs/game-engine.md`](game-engine.md)
@@ -923,7 +929,159 @@ shared instance would hold a session that outlives the unit of work it serves.
 
 ---
 
-## 12. Unresolved rules decisions blocking persisted games
+## 12. Audit trails and operational hardening — A64-015.6
+
+The closing task of the epic added no player-visible behaviour. What it added
+is the ability to **answer questions afterwards** — why a player was barred,
+what recovery did to a ticket — and the bounds that keep the machinery from
+degrading quietly. `specs/matchmaking/audit.md` records the audit itself,
+including what was found and what is deliberately left open.
+
+### 12.1 The cooldown audit trail
+
+§11.3's bar is one row per player, extended by `GREATEST` on a repeat
+decline. That is the right shape for the join path and it discards history:
+a second decline overwrites the first's expiry and nothing records that there
+were two.
+
+`matchmaking.queue_cooldown_audit` is the record. **Append-only**, one row per
+decline, carrying the player, the reason, the match that caused it, the window
+that was actually in force, and whether a bar was already standing when it
+landed.
+
+| Property | Rule |
+| --- | --- |
+| Idempotency | `uq_queue_cooldown_audit__source`, partial unique on `(player_id, source_match_id)`. A redelivered `game.match_declined` writes one row |
+| Transaction | The audit row and the enforcement row commit **together**. A bar with no record of why is what this relation exists to prevent |
+| `extended_existing` | Read *before* the write — "was a bar in force when this landed" — because comparing expiries only detects the rarer case where the old bar outlasted the new one |
+| Retention | `MATCHMAKING_COOLDOWN_AUDIT_RETENTION_HOURS`, default 2160 (90 days), against the bar's own one hour. The dispute arrives after the window closed |
+| Reach | Operations and support. **No route reaches it**, and no schema exposes it |
+
+It is **not a sanction**. There is no actor, no severity, no note and no
+escalation count; a cooldown is a mechanical consequence of one action with a
+duration from a settings file. Moderation belongs to `admin`, and §11.3's
+carried-forward note still stands.
+
+### 12.2 The pairing reconciliation timeline
+
+§11.6 publishes `matchmaking.pairing_reconciled` on every recovery. Until this
+task nothing consumed it: the log line beside it is aggregated per tick (it
+says *five tickets were settled*, not which), sits on the log pipeline's
+retention, and cannot be joined to a ticket id — which is the only identifier
+a support conversation starts from.
+
+`matchmaking.pairing_timeline` is the projection. One row per reconciled
+ticket, written by the `matchmaking_reconciliation_timeline` outbox consumer.
+
+| Property | Rule |
+| --- | --- |
+| Idempotency | `uq_pairing_timeline__event`, unique on the outbox entry id. Duplicate delivery is a no-op rather than a second row |
+| Source of truth | The **event payload**, never a re-read of the ticket — by projection time the ticket may have been paired again or pruned |
+| Ordering | `occurred_at` from the event, `recorded_at` from the clock. The gap between them is relay lag, which is what "why was this late" is asking |
+| `pairing_id` | Nullable and **null on every row today**. `PairingReconciled` identifies a ticket, because the reconciler may hold one half of a pair. The column and its partial index ship empty rather than back-filled with a guess |
+| Retention | `MATCHMAKING_TIMELINE_RETENTION_HOURS`, default 336 (14 days), bounded by the outbox horizon it is a projection of (AD-19) |
+| Reach | Operations and support. No route, no schema |
+
+### 12.3 Outbox consumer isolation
+
+The relay had three consumers on one loop, iterated **sequentially**, with **no
+timeout on any of them**. Three consequences, and the third is the one that
+mattered: a tick cost the sum of its consumers; which consumer was delayed by
+which was decided by a list literal at the composition root; and a consumer
+that *hung* stopped the relay for that process indefinitely.
+
+`ConsumerPolicy` gives each consumer a timeout and `run_once` dispatches them
+concurrently. A tick now costs the slowest consumer, and one that exceeds its
+budget fails **its own slice** — those entries are retried, and every other
+consumer's work in the tick has already committed.
+
+| Consumer | Budget | Why |
+| --- | --- | --- |
+| `matchmaking_reconciliation_timeline` | 10s | One insert per entry, no cross-module port |
+| `matchmaking_acceptance_failure` | 15s | Writes the queue; the requeue must not wait on a socket |
+| `matchmaking_pending_match` | 10s | Will be a network write when AD-09's gateway lands |
+| `social_notifications` | 20s | The most collaborators |
+| anything unregistered | 30s | A runaway guard, not a latency target |
+
+Durability is unchanged: every entry is still claimed once, every consumer
+still has its own `processed_event` partition, and the retry is still on the
+row. Concurrency is safe because each consumer opens its own session, which
+`SessionScopedNotificationHandler` already guaranteed for a different reason.
+
+**Known residual.** An entry's `attempt_count` is per *entry*, not per
+consumer, so a consumer that fails an entry consistently still spends that
+entry's shared attempt budget. Making it per-consumer means a second relation
+and an outbox redesign; it is recorded in `specs/matchmaking/audit.md` rather
+than pretended away.
+
+### 12.4 Metrics volume
+
+Every metric before this task was per-match or per-run, so one structured log
+record per measurement was the volume of business events. The pairing scan is
+not that: `MATCHMAKING_PAIRING_INTERVAL_SECONDS` is one second and
+`every_pool()` returns fourteen pools, so a naive counter there is ~1.2 million
+records a day on a platform with no players on it.
+
+`AggregatingMetrics` sums **counters** in memory and emits one record per
+series per flush; **observations pass straight through**. The asymmetry is
+arithmetic rather than compromise:
+
+- a counter summed over an interval loses nothing — the sum *is* the counter;
+- an observation summed over an interval loses the distribution, which is the
+  only thing an observation is for and exactly what §11.5's deadline evidence
+  reads.
+
+`MATCHMAKING`-wide the accumulator is bounded by the label enums rather than by
+traffic, which is what makes an in-memory accumulator safe here and would make
+it a leak in a system that labelled by identifier. `platform.metrics.flush`
+drains it every `METRICS_FLUSH_INTERVAL_SECONDS`.
+
+### 12.5 Pairing scan observability
+
+| Metric | Labels | Answers |
+| --- | --- | --- |
+| `matchmaking.pairing_scans_total` | `outcome` — `paired`, `idle`, `no_pair`, `claim_lost`, `creation_refused` | Did the scan run, and what came of it |
+| `matchmaking.pairing_candidates_total` | — | `rate(candidates)/rate(scans)` is the mean pool depth a scan sees |
+| `matchmaking.pairing_exclusions_total` | `reason` — `blocked`, `recent_opponent` | Why a pool with waiting players is not pairing |
+
+Exclusions are counted **per excluded pair per scan**, from the two mappings
+the service already holds — O(1) at the point they are merged. They are
+deliberately *not* counted per candidate comparison: the engine compares up to
+n² pairs, and incrementing there would be ~20,000 dictionary updates per scan
+at the default batch size. What that gives up is "how often did the rating
+window specifically reject a pair", and that is recorded as known debt.
+
+### 12.6 Retention covers every relation the module owns
+
+Five now, each with its own horizon and each **counted even when it deleted
+nothing** — a series reading zero says "the job ran and found nothing", an
+absent series says "the job did not run", and only the first lets an operator
+conclude the relation is not growing.
+
+| Relation | Horizon | Measured on |
+| --- | --- | --- |
+| `queue_ticket` | 72h | `resolved_at` |
+| `game.match` (abandoned) | 168h | `settled_at` |
+| `queue_cooldown` | 1h past expiry | `expires_at` |
+| `queue_cooldown_audit` | 2160h | `applied_at` |
+| `pairing_timeline` | 336h | `occurred_at` |
+
+The safety property is still the predicate rather than the horizon, and the
+audit relations add one ordering rule enforced at construction:
+`cooldown_audit_retention` must exceed `cooldown_retention`, because an audit
+trail pruned before the thing it explains answers nothing.
+
+### 12.7 One recorder per process
+
+The composition root and `matchmaking`'s `get_metrics` each built their own
+recorder. That was redundancy until §12.4 made the recorder **stateful**, at
+which point it became counters that nothing drained — the request path
+accumulated into an object `MetricsFlushTask` never saw.
+`platform.metrics.process_metrics()` is now the single accessor both reach.
+
+---
+
+## 13. Unresolved rules decisions blocking persisted games
 
 Games are **not** persisted in A64-015.2 and no `Match` is created, so none of
 the following blocks the queue. All of them block the first stored game, because
@@ -949,7 +1107,7 @@ Resolving any threshold above is a rules change and must bump it.
 
 ## TODO
 
-- [ ] Resolve §12's two research items and one product decision **before any game is played**
+- [ ] Resolve §13's two research items and one product decision **before any game is played**
 - [ ] **Tune `MATCHMAKING_RESERVATION_TTL_SECONDS` from the histogram** (§11.5), once it has run over a weekend. Thirty seconds is still an assumption; it is now a measurable one
 - [ ] Replace `LoggingPendingMatchSink` with AD-09's gateway (§11.4). Everything upstream is real; only the socket is missing
 - [ ] Add `time_control` to `QueuePool`, `CreateMatchRequest`, `game.match` and the acceptance response when `reference.time_control` ships (§2.1, §8.1, §10.7)
@@ -957,6 +1115,9 @@ Resolving any threshold above is a rules change and must bump it.
 - [ ] Replace `every_pool()` with a scan of pools that actually have waiting tickets, when the pool count makes it worth a query (§9.1)
 - [ ] Specify **challenges** — `matchmaking.challenge` (database.md §8.1), direct and open
 - [ ] Revisit the decline cooldown once there is a fair-play signal to feed (§11.3). It is deliberately not a sanction, and `admin` is where escalation belongs
+- [ ] Make the outbox's attempt budget per-consumer rather than per-entry (§12.3). It needs a second relation, so it is a task rather than a fix
+- [ ] Populate `pairing_timeline.pairing_id` if `PairingReconciled` ever carries one (§12.2)
+- [ ] Replace the logging metrics sink with a real exporter when one exists (§12.4). Everything upstream of the sink is already real
 - [ ] Assign a document owner and promote the status
 
 **Done since A64-015.3:** match persistence and the `pairing_id` unique index

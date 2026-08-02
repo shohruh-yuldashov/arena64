@@ -20,8 +20,10 @@ swap A64-015.3 predicted, one line in the composition root and nothing in
 
 from app.modules.matchmaking.infrastructure.models import (
     MATCHMAKING_SCHEMA,
+    QueueCooldownAuditModel,
     QueueCooldownModel,
     QueueTicketModel,
+    ReconciliationTimelineModel,
 )
 from app.modules.matchmaking.infrastructure.pending_match_sinks import (
     LoggingPendingMatchSink,
@@ -29,9 +31,11 @@ from app.modules.matchmaking.infrastructure.pending_match_sinks import (
 )
 from app.modules.matchmaking.infrastructure.rating_providers import ProvisionalRatingProvider
 from app.modules.matchmaking.infrastructure.repositories import (
+    SqlAlchemyCooldownAuditRepository,
     SqlAlchemyCooldownRepository,
     SqlAlchemyQueueRepository,
     SqlAlchemyQueueRetentionStore,
+    SqlAlchemyReconciliationTimelineRepository,
 )
 from app.modules.matchmaking.infrastructure.tasks import (
     MAINTENANCE_QUEUE,
@@ -75,12 +79,16 @@ __all__ = [
     "QueueRetentionServiceFactory",
     "QueueRetentionTask",
     "QueueServiceFactory",
+    "QueueCooldownAuditModel",
     "QueueCooldownModel",
     "QueueTicketModel",
+    "ReconciliationTimelineModel",
     "ReconciliationServiceFactory",
+    "SqlAlchemyCooldownAuditRepository",
     "SqlAlchemyCooldownRepository",
     "SqlAlchemyQueueRepository",
     "SqlAlchemyQueueRetentionStore",
+    "SqlAlchemyReconciliationTimelineRepository",
     "expiry_request",
     "pairing_request",
     "queue_retention_request",

@@ -65,6 +65,37 @@ PENDING_MATCH_DELIVERIES = "matchmaking.pending_match_deliveries_total"
 #: Rows removed by retention, by relation — §8.
 RETENTION_DELETIONS = "matchmaking.retention_deletions_total"
 
+#: What one pairing scan did — A64-015.6 §7.
+#:
+#: **The hottest counter on the platform.** One increment per scan, and a scan
+#: runs at `MATCHMAKING_PAIRING_INTERVAL_SECONDS` per pool — one second across
+#: fourteen pools today. It is safe only because `AggregatingMetrics` sums it
+#: in memory and emits one record per series per flush; a naive recorder here
+#: would write ~1.2 million log lines a day on an empty platform.
+PAIRING_SCANS = "matchmaking.pairing_scans_total"
+
+#: How many waiting tickets the scans in this interval considered.
+#:
+#: A **counter**, not an observation, and the choice is what keeps it cheap:
+#: `rate(candidates) / rate(scans)` is the mean pool depth a scan sees, which
+#: is the question, and it aggregates losslessly. An observation would be one
+#: record per scan for a number whose distribution nobody reads.
+PAIRING_CANDIDATES = "matchmaking.pairing_candidates_total"
+
+#: Pairs a scan was forbidden from making, by which rule forbade them — §7.
+#:
+#: Counted **per excluded pair per scan**, from the two exclusion mappings the
+#: service already holds, which is O(1) work at the point they are merged.
+#:
+#: It is deliberately *not* counted per candidate comparison. The engine
+#: compares up to n² pairs per scan, and incrementing there would be ~20,000
+#: dictionary updates per scan at the default batch size — the shape §7
+#: forbids ("do not emit one structured log record for every candidate
+#: comparison"), and no cheaper for being a counter rather than a log line.
+#: What is lost is "how often did the rating window specifically reject a
+#: pair", and that is recorded as known debt rather than bought at this price.
+PAIRING_EXCLUSIONS = "matchmaking.pairing_exclusions_total"
+
 
 class AcceptanceFailureAction(StrEnum):
     """What §1's policy did to one participant of a failed handshake.
@@ -109,19 +140,85 @@ class DeliveryOutcome(StrEnum):
     `PendingMatchNotifier`."""
 
 
+class ScanOutcome(StrEnum):
+    """What one pairing scan produced — A64-015.6 §7.
+
+    Mutually exclusive and exhaustive over `PairingOutcome`, so the sum of
+    this counter is the number of scans and each series is a share of it.
+    That is what makes the ratios readable: `idle / total` is how empty the
+    platform is, and `claim_lost / paired` is how much two workers are
+    treading on each other.
+    """
+
+    PAIRED = "paired"
+    """A match was created. The only outcome that produced a game."""
+
+    IDLE = "idle"
+    """Fewer than two waiting tickets. The healthy steady state of a quiet
+    platform, and the series that should dominate."""
+
+    NO_PAIR = "no_pair"
+    """Candidates existed and none were compatible — every pair was blocked,
+    too far apart on rating, or a rematch. Distinct from `idle` because the
+    operator response is different: `idle` means nobody is queueing, and a
+    persistent `no_pair` means the pool is deep enough and the window is too
+    tight."""
+
+    CLAIM_LOST = "claim_lost"
+    """Another worker reserved one of the two tickets first. Not a failure —
+    the tickets are still waiting — and a rising share means more schedulers
+    are scanning one pool than it needs."""
+
+    CREATION_REFUSED = "creation_refused"
+    """`game` declined, or failed, and both tickets went back to `waiting`.
+    The one scan outcome that is a *problem*."""
+
+
+class ExclusionReason(StrEnum):
+    """Why a pair was forbidden — A64-015.6 §7.
+
+    Two members, and the absent third is the point: there is no
+    `rating_window`, because that rejection happens inside the engine's
+    per-comparison loop and counting it there is the hot-path shape §7
+    forbids. See `PAIRING_EXCLUSIONS`.
+    """
+
+    BLOCKED = "blocked"
+    """BL-2 — `friends` says these two must never be paired."""
+
+    RECENT_OPPONENT = "recent_opponent"
+    """QT-3 — they just played each other."""
+
+
 class RetentionRelation(StrEnum):
-    """Which relation a retention run deleted from."""
+    """Which relation a retention run deleted from.
+
+    **One member per relation the run prunes**, and A64-015.6 §9 made that an
+    asserted invariant rather than a convention — `tests/unit/
+    test_queue_retention.py` checks the enum against `QueueRetentionResult`'s
+    fields. A relation that is pruned but not counted is one whose growth is
+    invisible until it is the incident, which is the failure retention exists
+    to prevent.
+    """
 
     QUEUE_TICKET = "queue_ticket"
     ABANDONED_MATCH = "abandoned_match"
+    QUEUE_COOLDOWN = "queue_cooldown"
+    COOLDOWN_AUDIT = "cooldown_audit"
+    PAIRING_TIMELINE = "pairing_timeline"
 
 
 __all__ = [
     "ACCEPTANCE_FAILURE_ACTIONS",
+    "PAIRING_CANDIDATES",
+    "PAIRING_EXCLUSIONS",
+    "PAIRING_SCANS",
     "PENDING_MATCH_DELIVERIES",
     "RECONCILIATION_ACTIONS",
     "RETENTION_DELETIONS",
     "AcceptanceFailureAction",
     "DeliveryOutcome",
+    "ExclusionReason",
     "RetentionRelation",
+    "ScanOutcome",
 ]

@@ -7,10 +7,13 @@ reconciler's outcomes to be *countable* rather than merely logged. Both are
 decisions that must be made from data the platform does not currently
 produce.
 
-    MetricsRecorder   what a service holds
-    LoggingMetrics    the implementation that ships
-    NullMetrics       the implementation a test holds when metrics are not
-                      the subject
+    MetricsRecorder     what a service holds
+    LoggingMetrics      the sink that ships — one record per measurement
+    AggregatingMetrics  sums counters over an interval (A64-015.6 §6)
+    MetricsFlushTask    the schedule that drains it
+    process_metrics     the one recorder a process has (A64-015.6 §10)
+    NullMetrics         the implementation a test holds when metrics are not
+                        the subject
 
 ## Why `app/platform` and not a module
 
@@ -18,6 +21,19 @@ Every module will eventually want to count something, so a recorder owned
 by whichever module needed one first would make every other module import
 it. Nothing here imports `app.modules`, and `.importlinter` fails if that
 changes — the same rule the outbox and the task dispatcher follow.
+
+## Counters are aggregated; observations are not — A64-015.6
+
+`LoggingMetrics` alone writes one record per measurement, which is the volume
+of business events for a per-match counter and is ~1.2M records a day for
+anything on the pairing scan (one second, fourteen pools). `AggregatingMetrics`
+wraps it and sums counters until a scheduled flush, while passing observations
+straight through.
+
+The asymmetry is arithmetic rather than compromise: a counter summed over an
+interval loses nothing, and an observation summed over an interval loses the
+distribution — which is the only thing an observation is for, and exactly what
+A64-015.5 §7's deadline-tuning evidence reads. See `aggregation.py`.
 
 ## Why the shipped implementation writes log lines
 
@@ -49,11 +65,28 @@ the difference), and a test does: see
 this platform emits comes from a `StrEnum`.
 """
 
+from app.platform.metrics.aggregation import AggregatingMetrics
+from app.platform.metrics.flush import (
+    METRICS_FLUSH_TASK,
+    MetricsFlushTask,
+    flush_request,
+)
 from app.platform.metrics.ports import (
     Labels,
     LoggingMetrics,
     MetricsRecorder,
     NullMetrics,
 )
+from app.platform.metrics.runtime import process_metrics
 
-__all__ = ["Labels", "LoggingMetrics", "MetricsRecorder", "NullMetrics"]
+__all__ = [
+    "METRICS_FLUSH_TASK",
+    "AggregatingMetrics",
+    "Labels",
+    "LoggingMetrics",
+    "MetricsFlushTask",
+    "MetricsRecorder",
+    "NullMetrics",
+    "flush_request",
+    "process_metrics",
+]

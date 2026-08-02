@@ -36,6 +36,7 @@ from app.modules.matchmaking.domain.exceptions import QueueCooldownActive
 from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType
 from app.modules.matchmaking.domain.queue_ticket import QueueStatus, QueueTicket
 from app.platform.outbox import OutboxEntry
+from tests.fakes.audit import InMemoryCooldownAuditRepository
 from tests.fakes.cooldowns import InMemoryCooldownRepository
 from tests.fakes.metrics import RecordingMetrics
 from tests.fakes.outbox import NullUnitOfWork
@@ -75,6 +76,11 @@ def tickets() -> InMemoryQueueRepository:
 @pytest.fixture
 def cooldowns() -> InMemoryCooldownRepository:
     return InMemoryCooldownRepository()
+
+
+@pytest.fixture
+def audit() -> InMemoryCooldownAuditRepository:
+    return InMemoryCooldownAuditRepository()
 
 
 @pytest.fixture
@@ -118,12 +124,14 @@ def queue(
 def policy(
     queue: QueueService,
     cooldowns: InMemoryCooldownRepository,
+    audit: InMemoryCooldownAuditRepository,
     clock: MovableClock,
     metrics: RecordingMetrics,
 ) -> MatchOutcomeService:
     return MatchOutcomeService(
         queue=queue,
         cooldowns=cooldowns,
+        audit=audit,
         unit_of_work=NullUnitOfWork(),
         clock=clock,
         metrics=metrics,

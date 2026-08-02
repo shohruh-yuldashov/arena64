@@ -7,7 +7,7 @@ grows with matches attempted, forever … The fix is
 `platform.outbox.retention`'s, applied to this table." This is that fix, and
 it deliberately reuses the shape rather than the code — see below.
 
-## Three relations, three reasons, one job
+## Five relations, five reasons, one job
 
     queue_ticket    terminal rows. Kept for a while because "why was I
                     matched with them" is a question somebody asks the day
@@ -22,7 +22,17 @@ it deliberately reuses the shape rather than the code — see below.
                     same product judgement as the queue's, so the module
                     with the opinion supplies it.
 
-All three in one pass rather than three tasks, because they are one job —
+A64-015.6 adds the two audit relations, and both keep a **longer** horizon
+than the operational rows they describe — which is the whole point of an
+audit trail:
+
+    queue_cooldown_audit  why a player was barred. Outlives the bar, because
+                          the dispute arrives after it has lifted (§3)
+    pairing_timeline      what recovery did to a ticket. Outlives the
+                          ticket, because the question is asked about a
+                          ticket that is gone (§4)
+
+All five in one pass rather than five tasks, because they are one job —
 "let go of what this handshake no longer owes anybody" — and because
 configuring three horizons that must stay consistent in three places is how
 they stop being consistent. Three schedules would also be three things to
@@ -66,7 +76,12 @@ from app.modules.matchmaking.application.metrics import (
     RETENTION_DELETIONS,
     RetentionRelation,
 )
-from app.modules.matchmaking.application.ports import CooldownRepository, QueueRetentionStore
+from app.modules.matchmaking.application.ports import (
+    CooldownAuditRepository,
+    CooldownRepository,
+    QueueRetentionStore,
+    ReconciliationTimelineRepository,
+)
 from app.platform.metrics import MetricsRecorder
 
 logger = logging.getLogger(__name__)
@@ -94,6 +109,24 @@ class QueueRetentionPolicy:
     ticket and asked within a day, while "why did my opponent decline"
     is answered from a match and is the question a support conversation
     starts with a week later.
+    """
+
+    cooldown_audit_retention: timedelta
+    """How long a **cooldown audit row** is kept, measured on `applied_at`.
+
+    Much longer than the bar it describes, and that asymmetry is the reason
+    the relation exists: a player disputing a cooldown does so after it has
+    lifted, and the enforcement row is pruned within the hour.
+    """
+
+    timeline_retention: timedelta
+    """How long a **reconciliation timeline entry** is kept, measured on
+    `occurred_at`.
+
+    Bounded by what it is a projection *of*: the outbox entries it was built
+    from are pruned on `OUTBOX_RETENTION_DAYS`, and keeping the derivative
+    longer than the source would leave a timeline nothing could rebuild
+    (AD-19).
     """
 
     cooldown_retention: timedelta
@@ -124,6 +157,13 @@ class QueueRetentionPolicy:
             raise ValueError("abandoned_match_retention must be positive")
         if self.cooldown_retention < timedelta(0):
             raise ValueError("cooldown_retention cannot be negative")
+        if self.cooldown_audit_retention <= self.cooldown_retention:
+            raise ValueError(
+                "cooldown_audit_retention must exceed cooldown_retention — an audit "
+                "trail pruned before the thing it explains answers nothing"
+            )
+        if self.timeline_retention <= timedelta(0):
+            raise ValueError("timeline_retention must be positive")
         if self.batch_size < 1 or self.max_batches < 1:
             raise ValueError("batch_size and max_batches must be positive")
 
@@ -137,6 +177,8 @@ class QueueRetentionResult:
     tickets_deleted: int
     matches_deleted: int
     cooldowns_deleted: int
+    cooldown_audits_deleted: int
+    timeline_entries_deleted: int
 
     live_tickets_past_horizon: int
     """Live tickets older than the whole retention horizon, which were
@@ -181,6 +223,8 @@ class QueueRetentionService:
         tickets: QueueRetentionStore,
         matches: AbandonedMatchRetention,
         cooldowns: CooldownRepository,
+        cooldown_audit: CooldownAuditRepository,
+        timeline: ReconciliationTimelineRepository,
         unit_of_work: UnitOfWork,
         clock: Clock,
         metrics: MetricsRecorder,
@@ -189,6 +233,8 @@ class QueueRetentionService:
         self._tickets = tickets
         self._matches = matches
         self._cooldowns = cooldowns
+        self._cooldown_audit = cooldown_audit
+        self._timeline = timeline
         self._unit_of_work = unit_of_work
         self._clock = clock
         self._metrics = metrics
@@ -211,6 +257,8 @@ class QueueRetentionService:
         ticket_cutoff = now - self._policy.ticket_retention
         match_cutoff = now - self._policy.abandoned_match_retention
         cooldown_cutoff = now - self._policy.cooldown_retention
+        audit_cutoff = now - self._policy.cooldown_audit_retention
+        timeline_cutoff = now - self._policy.timeline_retention
 
         try:
             tickets = await self._drain(
@@ -222,6 +270,16 @@ class QueueRetentionService:
             cooldowns = await self._drain(
                 lambda batch: self._cooldowns.prune_expired(
                     before=cooldown_cutoff, batch_size=batch
+                )
+            )
+            audits = await self._drain(
+                lambda batch: self._cooldown_audit.prune_recorded(
+                    before=audit_cutoff, batch_size=batch
+                )
+            )
+            timeline = await self._drain(
+                lambda batch: self._timeline.prune_recorded(
+                    before=timeline_cutoff, batch_size=batch
                 )
             )
             async with self._unit_of_work:
@@ -238,20 +296,26 @@ class QueueRetentionService:
                 tickets_deleted=0,
                 matches_deleted=0,
                 cooldowns_deleted=0,
+                cooldown_audits_deleted=0,
+                timeline_entries_deleted=0,
                 live_tickets_past_horizon=0,
                 unresolved_matches_past_horizon=0,
             )
 
-        self._metrics.increment(
-            RETENTION_DELETIONS,
-            labels={"relation": RetentionRelation.QUEUE_TICKET},
-            by=tickets,
-        )
-        self._metrics.increment(
-            RETENTION_DELETIONS,
-            labels={"relation": RetentionRelation.ABANDONED_MATCH},
-            by=matches,
-        )
+        # Every relation the run pruned, including the ones it deleted
+        # nothing from. A series that exists with a value of zero says "the
+        # job ran and found nothing"; a series that is absent says "the job
+        # did not run", and telling those apart is the entire operational
+        # value of a retention metric — see `AggregatingMetrics.increment` on
+        # why `by=0` is recorded rather than skipped.
+        for relation, deleted in (
+            (RetentionRelation.QUEUE_TICKET, tickets),
+            (RetentionRelation.ABANDONED_MATCH, matches),
+            (RetentionRelation.QUEUE_COOLDOWN, cooldowns),
+            (RetentionRelation.COOLDOWN_AUDIT, audits),
+            (RetentionRelation.PAIRING_TIMELINE, timeline),
+        ):
+            self._metrics.increment(RETENTION_DELETIONS, labels={"relation": relation}, by=deleted)
 
         if stranded:
             # `WARNING`, and it names no player: these are live tickets
@@ -280,6 +344,8 @@ class QueueRetentionService:
                 "tickets_deleted": tickets,
                 "matches_deleted": matches,
                 "cooldowns_deleted": cooldowns,
+                "cooldown_audits_deleted": audits,
+                "timeline_entries_deleted": timeline,
                 "live_tickets_past_horizon": stranded,
                 "unresolved_matches_past_horizon": unresolved,
             },
@@ -288,6 +354,8 @@ class QueueRetentionService:
             tickets_deleted=tickets,
             matches_deleted=matches,
             cooldowns_deleted=cooldowns,
+            cooldown_audits_deleted=audits,
+            timeline_entries_deleted=timeline,
             live_tickets_past_horizon=stranded,
             unresolved_matches_past_horizon=unresolved,
         )
@@ -318,6 +386,8 @@ def queue_retention_policy(
     ticket_retention_hours: int,
     abandoned_match_retention_hours: int,
     cooldown_retention_hours: int,
+    cooldown_audit_retention_hours: int,
+    timeline_retention_hours: int,
     batch_size: int,
     max_batches: int,
 ) -> QueueRetentionPolicy:
@@ -332,6 +402,8 @@ def queue_retention_policy(
         ticket_retention=timedelta(hours=ticket_retention_hours),
         abandoned_match_retention=timedelta(hours=abandoned_match_retention_hours),
         cooldown_retention=timedelta(hours=cooldown_retention_hours),
+        cooldown_audit_retention=timedelta(hours=cooldown_audit_retention_hours),
+        timeline_retention=timedelta(hours=timeline_retention_hours),
         batch_size=batch_size,
         max_batches=max_batches,
     )

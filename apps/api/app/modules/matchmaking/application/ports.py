@@ -12,6 +12,12 @@ by storage — the argument every port pair on this platform makes:
     QueueRetentionStore    deleting the tickets nobody owes anybody (§8)
     PendingMatchSink       where a realtime match offer goes (§4)
 
+A64-015.6 adds two more, and both are **audit** surfaces rather than
+operational ones — appended to, read by support, never on a request path:
+
+    CooldownAuditRepository          why a player was barred (§3)
+    ReconciliationTimelineRepository what recovery did to a ticket (§4)
+
 The **pairwise block** port is deliberately not here either:
 `friends.public.PairingExclusions` already answers it, and BL-2 is
 `friends`' rule to enforce. Two ports for "who may not be paired" would be
@@ -32,9 +38,11 @@ from typing import Protocol
 from uuid import UUID
 
 from app.modules.matchmaking.domain.cooldown import QueueCooldown
+from app.modules.matchmaking.domain.cooldown_audit import CooldownRecord
 from app.modules.matchmaking.domain.pending_match import PendingMatchOffer
 from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType
 from app.modules.matchmaking.domain.queue_ticket import QueueSnapshot, QueueTicket
+from app.modules.matchmaking.domain.reconciliation_timeline import ReconciliationEntry
 
 
 class QueueRepository(Protocol):
@@ -516,5 +524,114 @@ class PendingMatchSink(Protocol):
         **Batch-first**, like `EventHandler` and `NotificationSink`: the
         consumer resolves a whole relay tick at once, and a singular method
         would be called in a loop by every implementation.
+        """
+        ...
+
+
+class CooldownAuditRepository(Protocol):
+    """Storage for `CooldownRecord` — A64-015.6 §3.
+
+    Its own port rather than methods on `CooldownRepository`, and the split is
+    the one every port pair on this platform makes: what differs is the
+    capability. The eligibility check holds the enforcement store and must not
+    be able to write history; the policy that applies a cooldown writes both.
+
+    **Append-only.** There is no `update` and no `delete` beyond the retention
+    sweep, which is what makes a row here evidence rather than a current
+    opinion.
+    """
+
+    async def record(self, entry: CooldownRecord) -> CooldownRecord:
+        """Writes one audit row, or returns the one already written for this
+        `(player_id, source_match_id)`.
+
+        **Idempotent by unique index**, not by check-then-insert: the caller
+        is an outbox consumer under an at-least-once contract, so a
+        redelivered decline reaches it twice by design. `ON CONFLICT DO
+        NOTHING` followed by a read is what makes the second call a no-op
+        rather than a second row — and §3 requires exactly that ("duplicate
+        processing must not create conflicting records").
+
+        Flushes, never commits (repositories.md §5.1): the audit row and the
+        enforcement row are one transaction, because a bar with no record of
+        why is the thing this port exists to prevent.
+        """
+        ...
+
+    async def history_for(self, player_id: UUID, *, limit: int) -> Sequence[CooldownRecord]:
+        """This player's cooldowns, most recent first.
+
+        The support query §3 asks for, bounded by `limit` because every list
+        read on this platform is (CLAUDE.md §10.5). It reads the audit
+        relation rather than the enforcement one, so it still answers after
+        the bar has lifted — which is when the question is actually asked.
+
+        **No route reaches this.** See `CooldownRecord` on why the audit trail
+        is operational rather than a product surface.
+        """
+        ...
+
+    async def prune_recorded(self, *, before: datetime, batch_size: int) -> int:
+        """Deletes audit rows applied before `before`. Returns how many went.
+
+        Bounded and safe for more than one pruner, by the same
+        `FOR UPDATE SKIP LOCKED` every delete on this platform uses.
+
+        The cutoff is `applied_at` rather than `expires_at`: the horizon is
+        "how long is a dispute answerable", which runs from the event and not
+        from when the bar happened to lift.
+        """
+        ...
+
+
+class ReconciliationTimelineRepository(Protocol):
+    """Storage for `ReconciliationEntry` — A64-015.6 §4.
+
+    A projection, so this port is deliberately narrower than a repository for
+    an aggregate: append, two reads, and a bounded delete. Nothing can amend
+    an entry, because an amended timeline is not one.
+    """
+
+    async def append(self, entry: ReconciliationEntry) -> ReconciliationEntry:
+        """Writes one entry, or returns the one already written for its
+        `event_id`.
+
+        **Idempotent by unique index on `event_id`**, for the reason the
+        cooldown audit is: the caller is an outbox consumer, and AD-16
+        guarantees it will see some events twice. §4 requires idempotent
+        consumption, and a constraint is the only form of that which holds
+        when two relays deliver concurrently.
+        """
+        ...
+
+    async def for_ticket(self, ticket_id: UUID, *, limit: int) -> Sequence[ReconciliationEntry]:
+        """Everything recovery did to one queue ticket, most recent first.
+
+        The lookup a support conversation starts from — §4 requires the
+        timeline to be "queryable by ticket or pairing identifier", and the
+        ticket is the half that is always populated.
+        """
+        ...
+
+    async def for_pairing(self, pairing_id: UUID, *, limit: int) -> Sequence[ReconciliationEntry]:
+        """Everything recovery did to one pairing, most recent first.
+
+        **Returns nothing today**, and the column it reads is nullable and
+        always null — see `ReconciliationEntry.pairing_id`. The method exists
+        because §4 names the query and because a caller written against it now
+        needs no change when `PairingReconciled` starts carrying a pairing
+        id; returning an empty sequence is the honest answer to "which
+        recovery actions belonged to this pairing" when nothing records the
+        association.
+        """
+        ...
+
+    async def prune_recorded(self, *, before: datetime, batch_size: int) -> int:
+        """Deletes entries that occurred before `before`. Returns how many
+        went.
+
+        The cutoff is `occurred_at`, so the timeline's floor lines up with the
+        outbox entries it was projected from rather than with when the relay
+        happened to catch up.
         """
         ...

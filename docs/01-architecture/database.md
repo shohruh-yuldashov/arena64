@@ -220,7 +220,7 @@ variant were governed by different rules — the exact class of corruption AD-15
 | `auth` | `auth` | `account`, `credential`, `email_verification`, `password_reset_token`, `session` | Most sensitive schema on the platform |
 | `users` | `users` | `player_profile`, `handle_assignment`, `player_preference`, `notification_preference` | `player_id` originates here |
 | `friends` | `friends` | `friend_request`, `friendship`, `block` | |
-| `matchmaking` | `matchmaking` | `queue_ticket`, `queue_cooldown`, `challenge` | `queue_ticket` exists since A64-014.1 and **is PostgreSQL-authoritative** — see §8.1, which this reverses. `queue_cooldown` since A64-015.5 (§8.1b). `challenge` is not built yet |
+| `matchmaking` | `matchmaking` | `queue_ticket`, `queue_cooldown`, `queue_cooldown_audit`, `pairing_timeline`, `challenge` | `queue_ticket` exists since A64-014.1 and **is PostgreSQL-authoritative** — see §8.1, which this reverses. `queue_cooldown` since A64-015.5 (§8.1b); the two append-only audit relations since A64-015.6 (§8.1c, §8.1d). `challenge` is not built yet |
 | `game` | `game` | `match` | `match` exists since A64-015.4 and carries the part a pairing needs — who, which rules, from which pairing, and whether both agreed. §8.2 describes the relation it grows into; §8.2a describes what actually ships |
 | `game` | `game` | `match`, `match_participant`, `move`, `match_player_index` | Partitioned; the largest schema |
 | `rating` | `rating` | `player_rating`, `rating_adjustment`, `rating_period` | Holds the platform's hardest invariant |
@@ -799,10 +799,90 @@ now()`, which is not a legal predicate (`now()` is not immutable). The alternati
 `SELECT ... FOR UPDATE` on the queue-join path for a row that usually does not exist.
 
 What it costs is history: a second decline overwrites the first's `expires_at` and nothing
-records there were two. Deliberate — see above on why this is a delay rather than a file.
+records there were two. Deliberate — see above on why this is a delay rather than a file — and
+since A64-015.6 the history it discards is kept beside it in §8.1c.
 
 Retention is `MATCHMAKING_COOLDOWN_RETENTION_HOURS` (default 1), the shortest horizon on the
 platform: a cooldown that has lifted answers no question anybody will ask.
+
+### 8.1c `matchmaking.queue_cooldown_audit` — A64-015.6
+
+`id` (**primary key**, UUIDv7), `player_id`, `reason`, `source_match_id`, `applied_at`,
+`expires_at`, `extended_existing`.
+
+§8.1b keys enforcement on the player and extends it with `GREATEST`, which is the right shape for
+the join path and **discards history**: a second decline overwrites the first's expiry and nothing
+records that there were two. This relation is the record, and it is separate rather than merged
+because the hot read and the audit read want opposite shapes — a primary-key lookup on one side,
+a bounded scan of a player's history on the other.
+
+| Name | Kind | Rule | Source |
+| --- | --- | --- | --- |
+| `pk_queue_cooldown_audit` | Primary key on `(id)` | | DB-07 |
+| `uq_queue_cooldown_audit__source` | Unique, **partial** on `(player_id, source_match_id)` where the match is non-null | One row per decline, under concurrent redelivery | A64-015.6 §3 |
+| `ck_queue_cooldown_audit__window_positive` | Check | `expires_at > applied_at` | |
+| `ix_queue_cooldown_audit__player` | Index | `(player_id, applied_at)` — the support query, ordered so the walk stops at the limit | |
+| `ix_queue_cooldown_audit__retention` | Index | `(applied_at)` — retention's claim, player-blind | |
+
+**The unique index is the idempotency, and it is not decoration.** The writer is an outbox
+consumer under AD-16's at-least-once contract, so a redelivered `game.match_declined` reaches it
+twice by design; the `processed_event` ledger stops the ordinary case and cannot stop two relays
+delivering concurrently. A check-then-insert would pass for both and produce two rows, which for
+an audit trail means two different answers to one question.
+
+The index is partial because `source_match_id` is nullable and reserved for a future non-match
+reason. Nulls are distinct in a unique index anyway, so the predicate is about size rather than
+correctness.
+
+**`extended_existing` is read before the write.** "Was a bar in force when this landed", not "did
+the stored expiry differ from the requested one" — the second reading misses the ordinary repeat
+offender, whose decline pushes the expiry out and leaves the two identical.
+
+**No foreign key on `source_match_id`.** It names a row in the `game` schema, on a shorter horizon
+than this one (§8.2a). Provenance that outlives its subject is answered with a dangling identifier,
+not with a constraint that would either block retention or cascade a deletion into the record of
+what happened.
+
+Retention: `MATCHMAKING_COOLDOWN_AUDIT_RETENTION_HOURS`, default 2160 (90 days), against the bar's
+own one hour. The dispute arrives after the window closed.
+
+### 8.1d `matchmaking.pairing_timeline` — A64-015.6
+
+`id` (**primary key**, UUIDv7), `event_id`, `ticket_id`, `player_id`, `action`, `match_id`,
+`pairing_id`, `occurred_at`, `recorded_at`.
+
+A projection (AD-19) of `matchmaking.pairing_reconciled`, which had been published since A64-015.5
+and read by nobody. The log line beside it is aggregated per tick — it says *five tickets were
+settled*, not which — sits on the log pipeline's retention rather than the platform's, and cannot
+be joined to a ticket id, which is the only identifier a support conversation starts from.
+
+| Name | Kind | Rule | Source |
+| --- | --- | --- | --- |
+| `pk_pairing_timeline` | Primary key on `(id)` | | DB-07 |
+| `uq_pairing_timeline__event` | Unique on `(event_id)` | One row per outbox entry — duplicate delivery is a no-op | A64-015.6 §4 |
+| `ix_pairing_timeline__ticket` | Index | `(ticket_id, occurred_at)` — the operator query | |
+| `ix_pairing_timeline__pairing` | Index, **partial** on `pairing_id IS NOT NULL` | The by-pairing query §4 requires | |
+| `ix_pairing_timeline__retention` | Index | `(occurred_at)` — retention's claim | |
+
+`event_id` is both the idempotency key and the join back to the outbox rows the projection was
+built from, which is what makes it rebuildable rather than a second source of truth.
+
+**`ix_pairing_timeline__pairing` indexes a column that is always null**, and that is stated rather
+than left to be discovered. `PairingReconciled` carries a *ticket*, because the reconciler claims
+whatever bounded batch it locks and may hold one half of a pair without the other. The partial
+index costs one catalogue entry and no pages while the column stays null, and adding it now is
+cheaper than a migration on a populated relation later.
+
+**`occurred_at` and `recorded_at` are both kept.** The first comes from the event, the second from
+the clock, and the gap between them is relay lag — which is exactly what an operator asking "why
+was this late" wants and is not derivable from either alone.
+
+Retention: `MATCHMAKING_TIMELINE_RETENTION_HOURS`, default 336 (14 days), bounded by
+`OUTBOX_RETENTION_DAYS` — keeping a projection longer than the events it is built from would leave
+a timeline nothing could rebuild.
+
+**Neither relation is reachable from a route.** Both are for operations and support; the
+identifiers they hold are internal ones a player has no use for and an attacker would.
 
 ### 8.2 `game.match`
 

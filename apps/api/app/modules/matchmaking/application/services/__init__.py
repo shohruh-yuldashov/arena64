@@ -13,6 +13,10 @@ a request reaches:
     PendingMatchNotifier     realtime delivery of a pending match (§4)
     QueueRetentionService    letting go of the history (§8)
 
+and A64-015.6 adds one more, an operator-facing projection:
+
+    ReconciliationTimelineProjector  what recovery did to a ticket (§4)
+
 Six classes rather than methods on one, exactly as A64-015.1 predicted:
 what differs is the capability, and a service that could queue a player,
 create a match on their behalf, rewrite a reservation's outcome, bar them
@@ -45,6 +49,9 @@ from app.modules.matchmaking.application.services.reconciliation_service import 
     PairingReconciliationService,
     ReconciliationOutcome,
 )
+from app.modules.matchmaking.application.services.reconciliation_timeline_service import (
+    ReconciliationTimelineProjector,
+)
 
 __all__ = [
     "ExpirySweep",
@@ -53,6 +60,7 @@ __all__ = [
     "PairingReconciliationService",
     "PairingService",
     "PendingMatchNotifier",
+    "ReconciliationTimelineProjector",
     "QueueRetentionPolicy",
     "QueueRetentionResult",
     "QueueRetentionService",

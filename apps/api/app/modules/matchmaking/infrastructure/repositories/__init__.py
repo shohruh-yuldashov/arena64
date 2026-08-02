@@ -1,8 +1,10 @@
 """`matchmaking`'s repository adapters.
 
-    SqlAlchemyQueueRepository     the `queue_ticket` aggregate root
-    SqlAlchemyCooldownRepository  the `queue_cooldown` relation (A64-015.5)
-    SqlAlchemyQueueRetentionStore the bounded deletes, and nothing else
+    SqlAlchemyQueueRepository        the `queue_ticket` aggregate root
+    SqlAlchemyCooldownRepository     the `queue_cooldown` relation (A64-015.5)
+    SqlAlchemyQueueRetentionStore    the bounded deletes, and nothing else
+    SqlAlchemyCooldownAuditRepository    why a player was barred (A64-015.6)
+    SqlAlchemyReconciliationTimelineRepository  what recovery did (A64-015.6)
 
 The third is not a repository in the aggregate sense and is here anyway,
 because "adapter that talks to `matchmaking`'s tables" is what this package
@@ -11,6 +13,10 @@ separate protocols: the object that can delete a ticket must not also be
 able to resolve one.
 """
 
+from app.modules.matchmaking.infrastructure.repositories.audit_repositories import (
+    SqlAlchemyCooldownAuditRepository,
+    SqlAlchemyReconciliationTimelineRepository,
+)
 from app.modules.matchmaking.infrastructure.repositories.cooldown_repository import (
     SqlAlchemyCooldownRepository,
 )
@@ -22,7 +28,9 @@ from app.modules.matchmaking.infrastructure.repositories.queue_retention_store i
 )
 
 __all__ = [
+    "SqlAlchemyCooldownAuditRepository",
     "SqlAlchemyCooldownRepository",
+    "SqlAlchemyReconciliationTimelineRepository",
     "SqlAlchemyQueueRepository",
     "SqlAlchemyQueueRetentionStore",
 ]

@@ -74,11 +74,19 @@ from app.modules.game.public import (
     MatchParticipant,
     game_engine_version,
 )
+from app.modules.matchmaking.application.metrics import (
+    PAIRING_CANDIDATES,
+    PAIRING_EXCLUSIONS,
+    PAIRING_SCANS,
+    ExclusionReason,
+    ScanOutcome,
+)
 from app.modules.matchmaking.application.ports import QueueRepository, RecentOpponentProvider
 from app.modules.matchmaking.domain.events import PlayersPaired
 from app.modules.matchmaking.domain.pairing import PairExclusions, PairingEngine, TicketPair
 from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType
 from app.modules.matchmaking.domain.queue_ticket import QueueTicket
+from app.platform.metrics import MetricsRecorder
 from app.platform.outbox import EventPublisher
 
 logger = logging.getLogger(__name__)
@@ -137,6 +145,7 @@ class PairingService:
         events: EventPublisher,
         unit_of_work: UnitOfWork,
         clock: Clock,
+        metrics: MetricsRecorder,
         candidate_batch_size: int,
         reservation_ttl_seconds: float,
     ) -> None:
@@ -148,6 +157,7 @@ class PairingService:
         self._events = events
         self._unit_of_work = unit_of_work
         self._clock = clock
+        self._metrics = metrics
         self._candidate_batch_size = candidate_batch_size
         self._reservation_ttl_seconds = reservation_ttl_seconds
 
@@ -165,19 +175,40 @@ class PairingService:
             pool=pool, now=now, limit=self._candidate_batch_size
         )
         candidates = snapshot.tickets
+        self._metrics.increment(PAIRING_CANDIDATES, by=len(candidates))
+
         if len(candidates) < 2:
+            self._record_scan(ScanOutcome.IDLE)
             return PairingOutcome(scanned=len(candidates))
 
         exclusions = await self._exclusions_for(candidates)
         pair = self._engine.select(candidates, now=now, exclusions=exclusions)
         if pair is None:
+            # `DEBUG`, not a metric of its own: the *count* is
+            # `pairing_scans_total{outcome=no_pair}` and this line is what an
+            # operator turns on to see which pool it was. One record per scan
+            # at `INFO` would be the volume problem A64-015.6 §6 is about.
             logger.debug(
                 "pairing_found_nobody",
                 extra={"pool": pool.identifier(), "scanned": len(candidates)},
             )
+            self._record_scan(ScanOutcome.NO_PAIR)
             return PairingOutcome(scanned=len(candidates))
 
         return await self._settle(pair, pool=pool, scanned=len(candidates))
+
+    def _record_scan(self, outcome: ScanOutcome) -> None:
+        """One counter per scan — A64-015.6 §7.
+
+        Exactly one increment per `pair_once`, whatever happened, so the sum
+        of this series is the number of scans and every outcome is a share of
+        it. That is what makes `idle / total` and `claim_lost / paired`
+        readable without a second denominator.
+
+        Safe at this frequency only because `AggregatingMetrics` sums it in
+        memory — a scan runs once a second per pool, and there are fourteen.
+        """
+        self._metrics.increment(PAIRING_SCANS, labels={"outcome": outcome})
 
     async def _exclusions_for(self, candidates: Sequence[QueueTicket]) -> PairExclusions:
         """Every "these two, never" rule for this batch, in two batch reads.
@@ -197,6 +228,21 @@ class PairingService:
         recent: Mapping[UUID, frozenset[UUID]] = await self._opponents.recent_opponents_among(
             player_ids
         )
+
+        # A64-015.6 §7. Counted here, where the two mappings are still
+        # separate and the work is one pass over what was just read — not
+        # inside the engine's comparison loop, which is up to n² per scan.
+        # See `PAIRING_EXCLUSIONS` on what that trade gives up.
+        self._metrics.increment(
+            PAIRING_EXCLUSIONS,
+            labels={"reason": ExclusionReason.BLOCKED},
+            by=sum(len(others) for others in blocked.values()),
+        )
+        self._metrics.increment(
+            PAIRING_EXCLUSIONS,
+            labels={"reason": ExclusionReason.RECENT_OPPONENT},
+            by=sum(len(others) for others in recent.values()),
+        )
         return PairExclusions.merged(blocked, recent)
 
     async def _settle(self, pair: TicketPair, *, pool: QueuePool, scanned: int) -> PairingOutcome:
@@ -208,6 +254,7 @@ class PairingService:
                 "pairing_claim_lost",
                 extra={"pool": pool.identifier(), "pairing_id": str(pair.pairing_id)},
             )
+            self._record_scan(ScanOutcome.CLAIM_LOST)
             return PairingOutcome(scanned=scanned, pairing_id=pair.pairing_id, claim_lost=True)
 
         claimed, deadline = reservation
@@ -218,6 +265,7 @@ class PairingService:
             )
         except MatchCreationRefused as refusal:
             await self._release(claimed, pool=pool, reason=type(refusal).__name__)
+            self._record_scan(ScanOutcome.CREATION_REFUSED)
             return PairingOutcome(
                 scanned=scanned, pairing_id=pair.pairing_id, creation_refused=True
             )
@@ -236,11 +284,13 @@ class PairingService:
                 exc_info=error,
             )
             await self._release(claimed, pool=pool, reason=type(error).__name__)
+            self._record_scan(ScanOutcome.CREATION_REFUSED)
             return PairingOutcome(
                 scanned=scanned, pairing_id=claimed.pairing_id, creation_refused=True
             )
 
         await self._complete(claimed, pool=pool, match_id=result.match_id)
+        self._record_scan(ScanOutcome.PAIRED)
         logger.info(
             "players_paired",
             extra={

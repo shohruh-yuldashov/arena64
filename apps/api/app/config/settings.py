@@ -54,6 +54,25 @@ class AppSettings(BaseSettings):
     # log pipeline.
     log_format: Literal["json", "human"] | None = None
 
+    metrics_flush_interval_seconds: float = Field(default=60.0, ge=1.0, le=600.0)
+    """How often accumulated counters are emitted — A64-015.6 §6.
+
+    A minute, and the trade is resolution against volume: every counter on
+    the platform becomes at most one record per series per interval, so this
+    is directly the number of log lines metrics cost. At sixty seconds the
+    pairing scan's four series cost four records a minute instead of the
+    ~1.2 million a day a per-measurement recorder would write.
+
+    A minute is also the coarsest useful bucket for the things being counted
+    — a rate over scans, exclusions and reconciliation actions — and nothing
+    on this platform needs sub-minute resolution on a counter. Observations
+    are unaffected: they are emitted as they happen, because a summarised
+    latency is not a latency.
+
+    The floor is a guard against a configuration that turns the flush into a
+    busy loop, not a tuning range.
+    """
+
 
 class PostgresSettings(BaseSettings):
     """`postgres` — one primary DSN.
@@ -1214,6 +1233,39 @@ class OutboxSettings(BaseSettings):
     # because a platform that discovers it needs ninety days should raise a
     # value, not write a migration.
 
+    cooldown_audit_retention_hours: int = Field(default=2160, ge=1, le=8760)
+    """How long a **cooldown audit row** is kept — A64-015.6 §3.
+
+    Ninety days, and far longer than the one-hour horizon on the bar itself.
+    The asymmetry is the point rather than an inconsistency: the enforcement
+    row answers "may this player queue right now" and is worthless the moment
+    it lifts, while the audit row answers "why could I not queue last month",
+    which is when somebody actually asks.
+
+    Ninety days is the shortest window that covers a complaint routed through
+    support, escalated, and looked at — and it is short enough that this
+    stays a queue-delay log rather than becoming a behavioural profile. A
+    validator keeps it strictly above `cooldown_retention_hours`: an audit
+    trail pruned before the thing it explains answers nothing.
+    """
+
+    timeline_retention_hours: int = Field(default=336, ge=1, le=8760)
+    """How long a **reconciliation timeline entry** is kept — A64-015.6 §4.
+
+    Fourteen days, matched to `OUTBOX_RETENTION_DAYS`, and the match is
+    deliberate: the timeline is a *projection* of `pairing_reconciled`, and
+    AD-19 makes a projection something that can be rebuilt from its source.
+    Keeping it longer than the outbox would leave rows nothing could
+    reconstruct; keeping it shorter would throw away an answer the source
+    still holds.
+
+    Fourteen days is also the right length for what it is for. "Why did my
+    ticket go back in the queue" is an operational question asked within a
+    shift or two, and the counter beside it
+    (`matchmaking.reconciliation_actions_total`) is what carries the long-run
+    trend.
+    """
+
     retention_enabled: bool = True
     """Whether *this process* prunes the outbox.
 
@@ -1570,6 +1622,39 @@ class MatchmakingSettings(BaseSettings):
     It is not zero only so that a read in flight when the row expires does
     not race the delete — and the read's answer is the same either way, so
     the margin buys nothing except the absence of a confusing failure.
+    """
+
+    cooldown_audit_retention_hours: int = Field(default=2160, ge=1, le=8760)
+    """How long a **cooldown audit row** is kept — A64-015.6 §3.
+
+    Ninety days, and far longer than the one-hour horizon on the bar itself.
+    The asymmetry is the point rather than an inconsistency: the enforcement
+    row answers "may this player queue right now" and is worthless the moment
+    it lifts, while the audit row answers "why could I not queue last month",
+    which is when somebody actually asks.
+
+    Ninety days is the shortest window that covers a complaint routed through
+    support, escalated, and looked at — and it is short enough that this
+    stays a queue-delay log rather than becoming a behavioural profile. A
+    validator keeps it strictly above `cooldown_retention_hours`: an audit
+    trail pruned before the thing it explains answers nothing.
+    """
+
+    timeline_retention_hours: int = Field(default=336, ge=1, le=8760)
+    """How long a **reconciliation timeline entry** is kept — A64-015.6 §4.
+
+    Fourteen days, matched to `OUTBOX_RETENTION_DAYS`, and the match is
+    deliberate: the timeline is a *projection* of `pairing_reconciled`, and
+    AD-19 makes a projection something that can be rebuilt from its source.
+    Keeping it longer than the outbox would leave rows nothing could
+    reconstruct; keeping it shorter would throw away an answer the source
+    still holds.
+
+    Fourteen days is also the right length for what it is for. "Why did my
+    ticket go back in the queue" is an operational question asked within a
+    shift or two, and the counter beside it
+    (`matchmaking.reconciliation_actions_total`) is what carries the long-run
+    trend.
     """
 
     retention_enabled: bool = True

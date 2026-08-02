@@ -1,4 +1,5 @@
-"""The `matchmaking` schema — `queue_ticket` and `queue_cooldown`.
+"""The `matchmaking` schema — `queue_ticket`, `queue_cooldown`, and the two
+audit relations A64-015.6 added.
 
 The only place in this module that knows SQLAlchemy exists. Nothing above
 `infrastructure/` imports this file, and the aggregate it maps to holds no
@@ -138,7 +139,7 @@ them" answerable?) that pairing has not been built to ask yet.
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, Index, Integer, Uuid, text
+from sqlalchemy import Boolean, CheckConstraint, Index, Integer, Uuid, text
 from sqlalchemy.dialects.postgresql import ENUM as PgEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -147,6 +148,7 @@ from app.database.mixins.uuid_pk import UUIDPrimaryKeyMixin
 from app.database.types import UtcDateTime
 from app.modules.game.public import ProductVariant
 from app.modules.matchmaking.domain.cooldown import CooldownReason
+from app.modules.matchmaking.domain.events import ReconciliationAction
 from app.modules.matchmaking.domain.queue_pool import QueueType, Region
 from app.modules.matchmaking.domain.queue_ticket import QueueStatus
 
@@ -434,6 +436,12 @@ class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
 
 _COOLDOWN_REASON_ENUM = _enum(CooldownReason, "queue_cooldown_reason")
 
+#: A64-015.6 §4. The seven values `ReconciliationAction` holds, as a native
+#: enum: closed, stable, and on a column every timeline query filters or
+#: groups by, so four bytes beats a string and a typo cannot become a value
+#: no read path knows how to evaluate (DB-15).
+_RECONCILIATION_ACTION_ENUM = _enum(ReconciliationAction, "reconciliation_action")
+
 
 class QueueCooldownModel(Base):
     """The `matchmaking.queue_cooldown` row — A64-015.5 §3.
@@ -507,3 +515,160 @@ class QueueCooldownModel(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     """Written from the injected clock (AD-07), never `server_default=now()`
     — a test that cannot move this instant cannot test the window."""
+
+
+class QueueCooldownAuditModel(UUIDPrimaryKeyMixin, Base):
+    """The `matchmaking.queue_cooldown_audit` row — A64-015.6 §3.
+
+    ## Why this is a second relation and not columns on `queue_cooldown`
+
+    That one is keyed on the player and **overwritten** by an extension, which
+    is what makes enforcement a primary-key lookup and an upsert. This one is
+    append-only, so a player's whole cooldown history survives — which is what
+    A64-015.5 recorded losing and what §3 asks back.
+
+    Merging them would mean either keeping today's behaviour (no history) or
+    turning the join-path read into a scan-and-`max()` over a player's
+    history. The hot read and the audit read want opposite shapes.
+
+    ## `uq_queue_cooldown_audit__source` is the idempotency
+
+    Partial unique on `(player_id, source_match_id)` where the match is not
+    null. The writer is an outbox consumer under AD-16's at-least-once
+    contract, so a redelivered `game.match_declined` reaches it twice by
+    design; this is what makes the second write a no-op rather than a second
+    row.
+
+    Partial because `source_match_id` is nullable and reserved for a future
+    non-match reason. Nulls are distinct in a unique index anyway, so the
+    predicate is about *size* rather than correctness — the same argument
+    `uq_queue_ticket__requeued_from` records.
+
+    ## It is not a Sanction
+
+    No actor, no severity, no note, no escalation count. §3 forbids reusing
+    the moderation model and the reason is that this is a mechanical
+    consequence of one action with a duration from a settings file, not a
+    judgement somebody made. See `matchmaking.domain.cooldown_audit`.
+
+    ## No foreign key on `player_id` or `source_match_id`
+
+    DM-06's opaque cross-context identifiers, exactly as on `queue_ticket`.
+    `source_match_id` names a row in the `game` schema, which is pruned on its
+    own horizon — a foreign key would either block that or cascade a deletion
+    into the audit trail, which is the one relation that must outlive what it
+    describes.
+    """
+
+    __tablename__ = "queue_cooldown_audit"
+    __table_args__ = (
+        Index(
+            "uq_queue_cooldown_audit__source",
+            "player_id",
+            "source_match_id",
+            unique=True,
+            postgresql_where=text("source_match_id IS NOT NULL"),
+        ),
+        # The support query: "this player's cooldowns, most recent first".
+        # Leading with the player because every read names one, and carrying
+        # `applied_at` after it because every such read is ordered — which
+        # lets PostgreSQL walk the index and stop at the limit rather than
+        # sorting a history.
+        Index("ix_queue_cooldown_audit__player", "player_id", "applied_at"),
+        # Retention's claim. Its own index rather than a reuse of the one
+        # above, because a sweep is player-blind and a scan that had to lead
+        # with `player_id` would read the whole relation to find the oldest
+        # rows.
+        Index("ix_queue_cooldown_audit__retention", "applied_at"),
+        CheckConstraint("expires_at > applied_at", name="ck_queue_cooldown_audit__window_positive"),
+        {"schema": MATCHMAKING_SCHEMA},
+    )
+
+    player_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    reason: Mapped[CooldownReason] = mapped_column(_COOLDOWN_REASON_ENUM, nullable=False)
+
+    source_match_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    """The pending match whose decline caused this. Half of the idempotency
+    key; null is reserved for a future non-match reason."""
+
+    applied_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    """What was actually written to the enforcement row — after an extension
+    that is not `applied_at + the configured window`, and the difference is
+    what a dispute is about."""
+
+    extended_existing: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    """Whether this decline lengthened a bar already in force. The one field
+    that is not raw history, and the whole of what A64-015.5 lost."""
+
+
+class ReconciliationTimelineModel(UUIDPrimaryKeyMixin, Base):
+    """The `matchmaking.pairing_timeline` row — A64-015.6 §4.
+
+    A **projection** of `matchmaking.pairing_reconciled`, which A64-015.5
+    published and nothing consumed. AD-19 requires every projection to be
+    rebuildable from PostgreSQL, and this one is: the outbox rows it is built
+    from are the durable source, and `event_id` is the join back to them.
+
+    ## `uq_pairing_timeline__event` is the idempotency
+
+    Unique on `event_id`. The writer is an outbox consumer, so AD-16
+    guarantees it sees some events twice; §4 requires idempotent consumption,
+    and a constraint is the only form of that which holds when two relays
+    deliver concurrently. `ON CONFLICT DO NOTHING` then re-read.
+
+    ## Two query indexes, and one of them is empty by design
+
+    `ix_pairing_timeline__ticket` serves the lookup support actually starts
+    from. `ix_pairing_timeline__pairing` is partial on a column that is
+    **always null today** — see `ReconciliationEntry.pairing_id`: the event
+    identifies a ticket rather than a pairing, because the reconciler may hold
+    one half of a pair without the other. The column and its index exist
+    because §4 names the query, and a partial index over an all-null column
+    costs one catalogue entry and no pages.
+
+    ## No foreign key on `ticket_id`
+
+    Same schema, and still no constraint: `queue_ticket` is pruned on a
+    72-hour horizon and this timeline on its own, so a foreign key would
+    either block retention or cascade a deletion into the record of what
+    recovery did — which is the one thing that must outlive the ticket.
+    """
+
+    __tablename__ = "pairing_timeline"
+    __table_args__ = (
+        Index("uq_pairing_timeline__event", "event_id", unique=True),
+        Index("ix_pairing_timeline__ticket", "ticket_id", "occurred_at"),
+        Index(
+            "ix_pairing_timeline__pairing",
+            "pairing_id",
+            "occurred_at",
+            postgresql_where=text("pairing_id IS NOT NULL"),
+        ),
+        # Retention's claim — ticket- and pairing-blind, so it leads with the
+        # instant.
+        Index("ix_pairing_timeline__retention", "occurred_at"),
+        {"schema": MATCHMAKING_SCHEMA},
+    )
+
+    event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    """The outbox entry this was projected from. The idempotency key, and the
+    join that makes the projection rebuildable."""
+
+    ticket_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    player_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
+    action: Mapped[ReconciliationAction] = mapped_column(
+        _RECONCILIATION_ACTION_ENUM, nullable=False
+    )
+
+    match_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    pairing_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+
+    occurred_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    """When the fact became true — the deadline the reservation overran,
+    carried from the event."""
+
+    recorded_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    """When the projection saw it. The gap between the two is relay lag, which
+    is what an operator investigating "why was this late" reads."""

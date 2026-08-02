@@ -24,6 +24,7 @@ from app.modules.matchmaking.application.services import PairingService
 from app.modules.matchmaking.domain.pairing import PairingEngine, RatingWindowPolicy
 from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType, Region
 from app.modules.matchmaking.domain.queue_ticket import QueueStatus, QueueTicket
+from tests.fakes.metrics import RecordingMetrics
 from tests.fakes.outbox import NullUnitOfWork
 from tests.fakes.pairing import (
     ExplodingMatchCreation,
@@ -102,6 +103,7 @@ def _service(
     events: RecordingPublisher,
     unit_of_work: NullUnitOfWork,
     clock: MovableClock,
+    metrics: RecordingMetrics | None = None,
 ) -> PairingService:
     return PairingService(
         tickets=tickets,
@@ -112,6 +114,7 @@ def _service(
         events=events,
         unit_of_work=unit_of_work,
         clock=clock,
+        metrics=metrics if metrics is not None else RecordingMetrics(),
         candidate_batch_size=50,
         reservation_ttl_seconds=RESERVATION_TTL,
     )

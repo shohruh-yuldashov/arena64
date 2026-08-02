@@ -11,6 +11,7 @@ with no enforced pairing.
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from typing import Any
 
 from fastapi import FastAPI
@@ -34,27 +35,49 @@ from app.modules.friends.infrastructure.cache import (
     NoSocialGraphCache,
     RedisSocialGraphCache,
 )
+from app.modules.matchmaking.application.ports import PendingMatchSink
 from app.modules.matchmaking.application.services import (
+    MatchOutcomeService,
     PairingReconciliationService,
     PairingService,
+    PendingMatchNotifier,
+    QueueRetentionService,
     QueueService,
+)
+from app.modules.matchmaking.application.services.match_outcome_service import (
+    CONSUMER_NAME as ACCEPTANCE_FAILURE_CONSUMER,
+)
+from app.modules.matchmaking.application.services.match_outcome_service import (
+    SUBSCRIBED_EVENT_TYPES as ACCEPTANCE_FAILURE_EVENTS,
+)
+from app.modules.matchmaking.application.services.pending_match_notifier import (
+    CONSUMER_NAME as PENDING_MATCH_CONSUMER,
+)
+from app.modules.matchmaking.application.services.pending_match_notifier import (
+    SUBSCRIBED_EVENT_TYPES as PENDING_MATCH_EVENTS,
 )
 from app.modules.matchmaking.domain.queue_pool import every_pool
 from app.modules.matchmaking.infrastructure import (
+    LoggingPendingMatchSink,
     PairingReconciliationTask,
     PairingTask,
     QueueExpiryTask,
+    QueueRetentionTask,
     expiry_request,
     pairing_request,
+    queue_retention_request,
     reconciliation_request,
 )
 from app.modules.matchmaking.presentation.dependencies import (
     build_eligibility_policy,
     build_match_acceptance,
     build_match_creation,
+    build_match_outcome_service,
     build_pairing_exclusions,
     build_pairing_service,
     build_pairing_settlements,
+    build_pending_match_notifier,
+    build_queue_retention_service,
     build_queue_service,
     build_recent_opponents,
     build_reconciliation_service,
@@ -78,6 +101,7 @@ from app.modules.users.infrastructure.presence import (
     NoPresenceProvider,
     RedisPresenceProvider,
 )
+from app.platform.metrics import LoggingMetrics, MetricsRecorder
 from app.platform.outbox import (
     OutboxEventPublisher,
     OutboxRetentionTask,
@@ -333,6 +357,11 @@ def build_outbox_worker(
     # why it is a seam rather than a stub.
     sink = LoggingNotificationSink()
 
+    # A64-015.5's equivalent seam, for a different payload shape. One
+    # instance per process: it is stateless, and the day AD-09's gateway
+    # exists this line is where the real transport is wired.
+    pending_match_sink: PendingMatchSink = LoggingPendingMatchSink()
+
     def dispatcher_for(session: AsyncSession) -> SocialNotificationDispatcher:
         """The consumer, over one relay tick's session.
 
@@ -371,13 +400,51 @@ def build_outbox_worker(
         consumer=CONSUMER_NAME,
         event_types=SUBSCRIBED_EVENT_TYPES,
     )
+
+    # A64-015.5. Two `matchmaking` consumers join the relay, and both are
+    # wrapped in the same session-scoping adapter `notifications` already
+    # uses: they hold repositories, repositories hold a session, and a
+    # session must not outlive the unit of work it serves.
+    #
+    # **Each has its own `processed_event` partition**, so the ledger keeps
+    # them independently idempotent — a redelivery that the realtime
+    # notifier has already handled can still reach the acceptance-failure
+    # policy, and neither can mark the other's work done.
+    handlers: list[TaskHandler | object] = [handler]
+    handlers.append(
+        SessionScopedNotificationHandler(
+            session_factory=db.session_factory,
+            dispatcher_factory=lambda session: _match_outcome_for(
+                session, redis_pools, settings, clock
+            ),
+            consumer=ACCEPTANCE_FAILURE_CONSUMER,
+            event_types=ACCEPTANCE_FAILURE_EVENTS,
+        )
+    )
+    if settings.matchmaking.realtime_delivery_enabled:
+        handlers.append(
+            SessionScopedNotificationHandler(
+                session_factory=db.session_factory,
+                dispatcher_factory=lambda session: _pending_match_notifier_for(
+                    session, settings, clock, sink=pending_match_sink
+                ),
+                consumer=PENDING_MATCH_CONSUMER,
+                event_types=PENDING_MATCH_EVENTS,
+            )
+        )
+    else:
+        # `INFO`: with the push off, `GET /matchmaking/matches/pending`
+        # still answers and a client falls back to polling (§5). What is
+        # lost is latency, not correctness.
+        logger.info("pending_match_delivery_disabled", extra={"reason": "configuration"})
+
     return OutboxWorker(
         session_factory=db.session_factory,
         # One handler today. The list is the extension point: a second
         # consumer — moderation, audit, statistics — is an entry here and
         # its own `processed_event` partition, with nothing above it
         # changing.
-        handlers=[handler],
+        handlers=handlers,  # type: ignore[arg-type]
         settings=settings.outbox,
         clock=clock,
     )
@@ -428,7 +495,7 @@ def build_task_schedulers(
 ) -> list[PeriodicTaskScheduler]:
     """This process's periodic background work — A64-014.1 onwards.
 
-    Four jobs, all dispatched through `InlineTaskDispatcher` rather than
+    Five jobs, all dispatched through `InlineTaskDispatcher` rather than
     called directly:
 
         platform.outbox.prune          the retention horizon A64-013.7
@@ -437,6 +504,8 @@ def build_task_schedulers(
         matchmaking.queue.pair         one pool's pairing scan (A64-015.3)
         matchmaking.pairing.reconcile  the recovery A64-015.3 left to a
                                        human (A64-015.4)
+        matchmaking.queue.prune        the queue history horizon A64-014.1
+                                       shipped without (A64-015.5)
 
     Assembled here rather than in either owner because building a
     `QueueService` means naming a repository, a rating provider, a presence
@@ -537,6 +606,21 @@ def build_task_schedulers(
     else:
         logger.info("pairing_reconciliation_disabled", extra={"reason": "configuration"})
 
+    if settings.matchmaking.retention_enabled:
+        handlers.append(
+            QueueRetentionTask(
+                session_factory=db.session_factory,
+                service_factory=lambda session: _queue_retention_for(session, settings, clock),
+            )
+        )
+    else:
+        # `WARNING`, like the outbox's own retention switch and for the same
+        # reason: with it off, `queue_ticket`, `queue_cooldown` and the
+        # abandoned half of `game.match` all grow without bound, and the
+        # symptom arrives weeks later as a queue index that no longer fits
+        # in cache.
+        logger.warning("queue_retention_disabled", extra={"reason": "configuration"})
+
     if not handlers:
         return schedulers
 
@@ -572,6 +656,14 @@ def build_task_schedulers(
             )
             for pool in every_pool()
         )
+    if settings.matchmaking.retention_enabled:
+        schedulers.append(
+            PeriodicTaskScheduler(
+                dispatcher=dispatcher,
+                request=queue_retention_request(),
+                interval_seconds=settings.matchmaking.retention_interval_seconds,
+            )
+        )
     if settings.matchmaking.reconciliation_enabled:
         # **One scheduler, not one per pool.** A stranded reservation is a
         # stranded reservation whatever pool produced it, and the claim that
@@ -602,7 +694,9 @@ def _queue_service_for(
     """
     return build_queue_service(
         session,
-        eligibility=build_eligibility_policy(_presence_adapter(redis_pools, settings, clock)),
+        eligibility=build_eligibility_policy(
+            session, _presence_adapter(redis_pools, settings, clock), clock=clock
+        ),
         events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
         settings=settings.matchmaking,
         clock=clock,
@@ -666,11 +760,81 @@ def _reconciliation_service_for(
             session,
             events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
             clock=clock,
+            metrics=_metrics(),
         ),
         events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
         settings=settings.matchmaking,
         clock=clock,
+        metrics=_metrics(),
     )
+
+
+def _match_outcome_for(
+    session: AsyncSession, redis_pools: RedisPools, settings: Settings, clock: SystemClock
+) -> MatchOutcomeService:
+    """The acceptance-failure policy over one relay tick's session —
+    A64-015.5 §1.
+
+    Composes `matchmaking`'s queue use cases with its cooldown store, and
+    takes the *same* eligibility policy the HTTP join path uses — which is
+    what makes "a player in cooldown is not requeued" true without a second
+    rule. See `QueueService.requeue`.
+    """
+    return build_match_outcome_service(
+        session,
+        eligibility=build_eligibility_policy(
+            session, _presence_adapter(redis_pools, settings, clock), clock=clock
+        ),
+        events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
+        settings=settings.matchmaking,
+        clock=clock,
+        metrics=_metrics(),
+    )
+
+
+def _pending_match_notifier_for(
+    session: AsyncSession,
+    settings: Settings,
+    clock: SystemClock,
+    *,
+    sink: PendingMatchSink,
+) -> PendingMatchNotifier:
+    """The realtime pending-match consumer over one relay tick's session —
+    A64-015.5 §4.
+
+    The sink is passed in rather than built here, because it is the one
+    collaborator in this graph that is **process-wide**: a socket gateway
+    holds connections, and rebuilding it per relay tick would be rebuilding
+    the transport.
+    """
+    return build_pending_match_notifier(
+        session,
+        events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
+        sink=sink,
+        clock=clock,
+        metrics=_metrics(),
+    )
+
+
+def _queue_retention_for(
+    session: AsyncSession, settings: Settings, clock: SystemClock
+) -> QueueRetentionService:
+    """One retention run's object graph — A64-015.5 §8."""
+    return build_queue_retention_service(
+        session, settings=settings.matchmaking, clock=clock, metrics=_metrics()
+    )
+
+
+@lru_cache(maxsize=1)
+def _metrics() -> MetricsRecorder:
+    """The process-wide metrics recorder.
+
+    Cached rather than rebuilt, for the reason `engine_services()` is: it is
+    stateless, so one instance serves every worker and every request, and
+    building one per relay tick would be pure waste. `Depends` hands the
+    same object to the HTTP path through `get_metrics`.
+    """
+    return LoggingMetrics()
 
 
 def _presence_adapter(

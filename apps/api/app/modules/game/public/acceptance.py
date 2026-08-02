@@ -44,7 +44,7 @@ from app.modules.game.domain.exceptions import (
     NotAMatchParticipant,
 )
 from app.modules.game.domain.match_record import MatchRecordStatus
-from app.modules.game.public.variants import ProductVariant
+from app.modules.game.domain.variants import ProductVariant
 
 
 @dataclass(frozen=True, slots=True)

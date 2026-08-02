@@ -54,27 +54,26 @@ That is the same rule that created the gap this service exists to close,
 and obeying it here rather than reaching into `game.match` directly is what
 keeps the two schemas separable.
 
-## What a declined match does *not* do
+## What a declined match does, and where
 
-Nothing. A64-015.4 §10 asks for an explicit acceptance-failure policy and
-this is it, stated where the code that would implement an alternative would
-go: when a player declines or lets the window close, **both queue tickets
-stay `matched` and neither player is re-queued**. They must join the queue
-again.
+Nothing, **here**. A64-015.4 left the acceptance-failure policy open and
+this service implemented the minimum: a declined or expired match left both
+tickets `matched` and requeued nobody. A64-015.5 §1 closed that gap, and it
+did so in a different object — `MatchOutcomeService`, an outbox consumer
+reacting to `game.match_declined` and `game.match_acceptance_expired`.
 
-That is the safest minimal behaviour, and it is chosen rather than found —
-`specs/matchmaking.md` lists "what a declined acceptance does to both
-tickets" as an *open* specification item, so there is no product policy to
-follow. Re-queueing the accepting player automatically would mean this
-service minting a queue ticket on somebody's behalf, which drags in QT-1's
-uniqueness, the eligibility policy, a fresh rating snapshot and a decision
-about whose `entered_at` survives — four product questions, none of them
-answered, on a path that runs unattended. The failure mode of getting any
-of them wrong is a player holding a ticket they did not ask for, or two.
+The split is worth stating so nobody looks for the policy here. This service
+recovers **reservations** — tickets stranded between a claim and a
+settlement, which is a *worker* failure. That one applies a **policy** to a
+handshake that completed and failed, which is a *player* outcome. They read
+different rows, are triggered by different things, and would need different
+guards if they were one method.
 
-The cost is real and is not hidden: a player who accepts promptly and whose
-opponent declines loses their place in line through no fault of their own.
-That is recorded in `specs/matchmaking.md` as the open question it is.
+What they share is the counter: both increment
+`matchmaking.reconciliation_actions_total`, because "what became of this
+queue ticket after its pairing did not end in a game" is one funnel, and an
+operator reading it as two dashboards would miss that a rise in one is
+usually a fall in the other.
 """
 
 import logging
@@ -90,9 +89,11 @@ from app.modules.game.public import (
     PairingReconciliationReader,
     PairingSettlement,
 )
+from app.modules.matchmaking.application.metrics import RECONCILIATION_ACTIONS
 from app.modules.matchmaking.application.ports import QueueRepository
 from app.modules.matchmaking.domain.events import PairingReconciled, ReconciliationAction
 from app.modules.matchmaking.domain.queue_ticket import QueueTicket
+from app.platform.metrics import MetricsRecorder
 from app.platform.outbox import EventPublisher
 
 logger = logging.getLogger(__name__)
@@ -150,6 +151,7 @@ class PairingReconciliationService:
         events: EventPublisher,
         unit_of_work: UnitOfWork,
         clock: Clock,
+        metrics: MetricsRecorder,
         batch_size: int,
     ) -> None:
         self._tickets = tickets
@@ -158,6 +160,7 @@ class PairingReconciliationService:
         self._events = events
         self._unit_of_work = unit_of_work
         self._clock = clock
+        self._metrics = metrics
         self._batch_size = batch_size
 
     async def reconcile_once(self) -> ReconciliationOutcome:
@@ -177,8 +180,22 @@ class PairingReconciliationService:
         state that is about to change.
         """
         expired_matches = await self._expire_overdue_matches()
+        self._metrics.increment(
+            RECONCILIATION_ACTIONS,
+            labels={"action": ReconciliationAction.MATCH_CANCELLED},
+            by=expired_matches,
+        )
+
         claimed = await self._claim()
         if not claimed:
+            # §9 asks for `no_action` to be visible. A tick that found
+            # nothing is the healthy steady state, and its *rate* is what
+            # says the job is running at all — a counter that only moved
+            # when something was wrong would be indistinguishable from a
+            # scheduler that had stopped.
+            self._metrics.increment(
+                RECONCILIATION_ACTIONS, labels={"action": ReconciliationAction.NO_ACTION}
+            )
             return ReconciliationOutcome(
                 claimed=0,
                 settled=0,
@@ -195,6 +212,9 @@ class PairingReconciliationService:
             # "matched" strands one who does not. The reservations are
             # untouched and still stale, so the next tick claims them
             # again.
+            self._metrics.increment(
+                RECONCILIATION_ACTIONS, labels={"action": ReconciliationAction.FAILED}
+            )
             logger.error(
                 "pairing_reconciliation_read_failed",
                 extra={"claimed": len(claimed), "error": type(error).__name__},
@@ -237,6 +257,9 @@ class PairingReconciliationService:
                 )
                 await self._unit_of_work.commit()
         except Exception as error:  # noqa: BLE001 — a background tick must not escalate
+            self._metrics.increment(
+                RECONCILIATION_ACTIONS, labels={"action": ReconciliationAction.FAILED}
+            )
             logger.error(
                 "pairing_reconciliation_claim_failed",
                 extra={"error": type(error).__name__},
@@ -295,6 +318,9 @@ class PairingReconciliationService:
         except Exception as error:  # noqa: BLE001 — a background tick must not escalate
             # Nothing is lost: the reservations are still `reserved` and
             # still stale, so the next tick claims them again.
+            self._metrics.increment(
+                RECONCILIATION_ACTIONS, labels={"action": ReconciliationAction.FAILED}
+            )
             logger.error(
                 "pairing_reconciliation_write_failed",
                 extra={"claimed": len(claimed), "error": type(error).__name__},
@@ -395,6 +421,10 @@ class PairingReconciliationService:
         """
         if ticket.reserved_until is None:  # pragma: no cover — reserved implies a deadline
             return
+        # §9's counter. The label is a `ReconciliationAction` member, so the
+        # series count is fixed by the enum — no ticket id, no player id, no
+        # match id ever reaches a label.
+        self._metrics.increment(RECONCILIATION_ACTIONS, labels={"action": action})
         await self._events.publish(
             PairingReconciled(
                 occurred_at=ticket.reserved_until,

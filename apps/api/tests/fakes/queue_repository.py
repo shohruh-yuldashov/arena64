@@ -68,6 +68,17 @@ class InMemoryQueueRepository:
         ):
             raise AlreadyQueued("You are already in a matchmaking queue.")
 
+        # `uq_queue_ticket__requeued_from` — A64-015.5's idempotency. Two
+        # concurrent deliveries of one `match_declined` both pass the check
+        # above and both insert; only one row survives. Modelled here
+        # because `QueueService.requeue`'s correctness depends on it, and a
+        # fake that let the second through would leave the retry path
+        # untested.
+        if ticket.source_ticket_id is not None and any(
+            stored.source_ticket_id == ticket.source_ticket_id for stored in self.tickets.values()
+        ):
+            raise AlreadyQueued("That ticket has already been requeued.")
+
         self.tickets[ticket.id] = ticket
         return ticket
 
@@ -77,6 +88,15 @@ class InMemoryQueueRepository:
             return False
         self.tickets[ticket.id] = ticket
         return True
+
+    async def by_id(self, ticket_id: UUID) -> QueueTicket | None:
+        """One ticket by id, whatever its status — A64-015.5.
+
+        The only read here with no liveness predicate, exactly as the real
+        adapter has none: the caller is a requeue, and the ticket it is
+        restoring is `matched`.
+        """
+        return self.tickets.get(ticket_id)
 
     async def active_ticket(self, player_id: UUID, *, now: datetime) -> QueueTicket | None:
         for ticket in self.tickets.values():

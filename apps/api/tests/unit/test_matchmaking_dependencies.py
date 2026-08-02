@@ -10,8 +10,15 @@ request to hang `Depends` off, so it calls the builders directly through
 worker's graph untested.
 """
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.clock import SystemClock
 from app.modules.game.public import GameEngineServices, engine_services
-from app.modules.matchmaking.application.eligibility import PresenceEligibilityPolicy
+from app.modules.matchmaking.application.eligibility import (
+    AllEligibilityChecks,
+    CooldownEligibilityPolicy,
+    PresenceEligibilityPolicy,
+)
 from app.modules.matchmaking.presentation.dependencies import (
     build_eligibility_policy,
     get_engine_services,
@@ -36,19 +43,46 @@ class TestEngineServicesAreWiredOnce:
         assert isinstance(get_engine_services(), GameEngineServices)
 
 
-class TestTheEligibilityPortIsSatisfiedByTheRoot:
-    def test_the_presence_backed_policy_is_chosen(self) -> None:
-        """The service depends on the port; the root decides the adapter.
-        Which one it picked is otherwise only observable by making a player
-        offline and watching a join fail."""
-        policy = build_eligibility_policy(StubPresence())
+def _session() -> AsyncSession:
+    """A session object the composition root can hold but nothing touches.
 
-        assert isinstance(policy, PresenceEligibilityPolicy)
+    Every factory under test constructs repositories over a session and
+    none of these tests issues a query, so an unbound `AsyncSession` is
+    exactly enough — and it keeps the assertion about *wiring* rather than
+    about a database being reachable.
+    """
+    return AsyncSession()
+
+
+class TestTheEligibilityPortIsSatisfiedByTheRoot:
+    def test_both_checks_are_composed(self) -> None:
+        """The service depends on one port; the root decides how many
+        adapters satisfy it. A64-015.5 added the second — a decline
+        cooldown — and `QueueService` did not change, which is what
+        A64-015.2 predicted the port would buy."""
+        policy = build_eligibility_policy(_session(), StubPresence(), clock=SystemClock())
+
+        assert isinstance(policy, AllEligibilityChecks)
+
+    def test_presence_is_asked_before_the_cooldown(self) -> None:
+        """Order is significant: a player who fails both is refused by the
+        check that says less. See `AllEligibilityChecks`."""
+        policy = build_eligibility_policy(_session(), StubPresence(), clock=SystemClock())
+
+        assert [type(check) for check in policy._checks] == [
+            PresenceEligibilityPolicy,
+            CooldownEligibilityPolicy,
+        ]
 
     def test_the_policy_is_built_per_call_rather_than_shared(self) -> None:
-        """It holds a request-scoped presence reader, so caching it would
-        outlive the reader it wraps — the opposite of the engine bundle
-        above, and the reason the two are wired differently."""
+        """It holds a request-scoped presence reader and a session-scoped
+        cooldown store, so caching it would outlive both — the opposite of
+        the engine bundle above, and the reason the two are wired
+        differently."""
         presence = StubPresence()
+        session = _session()
 
-        assert build_eligibility_policy(presence) is not build_eligibility_policy(presence)
+        first = build_eligibility_policy(session, presence, clock=SystemClock())
+        second = build_eligibility_policy(session, presence, clock=SystemClock())
+
+        assert first is not second

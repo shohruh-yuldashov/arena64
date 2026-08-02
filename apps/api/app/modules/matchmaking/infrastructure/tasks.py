@@ -1,11 +1,17 @@
-"""`matchmaking`'s background work — three `platform.tasks` handlers.
+"""`matchmaking`'s background work — four `platform.tasks` handlers.
 
 `QueueExpiryTask` is the background half of `expires_at`; `PairingTask`
 (A64-015.3) scans one pool for a match; `PairingReconciliationTask`
-(A64-015.4) recovers the pairings that did not finish. All three are
+(A64-015.4) recovers the pairings that did not finish; `QueueRetentionTask`
+(A64-015.5) lets go of the history none of them owes anybody. All four are
 dispatched by a `PeriodicTaskScheduler` and wired at the composition root,
-and all three are four lines of body over a service that takes ports —
-which is the whole point of AD-17's seam.
+and all four are four lines of body over a service that takes ports — which
+is the whole point of AD-17's seam.
+
+Three run on the `matchmaking` queue and the fourth on `maintenance`, which
+is AD-20 applied rather than quoted: a prune that is hours late is
+invisible, and an expiry sweep that is minutes late leaves players holding
+tickets the platform has stopped honouring.
 
 ## `QueueExpiryTask` — the background half of `expires_at`
 
@@ -49,6 +55,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.modules.matchmaking.application.services import (
     PairingReconciliationService,
     PairingService,
+    QueueRetentionService,
     QueueService,
 )
 from app.modules.matchmaking.domain.queue_pool import QueuePool
@@ -289,3 +296,74 @@ class PairingReconciliationTask:
         """
         async with self._session_factory() as session:
             await self._service_factory(session).reconcile_once()
+
+
+#: The name a retention run is dispatched under — A64-015.5 §8.
+QUEUE_RETENTION_TASK = "matchmaking.queue.prune"
+
+#: The queue this work is routed to once queues exist (AD-20).
+#:
+#: `maintenance`, not `matchmaking`, and the split is AD-20's own: an
+#: expiry sweep that falls behind leaves players holding tickets the
+#: platform has stopped honouring, while a prune may be hours late and
+#: nobody notices. Sharing a pool would let a long prune delay the sweep,
+#: which is precisely the interference separate queues exist to prevent.
+#: `OutboxRetentionTask` is routed the same way for the same reason.
+MAINTENANCE_QUEUE = "maintenance"
+
+#: What the composition root supplies: a retention service over one session.
+QueueRetentionServiceFactory = Callable[[AsyncSession], QueueRetentionService]
+
+
+def queue_retention_request() -> TaskRequest:
+    """The request that asks for one retention run.
+
+    An empty payload, for the reason `expiry_request` and `prune_request`
+    both carry none: the horizons are configuration and the instant is the
+    service's clock. A request carrying a cutoff would let a stale schedule
+    prune against yesterday's horizon, which on the one job that deletes
+    anything means deleting more than the policy allows.
+    """
+    return TaskRequest(name=QUEUE_RETENTION_TASK, queue=MAINTENANCE_QUEUE)
+
+
+class QueueRetentionTask:
+    """`platform.tasks.TaskHandler` — one retention run, over one session.
+
+    The same shape as the three handlers above and the same division: the
+    *schedule* is `PeriodicTaskScheduler`'s, the *routing* is the
+    dispatcher's, and what is left here is "build a service over a session
+    and call one method". A64-015.5 §8 forbids a direct Celery dependency,
+    and this file has none.
+
+    ## Duplicate delivery is safe
+
+    AD-17's contract is at-least-once, so this will occasionally run twice
+    for one scheduled tick. Every delete is `SELECT ... FOR UPDATE SKIP
+    LOCKED` followed by a delete by primary key, so a second run claims what
+    the first left and finds nothing — and deleting a row that is already
+    gone is not an error, it is an empty batch.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        service_factory: QueueRetentionServiceFactory,
+    ) -> None:
+        self._session_factory = session_factory
+        self._service_factory = service_factory
+
+    @property
+    def name(self) -> str:
+        return QUEUE_RETENTION_TASK
+
+    async def run(self, payload: Mapping[str, Any]) -> None:
+        """Ignores the payload — see `queue_retention_request`.
+
+        Does not catch: `QueueRetentionService.prune_once` records its own
+        failures and never raises, so a `try` here would be a second
+        swallow with nothing left to swallow.
+        """
+        async with self._session_factory() as session:
+            await self._service_factory(session).prune_once()

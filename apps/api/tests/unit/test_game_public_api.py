@@ -168,6 +168,22 @@ class TestTheSurfaceIsDeliberate:
         "PairingSettlement",
         "PendingMatchView",
         "RecentOpponentReader",
+        # A64-015.5 — the events downstream modules subscribe to (R-3 says
+        # they must, and a subscriber that cannot name one has to match on a
+        # string literal), the two measurements that inform a `matchmaking`
+        # setting, and the sweep that lets go of pairings which never became
+        # games.
+        "MATCH_AGGREGATE",
+        "MATCH_ANSWER_LATENCY",
+        "MATCH_OUTCOMES",
+        "AbandonedMatchRetention",
+        "AnswerLatency",
+        "MatchAcceptanceExpired",
+        "MatchAcceptedByPlayer",
+        "MatchActivated",
+        "MatchCreated",
+        "MatchDeclined",
+        "MatchOutcome",
     }
 
     def test_nothing_is_published_by_accident(self) -> None:

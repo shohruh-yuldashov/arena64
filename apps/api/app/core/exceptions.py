@@ -13,6 +13,7 @@ the two structures once the first module is built.
     |   +-- AuthenticationFailed    401 — identity not proven
     |   +-- NotFoundError
     |   +-- ConflictError
+    |   |   +-- TemporaryConflictError  409 + a retry hint (A64-015.5)
     |   +-- PermissionDeniedError
     |   +-- PreconditionFailedError
     |   +-- RuleViolationError
@@ -92,6 +93,48 @@ class NotFoundError(DomainError):
 
 class ConflictError(DomainError):
     default_code: ClassVar[ErrorCode] = ErrorCode.CONFLICT
+
+
+class TemporaryConflictError(ConflictError):
+    """A conflict that resolves on its own after a stated interval —
+    A64-015.5.
+
+    Still a `409`: the platform's *state* refused the request, and the
+    caller did nothing wrong. What it adds is a **retry hint**, which is the
+    one thing that distinguishes "you are already queued" (fix it yourself,
+    or wait for the match you have) from "you declined a match a moment ago"
+    (do nothing, and try again in forty seconds).
+
+    ## Why this is in the core taxonomy rather than in the module
+
+    So that transport can render it without knowing which module raised it.
+    `app/api/exception_handlers.py` emits `Retry-After` for anything that is
+    one of these, exactly as it does for `TooManyRequests`, and it does that
+    by naming a type in `app.core` — never by importing
+    `matchmaking.domain.exceptions`, which would couple the platform's error
+    rendering to one bounded context and make every future module with a
+    cooldown edit this file.
+
+    AD-09's gateway renders the same exception as an error frame carrying
+    the same number and no header, which is the reason the interval lives on
+    the *exception* as a float rather than as a pre-formatted header string.
+
+    ## `retry_after_seconds` is derived from stored state, never from config
+
+    A caller that reported the configured window would be wrong for anything
+    that extends — see `QueueCooldownActive`, where a second decline
+    lengthens the bar and the honest answer is what the row now says.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_after_seconds: float,
+        code: ErrorCode | None = None,
+    ) -> None:
+        super().__init__(message, code=code)
+        self.retry_after_seconds = retry_after_seconds
 
 
 class PermissionDeniedError(DomainError):

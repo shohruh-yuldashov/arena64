@@ -27,6 +27,7 @@ from app.modules.game.public import (
     ProductVariant,
 )
 from tests.fakes.matches import InMemoryMatchRecordRepository
+from tests.fakes.metrics import RecordingMetrics
 from tests.fakes.outbox import NullUnitOfWork
 from tests.fakes.presence_redis import MovableClock
 from tests.fakes.queue_repository import RecordingPublisher
@@ -75,14 +76,23 @@ def events() -> RecordingPublisher:
 
 
 @pytest.fixture
+def metrics() -> RecordingMetrics:
+    return RecordingMetrics()
+
+
+@pytest.fixture
 def service(
-    matches: InMemoryMatchRecordRepository, events: RecordingPublisher, clock: MovableClock
+    matches: InMemoryMatchRecordRepository,
+    events: RecordingPublisher,
+    clock: MovableClock,
+    metrics: RecordingMetrics,
 ) -> MatchAcceptanceService:
     return MatchAcceptanceService(
         matches=matches,
         events=events,
         unit_of_work=NullUnitOfWork(),
         clock=clock,
+        metrics=metrics,
     )
 
 

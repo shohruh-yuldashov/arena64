@@ -1502,6 +1502,126 @@ class MatchmakingSettings(BaseSettings):
     a direct measure of relay health.
     """
 
+    decline_cooldown_seconds: int = Field(default=60, ge=0, le=3600)
+    """How long an explicit decline bars a player from the queue —
+    A64-015.5 §3.
+
+    **Sixty seconds**, chosen rather than given, and set against the thing
+    it exists to stop: a client — or a person — cycling the queue until it
+    produces an opponent they like the look of. One minute makes that cost
+    more than it is worth without being a punishment: a player who declined
+    because they genuinely had to leave has already left, and one who
+    misclicked waits about as long as it takes to notice.
+
+    It applies to a **decline** and to nothing else. A player whose window
+    closed without an answer earns no cooldown at all — §3 forbids treating
+    silence as a decline, and `CooldownReason` has one member so that stays
+    structural rather than remembered.
+
+    **Zero disables it**, which is what the `ge=0` floor is for. That is a
+    kill switch rather than a tuning value: with it off, declining is free
+    and the queue-churn vector is bounded only by
+    `RATE_LIMIT_MATCHMAKING_QUEUE_USER_LIMIT`. `MatchOutcomeService` records
+    no cooldown at all in that case rather than a zero-length one, so no
+    row is written and no `409` is ever raised.
+    """
+
+    ticket_retention_hours: int = Field(default=72, ge=1, le=8760)
+    """How long a **terminal** queue ticket is kept — A64-015.5 §8.
+
+    Three days, and it is set by the one question the row answers after the
+    fact: *why was I matched with them?* The inputs to that answer are
+    `entered_at`, the pool and the rating snapshot, and it is asked by
+    support the same day or the next. Three days covers a Friday-evening
+    complaint read on Monday morning.
+
+    A64-014.1 shipped this relation with no horizon at all and said so:
+    "resolved tickets accumulate … storage grows with matches attempted,
+    forever". This is the number that closes it.
+
+    The floor is a guard rather than a range. Below the reservation TTL and
+    the ticket TTL the horizon would start deleting rows the reconciler is
+    about to read — and while the retention *predicate* makes that
+    impossible (a live ticket is unreachable from the delete), a horizon
+    measured in minutes would still remove the audit trail of every pairing
+    within the hour. A validator below keeps it clear of both.
+    """
+
+    abandoned_match_retention_hours: int = Field(default=168, ge=1, le=8760)
+    """How long a **cancelled or expired** match is kept — A64-015.5 §8.
+
+    Seven days, longer than the ticket horizon, and the asymmetry is the
+    decision: "why was I matched with them" is answered from a ticket and
+    asked within a day, while "why did my opponent decline" is answered
+    from a match and is where a support conversation starts a week later.
+
+    A match that was **played** is not covered by this or by any horizon.
+    A64-015.4 recorded why — it is the permanent competitive record A-4 is
+    about, and DM-13's anonymise-don't-delete position exists so that it
+    survives erasure — and `AbandonedMatchRetention` excludes `active` by
+    predicate rather than by configuration, so no value here can reach one.
+    """
+
+    cooldown_retention_hours: int = Field(default=1, ge=0, le=168)
+    """How long a **lapsed** cooldown row is kept past its own expiry.
+
+    One hour, and short by design: a cooldown that has lifted answers no
+    question anybody will ask, unlike a resolved ticket or a settled match.
+    It is not zero only so that a read in flight when the row expires does
+    not race the delete — and the read's answer is the same either way, so
+    the margin buys nothing except the absence of a confusing failure.
+    """
+
+    retention_enabled: bool = True
+    """Whether *this process* prunes queue history — A64-015.5 §8.
+
+    Per-process, exactly like `OUTBOX_RETENTION_ENABLED`, and for the same
+    deployment shape: one API tier with it off, one maintenance tier with it
+    on, running the same image. Setting it to `false` everywhere is how an
+    operator stops deletion during an investigation — the relations then
+    grow, loudly and visibly, which is the correct direction for a switch
+    that governs destruction.
+    """
+
+    retention_interval_seconds: float = Field(default=3600.0, ge=60.0, le=86400.0)
+    """How often retention runs.
+
+    Hourly. A horizon is a **floor, not a deadline** — nothing is wrong if
+    a row survives an extra hour past it — so the interval is chosen to keep
+    each run small rather than to keep the horizon sharp. The same reasoning
+    `OUTBOX_PRUNE_INTERVAL_SECONDS` records, and the same floor: a minute is
+    a guard against a configuration that turns a `DELETE` loop into a busy
+    one.
+    """
+
+    retention_batch_size: int = Field(default=500, ge=1, le=10000)
+    """Rows per statement. Bounds the lock one delete takes."""
+
+    retention_max_batches: int = Field(default=20, ge=1, le=1000)
+    """Batches per relation per run. Bounds the whole job.
+
+    The two together cap one run at 10,000 rows per relation, which is far
+    above any plausible steady-state rate and low enough that the **first**
+    run after this ships does not try to delete the platform's whole queue
+    history in one job.
+    """
+
+    realtime_delivery_enabled: bool = True
+    """Whether *this process* pushes pending matches to connected players —
+    A64-015.5 §4.
+
+    **On by default**, and the degradation with it off is honest rather than
+    silent: `GET /matchmaking/matches/pending` still answers, so a polling
+    client is unaffected and a pushing one falls back to it (§5). What stops
+    is the push, which costs a player up to one poll interval of their
+    thirty-second window.
+
+    It is a switch at all because the sink is the newest seam on the
+    platform and the first one that will be replaced by a real transport
+    (AD-09). An operator whose gateway is misbehaving needs to be able to
+    stop feeding it without stopping matchmaking.
+    """
+
     reconciliation_batch_size: int = Field(default=100, ge=1, le=1000)
     """How many stranded reservations, and how many overdue matches, one
     pass may resolve.
@@ -1527,6 +1647,33 @@ class MatchmakingSettings(BaseSettings):
             raise ValueError(
                 "MATCHMAKING_RATING_WINDOW_MAXIMUM cannot be below "
                 "MATCHMAKING_RATING_WINDOW_INITIAL"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _retention_outlives_the_queue(self) -> "MatchmakingSettings":
+        """A64-015.5 §8: retention must not delete what recovery still
+        reads.
+
+        The retention *predicate* already makes a live ticket unreachable
+        (`resolved_at IS NOT NULL`), so this is not what stops the job
+        deleting somebody out of a queue — that is held by the schema. What
+        this stops is subtler and would be discovered much later: a horizon
+        shorter than the ticket's own lifetime would delete a ticket's audit
+        trail while its player could still be *in* the pool it describes,
+        and "why was I matched with them" would have no answer for the
+        matches that just happened.
+
+        Checked at startup (DI-06) rather than in a review, because a
+        retention rule that is wrong is discovered when the data is gone.
+        """
+        horizon_seconds = self.ticket_retention_hours * 3600
+        if horizon_seconds <= self.ticket_ttl_seconds:
+            raise ValueError(
+                "MATCHMAKING_TICKET_RETENTION_HOURS must exceed "
+                "MATCHMAKING_TICKET_TTL_SECONDS — a horizon shorter than a "
+                "ticket's own lifetime deletes the history of matches that "
+                "are still being played out"
             )
         return self
 

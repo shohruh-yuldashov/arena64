@@ -63,6 +63,15 @@ logger = logging.getLogger(__name__)
 #: drives a real violation through this path.
 _ONE_LIVE_PER_PLAYER_INDEX = "uq_queue_ticket__one_live_per_player"
 
+#: The second constraint this adapter translates — A64-015.5.
+#:
+#: A partial unique index on `source_ticket_id`, which is what makes a
+#: requeue idempotent under redelivery. It is translated to the *same*
+#: `AlreadyQueued` as QT-1 deliberately: both mean "somebody already put
+#: this player where they belong", and `QueueService.requeue` treats them
+#: identically. A second exception type would be two names for one outcome.
+_REQUEUED_FROM_INDEX = "uq_queue_ticket__requeued_from"
+
 #: The two statuses that mean "this player is still in the queue".
 #:
 #: Mirrors `QueueStatus.is_live` and is derived from it, so a sixth status
@@ -90,6 +99,7 @@ class SqlAlchemyQueueRepository:
             status=row.status,
             resolved_at=row.resolved_at,
             reserved_until=row.reserved_until,
+            source_ticket_id=row.source_ticket_id,
         )
 
     async def enqueue(self, ticket: QueueTicket) -> QueueTicket:
@@ -118,6 +128,7 @@ class SqlAlchemyQueueRepository:
             status=ticket.status,
             resolved_at=ticket.resolved_at,
             reserved_until=ticket.reserved_until,
+            source_ticket_id=ticket.source_ticket_id,
         )
         self._session.add(row)
 
@@ -156,6 +167,15 @@ class SqlAlchemyQueueRepository:
             ),
         )
         return int(result.rowcount) == 1
+
+    async def by_id(self, ticket_id: UUID) -> QueueTicket | None:
+        """One ticket by primary key, whatever its status — A64-015.5.
+
+        No liveness predicate, unlike every other read here: the caller is a
+        requeue, and the ticket it is restoring is `matched`.
+        """
+        row = await self._session.get(QueueTicketModel, ticket_id)
+        return self._to_domain(row) if row is not None else None
 
     async def active_ticket(self, player_id: UUID, *, now: datetime) -> QueueTicket | None:
         """The player's live ticket, or `None`.
@@ -513,4 +533,6 @@ class SqlAlchemyQueueRepository:
         constraint = getattr(getattr(error.orig, "__cause__", None), "constraint_name", None)
         if constraint == _ONE_LIVE_PER_PLAYER_INDEX:
             return AlreadyQueued("You are already in a matchmaking queue.")
+        if constraint == _REQUEUED_FROM_INDEX:
+            return AlreadyQueued("That ticket has already been requeued.")
         return error

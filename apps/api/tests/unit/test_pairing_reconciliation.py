@@ -23,6 +23,7 @@ from app.modules.matchmaking.domain.events import ReconciliationAction
 from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType
 from app.modules.matchmaking.domain.queue_ticket import QueueStatus, QueueTicket
 from tests.fakes.matches import StubAcceptanceExpiry, StubSettlements
+from tests.fakes.metrics import RecordingMetrics
 from tests.fakes.outbox import NullUnitOfWork
 from tests.fakes.presence_redis import MovableClock
 from tests.fakes.queue_repository import InMemoryQueueRepository, RecordingPublisher
@@ -79,6 +80,7 @@ def service(
         events=events,
         unit_of_work=NullUnitOfWork(),
         clock=clock,
+        metrics=RecordingMetrics(),
         batch_size=50,
     )
 
@@ -484,6 +486,7 @@ class TestTheBatchIsBounded:
             events=events,
             unit_of_work=NullUnitOfWork(),
             clock=clock,
+            metrics=RecordingMetrics(),
             batch_size=2,
         )
         for _ in range(5):

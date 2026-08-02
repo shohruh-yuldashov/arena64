@@ -220,7 +220,8 @@ variant were governed by different rules — the exact class of corruption AD-15
 | `auth` | `auth` | `account`, `credential`, `email_verification`, `password_reset_token`, `session` | Most sensitive schema on the platform |
 | `users` | `users` | `player_profile`, `handle_assignment`, `player_preference`, `notification_preference` | `player_id` originates here |
 | `friends` | `friends` | `friend_request`, `friendship`, `block` | |
-| `matchmaking` | `matchmaking` | `queue_ticket`, `challenge` | `queue_ticket` exists since A64-014.1 and **is PostgreSQL-authoritative** — see §8.1, which this reverses. `challenge` is not built yet |
+| `matchmaking` | `matchmaking` | `queue_ticket`, `queue_cooldown`, `challenge` | `queue_ticket` exists since A64-014.1 and **is PostgreSQL-authoritative** — see §8.1, which this reverses. `queue_cooldown` since A64-015.5 (§8.1b). `challenge` is not built yet |
+| `game` | `game` | `match` | `match` exists since A64-015.4 and carries the part a pairing needs — who, which rules, from which pairing, and whether both agreed. §8.2 describes the relation it grows into; §8.2a describes what actually ships |
 | `game` | `game` | `match`, `match_participant`, `move`, `match_player_index` | Partitioned; the largest schema |
 | `rating` | `rating` | `player_rating`, `rating_adjustment`, `rating_period` | Holds the platform's hardest invariant |
 | `achievements` | `achievements` | `achievement_definition`, `achievement_definition_text`, `player_achievement`, `achievement_progress` | |
@@ -700,17 +701,27 @@ duplicate the recipient must resolve twice.
 
 `id`, `player_id` (opaque — cross-schema, no FK, DM-06), `queue_type` (`ranked`, `casual`),
 `region` (`global`, `europe`, `north_america`, `south_america`, `asia`, `africa`, `oceania`),
-`rating_snapshot integer`, `entered_at`, `expires_at`, `status` (`waiting`, `matched`,
-`cancelled`, `expired`), `resolved_at`.
+`rating_snapshot integer`, `entered_at`, `expires_at`, `status` (`waiting`, `reserved`,
+`matched`, `cancelled`, `expired`), `resolved_at`, `reserved_until`, `source_ticket_id`.
+
+`reserved` arrived with A64-015.3's two-phase pairing claim. `reserved_until` (A64-015.4) is
+the deadline a reservation may stand before it is reconciled, and it is **the same instant**
+the match created from that pairing carries as its `acceptance_deadline` — one number in two
+rows in two schemas. `source_ticket_id` (A64-015.5) is the ticket a **requeue** replaced, when
+the platform put a player back in the queue after their opponent declined or fell silent.
 
 | Name | Kind | Rule | Source |
 | --- | --- | --- | --- |
-| `uq_queue_ticket__one_live_per_player` | Unique, **partial** on `(player_id)` covering only `waiting` rows | One live ticket per player, **across all pools** | QT-1 |
-| `ck_queue_ticket__resolved_iff_terminal` | Check | `resolved_at` is non-null **exactly when** `status` is not `waiting` | |
+| `uq_queue_ticket__one_live_per_player` | Unique, **partial** on `(player_id)` covering live rows | One live ticket per player, **across all pools** | QT-1 |
+| `uq_queue_ticket__requeued_from` | Unique, partial on `source_ticket_id IS NOT NULL` | One replacement per requeued ticket — idempotency under concurrent delivery | A64-015.5 §2 |
+| `ck_queue_ticket__resolved_iff_terminal` | Check | `resolved_at` is non-null **exactly when** `status` is terminal | |
+| `ck_queue_ticket__reserved_iff_deadline` | Check | `reserved_until` is non-null **exactly when** `status` is `reserved` | A64-015.4 |
 | `ck_queue_ticket__window_positive` | Check | `expires_at > entered_at` | |
 | `ck_queue_ticket__rating_non_negative` | Check | `rating_snapshot >= 0` | |
-| `ix_queue_ticket__pool` | Index, partial on `waiting` | `(queue_type, region, entered_at, id)` — the pairing scan and the snapshot | |
-| `ix_queue_ticket__due` | Index, partial on `waiting` | `(expires_at)` — the expiry claim, deliberately pool-blind so one worker drains every pool | |
+| `ix_queue_ticket__pool` | Index, partial on **`waiting` alone** | `(variant, queue_type, region, entered_at, id)` — the pairing scan. Deliberately not widened to `reserved`: that is what makes a reserved pair invisible to every other scan | |
+| `ix_queue_ticket__due` | Index, partial on live | `(expires_at)` — the expiry claim, deliberately pool-blind | |
+| `ix_queue_ticket__stale_reservation` | Index, partial on `reserved` | `(reserved_until)` — the reconciler's claim | A64-015.4 |
+| `ix_queue_ticket__retention` | Index, partial on `resolved_at IS NOT NULL` | `(resolved_at)` — retention's claim. **A live ticket is not in this index**, so no horizon can reach one | A64-015.5 §8 |
 
 **Why the reversal.** The three objections §8.1 raised are answered, and one argument it did not
 consider decides it:
@@ -747,11 +758,51 @@ updated once, then dead — so DB-18 looks like it applies. It does not: `fillfa
 updates, an update is HOT only when no *indexed* column changes, and all three indexes above are
 predicated on `status`, which is the one column the one update writes.
 
-**Known gap: no retention.** Resolved tickets accumulate. Every index is partial on `waiting`, so
-no read degrades — but storage grows with matches attempted, forever. The fix is
-`platform.outbox.retention`'s policy applied to this relation, and it is deferred to A64-014.2
-because the horizon is a product decision (how long is "why was I matched with them" answerable?)
-that pairing has not been built to ask yet.
+**Retention, since A64-015.5.** `MATCHMAKING_TICKET_RETENTION_HOURS` (default **72**) bounds
+this relation, measured on `resolved_at`. The horizon was a product decision — "how long is
+*why was I matched with them* answerable?" — and three days covers a Friday-evening complaint
+read on Monday morning.
+
+The **predicate is the safety property**, not the horizon: `resolved_at IS NOT NULL` is
+`ck_queue_ticket__resolved_iff_terminal` read from the other side, so a `waiting` or `reserved`
+ticket is unreachable from the delete however the window is configured. A misconfigured horizon
+can lose history; it cannot delete a player out of a queue, and it cannot delete the stranded
+reservation reconciliation is about to recover.
+
+### 8.1b `matchmaking.queue_cooldown` — A64-015.5
+
+`player_id` (**primary key**), `reason` (`declined_match`), `expires_at`, `created_at`.
+
+A player who declines a match is barred from re-queueing for
+`MATCHMAKING_DECLINE_COOLDOWN_SECONDS` (default 60). It bounds queue churn — cycling the queue
+until it produces an opponent you like the look of, which is a rating-manipulation vector rather
+than a load problem — and it is **not** a sanction: no appeal, no record beyond its own expiry,
+no escalation. Anything that should escalate belongs to `admin`.
+
+**Silence earns no cooldown.** A player whose acceptance window closed without an answer is not
+treated as having declined; the enum has one member so that stays structural.
+
+| Name | Kind | Rule | Source |
+| --- | --- | --- | --- |
+| `pk_queue_cooldown` | Primary key on `(player_id)` | One live cooldown per player | |
+| `ck_queue_cooldown__window_positive` | Check | `expires_at > created_at` | |
+| `ix_queue_cooldown__expiry` | Index | `(expires_at)` — retention's claim | |
+
+**The player is the key, not a surrogate id**, which departs from DB-07 and is the design rather
+than an oversight. A cooldown is a *current fact about a player* of which there is at most one,
+so keying on the player makes "a repeated decline extends rather than accumulates" a single
+`INSERT ... ON CONFLICT DO UPDATE ... GREATEST(...)` — a constraint under concurrency instead of
+a read-then-write two declines can interleave inside.
+
+With a surrogate key the same rule needs a partial unique index on `player_id WHERE expires_at >
+now()`, which is not a legal predicate (`now()` is not immutable). The alternative is a
+`SELECT ... FOR UPDATE` on the queue-join path for a row that usually does not exist.
+
+What it costs is history: a second decline overwrites the first's `expires_at` and nothing
+records there were two. Deliberate — see above on why this is a delay rather than a file.
+
+Retention is `MATCHMAKING_COOLDOWN_RETENTION_HOURS` (default 1), the shortest horizon on the
+platform: a cooldown that has lifted answers no question anybody will ask.
 
 ### 8.2 `game.match`
 
@@ -813,6 +864,69 @@ worker's input is "completed matches". A completed match with no result, or a li
 is a row that either silently skips rating or rates a game still in progress. Both are permanent
 corruptions of the competitive record (A-4), and both are the kind of state that arises from a
 half-applied completion transaction — precisely the case application code cannot check.
+
+### 8.2a `game.match` as it actually ships — A64-015.4, A64-015.5
+
+§8.2 describes the relation `game.match` grows into: partitioned monthly, with `reference`
+foreign keys, clocks, a result and a ply count. **None of that is built.** What ships is the
+subset a *pairing* needs, and the divergence is recorded here rather than discovered
+(CLAUDE.md §3.11).
+
+`id`, `pairing_id`, `variant` (`game.match_variant`), `rated`, `engine_version integer`,
+`light_player_id`, `light_ticket_id`, `light_accepted_at`, `dark_player_id`, `dark_ticket_id`,
+`dark_accepted_at`, `created_at`, `acceptance_deadline`, `status` (`game.match_status`:
+`pending_acceptance`, `active`, `cancelled`, `expired`), `declined_by` (`game.player_side`),
+`settled_at`.
+
+| Name | Kind | Rule | Source |
+| --- | --- | --- | --- |
+| `uq_match__pairing_id` | Unique on `(pairing_id)` | **One pairing, one match** | A64-015.4 §3 |
+| `uq_match__light_ticket`, `uq_match__dark_ticket` | Unique | A queue ticket produces at most one match. Also the reconciler's read | |
+| `ck_match__settled_iff_answered` | Check | `settled_at` non-null **exactly when** `status` is not `pending_acceptance` | |
+| `ck_match__declined_iff_cancelled` | Check | `declined_by` non-null **exactly when** `status` is `cancelled` | |
+| `ck_match__active_iff_both_accepted` | Check | An `active` match has both `accepted_at` instants | A64-015.4 §4 |
+| `ck_match__acceptance_window_positive` | Check | `acceptance_deadline > created_at` | |
+| `ix_match__pending_light`, `ix_match__pending_dark` | Index, partial on pending | "Which match must this player answer" | |
+| `ix_match__pending_deadline` | Index, partial on pending | `(acceptance_deadline)` — the expiry sweep | |
+| `ix_match__light_player_recent`, `ix_match__dark_player_recent` | Index | `(player_id, created_at)` — QT-3's rematch guard | |
+| `ix_match__abandoned` | Index, partial on `cancelled, expired` | `(settled_at)` — retention's claim. **An `active` match is not in this index** | A64-015.5 §8 |
+
+**`uq_match__pairing_id` is the load-bearing object.** A64-015.4 §3 forbids in-memory
+deduplication and check-then-insert, for the reason QT-1 is an index rather than an `if`: two
+pairing workers retrying one pairing both pass any read, both insert, and two players who agreed
+to one game have two. A-4 makes that permanent. The repository inserts inside a `SAVEPOINT`,
+lets the index refuse the loser, and re-reads by `pairing_id`.
+
+**The differences from §8.2, and why each.**
+
+| §8.2 | Shipped | Why |
+| --- | --- | --- |
+| Partitioned monthly, composite PK | One relation, `uuid` PK | Partitioning is for archival at volume (architecture.md §16 axis 4). There are no matches yet, and DB-13's denormalised `match_created_at` only earns its sharpness once `game.move` exists |
+| `variant_id`, `time_control_id`, `rating_category_id` → `reference` | A native `variant` enum; no time control, no rating category | The `reference` schema does not exist in code. `QueuePool` records why inventing a speed class in `matchmaking` would put the definition of "blitz" in the module least entitled to own it |
+| `origin`, `origin_ref`, `previous_match_id` | Absent | Every match comes from the queue today. `pairing_id` is `origin_ref` under the one origin that exists |
+| `engine_version text` | `integer` | `EngineVersion` is a single ordered integer, so "played under a version older than the fix" is an indexable comparison rather than a parse |
+| `status` with seven members | Four | The four a match reaches *before* it is played. `paused`, `flagged` and `abandoned` all need a clock |
+| `result`, `termination_reason`, `ply_count`, `final_position_hash`, `sequence_high`, `started_at`, `ended_at` | Absent | Nothing can be played yet |
+| `game.match_participant` (§8.3) | Two seats inlined as columns | Two seats is a closed set of exactly two; a child relation would make every read a join for a cardinality the type system already fixes. It becomes §8.3's relation when a seat gains a clock and an outcome |
+
+**No foreign key on the two ticket columns**, though both name rows in
+`matchmaking.queue_ticket`. Cross-context references are opaque (DM-06), a foreign key would
+make the two schemas undeployable apart, and it would outlive its usefulness immediately: queue
+tickets are prunable history on a 72-hour horizon and matches are permanent, so the constraint
+would forbid the retention §8.1a now has.
+
+**Retention applies to the churn, never to a game — A64-015.5.** A match that was *played* is
+the permanent record A-4 is about and has no horizon. Cancelled and expired rows — pairings that
+never became games — are bounded by `MATCHMAKING_ABANDONED_MATCH_RETENTION_HOURS` (default
+**168**), longer than the queue's because "why did my opponent decline" is where a support
+conversation starts a week later. The sweep is published as
+`game.public.AbandonedMatchRetention` and driven by `matchmaking`: `game` owns the rows, and the
+horizon is the same product judgement as the queue's own.
+
+The predicate is the safety property. `active` and `pending_acceptance` are excluded by the
+`WHERE`, so no configuration reaches a game — and a *pending* match older than the whole horizon
+is deliberately kept and **counted**, because it is a reconciliation failure the sweep must
+surface rather than delete the evidence of.
 
 ### 8.3 `game.match_participant`
 

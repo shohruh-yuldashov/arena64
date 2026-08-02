@@ -100,12 +100,16 @@ from app.modules.friends.application.services import PairingExclusionService
 from app.modules.friends.infrastructure.repositories import SqlAlchemyBlockedPlayerRepository
 from app.modules.friends.public import PairingExclusions
 from app.modules.game.application.services import (
+    GameAbandonedMatchRetention,
     GamePairingSettlements,
     GameRecentOpponents,
     MatchAcceptanceService,
     PersistentMatchCreation,
 )
-from app.modules.game.infrastructure.repositories import SqlAlchemyMatchRecordRepository
+from app.modules.game.infrastructure.repositories import (
+    SqlAlchemyMatchRecordRepository,
+    SqlAlchemyMatchRetentionStore,
+)
 from app.modules.game.public import (
     GameEngineServices,
     MatchAcceptanceExpiryUseCase,
@@ -115,25 +119,38 @@ from app.modules.game.public import (
     engine_services,
 )
 from app.modules.matchmaking.application.eligibility import (
+    AllEligibilityChecks,
+    CooldownEligibilityPolicy,
     PresenceEligibilityPolicy,
     QueueEligibilityPolicy,
 )
-from app.modules.matchmaking.application.ports import RecentOpponentProvider
+from app.modules.matchmaking.application.ports import (
+    CooldownRepository,
+    PendingMatchSink,
+    RecentOpponentProvider,
+)
 from app.modules.matchmaking.application.services import (
+    MatchOutcomeService,
     PairingReconciliationService,
     PairingService,
+    PendingMatchNotifier,
+    QueueRetentionService,
     QueueService,
+    queue_retention_policy,
 )
 from app.modules.matchmaking.domain.pairing import PairingEngine, RatingWindowPolicy
 from app.modules.matchmaking.infrastructure import (
     ProvisionalRatingProvider,
+    SqlAlchemyCooldownRepository,
     SqlAlchemyQueueRepository,
+    SqlAlchemyQueueRetentionStore,
 )
 from app.modules.users.application.services.public_profile_service import PublicProfileService
 from app.modules.users.application.services.user_service import UserService
 from app.modules.users.infrastructure.presence import NoPresenceProvider, RedisPresenceProvider
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
 from app.modules.users.public import PresenceProvider, PublicProfileReader
+from app.platform.metrics import LoggingMetrics, MetricsRecorder
 from app.platform.outbox import EventPublisher
 
 logger = logging.getLogger(__name__)
@@ -167,19 +184,34 @@ def get_presence_reader(
 PresenceReaderDep = Annotated[PresenceProvider, Depends(get_presence_reader)]
 
 
-def build_eligibility_policy(presence: PresenceProvider) -> QueueEligibilityPolicy:
-    """The checks a player must pass to enter a pool — A64-015.2.
+def build_eligibility_policy(
+    session: AsyncSession, presence: PresenceProvider, *, clock: Clock
+) -> QueueEligibilityPolicy:
+    """The checks a player must pass to enter a pool — A64-015.2,
+    A64-015.5 §3.
 
-    One implementation today, backed by the presence reader above. It is
-    built here rather than inside `QueueService` for the reason every
-    adapter is: the service depends on the port, and the root decides which
-    adapter satisfies it.
+    Two implementations now, composed into one port by
+    `AllEligibilityChecks`. `QueueService` still holds a single
+    `QueueEligibilityPolicy`, which is what A64-015.2 predicted the port
+    would buy: "a service that grew an `if` per module would end up holding
+    five ports and answering a question none of them is about."
+
+    Order is significant — presence first, cooldown second — so a player who
+    fails both is refused by the check that says less. See
+    `AllEligibilityChecks`.
     """
-    return PresenceEligibilityPolicy(presence)
+    return AllEligibilityChecks(
+        [
+            PresenceEligibilityPolicy(presence),
+            CooldownEligibilityPolicy(build_cooldowns(session), clock=clock),
+        ]
+    )
 
 
-def get_eligibility_policy(presence: PresenceReaderDep) -> QueueEligibilityPolicy:
-    return build_eligibility_policy(presence)
+def get_eligibility_policy(
+    session: DbSessionDep, presence: PresenceReaderDep, clock: ClockDep
+) -> QueueEligibilityPolicy:
+    return build_eligibility_policy(session, presence, clock=clock)
 
 
 EligibilityPolicyDep = Annotated[QueueEligibilityPolicy, Depends(get_eligibility_policy)]
@@ -334,9 +366,14 @@ def build_pairing_settlements(session: AsyncSession) -> PairingReconciliationRea
 
 
 def build_match_acceptance(
-    session: AsyncSession, *, events: EventPublisher, clock: Clock
+    session: AsyncSession,
+    *,
+    events: EventPublisher,
+    clock: Clock,
+    metrics: MetricsRecorder,
 ) -> MatchAcceptanceService:
-    """`game`'s acceptance handshake, over one session — A64-015.4 §6.
+    """`game`'s acceptance handshake, over one session — A64-015.4 §6,
+    A64-015.5 §10.
 
     One object satisfying two published ports —
     `MatchAcceptanceUseCase` for the three routes and
@@ -345,12 +382,135 @@ def build_match_acceptance(
     *implementation* would mean two objects racing for the same rows. The
     **consumers** still hold one port each, which is where the split that
     matters is: a route cannot expire anybody's match.
+
+    ## The one factory, and the four callers that share it
+
+    A64-015.5 §10 asks that the route path and the reconciliation task not
+    build this independently. They already did not — this function has been
+    the single construction site since A64-015.4 — and §10's real value is
+    that a **third and fourth** caller arrived without duplicating anything:
+
+        get_match_acceptance          the three HTTP routes
+        _reconciliation_service_for   the recovery task's expiry sweep
+        _pending_match_notifier_for   the realtime consumer's re-read (§4)
+        (a fifth needs no new code)
+
+    What is hoisted is the **factory, not the service**. A single shared
+    instance is exactly what this must not be: it holds a repository, the
+    repository holds a session, and a session must not outlive the unit of
+    work it serves. Each caller gets its own graph over its own session, and
+    what they share is the definition — so a collaborator added here reaches
+    all four at once.
+
+    The one genuinely shared object is the metrics recorder, which is
+    stateless and process-wide (`get_metrics`).
     """
     return MatchAcceptanceService(
         matches=SqlAlchemyMatchRecordRepository(session),
         events=events,
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
+        metrics=metrics,
+    )
+
+
+def build_cooldowns(session: AsyncSession) -> CooldownRepository:
+    """The decline cooldown store, over one session — A64-015.5 §3."""
+    return SqlAlchemyCooldownRepository(session)
+
+
+def build_match_outcome_service(
+    session: AsyncSession,
+    *,
+    eligibility: QueueEligibilityPolicy,
+    events: EventPublisher,
+    settings: MatchmakingSettings,
+    clock: Clock,
+    metrics: MetricsRecorder,
+) -> MatchOutcomeService:
+    """The acceptance-failure policy, over one relay tick's session —
+    A64-015.5 §1.
+
+    Holds a whole `QueueService` rather than a repository, and that is the
+    point: the requeue it performs must go through the *use case* — QT-1's
+    check, the eligibility gate, the outbox event — rather than through a
+    second path that writes tickets its own way. A consumer with a
+    repository would be a second implementation of "put somebody in the
+    queue", and the two would drift on the first rule that changed.
+    """
+    return MatchOutcomeService(
+        queue=build_queue_service(
+            session, eligibility=eligibility, events=events, settings=settings, clock=clock
+        ),
+        cooldowns=build_cooldowns(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+        metrics=metrics,
+        decline_cooldown_seconds=settings.decline_cooldown_seconds,
+    )
+
+
+def build_pending_match_notifier(
+    session: AsyncSession,
+    *,
+    events: EventPublisher,
+    sink: PendingMatchSink,
+    clock: Clock,
+    metrics: MetricsRecorder,
+) -> PendingMatchNotifier:
+    """The realtime pending-match consumer, over one relay tick's session —
+    A64-015.5 §4.
+
+    Three published reads and a sink. It takes an `EventPublisher` only to
+    build the acceptance service, which needs one — the notifier itself
+    publishes nothing, and a consumer that could would be a consumer that
+    can cause the events it reacts to.
+    """
+    return PendingMatchNotifier(
+        acceptance=build_match_acceptance(session, events=events, clock=clock, metrics=metrics),
+        exclusions=build_pairing_exclusions(session),
+        players=build_opponent_directory(session, clock=clock),
+        sink=sink,
+        clock=clock,
+        metrics=metrics,
+    )
+
+
+def build_queue_retention_service(
+    session: AsyncSession,
+    *,
+    settings: MatchmakingSettings,
+    clock: Clock,
+    metrics: MetricsRecorder,
+) -> QueueRetentionService:
+    """One retention run's object graph, over one session — A64-015.5 §8.
+
+    The two stores it holds are the **narrow** ones: neither can resolve a
+    ticket or settle a match, which is what keeps a maintenance job from
+    being able to change state it is only supposed to remove.
+
+    `game`'s abandoned-match sweep is reached through its published port,
+    so this module deletes its own rows and *asks* for the other module's —
+    see `game.public.AbandonedMatchRetention` on why the horizon belongs
+    here and the rows belong there.
+    """
+    return QueueRetentionService(
+        tickets=SqlAlchemyQueueRetentionStore(session),
+        matches=GameAbandonedMatchRetention(
+            store=SqlAlchemyMatchRetentionStore(session),
+            unit_of_work=SessionUnitOfWork(session),
+        ),
+        cooldowns=build_cooldowns(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+        metrics=metrics,
+        policy=queue_retention_policy(
+            ticket_retention_hours=settings.ticket_retention_hours,
+            abandoned_match_retention_hours=settings.abandoned_match_retention_hours,
+            cooldown_retention_hours=settings.cooldown_retention_hours,
+            batch_size=settings.retention_batch_size,
+            max_batches=settings.retention_max_batches,
+        ),
     )
 
 
@@ -420,6 +580,7 @@ def build_reconciliation_service(
     events: EventPublisher,
     settings: MatchmakingSettings,
     clock: Clock,
+    metrics: MetricsRecorder,
 ) -> PairingReconciliationService:
     """One reconciliation pass's object graph, over one session — §9.
 
@@ -442,12 +603,30 @@ def build_reconciliation_service(
         events=events,
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
+        metrics=metrics,
         batch_size=settings.reconciliation_batch_size,
     )
 
 
+def get_metrics() -> MetricsRecorder:
+    """The **process-wide** metrics recorder — A64-015.5 §7.
+
+    Stateless, so one instance serves every request and every worker;
+    `Depends` hands out the same object rather than building one per call.
+    The same lifetime `get_engine_services` gives the engine collaborators,
+    and for the same reason.
+    """
+    return LoggingMetrics()
+
+
+MetricsDep = Annotated[MetricsRecorder, Depends(get_metrics)]
+
+
 def get_match_acceptance(
-    session: DbSessionDep, clock: ClockDep, events: EventPublisherDep
+    session: DbSessionDep,
+    clock: ClockDep,
+    events: EventPublisherDep,
+    metrics: MetricsDep,
 ) -> MatchAcceptanceUseCase:
     """The per-request acceptance use case.
 
@@ -456,7 +635,7 @@ def get_match_acceptance(
     `expire_overdue` even by accident, though the object in its hand has
     it.
     """
-    return build_match_acceptance(session, events=events, clock=clock)
+    return build_match_acceptance(session, events=events, clock=clock, metrics=metrics)
 
 
 MatchAcceptanceDep = Annotated[MatchAcceptanceUseCase, Depends(get_match_acceptance)]
@@ -474,16 +653,21 @@ __all__ = [
     "EligibilityPolicyDep",
     "EngineServicesDep",
     "MatchAcceptanceDep",
+    "MetricsDep",
     "OpponentDirectoryDep",
     "PresenceReaderDep",
     "QueueServiceDep",
     "build_eligibility_policy",
+    "build_cooldowns",
     "build_match_acceptance",
     "build_match_creation",
+    "build_match_outcome_service",
     "build_opponent_directory",
     "build_pairing_exclusions",
     "build_pairing_service",
     "build_pairing_settlements",
+    "build_pending_match_notifier",
+    "build_queue_retention_service",
     "build_queue_service",
     "build_rating_window",
     "build_recent_opponents",
@@ -491,6 +675,7 @@ __all__ = [
     "get_eligibility_policy",
     "get_engine_services",
     "get_match_acceptance",
+    "get_metrics",
     "get_opponent_directory",
     "get_presence_reader",
     "get_queue_service",

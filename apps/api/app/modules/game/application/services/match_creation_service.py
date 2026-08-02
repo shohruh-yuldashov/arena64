@@ -100,6 +100,8 @@ class PersistentMatchCreation:
                         pairing_id=stored.pairing_id,
                         light_player_id=stored.light.player_id,
                         dark_player_id=stored.dark.player_id,
+                        light_ticket_id=stored.light.queue_ticket_id,
+                        dark_ticket_id=stored.dark.queue_ticket_id,
                         variant=stored.variant,
                         rated=stored.rated,
                         acceptance_deadline=stored.acceptance_deadline,

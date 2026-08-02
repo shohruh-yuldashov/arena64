@@ -524,3 +524,109 @@ class TestPairingIsWiredToRealPersistence:
         import app.modules.game.public as game_public
 
         assert not hasattr(game_public, "UnavailableMatchCreation")
+
+
+class TestMatchmakingRecoverySettings:
+    """A64-015.5's configuration — §3, §7 and §8."""
+
+    def test_a_decline_earns_a_cooldown_by_default(self) -> None:
+        """§3. Sixty seconds, set against the thing it stops: cycling the
+        queue until it produces an opponent you like the look of."""
+        assert MatchmakingSettings().decline_cooldown_seconds == 60
+
+    def test_the_cooldown_can_be_switched_off(self) -> None:
+        """`ge=0` is a kill switch rather than a tuning value: with it off,
+        declining is free and the churn vector is bounded only by the rate
+        limit."""
+        assert MatchmakingSettings(decline_cooldown_seconds=0).decline_cooldown_seconds == 0
+
+    def test_retention_outlives_a_ticket(self) -> None:
+        """§8, and the reason is subtler than "do not delete live rows" —
+        the predicate already makes that impossible. A horizon shorter than
+        a ticket's own lifetime would delete the audit trail of matches
+        that are still being played out."""
+        settings = MatchmakingSettings()
+
+        assert settings.ticket_retention_hours * 3600 > settings.ticket_ttl_seconds
+
+    def test_a_horizon_inside_the_ticket_lifetime_is_refused(self) -> None:
+        with pytest.raises(PydanticValidationError, match="TICKET_RETENTION_HOURS"):
+            MatchmakingSettings(ticket_retention_hours=1, ticket_ttl_seconds=7200)
+
+    def test_a_match_is_kept_longer_than_a_ticket(self) -> None:
+        """ "Why was I matched with them" is answered from a ticket and asked
+        within a day; "why did my opponent decline" is answered from a match
+        and is where a support conversation starts a week later."""
+        settings = MatchmakingSettings()
+
+        assert settings.abandoned_match_retention_hours > settings.ticket_retention_hours
+
+    def test_a_lapsed_cooldown_is_kept_briefly(self) -> None:
+        """Not zero, only so that a read in flight when the row expires does
+        not race the delete — the answer is the same either way."""
+        assert MatchmakingSettings().cooldown_retention_hours >= 1
+
+    def test_retention_and_realtime_delivery_are_on_by_default(self) -> None:
+        settings = MatchmakingSettings()
+
+        assert settings.retention_enabled is True
+        assert settings.realtime_delivery_enabled is True
+
+    def test_the_retention_run_is_bounded(self) -> None:
+        """CLAUDE.md §10.5. The two together cap a run at 10,000 rows per
+        relation, which is far above any steady-state rate and low enough
+        that the first run does not try to delete everything at once."""
+        settings = MatchmakingSettings()
+
+        assert settings.retention_batch_size * settings.retention_max_batches <= 10_000
+        with pytest.raises(PydanticValidationError):
+            MatchmakingSettings(retention_batch_size=0)
+
+
+class TestTheAnswerLatencyMetricsAreNamed:
+    """§7 requires the metric names to be documented so the deadline can be
+    tuned from data rather than intuition. Asserted so a rename that broke
+    an operator's dashboard fails here first."""
+
+    def test_the_two_measurements_are_published_from_game(self) -> None:
+        from app.modules.game.public import MATCH_ANSWER_LATENCY, MATCH_OUTCOMES
+
+        assert MATCH_ANSWER_LATENCY == "game.match_answer_latency_seconds"
+        assert MATCH_OUTCOMES == "game.match_outcomes_total"
+
+    def test_every_label_value_is_a_closed_enumeration(self) -> None:
+        """§9's cardinality rule: the number of time series each metric can
+        produce is fixed at import time."""
+        from app.modules.game.public import AnswerLatency, MatchOutcome
+        from app.modules.matchmaking.application.metrics import (
+            AcceptanceFailureAction,
+            DeliveryOutcome,
+            RetentionRelation,
+        )
+        from app.modules.matchmaking.domain.events import ReconciliationAction
+
+        for enumeration in (
+            AnswerLatency,
+            MatchOutcome,
+            AcceptanceFailureAction,
+            DeliveryOutcome,
+            RetentionRelation,
+            ReconciliationAction,
+        ):
+            assert len(list(enumeration)) <= 10
+            assert all(isinstance(member.value, str) for member in enumeration)
+
+    def test_the_reconciliation_actions_cover_every_failure_point(self) -> None:
+        """§9's real question is *where do workers fail?*, and it is
+        answerable only if the enum distinguishes the four places."""
+        from app.modules.matchmaking.domain.events import ReconciliationAction
+
+        assert {member.value for member in ReconciliationAction} == {
+            "settled",
+            "released",
+            "expired",
+            "requeued",
+            "pending_match_cancelled",
+            "no_action",
+            "reconciliation_failed",
+        }

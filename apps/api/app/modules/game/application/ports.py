@@ -2,12 +2,22 @@
 *needs* them, so a service depends on a contract and never on
 `SqlAlchemyMatchRecordRepository`.
 
-One protocol, because there is one aggregate with durable storage. The
-split that matters here is not between repositories but between this and
-the three published in `game.public`: those state what *other modules* may
-ask, this states what this module's own services need from a table. A
-consumer holding `PairingReconciliationReader` can learn whether a ticket
-produced a match; only something holding this can write one.
+Two protocols, split by **capability** rather than by aggregate — the
+argument every port pair on this platform makes:
+
+    MatchRecordRepository  read and write one match
+    MatchRetentionStore    delete the ones that never became games
+
+The second exists because the first must not be able to reach a `DELETE`:
+`game.match` is the permanent competitive record A-4 is about, and a bug in
+the acceptance sweep that deleted rather than expired would be
+unrecoverable. See `MatchRetentionStore`.
+
+The line these two share, and that separates both from the three protocols
+published in `game.public`: those state what *other modules* may ask, these
+state what this module's own services need from a table. A consumer holding
+`PairingReconciliationReader` can learn whether a ticket produced a match;
+only something holding one of these can change anything.
 """
 
 from collections.abc import Mapping, Sequence
@@ -144,4 +154,41 @@ class MatchRecordRepository(Protocol):
         ...
 
 
-__all__ = ["MatchRecordRepository"]
+__all__ = ["MatchRecordRepository", "MatchRetentionStore"]
+
+
+class MatchRetentionStore(Protocol):
+    """Deleting the matches that never became games — A64-015.5 §8.
+
+    A **second port rather than two methods on `MatchRecordRepository`**,
+    and the split is the one `OutboxRetentionStore` makes against
+    `OutboxRepository`: the acceptance service can create, lock, settle and
+    expire a match; it must not be able to *delete* one. A bug in the
+    expiry sweep that reached a `DELETE` would destroy the permanent
+    competitive record A-4 is about.
+
+    Satisfied by an adapter constructed only by the retention job's own
+    session — nothing on the HTTP path holds one.
+    """
+
+    async def prune_abandoned(self, *, before: datetime, batch_size: int) -> int:
+        """Deletes up to `batch_size` cancelled or expired matches settled
+        before `before`. Returns how many rows went.
+
+        See `game.public.AbandonedMatchRetention` for the contract and for
+        why an `active` match is unreachable from this statement.
+        """
+        ...
+
+    async def unsettled_before(self, instant: datetime) -> int:
+        """How many matches older than `instant` are still
+        `pending_acceptance`.
+
+        Not used to decide anything. It is the number that says *why* the
+        floor did not move, and here it is a genuine alarm: a pending match
+        older than the whole retention horizon means the acceptance-expiry
+        sweep has stopped, and two players are holding an offer nothing will
+        ever resolve. `PruneResult` carries `retained_unpublished` for
+        exactly the same reason.
+        """
+        ...

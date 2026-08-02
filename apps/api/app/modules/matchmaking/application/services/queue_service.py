@@ -29,6 +29,7 @@ cause.
 
     join           one — the ticket and its event
     leave          one — the resolution and its event
+    requeue        one — the replacement ticket and its event
     active_ticket  none — a read
     expire_due     two — the claim, then the resolutions (see `expire_due`)
 
@@ -51,7 +52,11 @@ from app.modules.matchmaking.domain.events import (
     QueueTicketEnqueued,
     QueueTicketExpired,
 )
-from app.modules.matchmaking.domain.exceptions import AlreadyQueued
+from app.modules.matchmaking.domain.exceptions import (
+    AlreadyQueued,
+    QueueNotPermitted,
+    TicketNotWaiting,
+)
 from app.modules.matchmaking.domain.queue_pool import QueuePool
 from app.modules.matchmaking.domain.queue_ticket import QueueSnapshot, QueueTicket
 from app.platform.outbox import EventPublisher
@@ -241,6 +246,127 @@ class QueueService:
             },
         )
         return True
+
+    async def requeue(self, *, ticket_id: UUID) -> QueueTicket | None:
+        """Puts a player back in the queue with the place in line they had
+        — A64-015.5 §1 and §2.
+
+        The reusable operation §2 asks for. Its one caller today is
+        `MatchOutcomeService`, reacting to a match that failed through no
+        fault of this player; a future rematch decline or an aborted game
+        would be a second caller and needs nothing new here.
+
+        Returns the new ticket, or `None` when the requeue **correctly did
+        not apply**. `None` is not a failure and every branch that produces
+        it is an ordinary outcome:
+
+            the source ticket is gone          nothing to restore
+            the source never produced a match  `QueueTicket.requeued` refuses
+            they already hold a live ticket    QT-1, and they are queued
+            they are no longer eligible        signed out, or in cooldown
+            somebody already requeued this     the unique index refused it
+
+        ## Idempotency is the index, not a check
+
+        §2 requires the operation to be idempotent, and the enforcement is
+        `uq_queue_ticket__requeued_from` — a partial unique index on
+        `source_ticket_id`. Two deliveries of one `match_declined` event
+        both pass the `active_ticket` read and both insert; only one row
+        survives, and the loser is reported as "already done" rather than
+        as an error. A check-then-insert would be correct until the relay
+        redelivered under load, which is exactly when it does.
+
+        ## Eligibility is re-asked, deliberately
+
+        §2: "blocked, sanctioned, or otherwise ineligible players are not
+        blindly requeued". The player accepted a match perhaps thirty
+        seconds ago, and in that window they may have signed out, or —
+        the case that matters — *declined a different match and earned a
+        cooldown*. Requeueing them anyway would let a decline be laundered
+        through somebody else's decline.
+
+        The eligibility read happens **before** the transaction opens, for
+        the reason `join` reads the rating outside one: it is a
+        cross-context call, and services.md BE-05 forbids those inside an
+        open transaction.
+        """
+        source = await self._tickets.by_id(ticket_id)
+        if source is None:
+            logger.warning("queue_requeue_source_missing", extra={"ticket_id": str(ticket_id)})
+            return None
+
+        at = self._clock.now()
+        if await self._tickets.active_ticket(source.player_id, now=at) is not None:
+            # They are already queued — by a manual re-entry, or by a
+            # delivery of this same event that got here first. Either way
+            # the outcome §1 wants is already true.
+            logger.debug("queue_requeue_already_queued", extra={"ticket_id": str(ticket_id)})
+            return None
+
+        try:
+            await self._eligibility.require_eligible(source.player_id, pool=source.pool)
+        except QueueNotPermitted:
+            logger.info(
+                "queue_requeue_refused",
+                extra={"ticket_id": str(ticket_id), "pool": source.pool.identifier()},
+            )
+            return None
+
+        try:
+            replacement = source.requeued(at=at, ttl=self._ticket_ttl_seconds)
+        except TicketNotWaiting:
+            # The source never produced a match, so there is nothing this
+            # player lost to somebody else's answer. A caller reaching here
+            # is a bug in the caller, and it is logged rather than raised
+            # because the caller is a background consumer that must not stop.
+            logger.error(
+                "queue_requeue_source_not_matched",
+                extra={"ticket_id": str(ticket_id), "status": source.status.value},
+            )
+            return None
+
+        async with self._unit_of_work:
+            try:
+                stored = await self._tickets.enqueue(replacement)
+            except AlreadyQueued:
+                # QT-1 or the requeue index refused it. Both mean somebody
+                # else got there first, which is the outcome we wanted.
+                await self._unit_of_work.rollback()
+                logger.debug("queue_requeue_lost_race", extra={"ticket_id": str(ticket_id)})
+                return None
+
+            await self._events.publish(
+                QueueTicketEnqueued(
+                    # The **replacement's** `entered_at`, which is the
+                    # original's — so a consumer plotting queue entries sees
+                    # this player where they actually belong in the
+                    # ordering rather than at the moment of recovery.
+                    occurred_at=stored.entered_at,
+                    ticket_id=stored.id,
+                    player_id=stored.player_id,
+                    variant=stored.pool.variant,
+                    queue_type=stored.queue_type,
+                    region=stored.region,
+                    rating_snapshot=stored.rating_snapshot,
+                    expires_at=stored.expires_at,
+                )
+            )
+            await self._unit_of_work.commit()
+
+        logger.info(
+            "queue_requeued",
+            extra={
+                "ticket_id": str(stored.id),
+                "source_ticket_id": str(ticket_id),
+                "player_id": str(stored.player_id),
+                "pool": stored.pool.identifier(),
+                # How much priority the policy actually preserved. The
+                # number that says whether §1's fairness rule is doing
+                # anything, without naming what happened to them.
+                "preserved_wait_seconds": (at - stored.entered_at).total_seconds(),
+            },
+        )
+        return stored
 
     async def active_ticket(self, *, player_id: UUID) -> QueueTicket | None:
         """The player's live ticket, or `None`.

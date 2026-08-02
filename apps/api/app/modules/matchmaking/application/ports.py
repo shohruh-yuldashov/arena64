@@ -8,6 +8,9 @@ by storage — the argument every port pair on this platform makes:
     QueueRepository        everything about a ticket in PostgreSQL
     RatingSnapshotProvider what number a ticket records at entry (QT-2)
     RecentOpponentProvider who these players have just played (A64-015.3)
+    CooldownRepository     who may not queue yet, and until when (A64-015.5)
+    QueueRetentionStore    deleting the tickets nobody owes anybody (§8)
+    PendingMatchSink       where a realtime match offer goes (§4)
 
 The **pairwise block** port is deliberately not here either:
 `friends.public.PairingExclusions` already answers it, and BL-2 is
@@ -28,6 +31,8 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from app.modules.matchmaking.domain.cooldown import QueueCooldown
+from app.modules.matchmaking.domain.pending_match import PendingMatchOffer
 from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType
 from app.modules.matchmaking.domain.queue_ticket import QueueSnapshot, QueueTicket
 
@@ -68,6 +73,22 @@ class QueueRepository(Protocol):
         `False` is not a failure. It means somebody else resolved the
         ticket first, which is what `QueueService.leave` reports as "you
         were not queued" — the honest answer, and the idempotent one.
+        """
+        ...
+
+    async def by_id(self, ticket_id: UUID) -> QueueTicket | None:
+        """One ticket, whatever its status — A64-015.5.
+
+        The read a **requeue** needs, and the only method on this port that
+        does not filter by liveness: the ticket being restored is `matched`
+        and therefore terminal, which every other read here deliberately
+        excludes.
+
+        `None` for an id that no longer names a row — retention removed it,
+        or it never existed. An ordinary outcome rather than an error: a
+        `match_declined` event redelivered after the retention horizon is a
+        thing that can happen, and the honest answer is "there is nothing
+        left to restore".
         """
         ...
 
@@ -347,5 +368,153 @@ class RecentOpponentProvider(Protocol):
         Never raises. An unreadable history must degrade to "no exclusions"
         rather than stop pairing: a rematch is a disappointment, and an
         empty pool is an outage.
+        """
+        ...
+
+
+class CooldownRepository(Protocol):
+    """Storage for `QueueCooldown` — A64-015.5 §3.
+
+    Its own port rather than three methods on `QueueRepository`, and the
+    split is by *capability* like every port pair on this platform: the
+    pairing scan and the expiry sweep both hold a queue repository, and
+    neither has any business being able to bar somebody from the queue.
+
+    **Durable, never process-local.** §3 forbids in-memory enforcement, and
+    the reason is the deployment AD-02 describes: several processes against
+    one database. A cooldown held in one worker's dictionary is a cooldown
+    the next request routes around.
+    """
+
+    async def apply(self, cooldown: QueueCooldown) -> QueueCooldown:
+        """Records a cooldown, **extending** any the player already has.
+
+        Returns the cooldown that is now in force, which is not necessarily
+        the one passed in: a player who declines twice keeps whichever
+        window ends later, and the caller needs the stored answer to report
+        an honest `retry_after`.
+
+        One statement — an upsert on `player_id` whose `SET` takes the
+        later expiry — because the alternative is read-then-write, and two
+        declines landing together would then both read "no cooldown" and
+        the second would overwrite rather than extend. That is exactly the
+        "repeated decline does not bypass the cooldown" rule §3 states, and
+        it is a constraint under concurrency rather than an `if`.
+
+        Flushes, never commits (repositories.md §5.1): the cooldown and the
+        outbox row that records why it exists are one transaction.
+        """
+        ...
+
+    async def active_for(self, player_id: UUID, *, now: datetime) -> QueueCooldown | None:
+        """The cooldown barring this player, or `None`.
+
+        **Expiry is applied in the query**, exactly as `active_ticket`
+        applies `expires_at`: a lapsed row that retention has not reached
+        yet must read as absent, or a player would be refused by
+        bookkeeping rather than by a rule.
+
+        `None` rather than raising — a player with no cooldown is the
+        overwhelmingly common case and every caller branches on it.
+        """
+        ...
+
+    async def prune_expired(self, *, before: datetime, batch_size: int) -> int:
+        """Deletes lapsed cooldown rows. Returns how many went.
+
+        Retention for the one relation on this platform whose rows are
+        *worthless* once expired: a cooldown that has lifted answers no
+        question anybody will ask, unlike a resolved queue ticket ("why was
+        I matched with them") or a settled match (the permanent record).
+
+        Bounded and safe for more than one pruner, by the same
+        `SKIP LOCKED` the outbox's retention uses.
+        """
+        ...
+
+
+class QueueRetentionStore(Protocol):
+    """Deleting the queue history nobody owes anybody — A64-015.5 §8.
+
+    A **separate port from `QueueRepository`**, and the split is the one
+    `OutboxRetentionStore` already makes against `OutboxRepository`: the
+    queue's use cases can enqueue, claim, reserve and resolve a ticket; they
+    must not be able to *delete* one. A bug in the expiry sweep that reached
+    a `DELETE` would destroy the history "why was I matched with them" is
+    answered from.
+
+    Satisfied by an adapter constructed only by the retention job's own
+    session — nothing on the HTTP path holds it.
+    """
+
+    async def prune_resolved(self, *, before: datetime, batch_size: int) -> int:
+        """Deletes up to `batch_size` **terminal** tickets resolved before
+        `before`. Returns how many rows went.
+
+        **Never touches a live ticket**, whatever its age. `waiting` and
+        `reserved` are excluded by predicate rather than by the horizon,
+        because a reserved ticket stranded by a dead worker is *old* and is
+        precisely the row reconciliation still needs — deleting it would
+        turn a recoverable pairing into a player who is silently no longer
+        in any queue.
+
+        The cutoff is `resolved_at`, which is non-null exactly for terminal
+        rows (`ck_queue_ticket__resolved_iff_terminal`), so the predicate and
+        the horizon agree by construction rather than by review.
+
+        Bounded by `batch_size` and safe for more than one pruner, by the
+        same `FOR UPDATE SKIP LOCKED` the relay's claim uses. An unbounded
+        `DELETE` on the queue relation would be an incident of its own.
+        """
+        ...
+
+    async def live_before(self, instant: datetime) -> int:
+        """How many **live** tickets are older than `instant`.
+
+        Not used to decide anything. It is the number that says *why* the
+        floor did not move, and on this relation it is a genuine alarm
+        rather than bookkeeping: a `waiting` ticket older than the whole
+        retention horizon is a player who has been in a queue for days,
+        which means the expiry sweep has stopped. `PruneResult` carries it
+        for the same reason `retained_unpublished` carries the outbox's.
+        """
+        ...
+
+
+class PendingMatchSink(Protocol):
+    """Where a realtime match offer goes — A64-015.5 §4.
+
+    The seam AD-09's gateway fills. Today's implementation writes a log
+    line, exactly as `notifications.NotificationSink` does and for the same
+    reason: there is no WebSocket transport in this build, and A64-015.5
+    excludes building one ("Do not implement the full live-game WebSocket
+    protocol").
+
+    **This is a seam, not a stub**, and the distinction is that everything
+    upstream is real — the offer was made durable in the same transaction as
+    the match, the relay claimed it, the participant and the deadline were
+    re-read at delivery, and the opponent preview passed the privacy gate.
+    What is missing is only the socket.
+
+    ## Its own port rather than `notifications.NotificationSink`
+
+    That one carries a `SocialNotification`, which is a rendered
+    `PublicProfile` about a *subject* — the wrong shape for a match offer,
+    which is about a contest and carries a deadline the client must count
+    down. AD-06 puts a port in the layer that needs it, and reusing a
+    contract by widening it is how one type ends up meaning two things.
+
+    A sink **may raise**. A delivery that failed is one the platform should
+    retry, so the exception propagates to the consumer, which turns it into
+    a recorded per-event failure and a backoff. Swallowing it here would
+    mark the event published and lose the offer silently.
+    """
+
+    async def deliver(self, offers: Sequence[PendingMatchOffer]) -> None:
+        """Delivers a batch. An empty batch is a legal no-op.
+
+        **Batch-first**, like `EventHandler` and `NotificationSink`: the
+        consumer resolves a whole relay tick at once, and a singular method
+        would be called in a loop by every implementation.
         """
         ...

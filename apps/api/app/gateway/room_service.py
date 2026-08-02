@@ -234,6 +234,46 @@ class GameRoomService:
             )
         return len(left)
 
+    async def is_attached(self, match_id: UUID, *, player_id: UUID, connection_id: UUID) -> bool:
+        """Whether **this connection** is in this match's room — §4.
+
+        The connection, not the player. §4 requires the move path to
+        "verify the connection belongs to the Game Room", and the
+        distinction is real: a player with two tabs may have joined on one
+        and not the other, and accepting a move from the tab that never
+        joined would mean the fan-out has no route back to it.
+
+        One Redis read, which is why the move handler asks this **before**
+        it asks `game` anything — see `MoveSubmissionHandler` on the
+        ordering.
+        """
+        members = await self._members.members_of(match_id)
+        return RoomMember(player_id=player_id, connection_id=connection_id) in members
+
+    async def record_progress(
+        self, match_id: UUID, *, ply: int, side_to_move: str, fingerprint: str
+    ) -> bool:
+        """Records the room's live projection — §11.
+
+        Forwards to the store's monotonic write and **never raises**: it
+        runs after a move is already committed in `game`, so a projection
+        that could not be written costs a client one resynchronisation, and
+        failing a move that was played would be strictly worse.
+
+        `False` means a newer ply is already stored, which under
+        at-least-once fan-out is an ordinary race rather than a problem.
+        """
+        try:
+            return await self._members.record_progress(
+                match_id, ply=ply, side_to_move=side_to_move, fingerprint=fingerprint
+            )
+        except Exception as exc:  # noqa: BLE001 — a projection must not fail a move
+            logger.warning(
+                "gateway_room_progress_write_failed",
+                extra={"match_id": str(match_id), "error": type(exc).__name__},
+            )
+            return False
+
     async def room_of(self, match_id: UUID) -> GameRoomSession | None:
         """The room as it stands, or `None` for a match that does not exist.
 

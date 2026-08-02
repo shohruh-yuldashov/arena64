@@ -34,24 +34,48 @@ envelope. Which is why `GatewayConnectionService.run` never raises and why
 this file resolves everything before the handshake is accepted.
 """
 
+import logging
+from datetime import timedelta
+from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends
 
-from app.api.deps import ClockDep, RedisPoolsDep, SettingsDep
+from app.api.deps import ClockDep, RateLimiterDep, RedisPoolsDep, SettingsDep
 from app.config.settings import GatewaySettings
 from app.core.clock import Clock
+from app.core.rate_limiting import RateLimitRule, RateLimitScope
 from app.gateway.connections import GatewayConnectionService, GatewayPolicy
+from app.gateway.delivery import (
+    InMemoryLocalSockets,
+    LoggingRemoteNodePublisher,
+    RoomBroadcaster,
+)
+from app.gateway.idempotency import RedisMoveIdempotencyStore
+from app.gateway.move_limits import ConnectionMoveLimiter, UnlimitedMoves
+from app.gateway.moves import MoveSubmissionHandler
 from app.gateway.node import resolve_node_id
-from app.gateway.ports import ConnectionRegistry, ConnectionRouter, RoomMemberStore
+from app.gateway.ports import (
+    ConnectionRegistry,
+    ConnectionRouter,
+    LocalSocketRegistry,
+    MoveRateLimiter,
+    RemoteNodePublisher,
+    RoomMemberStore,
+)
 from app.gateway.registry import RedisConnectionRegistry
 from app.gateway.room_service import GameRoomService
 from app.gateway.room_store import RedisRoomMemberStore
 from app.gateway.routing import FleetConnectionRouter
 from app.modules.auth.presentation.dependencies import WebSocketTicketServiceDep
-from app.modules.game.presentation.dependencies import WebSocketMatchRosterReaderDep
+from app.modules.game.presentation.dependencies import (
+    WebSocketLiveMovesDep,
+    WebSocketMatchRosterReaderDep,
+)
 from app.modules.users.presentation.dependencies import PresenceRecorderDep
 from app.platform.metrics import MetricsRecorder, process_metrics
+
+logger = logging.getLogger(__name__)
 
 
 def get_gateway_settings(settings: SettingsDep) -> GatewaySettings:
@@ -66,6 +90,22 @@ def get_gateway_settings(settings: SettingsDep) -> GatewaySettings:
 
 
 GatewaySettingsDep = Annotated[GatewaySettings, Depends(get_gateway_settings)]
+
+
+@lru_cache(maxsize=1)
+def get_local_sockets() -> LocalSocketRegistry:
+    """The sockets **this process** holds — A64-016.3 §10.
+
+    Cached, so there is exactly one per process. A per-request instance
+    would be a registry that never contains anything, which is the failure
+    that looks like "the fan-out silently reaches nobody" — and it would
+    look identical to a working single-player game.
+
+    Process-local by nature and not a correctness mechanism: a socket is a
+    file descriptor this process owns, and the fleet-wide question of
+    *which* node holds a connection is `ConnectionRegistry`'s, in Redis.
+    """
+    return InMemoryLocalSockets()
 
 
 def get_connection_registry(pools: RedisPoolsDep, clock: ClockDep) -> ConnectionRegistry:
@@ -83,6 +123,7 @@ def get_connection_registry(pools: RedisPoolsDep, clock: ClockDep) -> Connection
 
 
 ConnectionRegistryDep = Annotated[ConnectionRegistry, Depends(get_connection_registry)]
+LocalSocketsDep = Annotated[LocalSocketRegistry, Depends(get_local_sockets)]
 
 
 def get_node_id(settings: GatewaySettingsDep) -> str:
@@ -100,14 +141,18 @@ def get_node_id(settings: GatewaySettingsDep) -> str:
 NodeIdDep = Annotated[str, Depends(get_node_id)]
 
 
-def get_room_store(pools: RedisPoolsDep, clock: ClockDep) -> RoomMemberStore:
+def get_room_store(
+    pools: RedisPoolsDep, clock: ClockDep, settings: GatewaySettingsDep
+) -> RoomMemberStore:
     """Where room membership lives — over the `cache` role, like the
     connection registry it mirrors.
 
     Typed as the port, so nothing downstream can reach a Redis command or
     the reverse index that only the disconnect path should touch.
     """
-    return RedisRoomMemberStore(pools.cache, clock=clock)
+    return RedisRoomMemberStore(
+        pools.cache, clock=clock, progress_ttl_seconds=settings.room_ttl_seconds
+    )
 
 
 RoomStoreDep = Annotated[RoomMemberStore, Depends(get_room_store)]
@@ -158,6 +203,89 @@ def get_connection_router(registry: ConnectionRegistryDep, node_id: NodeIdDep) -
 ConnectionRouterDep = Annotated[ConnectionRouter, Depends(get_connection_router)]
 
 
+def get_remote_publisher() -> RemoteNodePublisher:
+    """Where a remote node's share of a fan-out goes — §9.
+
+    `LoggingRemoteNodePublisher` until there is a bus. Everything upstream
+    is real: the plan is computed from the live registry, the grouping is
+    one request per node, and the frame is the exact bytes a socket would
+    receive. Only the transport is missing, which is what §9 asks for
+    ("do not build a full distributed gateway broker in this task").
+
+    A deployment running more than one gateway node today therefore has
+    silently undelivered frames. `REMOTE_PUBLISHES` is what makes that
+    visible, and single-node is the only supported topology until
+    A64-016.4 — stated in `docs/01-architecture/websocket.md` §16.
+    """
+    return LoggingRemoteNodePublisher()
+
+
+def get_broadcaster(router: ConnectionRouterDep, sockets: LocalSocketsDep) -> RoomBroadcaster:
+    """The room fan-out, over the routing plan — §8."""
+    return RoomBroadcaster(
+        router=router,
+        sockets=sockets,
+        publisher=get_remote_publisher(),
+        metrics=get_gateway_metrics(),
+    )
+
+
+def get_move_limiter(
+    request_limiter: RateLimiterDep, settings: GatewaySettingsDep
+) -> MoveRateLimiter:
+    """The per-connection move limit — §13.
+
+    Over the platform's limiter rather than beside it: the sliding-window
+    Lua, the fail-open posture and the key derivation are already there and
+    already tested, and a second implementation would be a second place for
+    "count requests in a window" to be got right.
+
+    `UnlimitedMoves` when the switch is off, which is production code
+    rather than a double — the same argument `NoPresenceProvider` makes.
+    """
+    if not settings.move_rate_limit_enabled:
+        logger.warning("gateway_move_rate_limit_disabled", extra={"reason": "configuration"})
+        return UnlimitedMoves()
+
+    return ConnectionMoveLimiter(
+        limiter=request_limiter,
+        rule=RateLimitRule(
+            name="gateway_move",
+            scope=RateLimitScope.CONNECTION,
+            limit=settings.move_rate_limit,
+            window=timedelta(seconds=settings.move_rate_limit_window_seconds),
+        ),
+    )
+
+
+def get_move_handler(
+    moves: WebSocketLiveMovesDep,
+    rooms: RoomServiceDep,
+    broadcaster: Annotated[RoomBroadcaster, Depends(get_broadcaster)],
+    limiter: Annotated[MoveRateLimiter, Depends(get_move_limiter)],
+    pools: RedisPoolsDep,
+    settings: GatewaySettingsDep,
+) -> MoveSubmissionHandler:
+    """The `game.move.submit` handler, with everything it needs bound.
+
+    Six collaborators, which is what made A64-016.1's branching handler
+    stop being the right shape and is why §1 asks for a dispatch table —
+    every other handler is two lines and this one is a pipeline.
+    """
+    return MoveSubmissionHandler(
+        moves=moves,
+        rooms=rooms,
+        broadcaster=broadcaster,
+        idempotency=RedisMoveIdempotencyStore(pools.cache),
+        limiter=limiter,
+        metrics=get_gateway_metrics(),
+        idempotency_ttl_seconds=settings.move_idempotency_ttl_seconds,
+    )
+
+
+MoveHandlerDep = Annotated[MoveSubmissionHandler, Depends(get_move_handler)]
+
+
 def get_gateway_metrics() -> MetricsRecorder:
     """The process-wide recorder — A64-015.6 §10.
 
@@ -174,6 +302,8 @@ def build_gateway_service(
     tickets: WebSocketTicketServiceDep,
     registry: ConnectionRegistryDep,
     rooms: GameRoomService,
+    moves: MoveSubmissionHandler,
+    sockets: LocalSocketRegistry,
     presence: PresenceRecorderDep,
     clock: Clock,
     node_id: str,
@@ -192,6 +322,8 @@ def build_gateway_service(
         tickets=tickets,
         registry=registry,
         rooms=rooms,
+        moves=moves,
+        sockets=sockets,
         presence=presence,
         metrics=get_gateway_metrics(),
         clock=clock,
@@ -208,6 +340,8 @@ def get_gateway_service(
     tickets: WebSocketTicketServiceDep,
     registry: ConnectionRegistryDep,
     rooms: RoomServiceDep,
+    moves: MoveHandlerDep,
+    sockets: LocalSocketsDep,
     presence: PresenceRecorderDep,
     clock: ClockDep,
     node_id: NodeIdDep,
@@ -218,6 +352,8 @@ def get_gateway_service(
         tickets=tickets,
         registry=registry,
         rooms=rooms,
+        moves=moves,
+        sockets=sockets,
         presence=presence,
         clock=clock,
         node_id=node_id,

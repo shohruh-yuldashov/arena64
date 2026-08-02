@@ -38,7 +38,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.gateway.protocol import GatewayMessage
-from app.gateway.rooms import RoomMember
+from app.gateway.rooms import RoomMember, RoomProgress
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,6 +349,34 @@ class RoomMemberStore(Protocol):
         a store has no way to tell and no business telling."""
         ...
 
+    async def record_progress(
+        self, match_id: UUID, *, ply: int, side_to_move: str, fingerprint: str
+    ) -> bool:
+        """Records the room's live projection — A64-016.3 §11.
+
+        The minimum a client needs to synchronise and a router needs to
+        order: a sequence, whose turn it is, and a fingerprint. **Not the
+        board.** `game` is authoritative (AD-18) and this is an ephemeral
+        read projection; duplicating the aggregate here would be a second
+        thing to be wrong.
+
+        **Monotonic** — returns `False` and writes nothing when `ply` is not
+        greater than what is stored. §12 asks for exactly this: "concurrent
+        updates cannot silently overwrite a newer sequence". Two moves
+        delivered out of order would otherwise leave the room reporting the
+        earlier one, and a client resynchronising against it would be sent
+        backwards.
+
+        `False` is not an error. It means a newer move already landed,
+        which under at-least-once delivery is an ordinary race, and the
+        caller has nothing to do about it.
+        """
+        ...
+
+    async def progress_of(self, match_id: UUID) -> RoomProgress | None:
+        """The room's live projection, or `None` if no move has landed."""
+        ...
+
     async def leave_all(self, member: RoomMember) -> Sequence[UUID]:
         """Detaches one connection from every room it is in. Returns which.
 
@@ -356,6 +384,156 @@ class RoomMemberStore(Protocol):
         `room.leave`, and without this its member would sit in the room
         until the TTL — during which `both_connected` reports a player who
         is not there, which is the one thing the room exists to answer.
+        """
+        ...
+
+
+class LocalSocketRegistry(Protocol):
+    """The sockets **this process** holds, by connection id — A64-016.3 §10.
+
+    Process-local, and that is not a violation of "no process-local state
+    for correctness". A socket is a file descriptor owned by one process:
+    no other node can write to it, so a map from connection id to socket is
+    a fact about this process rather than a cached opinion about the fleet.
+    The fleet-wide question — *which* node holds a connection — is
+    `ConnectionRegistry`'s, and that one is in Redis precisely because it is
+    shared.
+
+    The two are used together: `RoutingPlan` says a route is local, and this
+    turns that route into something writable.
+    """
+
+    def attach(self, connection_id: UUID, socket: GatewaySocket) -> None:
+        """Records a socket this process is serving."""
+        ...
+
+    def detach(self, connection_id: UUID) -> None:
+        """Forgets one. Idempotent — detaching an absent connection is a
+        no-op, so a cleanup that runs twice cannot remove a reconnection
+        that happened to reuse the id."""
+        ...
+
+    def socket_for(self, connection_id: UUID) -> GatewaySocket | None:
+        """The socket, or `None` if this process is not holding it.
+
+        `None` is an **ordinary** answer, not a failure: a connection can
+        close between a routing plan being built and a frame being written,
+        and §10 requires that to be tolerated rather than to fail the move.
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class ForwardingRequest:
+    """One node's share of a fan-out — A64-016.3 §9.
+
+    **Primitive-only.** No `GatewaySocket`, no FastAPI `WebSocket`, no
+    engine type: §9 requires a "stable primitive payload", and the reason is
+    that the eventual transport serialises this onto a bus. A value that
+    could hold a socket is a value that cannot leave the process, which
+    would make the seam a lie.
+
+    One of these per **node**, never per connection — see
+    `RemoteNodePublisher`.
+    """
+
+    node_id: str
+    connection_ids: tuple[UUID, ...]
+    """Which of that node's connections should receive the frame.
+
+    Carried rather than left for the receiving node to recompute, because
+    the routing plan is the source of truth (§8) and a receiver that
+    re-derived the recipient set could disagree with the sender about who
+    was in the room a moment ago.
+    """
+
+    frame: str
+    """The encoded envelope, exactly as it would be written to a socket.
+
+    A string rather than a `GatewayMessage`, so the receiving node writes it
+    without re-encoding — and so that a frame cannot mean two things because
+    two builds serialised the same message differently.
+    """
+
+
+class RemoteNodePublisher(Protocol):
+    """Hands one node's share of a fan-out to whatever will carry it —
+    A64-016.3 §9.
+
+    **The seam, not the transport.** §9 is explicit that this task does not
+    build a broker, does not use Pub/Sub and takes no Celery dependency; it
+    asks for the abstraction the next task implements behind.
+
+    The contract that matters for that implementation:
+
+    **Never raises.** A move is committed before anything is delivered
+    (§9 — "failures do not roll back an already accepted move"), so a
+    publisher that raised would turn a delivery problem into a move that
+    appears to have failed after it was applied. It reports success and the
+    caller records the failure.
+
+    **Safely repeatable.** The frame carries a ply, and a client that
+    receives the same ply twice ignores the second — so at-least-once
+    delivery is acceptable and the eventual transport need not deduplicate.
+    """
+
+    async def publish(self, request: ForwardingRequest) -> bool:
+        """Hands off one node's share. `False` if it could not be handed
+        off.
+
+        Returns rather than raises — see this protocol's docstring. `False`
+        is what the caller counts as a remote delivery failure, which is the
+        only way an operator can see that half a fan-out is not arriving.
+        """
+        ...
+
+
+class MoveIdempotency(Protocol):
+    """Remembers one answer per `(connection, request_id)` — A64-016.3 §7.
+
+    Deliberately typed in **messages** rather than strings, so the handler
+    replays a frame it can hand straight to a socket and never re-renders a
+    stored decision — two answers to one request that were rendered twice
+    are two answers that can differ.
+    """
+
+    async def replay(self, connection_id: UUID, request_id: str) -> GatewayMessage | None:
+        """The answer this request already produced, or `None`.
+
+        `None` for a request never seen **and** for one whose entry has
+        lapsed, indistinguishably — both mean "process it", and the ply
+        compare-and-set is what stops a lapsed retry applying twice.
+        """
+        ...
+
+    async def remember(
+        self, connection_id: UUID, request_id: str, *, frame: GatewayMessage, ttl_seconds: int
+    ) -> None:
+        """Records the answer. **Never raises** — it runs after the move is
+        already applied and acknowledged, so a failure costs a retry being
+        reprocessed rather than anything a player can see."""
+        ...
+
+
+class MoveRateLimiter(Protocol):
+    """Bounds how fast one connection may submit moves — A64-016.3 §13.
+
+    Per **connection**, not per player: a player with two tabs is two
+    clients, and a limit shared between them would let one tab's
+    misbehaviour throttle the other's game.
+
+    Its own port rather than the platform `RateLimiter` directly, because
+    the answer this caller needs is a boolean — a socket has no headers to
+    carry `Retry-After` into, so the decision object every HTTP route reads
+    is machinery a handler would have to unpack and discard.
+    """
+
+    async def allow(self, connection_id: UUID) -> bool:
+        """Whether this connection may submit now.
+
+        **Never raises.** A limiter that failed would fail a move, and the
+        platform's own posture is that a rate limit outage degrades rather
+        than propagates — see `RateLimitSettings.fail_open`.
         """
         ...
 
@@ -374,8 +552,13 @@ __all__ = [
     "ConnectionRegistry",
     "ConnectionRoute",
     "ConnectionRouter",
+    "ForwardingRequest",
     "GatewaySocket",
+    "LocalSocketRegistry",
+    "MoveIdempotency",
+    "MoveRateLimiter",
     "RedeemedIdentity",
+    "RemoteNodePublisher",
     "RoomMemberStore",
     "RoutingPlan",
     "TicketRedeemer",

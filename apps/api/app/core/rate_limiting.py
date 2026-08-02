@@ -130,6 +130,23 @@ class RateLimitScope(StrEnum):
     sign-in attempt and a settings change in the same bucket.
     """
 
+    CONNECTION = "connection"
+    """One WebSocket connection — A64-016.3 §13.
+
+    The dimension a realtime tier needs and the three above cannot express.
+    Not `USER`, deliberately: a player with two tabs is two clients, and a
+    shared bucket would let one tab's misbehaving loop throttle the other's
+    game — which on a live board is a player losing to somebody else's bug.
+
+    Unspoofable for the same reason `USER` is, and more directly: the
+    subject is a `connection_id` this process minted when it accepted the
+    socket. A client never sees it and has no field to send one in.
+
+    **Bounded by construction.** A connection lives for one socket, so the
+    keyspace is bounded by concurrent connections rather than by history —
+    and each key expires with its window like every other rate-limit key.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class RateLimitRule:

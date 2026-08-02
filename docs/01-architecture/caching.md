@@ -1,7 +1,7 @@
 # Redis Keyspaces, Caching and TTL Policy
 
 > **Status:** Approved for the keyspaces that exist — `rl:v1:`, `presence:v1:`, `wsticket:v1:`,
-> `gwconn:v2:`, `gwroom:v1:`,
+> `gwconn:v2:`, `gwroom:v1:`, `gwroomstate:v1:`, `gwmove:v1:`, `game:live:v1:`,
 > `friends:v1:` and Celery's. Sections marked *Not yet allocated* describe
 > workloads with no implementation.
 > **Owner:** Backend platform
@@ -414,6 +414,9 @@ and what happens when it stops fitting.**
 | `gwconn:v2:<player_id>` | gateway | `cache` | `GATEWAY_CONNECTION_TTL_SECONDS` per member, by score; `EXPIRE` on the key | **Propagates.** A connection that cannot be registered is one nothing can route to. Member is `connection_id\|node_id` since A64-016.2 — see websocket.md §5, including why v1 needs no migration |
 | `gwroom:v1:<match_id>` | gateway | `cache` | `GATEWAY_ROOM_TTL_SECONDS` per member, by score; `EXPIRE` on the key | **Propagates.** A room membership that cannot be written is a socket nothing can route a move to |
 | `gwconnroom:v1:<connection_id>` | gateway | `cache` | Same as the room key | Degrades. A stale entry costs one wasted `ZREM`; the room key is authoritative — websocket.md §15.1 |
+| `gwroomstate:v1:<match_id>` | gateway | `cache` | `GATEWAY_ROOM_TTL_SECONDS`, `PEXPIRE` inside the script | Degrades. A projection; `game` is authoritative. Written by a **monotonic** CAS so an out-of-order fan-out cannot move it backwards — websocket.md §17.9 |
+| `gwmove:v1:<connection_id>:<request_id>` | gateway | `cache` | `GATEWAY_MOVE_IDEMPOTENCY_TTL_SECONDS` | Degrades. A lost entry costs a retry being reprocessed, which the ply CAS then refuses as stale — websocket.md §17.5 |
+| `game:live:v1:<match_id>` | `game` | **`live`** | `GAME_LIVE_STATE_TTL_SECONDS`, `PEXPIRE` inside the script | **Propagates, and is the one keyspace on this platform that is not reconstructible.** AD-18's live position; the durable move log that would allow replay does not exist yet — websocket.md §18 |
 | `celery-*` | Celery | `broker` | `result_expires` | Celery's |
 
 **Sessions are not in this table, and that is the finding.** `auth`'s refresh

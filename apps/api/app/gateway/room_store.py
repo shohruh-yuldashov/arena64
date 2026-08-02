@@ -3,9 +3,10 @@ A64-016.2 §6.
 
 ## The keyspace
 
-    gwroom:v1:<match_id>   ->  sorted set, member = "<player_id>|<connection_id>"
-                                            score  = expiry, epoch seconds
+    gwroom:v1:<match_id>           ->  sorted set, member = "<player>|<connection>"
+                                                   score  = expiry, epoch seconds
     gwconnroom:v1:<connection_id>  ->  set of match ids this connection is in
+    gwroomstate:v1:<match_id>      ->  hash { ply, side_to_move, fingerprint }
 
 Registered in `caching.md` §3 (C-1), versioned (C-2), expiring (C-3).
 
@@ -35,6 +36,23 @@ bounded two ways: both keys are written in one transaction, and the forward
 key is authoritative — `members_of` never reads the reverse index, so a stale
 entry there causes one wasted `ZREM` and never a phantom member.
 
+## The progress projection, and why it is a third key
+
+`gwroomstate:v1:` holds the room's live read projection (§11) — a sequence,
+whose turn it is, and a fingerprint. Separate from the membership set
+because the two have different shapes and different write paths: membership
+is a sorted set written on join and leave, progress is a hash written on
+every move.
+
+Its write is a **monotonic** compare-and-set, not an `HSET`. §12 requires
+that a concurrent update cannot silently overwrite a newer sequence, and
+under at-least-once fan-out an out-of-order delivery is ordinary rather than
+rare — a plain write would leave the room reporting an older ply and send a
+resynchronising client backwards.
+
+**Not the board.** `game` is authoritative (AD-18); this is a projection
+that is allowed to be stale and never allowed to be wrong about ordering.
+
 ## Why `cache`
 
 Same posture as the connection registry and presence: derived from two facts
@@ -53,7 +71,7 @@ from redis.asyncio import Redis
 
 from app.core.clock import Clock
 from app.gateway.node import member_separator
-from app.gateway.rooms import RoomMember
+from app.gateway.rooms import RoomMember, RoomProgress
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +79,33 @@ KEY_VERSION: Final = "v1"
 
 _ROOM_PREFIX: Final = f"gwroom:{KEY_VERSION}:"
 _CONNECTION_PREFIX: Final = f"gwconnroom:{KEY_VERSION}:"
+_PROGRESS_PREFIX: Final = f"gwroomstate:{KEY_VERSION}:"
+
+_PLY_FIELD: Final = "ply"
+_SIDE_FIELD: Final = "side_to_move"
+_FINGERPRINT_FIELD: Final = "fingerprint"
+
+#: Monotonic compare-and-set on the room's ply — A64-016.3 §11, §12.
+#:
+#: `KEYS[1]` the progress key. `ARGV`: ply, side to move, fingerprint, TTL
+#: in milliseconds. Returns `1` when it wrote and `0` when a newer ply was
+#: already stored.
+#:
+#: A plain `HSET` would let an out-of-order delivery move the room backwards,
+#: and under at-least-once fan-out that is the ordinary case rather than a
+#: rare race. Strictly greater, so a redelivery of the *same* ply is a no-op
+#: rather than a rewrite.
+_ADVANCE_PROGRESS = """
+local stored = redis.call('HGET', KEYS[1], 'ply')
+
+if stored ~= false and tonumber(stored) >= tonumber(ARGV[1]) then
+    return 0
+end
+
+redis.call('HSET', KEYS[1], 'ply', ARGV[1], 'side_to_move', ARGV[2], 'fingerprint', ARGV[3])
+redis.call('PEXPIRE', KEYS[1], ARGV[4])
+return 1
+"""
 
 #: How much longer a key lives than its longest-lived member — see
 #: `RedisConnectionRegistry` on why a sorted set needs one.
@@ -70,13 +115,19 @@ _KEY_TTL_MARGIN_SECONDS: Final = 60
 class RedisRoomMemberStore:
     """`RoomMemberStore` over the `cache` role."""
 
-    def __init__(self, redis: Redis, *, clock: Clock) -> None:
+    def __init__(self, redis: Redis, *, clock: Clock, progress_ttl_seconds: int) -> None:
         self._redis = redis
         self._clock = clock
+        self._progress_ttl_seconds = progress_ttl_seconds
+        self._advance_progress = redis.register_script(_ADVANCE_PROGRESS)
 
     @staticmethod
     def _room_key(match_id: UUID) -> str:
         return f"{_ROOM_PREFIX}{match_id}"
+
+    @staticmethod
+    def _progress_key(match_id: UUID) -> str:
+        return f"{_PROGRESS_PREFIX}{match_id}"
 
     @staticmethod
     def _connection_key(connection_id: UUID) -> str:
@@ -143,6 +194,47 @@ class RedisRoomMemberStore:
         """
         raw = await self._redis.zrangebyscore(self._room_key(match_id), min=self._now(), max="+inf")
         return self._decode_all(raw)
+
+    async def record_progress(
+        self, match_id: UUID, *, ply: int, side_to_move: str, fingerprint: str
+    ) -> bool:
+        """Records the room's live projection, monotonically — §11, §12.
+
+        A Lua compare-and-set on the ply rather than a plain `HSET`. §12
+        requires that "concurrent updates cannot silently overwrite a newer
+        sequence", and a read-then-write has a window that a later move
+        lands in — which under at-least-once fan-out is not a rare race but
+        the ordinary consequence of two nodes delivering.
+
+        Returns `False` when a newer ply is already stored. Not an error:
+        the caller has nothing to do about it, and the room is already
+        showing the better answer.
+        """
+        wrote = await self._advance_progress(
+            keys=[self._progress_key(match_id)],
+            args=[str(ply), side_to_move, fingerprint, str(self._progress_ttl_seconds * 1000)],
+        )
+        return bool(wrote)
+
+    async def progress_of(self, match_id: UUID) -> RoomProgress | None:
+        """The room's live projection, or `None` if no move has landed."""
+        stored = await self._redis.hgetall(self._progress_key(match_id))  # type: ignore[misc]
+        if not stored:
+            return None
+
+        raw = {_as_text(key): _as_text(value) for key, value in stored.items()}
+        try:
+            return RoomProgress(
+                ply=int(raw[_PLY_FIELD]),
+                side_to_move=raw[_SIDE_FIELD],
+                fingerprint=raw[_FINGERPRINT_FIELD],
+            )
+        except (KeyError, ValueError):
+            # Tolerant like every decoder here — a value written by another
+            # build must cost one unsynchronised client, not an exception
+            # inside a fan-out.
+            logger.warning("gateway_room_progress_malformed")
+            return None
 
     async def leave_all(self, member: RoomMember) -> Sequence[UUID]:
         """Detaches one connection from every room it is in.

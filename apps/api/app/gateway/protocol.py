@@ -160,6 +160,37 @@ class MessageType(StrEnum):
     ROOM_LEFT = "room.left"
     """Server to client, confirming a leave."""
 
+    MOVE_SUBMIT = "game.move.submit"
+    """Client to server, on the `game` channel — A64-016.3 §2.
+
+    Carries `match_id` and `path`: the squares the piece occupies in order.
+    **Not** a from/to pair, which is ambiguous in draughts — the same origin
+    and destination can be reached by two capture sequences taking different
+    pieces — and **not** the captures or the promotion, which the server
+    derives from its own generator so a tampered client cannot claim to have
+    taken a piece it did not jump."""
+
+    MOVE_ACCEPTED = "game.move.accepted"
+    """Server to client. The move was applied; carries the new ply, the side
+    to move, a position fingerprint and what the engine determined the move
+    actually was."""
+
+    MOVE_REJECTED = "game.move.rejected"
+    """Server to client. The move was not applied, with a stable category.
+
+    Separate from `error` because a client branches on it differently: an
+    `error` is about the *frame*, and this is about the *move* — the socket
+    is fine, the request was well formed, and the game said no."""
+
+    MOVE_APPLIED = "game.move.applied"
+    """Server to client, to **both** participants — the fan-out.
+
+    The submitter also receives `game.move.accepted`, and the two are
+    deliberately not merged: the acknowledgement is correlated to a
+    `request_id` and the broadcast is not, so a client that received only
+    the broadcast could not tell whether its own submission or its
+    opponent's produced it."""
+
     ERROR = "error"
     """Server to client. Always carries a `GatewayErrorCode`, never prose."""
 
@@ -195,6 +226,38 @@ class GatewayErrorCode(StrEnum):
     `NOT_A_PARTICIPANT` because it discloses nothing the caller does not
     already know (they are a participant) and because the client's response
     differs: wait, rather than stop asking."""
+
+    NOT_IN_ROOM = "not_in_room"
+    """A move arrived on a connection that has not joined the match's room.
+
+    Distinct from `NOT_A_PARTICIPANT` because it is the client's own
+    sequencing mistake rather than a permission failure — the fix is to
+    send `room.join` first, which is actionable, where "you are not in this
+    match" is not."""
+
+    NOT_YOUR_TURN = "not_your_turn"
+    """The submitter does not own the side to move. A **synchronisation**
+    failure: the client should resynchronise, not conclude its move
+    generator is wrong."""
+
+    ILLEGAL_MOVE = "illegal_move"
+    """The path is not legal in the current position. Under AD-14 the
+    client ran the same rules and disagreed, so this is the one rejection a
+    client should log loudly."""
+
+    STALE_STATE = "stale_state"
+    """Another writer advanced the match first. **Retryable** — nothing
+    about the move was wrong. In practice the other writer is the opponent,
+    so a retry usually returns `not_your_turn`, which is correct."""
+
+    MATCH_NOT_ACTIVE = "match_not_active"
+    """The match is not being played. One code for still-in-acceptance,
+    declined, expired and finished, because the client's response to all
+    four is identical: stop sending moves."""
+
+    RATE_LIMITED = "rate_limited"
+    """Too many moves from this connection. The connection **stays open**
+    — §13 forbids closing it for one ordinary violation."""
 
     INTERNAL_ERROR = "internal_error"
     """Something failed that the client cannot act on. Matches the platform's
@@ -331,6 +394,107 @@ def room_joined(
     )
 
 
+def move_accepted(
+    *,
+    match_id: UUID,
+    ply: int,
+    side_to_move: str,
+    fingerprint: str,
+    path: Sequence[str],
+    captured: Sequence[str],
+    promoted_to: str | None,
+    request_id: str | None,
+) -> GatewayMessage:
+    """The submitter's acknowledgement — A64-016.3 §3.
+
+    Correlated by `request_id`, which is the envelope's existing field: §7
+    forbids inventing a second identifier, and there is nothing a move
+    correlation token would need that this does not already do.
+
+    Carries a **fingerprint rather than a board**. The client already
+    applied the move optimistically (AD-23); what it needs is confirmation
+    and a way to detect divergence, and a full position on every move would
+    be the largest payload in the protocol multiplied by every move of
+    every game.
+    """
+    return GatewayMessage(
+        type=MessageType.MOVE_ACCEPTED,
+        payload={
+            "match_id": str(match_id),
+            "ply": ply,
+            "side_to_move": side_to_move,
+            "fingerprint": fingerprint,
+            "applied": _applied_payload(path, captured, promoted_to),
+        },
+        request_id=request_id,
+        channel=Channel.GAME,
+    )
+
+
+def move_rejected(code: GatewayErrorCode, *, request_id: str | None, reason: str) -> GatewayMessage:
+    """The submitter's refusal — §3 and §14.
+
+    A **stable category** plus a safe sentence. The category is what a
+    client branches on; the sentence is what it may show a player, and it
+    is drawn from a fixed table rather than from an exception — §14 forbids
+    leaking SQL errors, Redis errors, Python class names and stack traces,
+    and the only way to guarantee that is for the message never to come
+    from the failure object at all.
+    """
+    return GatewayMessage(
+        type=MessageType.MOVE_REJECTED,
+        payload={"code": code.value, "reason": reason},
+        request_id=request_id,
+        channel=Channel.GAME,
+    )
+
+
+def move_applied(
+    *,
+    match_id: UUID,
+    ply: int,
+    side_to_move: str,
+    fingerprint: str,
+    path: Sequence[str],
+    captured: Sequence[str],
+    promoted_to: str | None,
+) -> GatewayMessage:
+    """The broadcast both participants receive.
+
+    **No `request_id`**, deliberately: this frame is not an answer to
+    anybody's request. The submitter receives it *as well as* their
+    acknowledgement, which is what lets a client treat the broadcast
+    uniformly — one code path advances the board whoever moved.
+    """
+    return GatewayMessage(
+        type=MessageType.MOVE_APPLIED,
+        payload={
+            "match_id": str(match_id),
+            "ply": ply,
+            "side_to_move": side_to_move,
+            "fingerprint": fingerprint,
+            "applied": _applied_payload(path, captured, promoted_to),
+        },
+        channel=Channel.GAME,
+    )
+
+
+def _applied_payload(
+    path: Sequence[str], captured: Sequence[str], promoted_to: str | None
+) -> dict[str, Any]:
+    """What the engine determined the move was.
+
+    Shared by the acknowledgement and the broadcast so the two cannot
+    describe the same move differently — which is the bug a client would
+    see as its own board diverging from its opponent's.
+    """
+    return {
+        "path": list(path),
+        "captured": list(captured),
+        "promoted_to": promoted_to,
+    }
+
+
 def room_left(*, match_id: UUID, request_id: str | None) -> GatewayMessage:
     """Confirmation that this connection has left a room.
 
@@ -446,6 +610,9 @@ __all__ = [
     "connection_ready",
     "decode",
     "error",
+    "move_accepted",
+    "move_applied",
+    "move_rejected",
     "pong",
     "room_joined",
     "room_left",

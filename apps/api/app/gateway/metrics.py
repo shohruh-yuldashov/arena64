@@ -88,6 +88,72 @@ ROOM_STATES: Final = "gateway.room_states_total"
 ROUTE_RESOLUTIONS: Final = "gateway.route_resolutions_total"
 
 
+#: Move frames received — §15's "move submissions". Counted before any
+#: validation, so `submissions - accepted - rejected` is the number that
+#: were deduplicated by `request_id`.
+MOVE_SUBMISSIONS: Final = "gateway.move_submissions_total"
+
+#: Moves the game applied — §15's "accepted moves".
+MOVES_ACCEPTED: Final = "gateway.moves_accepted_total"
+
+#: Moves refused, by bounded category — §15's "rejected moves", "stale-state
+#: conflicts" and "rate-limit rejections", which are three labels on one
+#: counter rather than three counters: they are mutually exclusive outcomes
+#: of one operation, and splitting them would make "what fraction of moves
+#: are refused" a sum across metrics.
+MOVES_REJECTED: Final = "gateway.moves_rejected_total"
+
+#: Frames written to sockets this node holds — §15's "local deliveries".
+LOCAL_DELIVERIES: Final = "gateway.local_deliveries_total"
+
+#: Forwarding requests published to other nodes — §15's "remote-node
+#: publishes". **One per node, not per connection**, which is what the
+#: counter is for: a rate that tracks connections rather than nodes is the
+#: symptom of a publisher that bypassed the routing plan.
+REMOTE_PUBLISHES: Final = "gateway.remote_publishes_total"
+
+#: Forwarding requests that could not be published — §15's "remote delivery
+#: failures". Separate from `REMOTE_PUBLISHES` rather than a label on it,
+#: because a failure is not an attempt that happened to end differently: an
+#: alert fires on this rate alone.
+REMOTE_PUBLISH_FAILURES: Final = "gateway.remote_publish_failures_total"
+
+
+class MoveRejection(StrEnum):
+    """Why a move was not applied.
+
+    Closed and small, and every member maps to exactly one wire code — see
+    `app/gateway/moves.py`. A category per *failure mode* rather than per
+    exception type, so a new exception in `game` that means the same thing
+    to a client does not become a new time series.
+    """
+
+    NOT_IN_ROOM = "not_in_room"
+    NOT_A_PARTICIPANT = "not_a_participant"
+    NOT_YOUR_TURN = "not_your_turn"
+    ILLEGAL_MOVE = "illegal_move"
+    STALE_STATE = "stale_state"
+    """§15's "stale-state conflicts". A rising rate means players are
+    genuinely racing — two clients submitting against the same ply — which
+    on a two-player game means one of them has a broken turn indicator."""
+
+    MATCH_NOT_ACTIVE = "match_not_active"
+    RATE_LIMITED = "rate_limited"
+    """§15's "rate-limit rejections". Counted here rather than on its own
+    counter because from the client's side it is one of the ways a move can
+    be refused, and an operator comparing it against the others is asking
+    the right question."""
+
+    MALFORMED = "malformed"
+    """The frame decoded but its payload was not a move — no `match_id`, no
+    `path`, or a `path` that is not a list of strings."""
+
+    INTERNAL = "internal"
+    """Something failed that the client cannot act on. Always accompanied
+    by an `ERROR` log carrying the exception; this exists so the *rate* is
+    visible without parsing logs."""
+
+
 class RouteLocality(StrEnum):
     """Whether a recipient connection is held by this process."""
 

@@ -31,10 +31,17 @@ import asyncio
 from collections.abc import Sequence
 from uuid import UUID
 
-from app.gateway.ports import ConnectionClosed, ConnectionRoute
+from app.gateway.ports import ConnectionClosed, ConnectionRoute, ForwardingRequest
 from app.gateway.protocol import GatewayMessage, MessageType
-from app.gateway.rooms import RoomMember
-from app.modules.game.public import MatchRecordStatus, MatchRoster
+from app.gateway.rooms import RoomMember, RoomProgress
+from app.modules.engine import PlayerSide
+from app.modules.game.public import (
+    AppliedMove,
+    MatchRecordStatus,
+    MatchRoster,
+    SubmitMoveRequest,
+    SubmitMoveResult,
+)
 from app.modules.users.public import DeviceType
 
 
@@ -216,6 +223,10 @@ class RecordingPresence:
 
 
 __all__ = [
+    "RecordingRemotePublisher",
+    "InMemoryMoveIdempotency",
+    "FakeSubmitMoves",
+    "CountingMoveLimiter",
     "FakeConnectionRegistry",
     "FakeGatewaySocket",
     "FakeRoomMemberStore",
@@ -249,6 +260,7 @@ class FakeRoomMemberStore:
     def __init__(self) -> None:
         self.rooms: dict[UUID, list[RoomMember]] = {}
         self.rooms_of_connection: dict[UUID, set[UUID]] = {}
+        self.progress: dict[UUID, RoomProgress] = {}
 
     async def join(
         self, match_id: UUID, member: RoomMember, *, ttl_seconds: int
@@ -268,6 +280,24 @@ class FakeRoomMemberStore:
 
     async def members_of(self, match_id: UUID) -> Sequence[RoomMember]:
         return tuple(self.rooms.get(match_id, []))
+
+    async def record_progress(
+        self, match_id: UUID, *, ply: int, side_to_move: str, fingerprint: str
+    ) -> bool:
+        """Monotonic, like the real Lua: a write that would move the room
+        backwards is refused. Modelled because an out-of-order delivery is
+        ordinary under at-least-once fan-out, not a rare race."""
+        current = self.progress.get(match_id)
+        if current is not None and current.ply >= ply:
+            return False
+
+        self.progress[match_id] = RoomProgress(
+            ply=ply, side_to_move=side_to_move, fingerprint=fingerprint
+        )
+        return True
+
+    async def progress_of(self, match_id: UUID) -> RoomProgress | None:
+        return self.progress.get(match_id)
 
     async def leave_all(self, member: RoomMember) -> Sequence[UUID]:
         left = tuple(self.rooms_of_connection.pop(member.connection_id, set()))
@@ -311,3 +341,97 @@ class StubMatchRosters:
 
     async def roster_of(self, match_id: UUID) -> MatchRoster | None:
         return self.rosters.get(match_id)
+
+
+class FakeSubmitMoves:
+    """A `SubmitMoveUseCase` a test dictates the answers of.
+
+    A stub rather than the real `LiveMoveService`, and the line is the one
+    every gateway fake draws: what these tests are about is the *transport*
+    — the ordering of the checks, the wire mapping, the fan-out — not
+    whether the engine agrees a path is legal. That is
+    `tests/unit/test_move_generation.py`'s, and §16 forbids duplicating it.
+
+    `raises` is what makes the error-mapping assertions possible without
+    constructing a position that produces each failure.
+    """
+
+    def __init__(self) -> None:
+        self.raises: Exception | None = None
+        self.submissions: list[SubmitMoveRequest] = []
+        self._ply = 0
+
+    async def submit(self, request: SubmitMoveRequest) -> SubmitMoveResult:
+        self.submissions.append(request)
+        if self.raises is not None:
+            raise self.raises
+
+        self._ply += 1
+        return SubmitMoveResult(
+            match_id=request.match_id,
+            ply=self._ply,
+            side_to_move=PlayerSide.DARK,
+            fingerprint=f"fingerprint-{self._ply}",
+            applied=AppliedMove(path=request.path, captured=(), promoted_to=None),
+        )
+
+
+class InMemoryMoveIdempotency:
+    """`MoveIdempotency` as a dict keyed on `(connection, request_id)`.
+
+    The scope is the point, and it is modelled rather than simplified: a
+    store keyed on the player would make one tab's retry return the other
+    tab's answer, which is the bug §7's explicit scoping exists to prevent.
+
+    No expiry. The TTL is Redis's and a fake clock here would make "the
+    entry lapsed" a property of the fake.
+    """
+
+    def __init__(self) -> None:
+        self.answers: dict[tuple[UUID, str], GatewayMessage] = {}
+
+    async def replay(self, connection_id: UUID, request_id: str) -> GatewayMessage | None:
+        return self.answers.get((connection_id, request_id))
+
+    async def remember(
+        self, connection_id: UUID, request_id: str, *, frame: GatewayMessage, ttl_seconds: int
+    ) -> None:
+        self.answers[(connection_id, request_id)] = frame
+
+
+class CountingMoveLimiter:
+    """A `MoveRateLimiter` that allows a fixed number and then refuses.
+
+    Counts calls, so a test can assert that a refused submission happened
+    **before** any expensive work — the property §13 asks for and the one
+    a limiter placed after the game check would silently lose.
+    """
+
+    def __init__(self, allowance: int) -> None:
+        self.allowance = allowance
+        self.calls = 0
+
+    async def allow(self, connection_id: UUID) -> bool:
+        self.calls += 1
+        if self.allowance <= 0:
+            return False
+        self.allowance -= 1
+        return True
+
+
+class RecordingRemotePublisher:
+    """A `RemoteNodePublisher` that keeps every forwarding request.
+
+    Keeps them rather than counting, because the property worth asserting
+    is **one publish per node** — a publisher that sent one per connection
+    would produce the same count when every player has one tab and the
+    wrong one the moment somebody opens a second.
+    """
+
+    def __init__(self, *, succeeds: bool = True) -> None:
+        self.published: list[ForwardingRequest] = []
+        self._succeeds = succeeds
+
+    async def publish(self, request: ForwardingRequest) -> bool:
+        self.published.append(request)
+        return self._succeeds

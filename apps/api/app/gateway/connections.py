@@ -70,6 +70,7 @@ from typing import Final
 from uuid import UUID, uuid4
 
 from app.core.clock import Clock
+from app.gateway.dispatch import MessageDispatch
 from app.gateway.metrics import (
     CONNECTION_DURATION,
     CONNECTIONS_ACCEPTED,
@@ -79,10 +80,12 @@ from app.gateway.metrics import (
     RejectionReason,
     RoomRejectionReason,
 )
+from app.gateway.moves import MoveSubmissionHandler
 from app.gateway.ports import (
     ConnectionClosed,
     ConnectionRegistry,
     GatewaySocket,
+    LocalSocketRegistry,
     TicketRedeemer,
 )
 from app.gateway.protocol import (
@@ -154,6 +157,8 @@ class GatewayConnectionService:
         tickets: TicketRedeemer,
         registry: ConnectionRegistry,
         rooms: GameRoomService,
+        moves: MoveSubmissionHandler,
+        sockets: LocalSocketRegistry,
         presence: PresenceRecorder,
         metrics: MetricsRecorder,
         clock: Clock,
@@ -162,6 +167,8 @@ class GatewayConnectionService:
         self._tickets = tickets
         self._registry = registry
         self._rooms = rooms
+        self._moves = moves
+        self._sockets = sockets
         self._presence = presence
         self._metrics = metrics
         self._clock = clock
@@ -216,6 +223,11 @@ class GatewayConnectionService:
         """
         opened_at = self._clock.now()
         self._metrics.increment(CONNECTIONS_ACCEPTED)
+
+        # Inside `_serve`, so it is covered by the same `finally` that
+        # unregisters — a socket left in the local map after its connection
+        # closed is a fan-out writing to a dead descriptor on every move.
+        self._sockets.attach(connection_id, socket)
 
         # `1` means this connection is the player's first, from the same
         # atomic operation that made it true. See this module's docstring.
@@ -282,12 +294,16 @@ class GatewayConnectionService:
     ) -> bool:
         """One frame. `False` when the connection should stop.
 
-        **Still not a dispatch table**, and A64-016.2 §5 says to keep it
-        that way while the branching stays clear: four cases, each two
-        lines, reading top to bottom in the order a connection meets them.
-        A table would add a registration step and an indirection to save
-        nothing — it earns its place when a handler needs its own
-        collaborators, which is A64-016.3's move submission.
+        **A dispatch table since A64-016.3 §1.** The previous four-branch
+        match reached its limit when a handler needed six collaborators of
+        its own: every branch either forwarded a frame or was a two-line
+        answer, and the move handler is neither.
+
+        What is *not* a table is the decode and the send. Decoding fails
+        before there is a type to dispatch on, and sending is the read
+        loop's so that one place owns the socket — which is what makes
+        AD-11's cross-stream ordering a property of the loop rather than of
+        every handler behaving.
         """
         try:
             message = decode(raw, max_bytes=self._policy.max_frame_bytes)
@@ -301,42 +317,60 @@ class GatewayConnectionService:
             )
             return await self._try_send(socket, error(malformed.code))
 
-        if message.type is MessageType.PING:
-            await self._heartbeat(player_id=player_id, connection_id=connection_id)
-            return await self._try_send(socket, pong(request_id=message.request_id))
+        answer = await self._dispatch_for(
+            socket, player_id=player_id, connection_id=connection_id
+        ).dispatch(message, player_id=player_id)
 
-        if message.type is MessageType.ROOM_JOIN:
-            return await self._join_room(
-                message, socket, player_id=player_id, connection_id=connection_id
-            )
+        if answer is None:
+            return True
+        return await self._try_send(socket, answer)
 
-        if message.type is MessageType.ROOM_LEAVE:
-            return await self._leave_room(
-                message, socket, player_id=player_id, connection_id=connection_id
-            )
+    def _dispatch_for(
+        self, socket: GatewaySocket, *, player_id: UUID, connection_id: UUID
+    ) -> MessageDispatch:
+        """This connection's table, bound to its identity.
 
-        # A well-formed frame of a type only the *server* sends —
-        # `connection.ready`, `pong`, `error`. Decodable, and not something
-        # a client may send, so it is refused with the same code rather
-        # than silently ignored: silence would leave a confused client
-        # waiting for an answer that is never coming.
-        logger.debug(
-            "gateway_frame_unexpected",
-            extra={"user_id": str(player_id), "message_type": message.type.value},
+        Built per frame rather than per connection, which is a dict of four
+        closures and is the cheaper of the two arrangements to reason about:
+        the lifecycle holds no per-connection object, so there is nothing to
+        tear down and nothing that can outlive the socket it closed over.
+
+        Every entry is a bound method, so `CLIENT_SENDABLE` and this literal
+        are the whole of the routing decision — there is no registry, no
+        decorator and nothing discovered at import time (§1).
+        """
+        return MessageDispatch(
+            {
+                MessageType.PING: lambda message: self._answer_ping(
+                    message, player_id=player_id, connection_id=connection_id
+                ),
+                MessageType.ROOM_JOIN: lambda message: self._join_room(
+                    message, player_id=player_id, connection_id=connection_id
+                ),
+                MessageType.ROOM_LEAVE: lambda message: self._leave_room(
+                    message, player_id=player_id, connection_id=connection_id
+                ),
+                MessageType.MOVE_SUBMIT: lambda message: self._moves.handle(
+                    message, player_id=player_id, connection_id=connection_id
+                ),
+            }
         )
-        return await self._try_send(
-            socket,
-            error(GatewayErrorCode.MALFORMED_MESSAGE, request_id=message.request_id),
-        )
+
+    async def _answer_ping(
+        self, message: GatewayMessage, *, player_id: UUID, connection_id: UUID
+    ) -> GatewayMessage:
+        """`ping` — refreshes both liveness windows and answers.
+
+        **Not charged against the move limit** (§13). A heartbeat is what
+        keeps a connection alive; rate-limiting it would disconnect the
+        players who are behaving.
+        """
+        await self._heartbeat(player_id=player_id, connection_id=connection_id)
+        return pong(request_id=message.request_id)
 
     async def _join_room(
-        self,
-        message: GatewayMessage,
-        socket: GatewaySocket,
-        *,
-        player_id: UUID,
-        connection_id: UUID,
-    ) -> bool:
+        self, message: GatewayMessage, *, player_id: UUID, connection_id: UUID
+    ) -> GatewayMessage:
         """`room.join` — attaches this connection to a match's routing scope.
 
         **The player is `player_id`, the socket's proven identity**, never
@@ -346,13 +380,10 @@ class GatewayConnectionService:
         """
         match_id = _match_id_of(message)
         if match_id is None:
-            return await self._try_send(
-                socket,
-                error(
-                    GatewayErrorCode.MALFORMED_MESSAGE,
-                    request_id=message.request_id,
-                    channel=message.channel,
-                ),
+            return error(
+                GatewayErrorCode.MALFORMED_MESSAGE,
+                request_id=message.request_id,
+                channel=message.channel,
             )
 
         try:
@@ -360,33 +391,22 @@ class GatewayConnectionService:
                 match_id, player_id=player_id, connection_id=connection_id
             )
         except RoomJoinRefused as refused:
-            return await self._try_send(
-                socket,
-                error(
-                    _REFUSAL_CODES[refused.reason],
-                    request_id=message.request_id,
-                    channel=message.channel,
-                ),
+            return error(
+                _REFUSAL_CODES[refused.reason],
+                request_id=message.request_id,
+                channel=message.channel,
             )
 
-        return await self._try_send(
-            socket,
-            room_joined(
-                match_id=room.match_id,
-                participants=room.participants,
-                both_connected=room.both_connected,
-                request_id=message.request_id,
-            ),
+        return room_joined(
+            match_id=room.match_id,
+            participants=room.participants,
+            both_connected=room.both_connected,
+            request_id=message.request_id,
         )
 
     async def _leave_room(
-        self,
-        message: GatewayMessage,
-        socket: GatewaySocket,
-        *,
-        player_id: UUID,
-        connection_id: UUID,
-    ) -> bool:
+        self, message: GatewayMessage, *, player_id: UUID, connection_id: UUID
+    ) -> GatewayMessage:
         """`room.leave` — detaches this connection.
 
         Answered with `room.left` whether or not the connection was in the
@@ -396,19 +416,14 @@ class GatewayConnectionService:
         """
         match_id = _match_id_of(message)
         if match_id is None:
-            return await self._try_send(
-                socket,
-                error(
-                    GatewayErrorCode.MALFORMED_MESSAGE,
-                    request_id=message.request_id,
-                    channel=message.channel,
-                ),
+            return error(
+                GatewayErrorCode.MALFORMED_MESSAGE,
+                request_id=message.request_id,
+                channel=message.channel,
             )
 
         await self._rooms.leave(match_id, player_id=player_id, connection_id=connection_id)
-        return await self._try_send(
-            socket, room_left(match_id=match_id, request_id=message.request_id)
-        )
+        return room_left(match_id=match_id, request_id=message.request_id)
 
     async def _heartbeat(self, *, player_id: UUID, connection_id: UUID) -> None:
         """Refreshes both windows a live connection depends on.
@@ -467,6 +482,10 @@ class GatewayConnectionService:
         # window in which the fleet has forgotten the socket and a room
         # still reports it as attached — which is the one thing
         # `both_connected` must never do.
+        # Before both, so a fan-out that is already in flight finds no
+        # socket rather than a closing one, and the room stops naming this
+        # connection as a recipient.
+        self._sockets.detach(connection_id)
         await self._rooms.detach(player_id=player_id, connection_id=connection_id)
 
         remaining = 0

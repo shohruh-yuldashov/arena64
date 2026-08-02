@@ -21,10 +21,12 @@ only something holding one of these can change anything.
 """
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from app.modules.engine import Position
 from app.modules.game.domain.match_record import MatchRecord
 
 
@@ -205,5 +207,78 @@ class MatchRetentionStore(Protocol):
         sweep has stopped, and two players are holding an offer nothing will
         ever resolve. `PruneResult` carries `retained_unpublished` for
         exactly the same reason.
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class LiveMatchState:
+    """A match as it stands mid-game — AD-18's "live position". A64-016.3.
+
+    Two fields, and the pairing is the whole design: a position and the ply
+    it was reached at. The ply is the **version** the compare-and-set is
+    made against, so it is not bookkeeping beside the position — it is what
+    makes concurrent writes safe.
+    """
+
+    position: Position
+    ply: int
+    """How many moves have been played. `0` for a match nobody has moved
+    in yet, which is also the value a lazily-seeded state carries."""
+
+
+class LiveMatchStore(Protocol):
+    """Where a match in progress lives — architecture.md AD-18.
+
+    "Live position lives in Redis. Moves are appended durably to
+    PostgreSQL." This is the first half. The second half — the durable move
+    log — is **not built**, and that gap is stated here rather than left to
+    be discovered: until it exists, a Redis primary failure loses an
+    in-flight game with no replay path, which is the mitigation AD-19
+    depends on.
+
+    That is acceptable only because no rated game is played yet. See
+    `docs/01-architecture/websocket.md` §16.
+
+    ## Why compare-and-set rather than a lock
+
+    §6 forbids a process-local lock and asks for "optimistic versioning,
+    row locking, Redis atomic operations, or the existing authoritative-
+    state mechanism". A lock would also serialise the two players of a
+    match through one process, which is exactly the coupling a horizontally
+    scaled gateway must not have.
+
+    `advance` is conditional on the ply that was read. Two moves submitted
+    against the same state produce one write and one refusal, decided
+    inside Redis rather than by a check either caller could pass.
+    """
+
+    async def load(self, match_id: UUID) -> LiveMatchState | None:
+        """The current live state, or `None` if there is none.
+
+        `None` means "no move has been played and nothing has seeded it" —
+        an ordinary answer for a freshly activated match, and the caller
+        seeds from the variant's opening position rather than treating it
+        as an error.
+        """
+        ...
+
+    async def advance(
+        self, match_id: UUID, *, state: LiveMatchState, expected_ply: int, ttl_seconds: int
+    ) -> bool:
+        """Writes `state` **only if** the stored ply is still `expected_ply`.
+
+        Returns `False` when it is not — the optimistic-concurrency
+        failure, which the caller turns into `StaleMatchState`.
+
+        `expected_ply` of `0` also accepts an **absent** key, which is what
+        makes lazy seeding safe: two nodes both finding no state and both
+        applying the first move resolve to one winner, because the second's
+        condition no longer holds once the first has written.
+
+        The TTL is an argument rather than a policy this holds, so "how
+        long may a game sit idle before its live state is dropped" is
+        visible at the call site and configurable — see
+        `GameSettings.live_state_ttl_seconds`.
         """
         ...

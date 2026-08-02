@@ -78,6 +78,34 @@ class RoomMember:
 
 
 @dataclass(frozen=True, slots=True)
+class RoomProgress:
+    """How far a match has got, as the room reports it — A64-016.3 §11.
+
+    An **ephemeral read projection**, not a second source of truth. `game`
+    owns the position (AD-18); this is the minimum a client needs to notice
+    it has fallen behind and a router needs to order what it delivers.
+
+    Three fields, and the restraint is the design. §11 says "do not
+    duplicate the complete Game aggregate in `gwroom:v1:`", and a board here
+    would be exactly that — a copy that can disagree with the authority,
+    updated by a fan-out that is allowed to fail.
+    """
+
+    ply: int
+    """The authoritative sequence, as last delivered. Monotonic: the store
+    refuses a write that would move it backwards."""
+
+    side_to_move: str
+    """Whose turn it is, as a primitive. A string rather than `PlayerSide`
+    because the gateway must not hold an engine enum — the same rule that
+    keeps `SubmitMoveResult`'s applied move a tuple of strings."""
+
+    fingerprint: str
+    """A position fingerprint, for divergence detection. Opaque here: the
+    gateway compares it and never parses it."""
+
+
+@dataclass(frozen=True, slots=True)
 class GameRoomSession:
     """One match's routing scope, as it stands right now.
 
@@ -159,4 +187,4 @@ class GameRoomSession:
         )
 
 
-__all__ = ["GameRoomSession", "RoomMember", "RoomStatus"]
+__all__ = ["GameRoomSession", "RoomMember", "RoomProgress", "RoomStatus"]

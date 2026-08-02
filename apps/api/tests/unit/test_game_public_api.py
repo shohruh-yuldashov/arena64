@@ -190,6 +190,19 @@ class TestTheSurfaceIsDeliberate:
         # compromised could enumerate nothing and change nothing.
         "MatchRoster",
         "MatchRosterReader",
+        # A64-016.3 — the live-play boundary. The gateway holds
+        # `SubmitMoveUseCase` and can do nothing else: it cannot read a
+        # position, enumerate matches or resign one. The four failures are
+        # published because a consumer must catch *the* error the service
+        # raises, not a lookalike.
+        "AppliedMove",
+        "SubmitMoveRequest",
+        "SubmitMoveResult",
+        "SubmitMoveUseCase",
+        "IllegalMoveSubmitted",
+        "MatchNotActive",
+        "NotYourTurn",
+        "StaleMatchState",
     }
 
     def test_nothing_is_published_by_accident(self) -> None:

@@ -114,6 +114,16 @@ from app.modules.game.public.metrics import (
     AnswerLatency,
     MatchOutcome,
 )
+from app.modules.game.public.moves import (
+    AppliedMove,
+    IllegalMoveSubmitted,
+    MatchNotActive,
+    NotYourTurn,
+    StaleMatchState,
+    SubmitMoveRequest,
+    SubmitMoveResult,
+    SubmitMoveUseCase,
+)
 from app.modules.game.public.opponents import RecentOpponentReader
 from app.modules.game.public.reconciliation import (
     PairingReconciliationReader,
@@ -123,6 +133,14 @@ from app.modules.game.public.retention import AbandonedMatchRetention
 from app.modules.game.public.rooms import MatchRoster, MatchRosterReader
 
 __all__ = [
+    "SubmitMoveUseCase",
+    "SubmitMoveResult",
+    "SubmitMoveRequest",
+    "StaleMatchState",
+    "NotYourTurn",
+    "MatchNotActive",
+    "IllegalMoveSubmitted",
+    "AppliedMove",
     "MATCH_AGGREGATE",
     "AbandonedMatchRetention",
     "MATCH_ANSWER_LATENCY",

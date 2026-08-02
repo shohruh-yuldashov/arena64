@@ -38,10 +38,21 @@ from uuid import UUID
 from fastapi import Depends, Request, WebSocket
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.api.deps import SettingsDep
 from app.database.session import open_session
-from app.modules.game.application.services import GameMatchRoster
+from app.modules.game.application.ports import LiveMatchStore
+from app.modules.game.application.services import GameMatchRoster, LiveMoveService
+from app.modules.game.infrastructure import RedisLiveMatchStore
 from app.modules.game.infrastructure.repositories import SqlAlchemyMatchRecordRepository
-from app.modules.game.public import MatchRoster, MatchRosterReader
+from app.modules.game.public import (
+    GameEngineServices,
+    MatchRoster,
+    MatchRosterReader,
+    SubmitMoveRequest,
+    SubmitMoveResult,
+    SubmitMoveUseCase,
+    engine_services,
+)
 
 
 class SessionScopedMatchRosters:
@@ -98,14 +109,81 @@ def get_match_roster_reader_ws(websocket: WebSocket) -> MatchRosterReader:
     return SessionScopedMatchRosters(websocket.app.state.db.session_factory)
 
 
+class SessionScopedLiveMoves:
+    """`SubmitMoveUseCase` that opens a session per submission — A64-016.3.
+
+    Same arrangement as `SessionScopedMatchRosters` above and for the same
+    reason: the caller is a WebSocket, whose "request" scope is the whole
+    connection, and a use case resolved through `DbSessionDep` would hold
+    one PostgreSQL session per open socket for the length of a game.
+
+    A move holds a connection for one primary-key lookup. The position
+    itself is in Redis (AD-18), so the database is touched once per move
+    and only to answer "who is in this match and is it active".
+
+    Holds the engine collaborators for the **life of the process**, which is
+    right and is what `engine_services()` is for: they are stateless, and
+    `specs/game-engine/audit.md` §14 says building them per call is pure
+    waste.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        live: LiveMatchStore,
+        engine: GameEngineServices,
+        live_state_ttl_seconds: int,
+    ) -> None:
+        self._session_factory = session_factory
+        self._live = live
+        self._engine = engine
+        self._live_state_ttl_seconds = live_state_ttl_seconds
+
+    async def submit(self, request: SubmitMoveRequest) -> SubmitMoveResult:
+        async with open_session(self._session_factory) as session:
+            service = LiveMoveService(
+                matches=SqlAlchemyMatchRecordRepository(session),
+                live=self._live,
+                generator=self._engine.generator,
+                applier=self._engine.applier,
+                live_state_ttl_seconds=self._live_state_ttl_seconds,
+            )
+            return await service.submit(request)
+
+
+def get_live_moves_ws(websocket: WebSocket, settings: SettingsDep) -> SubmitMoveUseCase:
+    """`game`'s live-play command, for a WebSocket route.
+
+    The **`live` Redis role**, not `cache` — see `RedisLiveMatchStore` on
+    why the one keyspace holding something that cannot be rebuilt must not
+    sit on an instance configured to evict.
+
+    Typed as the port, so the gateway holds one method: it can submit a
+    move and cannot read a position, enumerate matches or resign one.
+    """
+    return SessionScopedLiveMoves(
+        session_factory=websocket.app.state.db.session_factory,
+        live=RedisLiveMatchStore(websocket.app.state.redis_pools.live),
+        engine=engine_services(),
+        live_state_ttl_seconds=settings.game.live_state_ttl_seconds,
+    )
+
+
+WebSocketLiveMovesDep = Annotated[SubmitMoveUseCase, Depends(get_live_moves_ws)]
+
+
 MatchRosterReaderDep = Annotated[MatchRosterReader, Depends(get_match_roster_reader)]
 WebSocketMatchRosterReaderDep = Annotated[MatchRosterReader, Depends(get_match_roster_reader_ws)]
 
 
 __all__ = [
     "MatchRosterReaderDep",
+    "SessionScopedLiveMoves",
     "SessionScopedMatchRosters",
+    "WebSocketLiveMovesDep",
     "WebSocketMatchRosterReaderDep",
+    "get_live_moves_ws",
     "get_match_roster_reader",
     "get_match_roster_reader_ws",
 ]

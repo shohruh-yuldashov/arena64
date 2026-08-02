@@ -13,6 +13,7 @@ from app.config.settings import (
     AuthSettings,
     EmailSettings,
     FriendsSettings,
+    GameSettings,
     GatewaySettings,
     JWTSettings,
     MatchmakingSettings,
@@ -104,6 +105,7 @@ class TestSettings:
             outbox=OutboxSettings(),
             matchmaking=MatchmakingSettings(),
             gateway=GatewaySettings(),
+            game=GameSettings(),
         )
         assert settings.environment is Environment.TEST
 
@@ -135,6 +137,7 @@ class TestSettings:
                 outbox=OutboxSettings(),
                 matchmaking=MatchmakingSettings(),
                 gateway=GatewaySettings(),
+                game=GameSettings(),
             )
 
     def test_production_rejects_a_left_default_redis_role(self) -> None:
@@ -158,6 +161,7 @@ class TestSettings:
                 outbox=OutboxSettings(),
                 matchmaking=MatchmakingSettings(),
                 gateway=GatewaySettings(),
+                game=GameSettings(),
             )
 
     def test_production_accepts_fully_explicit_configuration(self) -> None:
@@ -186,6 +190,7 @@ class TestSettings:
             outbox=OutboxSettings(),
             matchmaking=MatchmakingSettings(),
             gateway=GatewaySettings(),
+            game=GameSettings(),
         )
         assert settings.environment is Environment.PRODUCTION
 
@@ -207,6 +212,7 @@ class TestSettings:
             outbox=OutboxSettings(),
             matchmaking=MatchmakingSettings(),
             gateway=GatewaySettings(),
+            game=GameSettings(),
         )
         with pytest.raises(PydanticValidationError):
             settings.environment = Environment.PRODUCTION  # type: ignore[misc]
@@ -318,6 +324,7 @@ class TestJWTProductionGuard:
             outbox=OutboxSettings(),
             matchmaking=MatchmakingSettings(),
             gateway=GatewaySettings(),
+            game=GameSettings(),
             jwt=JWTSettings(**jwt_overrides),  # type: ignore[arg-type]
         )
 
@@ -353,6 +360,7 @@ class TestJWTProductionGuard:
             outbox=OutboxSettings(),
             matchmaking=MatchmakingSettings(),
             gateway=GatewaySettings(),
+            game=GameSettings(),
             jwt=JWTSettings(),
         )
 

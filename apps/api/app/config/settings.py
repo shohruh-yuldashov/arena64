@@ -1783,6 +1783,36 @@ class MatchmakingSettings(BaseSettings):
         return self
 
 
+class GameSettings(BaseSettings):
+    """`game` — live play (A64-016.3).
+
+    One number today. It exists because AD-18 puts the in-flight position in
+    Redis, and anything in Redis without a horizon is an outage waiting for
+    enough traffic (CLAUDE.md §10.5).
+    """
+
+    model_config = SettingsConfigDict(env_prefix="GAME_", frozen=True, extra="forbid")
+
+    live_state_ttl_seconds: int = Field(default=14400, ge=300, le=604800)
+    """How long a match's live position survives without a move.
+
+    **Four hours**, and it is measured against an abandoned game rather
+    than a played one. A draughts game is minutes to tens of minutes; four
+    hours is well past any plausible think time and short enough that a
+    match nobody returned to stops occupying memory the same day.
+
+    Reset on every move, so an active game never expires — the horizon
+    applies to silence, not to duration.
+
+    **This is the one TTL on the platform whose expiry loses something that
+    cannot be rebuilt.** The durable move log AD-18 pairs with this store
+    does not exist yet, so a lapsed key is a game that cannot be replayed.
+    The floor of five minutes is a guard against a value that would drop
+    positions mid-game; the real fix is the move log, and it is recorded as
+    A64-016.3's headline gap rather than papered over with a longer number.
+    """
+
+
 class GatewaySettings(BaseSettings):
     """`gateway` — the realtime WebSocket transport (A64-016.1, AD-09).
 
@@ -1905,6 +1935,52 @@ class GatewaySettings(BaseSettings):
     longer one would keep a stale one past any plausible game.
     """
 
+    move_rate_limit_enabled: bool = True
+    """Whether `game.move.submit` is rate limited — A64-016.3 §13.
+
+    Move submission is the first expensive per-frame operation on this
+    platform: a database read, a position load, a legal-move generation and
+    a Redis compare-and-set. Everything before it is bounded by what a
+    socket can physically send; this is not.
+
+    `False` wires `UnlimitedMoves`, which is production code rather than a
+    double — the same argument `PRESENCE_ENABLED` makes. It exists because
+    the alternative to a documented switch is somebody commenting out a
+    dependency under pressure and forgetting to restore it, and turning it
+    off means an unbounded move rate.
+    """
+
+    move_rate_limit: int = Field(default=30, ge=1, le=600)
+    move_rate_limit_window_seconds: int = Field(default=10, ge=1, le=300)
+    """How many moves one **connection** may submit per window.
+
+    Thirty in ten seconds, and it is set against a bullet game rather than a
+    correspondence one: three moves a second is faster than anybody plays
+    and slower than a loop, which is the gap a limit has to sit in. Bursty
+    on purpose — the window is short enough that a legitimate flurry near a
+    time scramble passes and a sustained flood does not.
+
+    **Per connection, not per player** (`RateLimitScope.CONNECTION`). A
+    player with two tabs is two clients, and a shared bucket would let one
+    tab's misbehaving loop throttle the other's game — which on a live board
+    is a player losing to somebody else's bug.
+
+    A violation refuses the frame and **keeps the connection open** (§13).
+    """
+
+    move_idempotency_ttl_seconds: int = Field(default=60, ge=5, le=3600)
+    """How long one `(connection, request_id)` answer is remembered — §7.
+
+    The window a client retry actually needs is a client timeout, so a
+    minute is generous. Longer keeps answers for retries nobody will send;
+    shorter lets a slow retry through as a fresh submission, which the ply
+    compare-and-set then refuses as `stale_state` — safe, and confusing.
+
+    Bounded rather than unbounded because §7 forbids "a permanent unbounded
+    request cache", and because the keyspace is one entry per move per
+    connection.
+    """
+
     @model_validator(mode="after")
     def _bounds_are_ordered(self) -> "GatewaySettings":
         """The three timers must nest, and a misordering is silent.
@@ -1945,6 +2021,7 @@ class Settings(BaseModel):
     outbox: OutboxSettings
     matchmaking: MatchmakingSettings
     gateway: GatewaySettings
+    game: GameSettings
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":
@@ -2032,4 +2109,5 @@ def get_settings() -> Settings:
         outbox=OutboxSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         matchmaking=MatchmakingSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         gateway=GatewaySettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        game=GameSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

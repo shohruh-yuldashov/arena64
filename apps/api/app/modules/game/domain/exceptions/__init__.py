@@ -38,7 +38,12 @@ this rides the generic `conflict` code and the task that gives it one can
 judge otherwise.
 """
 
-from app.core.exceptions import ConflictError, DomainError, NotFoundError
+from app.core.exceptions import (
+    ConflictError,
+    DomainError,
+    NotFoundError,
+    RuleViolationError,
+)
 
 
 class InvalidMatchTransition(ConflictError):
@@ -169,16 +174,84 @@ class AcceptanceWindowClosed(ConflictError):
     """
 
 
+class MatchNotActive(ConflictError):
+    """A move was submitted for a match that is not being played —
+    A64-016.3.
+
+    `409`: the request was well formed and the caller's view was stale.
+    Covers every state that is not `active` — still in acceptance,
+    declined, expired, finished — deliberately as **one** failure, because
+    a client's response to all of them is identical (stop sending moves)
+    and distinguishing them tells a prober how far a match got.
+
+    A `ConflictError` rather than a `NotFoundError` because by the time
+    this can fire the caller has already been proven a participant, so
+    there is nothing left to withhold — which is exactly the line
+    `NotAMatchParticipant` draws from the other side.
+    """
+
+
+class NotYourTurn(ConflictError):
+    """The submitting player does not own the side to move — A64-016.3.
+
+    Distinct from `IllegalMoveSubmitted` even though both mean "not now":
+    a client that played out of turn has a **synchronisation** problem and
+    should resynchronise, while one that played an illegal move has a
+    **rules** problem and should not. Collapsing them would make the first
+    look like a bug in the client's own move generator, which is the one
+    place a client is entitled to trust itself (AD-14 — two
+    implementations, one corpus).
+    """
+
+
+class IllegalMoveSubmitted(RuleViolationError):
+    """The path is not a legal move in the current position — A64-016.3.
+
+    A `RuleViolationError`, unlike everything else here, because it is the
+    one failure that is genuinely about the *rules* rather than about
+    state or identity — and `ErrorCode.RULE_VIOLATION` is what a client
+    should log loudly, since under AD-14 its own engine agreed the move was
+    legal and one of the two is wrong.
+
+    One type for every way a path can be wrong: no piece there, not that
+    player's piece, not a legal step, or a mandatory capture available
+    elsewhere. The engine knows which and says so in the server's logs; the
+    client is told the move was illegal, because a client that could
+    enumerate *why* has a rules oracle and does not need one — it has the
+    same engine.
+    """
+
+
+class StaleMatchState(ConflictError):
+    """The match moved on between reading its state and writing the result
+    — A64-016.3.
+
+    The optimistic-concurrency failure. A client should **retry** rather
+    than treat it as a rejection: nothing about the move was wrong, another
+    writer simply got there first.
+
+    Not retried inside the service, deliberately. In practice the other
+    writer is the opponent, so by the time a retry lands it is no longer
+    this player's turn and they receive `NotYourTurn` — which is the
+    correct answer, and a silent internal retry would turn it into a
+    confusing one.
+    """
+
+
 __all__ = [
     "AcceptanceWindowClosed",
     "CorruptMoveLog",
+    "IllegalMoveSubmitted",
     "InvalidMatchTransition",
     "MalformedMoveLog",
+    "MatchNotActive",
     "MatchNotFound",
     "MatchNotPending",
     "NotAMatchParticipant",
+    "NotYourTurn",
     "PositionHashMismatch",
     "ReplayError",
+    "StaleMatchState",
     "ReplayResultMismatch",
     "UnsupportedEngineVersion",
 ]

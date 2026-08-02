@@ -29,6 +29,7 @@ A64-016.2 should add.
 import asyncio
 import json
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 
@@ -39,20 +40,34 @@ from app.gateway.connections import (
     GatewayConnectionService,
     GatewayPolicy,
 )
+from app.gateway.delivery import InMemoryLocalSockets, RoomBroadcaster
 from app.gateway.metrics import CloseReason
+from app.gateway.moves import MoveSubmissionHandler
 from app.gateway.protocol import (
     PROTOCOL_VERSION,
     Channel,
     GatewayErrorCode,
     MessageType,
+    move_applied,
 )
 from app.gateway.room_service import GameRoomService
+from app.gateway.routing import FleetConnectionRouter
+from app.modules.game.public import (
+    IllegalMoveSubmitted,
+    MatchNotActive,
+    NotYourTurn,
+    StaleMatchState,
+)
 from tests.fakes.gateway import (
+    CountingMoveLimiter,
     FakeConnectionRegistry,
     FakeGatewaySocket,
     FakeRoomMemberStore,
+    FakeSubmitMoves,
     FakeTicketRedeemer,
+    InMemoryMoveIdempotency,
     RecordingPresence,
+    RecordingRemotePublisher,
     StubMatchRosters,
 )
 from tests.fakes.metrics import RecordingMetrics
@@ -119,16 +134,57 @@ def _rooms(
     )
 
 
+def _moves(
+    rooms: GameRoomService,
+    *,
+    submissions: FakeSubmitMoves | None = None,
+    limiter: CountingMoveLimiter | None = None,
+    publisher: RecordingRemotePublisher | None = None,
+    sockets: InMemoryLocalSockets | None = None,
+    registry: FakeConnectionRegistry | None = None,
+) -> MoveSubmissionHandler:
+    """The real move handler over in-memory collaborators.
+
+    Real, because §16's required coverage is about the *handler's* ordering
+    and mapping. What is substituted is the engine (`FakeSubmitMoves` — the
+    rules are `test_move_generation.py`'s and §16 forbids duplicating them),
+    the transport and the stores.
+    """
+    return MoveSubmissionHandler(
+        moves=submissions if submissions is not None else FakeSubmitMoves(),
+        rooms=rooms,
+        broadcaster=RoomBroadcaster(
+            router=FleetConnectionRouter(
+                registry=registry if registry is not None else FakeConnectionRegistry(),
+                node_id=NODE_ID,
+                metrics=RecordingMetrics(),
+            ),
+            sockets=sockets if sockets is not None else InMemoryLocalSockets(),
+            publisher=publisher if publisher is not None else RecordingRemotePublisher(),
+            metrics=RecordingMetrics(),
+        ),
+        idempotency=InMemoryMoveIdempotency(),
+        limiter=limiter if limiter is not None else CountingMoveLimiter(allowance=100),
+        metrics=RecordingMetrics(),
+        idempotency_ttl_seconds=60,
+    )
+
+
 def _service(
     tickets: FakeTicketRedeemer,
     registry: FakeConnectionRegistry,
     presence: RecordingPresence,
     rooms: GameRoomService | None = None,
+    moves: MoveSubmissionHandler | None = None,
+    sockets: InMemoryLocalSockets | None = None,
 ) -> GatewayConnectionService:
+    resolved_rooms = rooms if rooms is not None else _rooms()
     return GatewayConnectionService(
         tickets=tickets,
         registry=registry,
-        rooms=rooms if rooms is not None else _rooms(),
+        rooms=resolved_rooms,
+        moves=moves if moves is not None else _moves(resolved_rooms),
+        sockets=sockets if sockets is not None else InMemoryLocalSockets(),
         presence=presence,
         metrics=RecordingMetrics(),
         clock=MovableClock(NOW),
@@ -408,6 +464,8 @@ class TestCleanup:
             tickets=tickets,
             registry=registry,
             rooms=_rooms(),
+            moves=_moves(_rooms()),
+            sockets=InMemoryLocalSockets(),
             presence=presence,
             metrics=RecordingMetrics(),
             clock=MovableClock(NOW),
@@ -599,3 +657,365 @@ class TestGameRooms:
         assert len(left) == 3
         assert all(m.channel is Channel.GAME for m in left)
         assert MessageType.ERROR not in socket.types()
+
+
+class TestMoveSubmission:
+    """A64-016.3 §16 — the transport half of a move.
+
+    The real `MoveSubmissionHandler`, the real dispatch table, the real
+    room service and the real `RoutingPlan` run here. What is substituted is
+    the **engine**: `FakeSubmitMoves` stands in for `SubmitMoveUseCase`
+    because these tests are about the ordering of the checks, the wire
+    mapping and the fan-out, and §16 forbids duplicating the move-rule
+    tests that already exist.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_participant_in_the_room_has_their_move_accepted_and_broadcast(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§16.1, and the two-frame answer with it.
+
+        The submitter receives `game.move.accepted` **correlated to their
+        `request_id`** and `game.move.applied` as one of the room's
+        recipients. Both, deliberately: merging them would mean a client
+        could not tell its own move from its opponent's without inspecting
+        the payload.
+
+        The accepted frame carries the ply, the side to move and the
+        server-derived applied move — not a board, because the client
+        already applied it optimistically and needs confirmation rather than
+        a copy.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters, members)
+        sockets = InMemoryLocalSockets()
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [
+                _frame("room.join", channel="game", payload={"match_id": str(match_id)}),
+                _frame(
+                    "game.move.submit",
+                    channel="game",
+                    request_id="m1",
+                    payload={"match_id": str(match_id), "path": ["c3", "d4"]},
+                ),
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            moves=_moves(rooms, sockets=sockets, registry=registry),
+            sockets=sockets,
+        ).run(socket, ticket=VALID_TICKET)
+
+        accepted = next(m for m in socket.sent if m.type is MessageType.MOVE_ACCEPTED)
+        assert accepted.channel is Channel.GAME
+        assert accepted.request_id == "m1"
+        assert accepted.payload["ply"] == 1
+        assert accepted.payload["applied"]["path"] == ["c3", "d4"]
+        # Delivered to this connection as a room recipient, not only
+        # acknowledged.
+        assert MessageType.MOVE_APPLIED in socket.types()
+
+    @pytest.mark.asyncio
+    async def test_a_move_is_refused_before_the_engine_when_the_socket_is_not_in_the_room(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§16.2, and §4's ordering.
+
+        Two refusals, one code each, and **neither reaches the engine** —
+        asserted against `submissions`, because a handler that called the
+        game first would produce the same wire answer while doing a database
+        read and a move generation for a frame it was going to refuse.
+
+        The non-participant gets `not_a_participant`; the participant who
+        never sent `room.join` gets `not_in_room`, which is a different and
+        actionable message — the fix is to join, where "that match is not
+        yours" gives them nothing to do.
+        """
+        participant, outsider = generate_uuid7(), generate_uuid7()
+        match_id = generate_uuid7()
+        rosters = StubMatchRosters()
+        rosters.add(match_id, light=participant, dark=generate_uuid7())
+        rooms = _rooms(rosters)
+        submissions = FakeSubmitMoves()
+        move = _frame(
+            "game.move.submit",
+            channel="game",
+            payload={"match_id": str(match_id), "path": ["c3", "d4"]},
+        )
+
+        for player_id, ticket in ((outsider, "outsider"), (participant, "unjoined")):
+            tickets.add(ticket, player_id)
+            socket = FakeGatewaySocket([move])
+            await _service(
+                tickets, registry, presence, rooms, moves=_moves(rooms, submissions=submissions)
+            ).run(socket, ticket=ticket)
+
+            rejected = next(m for m in socket.sent if m.type is MessageType.MOVE_REJECTED)
+            assert rejected.payload["code"] == GatewayErrorCode.NOT_IN_ROOM.value
+
+        assert submissions.submissions == []
+
+    @pytest.mark.asyncio
+    async def test_every_game_failure_becomes_a_stable_category_and_a_safe_sentence(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§16.3 and §16.4 together, plus §14's disclosure rule.
+
+        Wrong side, illegal move, stale state and match-not-active are four
+        distinct exceptions from `game` and four distinct wire codes — a
+        client's response differs for each: resynchronise, log loudly,
+        retry, stop.
+
+        The **sentence never comes from the exception** (§14). Each is
+        asserted to be the fixed one from `_REJECTIONS` rather than
+        `str(error)`, which is what makes "no SQL errors, no Redis errors,
+        no class names, no stack traces" a property of the table rather than
+        a rule somebody remembers — the exception messages here are
+        deliberately full of detail that must not appear.
+        """
+        player_id, match_id = generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=generate_uuid7())
+        rooms = _rooms(rosters, members)
+        submissions = FakeSubmitMoves()
+
+        failures = {
+            NotYourTurn("light to move, dark submitted"): GatewayErrorCode.NOT_YOUR_TURN,
+            IllegalMoveSubmitted("no piece on c3 in <Position ...>"): (
+                GatewayErrorCode.ILLEGAL_MOVE
+            ),
+            StaleMatchState("expected ply 7, stored 8"): GatewayErrorCode.STALE_STATE,
+            MatchNotActive("the match is cancelled"): GatewayErrorCode.MATCH_NOT_ACTIVE,
+        }
+
+        for index, (error, expected) in enumerate(failures.items()):
+            submissions.raises = error
+            ticket = f"ticket-{index}"
+            tickets.add(ticket, player_id)
+            socket = FakeGatewaySocket(
+                [
+                    _frame("room.join", channel="game", payload={"match_id": str(match_id)}),
+                    _frame(
+                        "game.move.submit",
+                        channel="game",
+                        payload={"match_id": str(match_id), "path": ["c3", "d4"]},
+                    ),
+                ]
+            )
+            await _service(
+                tickets, registry, presence, rooms, moves=_moves(rooms, submissions=submissions)
+            ).run(socket, ticket=ticket)
+
+            rejected = next(m for m in socket.sent if m.type is MessageType.MOVE_REJECTED)
+            assert rejected.payload["code"] == expected.value
+            assert str(error) not in rejected.payload["reason"]
+
+    @pytest.mark.asyncio
+    async def test_a_duplicate_request_id_replays_the_answer_without_reapplying(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§16.5, and §7's scope.
+
+        The same `request_id` three times. The engine is called **once** —
+        asserted against `submissions`, which is the only place a second
+        application would show — and all three answers are byte-identical,
+        because the stored value is the frame that was sent rather than a
+        decision the handler re-renders.
+
+        A frame with **no** `request_id` is not deduplicated, which is the
+        honest behaviour: there is nothing to key on, and inventing one
+        would be the second correlation identifier §7 forbids. Asserted
+        alongside, because a store that keyed on the payload instead would
+        pass every assertion above and silently swallow a legitimate
+        repeated move.
+        """
+        player_id, match_id = generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=generate_uuid7())
+        rooms = _rooms(rosters, members)
+        submissions = FakeSubmitMoves()
+
+        retried = _frame(
+            "game.move.submit",
+            channel="game",
+            request_id="same",
+            payload={"match_id": str(match_id), "path": ["c3", "d4"]},
+        )
+        uncorrelated = _frame(
+            "game.move.submit",
+            channel="game",
+            payload={"match_id": str(match_id), "path": ["c3", "d4"]},
+        )
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [
+                _frame("room.join", channel="game", payload={"match_id": str(match_id)}),
+                retried,
+                retried,
+                retried,
+                uncorrelated,
+            ]
+        )
+
+        await _service(
+            tickets, registry, presence, rooms, moves=_moves(rooms, submissions=submissions)
+        ).run(socket, ticket=VALID_TICKET)
+
+        accepted = [m for m in socket.sent if m.type is MessageType.MOVE_ACCEPTED]
+        assert len(accepted) == 4
+        assert {m.to_json() for m in accepted[:3]} == {accepted[0].to_json()}
+        # Three correlated submissions applied once; the uncorrelated one
+        # applied on its own.
+        assert len(submissions.submissions) == 2
+
+    @pytest.mark.asyncio
+    async def test_the_move_limit_refuses_before_any_expensive_work(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§16.8, and §13's ordering requirement.
+
+        One move allowed, three sent. The refusals carry `rate_limited` and
+        the **connection stays open** — asserted by the `ping` at the end
+        being answered, because §13 forbids closing a socket for one
+        ordinary violation.
+
+        `submissions` proves the ordering: a limiter placed after the room
+        check or the decode would produce the same wire answers while having
+        already done the work it exists to prevent. And `ping` is not
+        charged against the limit — the limiter is consulted three times,
+        not four.
+        """
+        player_id, match_id = generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=generate_uuid7())
+        rooms = _rooms(rosters, members)
+        submissions = FakeSubmitMoves()
+        limiter = CountingMoveLimiter(allowance=1)
+
+        move = _frame(
+            "game.move.submit",
+            channel="game",
+            payload={"match_id": str(match_id), "path": ["c3", "d4"]},
+        )
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [
+                _frame("room.join", channel="game", payload={"match_id": str(match_id)}),
+                move,
+                move,
+                move,
+                _frame("ping"),
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            moves=_moves(rooms, submissions=submissions, limiter=limiter),
+        ).run(socket, ticket=VALID_TICKET)
+
+        refused = [
+            m
+            for m in socket.sent
+            if m.type is MessageType.MOVE_REJECTED
+            and m.payload["code"] == GatewayErrorCode.RATE_LIMITED.value
+        ]
+        assert len(refused) == 2
+        assert len(submissions.submissions) == 1
+        assert limiter.calls == 3
+        assert MessageType.PONG in socket.types()
+
+
+class TestRoutingPlanTransport:
+    """§16.6 — the fan-out honours the plan."""
+
+    @pytest.mark.asyncio
+    async def test_local_routes_are_written_directly_and_remote_routes_group_by_node(
+        self,
+    ) -> None:
+        """§8, and the bound that matters.
+
+        Three players: one with two tabs on this node, one with three tabs
+        split across two other nodes, one offline. The local pair are
+        written to their sockets; the remote five become **two** forwarding
+        requests — one per node, not one per connection.
+
+        That last assertion is the whole test. A publisher that iterated
+        routes would send the same frame three times to the node holding
+        three tabs, and it looks identical to a working system until
+        somebody opens a second tab.
+        """
+        here, split, offline = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        registry = FakeConnectionRegistry()
+        sockets = InMemoryLocalSockets()
+        publisher = RecordingRemotePublisher()
+
+        local_sockets = []
+        for _ in range(2):
+            connection_id = uuid4()
+            await registry.register(here, connection_id, node_id=NODE_ID, ttl_seconds=90)
+            socket = FakeGatewaySocket()
+            sockets.attach(connection_id, socket)
+            local_sockets.append(socket)
+
+        for node_id, tabs in (("node-b", 2), ("node-c", 1)):
+            for _ in range(tabs):
+                await registry.register(split, uuid4(), node_id=node_id, ttl_seconds=90)
+
+        broadcaster = RoomBroadcaster(
+            router=FleetConnectionRouter(
+                registry=registry, node_id=NODE_ID, metrics=RecordingMetrics()
+            ),
+            sockets=sockets,
+            publisher=publisher,
+            metrics=RecordingMetrics(),
+        )
+
+        report = await broadcaster.deliver(
+            move_applied(
+                match_id=generate_uuid7(),
+                ply=3,
+                side_to_move="dark",
+                fingerprint="fp",
+                path=["c3", "d4"],
+                captured=[],
+                promoted_to=None,
+            ),
+            recipients=[here, split, offline],
+        )
+
+        assert report.local == 2
+        assert all(s.types() == [MessageType.MOVE_APPLIED] for s in local_sockets)
+        # One request per node, carrying that node's connections.
+        assert report.remote_nodes == 2
+        assert {r.node_id for r in publisher.published} == {"node-b", "node-c"}
+        assert sorted(len(r.connection_ids) for r in publisher.published) == [1, 2]
+        # An offline player contributes nothing and is not a failure.
+        assert report.failures == 0

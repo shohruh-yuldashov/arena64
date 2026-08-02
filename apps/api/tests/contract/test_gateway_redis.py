@@ -16,6 +16,14 @@ server**:
                     unregister does not underflow
     the member      the node survives a round trip through a sorted set
 
+A64-016.3 adds `gwroom:v1:`, which A64-016.2's known-gaps list named as the
+next thing to cover:
+
+    the room set    join, duplicate join, removal and the empty-room TTL,
+                    with the member set returned from inside the write
+    monotonic CAS   a concurrent update cannot silently overwrite a newer
+                    sequence
+
 Four tests for eight properties, because §12 caps this task at eight tests
 in total and the four room behaviours take the other half. Each test
 therefore carries the assertions that belong to one *mechanism* rather than
@@ -41,6 +49,8 @@ from redis.asyncio import Redis
 
 from app.core.identifiers import generate_uuid7
 from app.gateway.registry import RedisConnectionRegistry
+from app.gateway.room_store import RedisRoomMemberStore
+from app.gateway.rooms import RoomMember
 from app.modules.auth.application.services.opaque_tokens import OpaqueTokenService
 from app.modules.auth.infrastructure import RedisWebSocketTicketStore
 from tests.fakes.presence_redis import MovableClock
@@ -50,6 +60,8 @@ TTL_SECONDS = 90
 
 NODE_A = "gateway-a"
 NODE_B = "gateway-b"
+
+ROOM_TTL_SECONDS = 3600
 
 
 @pytest_asyncio.fixture
@@ -211,3 +223,144 @@ class TestTheConnectionRegistryCountsAtomically:
         # Cleanup by connection alone, as the lifecycle does it.
         assert await registry.unregister(player_id, elsewhere) == 2
         assert await registry.node_for(player_id, elsewhere) is None
+
+
+@pytest_asyncio.fixture
+async def rooms(contract_redis: Redis) -> RedisRoomMemberStore:
+    return RedisRoomMemberStore(
+        contract_redis, clock=MovableClock(NOW), progress_ttl_seconds=ROOM_TTL_SECONDS
+    )
+
+
+class TestTheRoomStore:
+    """`gwroom:v1:` against real Redis — A64-016.3 §12.
+
+    A64-016.2 shipped this keyspace with fake-based tests and recorded the
+    gap in its own known-gaps list ("room membership and the reverse index
+    are asserted against a fake that models them"). §12 closes it.
+
+    Two tests for eight properties, because §16 caps this task at eight and
+    the six move behaviours take the rest. Each carries the assertions that
+    belong to one **mechanism** — the sorted set, and the monotonic
+    compare-and-set — rather than one per line of code.
+    """
+
+    async def test_membership_is_atomic_idempotent_and_per_connection(
+        self, rooms: RedisRoomMemberStore, contract_redis: Redis
+    ) -> None:
+        """§12's membership half: join, duplicate join, removal, one
+        connection leaving, and the empty-room TTL.
+
+        Every assertion is on the value the **write returned**, not on a
+        separate read. That is the property a fake cannot have: the member
+        set comes back from inside the same `MULTI`/`EXEC` that added the
+        member, so "are both players here now" is a fact about the state
+        this join produced rather than one the opponent's join may already
+        have changed.
+
+        The per-connection assertion is the one §12 names twice and the one
+        a store keyed on the player alone would fail: two tabs, one leaves,
+        the other stays. That is what makes a member the `(player,
+        connection)` pair.
+
+        **What this store deliberately cannot do** is refuse a
+        non-participant. It has no roster and no way to get one — membership
+        is `GameRoomService`'s rule, checked against `game.public` before
+        any of these are called. §12 asks that a non-participant "cannot be
+        inserted through the public store contract"; the honest reading is
+        that the contract has no participant concept at all, which is
+        asserted at the service level in
+        `tests/unit/test_gateway_connection.py`.
+        """
+        match_id = generate_uuid7()
+        player, opponent = generate_uuid7(), generate_uuid7()
+        first_tab = RoomMember(player_id=player, connection_id=generate_uuid7())
+        second_tab = RoomMember(player_id=player, connection_id=generate_uuid7())
+        theirs = RoomMember(player_id=opponent, connection_id=generate_uuid7())
+
+        after_first = await rooms.join(match_id, first_tab, ttl_seconds=ROOM_TTL_SECONDS)
+        after_second = await rooms.join(match_id, second_tab, ttl_seconds=ROOM_TTL_SECONDS)
+        after_duplicate = await rooms.join(match_id, second_tab, ttl_seconds=ROOM_TTL_SECONDS)
+        after_opponent = await rooms.join(match_id, theirs, ttl_seconds=ROOM_TTL_SECONDS)
+
+        assert list(after_first) == [first_tab]
+        assert len(after_second) == 2
+        # `ZADD` rescores rather than appending — the duplicate is not a
+        # third member.
+        assert len(after_duplicate) == 2
+        assert len(after_opponent) == 3
+
+        remaining = await rooms.leave(match_id, second_tab)
+        assert set(remaining) == {first_tab, theirs}
+        # One tab leaving does not take the player's other one.
+        assert first_tab in remaining
+
+        # Idempotent: removing what is already gone reports the truth.
+        assert set(await rooms.leave(match_id, second_tab)) == {first_tab, theirs}
+
+        # The key carries an expiry, so a room nobody returns to is dropped
+        # rather than swept — §8's "empty room expires after TTL".
+        ttl = await contract_redis.ttl(f"gwroom:v1:{match_id}")
+        assert 0 < ttl <= ROOM_TTL_SECONDS + 60
+
+        for member in (first_tab, theirs):
+            await rooms.leave(match_id, member)
+        assert await rooms.members_of(match_id) == ()
+
+    async def test_the_room_sequence_advances_atomically_and_never_goes_backwards(
+        self, rooms: RedisRoomMemberStore, contract_redis: Redis
+    ) -> None:
+        """§12's sequence half, and §11's projection.
+
+        The monotonic compare-and-set. A plain `HSET` would pass the first
+        two assertions and fail the third — and under at-least-once fan-out
+        an out-of-order delivery is the ordinary case rather than a rare
+        race, so a room reporting an older ply would send a resynchronising
+        client backwards.
+
+        Twenty concurrent writers with descending plies is the shape that
+        makes it real: read-then-write would let whichever finished last
+        win, and here exactly the highest survives however they interleave.
+        """
+        match_id = generate_uuid7()
+
+        assert await rooms.record_progress(match_id, ply=1, side_to_move="dark", fingerprint="fp-1")
+        assert await rooms.record_progress(
+            match_id, ply=2, side_to_move="light", fingerprint="fp-2"
+        )
+
+        # An older ply is refused rather than written, and so is a repeat of
+        # the current one — a redelivery must be a no-op, not a rewrite.
+        assert not await rooms.record_progress(
+            match_id, ply=1, side_to_move="dark", fingerprint="stale"
+        )
+        assert not await rooms.record_progress(
+            match_id, ply=2, side_to_move="light", fingerprint="repeat"
+        )
+
+        progress = await rooms.progress_of(match_id)
+        assert progress is not None
+        assert (progress.ply, progress.side_to_move, progress.fingerprint) == (
+            2,
+            "light",
+            "fp-2",
+        )
+
+        # Concurrent, descending. Exactly one write survives and it is the
+        # highest, whatever order Redis executes them in.
+        await asyncio.gather(
+            *(
+                rooms.record_progress(
+                    match_id, ply=ply, side_to_move="dark", fingerprint=f"fp-{ply}"
+                )
+                for ply in range(22, 2, -1)
+            )
+        )
+
+        settled = await rooms.progress_of(match_id)
+        assert settled is not None
+        assert settled.ply == 22
+        assert settled.fingerprint == "fp-22"
+
+        ttl = await contract_redis.ttl(f"gwroomstate:v1:{match_id}")
+        assert 0 < ttl <= ROOM_TTL_SECONDS

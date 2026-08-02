@@ -1,10 +1,14 @@
 # Realtime / WebSocket Architecture
 
-> **Status:** Approved for what exists — the authenticated connection foundation (A64-016.1)
-> and game room sessions (A64-016.2). Move routing, clocks, spectators, reconnection replay
-> and the cross-node transport are specified in outline only and are marked as such.
+> **Status:** Approved for what exists — the authenticated connection foundation (A64-016.1),
+> game room sessions (A64-016.2) and live move submission (A64-016.3). Clocks, spectators,
+> reconnection replay and the cross-node *transport* are specified in outline only and are
+> marked as such.
+>
+> **Read §18 before building on this.** The durable move log AD-18 pairs with the Redis live
+> position does not exist, so an in-flight game is not yet recoverable.
 > **Owner:** _Unassigned_
-> **Last reviewed:** 2026-08-02 (A64-016.2)
+> **Last reviewed:** 2026-08-02 (A64-016.3)
 > **Implements:** architecture.md AD-09 (single-use tickets), AD-11 (one multiplexed socket),
 > R-7 (the gateway contains no domain logic)
 > **Code:** `apps/api/app/gateway/`
@@ -28,7 +32,10 @@ one. A64-016.1 built the connection; everything a connection *carries* arrives l
 | Channel multiplexing (AD-11) | **Built** — A64-016.2, §13 |
 | Node identity and cross-node route resolution | **Built** — A64-016.2, §5, §14 |
 | Game room sessions and membership | **Built** — A64-016.2, §15 |
-| Move routing, clocks, spectators, chat | **Deferred** — §9 |
+| Move submission, validation and fan-out | **Built** — A64-016.3, §17 |
+| Per-connection move rate limiting | **Built** — A64-016.3, §17.6 |
+| Durable move log (AD-18's second half) | **Not built** — §18, and the reason to read it |
+| Clocks, spectators, chat | **Deferred** — §9 |
 | Cross-node message *transport* | **Deferred** — §9, §14.3 |
 | Reconnection replay (AD-12) | **Deferred** — §9 |
 
@@ -313,18 +320,38 @@ once.
 | `room.leave` | `game` | client → server | Leave a room. Idempotent |
 | `room.joined` | `game` | server → client | Confirmation, with the participants and whether both are connected |
 | `room.left` | `game` | server → client | Confirmation. Sent for an idempotent leave too |
-| `error` | the failing frame's | server → client | A refusal, carrying a code |
+| `game.move.submit` | `game` | client → server | One move — §17.1 |
+| `game.move.accepted` | `game` | server → client | The submitter's acknowledgement, correlated by `request_id` |
+| `game.move.rejected` | `game` | server → client | The submitter's refusal, with a stable category |
+| `game.move.applied` | `game` | server → client | The broadcast **both** participants receive. No `request_id` |
+| `error` | the failing frame's | server → client | A refusal about the *frame*, carrying a code |
 
-Eight, and every one of them is implemented. Adding a type without the handler behind it is the
-speculative generality CLAUDE.md §1.7 forbids, and the platform has declined it three times now
-— `TokenType.ACCESS` alone, `PasswordHasher.hash` alone, and A64-016.1's four-member
-`MessageType` — on the grounds that an unused member on a protocol surface reads as "this is
-wired up" to whoever adds the next task.
+Twelve, and every one of them is implemented. Adding a type without the handler behind it is the
+speculative generality CLAUDE.md §1.7 forbids, and the platform has declined it three times —
+`TokenType.ACCESS` alone, `PasswordHasher.hash` alone, and A64-016.1's four-member
+`MessageType`.
 
-**Still not a dispatch table.** The handler is four branches reading top to bottom in the order a
-connection meets them. A table would add a registration step and an indirection to save nothing;
-it earns its place when a handler needs its own collaborators, which is A64-016.3's move
-submission.
+### 8.2a The dispatch table — A64-016.3 §1
+
+A64-016.1 shipped two branches, A64-016.2 four, and both said the same thing: a table earns its
+place when a handler needs its own collaborators. `MoveSubmissionHandler` holds six, so the
+branching became a `dict` from `MessageType` to a bound handler.
+
+| Property | How |
+| --- | --- |
+| Deterministic | A dict literal over a closed enum. The same frame reaches the same handler on every process, every time |
+| No dynamic imports | Nothing imports at call time |
+| No reflection | No decorator registry, no metaclass, no module scanning |
+| Handlers get only what they need | `ping` takes the connection; the move handler takes its own collaborators |
+| Complete | `CLIENT_SENDABLE` names the four types a client may send; a test asserts the table covers exactly those |
+
+**Not a generic event framework**, which §1 forbids: no middleware chain, no priorities, no
+wildcard subscriptions, no handler that can register another. Adding a message type is one entry
+and one method.
+
+The decode and the send stay outside it. Decoding fails before there is a type to dispatch on,
+and sending is the read loop's — so one place owns the socket, which is what makes AD-11's
+cross-stream ordering a property of the loop rather than of every handler behaving.
 
 ### 8.3 Errors carry a code, never prose
 
@@ -378,8 +405,16 @@ duration keeps its distribution.
 | `gateway.room_leaves_total` | `reason` — `client`, `disconnect` | How rooms drain. `disconnect` dominates — most players close the tab rather than leaving politely |
 | `gateway.room_states_total` | `state` — `waiting`, `ready` | `rate(…{state=ready})` is "how often does a room complete", which is the question a gauge over active rooms could not answer |
 | `gateway.route_resolutions_total` | `locality` — `local`, `remote` | The ratio is the operational question: a rising remote share is what says a cross-node transport is now actually needed |
+| `gateway.move_submissions_total` | — | Counted before validation, so `submissions − accepted − rejected` is the number deduplicated by `request_id` |
+| `gateway.moves_accepted_total` | — | Moves the game applied |
+| `gateway.moves_rejected_total` | `category` — the eight in §17.7 | One counter, not eight: they are mutually exclusive outcomes of one operation, and splitting them would make "what fraction of moves are refused" a sum across metrics |
+| `gateway.local_deliveries_total` | — | Frames written to sockets this node holds |
+| `gateway.remote_publishes_total` | — | **Per node, not per connection.** A rate that tracks connections is the symptom of a publisher that bypassed the routing plan |
+| `gateway.remote_publish_failures_total` | — | Separate from publishes rather than a label on them, because an alert fires on this rate alone |
 
-**No player ids, no ticket ids, no connection ids, no match ids and no node ids in any label.** Beyond A64-015.5 §9's
+**No player ids, no ticket ids, no connection ids, no match ids, no request ids and no node ids
+in any label.** No board state and no move payload is ever logged — a log of every frame would be
+a searchable record of every game. Beyond A64-015.5 §9's
 cardinality rule, a ticket id in a label is a credential in a system with broader read access
 than the store it came from, and a player id is a record of when somebody was connected — which
 is the sleep schedule `show_last_seen` exists to withhold.
@@ -405,6 +440,11 @@ client a code.
 | `GATEWAY_MAX_FRAME_BYTES` | 8192 | Checked before parsing |
 | `GATEWAY_NODE_ID` | *(generated)* | §14.1. Set it in any deployment with more than one replica |
 | `GATEWAY_ROOM_TTL_SECONDS` | 3600 | §15.1. Measured against a game, not a heartbeat |
+| `GATEWAY_MOVE_RATE_LIMIT_ENABLED` | `true` | §17.6. Off means an unbounded move rate |
+| `GATEWAY_MOVE_RATE_LIMIT` | 30 | Per connection |
+| `GATEWAY_MOVE_RATE_LIMIT_WINDOW_SECONDS` | 10 | |
+| `GATEWAY_MOVE_IDEMPOTENCY_TTL_SECONDS` | 60 | §17.5 |
+| `GAME_LIVE_STATE_TTL_SECONDS` | 14400 | The one TTL whose expiry loses something unrebuildable — §18 |
 
 There is **no kill switch**. Presence and the friends cache have one because they degrade to a
 working platform with a feature missing; a gateway with no registry cannot answer "does this
@@ -417,12 +457,12 @@ position is "broken" is not a switch — turning the gateway off is a deploy dec
 
 | Gap | Consequence today | What closes it |
 | --- | --- | --- |
-| ~~No contract suite over `wsticket:v1:` or `gwconn:v1:`~~ | **Closed by A64-016.2.** `tests/contract/test_gateway_redis.py` proves `GETDEL` single-use, concurrent redemption with one winner, atomic counting across register/unregister, and node resolution — against real Redis | — |
-| No contract suite over `gwroom:v1:` | Room membership and the reverse index are asserted against a fake that models them. The atomicity of "add then read the members" is Redis's | Extend `test_gateway_redis.py`. Cheaper than the connection suite was, because the fixture now exists |
-| `ConnectionRouter.plan_for` has no caller | The seam is built and tested and nothing routes through it. Deliberate (§14.3), and it is dead code until A64-016.3 | The move fan-out |
-| The `/ws` route itself is not driven by a test | Three statements — accept, wrap, delegate — and a mis-wiring fails at application build. Verified by hand during A64-016.1 | One `TestClient.websocket_connect` case, once the suite has a websocket fixture |
-| No per-connection rate limit | One authenticated client can send frames as fast as it can write them. Bounded per frame, not per second | A limiter on the read loop, once there is a message worth spending |
-| No node identity in the registry | Cross-node message routing is impossible | `gwconn:v2:` — see §9 |
+| ~~No contract suite over `wsticket:v1:` or `gwconn:v1:`~~ | **Closed by A64-016.2** | — |
+| ~~No contract suite over `gwroom:v1:`~~ | **Closed by A64-016.3.** `tests/contract/test_gateway_redis.py` proves atomic membership, per-connection removal, the empty-room TTL and the monotonic sequence CAS against real Redis | — |
+| **No durable move log** | **See §18.** The headline gap of A64-016.3 | A64-016.4 or earlier |
+| `RemoteNodePublisher` is a log line | A fan-out to a connection on another node is silently not delivered. **Single-node is the only supported topology** | The transport (§14.3) |
+| No terminal-state detection | A game that has been won continues to accept moves until the engine has no legal move, and nothing settles the match | The lifecycle task |
+| No per-connection limit on non-move frames | `room.join` and `ping` are bounded only by what a socket can send. Both are cheap; neither is free | A second rule if it becomes worth spending |
 
 ---
 
@@ -609,6 +649,249 @@ attached during the handshake changes that predicate and nothing in `game`.
 | Disconnect detaches | `GameRoomService.detach` runs from the connection's cleanup, **before** the registry unregister, so there is no window in which the fleet has forgotten the socket while a room still reports it attached |
 | One tab closing | Removes one member. The player's other connections stay in the room |
 | Empty room | Expires. There is no close operation, because a room with no members is indistinguishable from one that never existed |
+
+---
+
+## 17. Move submission — A64-016.3
+
+### 17.1 The frame
+
+```json
+{ "v": 1, "type": "game.move.submit", "channel": "game", "request_id": "m17",
+  "payload": { "match_id": "…", "path": ["c3", "d4", "f6"] } }
+```
+
+Two fields, and the restraint is the design.
+
+**A path, not a from/to pair.** The same origin and destination can be reached by two capture
+sequences taking different pieces, and picking one for the player is picking which of their
+pieces survives.
+
+**No captures and no promotion.** The client could send them, and the server would then have to
+either trust them or verify them — and verifying means generating the legal moves anyway. So the
+server asks its own generator for the legal moves in the position and looks for the one whose
+path matches: the captures and the crown are the generator's, and a tampered client cannot claim
+to have taken a piece it did not jump. Strictly stronger than validation, and less code.
+
+**No player id.** §4 forbids trusting a client-supplied identity, and the frame has no field for
+one — the player is the socket's redeemed ticket. Structural rather than remembered.
+
+### 17.2 What the client gets back
+
+| Frame | When | Correlated |
+| --- | --- | --- |
+| `game.move.accepted` | The move applied | Yes — the submitter's `request_id` |
+| `game.move.rejected` | It did not | Yes |
+| `game.move.applied` | Broadcast to both participants | **No** |
+
+The submitter receives **two** frames: their acknowledgement and the broadcast. Merging them
+would mean a client could not tell its own move from its opponent's without inspecting the
+payload, and it would leave two code paths for advancing the board with one rarely exercised.
+
+**Ordering: the submitter may receive `applied` before `accepted`.** The fan-out runs before the
+handler returns its answer, and both are idempotent by ply — a client that has already applied
+the move optimistically (AD-23) treats the broadcast for its own move as a no-op. Clients must
+not assume the acknowledgement arrives first.
+
+Accepted payload: `match_id`, `ply`, `side_to_move`, `fingerprint`, and the server-derived
+`applied` move. **A fingerprint, not a board** — the client already applied the move
+optimistically and needs confirmation and a divergence check, and a full position on every move
+would be the largest payload in the protocol multiplied by every move of every game.
+
+### 17.3 The `game.public` boundary
+
+```
+SubmitMoveRequest  ->  SubmitMoveUseCase.submit  ->  SubmitMoveResult
+```
+
+One method. The gateway can submit and can do nothing else — it cannot read a position,
+enumerate matches or resign one. R-7 ("the gateway never decides whether a move is legal") is
+worth nothing if the port it holds is wide.
+
+Checks run in this order, and the order is the point:
+
+| # | Check | Failure |
+| --- | --- | --- |
+| 1 | The match exists **and** this player is in it | `not_a_participant` |
+| 2 | The match is `active` | `match_not_active` |
+| 3 | The player owns the side to move | `not_your_turn` |
+| 4 | The path is legal here | `illegal_move` |
+| 5 | Nobody else wrote first | `stale_state` |
+
+Identity, then state, then rules. A caller who may not see a match learns nothing about it —
+step 1 collapses "no such match" and "not yours" — and a caller whose turn it is not is refused
+*before* the engine says whether their move would have been legal, which would otherwise be a
+free rules oracle against a position they may not reason about.
+
+Before any of that, the **gateway** checks two cheaper things: the rate limit (§17.6) and whether
+this connection is in the room (`not_in_room`). Both are one Redis read; the game check is a
+database read plus a position load.
+
+### 17.4 Concurrency — compare-and-set on the ply
+
+The live position lives in Redis (AD-18) as `game:live:v1:<match_id>`, a hash of `{ply,
+position}` on the **`live`** role. Every write is a Lua compare-and-set conditional on the ply
+that was read.
+
+Two moves submitted against the same state produce one application and one `stale_state`,
+decided inside Redis. §6 forbids a process-local lock, and a lock would be wrong anyway: the two
+players may be on different gateway nodes, so a lock in one process guards nothing.
+
+The read is not locked and does not need to be. A stale read produces a failed CAS, which is
+what a lock would have prevented by *waiting* — and waiting is worse, because the loser's move
+has almost certainly become illegal by then and the honest answer is to say so.
+
+`expected_ply = 0` also matches an absent key, which is what makes lazy seeding safe: the first
+mover computes the opening position from the variant, and two nodes doing so concurrently
+resolve to one winner.
+
+**Why `live` and not `cache`.** The one gateway-adjacent keyspace that is not reconstructible by
+a reconnect. `cache` is configured to evict, which is correct for presence, the connection
+registry and rooms — and would make the eviction policy a way to lose a game.
+
+### 17.5 Idempotency — two mechanisms, two failures
+
+They look interchangeable and are not:
+
+| Mechanism | The failure it handles | Correct outcome |
+| --- | --- | --- |
+| `request_id` dedupe | The **client retried**. Same connection, same intent, sent twice because the first answer was lost | The *first* answer, replayed |
+| Ply compare-and-set | The **opponent moved first**. Two different intents against the same state | One applied, one refused |
+
+A CAS alone would let a retry fail as `stale_state` rather than returning the original success.
+A dedupe alone would let two genuinely concurrent moves both apply.
+
+**Scope: `(connection_id, request_id)`**, stated explicitly per §7. Not the player — two tabs
+choosing `"1"` are two independent clients, and keying on the player would make one tab's retry
+return the other's answer. Not the match — that would do the same across a reconnect, where a
+client legitimately restarts its counter.
+
+**Bounded**: `GATEWAY_MOVE_IDEMPOTENCY_TTL_SECONDS`, default 60, in `gwmove:v1:` on `cache`.
+§7 forbids "a permanent unbounded request cache". A frame with **no** `request_id` is not
+deduplicated at all — there is nothing to key on, and inventing one would be the second
+correlation identifier §7 forbids.
+
+What is stored is the **encoded response frame**, including rejections, so a retry replays
+exactly what the client already saw rather than a decision re-rendered.
+
+### 17.6 Per-connection move rate limiting
+
+Move submission is the first expensive per-frame operation: a database read, a position load, a
+legal-move generation and a Redis CAS.
+
+| Property | Value |
+| --- | --- |
+| Scope | `RateLimitScope.CONNECTION` — new in A64-016.3 |
+| Default | 30 moves per 10 seconds |
+| Implementation | The platform's sliding-window limiter, not a second one |
+| Placement | **Before the decode and before every read** (§13) |
+| On violation | `game.move.rejected` with `rate_limited`. The connection **stays open** |
+| `ping` | Not charged. Rate-limiting a heartbeat disconnects the players who are behaving |
+
+Per connection rather than per player: a player with two tabs is two clients, and a shared bucket
+would let one tab's misbehaving loop throttle the other's game — which on a live board is losing
+to somebody else's bug.
+
+Fails **open**, like every other limit on this platform: a limiter outage that refused moves
+would stop every game in progress.
+
+### 17.7 Error mapping
+
+Every failure becomes a stable category and a **fixed sentence**. The sentence never comes from
+the exception, which is what makes §14's "no SQL errors, no Redis errors, no Python class names,
+no stack traces" a property of a lookup table rather than a rule somebody remembers.
+
+| Code | Meaning | What the client should do |
+| --- | --- | --- |
+| `not_in_room` | This connection has not joined the match's room | Send `room.join`, then retry |
+| `not_a_participant` | Not this player's match — **or** no such match | Stop |
+| `not_your_turn` | Out of turn | Resynchronise |
+| `illegal_move` | The path is not legal here | Log loudly — under AD-14 the client's own engine disagreed |
+| `stale_state` | Another writer advanced the match first | **Retry** |
+| `match_not_active` | Still in acceptance, declined, expired, or finished | Stop |
+| `rate_limited` | Too many moves from this connection | Slow down |
+| `internal_error` | Something the client cannot act on | Retry |
+
+Anything unmapped is `internal_error`, with the exception type and traceback in the log where the
+caller cannot read it.
+
+### 17.8 Fan-out over `RoutingPlan`
+
+```
+recipients  ->  RoutingPlan  ->  local:  write to sockets this node holds
+                             ->  remote: one ForwardingRequest per node
+```
+
+§8 forbids bypassing the plan and forbids rediscovering routes inside the publisher; both are
+structural. `RoomBroadcaster` asks the router once, and `ForwardingRequest` already names the
+connections — the publisher has no registry to consult.
+
+**One publish per node, not per connection.** The plan groups by node, so a fan-out to a player
+with four tabs on one node is one request carrying four connection ids. A publisher that iterated
+routes would send the same frame four times to the same process, and it looks identical to a
+working system until the fleet grows.
+
+`ForwardingRequest` is **primitive-only** — a node id, connection ids and the encoded frame. No
+socket, no FastAPI object, no engine type, because the eventual transport serialises it.
+
+**Delivery never fails a move.** By the time it runs the move is committed in `game`, so a socket
+that went away between the plan and the write is counted and logged, never raised (§9, §10). The
+implementation behind `RemoteNodePublisher` is a **log line** until A64-016.4 — see §18.
+
+### 17.9 Room state — the live projection
+
+`gwroomstate:v1:<match_id>` holds `{ply, side_to_move, fingerprint}`. The minimum a client needs
+to notice it has fallen behind and a router needs to order what it delivers.
+
+**Not the board.** `game` is authoritative (AD-18); §11 says "do not duplicate the complete Game
+aggregate in `gwroom:v1:`", and a board here would be a copy that can disagree with the authority
+and is updated by a fan-out that is allowed to fail.
+
+The write is a **monotonic** compare-and-set, not an `HSET`. §12 requires that a concurrent
+update cannot silently overwrite a newer sequence, and under at-least-once fan-out an
+out-of-order delivery is ordinary rather than rare — a plain write would leave the room reporting
+an older ply and send a resynchronising client backwards.
+
+---
+
+## 18. The durable move log — the gap to read before building on this
+
+AD-18: *"Live position lives in Redis. **Moves are appended durably to PostgreSQL.**"*
+
+A64-016.3 built the first sentence and not the second. `game:live:v1:<match_id>` holds the
+position and the ply; nothing writes a move anywhere durable.
+
+### What that costs, precisely
+
+AD-19 says nothing competitive lives only in Redis, and names the mitigation: *"the durable move
+log allows a match to be reconstructed by replay through the engine."* Without it:
+
+| Event | Consequence |
+| --- | --- |
+| Redis primary fails | Every in-flight game is lost, unrecoverably. There is nothing to replay from |
+| `GAME_LIVE_STATE_TTL_SECONDS` lapses | The same, for one game |
+| A position decodes as malformed | The service falls back to the **opening position** — the wrong game, logged at `ERROR` |
+
+The third is the one that would be hardest to notice in production, which is why the decoder logs
+at `ERROR` rather than `WARNING` like every other tolerant decoder on this platform.
+
+### Why it shipped anyway
+
+Because no rated game is played yet: matchmaking creates matches, the acceptance handshake works,
+and nothing consumes a result. The engine's own audit records the same posture for the same
+reason — three draw thresholds are undecided, and they block "anything that stores a rated
+result" rather than blocking play.
+
+**This is the thing to build before a real game is played.** It is not a refinement of what is
+here; it is the half of AD-18 that makes the other half safe.
+
+### What it needs
+
+`game.move` — database.md §8.4 already specifies it as the platform's largest relation,
+partitioned, append-only. One insert per move inside the same transaction that advances the ply,
+and `ReplayEngine` (which exists, is tested, and has no caller) to reconstruct a position from it.
+
+---
 
 ---
 

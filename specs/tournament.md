@@ -6,7 +6,7 @@
 | **Status** | Approved for v0.x — Single Elimination only |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-05 — A64-019.6, activation and no-show adjudication (§6e) |
+| **Last updated** | 2026-08-05 — A64-019.6, final results and public reads (§6f, §6g) |
 | **Related specs** | [`rating.md`](./rating.md), [`replay.md`](./replay.md), [`matchmaking.md`](./matchmaking.md) |
 | **Related** | `services.md` §11.3, `database.md` §18.3, `domain-model.md` §16.2 and R-25 |
 
@@ -322,14 +322,14 @@ twice, create a third attempt, or overwrite an advancement. The guarantees are t
 database's: `unique (pairing_id, attempt_number)`, `unique match_id`, and the
 `winner_id IS NULL` compare-and-set A64-019.4 already uses.
 
-### The queue ticket a tournament does not have — corrected in A64-019.6
+### The queue ticket a tournament does not have — corrected in A64-019.5H
 
 A64-019.5 shipped a derived uuid5 as each seat's `queue_ticket_id`, because
 `game.public.MatchParticipant` required one and `game.match` stored it `NOT NULL`. That
 recorded a queue ticket that never existed — a fabricated fact in a permanent record (A-4), and
 one `settlements_for` would have answered questions about.
 
-A64-019.6 makes the column nullable instead. A tournament seat now passes `None`, and the
+A64-019.5H makes the column nullable instead. A tournament seat now passes `None`, and the
 requirement is **origin-specific rather than dropped**:
 
 | Origin | `queue_ticket_id` |
@@ -392,11 +392,11 @@ LOCKED`, never raises. It compares `game`'s matches for a node against this modu
 | Match ended with no result at all | **Reported, not repaired** |
 
 The last two are logged at `ERROR` with a counter rather than repaired, because neither has an
-answer this module may invent. **A64-019.6 removed their most common cause**: a tournament match
+answer this module may invent. **A64-019.5H removed their most common cause**: a tournament match
 is now system-activated (§6e), so it cannot expire unanswered, and a fixture nobody turns up for
 is decided by the no-show deadline rather than left for the reconciler to find.
 
-## 6e. Activation and the no-show deadline — A64-019.6
+## 6e. Activation and the no-show deadline — A64-019.5H (Live Tournament Hardening)
 
 ### A tournament match is a fixture, not an offer
 
@@ -474,6 +474,110 @@ The sweep is a `platform.tasks` handler with an injected clock, a durable row-he
 `FOR UPDATE SKIP LOCKED`, a bounded batch and no in-process timer — a deadline held in process
 lives on one node, and a deploy takes every one it held with it (AD-21).
 
+## 6f. Final results — A64-019.6
+
+### Placement is the elimination round
+
+Single elimination ranks by how far you got, so every player knocked out in the same round
+finished in the same place:
+
+```
+rank(champion)               1
+rank(eliminated in round r)  2 ** (rounds - r) + 1
+```
+
+| 8 players, 3 rounds | Rank |
+| --- | --- |
+| Champion | 1 |
+| Final loser | 2 |
+| Semi-final losers | 3, 3 |
+| Quarter-final losers | 5, 5, 5, 5 |
+
+**Ties are not broken** — not by rating, not by seed, not by a head-to-head that never happened,
+not by move count and not by duration. Two players knocked out in the same round have the same
+evidence about them, and inventing an order would publish a comparison nobody made. The seed
+stays metadata: it explains the draw, it does not rank the result.
+
+Ranks are therefore **not dense**: two players share third, so nobody is fourth and the next
+tier starts at fifth. That is how every bracket sport reports a draw sheet.
+
+### Standings are an immutable snapshot
+
+Before completion the **bracket** is authoritative — nodes, attempts and recorded advancements.
+At completion, `tournaments.standing` is materialised **once** and never recomputed. A read
+endpoint pages over stored rows: a derivation that ran per request would make a published result
+depend on code that can change, and the bracket it came from is already terminal.
+
+C1, a permanent record: `created_at` alone, no `updated_at`. Corrections and overrides are
+deferred with the Administration epic (OQ-1), as are prizes, rewards, trophies, achievements,
+season points and team standings.
+
+### Statistics count games, never advancements
+
+| Event | Effect |
+| --- | --- |
+| Decisive real match | One win, one loss |
+| Drawn real match | One draw for **both** |
+| Two draws → higher seed advances (§6c) | `adjudicated_advancements` +1 for the advancing player |
+| No-show adjudication (§6e) | `adjudicated_advancements` +1. **Not** a win |
+| Bye | **Nothing** — no win, no loss, no adjudication |
+
+A bye is arithmetic, not a ruling: the bracket had an empty seat, and nobody adjudicated
+anything. No `game` result is ever fabricated.
+
+### Completion
+
+`complete_tournament(tournament_id)` — lock, require `IN_PROGRESS`, verify the final has a
+winner and every contested pairing is settled, derive placement, materialise every standing,
+transition to `COMPLETED`, stamp `completed_at`, publish through the outbox. **One transaction.**
+
+The standings are written *before* the transition, deliberately: the state §5 forbids —
+`COMPLETED` with no standings — would be unrepairable, because `COMPLETED` is terminal and
+nothing would run again to write the other half. A failure leaves the tournament `IN_PROGRESS`,
+which the next completed match reaches again.
+
+**The trigger is automatic** (§14): the final's winner finishes the tournament through the
+advancement flow. There is no operator endpoint, and no `POST /complete` — an endpoint that
+could finish a bracket is one that could finish an unfinished one.
+
+Idempotent by three database facts: `pk_standing`, `uq_standing__one_champion`, and `COMPLETED`
+being terminal. A second completion returns the stored result unchanged.
+
+**Ordering note.** A64-019.6 reversed A64-019.5's "effects first, bookkeeping last" for one
+step: an attempt's result is now recorded *before* the advancement. Because the advancement can
+finish the tournament, the old order counted the deciding match in nobody's record — the
+champion showed one win instead of two. The recovery argument is unaffected: `apply` re-derives
+from the payload and does not gate on the write.
+
+### One event, not two
+
+`tournament.completed` carries the winner and the entrant count. A separate
+`tournament.results_materialized` is deliberately **not** emitted: completion and
+materialisation are one transaction, so a consumer that saw one and not the other would be
+observing a state that cannot exist.
+
+## 6g. Public reads — A64-019.6
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /api/v1/tournaments/{id}` | Configuration, entrant count, current round, lifecycle instants |
+| `GET /api/v1/tournaments/{id}/bracket` | Rounds, nodes, seeds, winners, advancement reasons, attempt summaries with `match_id` |
+| `GET /api/v1/tournaments/{id}/standings` | The immutable placement, ordered `final_rank`, `seed_number`, `player_id` |
+| `GET /api/v1/players/{id}/tournaments` | Participation, newest first, **keyset** paginated |
+
+**Public** means no viewer is narrower than another — no owner check, no friends-only variant,
+no configurable privacy. It does not mean unauthenticated: every route outside `/health` is
+behind a session. An unknown tournament is `404` and never `403`, and here that cannot be got
+wrong: a tournament is present for everybody or absent for everybody.
+
+Withheld: `created_by`, compare-and-set targets, no-show deadlines, attendance instants, outbox
+and audit rows, and ORM models. `match_id` **is** published, so a reader can follow a node to
+the game that decided it — the replay itself is `game`'s, on `game`'s endpoint, under `game`'s
+visibility rule.
+
+A player's history uses `(registered_at, tournament_id)` descending — both keys, because a
+single-key order over an unbounded history pages unstably. Never `OFFSET`.
+
 ## 7. Privacy
 
 Tournaments and their brackets are **public**. A private tournament is deferred with
@@ -487,6 +591,6 @@ Where a resource is not visible, the answer is the platform's existing rule: **`
 | # | Question | Blocked work |
 | --- | --- | --- |
 | OQ-1 | Who may cancel a tournament, remove a participant, or override a result? | Moderation — waits for the Administration epic and `specs/admin.md` |
-| OQ-2 | ~~Is check-in required, and what is the no-show window?~~ **Answered by A64-019.6** — §6e: no check-in, and a 300-second attendance deadline enforced by a bounded sweep. What remains open is only the *rating* treatment of a repeat offender, which waits on `fairplay` | — |
+| OQ-2 | ~~Is check-in required, and what is the no-show window?~~ **Answered by A64-019.5H** — §6e: no check-in, and a 300-second attendance deadline enforced by a bounded sweep. What remains open is only the *rating* treatment of a repeat offender, which waits on `fairplay` | — |
 | OQ-3 | Time control per tournament | `specs/rating.md` OQ-1 and OQ-2 — the catalogue does not exist, so every match is the platform default |
 | OQ-4 | Retention for cancelled tournaments | Append-only in v0.x, like everything else |

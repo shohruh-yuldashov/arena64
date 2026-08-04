@@ -310,7 +310,7 @@ def _events_for(
     branch at the call site.
     """
     # `Any`-valued rather than inferred, because the two ticket ids are
-    # nullable since A64-019.6 and every other entry is not — an inferred
+    # nullable since A64-019.5H and every other entry is not — an inferred
     # `dict[str, UUID | None]` would then widen the four that are never
     # absent. The events' own signatures are where each field's nullability
     # is stated; this mapping only carries them.

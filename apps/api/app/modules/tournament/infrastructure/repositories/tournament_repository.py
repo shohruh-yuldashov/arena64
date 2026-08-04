@@ -27,6 +27,7 @@ from app.modules.tournament.application.ports import (
     AlreadyRegistered,
     AttemptAlreadyExists,
     PlanAlreadyExists,
+    StandingsAlreadyRecorded,
     TournamentIsFull,
 )
 from app.modules.tournament.domain.attempts import AdvancementReason, PairingAttempt
@@ -38,11 +39,13 @@ from app.modules.tournament.domain.bracket_plan import (
 from app.modules.tournament.domain.registration import Registration, RegistrationStatus
 from app.modules.tournament.domain.rounds import TournamentRound
 from app.modules.tournament.domain.seeding import PlannedPairing, Seed
+from app.modules.tournament.domain.standings import Standing
 from app.modules.tournament.domain.tournament import Tournament, TournamentStatus
 from app.modules.tournament.infrastructure.models import (
     PairingAttemptModel,
     PairingModel,
     RegistrationModel,
+    StandingModel,
     TournamentModel,
     TournamentRoundModel,
 )
@@ -73,10 +76,18 @@ class SqlAlchemyTournamentRepository:
         return _to_domain(row) if row else None
 
     async def save(self, tournament: Tournament) -> None:
+        """Persists a lifecycle transition and the instant it named.
+
+        The three columns are written together because
+        `Tournament.transitioned_to` sets them together — a status without
+        its instant is a tournament that cannot say when it finished.
+        """
         row = await self._session.get(TournamentModel, tournament.id)
         if row is None:
             return
         row.status = tournament.status
+        row.started_at = tournament.started_at
+        row.completed_at = tournament.completed_at
         await self._session.flush()
 
     async def in_progress(self, *, limit: int) -> list[uuid.UUID]:
@@ -216,6 +227,8 @@ def _to_model(tournament: Tournament) -> TournamentModel:
         created_by=tournament.created_by,
         registration_deadline=tournament.registration_deadline,
         created_at=tournament.created_at,
+        started_at=tournament.started_at,
+        completed_at=tournament.completed_at,
     )
 
 
@@ -232,6 +245,8 @@ def _to_domain(row: TournamentModel) -> Tournament:
         created_at=row.created_at,
         registration_deadline=row.registration_deadline,
         status=row.status,
+        started_at=row.started_at,
+        completed_at=row.completed_at,
     )
 
 
@@ -597,6 +612,103 @@ def _to_attempt(row: PairingAttemptModel) -> PairingAttempt:
     )
 
 
+class SqlAlchemyStandingRepository:
+    """`StandingRepository` — a completed tournament's immutable placement.
+
+    **Write once, read many.** There is no update method: a standing is a
+    snapshot of a bracket that can no longer change, and a correction is the
+    Administration epic's (OQ-1).
+
+    The insert runs inside a `SAVEPOINT` for the reason every insert-and-
+    catch in this file does — the loser of a completion race re-reads the
+    winner's rows in the same session, and a poisoned transaction would
+    refuse the read.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def record(self, standings: Sequence[Standing]) -> None:
+        """Materialises every standing in one flush. Raises on a collision.
+
+        All or nothing: a tournament with some of its results is one nothing
+        can page over and nothing can repair, because the bracket it came
+        from is already terminal.
+        """
+        try:
+            async with self._session.begin_nested():
+                for standing in standings:
+                    self._session.add(
+                        StandingModel(
+                            tournament_id=standing.tournament_id,
+                            player_id=standing.player_id,
+                            final_rank=standing.final_rank,
+                            seed_number=standing.seed_number,
+                            elimination_round=standing.elimination_round,
+                            eliminated_by_player_id=standing.eliminated_by_player_id,
+                            wins=standing.wins,
+                            losses=standing.losses,
+                            draws=standing.draws,
+                            adjudicated_advancements=standing.adjudicated_advancements,
+                            final_status=standing.final_status,
+                            created_at=standing.created_at,
+                        )
+                    )
+                await self._session.flush()
+        except IntegrityError as violation:
+            if not any(
+                marker in str(violation.orig)
+                for marker in ("pk_standing", "uq_standing__one_champion")
+            ):
+                raise
+            raise StandingsAlreadyRecorded(
+                f"tournament {standings[0].tournament_id} already has results"
+            ) from violation
+
+    async def standings_for(self, tournament_id: uuid.UUID) -> list[Standing]:
+        """The published order — served by `ix_standing__placement`.
+
+        Ordered here rather than by the caller, so the wire order and the
+        stored order cannot drift.
+        """
+        rows = await self._session.scalars(
+            select(StandingModel)
+            .where(StandingModel.tournament_id == tournament_id)
+            .order_by(
+                StandingModel.final_rank,
+                StandingModel.seed_number,
+                StandingModel.player_id,
+            )
+        )
+        return [_to_standing(row) for row in rows]
+
+    async def exists(self, tournament_id: uuid.UUID) -> bool:
+        return bool(
+            await self._session.scalar(
+                select(func.count())
+                .select_from(StandingModel)
+                .where(StandingModel.tournament_id == tournament_id)
+            )
+        )
+
+
+def _to_standing(row: StandingModel) -> Standing:
+    return Standing(
+        tournament_id=row.tournament_id,
+        player_id=row.player_id,
+        final_rank=row.final_rank,
+        seed_number=row.seed_number,
+        elimination_round=row.elimination_round,
+        eliminated_by_player_id=row.eliminated_by_player_id,
+        wins=row.wins,
+        losses=row.losses,
+        draws=row.draws,
+        adjudicated_advancements=row.adjudicated_advancements,
+        final_status=row.final_status,
+        created_at=row.created_at,
+    )
+
+
 class SqlAlchemyRoundRepository:
     """`RoundRepository` — where each round is, never how it may move.
 
@@ -645,6 +757,7 @@ __all__ = [
     "SqlAlchemyPairingRepository",
     "SqlAlchemyRegistrationRepository",
     "SqlAlchemyRoundRepository",
+    "SqlAlchemyStandingRepository",
     "SqlAlchemySeedRepository",
     "SqlAlchemyTournamentRepository",
 ]

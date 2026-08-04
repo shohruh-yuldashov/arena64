@@ -248,7 +248,7 @@ class TestTheSurfaceIsDeliberate:
         "OriginMatchOutcome",
         "OriginMatchReader",
         "OriginMatchState",
-        # A64-019.6 — whether a match waits to be accepted.
+        # A64-019.5H — whether a match waits to be accepted.
         #
         # A named policy on the request rather than a boolean or something
         # inferred from `origin`, and published because the *caller* decides

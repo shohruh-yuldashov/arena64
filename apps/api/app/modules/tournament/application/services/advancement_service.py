@@ -7,21 +7,27 @@ this is what happens when one of them ends.
             ->  round complete?  -> publish and launch the next one
             ->  final complete?  -> the tournament has a winner
 
-## Effects first, bookkeeping last
+## The result is recorded before the advancement — A64-019.6
 
-The order every method here follows, and it is the same argument
-`TournamentMatchLauncher` makes about creating the match before recording
-the attempt: **the recoverable state is the one where more has happened than
-has been written down.**
+A64-019.5 did the opposite, on "effects first, bookkeeping last": the
+recoverable state is the one where more has happened than has been written
+down. That reasoning was sound and the order was still wrong, for a reason
+that only appeared once results existed.
 
-So the rematch is launched, or the winner advanced, *before* the attempt is
-marked completed. A worker that dies in between leaves an attempt that still
-says `created`, and the redelivery re-derives exactly the same decision from
-the same payload — the launch collides with `unique (pairing_id,
-attempt_number)` and the advancement collides with `winner_id IS NULL`, so
-both are no-ops and the bookkeeping finally lands. Marking the attempt first
-would leave the opposite: a bracket that believes the match is handled and
-never acts on it.
+**A64-019.6 derives a tournament's statistics from the stored attempts**,
+and the advancement below can finish the tournament — the final's winner
+triggers completion (§14), which materialises standings *immediately*. With
+the old order the deciding match had not yet been marked completed when its
+own result was counted, so the final game appeared in nobody's record: the
+champion showed one win instead of two and the runner-up showed no loss at
+all. A plausible-looking, permanently wrong result.
+
+Reversing it costs nothing, because the recovery argument never depended on
+the order. `apply` re-derives its decision from the **payload**, not from the
+stored attempt, and does not gate on `complete` returning `True` — so a
+worker that dies after recording and before advancing is repaired by exactly
+the same redelivery, which advances under the `winner_id IS NULL`
+compare-and-set and finds the bookkeeping already done.
 
 That is also why `complete` returning `False` is **not** treated as "stop".
 It means somebody already recorded this result; it says nothing about
@@ -55,6 +61,9 @@ from app.modules.tournament.application.ports import (
 from app.modules.tournament.application.services.bracket_service import (
     TournamentBracketService,
 )
+from app.modules.tournament.application.services.completion_service import (
+    TournamentCompletionService,
+)
 from app.modules.tournament.application.services.match_launcher import (
     PlannedAttempt,
     TournamentMatchLauncher,
@@ -69,11 +78,7 @@ from app.modules.tournament.domain.attempts import (
     rematch_seats,
 )
 from app.modules.tournament.domain.bracket_plan import BracketSlot, LocatedNode
-from app.modules.tournament.domain.events import (
-    RoundCompleted,
-    RoundPublished,
-    TournamentCompleted,
-)
+from app.modules.tournament.domain.events import RoundCompleted, RoundPublished
 from app.modules.tournament.domain.exceptions import InvalidBracketPosition
 from app.modules.tournament.domain.rounds import RoundStatus, TournamentRound
 from app.modules.tournament.domain.tournament import Tournament, TournamentStatus
@@ -130,6 +135,7 @@ class TournamentAdvancementService:
         rounds: RoundRepository,
         attempts: PairingAttemptRepository,
         launcher: TournamentMatchLauncher,
+        completion: TournamentCompletionService,
         events: EventPublisher,
         unit_of_work: UnitOfWork,
         clock: Clock,
@@ -140,6 +146,7 @@ class TournamentAdvancementService:
         self._rounds = rounds
         self._attempts = attempts
         self._launcher = launcher
+        self._completion = completion
         self._events = events
         self._unit_of_work = unit_of_work
         self._clock = clock
@@ -177,12 +184,14 @@ class TournamentAdvancementService:
             higher_seed_player_id=higher_seed_of(located.node),
         )
 
+        # **The result is recorded first** — see this module's docstring on
+        # why A64-019.6 reversed A64-019.5's order.
+        await self._record(attempt, completion)
+
         if advancement.rematch_due:
             await self._rematch(tournament, attempt)
         elif advancement.winner_id is not None and advancement.reason is not None:
             await self._advance(tournament, located, advancement.winner_id, advancement.reason)
-
-        await self._record(attempt, completion)
 
     async def _rematch(self, tournament: Tournament, attempt: PairingAttempt) -> None:
         """One rematch, sides swapped, same pairing — §6c.
@@ -250,6 +259,7 @@ class TournamentAdvancementService:
         Idempotent because every write is guarded on the status it moves
         from: a second call finds the round already `COMPLETED` and stops.
         """
+        final_round = False
         async with self._unit_of_work:
             nodes = await self._bracket.nodes_for(tournament.id)
             current = [node for node in nodes if node.round_number == from_round]
@@ -260,12 +270,14 @@ class TournamentAdvancementService:
             await self._complete_round(tournament, from_round)
 
             following = [node for node in nodes if node.round_number == from_round + 1]
-            if not following:
-                await self._finish(tournament, current)
-            else:
+            final_round = not following
+            if not final_round:
                 await self._open_round(tournament, following, round_number=from_round + 1)
 
             await self._unit_of_work.commit()
+
+        if final_round:
+            await self._finish(tournament)
 
     async def _complete_round(self, tournament: Tournament, round_number: int) -> None:
         round_ = await self._round(tournament, round_number)
@@ -316,37 +328,42 @@ class TournamentAdvancementService:
         )
         await self._launcher.launch(tournament, plans_for(nodes))
 
-    async def _finish(self, tournament: Tournament, final: list[BracketSlot]) -> None:
-        """The final is decided, so the tournament is — §5.
+    async def _finish(self, tournament: Tournament) -> None:
+        """The final is decided, so the tournament is — §5, §6f.
 
-        `COMPLETED` is terminal: a completed tournament is a permanent
-        competitive record, and reopening one would make the standings
-        somebody read stop being the standings.
+        **The automatic completion trigger.** A64-019.6 §14: the final
+        winner finishes the tournament, and no operator is required to close
+        a bracket that is already decided. This is the production path that
+        reaches `TournamentCompletionService`, and it is why that service
+        does not need an entry point of its own.
+
+        Delegated rather than performed here, and the transition moved with
+        it: completion now means *materialising the standings and* moving to
+        `COMPLETED`, in one transaction. Doing half of it here would produce
+        exactly the state §5 forbids — a `COMPLETED` tournament with no
+        result — because `COMPLETED` is terminal and nothing would run again
+        to write the other half.
+
+        Its own transaction, after this method's caller committed the round
+        it closed. That is deliberate: the round is finished whether or not
+        the completion succeeds, and a failure here leaves a tournament that
+        is still `IN_PROGRESS` with a decided bracket — which the next
+        delivery, or the reconciler, completes.
         """
-        winner_id = next((node.winner_id for node in final if node.winner_id is not None), None)
-        if winner_id is None:  # pragma: no cover — the caller checked every
-            # node in this round has a winner before reaching here.
-            return
-
-        completed = tournament.transitioned_to(TournamentStatus.COMPLETED)
-        await self._tournaments.save(completed)
-        await self._events.publish(
-            TournamentCompleted(
-                occurred_at=self._now(), tournament_id=tournament.id, winner_id=winner_id
-            )
-        )
-        logger.info(
-            "tournament_completed",
-            extra={"tournament_id": str(tournament.id), "winner_id": str(winner_id)},
-        )
+        await self._completion.complete_tournament(tournament.id)
 
     async def _record(self, attempt: PairingAttempt, completion: CompletedTournamentMatch) -> None:
-        """Marks the attempt completed. **Last**, and not a gate.
+        """Marks the attempt completed. **First**, and not a gate.
 
-        `complete` returning `False` means another delivery already recorded
-        this result. It says nothing about whether the advancement that
-        result implies was carried out, which is why nothing above depends
-        on it — see this module's docstring.
+        First, because the advancement that follows can finish the
+        tournament, and a tournament's statistics are derived from these
+        rows — see this module's docstring on the game that would otherwise
+        appear in nobody's record.
+
+        Not a gate: `complete` returning `False` means another delivery
+        already recorded this result, and says nothing about whether the
+        advancement it implies was carried out. Nothing below depends on it,
+        which is what makes recording early safe.
         """
         async with self._unit_of_work:
             await self._attempts.complete(

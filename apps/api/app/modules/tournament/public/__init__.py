@@ -1,7 +1,7 @@
 """`tournament`'s published surface.
 
 Deliberately **minimal**: the vocabulary a consumer needs to name a
-tournament, and — since A64-019.6 — one command it can act with.
+tournament, and — since A64-019.5H — one command it can act with.
 Registration, brackets and standings are published when the phases that
 build them do; publishing a type before its use case exists is how a
 surface accumulates things nothing supports.

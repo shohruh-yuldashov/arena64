@@ -723,7 +723,7 @@ def _tournament_reconciliation_for(
 def _tournament_no_show_for(
     session: AsyncSession, settings: Settings, clock: SystemClock
 ) -> TournamentNoShowService:
-    """One no-show pass's graph — A64-019.6 §6e.
+    """One no-show pass's graph — A64-019.5H §6e.
 
     Tournament matches are system-activated, so `game`'s acceptance expiry
     never claims one and nothing else would ever end a fixture nobody turned
@@ -958,7 +958,7 @@ def build_task_schedulers(
         )
     )
 
-    # A64-019.6 §6e. A tournament match is **system-activated** — nobody is
+    # A64-019.5H §6e. A tournament match is **system-activated** — nobody is
     # asked to accept a fixture they entered a tournament to play — so
     # `game`'s acceptance expiry never claims one, and without this a
     # bracket would wait forever on a player who never arrived.

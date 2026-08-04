@@ -77,7 +77,7 @@ from app.modules.game.domain.variants import MatchOrigin, ProductVariant
 
 
 class AcceptancePolicy(StrEnum):
-    """Whether a match waits for its two players to answer — A64-019.6.
+    """Whether a match waits for its two players to answer — A64-019.5H.
 
     A **named policy on the request**, rather than a boolean or something
     inferred from `origin`. A boolean parameter selecting behaviour is what
@@ -276,7 +276,7 @@ class CreateMatchRequest:
     """
 
     acceptance: AcceptancePolicy = AcceptancePolicy.BILATERAL
-    """Whether this match waits to be accepted — A64-019.6.
+    """Whether this match waits to be accepted — A64-019.5H.
 
     Defaulted, so `matchmaking` is unchanged: a queue pairing is an offer
     and stays one. A tournament asks for `SYSTEM`, and
@@ -302,7 +302,7 @@ class CreateMatchRequest:
         ):
             raise ValueError("a match needs two different queue tickets")
 
-        # **Origin-specific, not relaxed.** A64-019.6 made the field
+        # **Origin-specific, not relaxed.** A64-019.5H made the field
         # nullable so a tournament need not invent one; it did not make a
         # queue pairing's provenance optional. A queue match without its
         # tickets is one no reconciler can recover, which is exactly the

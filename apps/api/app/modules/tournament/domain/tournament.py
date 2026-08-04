@@ -147,6 +147,16 @@ class Tournament:
     registration_deadline: datetime | None = None
     status: TournamentStatus = TournamentStatus.DRAFT
 
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    """When play began and when the result was recorded — A64-019.6 §9.
+
+    Stored rather than derived from the rounds, because both are facts a
+    public detail page renders and neither is answerable from a round once
+    the bracket is pruned. `None` until the transition that sets it, so the
+    pair reads as the lifecycle rather than as two nullable decorations.
+    """
+
     def __post_init__(self) -> None:
         if self.format not in SUPPORTED_FORMATS:
             raise UnsupportedTournamentFormat(
@@ -162,17 +172,31 @@ class Tournament:
     def is_open_for_registration(self) -> bool:
         return self.status is TournamentStatus.REGISTRATION_OPEN
 
-    def transitioned_to(self, status: TournamentStatus) -> "Tournament":
+    def transitioned_to(
+        self, status: TournamentStatus, *, at: datetime | None = None
+    ) -> "Tournament":
         """This tournament in `status`, or a refusal.
 
         The single mutator. A caller cannot reach a state by assembling one
         by hand, which is what keeps `_ALLOWED` the whole rule rather than
         the rule most callers happen to follow.
+
+        `at` stamps the instant the transition *names* — `started_at` on the
+        move into play, `completed_at` on the move out of it — and is
+        ignored for the transitions that name none. Set here rather than by
+        the caller so the status and its instant are one write, and a
+        tournament cannot say it finished without saying when.
         """
         if status not in _ALLOWED[self.status]:
             raise InvalidTournamentTransition(
                 f"a tournament cannot move from {self.status.value} to {status.value}"
             )
+        if at is None:
+            return replace(self, status=status)
+        if status is TournamentStatus.IN_PROGRESS:
+            return replace(self, status=status, started_at=at)
+        if status is TournamentStatus.COMPLETED:
+            return replace(self, status=status, completed_at=at)
         return replace(self, status=status)
 
 

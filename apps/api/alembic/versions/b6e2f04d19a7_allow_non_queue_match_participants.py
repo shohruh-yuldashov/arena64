@@ -1,6 +1,6 @@
 """allow non-queue match participants
 
-A64-019.6. `game.match`'s two ticket columns become nullable, because a
+A64-019.5H. `game.match`'s two ticket columns become nullable, because a
 match need not have come from a queue.
 
     light_ticket_id  NOT NULL -> NULL

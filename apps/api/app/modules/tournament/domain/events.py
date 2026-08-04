@@ -104,12 +104,34 @@ class RoundCompleted(_TournamentEvent):
 
 @dataclass(frozen=True)
 class TournamentCompleted(_TournamentEvent):
+    """The tournament is over and its results are recorded — A64-019.6 §15.
+
+    **One event, not two.** §15 permits a separate
+    `tournament.results_materialized` and asks for it to be avoided when one
+    suffices, and one does: completion and materialisation are a single
+    transaction (§6f), so a consumer that saw this event and then read empty
+    standings would be observing a state that cannot exist. A second event
+    would announce the same instant twice and give every consumer a choice
+    of which to key on.
+
+    `entrant_count` rides along so a consumer can size a result page before
+    reading one, which is the only thing a completion notification would
+    otherwise have to go back for.
+    """
+
     event_type: ClassVar[str] = "tournament.completed"
 
     winner_id: UUID
+    entrant_count: int = 0
+    """How many standings were materialised. Defaulted so the field is
+    additive for anything written against A64-019.5's payload."""
 
     def payload(self) -> dict[str, Any]:
-        return {**super().payload(), "winner_id": str(self.winner_id)}
+        return {
+            **super().payload(),
+            "winner_id": str(self.winner_id),
+            "entrant_count": self.entrant_count,
+        }
 
 
 @dataclass(frozen=True)

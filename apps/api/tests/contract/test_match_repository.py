@@ -78,7 +78,7 @@ def _record(
 
 
 def _tournament_record(*, origin_ref: UUID, at: datetime = NOW) -> MatchRecord:
-    """A match created by a bracket — A64-019.6.
+    """A match created by a bracket — A64-019.5H.
 
     No queue tickets, because the entrant did not arrive through a queue.
     `origin` and `origin_ref` carry where it came from instead, which is
@@ -519,7 +519,7 @@ class TestTheTwoPublishedReads:
 
 
 class TestNonQueueParticipants:
-    """A64-019.6 — a match need not have come from a queue.
+    """A64-019.5H — a match need not have come from a queue.
 
     The four cases are one property seen from both sides: a queue pairing
     still records real tickets and is still reconcilable by them, and every

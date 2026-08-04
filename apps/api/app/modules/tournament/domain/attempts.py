@@ -124,7 +124,7 @@ class PairingAttempt:
     that shortens it must not eliminate somebody who was inside the window
     they were given.
 
-    `None` only for a row written before A64-019.6, which cannot be
+    `None` only for a row written before A64-019.5H, which cannot be
     adjudicated for absence and correctly is not claimed by the sweep.
     """
 

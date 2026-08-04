@@ -133,7 +133,7 @@ class TournamentStartService:
         if tournament.status is TournamentStatus.IN_PROGRESS:
             return tournament
 
-        started = tournament.transitioned_to(TournamentStatus.IN_PROGRESS)
+        started = tournament.transitioned_to(TournamentStatus.IN_PROGRESS, at=self._clock.now())
         await self._tournaments.save(started)
         await self._start_round(started, FIRST_ROUND)
         await self._events.publish(

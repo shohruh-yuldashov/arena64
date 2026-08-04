@@ -1,6 +1,6 @@
 """Adjudicating absence — SPEC-TOURNAMENT §6e.
 
-A64-019.6 makes a tournament match **system-activated**: nobody is asked to
+A64-019.5H makes a tournament match **system-activated**: nobody is asked to
 accept a fixture they entered a tournament to play, so the match is created
 already `ACTIVE` and can never expire unanswered. That removes the mechanism
 that used to end a match nobody engaged with, and this is what replaces it.

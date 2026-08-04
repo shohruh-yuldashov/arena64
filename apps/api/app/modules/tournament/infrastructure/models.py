@@ -5,6 +5,7 @@
     tournaments.round            one row per round
     tournaments.pairing          one row per bracket node
     tournaments.pairing_attempt  one row per `game` match played for a node
+    tournaments.standing         one row per entrant of a completed tournament
 
 ## No foreign key leaves this schema
 
@@ -55,6 +56,11 @@ from app.modules.tournament.domain.attempts import (
 )
 from app.modules.tournament.domain.registration import RegistrationStatus
 from app.modules.tournament.domain.rounds import RoundStatus
+from app.modules.tournament.domain.standings import (
+    FIRST_PLACE,
+    SECOND_PLACE,
+    FinalStatus,
+)
 from app.modules.tournament.domain.tournament import (
     MAX_CAPACITY,
     MIN_CAPACITY,
@@ -118,6 +124,13 @@ class TournamentModel(Base, TimestampMixin):
     The column the deadline sweep claims on — see
     `infrastructure/tasks.py`."""
 
+    started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    """When play began and when the result was recorded — A64-019.6 §9.
+
+    Stored rather than derived from the rounds, because both are facts the
+    public detail page renders and neither survives a round being pruned."""
+
     __table_args__ = (
         # The sweep's whole query: open tournaments whose deadline has
         # passed. Partial, because a tournament without a deadline is never
@@ -172,6 +185,16 @@ class RegistrationModel(Base, TimestampMixin):
             "ix_registration__active",
             "tournament_id",
             postgresql_where=text(f"status = '{RegistrationStatus.REGISTERED.value}'"),
+        ),
+        # "Which tournaments has this player entered, newest first" —
+        # A64-019.6 §12's keyset. Descending on both keys because that is
+        # the order the endpoint pages in, and an ascending index would make
+        # every page a backwards scan.
+        Index(
+            "ix_registration__by_player",
+            "player_id",
+            text("registered_at DESC"),
+            text("tournament_id DESC"),
         ),
         ForeignKeyConstraint(
             ["tournament_id"],
@@ -404,7 +427,7 @@ class PairingAttemptModel(Base, TimestampMixin):
     Written at creation from `TOURNAMENT_NO_SHOW_SECONDS` and never
     recomputed, so a deploy that changes the setting cannot move a deadline
     a player was already given. `NULL` only for a row written before
-    A64-019.6, which the sweep's predicate therefore never claims.
+    A64-019.5H, which the sweep's predicate therefore never claims.
     """
 
     light_present_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
@@ -472,7 +495,7 @@ class PairingAttemptModel(Base, TimestampMixin):
         ),
         # A draw names nobody; every other settled outcome names somebody.
         # Written this way round rather than as "decisive implies a winner"
-        # because A64-019.6 added `no_show`, which also advances a player —
+        # because A64-019.5H added `no_show`, which also advances a player —
         # and a rule phrased in terms of the members that *do* is one a
         # third member silently escapes.
         CheckConstraint(
@@ -487,11 +510,131 @@ class PairingAttemptModel(Base, TimestampMixin):
     )
 
 
+class StandingModel(Base):
+    """`tournaments.standing` — one entrant's final, immutable result. §6f.
+
+    **C1, a permanent record**: `created_at` alone and no `updated_at`
+    (database.md DB-02). A standing is materialised once, when the
+    tournament completes, and is never recomputed — recomputing it on every
+    read would make a published result depend on code that can change, and
+    a mutable column would invite exactly the admin correction A64-019.6
+    defers (OQ-1).
+
+    A **snapshot of a bracket that can no longer change**, which is what
+    makes storing it safe: every field is derived from nodes and attempts
+    that are terminal by the time this row exists.
+    """
+
+    __tablename__ = "standing"
+
+    tournament_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True)
+    player_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True)
+    """The key is the pair, so a second result for one player is impossible —
+    §6's idempotency, made structural rather than remembered."""
+
+    final_rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    """Where they finished. **Tied tiers share it** (§6f), so ranks are not
+    dense: two players share third and nobody is fourth."""
+
+    seed_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    """Metadata, never a tie-break. It explains the draw; it does not rank
+    the result."""
+
+    elimination_round: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    eliminated_by_player_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), nullable=True
+    )
+    """`NULL` exactly for the champion — the constraint below pairs them.
+
+    No foreign key into `game` or `users` (DB-03, DM-06): a player id is an
+    opaque cross-context identifier, and this one names a *tournament*
+    participant whose row lives beside this one.
+    """
+
+    wins: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    losses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    draws: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    """Games that were **played**. A bye, an adjudication and a no-show move
+    none of them."""
+
+    adjudicated_advancements: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    """Rounds advanced by a decision rather than a result — §6c's two-draw
+    seed tie-break and §6e's no-show. A bye is not one: nothing was
+    adjudicated."""
+
+    final_status: Mapped[FinalStatus] = mapped_column(
+        _enum(FinalStatus, "final_status"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tournament_id"],
+            [f"{TOURNAMENT_SCHEMA}.tournament.id"],
+            name="fk_standing__tournament",
+            ondelete="RESTRICT",
+        ),
+        # The published ordering, as an index: rank, then seed, then player.
+        # A read that had to sort would sort a whole tournament's results per
+        # request, and this is the one relation a public endpoint pages over.
+        Index(
+            "ix_standing__placement",
+            "tournament_id",
+            "final_rank",
+            "seed_number",
+            "player_id",
+        ),
+        # **Exactly one champion.** A partial unique index rather than a
+        # `CHECK`, because a row-level constraint cannot see the other rows —
+        # the same argument capacity makes one level up.
+        Index(
+            "uq_standing__one_champion",
+            "tournament_id",
+            unique=True,
+            postgresql_where=text(f"final_rank = {FIRST_PLACE}"),
+        ),
+        CheckConstraint(f"final_rank >= {FIRST_PLACE}", name="ck_standing__rank_from_one"),
+        CheckConstraint("seed_number >= 1", name="ck_standing__seed_from_one"),
+        CheckConstraint(
+            "wins >= 0 AND losses >= 0 AND draws >= 0 AND adjudicated_advancements >= 0",
+            name="ck_standing__counts_not_negative",
+        ),
+        # The winner is the one player with no elimination, and the two
+        # elimination columns travel together — a round with no conqueror is
+        # unanswerable when somebody asks who knocked them out.
+        CheckConstraint(
+            f"(final_rank = {FIRST_PLACE}) = (elimination_round IS NULL)",
+            name="ck_standing__champion_is_not_eliminated",
+        ),
+        CheckConstraint(
+            "(elimination_round IS NULL) = (eliminated_by_player_id IS NULL)",
+            name="ck_standing__elimination_is_complete",
+        ),
+        CheckConstraint(
+            "eliminated_by_player_id IS NULL OR eliminated_by_player_id <> player_id",
+            name="ck_standing__nobody_eliminates_themselves",
+        ),
+        # Status and rank say the same thing, so they must not disagree. A
+        # projection that trusted one and a client that rendered the other
+        # would otherwise show a champion ranked third.
+        CheckConstraint(
+            f"(final_status = '{FinalStatus.CHAMPION.value}') = (final_rank = {FIRST_PLACE})",
+            name="ck_standing__champion_iff_first",
+        ),
+        CheckConstraint(
+            f"(final_status = '{FinalStatus.RUNNER_UP.value}') = (final_rank = {SECOND_PLACE})",
+            name="ck_standing__runner_up_iff_second",
+        ),
+        {"schema": TOURNAMENT_SCHEMA},
+    )
+
+
 __all__ = [
     "TOURNAMENT_SCHEMA",
     "TournamentRoundModel",
     "PairingAttemptModel",
     "PairingModel",
     "RegistrationModel",
+    "StandingModel",
     "TournamentModel",
 ]

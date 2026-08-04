@@ -41,6 +41,9 @@ from app.modules.tournament.application.services.advancement_service import (
 from app.modules.tournament.application.services.bracket_service import (
     TournamentBracketService,
 )
+from app.modules.tournament.application.services.completion_service import (
+    TournamentCompletionService,
+)
 from app.modules.tournament.application.services.match_completion_consumer import (
     TournamentMatchCompletionConsumer,
 )
@@ -66,6 +69,9 @@ from app.modules.tournament.application.services.start_service import (
 from app.modules.tournament.infrastructure.rating_snapshots import (
     PublishedRatingSnapshots,
 )
+from app.modules.tournament.infrastructure.repositories.results_repository import (
+    SqlAlchemyTournamentResults,
+)
 from app.modules.tournament.infrastructure.repositories.tournament_repository import (
     SqlAlchemyBracketRepository,
     SqlAlchemyPairingAttemptRepository,
@@ -73,6 +79,7 @@ from app.modules.tournament.infrastructure.repositories.tournament_repository im
     SqlAlchemyRegistrationRepository,
     SqlAlchemyRoundRepository,
     SqlAlchemySeedRepository,
+    SqlAlchemyStandingRepository,
     SqlAlchemyTournamentRepository,
 )
 from app.modules.tournament.public import TournamentAttendance
@@ -231,6 +238,29 @@ def build_start_service(
     )
 
 
+def build_completion_service(
+    session: AsyncSession, *, events: EventPublisher, clock: Clock
+) -> TournamentCompletionService:
+    """Materialising a completed tournament's result — A64-019.6 §6f.
+
+    Its own factory rather than a method on the advancement graph, because
+    two very different callers reach it: the advancement flow, when a final
+    gains a winner, and a read path that must be able to complete a bracket
+    an operator is looking at. Both get the same object graph over their own
+    session.
+    """
+    return TournamentCompletionService(
+        tournaments=SqlAlchemyTournamentRepository(session),
+        bracket=SqlAlchemyBracketRepository(session),
+        attempts=SqlAlchemyPairingAttemptRepository(session),
+        seeds=SqlAlchemySeedRepository(session),
+        standings=SqlAlchemyStandingRepository(session),
+        events=events,
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )
+
+
 def build_advancement_service(
     session: AsyncSession,
     *,
@@ -251,6 +281,7 @@ def build_advancement_service(
         rounds=SqlAlchemyRoundRepository(session),
         attempts=SqlAlchemyPairingAttemptRepository(session),
         launcher=build_match_launcher(session, matches=matches, clock=clock, settings=settings),
+        completion=build_completion_service(session, events=events, clock=clock),
         events=events,
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
@@ -300,6 +331,21 @@ class SessionScopedAttendance:
             )
             await session.commit()
         return recorded
+
+
+def get_tournament_results(session: DbSessionDep) -> SqlAlchemyTournamentResults:
+    """The four public reads, over this request's session — §9–§12.
+
+    A **read** adapter, deliberately distinct from the write repositories
+    beside it: nothing it holds can take a lock, move a bracket or
+    materialise a result, so a route cannot change a tournament by reading
+    one. Request-scoped, because every one of the four is a bounded read
+    that ends with the response.
+    """
+    return SqlAlchemyTournamentResults(session)
+
+
+TournamentResultsDep = Annotated[SqlAlchemyTournamentResults, Depends(get_tournament_results)]
 
 
 def build_attendance(session: AsyncSession) -> TournamentAttendance:
@@ -401,12 +447,15 @@ __all__ = [
     "build_advancement_service",
     "build_attendance",
     "build_bracket_service",
+    "build_completion_service",
     "build_deadline_service",
     "build_match_completion_consumer",
     "build_match_launcher",
     "build_no_show_service",
     "WebSocketTournamentAttendanceDep",
+    "TournamentResultsDep",
     "get_attendance_ws",
+    "get_tournament_results",
     "build_reconciliation_service",
     "build_start_service",
     "get_bracket_service",

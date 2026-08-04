@@ -209,7 +209,7 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
         # than one because a ticket may be either side, and a composite
         # would not constrain the pair.
         #
-        # Nullable since A64-019.6, and the uniqueness is unaffected:
+        # Nullable since A64-019.5H, and the uniqueness is unaffected:
         # PostgreSQL treats each `NULL` as distinct, so every match that did
         # not come from the queue coexists freely while two matches still
         # cannot claim one ticket. The indexes also become smaller as

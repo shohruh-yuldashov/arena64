@@ -113,7 +113,7 @@ class _MatchEvent(DomainEvent):
     dark_player_id: UUID
     light_ticket_id: UUID | None
     dark_ticket_id: UUID | None
-    """The queue tickets, or `None` where there are none — A64-019.6.
+    """The queue tickets, or `None` where there are none — A64-019.5H.
 
     Nullable because a match need not have come from the queue. Every
     consumer that reads these already asks a question that only makes sense

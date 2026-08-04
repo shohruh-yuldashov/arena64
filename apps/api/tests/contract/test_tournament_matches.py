@@ -430,7 +430,7 @@ def _higher_seed(node) -> UUID:  # type: ignore[no-untyped-def]
 
 
 class TestSystemActivationAndNoShow:
-    """A64-019.6 §6e — the policy that replaced the acceptance handshake.
+    """A64-019.5H §6e — the policy that replaced the acceptance handshake.
 
     Four tests, and each covers a rule no unit test can: what `game`
     actually persists when a tournament asks for a match, and what a sweep

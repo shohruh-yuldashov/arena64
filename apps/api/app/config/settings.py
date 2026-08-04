@@ -1846,7 +1846,7 @@ class GameSettings(BaseSettings):
 
 
 class TournamentSettings(BaseSettings):
-    """`tournament` — SPEC-TOURNAMENT §6e (A64-019.6).
+    """`tournament` — SPEC-TOURNAMENT §6e (A64-019.5H).
 
     The no-show policy's two numbers. They are settings rather than
     constants because both are *product* judgements about how long a

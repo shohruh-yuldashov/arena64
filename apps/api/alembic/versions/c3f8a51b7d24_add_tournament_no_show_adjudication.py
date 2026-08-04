@@ -1,6 +1,6 @@
 """add tournament no-show adjudication
 
-A64-019.6, SPEC-TOURNAMENT §6e. A tournament match is created **already
+A64-019.5H, SPEC-TOURNAMENT §6e. A tournament match is created **already
 active** — nobody is asked to accept a fixture they entered a tournament to
 play — so the question stops being "did they answer" and becomes "did they
 turn up".

@@ -64,7 +64,7 @@ DEADLINE_TASK: Final = "tournament.registration.close_overdue"
 #: committing a match and this module recording the attempt.
 RECONCILIATION_TASK: Final = "tournament.bracket.reconcile"
 
-#: A64-019.6, §6e. What replaced the acceptance handshake when tournament
+#: A64-019.5H, §6e. What replaced the acceptance handshake when tournament
 #: matches became system-activated: a match nobody turned up for.
 NO_SHOW_TASK: Final = "tournament.no_show.adjudicate"
 

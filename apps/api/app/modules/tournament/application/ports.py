@@ -36,6 +36,7 @@ from app.modules.tournament.domain.bracket_plan import (
 from app.modules.tournament.domain.registration import Registration
 from app.modules.tournament.domain.rounds import TournamentRound
 from app.modules.tournament.domain.seeding import PlannedPairing, Seed
+from app.modules.tournament.domain.standings import Standing
 from app.modules.tournament.domain.tournament import Tournament
 
 
@@ -341,6 +342,47 @@ class PairingAttemptRepository(Protocol):
         ...
 
 
+class StandingsAlreadyRecorded(DomainError):
+    """This tournament's results are already materialised — §6f.
+
+    Raised from the primary key rather than a prior read, so two workers
+    completing one tournament cannot both write. The caller treats it as a
+    signal to return the stored result: standings are immutable, so the
+    winner's rows and the loser's would have been identical anyway.
+    """
+
+
+class StandingRepository(Protocol):
+    """A completed tournament's final placement — §6f.
+
+    Written **once**, read many times. There is no update method and there
+    will not be one: a standing is a snapshot of a bracket that can no
+    longer change, and a correction is the Administration epic's (OQ-1).
+    """
+
+    async def record(self, standings: Sequence[Standing]) -> None:
+        """Materialises every standing in one flush.
+
+        Raises `StandingsAlreadyRecorded` on a collision. All or nothing:
+        a tournament with some of its results is one nothing can page over
+        and nothing can repair, because the bracket it was derived from is
+        already terminal.
+        """
+        ...
+
+    async def standings_for(self, tournament_id: UUID) -> list[Standing]:
+        """The published order — rank, then seed, then player id.
+
+        Ordered by the index rather than by the caller, so the wire order
+        and the stored order cannot drift.
+        """
+        ...
+
+    async def exists(self, tournament_id: UUID) -> bool:
+        """Whether this tournament's results have been materialised."""
+        ...
+
+
 class RoundRepository(Protocol):
     """A tournament's rounds and their lifecycle — §6b.
 
@@ -434,6 +476,8 @@ __all__ = [
     "RatingSnapshots",
     "RoundRepository",
     "SeedRepository",
+    "StandingRepository",
+    "StandingsAlreadyRecorded",
     "PlayerDirectory",
     "NotRegistered",
     "RegistrationNotOpen",

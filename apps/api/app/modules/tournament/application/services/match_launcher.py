@@ -68,7 +68,7 @@ logger = logging.getLogger(__name__)
 
 #: The acceptance window a tournament match nominally carries.
 #:
-#: **Nothing uses it.** A64-019.6 makes these matches system-activated
+#: **Nothing uses it.** A64-019.5H makes these matches system-activated
 #: (`AcceptancePolicy.SYSTEM`): they are created already `ACTIVE`, so there
 #: is no handshake to miss and the expiry sweep never claims one. The field
 #: is required by `CreateMatchRequest` and `MatchRecord` enforces only that
@@ -187,7 +187,7 @@ class TournamentMatchLauncher:
                 rated=tournament.rated,
                 engine_version=game_engine_version(),
                 acceptance_deadline=no_show_deadline,
-                # **System-activated** — A64-019.6, §6e. Nobody is asked to
+                # **System-activated** — A64-019.5H, §6e. Nobody is asked to
                 # accept a fixture they entered a tournament to play, so the
                 # match is created already `ACTIVE` and the players may join
                 # it through the live gateway immediately. What replaces the
@@ -198,7 +198,7 @@ class TournamentMatchLauncher:
                     # **No ticket, and that is the fact.** A tournament
                     # entrant did not arrive through a queue. A64-019.5
                     # derived a uuid5 here to satisfy a `NOT NULL` and so
-                    # recorded a ticket that never existed; A64-019.6 made
+                    # recorded a ticket that never existed; A64-019.5H made
                     # the column nullable instead — see `specs/tournament.md`
                     # §6c, which recorded the wart before it was fixed.
                     queue_ticket_id=None,

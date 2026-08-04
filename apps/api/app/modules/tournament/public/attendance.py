@@ -1,6 +1,6 @@
 """Telling a tournament that somebody turned up — SPEC-TOURNAMENT §6e.
 
-A64-019.6 makes tournament matches **system-activated**: nobody is asked to
+A64-019.5H makes tournament matches **system-activated**: nobody is asked to
 accept a fixture they entered a tournament to play, so the match is created
 already `ACTIVE` and there is no acceptance handshake to miss. That removes
 the only signal the platform had for "this player is engaged", and replaces

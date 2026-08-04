@@ -356,19 +356,16 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
     dark_ticket_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     dark_accepted_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
-    received_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
-    """When the **gateway** saw the frame — MT-9, A64-016.5 §3.
-
-    The temporal authority for the flag race, and a different fact from
-    `created_at`: that is when the row was appended, which is later by the
-    width of every queue, lock and validation between the two. Collapsing
-    them would make the platform's own queueing delay part of the flag
-    decision, which outcome tenet T-2 forbids.
-
-    Nullable because every move A64-016.4 wrote has none — the field did not
-    exist. Null means "before A64-016.5", not "unknown when", and a
-    backfilled guess would be worse than an honest gap.
-    """
+    # **No `received_at` here.** MT-9's flag-race authority is per *move*,
+    # not per match, and its owner is `MoveLogModel.received_at`. A copy on
+    # this row was mapped by A64-016.5 and never migrated, so it existed in
+    # `Base.metadata` — and therefore in every schema built by
+    # `create_all` — while no migration-built database had the column. Every
+    # ORM read and write of `game.match` failed there.
+    #
+    # Removed rather than migrated: nothing read or wrote it, and adding the
+    # column would have entrenched a duplicate of a fact that belongs to the
+    # move log.
 
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     """Written from the injected clock (AD-07), never `server_default=now()`:

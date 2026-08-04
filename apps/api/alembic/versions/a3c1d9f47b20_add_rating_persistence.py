@@ -107,10 +107,18 @@ def upgrade() -> None:
 
     # The leaderboard's whole query — SPEC-RATING §15. Descending, because
     # every reader of a rating reads it from the top.
+    # The leaderboard's ordering, exactly — A64-017.4. See the model for
+    # why `rating_deviation` is in it and why the index is not unique.
     op.create_index(
-        "ix_player_rating__leaderboard",
+        "ix_player_rating__standings",
         "player_rating",
-        ["variant", "speed_class", sa.text("rating_value DESC"), "player_id"],
+        [
+            "variant",
+            "speed_class",
+            sa.text("rating_value DESC"),
+            "rating_deviation",
+            "player_id",
+        ],
         schema=_SCHEMA,
     )
 
@@ -220,7 +228,7 @@ def downgrade() -> None:
 
     op.drop_index("ix_rating_adjustment__player_history", "rating_adjustment", schema=_SCHEMA)
     op.drop_table("rating_adjustment", schema=_SCHEMA)
-    op.drop_index("ix_player_rating__leaderboard", "player_rating", schema=_SCHEMA)
+    op.drop_index("ix_player_rating__standings", "player_rating", schema=_SCHEMA)
     op.drop_table("player_rating", schema=_SCHEMA)
 
     bind = op.get_bind()

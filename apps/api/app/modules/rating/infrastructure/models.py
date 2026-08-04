@@ -174,11 +174,21 @@ class PlayerRatingModel(Base, TimestampMixin):
         #
         # Not unique: two players holding the same rating is the ordinary
         # case, not a conflict.
+        # The leaderboard's whole query — A64-017.4. The column order is
+        # the `ORDER BY` exactly: an index that omitted `rating_deviation`
+        # would serve the scan and then sort the ties, which is a sort per
+        # page on the one read a ladder does most.
+        #
+        # Not unique: two players on the same rating *and* the same
+        # deviation is uncommon and legal, which is why `player_id` is
+        # there — it makes the order total, and a total order is what makes
+        # keyset pagination unable to skip or repeat a player.
         Index(
-            "ix_player_rating__leaderboard",
+            "ix_player_rating__standings",
             "variant",
             "speed_class",
             text("rating_value DESC"),
+            "rating_deviation",
             "player_id",
         ),
         # --- invariants the aggregate also enforces (BE-06) ----------------

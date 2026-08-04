@@ -1,6 +1,7 @@
 """`rating`'s published surface — the only way into this module.
 
     RatingKey, SpeedClass   what a rating is *of*
+    LeaderboardReader       standings for one key, paginated by cursor
     RatingSnapshot          what a player rates, as a Glicko-2 triple
     RatingReader            the one question this module answers publicly
 
@@ -28,10 +29,20 @@ boundary that needs it.
 """
 
 from app.modules.rating.domain.keys import DEFAULT_SPEED_CLASS, RatingKey, SpeedClass
+from app.modules.rating.public.leaderboard import (
+    LeaderboardCursor,
+    LeaderboardEntry,
+    LeaderboardPage,
+    LeaderboardReader,
+)
 from app.modules.rating.public.ratings import RatingReader, RatingSnapshot
 
 __all__ = [
     "DEFAULT_SPEED_CLASS",
+    "LeaderboardCursor",
+    "LeaderboardEntry",
+    "LeaderboardPage",
+    "LeaderboardReader",
     "RatingKey",
     "RatingReader",
     "RatingSnapshot",

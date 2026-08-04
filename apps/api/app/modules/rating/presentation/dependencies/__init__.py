@@ -21,16 +21,32 @@ from app.api.deps import DbSessionDep
 from app.database.session import open_session
 from app.modules.rating.application.ports import PlayerRatingRepository
 from app.modules.rating.domain.keys import RatingKey
+from app.modules.rating.infrastructure.repositories.leaderboard_repository import (
+    SqlAlchemyLeaderboardReader,
+)
 from app.modules.rating.infrastructure.repositories.player_rating_repository import (
     SqlAlchemyPlayerRatingRepository,
     SqlAlchemyRatingReader,
 )
-from app.modules.rating.public import RatingReader, RatingSnapshot
+from app.modules.rating.public import LeaderboardReader, RatingReader, RatingSnapshot
 
 
 def get_player_rating_repository(session: DbSessionDep) -> PlayerRatingRepository:
     """The aggregate's storage, over this request's session."""
     return SqlAlchemyPlayerRatingRepository(session)
+
+
+def get_leaderboard_reader(session: DbSessionDep) -> LeaderboardReader:
+    """The standings read — A64-017.4.
+
+    A **query**, not a projection: there is no cache to warm, nothing to
+    rebuild and nothing to invalidate, because the relation it reads is the
+    one a rating update writes. See `rating.public.leaderboard`.
+    """
+    return SqlAlchemyLeaderboardReader(session)
+
+
+LeaderboardReaderDep = Annotated[LeaderboardReader, Depends(get_leaderboard_reader)]
 
 
 def get_rating_reader(session: DbSessionDep) -> RatingReader:
@@ -71,9 +87,11 @@ class SessionScopedRatingReader:
 
 
 __all__ = [
+    "LeaderboardReaderDep",
     "PlayerRatingRepositoryDep",
     "RatingReaderDep",
     "SessionScopedRatingReader",
+    "get_leaderboard_reader",
     "get_player_rating_repository",
     "get_rating_reader",
 ]

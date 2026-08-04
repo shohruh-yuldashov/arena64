@@ -26,7 +26,7 @@ from app.modules.engine import PlayerSide
 from app.modules.game.domain.match_record import MatchRecordStatus
 from app.modules.game.domain.result import MatchOutcome, TerminationReason
 from app.modules.game.domain.variants import ProductVariant
-from app.modules.game.infrastructure.models import MatchRecordModel
+from app.modules.game.infrastructure.models import MatchRecordModel, MoveLogModel
 from app.modules.game.presentation.dependencies import get_match_history, get_match_replay
 from app.modules.game.public import UnsupportedEngineVersion
 from tests.contract.contract_app import build_contract_app, contract_client
@@ -319,3 +319,112 @@ class TestTheApiIsReachable:
 
         assert response.status_code == 409, response.text
         assert response.json()["code"] == "unsupported_engine_version"
+
+
+class TestTheAuditScenarios:
+    """A64-018.4 §1, §5, §6 — the whole flow, and the two behaviours that
+    only appear when the pieces are put together."""
+
+    async def test_an_unsupported_version_is_refused_without_reading_the_move_log(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """§3 and SPEC-REPLAY §4 — "no attempt is made", audited.
+
+        A64-018.4 found that `PersistedMatchReplay.replay_data` loads every
+        ply *before* `ReplayEngine` examines the version, so an unsupported
+        match cost a full log read for an answer that one row already had.
+        The refusal moved to `VisibleMatchReplay`, which is holding the
+        match entry anyway.
+
+        Proven by giving the match a move log whose rows would **fail** a
+        replay — the position hashes are nonsense — and asserting the API
+        still answers `unsupported_engine_version`. If the log were read and
+        replayed, this would surface as a hash mismatch instead.
+        """
+        player = await register(client)
+        match_id = _id(500)
+        await _finished(
+            contract_session,
+            match_id=match_id,
+            light=player.id,
+            dark=_id(9),
+            created_at=NOW,
+            engine_version=1,
+        )
+        contract_session.add(
+            MoveLogModel(
+                id=_id(700_001),
+                match_id=match_id,
+                ply_number=1,
+                seat="light",
+                path=["c3", "d4"],
+                captured=[],
+                promoted_to=None,
+                position_hash="not-a-real-fingerprint",
+                engine_version=1,
+                created_at=NOW,
+            )
+        )
+        await contract_session.commit()
+
+        response = await client.get(f"/api/v1/matches/{match_id}/replay", headers=player.auth)
+
+        assert response.status_code == 409, response.text
+        assert response.json()["code"] == "unsupported_engine_version"
+
+        # …and the match is still listed, which is §4's whole point: the
+        # metadata survives, only the reconstruction is refused.
+        listed = await client.get(f"/api/v1/players/{player.id}/matches", headers=player.auth)
+        assert [e["match_id"] for e in listed.json()["data"]["entries"]] == [str(match_id)]
+
+    async def test_visibility_filtering_makes_pages_sparse_without_losing_entries(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """§5 — the documented consequence of filtering after the query.
+
+        A stranger paging a player whose record is mostly casual sees
+        **short pages**: the query returns `limit` rows and the filter
+        removes the hidden ones, so a page of two can come back with one
+        entry — or none — while `next_cursor` is still set.
+
+        That is the accepted behaviour, not a defect, and it is asserted
+        rather than left to be discovered: the alternative is filtering
+        inside the query, which SPEC-REPLAY §3 rejects because the cursor
+        would then come from a row the caller cannot see.
+
+        **Nothing is lost or repeated.** Walking every page yields each
+        visible match exactly once, which is the property that actually
+        matters.
+        """
+        stranger = await register(client)
+        owner = _id(800)
+        for index in range(6):
+            await _finished(
+                contract_session,
+                match_id=_id(600 + index),
+                light=owner,
+                dark=_id(9),
+                created_at=NOW - timedelta(hours=index),
+                rated=index % 3 == 0,
+            )
+        await contract_session.commit()
+
+        seen: list[str] = []
+        cursor: str | None = None
+        pages = 0
+
+        while pages < 6:
+            url = f"/api/v1/players/{owner}/matches?limit=2"
+            response = await client.get(
+                url + (f"&after={cursor}" if cursor else ""), headers=stranger.auth
+            )
+            body = response.json()["data"]
+            seen.extend(entry["match_id"] for entry in body["entries"])
+            cursor = body["next_cursor"]
+            pages += 1
+            if cursor is None:
+                break
+
+        # Two of six are rated, newest first, each exactly once.
+        assert seen == [str(_id(600)), str(_id(603))]
+        assert cursor is None

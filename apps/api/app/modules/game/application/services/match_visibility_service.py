@@ -40,6 +40,7 @@ match even when the filter removes one.
 import logging
 from uuid import UUID
 
+from app.modules.game.domain.replay import SUPPORTED_ENGINE_VERSIONS
 from app.modules.game.public.history import (
     HistoryCursor,
     MatchHistoryEntry,
@@ -47,6 +48,7 @@ from app.modules.game.public.history import (
     MatchHistoryReader,
     MatchReplay,
     MatchReplayReader,
+    UnsupportedEngineVersion,
 )
 
 logger = logging.getLogger(__name__)
@@ -121,6 +123,20 @@ class VisibleMatchReplay:
         entry = await self._history.entry_for(match_id)
         if entry is None or not is_visible_to(entry, viewer_id):
             return None
+
+        # **Before the log is loaded** — SPEC-REPLAY §4's "no attempt is
+        # made". The entry is already in hand and carries the version, so
+        # refusing here costs nothing; letting the call through would read
+        # every ply of a game that is then discarded, which for a long
+        # match is the whole log for an answer that was already knowable.
+        #
+        # Audited in A64-018.4: `GameMatchReplay` on its own still loads the
+        # log before refusing, and the API never reaches it that way.
+        if entry.engine_version not in {v.number for v in SUPPORTED_ENGINE_VERSIONS}:
+            raise UnsupportedEngineVersion(
+                f"match {match_id} was played under engine version "
+                f"{entry.engine_version}, which this build cannot reproduce"
+            )
 
         return await self._replays.replay_of(match_id)
 

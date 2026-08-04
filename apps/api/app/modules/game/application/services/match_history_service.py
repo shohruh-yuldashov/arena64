@@ -17,9 +17,15 @@ only because the history read does not touch the rules.
 that refusal is translated here into the published `UnsupportedEngineVersion`
 so a consumer branches on a `game.public` type rather than on a domain one.
 
-**No attempt is made** — §4's wording. The version is checked before the log
-is replayed rather than after, so a refused match costs one row read instead
-of a full reconstruction that is then thrown away.
+**No attempt is made** — §4's wording, and it holds for the reconstruction:
+`ReplayEngine` refuses before touching a move.
+
+What this class does **not** avoid is loading the log: `replay_data` reads
+every ply before the version is examined, so an unsupported match here costs
+a full log read for an answer that was knowable from one row. A64-018.4
+audited it and put the cheap refusal in `VisibleMatchReplay`, which already
+holds the match entry — so the API path never pays it. This reader, used
+directly, still does.
 
 ## Why the plies carry positions
 

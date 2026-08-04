@@ -28,17 +28,24 @@ strings instead of an event loop with a client in it.
 """
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from uuid import UUID
 
+from app.gateway.event_buffer import BufferedEvents
 from app.gateway.ports import ConnectionClosed, ConnectionRoute, ForwardingRequest
 from app.gateway.protocol import GatewayMessage, MessageType
 from app.gateway.rooms import RoomMember, RoomProgress
+from app.gateway.spectators import SpectatorRefusal, SpectatorSubscription
 from app.modules.engine import PlayerSide
+from app.modules.game.domain.variants import ProductVariant
 from app.modules.game.public import (
     AppliedMove,
+    ClockView,
     MatchRecordStatus,
     MatchRoster,
+    MatchSnapshot,
+    PlacedPiece,
     SubmitMoveRequest,
     SubmitMoveResult,
 )
@@ -223,6 +230,8 @@ class RecordingPresence:
 
 
 __all__ = [
+    "StubMatchSnapshots",
+    "InMemoryEventBuffer",
     "RecordingRemotePublisher",
     "InMemoryMoveIdempotency",
     "FakeSubmitMoves",
@@ -435,3 +444,185 @@ class RecordingRemotePublisher:
     async def publish(self, request: ForwardingRequest) -> bool:
         self.published.append(request)
         return self._succeeds
+
+
+class InMemoryEventBuffer:
+    """The `gwevent:v1:` sorted set, as a dict of lists.
+
+    Models the two properties the reconnect decision rests on, and nothing
+    else:
+
+    **Idempotent on the sequence.** Appending the same ply twice leaves one
+    entry, which is what `ZADD` on an existing member does and what makes an
+    at-least-once fan-out safe to buffer.
+
+    **Continuity is proven by the oldest entry**, not by the count — a buffer
+    that trimmed past the client can still return frames, and returning them
+    would be the silent partial recovery §6 forbids.
+
+    Not modelled: the TTL and the rank trim's atomicity, both of which belong
+    to Redis and are asserted against it in
+    `tests/contract/test_state_sync.py`.
+    """
+
+    def __init__(self, *, max_events: int = 64) -> None:
+        self.events: dict[UUID, dict[int, str]] = {}
+        self._max_events = max_events
+
+    async def append(self, match_id: UUID, *, sequence: int, frame: str) -> None:
+        buffered = self.events.setdefault(match_id, {})
+        buffered.setdefault(sequence, frame)
+
+        for stale in sorted(buffered)[: max(0, len(buffered) - self._max_events)]:
+            del buffered[stale]
+
+    async def since(self, match_id: UUID, *, sequence: int) -> BufferedEvents:
+        buffered = self.events.get(match_id, {})
+        if not buffered:
+            return BufferedEvents(frames=(), is_contiguous=False)
+
+        return BufferedEvents(
+            frames=tuple(buffered[key] for key in sorted(buffered) if key > sequence),
+            is_contiguous=min(buffered) <= sequence + 1,
+        )
+
+    async def length(self, match_id: UUID) -> int:
+        return len(self.events.get(match_id, {}))
+
+
+class StubMatchSnapshots:
+    """A `game.public.MatchSnapshotReader` a test dictates the answers of.
+
+    A stub rather than the real `GameMatchSnapshot` for the reason every
+    gateway fake is one: what these tests are about is what the *gateway*
+    does with a snapshot — the resync decision, the membership check, the
+    payload projection — not how `game` replays a log to build one, which is
+    `tests/contract/test_move_log.py`'s.
+    """
+
+    def __init__(self) -> None:
+        self.snapshots: dict[UUID, MatchSnapshot] = {}
+
+    def add(
+        self,
+        match_id: UUID,
+        *,
+        light: UUID,
+        dark: UUID,
+        sequence: int = 0,
+        clock: ClockView | None = None,
+        status: MatchRecordStatus = MatchRecordStatus.ACTIVE,
+    ) -> MatchSnapshot:
+        snapshot = MatchSnapshot(
+            match_id=match_id,
+            engine_version=2,
+            variant=ProductVariant.RUSSIAN_8X8,
+            status=status,
+            sequence=sequence,
+            side_to_move=PlayerSide.LIGHT if sequence % 2 == 0 else PlayerSide.DARK,
+            fingerprint=f"fingerprint-{sequence}",
+            pieces=(PlacedPiece(square="c3", side="light", rank="man"),),
+            light_player_id=light,
+            dark_player_id=dark,
+            clock=clock,
+            outcome=None,
+            termination_reason=None,
+            winner=None,
+            observed_at=datetime(2026, 8, 4, 12, 0, tzinfo=UTC),
+        )
+        self.snapshots[match_id] = snapshot
+        return snapshot
+
+    async def snapshot_of(self, match_id: UUID) -> MatchSnapshot | None:
+        return self.snapshots.get(match_id)
+
+
+class InMemorySpectatorStore:
+    """The `gwspec:v1:` keyspace and its reverse index, as two dicts.
+
+    Models what the fan-out and the disconnect path actually depend on:
+    subscriptions are keyed on `(player, connection)` so a viewer with two
+    tabs is two entries, and a connection can be removed from every match it
+    watches without knowing which those were.
+
+    Not modelled: the TTL and the score-range liveness filter, both of which
+    belong to Redis and are asserted against it in
+    `tests/contract/test_spectating.py`.
+    """
+
+    def __init__(self) -> None:
+        self.watching: dict[UUID, set[SpectatorSubscription]] = {}
+        self.fails = False
+
+    async def subscribe(
+        self, match_id: UUID, subscription: SpectatorSubscription, *, ttl_seconds: int
+    ) -> int:
+        audience = self.watching.setdefault(match_id, set())
+        audience.add(subscription)
+        return len(audience)
+
+    async def unsubscribe(self, match_id: UUID, subscription: SpectatorSubscription) -> int:
+        audience = self.watching.setdefault(match_id, set())
+        audience.discard(subscription)
+        return len(audience)
+
+    async def routes_for(self, match_id: UUID) -> Sequence[SpectatorSubscription]:
+        if self.fails:
+            raise ConnectionError("spectator store unavailable")
+        return tuple(sorted(self.watching.get(match_id, ()), key=lambda sub: sub.connection_id))
+
+    async def unsubscribe_all(self, subscription: SpectatorSubscription) -> Sequence[UUID]:
+        left = [
+            match_id for match_id, audience in self.watching.items() if subscription in audience
+        ]
+        for match_id in left:
+            self.watching[match_id].discard(subscription)
+        return tuple(left)
+
+
+class StubSpectatorPolicy:
+    """A `SpectatorEligibility` a test dictates the answer of.
+
+    A stub rather than `BlockAwareSpectatorPolicy`, because the *policy* has
+    its own tests over a real block graph — what the handler tests are about
+    is that a refusal becomes the right wire code and that an admission
+    subscribes.
+    """
+
+    def __init__(self, refusal: SpectatorRefusal | None = None) -> None:
+        self.refusal = refusal
+        self.asked: list[UUID] = []
+
+    async def refusal_for(
+        self, snapshot: MatchSnapshot, *, player_id: UUID
+    ) -> SpectatorRefusal | None:
+        self.asked.append(player_id)
+        return self.refusal
+
+
+class StubPairingExclusions:
+    """A `friends.public.PairingExclusions` over a set of blocked pairs.
+
+    Symmetric, as the real one is: `blocked_pairs_among` reports the
+    exclusion from both sides, which is what makes BL-1's invisibility hold.
+    """
+
+    def __init__(self, blocked: Sequence[tuple[UUID, UUID]] = ()) -> None:
+        self.blocked = tuple(blocked)
+        self.fails = False
+
+    async def blocked_pairs_among(
+        self, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, frozenset[UUID]]:
+        if self.fails:
+            raise ConnectionError("block graph unavailable")
+
+        named = set(player_ids)
+        pairs: dict[UUID, set[UUID]] = {}
+        for blocker, blocked in self.blocked:
+            if blocker not in named or blocked not in named:
+                continue
+            pairs.setdefault(blocker, set()).add(blocked)
+            pairs.setdefault(blocked, set()).add(blocker)
+
+        return {player: frozenset(against) for player, against in pairs.items()}

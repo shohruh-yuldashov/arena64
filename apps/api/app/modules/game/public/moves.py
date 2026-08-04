@@ -47,11 +47,13 @@ task's problem and is why the field exists now rather than later.
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
 from app.modules.engine import PlayerSide
 from app.modules.game.domain.exceptions import (
+    ClockExpired,
     IllegalMoveSubmitted,
     MatchNotActive,
     NotYourTurn,
@@ -78,7 +80,22 @@ class SubmitMoveRequest:
     protocol frame has no field for one — so this is the only value that
     can reach here, structurally rather than by convention."""
 
-    path: tuple[str, ...]
+    received_at: datetime | None = None
+    """When the **gateway** received the frame — MT-9, A64-016.5 §2.
+
+    The temporal authority for the flag race, captured before any queueing,
+    routing, database work or engine validation. A player must not lose on
+    time because of the platform's own delay, and the only way to guarantee
+    that is for the deciding instant to be taken at the boundary rather than
+    anywhere downstream.
+
+    `None` means "use the server clock now", which is correct for an untimed
+    match and for a caller that is not a socket. A timed match submitted
+    without one would charge the mover for the platform's processing, so
+    the gateway always supplies it.
+    """
+
+    path: tuple[str, ...] = ()
     """The squares the piece occupies in order, in algebraic notation
     (`("c3", "e5", "g3")`). At least two.
 
@@ -112,6 +129,23 @@ class AppliedMove:
 
 
 @dataclass(frozen=True, slots=True)
+class ClockView:
+    """The clock as a client should render it — A64-016.5 §3, §7.
+
+    Primitive-only and absolute. `deadline` is when the active side flags if
+    they do not move, which a client counts down to; `server_time` is when
+    the server believed that, which is what lets a client correct for its
+    own skew instead of accumulating it.
+    """
+
+    light_ms: int
+    dark_ms: int
+    active_side: PlayerSide
+    deadline: datetime
+    server_time: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class SubmitMoveResult:
     """A move that was played, and the state that followed it."""
 
@@ -138,6 +172,17 @@ class SubmitMoveResult:
 
     outcome: MatchOutcome | None = None
     termination_reason: TerminationReason | None = None
+    clock: ClockView | None = None
+    """The clock after this move, or `None` for an untimed match —
+    A64-016.5 §3.
+
+    Returned so a client can render the authoritative remaining time rather
+    than extrapolating from its own countdown, which drifts. The deadline is
+    absolute for the reason every other instant on this platform is: a
+    duration re-based on receipt drifts by the network latency it was meant
+    to describe.
+    """
+
     winner: PlayerSide | None = None
     """The result, when this move ended the game — A64-016.4 §7.
 
@@ -209,4 +254,6 @@ __all__ = [
     "SubmitMoveRequest",
     "SubmitMoveResult",
     "SubmitMoveUseCase",
+    "ClockExpired",
+    "ClockView",
 ]

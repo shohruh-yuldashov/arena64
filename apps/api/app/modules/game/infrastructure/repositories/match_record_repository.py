@@ -36,7 +36,8 @@ from sqlalchemy import CursorResult, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.engine import EngineVersion
+from app.modules.engine import EngineVersion, PlayerSide
+from app.modules.game.domain.clock import ClockState, TimeControl
 from app.modules.game.domain.match_record import MatchRecord, MatchRecordStatus, MatchSeat
 from app.modules.game.infrastructure.models import MatchRecordModel
 
@@ -73,6 +74,8 @@ class SqlAlchemyMatchRecordRepository:
             status=row.status,
             declined_by=row.declined_by,
             ply_number=row.ply_number,
+            time_control=_time_control_of(row),
+            clock=_clock_of(row),
             outcome=row.outcome,
             termination_reason=row.termination_reason,
             winner=row.winner,
@@ -117,6 +120,16 @@ class SqlAlchemyMatchRecordRepository:
             status=record.status,
             declined_by=record.declined_by,
             settled_at=record.settled_at,
+            ply_number=record.ply_number,
+            time_control_initial_ms=(
+                record.time_control.initial_ms if record.time_control else None
+            ),
+            time_control_increment_ms=(
+                record.time_control.increment_ms if record.time_control else None
+            ),
+            clock_light_ms=record.clock.light_ms if record.clock else None,
+            clock_dark_ms=record.clock.dark_ms if record.clock else None,
+            clock_turn_started_at=record.clock.turn_started_at if record.clock else None,
         )
 
         try:
@@ -262,6 +275,9 @@ class SqlAlchemyMatchRecordRepository:
                 .values(
                     status=record.status,
                     ply_number=record.ply_number,
+                    clock_light_ms=record.clock.light_ms if record.clock else None,
+                    clock_dark_ms=record.clock.dark_ms if record.clock else None,
+                    clock_turn_started_at=(record.clock.turn_started_at if record.clock else None),
                     outcome=record.outcome,
                     termination_reason=record.termination_reason,
                     winner=record.winner,
@@ -368,6 +384,38 @@ class SqlAlchemyMatchRecordRepository:
 
         rows = await self._session.execute(latest)
         return {player_id: opponent_id for player_id, opponent_id in rows.all()}
+
+
+def _time_control_of(row: MatchRecordModel) -> TimeControl | None:
+    """The row's time control, or `None` for an untimed match.
+
+    Both columns are null together — `ck_match__clock_iff_time_control` —
+    so reading one is enough to decide, and the other is narrowed rather
+    than re-checked.
+    """
+    if row.time_control_initial_ms is None:
+        return None
+    return TimeControl(
+        initial_ms=row.time_control_initial_ms,
+        increment_ms=row.time_control_increment_ms or 0,
+    )
+
+
+def _clock_of(row: MatchRecordModel) -> ClockState | None:
+    """The row's clock, or `None` for an untimed match.
+
+    `active_side` is **derived from ply parity** rather than stored: LIGHT
+    moves first, so an even ply count means LIGHT is to move. Storing it
+    would be a third copy of one fact — see `MatchRecordModel`.
+    """
+    if row.clock_light_ms is None or row.clock_turn_started_at is None:
+        return None
+    return ClockState(
+        light_ms=row.clock_light_ms,
+        dark_ms=row.clock_dark_ms or 0,
+        active_side=PlayerSide.LIGHT if row.ply_number % 2 == 0 else PlayerSide.DARK,
+        turn_started_at=row.clock_turn_started_at,
+    )
 
 
 def _constraint_of(error: IntegrityError) -> str:

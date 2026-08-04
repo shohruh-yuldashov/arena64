@@ -1793,6 +1793,35 @@ class GameSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="GAME_", frozen=True, extra="forbid")
 
+    clock_enabled: bool = True
+    """Whether the clock worker runs — A64-016.5 §6, AD-21.
+
+    `False` stops adjudication and nothing else: moves still charge time,
+    the move log still records it, and no match ever flags. That is the
+    honest degradation for a switch on a *worker* rather than on a feature,
+    and it exists because the alternative to a documented switch is somebody
+    stopping a process and forgetting which one.
+
+    Untimed matches are unaffected either way — they have no deadline.
+    """
+
+    clock_interval_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
+    """How often expired deadlines are claimed.
+
+    **The resolution of the flag**, not a tuning knob: a player whose time
+    runs out is told so within this interval, and on a bullet game an
+    interval of ten seconds would let them keep moving for nine of them.
+
+    One second is one `ZRANGEBYSCORE` per worker per second against an index
+    that is empty when nothing is expiring — the same cost and the same
+    argument as `OUTBOX_POLL_INTERVAL_SECONDS`.
+    """
+
+    clock_batch_size: int = Field(default=100, ge=1, le=1000)
+    """How many deadlines one pass claims. Bounds the transaction count of a
+    single pass, which matters on the tick after an outage when every
+    deadline that lapsed meanwhile is due at once."""
+
     live_state_ttl_seconds: int = Field(default=14400, ge=300, le=604800)
     """How long a match's live position survives without a move.
 
@@ -1966,6 +1995,92 @@ class GatewaySettings(BaseSettings):
     is a player losing to somebody else's bug.
 
     A violation refuses the frame and **keeps the connection open** (§13).
+    """
+
+    bus_max_stream_length: int = Field(default=1024, ge=16, le=100_000)
+    """How many entries one node's cross-node stream holds — §9.
+
+    The bound that makes a node which has gone away safe: its stream stops
+    growing and the oldest entries are dropped, which for realtime frames is
+    the correct loss — a client that missed a ply resynchronises, and one
+    that missed the *newest* ply is looking at a stale board anyway.
+    """
+
+    bus_stream_ttl_seconds: int = Field(default=300, ge=30, le=86400)
+    """How long a node's stream survives without a publish.
+
+    The half the length cap does not give: a node that never comes back
+    leaves a capped-but-permanent key, and one key per node that ever
+    existed is unbounded in the fleet's *history* rather than its size.
+    Refreshed on every publish, so a live node's stream never lapses.
+    """
+
+    event_buffer_length: int = Field(default=64, ge=4, le=4096)
+    """How many recent events a match's replay buffer keeps — A64-016.6 §3.
+
+    Sixty-four plies is most of a draughts game, so a client that dropped
+    for a minute gets incremental events rather than a snapshot. The bound
+    exists because a long game must not accumulate frames forever, and the
+    cost of it being too small is a full snapshot — a fallback that already
+    exists, which is why this can be generous rather than exact.
+    """
+
+    event_buffer_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
+    """How long a match's replay buffer survives without an event.
+
+    An hour, measured against a game rather than a heartbeat — the same
+    argument `GATEWAY_ROOM_TTL_SECONDS` makes. It bounds a *finished* match:
+    a capped buffer is still one key per match ever played, which is
+    unbounded in history rather than in size.
+    """
+
+    forwarding_enabled: bool = Field(default=True)
+    """Whether this node drains its cross-node bus stream — A64-016.8.
+
+    A switch rather than an assumption, like the clock's, and the same
+    shape: with it off a multi-node deployment publishes frames nothing
+    reads, which is precisely the state A64-016.5 shipped in. It exists so
+    a single-node deployment can turn off a tick that has nothing to do,
+    and so an operator can stop a node draining while they investigate one.
+    """
+
+    forwarding_interval_seconds: float = Field(default=0.25, ge=0.01, le=10.0)
+    """How often a node reads its own bus stream.
+
+    A quarter second, and the number is a **latency budget** rather than a
+    tuning knob: it is the worst-case delay this design adds to a move that
+    has to cross a node boundary, on top of the network. Small enough to sit
+    inside the round trip a player already accepts, large enough that an
+    idle fleet is not spending a Redis read per node per ten milliseconds.
+
+    See `app/gateway/forwarding.py` on why this is a poll rather than a
+    blocking `XREADGROUP`.
+    """
+
+    forwarding_batch_size: int = Field(default=256, ge=1, le=4096)
+    """How many bus entries one pass takes.
+
+    Bounded so a node returning from a pause drains at a rate its sockets
+    can absorb: an unbounded read would hand one pass a backlog of every
+    frame published while it was away, and write all of them before
+    yielding.
+    """
+
+    spectator_ttl_seconds: int = Field(default=900, ge=60, le=86400)
+    """How long one spectator subscription survives — A64-016.7 §3, §6.
+
+    The backstop for a viewer whose socket died without a `spectator.leave`
+    and whose node died without running cleanup. Fifteen minutes rather than
+    the connection TTL, because the two bound different things: a connection
+    TTL asks "is this socket alive", and this asks "should this subscription
+    outlive the node that made it" — and the cost of it being too long is a
+    fan-out to a connection that no longer exists, which the delivery loop
+    already tolerates and counts.
+
+    Refreshed on every rejoin rather than on every heartbeat, which is
+    deliberate: a spectator that watches for longer than this and is dropped
+    presses watch again, and a heartbeat that refreshed every subscription
+    would put a write on the hot path for a key whose loss costs nothing.
     """
 
     move_idempotency_ttl_seconds: int = Field(default=60, ge=5, le=3600)

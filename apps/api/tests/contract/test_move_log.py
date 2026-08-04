@@ -18,6 +18,7 @@ settlement, and the replay — rather than one per line.
 Skipped, not failed, when PostgreSQL is unreachable (see `conftest.py`).
 """
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -29,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.core.identifiers import generate_uuid7
 from app.modules.engine import CURRENT_ENGINE_VERSION, PlayerSide
-from app.modules.game.application.ports import LiveMatchState, LoggedMove
+from app.modules.game.application.ports import ClaimedDeadline, LiveMatchState, LoggedMove
 from app.modules.game.application.services import LiveMoveService, PersistedMatchReplay
 from app.modules.game.domain.match import MatchStatus
 from app.modules.game.domain.match_record import MatchRecord, MatchRecordStatus, MatchSeat
@@ -78,6 +79,31 @@ class _NullLiveCache:
         return True
 
 
+class _NullDeadlines:
+    """A `ClockDeadlineStore` that remembers nothing.
+
+    Every match in this file is **untimed** — `time_control` is `None`,
+    which is every match the platform creates today — so no deadline is
+    ever written and this records that fact rather than hiding it. The
+    deadline store's own atomicity is `tests/contract/test_live_clock.py`'s.
+    """
+
+    def __init__(self) -> None:
+        self.scheduled: list[tuple[UUID, int]] = []
+        self.cancelled: list[UUID] = []
+
+    async def schedule(
+        self, match_id: UUID, *, ply_number: int, side: PlayerSide, deadline: datetime
+    ) -> None:
+        self.scheduled.append((match_id, ply_number))
+
+    async def cancel(self, match_id: UUID) -> None:
+        self.cancelled.append(match_id)
+
+    async def claim_expired(self, *, now: datetime, limit: int) -> Sequence[ClaimedDeadline]:
+        return ()
+
+
 class _RecordingEvents:
     """An `EventPublisher` that keeps what was staged.
 
@@ -124,6 +150,7 @@ def _service(contract_session: AsyncSession, events: _RecordingEvents) -> LiveMo
         matches=SqlAlchemyMatchRecordRepository(contract_session),
         moves=SqlAlchemyMoveLogRepository(contract_session),
         live=_NullLiveCache(),
+        deadlines=_NullDeadlines(),
         events=events,  # type: ignore[arg-type]
         generator=engine.generator,
         applier=engine.applier,
@@ -280,6 +307,7 @@ class TestTheDurableMoveLog:
                     seat=PlayerSide.LIGHT,
                     engine_version=CURRENT_ENGINE_VERSION,
                     created_at=NOW,
+                    received_at=NOW,
                 ),
             )
         await savepoint.rollback()
@@ -479,6 +507,7 @@ class TestAcknowledgementAfterCommit:
         moves = SessionScopedLiveMoves(
             session_factory=factory,
             live=_NullLiveCache(),
+            deadlines=_NullDeadlines(),
             engine=engine_services(),
             clock=MovableClock(NOW),
             live_state_ttl_seconds=3600,

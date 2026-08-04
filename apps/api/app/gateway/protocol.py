@@ -191,6 +191,44 @@ class MessageType(StrEnum):
     the broadcast could not tell whether its own submission or its
     opponent's produced it."""
 
+    RESUME = "game.resume"
+    """Client to server, on the `game` channel — A64-016.6 §4.
+
+    Carries `match_id` and `last_known_sequence`. The player is the socket's
+    authenticated identity; the frame has no field for one, so a client
+    cannot resume somebody else's game."""
+
+    SNAPSHOT = "game.snapshot"
+    """Server to client. The full authoritative state, which becomes the
+    client's new synchronisation baseline (§6)."""
+
+    EVENTS = "game.events"
+    """Server to client. The ordered frames a client missed, when the buffer
+    can prove it holds all of them."""
+
+    RESUMED = "game.resumed"
+    """Server to client, after a snapshot or a batch of events. Says the
+    connection is back in the room and names the sequence it is now at."""
+
+    RESYNC_REQUIRED = "game.resync_required"
+    """Server to client. The gap could not be proven complete, so the client
+    must ask again with no `last_known_sequence` and take a snapshot. Sent
+    rather than silently sending a snapshot, so a client can count how often
+    it falls too far behind."""
+
+    SPECTATOR_JOIN = "spectator.join"
+    """Client to server — A64-016.7 §2. Carries `match_id`. The viewer is
+    the socket's authenticated identity."""
+
+    SPECTATOR_LEAVE = "spectator.leave"
+    """Client to server. Idempotent."""
+
+    SPECTATOR_JOINED = "spectator.joined"
+    """Server to client, with the safe snapshot and the audience size."""
+
+    SPECTATOR_LEFT = "spectator.left"
+    """Server to client. Sent for an idempotent leave too."""
+
     ERROR = "error"
     """Server to client. Always carries a `GatewayErrorCode`, never prose."""
 
@@ -254,6 +292,23 @@ class GatewayErrorCode(StrEnum):
     """The match is not being played. One code for still-in-acceptance,
     declined, expired and finished, because the client's response to all
     four is identical: stop sending moves."""
+
+    NOT_SPECTATABLE = "not_spectatable"
+    """No such match, or it is not in a state that has a game to watch.
+    **One code for both** — a client cannot enumerate live match identifiers
+    by sending spectator joins."""
+
+    SPECTATING_FORBIDDEN = "spectating_forbidden"
+    """A block stands between this viewer and a participant, or they are
+    playing. Distinguishable from `not_spectatable` only to somebody who
+    already knows why: BL-1 keeps a block invisible, and this says nothing
+    about which direction it runs in."""
+
+    CLOCK_EXPIRED = "clock_expired"
+    """The mover's flag had already fallen when the frame arrived —
+    A64-016.5 §4. Distinct from `not_your_turn` because it is not a
+    synchronisation problem: the move was legal and it was their turn, and
+    they were simply too late. The client stops sending moves."""
 
     RATE_LIMITED = "rate_limited"
     """Too many moves from this connection. The connection **stays open**
@@ -511,6 +566,103 @@ def _applied_payload(
     }
 
 
+def match_snapshot(payload: dict[str, Any], *, request_id: str | None) -> GatewayMessage:
+    """The authoritative state, as the new synchronisation baseline — §6.
+
+    Takes an already-projected payload rather than a `MatchSnapshot`,
+    because this module knows nothing about `game` and must not: the
+    projection is the caller's, and keeping it there is what lets the
+    protocol stay a codec.
+    """
+    return GatewayMessage(
+        type=MessageType.SNAPSHOT,
+        payload=payload,
+        request_id=request_id,
+        channel=Channel.GAME,
+    )
+
+
+def match_events(
+    *, match_id: UUID, frames: Sequence[str], request_id: str | None
+) -> GatewayMessage:
+    """The frames a client missed, in order — §4.
+
+    Carried as **encoded strings** rather than decoded objects, so the
+    frames a resuming client receives are byte-identical to the ones it
+    would have received live. Re-encoding would be a second encoder able to
+    disagree with the first, which is the bug that shows up as a client
+    whose board diverges only after a reconnect.
+    """
+    return GatewayMessage(
+        type=MessageType.EVENTS,
+        payload={"match_id": str(match_id), "frames": list(frames)},
+        request_id=request_id,
+        channel=Channel.GAME,
+    )
+
+
+def resumed(
+    *, match_id: UUID, sequence: int, both_connected: bool, request_id: str | None
+) -> GatewayMessage:
+    """Confirmation that this connection is back in the room — §4."""
+    return GatewayMessage(
+        type=MessageType.RESUMED,
+        payload={
+            "match_id": str(match_id),
+            "sequence": sequence,
+            "both_connected": both_connected,
+        },
+        request_id=request_id,
+        channel=Channel.GAME,
+    )
+
+
+def resync_required(*, match_id: UUID, request_id: str | None) -> GatewayMessage:
+    """The gap could not be proven complete — §6.
+
+    Sent rather than silently substituting a snapshot, because §6 forbids
+    "silent partial recovery" and because a client that can count how often
+    it falls behind can tell a flaky network from a buffer that is too
+    small.
+    """
+    return GatewayMessage(
+        type=MessageType.RESYNC_REQUIRED,
+        payload={"match_id": str(match_id)},
+        request_id=request_id,
+        channel=Channel.GAME,
+    )
+
+
+def spectator_joined(
+    payload: dict[str, Any], *, audience: int, request_id: str | None
+) -> GatewayMessage:
+    """Confirmation, with the safe snapshot — §2, §4.
+
+    The **same projection** a participant's resume receives, deliberately:
+    §4 lists what a spectator may see and it is the whole of the public
+    state. A second, narrower snapshot format would be a second thing to
+    keep in step with the position, and the redaction that matters is on the
+    *event* stream rather than on the board — which is public by the time
+    anybody can watch it.
+    """
+    return GatewayMessage(
+        type=MessageType.SPECTATOR_JOINED,
+        payload={**payload, "audience": audience},
+        request_id=request_id,
+        channel=Channel.GAME,
+    )
+
+
+def spectator_left(*, match_id: UUID, request_id: str | None) -> GatewayMessage:
+    """Confirmation that this connection has stopped watching."""
+    return GatewayMessage(
+        type=MessageType.SPECTATOR_LEFT,
+        payload={"match_id": str(match_id)},
+        request_id=request_id,
+        channel=Channel.GAME,
+    )
+
+
 def room_left(*, match_id: UUID, request_id: str | None) -> GatewayMessage:
     """Confirmation that this connection has left a room.
 
@@ -626,10 +778,16 @@ __all__ = [
     "connection_ready",
     "decode",
     "error",
+    "match_events",
+    "match_snapshot",
     "move_accepted",
     "move_applied",
     "move_rejected",
     "pong",
+    "resumed",
+    "spectator_joined",
+    "spectator_left",
+    "resync_required",
     "room_joined",
     "room_left",
 ]

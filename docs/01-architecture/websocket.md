@@ -1,11 +1,13 @@
 # Realtime / WebSocket Architecture
 
-> **Status:** Approved for what exists — the authenticated connection foundation (A64-016.1),
-> game room sessions (A64-016.2), live move submission (A64-016.3) and the durable move log
-> with terminal settlement (A64-016.4). Clocks, spectators and reconnection replay are
-> specified in outline only and are marked as such.
+> **Status:** Approved. The Live Game epic is complete — the authenticated connection
+> foundation (A64-016.1), game room sessions (A64-016.2), live move submission (A64-016.3),
+> the durable move log with terminal settlement (A64-016.4), distributed clocks (A64-016.5),
+> state synchronisation and reconnection (A64-016.6), spectating (A64-016.7) and the closing
+> audit (A64-016.8). Readiness and every accepted limitation are in
+> [`specs/live-game/audit.md`](../../specs/live-game/audit.md).
 > **Owner:** _Unassigned_
-> **Last reviewed:** 2026-08-04 (A64-016.4)
+> **Last reviewed:** 2026-08-04 (A64-016.8 — Live Game audit)
 > **Implements:** architecture.md AD-09 (single-use tickets), AD-11 (one multiplexed socket),
 > R-7 (the gateway contains no domain logic)
 > **Code:** `apps/api/app/gateway/`
@@ -980,14 +982,202 @@ envelope would be a second copy of two fields that must not disagree.
 | Adapter today | `InProcessGatewayBus`. Complete against the contract, and does not cross a process boundary — correct for **single-node**, which remains the supported topology |
 | Adapter next | `RedisStreamGatewayBus` on the `bus` role: a stream per node (`gwbus:v1:<node_id>`), `MAXLEN`-bounded, consumed by that node's own reader task |
 
-### 18.7 What is still missing
+### 18.7 What was still missing at A64-016.4, and where it went
 
-| Gap | Consequence | Closes with |
-| --- | --- | --- |
-| No clocks | A game has no time control and cannot be lost on time. `think_time_ms` and `remaining_clock_ms` are null | A64-016.5 |
-| No multi-node bus adapter | A fan-out to another node is queued in memory and never crosses. Single-node only | A64-016.5 |
-| No `UPDATE`/`DELETE` revocation on `game.move` | Append-only is held by the code and the absence of a mutating method, not by a grant | A privilege change |
-| No draw thresholds | Three of four are undecided product rules (`specs/game-engine/audit.md` §8), so those draws cannot fire | A product decision |
+| Gap | Closed by |
+| --- | --- |
+| No clocks | §19 (A64-016.5) |
+| No multi-node bus adapter | §19.4 — the adapter in A64-016.5, the loop that drains it in A64-016.8 |
+| No `UPDATE`/`DELETE` revocation on `game.move` | **Still open.** A privilege change, not a migration — `specs/live-game/audit.md` §7 |
+| No draw thresholds | **Still open.** Three of four are undecided product rules — `specs/game-engine/audit.md` §8 |
+
+---
+
+## 19. Clocks — A64-016.5
+
+AD-21: *"the clock is adjudicated by a worker against Redis"*, never by an in-process timer. A
+timer lives on one node, and a node that is deployed takes every timer it held with it — those
+matches then do not flag, they **hang**.
+
+### 19.1 Where time is charged
+
+`received_at`, captured at the frame boundary in `GatewayConnectionService._read_loop` and
+nowhere later. MT-9 makes the gateway receive instant the temporal authority for the flag race,
+and every step between that line and the clock — dispatch, the room read, the row lock, the
+engine — is platform delay a player must not be charged for.
+
+```
+ClockState.charged(control, at)   charge the mover  ->  credit the increment
+                                  ->  switch the side to move
+```
+
+Pure, in `game.domain.clock`, and therefore testable without a socket, a database or a sleep. A
+flag is `at > deadline()` — **strictly** after, so a move arriving on the exact millisecond of
+the deadline is in time.
+
+### 19.2 The deadline keyspace
+
+| | |
+| --- | --- |
+| **Key** | `clock:v1:deadlines` — one global sorted set, not one key per match |
+| **Member** | `<match_id>\|<ply>\|<side>` |
+| **Score** | The deadline, epoch milliseconds |
+| **Instance** | `live` — a lost deadline is a match that never flags |
+| **Owner** | `game` (`app/modules/game/infrastructure/clock_deadline_store.py`). Sole writer |
+
+One set rather than one key per match because the question is *"which matches have flagged"*,
+which a score range answers in one `ZRANGEBYSCORE`; per-match keys would need a scan.
+
+**The ply is the version.** A move that beats the clock writes a deadline for the next ply and
+supersedes the previous one in one Lua script, so there is no second sequence to keep in step —
+the same number `uq_move__ply` already serialises on.
+
+### 19.3 Adjudication
+
+`ClockAdjudicationTask` on the **`realtime`** queue (AD-20), every
+`GAME_CLOCK_INTERVAL_SECONDS`. One transaction **per deadline**, not per batch: two matches
+flagging in the same pass are unrelated, and a batch transaction would let one match's failure
+roll back another's settlement.
+
+The race with a real move is closed by the row lock rather than by ordering:
+
+```
+claim expired deadlines   ->  SELECT ... FOR UPDATE the match
+                          ->  is it still this ply, this side, still expired?
+                          ->  yes: settle    no: superseded, drop it
+```
+
+A move that arrived first has already advanced the ply inside the same lock, so the adjudicator
+finds a deadline that no longer describes the match and discards it. Neither path guesses.
+
+`GAME_CLOCK_ENABLED=false` disables it, at `WARNING`, and the warning is load-bearing: with it
+off moves still charge time and the log still records it, and **no match ever flags** — a game
+nobody can lose on time, which is a silent product change rather than a degraded feature.
+
+### 19.4 The cross-node bus, and the loop A64-016.8 added
+
+`RedisStreamGatewayBus` on the **`bus`** role: one stream per node (`gwbus:v1:<node_id>`),
+`MAXLEN ~`-bounded, `XREADGROUP` with one consumer group per node, `XACK` after decoding.
+
+A64-016.5 shipped both halves and **no loop between them** — `consume` had no caller, so a frame
+published for another node was written, reported delivered by `REMOTE_PUBLISHES`, trimmed, and
+never seen. A64-016.8 added `GatewayForwarder` and `GatewayForwardingTask`
+(`GATEWAY_FORWARDING_INTERVAL_SECONDS`, default 0.25s), and `FORWARDED_FRAMES` is the counter
+that makes the round trip visible: `REMOTE_PUBLISHES` rising while it stays at zero is a fleet
+whose nodes cannot talk to each other.
+
+A scheduled pass rather than a blocking `XREADGROUP`, because a blocking read parks a Redis
+connection for its whole duration and the failure when that connection drops is a node that
+silently stops receiving — the exact defect the loop exists to fix. The cost is a bounded
+worst-case latency of one interval.
+
+---
+
+## 20. State synchronisation and reconnection — A64-016.6
+
+### 20.1 The snapshot
+
+`game.public.MatchSnapshot` — one published read, so the gateway never assembles state from
+`game` internals (R-7). It carries the position as a fingerprint **plus** a flat placement list,
+because a client cannot render a board from a fingerprint and the gateway may not hold a
+`Position`.
+
+`sequence` **is the ply**. There is no second counter: it advances exactly when the position
+changes, it is already under the match row's lock, and it is already what `uq_move__ply`
+serialises on.
+
+Deliberately absent: move history (the durable log answers that and is unbounded), and any
+opponent profile — handles and ratings are `users`', composed by whoever renders them.
+
+### 20.2 The replay buffer
+
+| | |
+| --- | --- |
+| **Key** | `gwevent:v1:<match_id>` — a sorted set scored by the match sequence |
+| **Member** | `<sequence>\|<frame>`, the frame being the exact bytes a live socket received |
+| **Bounds** | `GATEWAY_EVENT_BUFFER_LENGTH` by rank, `GATEWAY_EVENT_BUFFER_TTL_SECONDS` on the key |
+| **Instance** | `cache` — losing it costs a snapshot, not a game |
+
+A sorted set rather than a stream, because the one operation this exists for is *"everything
+after sequence N"*: a stream is keyed by its own entry ids, so answering that means keeping an
+entry id per client — state per connection, in a store whose whole point is that connections are
+disposable.
+
+### 20.3 The recovery decision
+
+```
+client is current           ->  nothing
+last_known_sequence <= 0    ->  snapshot (the client asked to start over)
+buffer proves continuity    ->  the missed frames, in order
+buffer cannot prove it      ->  game.resync_required
+```
+
+**Continuity is proven by the oldest buffer entry, not by the count.** A buffer that has trimmed
+past the client can still return frames, and returning them would leave that client missing plies
+while believing it was current — the silent partial recovery A64-016.6 §6 forbids. `resync_required`
+rather than an unrequested snapshot, so a client can count how often it falls behind.
+
+### 20.4 Cross-node resume needs nothing special
+
+Everything a resume touches is fleet-wide: the connection registry (`gwconn:v2:`), room membership
+(`gwroom:v1:`), the buffer (Redis) and the snapshot (PostgreSQL). Nothing is process-local, so a
+client reconnecting to a different node reads identical state. **No socket moves between nodes**,
+and none needs to — the new node registers its own connection and joins the room by the ordinary
+path.
+
+---
+
+## 21. Spectating — A64-016.7
+
+Read-only, over the connection the client already holds, on AD-11's `game` channel. Not a second
+socket, not a second broadcast pipeline and not a second snapshot format.
+
+### 21.1 The keyspace
+
+| | |
+| --- | --- |
+| **Key** | `gwspec:v1:<match_id>` — sorted set scored by the subscription's expiry |
+| **Member** | `<player_id>\|<connection_id>` — a viewer with two tabs is two subscriptions |
+| **Reverse index** | `gwspecconn:v1:<connection_id>` — a socket that dropped never says `spectator.leave` |
+| **Expiry** | `GATEWAY_SPECTATOR_TTL_SECONDS`, by score, so a dead node's subscriptions drain with nothing sweeping |
+
+### 21.2 Read-only is structural, not a check
+
+A subscription lives in `gwspec:v1:` and **every** operation a spectator must not perform reads
+`gwroom:v1:`. A spectator submitting a move is refused `not_in_room` by machinery that predates
+spectating and knows nothing about it — stronger than a guard somebody has to remember to add to
+the next handler.
+
+### 21.3 Eligibility — an undocumented product decision, defaulted safely
+
+Nothing on this platform specifies who may watch a game: no privacy flag, no tournament model, no
+moderation surface. The shipped default, recorded in `app/gateway/spectators.py` and
+[`specs/spectator.md`](../../specs/spectator.md):
+
+| Rule | Why |
+| --- | --- |
+| The match is `active` or finished | A pairing still being accepted is not a game, and its existence is not public |
+| Neither participant blocks them | BL-1 carries over unchanged: a blocker gains nothing if the blocked player can watch them play |
+| Participants may not spectate | They are in the room already |
+
+Everything else is permitted, which is the permissive direction and deliberate: a restrictive
+default would ship the feature switched off with no way to switch it on without code.
+
+**No delay is invented.** AD-10 permits a delayed spectator feed and names no interval; guessing
+one would be inventing a competitive-integrity parameter. Frames are immediate, and the seam that
+would hold one back is `RoomBroadcaster.deliver`.
+
+### 21.4 One recipient set
+
+Spectators are unioned into the existing fan-out, never served by a second one. Two things make
+that safe:
+
+- **`SPECTATOR_SAFE_EVENTS`**, checked inside `deliver` rather than by the caller. An allowlist,
+  so the first participant-only frame anybody adds fails closed — the same mistake against a
+  denylist would leak it.
+- **The plan is restricted to the subscribed connection.** The router resolves every tab a player
+  has open, which is right for a participant (they are in the room on all of them) and wrong for a
+  viewer who pressed watch in one.
 
 ---
 

@@ -222,6 +222,26 @@ class IllegalMoveSubmitted(RuleViolationError):
     """
 
 
+class ClockExpired(ConflictError):
+    """The mover's flag had already fallen when their frame arrived —
+    A64-016.5 §4, §7.
+
+    Distinct from `NotYourTurn` and from `IllegalMoveSubmitted`, because it
+    is neither a synchronisation problem nor a rules problem: the move was
+    legal and it was that player's turn, and they were simply too late.
+
+    Raised **before** the engine is consulted, deliberately. A move from a
+    player whose time had run out when the gateway received it is not a
+    legal move that loses — it is a move that never happened, and telling
+    them whether it would have been legal is a rules oracle for a position
+    they are no longer entitled to play in.
+
+    The comparison is against `received_at`, never against the instant the
+    transaction ran. See `ClockState.has_flagged` for why the boundary is
+    strict.
+    """
+
+
 class StaleMatchState(ConflictError):
     """The match moved on between reading its state and writing the result
     — A64-016.3.
@@ -240,6 +260,7 @@ class StaleMatchState(ConflictError):
 
 __all__ = [
     "AcceptanceWindowClosed",
+    "ClockExpired",
     "CorruptMoveLog",
     "IllegalMoveSubmitted",
     "InvalidMatchTransition",

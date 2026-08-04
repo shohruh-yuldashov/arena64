@@ -100,7 +100,9 @@ from app.gateway.protocol import (
     room_joined,
     room_left,
 )
+from app.gateway.resume import ResumeHandler
 from app.gateway.room_service import GameRoomService, RoomJoinRefused
+from app.gateway.spectator_handler import SpectatorHandler
 from app.modules.users.public import DeviceType, PresenceRecorder
 from app.platform.metrics import MetricsRecorder
 
@@ -158,6 +160,8 @@ class GatewayConnectionService:
         registry: ConnectionRegistry,
         rooms: GameRoomService,
         moves: MoveSubmissionHandler,
+        resumes: ResumeHandler,
+        spectators: SpectatorHandler,
         sockets: LocalSocketRegistry,
         presence: PresenceRecorder,
         metrics: MetricsRecorder,
@@ -168,6 +172,8 @@ class GatewayConnectionService:
         self._registry = registry
         self._rooms = rooms
         self._moves = moves
+        self._resumes = resumes
+        self._spectators = spectators
         self._sockets = sockets
         self._presence = presence
         self._metrics = metrics
@@ -284,13 +290,30 @@ class GatewayConnectionService:
             except ConnectionClosed:
                 return CloseReason.CLIENT
 
+            # **Here**, and nowhere later. MT-9 makes the gateway receive
+            # instant the temporal authority for the flag race, and every
+            # step between this line and the clock — dispatch, the room
+            # read, the row lock, the engine — is platform delay a player
+            # must not be charged for (A64-016.5 §2).
+            received_at = self._clock.now()
+
             if not await self._handle(
-                raw, socket, player_id=player_id, connection_id=connection_id
+                raw,
+                socket,
+                player_id=player_id,
+                connection_id=connection_id,
+                received_at=received_at,
             ):
                 return CloseReason.CLIENT
 
     async def _handle(
-        self, raw: str, socket: GatewaySocket, *, player_id: UUID, connection_id: UUID
+        self,
+        raw: str,
+        socket: GatewaySocket,
+        *,
+        player_id: UUID,
+        connection_id: UUID,
+        received_at: datetime,
     ) -> bool:
         """One frame. `False` when the connection should stop.
 
@@ -318,7 +341,10 @@ class GatewayConnectionService:
             return await self._try_send(socket, error(malformed.code))
 
         answer = await self._dispatch_for(
-            socket, player_id=player_id, connection_id=connection_id
+            socket,
+            player_id=player_id,
+            connection_id=connection_id,
+            received_at=received_at,
         ).dispatch(message, player_id=player_id)
 
         if answer is None:
@@ -326,11 +352,16 @@ class GatewayConnectionService:
         return await self._try_send(socket, answer)
 
     def _dispatch_for(
-        self, socket: GatewaySocket, *, player_id: UUID, connection_id: UUID
+        self,
+        socket: GatewaySocket,
+        *,
+        player_id: UUID,
+        connection_id: UUID,
+        received_at: datetime,
     ) -> MessageDispatch:
         """This connection's table, bound to its identity.
 
-        Built per frame rather than per connection, which is a dict of four
+        Built per frame rather than per connection, which is a dict of seven
         closures and is the cheaper of the two arrangements to reason about:
         the lifecycle holds no per-connection object, so there is nothing to
         tear down and nothing that can outlive the socket it closed over.
@@ -350,7 +381,19 @@ class GatewayConnectionService:
                 MessageType.ROOM_LEAVE: lambda message: self._leave_room(
                     message, player_id=player_id, connection_id=connection_id
                 ),
+                MessageType.RESUME: lambda message: self._resumes.handle(
+                    message, player_id=player_id, connection_id=connection_id
+                ),
                 MessageType.MOVE_SUBMIT: lambda message: self._moves.handle(
+                    message,
+                    player_id=player_id,
+                    connection_id=connection_id,
+                    received_at=received_at,
+                ),
+                MessageType.SPECTATOR_JOIN: lambda message: self._spectators.join(
+                    message, player_id=player_id, connection_id=connection_id
+                ),
+                MessageType.SPECTATOR_LEAVE: lambda message: self._spectators.leave(
                     message, player_id=player_id, connection_id=connection_id
                 ),
             }
@@ -487,6 +530,11 @@ class GatewayConnectionService:
         # connection as a recipient.
         self._sockets.detach(connection_id)
         await self._rooms.detach(player_id=player_id, connection_id=connection_id)
+        # And out of every audience. A64-016.7 §3: a socket that dropped
+        # never sends `spectator.leave`, and a subscription left behind is a
+        # fan-out to a dead descriptor on every move of a game nobody is
+        # watching. `detach` never raises — see `SpectatorHandler`.
+        await self._spectators.detach(player_id=player_id, connection_id=connection_id)
 
         remaining = 0
         try:

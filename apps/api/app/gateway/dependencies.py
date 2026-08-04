@@ -40,14 +40,17 @@ from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends
+from redis.asyncio import Redis
 
 from app.api.deps import ClockDep, RateLimiterDep, RedisPoolsDep, SettingsDep
 from app.config.settings import GatewaySettings
 from app.core.clock import Clock
 from app.core.rate_limiting import RateLimitRule, RateLimitScope
-from app.gateway.bus import BusRemoteNodePublisher, GatewayBus, InProcessGatewayBus
+from app.database.redis import RedisPools
+from app.gateway.bus import BusRemoteNodePublisher, GatewayBus
 from app.gateway.connections import GatewayConnectionService, GatewayPolicy
 from app.gateway.delivery import InMemoryLocalSockets, RoomBroadcaster
+from app.gateway.event_buffer import RedisMatchEventBuffer
 from app.gateway.idempotency import RedisMoveIdempotencyStore
 from app.gateway.move_limits import ConnectionMoveLimiter, UnlimitedMoves
 from app.gateway.moves import MoveSubmissionHandler
@@ -61,13 +64,20 @@ from app.gateway.ports import (
     RoomMemberStore,
 )
 from app.gateway.registry import RedisConnectionRegistry
+from app.gateway.resume import ResumeHandler
 from app.gateway.room_service import GameRoomService
 from app.gateway.room_store import RedisRoomMemberStore
 from app.gateway.routing import FleetConnectionRouter
+from app.gateway.spectator_handler import SpectatorHandler
+from app.gateway.spectator_store import RedisSpectatorStore
+from app.gateway.spectators import BlockAwareSpectatorPolicy, SpectatorStore
+from app.gateway.stream_bus import RedisStreamGatewayBus
 from app.modules.auth.presentation.dependencies import WebSocketTicketServiceDep
+from app.modules.friends.presentation.dependencies import WebSocketPairingExclusionsDep
 from app.modules.game.presentation.dependencies import (
     WebSocketLiveMovesDep,
     WebSocketMatchRosterReaderDep,
+    WebSocketMatchSnapshotDep,
 )
 from app.modules.users.presentation.dependencies import PresenceRecorderDep
 from app.platform.metrics import MetricsRecorder, process_metrics
@@ -200,8 +210,32 @@ def get_connection_router(registry: ConnectionRegistryDep, node_id: NodeIdDep) -
 ConnectionRouterDep = Annotated[ConnectionRouter, Depends(get_connection_router)]
 
 
+def get_gateway_bus_for(pools: RedisPools, settings: GatewaySettings) -> GatewayBus:
+    """The transport frames cross between gateway processes — §9.
+
+    `RedisStreamGatewayBus` on the **`bus`** Redis role since A64-016.5.
+    AD-03 assigns that instance to pub/sub fan-out and nothing used it until
+    now, which is the point: cross-node realtime traffic must not compete
+    with live match positions (`live`) or with anything evictable (`cache`).
+
+    Cached per process, because the adapter remembers which consumer groups
+    it has created — a per-request instance would issue an `XGROUP CREATE`
+    on every publish.
+    """
+    return _bus_for(pools.bus, settings.bus_max_stream_length, settings.bus_stream_ttl_seconds)
+
+
 @lru_cache(maxsize=1)
-def get_gateway_bus() -> GatewayBus:
+def _bus_for(redis: Redis, max_stream_length: int, stream_ttl_seconds: int) -> GatewayBus:
+    """One bus per process. Cached on its collaborators so a test that
+    varies them gets a fresh one, and production — where all three are
+    fixed — gets exactly one."""
+    return RedisStreamGatewayBus(
+        redis, max_stream_length=max_stream_length, stream_ttl_seconds=stream_ttl_seconds
+    )
+
+
+def get_gateway_bus(pools: RedisPoolsDep, settings: GatewaySettingsDep) -> GatewayBus:
     """The transport frames cross between gateway processes — A64-016.4 §9.
 
     Cached, so one bus serves the process. `InProcessGatewayBus` is the
@@ -209,14 +243,16 @@ def get_gateway_bus() -> GatewayBus:
     implements the contract completely and simply does not cross a process
     boundary, which is the one thing a single-node deployment does not need.
 
-    A multi-node deployment needs `RedisStreamGatewayBus` against the `bus`
-    Redis role, which is one class against this same port. See
-    `app/gateway/bus.py` for the stream shape and the bound it needs.
+    See `get_gateway_bus_for`, which is what a caller without a request
+    resolves.
     """
-    return InProcessGatewayBus()
+    return get_gateway_bus_for(pools, settings)
 
 
-def get_remote_publisher() -> RemoteNodePublisher:
+GatewayBusDep = Annotated[GatewayBus, Depends(get_gateway_bus)]
+
+
+def get_remote_publisher(bus: GatewayBusDep) -> RemoteNodePublisher:
     """Where a remote node's share of a fan-out goes — §9.
 
     Over the bus since A64-016.4 §9. The publisher decides *what* to send
@@ -228,15 +264,19 @@ def get_remote_publisher() -> RemoteNodePublisher:
     Still one publish per node, not per connection: the grouping is the
     routing plan's and this only translates it.
     """
-    return BusRemoteNodePublisher(get_gateway_bus())
+    return BusRemoteNodePublisher(bus)
 
 
-def get_broadcaster(router: ConnectionRouterDep, sockets: LocalSocketsDep) -> RoomBroadcaster:
+def get_broadcaster(
+    router: ConnectionRouterDep,
+    sockets: LocalSocketsDep,
+    publisher: Annotated[RemoteNodePublisher, Depends(get_remote_publisher)],
+) -> RoomBroadcaster:
     """The room fan-out, over the routing plan — §8."""
     return RoomBroadcaster(
         router=router,
         sockets=sockets,
-        publisher=get_remote_publisher(),
+        publisher=publisher,
         metrics=get_gateway_metrics(),
     )
 
@@ -269,24 +309,120 @@ def get_move_limiter(
     )
 
 
+@lru_cache(maxsize=1)
+def _event_buffer_for(redis: Redis, max_events: int, ttl_seconds: int) -> RedisMatchEventBuffer:
+    """One buffer per process, cached on its collaborators — the same shape
+    the bus uses, and for the same reason: the object is cheap and the
+    script registration is not."""
+    return RedisMatchEventBuffer(redis, max_events=max_events, ttl_seconds=ttl_seconds)
+
+
+def get_event_buffer(pools: RedisPoolsDep, settings: GatewaySettingsDep) -> RedisMatchEventBuffer:
+    """The bounded replay buffer a reconnect reads — A64-016.6 §3.
+
+    On the **`cache`** role. Losing it costs a full snapshot rather than a
+    game, which is exactly the derived-and-expendable posture that instance
+    is configured for — and is why it is not beside the live position.
+    """
+    return _event_buffer_for(
+        pools.cache,
+        settings.event_buffer_length,
+        settings.event_buffer_ttl_seconds,
+    )
+
+
+EventBufferDep = Annotated[RedisMatchEventBuffer, Depends(get_event_buffer)]
+
+
+def get_resume_handler(
+    snapshots: WebSocketMatchSnapshotDep,
+    events: EventBufferDep,
+    rooms: RoomServiceDep,
+) -> ResumeHandler:
+    """The reconnect path — §4.
+
+    Holds `game`'s published snapshot reader, the buffer, and the room
+    service. No socket, no node identity and no bus: a resume reads
+    fleet-wide state and rejoins a room, which is why §5's cross-node case
+    needs nothing special.
+    """
+    return ResumeHandler(
+        snapshots=snapshots,
+        events=events,
+        rooms=rooms,
+        metrics=get_gateway_metrics(),
+    )
+
+
+ResumeHandlerDep = Annotated[ResumeHandler, Depends(get_resume_handler)]
+
+
+def get_spectator_store(pools: RedisPoolsDep, clock: ClockDep) -> SpectatorStore:
+    """Who is watching what — A64-016.7 §3.
+
+    On the **`cache`** role, beside the room membership and the connection
+    registry it sits next to conceptually: a subscription is a claim about a
+    socket that exists right now, and losing one costs a viewer a rejoin.
+    §3 forbids persisting it in PostgreSQL, and this is where that rule is
+    kept rather than merely stated.
+    """
+    return RedisSpectatorStore(pools.cache, clock=clock)
+
+
+SpectatorStoreDep = Annotated[SpectatorStore, Depends(get_spectator_store)]
+
+
+def get_spectator_handler(
+    snapshots: WebSocketMatchSnapshotDep,
+    exclusions: WebSocketPairingExclusionsDep,
+    store: SpectatorStoreDep,
+    settings: GatewaySettingsDep,
+) -> SpectatorHandler:
+    """The `spectator.join` / `spectator.leave` handler — §2.
+
+    `BlockAwareSpectatorPolicy` is named here, which is what a composition
+    root is for: the handler holds `SpectatorEligibility` and so cannot
+    reach the block graph, the match repository or anything else the policy
+    consulted to reach its answer.
+    """
+    return SpectatorHandler(
+        snapshots=snapshots,
+        policy=BlockAwareSpectatorPolicy(exclusions),
+        store=store,
+        metrics=get_gateway_metrics(),
+        subscription_ttl_seconds=settings.spectator_ttl_seconds,
+    )
+
+
+SpectatorHandlerDep = Annotated[SpectatorHandler, Depends(get_spectator_handler)]
+
+
 def get_move_handler(
     moves: WebSocketLiveMovesDep,
     rooms: RoomServiceDep,
     broadcaster: Annotated[RoomBroadcaster, Depends(get_broadcaster)],
+    buffer: EventBufferDep,
+    spectators: SpectatorStoreDep,
     limiter: Annotated[MoveRateLimiter, Depends(get_move_limiter)],
     pools: RedisPoolsDep,
     settings: GatewaySettingsDep,
 ) -> MoveSubmissionHandler:
     """The `game.move.submit` handler, with everything it needs bound.
 
-    Six collaborators, which is what made A64-016.1's branching handler
+    Seven collaborators, which is what made A64-016.1's branching handler
     stop being the right shape and is why §1 asks for a dispatch table —
     every other handler is two lines and this one is a pipeline.
+
+    The spectator store is the **read** side only: this handler asks who is
+    watching so the fan-out can include them, and has no way to subscribe
+    anybody. Joining is `SpectatorHandler`'s.
     """
     return MoveSubmissionHandler(
         moves=moves,
         rooms=rooms,
         broadcaster=broadcaster,
+        buffer=buffer,
+        spectators=spectators,
         idempotency=RedisMoveIdempotencyStore(pools.cache),
         limiter=limiter,
         metrics=get_gateway_metrics(),
@@ -314,6 +450,8 @@ def build_gateway_service(
     registry: ConnectionRegistryDep,
     rooms: GameRoomService,
     moves: MoveSubmissionHandler,
+    resumes: ResumeHandler,
+    spectators: SpectatorHandler,
     sockets: LocalSocketRegistry,
     presence: PresenceRecorderDep,
     clock: Clock,
@@ -334,6 +472,8 @@ def build_gateway_service(
         registry=registry,
         rooms=rooms,
         moves=moves,
+        resumes=resumes,
+        spectators=spectators,
         sockets=sockets,
         presence=presence,
         metrics=get_gateway_metrics(),
@@ -352,6 +492,8 @@ def get_gateway_service(
     registry: ConnectionRegistryDep,
     rooms: RoomServiceDep,
     moves: MoveHandlerDep,
+    resumes: ResumeHandlerDep,
+    spectators: SpectatorHandlerDep,
     sockets: LocalSocketsDep,
     presence: PresenceRecorderDep,
     clock: ClockDep,
@@ -364,6 +506,8 @@ def get_gateway_service(
         registry=registry,
         rooms=rooms,
         moves=moves,
+        resumes=resumes,
+        spectators=spectators,
         sockets=sockets,
         presence=presence,
         clock=clock,
@@ -377,6 +521,10 @@ GatewayServiceDep = Annotated[GatewayConnectionService, Depends(get_gateway_serv
 
 __all__ = [
     "ConnectionRegistryDep",
+    "SpectatorHandlerDep",
+    "SpectatorStoreDep",
+    "get_spectator_handler",
+    "get_spectator_store",
     "ConnectionRouterDep",
     "GatewayServiceDep",
     "GatewaySettingsDep",
@@ -388,6 +536,7 @@ __all__ = [
     "get_gateway_metrics",
     "get_connection_router",
     "get_gateway_bus",
+    "get_gateway_bus_for",
     "get_gateway_service",
     "get_gateway_settings",
     "get_node_id",

@@ -48,10 +48,13 @@ the log where the caller cannot read it.
 """
 
 import logging
+from collections.abc import Sequence
+from datetime import datetime
 from typing import Final
 from uuid import UUID
 
 from app.gateway.delivery import RoomBroadcaster
+from app.gateway.event_buffer import RedisMatchEventBuffer
 from app.gateway.metrics import (
     MOVE_SUBMISSIONS,
     MOVES_ACCEPTED,
@@ -67,7 +70,9 @@ from app.gateway.protocol import (
     move_rejected,
 )
 from app.gateway.room_service import GameRoomService
+from app.gateway.spectators import SpectatorStore, SpectatorSubscription
 from app.modules.game.public import (
+    ClockExpired,
     IllegalMoveSubmitted,
     MatchNotActive,
     MatchNotFound,
@@ -115,6 +120,11 @@ _REJECTIONS: Final[dict[type[Exception], tuple[GatewayErrorCode, MoveRejection, 
         MoveRejection.ILLEGAL_MOVE,
         "That is not a legal move.",
     ),
+    ClockExpired: (
+        GatewayErrorCode.CLOCK_EXPIRED,
+        MoveRejection.CLOCK_EXPIRED,
+        "Your time ran out.",
+    ),
     StaleMatchState: (
         GatewayErrorCode.STALE_STATE,
         MoveRejection.STALE_STATE,
@@ -138,6 +148,8 @@ class MoveSubmissionHandler:
         moves: SubmitMoveUseCase,
         rooms: GameRoomService,
         broadcaster: RoomBroadcaster,
+        buffer: RedisMatchEventBuffer,
+        spectators: SpectatorStore,
         idempotency: MoveIdempotency,
         limiter: MoveRateLimiter,
         metrics: MetricsRecorder,
@@ -146,13 +158,20 @@ class MoveSubmissionHandler:
         self._moves = moves
         self._rooms = rooms
         self._broadcaster = broadcaster
+        self._buffer = buffer
+        self._spectators = spectators
         self._idempotency = idempotency
         self._limiter = limiter
         self._metrics = metrics
         self._idempotency_ttl_seconds = idempotency_ttl_seconds
 
     async def handle(
-        self, message: GatewayMessage, *, player_id: UUID, connection_id: UUID
+        self,
+        message: GatewayMessage,
+        *,
+        player_id: UUID,
+        connection_id: UUID,
+        received_at: datetime,
     ) -> GatewayMessage:
         """One submission. Returns the frame to send back to the submitter.
 
@@ -173,7 +192,7 @@ class MoveSubmissionHandler:
                 request_id=message.request_id,
             )
 
-        submission = _submission_of(message, player_id=player_id)
+        submission = _submission_of(message, player_id=player_id, received_at=received_at)
         if submission is None:
             return self._refuse(
                 GatewayErrorCode.MALFORMED_MESSAGE,
@@ -244,18 +263,33 @@ class MoveSubmissionHandler:
             fingerprint=result.fingerprint,
         )
 
+        applied = move_applied(
+            match_id=result.match_id,
+            ply=result.ply,
+            side_to_move=result.side_to_move.value,
+            fingerprint=result.fingerprint,
+            path=result.applied.path,
+            captured=result.applied.captured,
+            promoted_to=result.applied.promoted_to,
+            result=_result_payload(result),
+        )
+
+        # **Buffered before it is delivered** — A64-016.6 §2, §3. A client
+        # that reconnects a moment after a move must find it in the buffer,
+        # and delivery is the slower of the two: it writes sockets and may
+        # publish to another node. Buffering second would leave a window in
+        # which the move is on somebody's screen and not in the replay.
+        #
+        # The frame is the *same string* that goes to a live socket, so a
+        # resuming client applies bytes identical to the ones it would have
+        # received — see `match_events` on why re-encoding would be a second
+        # encoder able to disagree with the first.
+        await self._buffer.append(result.match_id, sequence=result.ply, frame=applied.to_json())
+
         report = await self._broadcaster.deliver(
-            move_applied(
-                match_id=result.match_id,
-                ply=result.ply,
-                side_to_move=result.side_to_move.value,
-                fingerprint=result.fingerprint,
-                path=result.applied.path,
-                captured=result.applied.captured,
-                promoted_to=result.applied.promoted_to,
-                result=_result_payload(result),
-            ),
+            applied,
             recipients=room.participants,
+            spectators=await self._watching(result.match_id),
         )
 
         # One line per move rather than per recipient (§15), and no board,
@@ -268,8 +302,27 @@ class MoveSubmissionHandler:
                 "local": report.local,
                 "remote_nodes": report.remote_nodes,
                 "failures": report.failures,
+                "spectator_failures": report.spectator_failures,
             },
         )
+
+    async def _watching(self, match_id: UUID) -> Sequence[SpectatorSubscription]:
+        """Who is spectating this match — A64-016.7 §5.
+
+        A read on the move path, so it is bounded by the same posture the
+        rest of this method has: a failure returns **no audience** rather
+        than raising, because a spectator that missed a frame resynchronises
+        by rejoining and a move that failed because a viewer list could not
+        be read would be a game lost to somebody else's tab.
+        """
+        try:
+            return await self._spectators.routes_for(match_id)
+        except Exception as exc:  # noqa: BLE001 — an audience must not fail a move
+            logger.warning(
+                "gateway_spectator_routes_failed",
+                extra={"match_id": str(match_id), "error": type(exc).__name__},
+            )
+            return ()
 
     async def _replayed(
         self, message: GatewayMessage, *, connection_id: UUID
@@ -373,7 +426,9 @@ def _accepted_frame(result: SubmitMoveResult, *, request_id: str | None) -> Gate
     )
 
 
-def _submission_of(message: GatewayMessage, *, player_id: UUID) -> SubmitMoveRequest | None:
+def _submission_of(
+    message: GatewayMessage, *, player_id: UUID, received_at: datetime
+) -> SubmitMoveRequest | None:
     """A decoded frame as a command, or `None` if the payload is not one.
 
     Validated here rather than in `protocol.decode`, because the envelope
@@ -381,9 +436,12 @@ def _submission_of(message: GatewayMessage, *, player_id: UUID) -> SubmitMoveReq
     and making it know would be the beginning of a schema registry inside
     the codec.
 
-    **`player_id` comes from the caller**, never the payload (§4). The
-    protocol has no field for one, so this is structural: there is no
-    client-supplied identity in scope to prefer by accident.
+    **`player_id` and `received_at` come from the caller**, never the
+    payload. The protocol has no field for either, so this is structural
+    rather than remembered: there is no client-supplied identity or
+    timestamp in scope to prefer by accident — and a client that could
+    supply its own `received_at` could claim to have moved before its flag
+    fell (A64-016.5 §2).
     """
     raw_match = message.payload.get("match_id")
     raw_path = message.payload.get("path")
@@ -398,7 +456,12 @@ def _submission_of(message: GatewayMessage, *, player_id: UUID) -> SubmitMoveReq
     except ValueError:
         return None
 
-    return SubmitMoveRequest(match_id=match_id, player_id=player_id, path=tuple(raw_path))
+    return SubmitMoveRequest(
+        match_id=match_id,
+        player_id=player_id,
+        received_at=received_at,
+        path=tuple(raw_path),
+    )
 
 
 __all__ = ["MoveSubmissionHandler"]

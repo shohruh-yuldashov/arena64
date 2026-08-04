@@ -19,6 +19,9 @@ cannot read a match's acceptance state.
 from app.modules.game.application.services.abandoned_match_retention import (
     GameAbandonedMatchRetention,
 )
+from app.modules.game.application.services.clock_adjudication_service import (
+    ClockAdjudicationService,
+)
 from app.modules.game.application.services.live_move_service import LiveMoveService
 from app.modules.game.application.services.match_acceptance_service import (
     MatchAcceptanceService,
@@ -29,6 +32,7 @@ from app.modules.game.application.services.match_creation_service import (
 )
 from app.modules.game.application.services.match_replay_service import PersistedMatchReplay
 from app.modules.game.application.services.match_roster_service import GameMatchRoster
+from app.modules.game.application.services.match_snapshot_service import GameMatchSnapshot
 from app.modules.game.application.services.pairing_settlement_service import (
     GamePairingSettlements,
 )
@@ -37,6 +41,8 @@ from app.modules.game.application.services.recent_opponent_service import (
 )
 
 __all__ = [
+    "GameMatchSnapshot",
+    "ClockAdjudicationService",
     "PersistedMatchReplay",
     "LiveMoveService",
     "GameMatchRoster",

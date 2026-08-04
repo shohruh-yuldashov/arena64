@@ -144,6 +144,12 @@ class MoveRejection(StrEnum):
     be refused, and an operator comparing it against the others is asking
     the right question."""
 
+    CLOCK_EXPIRED = "clock_expired"
+    """The mover had already flagged when the frame arrived. A rising rate
+    against a flat `moves_accepted_total` means players are running out of
+    time, which is a game outcome rather than a defect — it is here so an
+    operator can tell that apart from a platform delay."""
+
     MALFORMED = "malformed"
     """The frame decoded but its payload was not a move — no `match_id`, no
     `path`, or a `path` that is not a list of strings."""
@@ -152,6 +158,78 @@ class MoveRejection(StrEnum):
     """Something failed that the client cannot act on. Always accompanied
     by an `ERROR` log carrying the exception; this exists so the *rate* is
     visible without parsing logs."""
+
+
+#: Reconnect attempts, by how they were answered — A64-016.6.
+RESUMES: Final = "gateway.resumes_total"
+
+
+class ResumeOutcome(StrEnum):
+    """How a reconnect was answered.
+
+    The distribution is the operational question, and it is why these are
+    five labels on one counter rather than five counters: `incremental`
+    should dominate, `snapshot` should be rare, and a rising
+    `resync_required` means the event buffer is too small for the
+    disconnection lengths this deployment actually sees.
+    """
+
+    CURRENT = "current"
+    """The client had missed nothing. The fast path, and the common one for
+    a socket that dropped and returned within a second."""
+
+    INCREMENTAL = "incremental"
+    """The buffer proved it held the whole gap. What should dominate."""
+
+    SNAPSHOT = "snapshot"
+    """The client asked to start over, or was too far behind."""
+
+    RESYNC_REQUIRED = "resync_required"
+    """The gap could not be proven complete. A rising rate is the signal to
+    lengthen the buffer rather than a defect."""
+
+    NOT_A_PARTICIPANT = "not_a_participant"
+    """Refused. Covers an unknown match too — the two are one answer."""
+
+
+#: Spectator joins that were admitted — §7.
+SPECTATOR_JOINS: Final = "gateway.spectator_joins_total"
+
+#: Spectator joins refused, by bounded reason — §7.
+SPECTATOR_REJECTIONS: Final = "gateway.spectator_rejections_total"
+
+#: Spectators detached, by how — §7's "active spectator count", counted as
+#: transitions for the reason every other count on this tier is: there is no
+#: gauge, because a gauge is read at scrape time and needs the exporter to
+#: call into the process.
+SPECTATOR_LEAVES: Final = "gateway.spectator_leaves_total"
+
+#: Frames a spectator could not be sent — §7's "spectator delivery
+#: failures". Separate from the participants' `LOCAL_DELIVERIES`, because a
+#: spectator that missed a frame resynchronises and a participant that
+#: missed one is mid-game.
+SPECTATOR_DELIVERY_FAILURES: Final = "gateway.spectator_delivery_failures_total"
+
+
+class SpectatorLeaveReason(StrEnum):
+    """How a spectator stopped watching."""
+
+    CLIENT = "client"
+    DISCONNECT = "disconnect"
+
+
+#: Frames delivered to a local socket on behalf of another node — A64-016.8.
+#:
+#: The counter that would have made A64-016.5's gap visible. `REMOTE_PUBLISHES`
+#: says a frame was handed to the bus; this says one came off it and reached a
+#: socket. A deployment where the first rises and the second stays at zero is
+#: a fleet whose nodes cannot talk to each other, which is exactly the state
+#: this platform shipped in until the forwarding loop existed.
+FORWARDED_FRAMES: Final = "gateway.forwarded_frames_total"
+
+#: Forwarded frames that reached nobody — the connection had closed, or the
+#: entry could not be parsed. Not an error on its own: see `ForwardingRun`.
+FORWARDING_FAILURES: Final = "gateway.forwarding_failures_total"
 
 
 class RouteLocality(StrEnum):

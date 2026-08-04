@@ -215,9 +215,23 @@ class MatchSeat:
         return self.accepted_at is not None
 
     def accepting(self, at: datetime) -> "MatchSeat":
-        return MatchSeat(
-            player_id=self.player_id, queue_ticket_id=self.queue_ticket_id, accepted_at=at
-        )
+        """This seat, having answered yes.
+
+        `replace` rather than a fresh `MatchSeat`, and the difference is a
+        rating outage. Naming three of four fields silently dropped
+        `rating` — the snapshot captured at creation (MT-4, PR-3) — and
+        `MatchRecordRepository.settle` writes every rating column from the
+        record it is given, so accepting a match **nulled its own seat
+        snapshots in the database**. `MatchCompleted` then carried
+        `light=None, dark=None`, the rating consumer correctly read that as
+        "not rateable", and no rating on this platform would ever have
+        moved.
+
+        Constructing by name is what let a field be forgotten. `replace`
+        cannot forget one, so a fifth field added later inherits this
+        instead of needing to be remembered here.
+        """
+        return replace(self, accepted_at=at)
 
 
 @dataclass(frozen=True, slots=True)

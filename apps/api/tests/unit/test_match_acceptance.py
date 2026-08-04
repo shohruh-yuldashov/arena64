@@ -11,6 +11,7 @@ boundary, the compare-and-set and the "which event, when" decision are
 genuinely exercised.
 """
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -19,7 +20,12 @@ import pytest
 from app.core.identifiers import generate_uuid7
 from app.modules.engine import CURRENT_ENGINE_VERSION, PlayerSide
 from app.modules.game.application.services import MatchAcceptanceService
-from app.modules.game.domain.match_record import MatchRecord, MatchRecordStatus, MatchSeat
+from app.modules.game.domain.match_record import (
+    MatchRecord,
+    MatchRecordStatus,
+    MatchSeat,
+    SeatRating,
+)
 from app.modules.game.public import (
     AcceptanceWindowClosed,
     MatchNotFound,
@@ -57,6 +63,24 @@ def _record(
         dark=MatchSeat(player_id=dark or generate_uuid7(), queue_ticket_id=generate_uuid7()),
         created_at=at,
         acceptance_deadline=at + WINDOW,
+    )
+
+
+def _rated_record() -> MatchRecord:
+    """A match carrying the seat snapshots a rating is computed from."""
+    snapshot = SeatRating(
+        value=1500.0,
+        deviation=350.0,
+        volatility=0.06,
+        games_played=0,
+        is_provisional=True,
+        speed_class="classical",
+    )
+    record = _record()
+    return replace(
+        record,
+        light=replace(record.light, rating=snapshot),
+        dark=replace(record.dark, rating=snapshot),
     )
 
 
@@ -181,6 +205,35 @@ class TestBothAcceptancesActivate:
         view = await service.accept(player_id=record.light.player_id, match_id=record.id)
 
         assert view.status is MatchRecordStatus.ACTIVE
+
+    async def test_accepting_keeps_the_seat_rating_snapshot(
+        self, service: MatchAcceptanceService, matches: InMemoryMatchRecordRepository
+    ) -> None:
+        """MT-4, PR-3 — the snapshot survives the handshake.
+
+        `MatchSeat.accepting` rebuilt the seat by naming three of its four
+        fields and dropped `rating`. `MatchRecordRepository.settle` writes
+        every rating column from the record it is handed, so **accepting a
+        match nulled its own snapshots in the database**: `MatchCompleted`
+        then carried `light=None, dark=None`, the rating consumer correctly
+        read that as "not rateable", and no rating on this platform would
+        ever have moved.
+
+        Asserted on the *stored* record rather than on the returned view,
+        because the view deliberately hides ratings and the outage was in
+        what got written.
+        """
+        record = await _stored(matches, _rated_record())
+
+        await service.accept(player_id=record.light.player_id, match_id=record.id)
+        await service.accept(player_id=record.dark.player_id, match_id=record.id)
+
+        stored = await matches.lock(record.id)
+        assert stored is not None
+        assert stored.status is MatchRecordStatus.ACTIVE
+        assert stored.light.rating is not None
+        assert stored.dark.rating is not None
+        assert stored.light.rating.value == 1500.0
 
 
 class TestOneDeclinePreventsActivation:

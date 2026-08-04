@@ -58,16 +58,20 @@ from app.gateway.protocol import (
     decode,
     move_accepted,
     move_applied,
+    resumed,
 )
 from app.gateway.resume import ResumeHandler
 from app.gateway.room_service import GameRoomService
 from app.gateway.rooms import RoomMember
 from app.gateway.routing import FleetConnectionRouter
+from app.gateway.spectator_handler import SpectatorHandler
+from app.gateway.spectators import BlockAwareSpectatorPolicy, SpectatorSubscription
 from app.modules.engine import PlayerSide
 from app.modules.game.public import (
     ClockView,
     IllegalMoveSubmitted,
     MatchNotActive,
+    MatchRecordStatus,
     NotYourTurn,
     StaleMatchState,
 )
@@ -80,10 +84,13 @@ from tests.fakes.gateway import (
     FakeTicketRedeemer,
     InMemoryEventBuffer,
     InMemoryMoveIdempotency,
+    InMemorySpectatorStore,
     RecordingPresence,
     RecordingRemotePublisher,
     StubMatchRosters,
     StubMatchSnapshots,
+    StubPairingExclusions,
+    StubSpectatorPolicy,
 )
 from tests.fakes.metrics import RecordingMetrics
 from tests.fakes.presence_redis import MovableClock
@@ -158,6 +165,7 @@ def _moves(
     sockets: InMemoryLocalSockets | None = None,
     registry: FakeConnectionRegistry | None = None,
     buffer: InMemoryEventBuffer | None = None,
+    spectators: InMemorySpectatorStore | None = None,
 ) -> MoveSubmissionHandler:
     """The real move handler over in-memory collaborators.
 
@@ -180,6 +188,7 @@ def _moves(
             metrics=RecordingMetrics(),
         ),
         buffer=buffer if buffer is not None else InMemoryEventBuffer(),
+        spectators=spectators if spectators is not None else InMemorySpectatorStore(),
         idempotency=InMemoryMoveIdempotency(),
         limiter=limiter if limiter is not None else CountingMoveLimiter(allowance=100),
         metrics=RecordingMetrics(),
@@ -202,6 +211,22 @@ def _resumes(
     )
 
 
+def _spectators(
+    *,
+    snapshots: StubMatchSnapshots | None = None,
+    policy: StubSpectatorPolicy | None = None,
+    store: InMemorySpectatorStore | None = None,
+) -> SpectatorHandler:
+    """The real spectator handler over in-memory collaborators."""
+    return SpectatorHandler(
+        snapshots=snapshots if snapshots is not None else StubMatchSnapshots(),
+        policy=policy if policy is not None else StubSpectatorPolicy(),
+        store=store if store is not None else InMemorySpectatorStore(),
+        metrics=RecordingMetrics(),
+        subscription_ttl_seconds=900,
+    )
+
+
 def _service(
     tickets: FakeTicketRedeemer,
     registry: FakeConnectionRegistry,
@@ -210,6 +235,7 @@ def _service(
     moves: MoveSubmissionHandler | None = None,
     sockets: InMemoryLocalSockets | None = None,
     resumes: ResumeHandler | None = None,
+    spectators: SpectatorHandler | None = None,
 ) -> GatewayConnectionService:
     resolved_rooms = rooms if rooms is not None else _rooms()
     return GatewayConnectionService(
@@ -218,6 +244,7 @@ def _service(
         rooms=resolved_rooms,
         moves=moves if moves is not None else _moves(resolved_rooms),
         resumes=resumes if resumes is not None else _resumes(resolved_rooms),
+        spectators=spectators if spectators is not None else _spectators(),
         sockets=sockets if sockets is not None else InMemoryLocalSockets(),
         presence=presence,
         metrics=RecordingMetrics(),
@@ -500,6 +527,7 @@ class TestCleanup:
             rooms=_rooms(),
             moves=_moves(_rooms()),
             resumes=_resumes(_rooms()),
+            spectators=_spectators(),
             sockets=InMemoryLocalSockets(),
             presence=presence,
             metrics=RecordingMetrics(),
@@ -1523,3 +1551,379 @@ class TestReconnection:
 
         socket.hang_up()
         await served
+
+
+class TestSpectating:
+    """A64-016.7 §9 — watching a game without being in it."""
+
+    @pytest.mark.asyncio
+    async def test_an_eligible_spectator_joins_and_receives_the_position(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§9.1 and §9.3 — admitted, subscribed, and given the board.
+
+        Two assertions in one test because they are one outcome: a
+        `spectator.joined` that did not carry the position would be a client
+        told it is watching and shown nothing, and a subscription that was
+        not recorded would be a client shown a board it never receives
+        another frame for.
+
+        What crosses is the **same projection a resuming participant gets**
+        — the fingerprint, the placement and the sequence — and what does
+        not is anything about the two players beyond their identifiers. See
+        `app/gateway/projections.py`.
+        """
+        viewer, light, dark = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        match_id = generate_uuid7()
+
+        snapshots = StubMatchSnapshots()
+        snapshots.add(match_id, light=light, dark=dark, sequence=4)
+        store = InMemorySpectatorStore()
+
+        tickets.add(VALID_TICKET, viewer)
+        socket = FakeGatewaySocket(
+            [
+                _frame(
+                    "spectator.join",
+                    channel="game",
+                    request_id="s1",
+                    payload={"match_id": str(match_id)},
+                )
+            ],
+            # Held open, because the subscription is asserted **while the
+            # connection is live**: closing it runs the cleanup that empties
+            # every audience, which the last test in this class covers.
+            holds_open=True,
+        )
+
+        served = asyncio.create_task(
+            _service(
+                tickets,
+                registry,
+                presence,
+                spectators=_spectators(snapshots=snapshots, store=store),
+            ).run(socket, ticket=VALID_TICKET)
+        )
+        for _ in range(len(socket.sent) + 8):
+            await asyncio.sleep(0)
+
+        joined = next(m for m in socket.sent if m.type is MessageType.SPECTATOR_JOINED)
+        assert joined.request_id == "s1"
+        assert joined.payload["audience"] == 1
+        assert joined.payload["sequence"] == 4
+        assert joined.payload["fingerprint"] == "fingerprint-4"
+        assert {sub.player_id for sub in store.watching[match_id]} == {viewer}
+
+        socket.hang_up()
+        await served
+
+    @pytest.mark.asyncio
+    async def test_a_block_between_the_viewer_and_a_player_refuses_the_join(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§9.2, over the **real** policy rather than a stub.
+
+        The block is one-directional in `friends` and the refusal is
+        symmetric here, which is BL-1's reasoning carried over: a blocker
+        who could still be watched by the person they blocked has gained
+        nothing from blocking them.
+
+        The wire code is `spectating_forbidden` and **not** a distinct
+        "you are blocked", because a client that could tell the two apart
+        could probe the block graph one match at a time.
+        """
+        viewer, light, dark = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        match_id = generate_uuid7()
+
+        snapshots = StubMatchSnapshots()
+        snapshots.add(match_id, light=light, dark=dark)
+        store = InMemorySpectatorStore()
+        policy = BlockAwareSpectatorPolicy(StubPairingExclusions([(light, viewer)]))
+
+        tickets.add(VALID_TICKET, viewer)
+        socket = FakeGatewaySocket(
+            [_frame("spectator.join", channel="game", payload={"match_id": str(match_id)})]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            spectators=SpectatorHandler(
+                snapshots=snapshots,
+                policy=policy,
+                store=store,
+                metrics=RecordingMetrics(),
+                subscription_ttl_seconds=900,
+            ),
+        ).run(socket, ticket=VALID_TICKET)
+
+        refusal = next(m for m in socket.sent if m.type is MessageType.ERROR)
+        assert refusal.payload["code"] == GatewayErrorCode.SPECTATING_FORBIDDEN
+        assert match_id not in store.watching
+
+    @pytest.mark.asyncio
+    async def test_a_match_that_is_not_being_played_cannot_be_watched(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§9.2 and §1 — an unknown match and a pending one are one answer.
+
+        A pairing still being accepted is not a game: there is nothing to
+        watch, and its *existence* is not public. So it produces the same
+        `not_spectatable` a match id nobody ever issued does, which is what
+        keeps live match identifiers unenumerable — the rule the room join
+        and the move path already keep.
+        """
+        viewer, light, dark = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        pending_id, unknown_id = generate_uuid7(), generate_uuid7()
+
+        snapshots = StubMatchSnapshots()
+        snapshots.add(
+            pending_id, light=light, dark=dark, status=MatchRecordStatus.PENDING_ACCEPTANCE
+        )
+
+        tickets.add(VALID_TICKET, viewer)
+        socket = FakeGatewaySocket(
+            [
+                _frame("spectator.join", channel="game", payload={"match_id": str(pending_id)}),
+                _frame("spectator.join", channel="game", payload={"match_id": str(unknown_id)}),
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            spectators=_spectators(
+                snapshots=snapshots, policy=BlockAwareSpectatorPolicy(StubPairingExclusions())
+            ),
+        ).run(socket, ticket=VALID_TICKET)
+
+        refusals = [m for m in socket.sent if m.type is MessageType.ERROR]
+        assert [m.payload["code"] for m in refusals] == [
+            GatewayErrorCode.NOT_SPECTATABLE,
+            GatewayErrorCode.NOT_SPECTATABLE,
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_move_reaches_the_watching_tab_and_not_the_viewers_other_tab(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§9.4, and the reason spectators are `(player, connection)` pairs.
+
+        The viewer has two sockets open and pressed watch in one of them.
+        The router resolves **both** — that is what it does for a player —
+        so the fan-out would deliver a game to a tab that never asked for
+        one unless the plan is restricted to the subscribed connection.
+
+        The participants are unaffected: they are in the room on every tab,
+        which is what a room is.
+        """
+        viewer, light, dark = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        match_id = generate_uuid7()
+
+        sockets = InMemoryLocalSockets()
+        watching_id, other_id = uuid4(), uuid4()
+        watching, other = FakeGatewaySocket(), FakeGatewaySocket()
+        for connection_id, socket in ((watching_id, watching), (other_id, other)):
+            await registry.register(viewer, connection_id, node_id=NODE_ID, ttl_seconds=90)
+            sockets.attach(connection_id, socket)
+
+        store = InMemorySpectatorStore()
+        await store.subscribe(
+            match_id,
+            SpectatorSubscription(player_id=viewer, connection_id=watching_id),
+            ttl_seconds=900,
+        )
+
+        broadcaster = RoomBroadcaster(
+            router=FleetConnectionRouter(
+                registry=registry, node_id=NODE_ID, metrics=RecordingMetrics()
+            ),
+            sockets=sockets,
+            publisher=RecordingRemotePublisher(),
+            metrics=RecordingMetrics(),
+        )
+
+        report = await broadcaster.deliver(
+            move_applied(
+                match_id=match_id,
+                ply=3,
+                side_to_move="dark",
+                fingerprint="fp",
+                path=["c3", "d4"],
+                captured=[],
+                promoted_to=None,
+            ),
+            recipients=[light, dark],
+            spectators=await store.routes_for(match_id),
+        )
+
+        assert report.local == 1
+        assert watching.types() == [MessageType.MOVE_APPLIED]
+        assert other.types() == []
+
+    @pytest.mark.asyncio
+    async def test_an_event_that_is_not_spectator_safe_never_reaches_the_audience(
+        self,
+        registry: FakeConnectionRegistry,
+    ) -> None:
+        """§9.6 — the allowlist, and why it is checked at the fan-out.
+
+        `game.resumed` is a participant's own reconnection outcome and
+        carries `both_connected`, which is a statement about the *players'*
+        presence. Passing it here with an audience is exactly the mistake a
+        future caller will make, and the filter is in `deliver` rather than
+        at the call site so that making it costs a spectator nothing rather
+        than leaking a frame.
+        """
+        viewer, match_id = generate_uuid7(), generate_uuid7()
+        connection_id = uuid4()
+
+        sockets = InMemoryLocalSockets()
+        socket = FakeGatewaySocket()
+        await registry.register(viewer, connection_id, node_id=NODE_ID, ttl_seconds=90)
+        sockets.attach(connection_id, socket)
+
+        broadcaster = RoomBroadcaster(
+            router=FleetConnectionRouter(
+                registry=registry, node_id=NODE_ID, metrics=RecordingMetrics()
+            ),
+            sockets=sockets,
+            publisher=RecordingRemotePublisher(),
+            metrics=RecordingMetrics(),
+        )
+
+        report = await broadcaster.deliver(
+            resumed(match_id=match_id, sequence=4, both_connected=True, request_id=None),
+            recipients=[],
+            spectators=[SpectatorSubscription(player_id=viewer, connection_id=connection_id)],
+        )
+
+        assert report.local == 0
+        assert socket.types() == []
+
+    @pytest.mark.asyncio
+    async def test_a_spectator_submitting_a_move_is_refused_by_the_room(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§9.5, and the shape of the guarantee rather than a check.
+
+        The viewer joins as a spectator and then submits a move on the same
+        socket. It is refused `not_in_room` by `MoveSubmissionHandler` —
+        machinery that predates spectating and knows nothing about it —
+        because a subscription lives in `gwspec:v1:` and the move path reads
+        `gwroom:v1:`.
+
+        That is stronger than a guard somebody has to remember to add to the
+        next handler, and the assertion that no submission reached `game` is
+        what says the refusal happened at the gateway rather than in the
+        engine.
+        """
+        viewer, light, dark = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        match_id = generate_uuid7()
+
+        snapshots = StubMatchSnapshots()
+        snapshots.add(match_id, light=light, dark=dark)
+        rosters = StubMatchRosters()
+        rosters.add(match_id, light=light, dark=dark)
+        rooms = _rooms(rosters)
+        submissions = FakeSubmitMoves()
+
+        tickets.add(VALID_TICKET, viewer)
+        socket = FakeGatewaySocket(
+            [
+                _frame("spectator.join", channel="game", payload={"match_id": str(match_id)}),
+                _frame(
+                    "game.move.submit",
+                    channel="game",
+                    request_id="m1",
+                    payload={"match_id": str(match_id), "path": ["c3", "d4"]},
+                ),
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            moves=_moves(rooms, submissions=submissions),
+            spectators=_spectators(snapshots=snapshots),
+        ).run(socket, ticket=VALID_TICKET)
+
+        assert MessageType.SPECTATOR_JOINED in socket.types()
+        rejection = next(m for m in socket.sent if m.type is MessageType.MOVE_REJECTED)
+        assert rejection.payload["code"] == GatewayErrorCode.NOT_IN_ROOM
+        assert submissions.submissions == []
+
+    @pytest.mark.asyncio
+    async def test_leaving_and_disconnecting_both_end_the_subscription(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§9.7 — the two ways an audience shrinks.
+
+        A client that says `spectator.leave` is out immediately, and one
+        that simply vanishes is taken out by the connection cleanup, because
+        a socket that dropped never sends anything. Both are asserted in one
+        test because a fix to either that broke the other would still pass a
+        test of one.
+
+        The two matches make the disconnect case meaningful: `detach`
+        removes this connection from **every** audience it was in, which is
+        what the reverse index exists for. What is deliberately not asserted
+        is the TTL — it is Redis's and is asserted against it in
+        `tests/contract/test_spectating.py`.
+        """
+        viewer, light, dark = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        left_id, dropped_id = generate_uuid7(), generate_uuid7()
+
+        snapshots = StubMatchSnapshots()
+        snapshots.add(left_id, light=light, dark=dark)
+        snapshots.add(dropped_id, light=light, dark=dark)
+        store = InMemorySpectatorStore()
+
+        tickets.add(VALID_TICKET, viewer)
+        socket = FakeGatewaySocket(
+            [
+                _frame("spectator.join", channel="game", payload={"match_id": str(left_id)}),
+                _frame("spectator.join", channel="game", payload={"match_id": str(dropped_id)}),
+                _frame(
+                    "spectator.leave",
+                    channel="game",
+                    request_id="l1",
+                    payload={"match_id": str(left_id)},
+                ),
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            spectators=_spectators(snapshots=snapshots, store=store),
+        ).run(socket, ticket=VALID_TICKET)
+
+        confirmation = next(m for m in socket.sent if m.type is MessageType.SPECTATOR_LEFT)
+        assert confirmation.request_id == "l1"
+        # The explicit leave, and the disconnect that took the other with it.
+        assert store.watching[left_id] == set()
+        assert store.watching[dropped_id] == set()

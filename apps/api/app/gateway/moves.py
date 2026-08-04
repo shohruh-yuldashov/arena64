@@ -48,6 +48,7 @@ the log where the caller cannot read it.
 """
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Final
 from uuid import UUID
@@ -69,6 +70,7 @@ from app.gateway.protocol import (
     move_rejected,
 )
 from app.gateway.room_service import GameRoomService
+from app.gateway.spectators import SpectatorStore, SpectatorSubscription
 from app.modules.game.public import (
     ClockExpired,
     IllegalMoveSubmitted,
@@ -147,6 +149,7 @@ class MoveSubmissionHandler:
         rooms: GameRoomService,
         broadcaster: RoomBroadcaster,
         buffer: RedisMatchEventBuffer,
+        spectators: SpectatorStore,
         idempotency: MoveIdempotency,
         limiter: MoveRateLimiter,
         metrics: MetricsRecorder,
@@ -156,6 +159,7 @@ class MoveSubmissionHandler:
         self._rooms = rooms
         self._broadcaster = broadcaster
         self._buffer = buffer
+        self._spectators = spectators
         self._idempotency = idempotency
         self._limiter = limiter
         self._metrics = metrics
@@ -282,7 +286,11 @@ class MoveSubmissionHandler:
         # encoder able to disagree with the first.
         await self._buffer.append(result.match_id, sequence=result.ply, frame=applied.to_json())
 
-        report = await self._broadcaster.deliver(applied, recipients=room.participants)
+        report = await self._broadcaster.deliver(
+            applied,
+            recipients=room.participants,
+            spectators=await self._watching(result.match_id),
+        )
 
         # One line per move rather than per recipient (§15), and no board,
         # no path and no fingerprint in it: the payload is the game.
@@ -294,8 +302,27 @@ class MoveSubmissionHandler:
                 "local": report.local,
                 "remote_nodes": report.remote_nodes,
                 "failures": report.failures,
+                "spectator_failures": report.spectator_failures,
             },
         )
+
+    async def _watching(self, match_id: UUID) -> Sequence[SpectatorSubscription]:
+        """Who is spectating this match — A64-016.7 §5.
+
+        A read on the move path, so it is bounded by the same posture the
+        rest of this method has: a failure returns **no audience** rather
+        than raising, because a spectator that missed a frame resynchronises
+        by rejoining and a move that failed because a viewer list could not
+        be read would be a game lost to somebody else's tab.
+        """
+        try:
+            return await self._spectators.routes_for(match_id)
+        except Exception as exc:  # noqa: BLE001 — an audience must not fail a move
+            logger.warning(
+                "gateway_spectator_routes_failed",
+                extra={"match_id": str(match_id), "error": type(exc).__name__},
+            )
+            return ()
 
     async def _replayed(
         self, message: GatewayMessage, *, connection_id: UUID

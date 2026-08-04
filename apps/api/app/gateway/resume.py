@@ -50,7 +50,7 @@ store's guarantee rather than this handler's.
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Final
 from uuid import UUID
 
 from app.gateway.event_buffer import RedisMatchEventBuffer
@@ -58,6 +58,7 @@ from app.gateway.metrics import (
     RESUMES,
     ResumeOutcome,
 )
+from app.gateway.projections import snapshot_payload
 from app.gateway.protocol import (
     GatewayErrorCode,
     GatewayMessage,
@@ -166,7 +167,7 @@ class ResumeHandler:
 
         if request.last_known_sequence <= NO_SEQUENCE:
             self._record(ResumeOutcome.SNAPSHOT)
-            return match_snapshot(_snapshot_payload(snapshot), request_id=request_id)
+            return match_snapshot(snapshot_payload(snapshot), request_id=request_id)
 
         buffered = await self._events.since(request.match_id, sequence=request.last_known_sequence)
         if not buffered.is_contiguous:
@@ -234,68 +235,6 @@ def _request_of(message: GatewayMessage) -> _Resumption | None:
         return None
 
     return _Resumption(match_id=match_id, last_known_sequence=max(NO_SEQUENCE, raw_sequence))
-
-
-def _snapshot_payload(snapshot: MatchSnapshot) -> dict[str, Any]:
-    """The published snapshot as wire primitives.
-
-    Projected here rather than in `protocol`, which knows nothing about
-    `game` and must not — and rather than in `game`, which knows nothing
-    about this protocol. The gateway is where the two vocabularies meet,
-    which is what a transport adapter is for.
-
-    Carries **no player handles and no ratings**: those are `users`' and are
-    composed by whoever renders them.
-    """
-    return {
-        "match_id": str(snapshot.match_id),
-        "engine_version": snapshot.engine_version,
-        "variant": snapshot.variant.value,
-        "status": snapshot.status.value,
-        "sequence": snapshot.sequence,
-        "side_to_move": snapshot.side_to_move.value,
-        "fingerprint": snapshot.fingerprint,
-        "pieces": [
-            {"square": piece.square, "side": piece.side, "rank": piece.rank}
-            for piece in snapshot.pieces
-        ],
-        "participants": {
-            "light": str(snapshot.light_player_id),
-            "dark": str(snapshot.dark_player_id),
-        },
-        "clock": _clock_payload(snapshot),
-        "result": _result_payload(snapshot),
-        "server_time": snapshot.observed_at.isoformat(),
-    }
-
-
-def _clock_payload(snapshot: MatchSnapshot) -> dict[str, Any] | None:
-    """The authoritative clock — §7.
-
-    Absolute instants, never durations. A reconnecting client is exactly the
-    one whose latency is unknown, so a duration re-based on receipt would
-    drift by the amount it was meant to describe — and §7 forbids the client
-    extrapolating from stale values.
-    """
-    if snapshot.clock is None:
-        return None
-    return {
-        "light_ms": snapshot.clock.light_ms,
-        "dark_ms": snapshot.clock.dark_ms,
-        "active_side": snapshot.clock.active_side.value,
-        "deadline": snapshot.clock.deadline.isoformat(),
-        "server_time": snapshot.clock.server_time.isoformat(),
-    }
-
-
-def _result_payload(snapshot: MatchSnapshot) -> dict[str, Any] | None:
-    if snapshot.outcome is None or snapshot.termination_reason is None:
-        return None
-    return {
-        "outcome": snapshot.outcome.value,
-        "termination_reason": snapshot.termination_reason.value,
-        "winner": snapshot.winner.value if snapshot.winner is not None else None,
-    }
 
 
 __all__ = ["NO_SEQUENCE", "ResumeHandler"]

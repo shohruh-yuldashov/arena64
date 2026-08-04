@@ -28,7 +28,7 @@ strings instead of an event loop with a client in it.
 """
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -36,6 +36,7 @@ from app.gateway.event_buffer import BufferedEvents
 from app.gateway.ports import ConnectionClosed, ConnectionRoute, ForwardingRequest
 from app.gateway.protocol import GatewayMessage, MessageType
 from app.gateway.rooms import RoomMember, RoomProgress
+from app.gateway.spectators import SpectatorRefusal, SpectatorSubscription
 from app.modules.engine import PlayerSide
 from app.modules.game.domain.variants import ProductVariant
 from app.modules.game.public import (
@@ -534,3 +535,94 @@ class StubMatchSnapshots:
 
     async def snapshot_of(self, match_id: UUID) -> MatchSnapshot | None:
         return self.snapshots.get(match_id)
+
+
+class InMemorySpectatorStore:
+    """The `gwspec:v1:` keyspace and its reverse index, as two dicts.
+
+    Models what the fan-out and the disconnect path actually depend on:
+    subscriptions are keyed on `(player, connection)` so a viewer with two
+    tabs is two entries, and a connection can be removed from every match it
+    watches without knowing which those were.
+
+    Not modelled: the TTL and the score-range liveness filter, both of which
+    belong to Redis and are asserted against it in
+    `tests/contract/test_spectating.py`.
+    """
+
+    def __init__(self) -> None:
+        self.watching: dict[UUID, set[SpectatorSubscription]] = {}
+        self.fails = False
+
+    async def subscribe(
+        self, match_id: UUID, subscription: SpectatorSubscription, *, ttl_seconds: int
+    ) -> int:
+        audience = self.watching.setdefault(match_id, set())
+        audience.add(subscription)
+        return len(audience)
+
+    async def unsubscribe(self, match_id: UUID, subscription: SpectatorSubscription) -> int:
+        audience = self.watching.setdefault(match_id, set())
+        audience.discard(subscription)
+        return len(audience)
+
+    async def routes_for(self, match_id: UUID) -> Sequence[SpectatorSubscription]:
+        if self.fails:
+            raise ConnectionError("spectator store unavailable")
+        return tuple(sorted(self.watching.get(match_id, ()), key=lambda sub: sub.connection_id))
+
+    async def unsubscribe_all(self, subscription: SpectatorSubscription) -> Sequence[UUID]:
+        left = [
+            match_id for match_id, audience in self.watching.items() if subscription in audience
+        ]
+        for match_id in left:
+            self.watching[match_id].discard(subscription)
+        return tuple(left)
+
+
+class StubSpectatorPolicy:
+    """A `SpectatorEligibility` a test dictates the answer of.
+
+    A stub rather than `BlockAwareSpectatorPolicy`, because the *policy* has
+    its own tests over a real block graph — what the handler tests are about
+    is that a refusal becomes the right wire code and that an admission
+    subscribes.
+    """
+
+    def __init__(self, refusal: SpectatorRefusal | None = None) -> None:
+        self.refusal = refusal
+        self.asked: list[UUID] = []
+
+    async def refusal_for(
+        self, snapshot: MatchSnapshot, *, player_id: UUID
+    ) -> SpectatorRefusal | None:
+        self.asked.append(player_id)
+        return self.refusal
+
+
+class StubPairingExclusions:
+    """A `friends.public.PairingExclusions` over a set of blocked pairs.
+
+    Symmetric, as the real one is: `blocked_pairs_among` reports the
+    exclusion from both sides, which is what makes BL-1's invisibility hold.
+    """
+
+    def __init__(self, blocked: Sequence[tuple[UUID, UUID]] = ()) -> None:
+        self.blocked = tuple(blocked)
+        self.fails = False
+
+    async def blocked_pairs_among(
+        self, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, frozenset[UUID]]:
+        if self.fails:
+            raise ConnectionError("block graph unavailable")
+
+        named = set(player_ids)
+        pairs: dict[UUID, set[UUID]] = {}
+        for blocker, blocked in self.blocked:
+            if blocker not in named or blocked not in named:
+                continue
+            pairs.setdefault(blocker, set()).add(blocked)
+            pairs.setdefault(blocked, set()).add(blocker)
+
+        return {player: frozenset(against) for player, against in pairs.items()}

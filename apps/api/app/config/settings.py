@@ -2034,6 +2034,23 @@ class GatewaySettings(BaseSettings):
     unbounded in history rather than in size.
     """
 
+    spectator_ttl_seconds: int = Field(default=900, ge=60, le=86400)
+    """How long one spectator subscription survives — A64-016.7 §3, §6.
+
+    The backstop for a viewer whose socket died without a `spectator.leave`
+    and whose node died without running cleanup. Fifteen minutes rather than
+    the connection TTL, because the two bound different things: a connection
+    TTL asks "is this socket alive", and this asks "should this subscription
+    outlive the node that made it" — and the cost of it being too long is a
+    fan-out to a connection that no longer exists, which the delivery loop
+    already tolerates and counts.
+
+    Refreshed on every rejoin rather than on every heartbeat, which is
+    deliberate: a spectator that watches for longer than this and is dropped
+    presses watch again, and a heartbeat that refreshed every subscription
+    would put a write on the hot path for a key whose loss costs nothing.
+    """
+
     move_idempotency_ttl_seconds: int = Field(default=60, ge=5, le=3600)
     """How long one `(connection, request_id)` answer is remembered — §7.
 

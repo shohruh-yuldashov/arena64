@@ -68,8 +68,12 @@ from app.gateway.resume import ResumeHandler
 from app.gateway.room_service import GameRoomService
 from app.gateway.room_store import RedisRoomMemberStore
 from app.gateway.routing import FleetConnectionRouter
+from app.gateway.spectator_handler import SpectatorHandler
+from app.gateway.spectator_store import RedisSpectatorStore
+from app.gateway.spectators import BlockAwareSpectatorPolicy, SpectatorStore
 from app.gateway.stream_bus import RedisStreamGatewayBus
 from app.modules.auth.presentation.dependencies import WebSocketTicketServiceDep
+from app.modules.friends.presentation.dependencies import WebSocketPairingExclusionsDep
 from app.modules.game.presentation.dependencies import (
     WebSocketLiveMovesDep,
     WebSocketMatchRosterReaderDep,
@@ -353,26 +357,72 @@ def get_resume_handler(
 ResumeHandlerDep = Annotated[ResumeHandler, Depends(get_resume_handler)]
 
 
+def get_spectator_store(pools: RedisPoolsDep, clock: ClockDep) -> SpectatorStore:
+    """Who is watching what — A64-016.7 §3.
+
+    On the **`cache`** role, beside the room membership and the connection
+    registry it sits next to conceptually: a subscription is a claim about a
+    socket that exists right now, and losing one costs a viewer a rejoin.
+    §3 forbids persisting it in PostgreSQL, and this is where that rule is
+    kept rather than merely stated.
+    """
+    return RedisSpectatorStore(pools.cache, clock=clock)
+
+
+SpectatorStoreDep = Annotated[SpectatorStore, Depends(get_spectator_store)]
+
+
+def get_spectator_handler(
+    snapshots: WebSocketMatchSnapshotDep,
+    exclusions: WebSocketPairingExclusionsDep,
+    store: SpectatorStoreDep,
+    settings: GatewaySettingsDep,
+) -> SpectatorHandler:
+    """The `spectator.join` / `spectator.leave` handler — §2.
+
+    `BlockAwareSpectatorPolicy` is named here, which is what a composition
+    root is for: the handler holds `SpectatorEligibility` and so cannot
+    reach the block graph, the match repository or anything else the policy
+    consulted to reach its answer.
+    """
+    return SpectatorHandler(
+        snapshots=snapshots,
+        policy=BlockAwareSpectatorPolicy(exclusions),
+        store=store,
+        metrics=get_gateway_metrics(),
+        subscription_ttl_seconds=settings.spectator_ttl_seconds,
+    )
+
+
+SpectatorHandlerDep = Annotated[SpectatorHandler, Depends(get_spectator_handler)]
+
+
 def get_move_handler(
     moves: WebSocketLiveMovesDep,
     rooms: RoomServiceDep,
     broadcaster: Annotated[RoomBroadcaster, Depends(get_broadcaster)],
     buffer: EventBufferDep,
+    spectators: SpectatorStoreDep,
     limiter: Annotated[MoveRateLimiter, Depends(get_move_limiter)],
     pools: RedisPoolsDep,
     settings: GatewaySettingsDep,
 ) -> MoveSubmissionHandler:
     """The `game.move.submit` handler, with everything it needs bound.
 
-    Six collaborators, which is what made A64-016.1's branching handler
+    Seven collaborators, which is what made A64-016.1's branching handler
     stop being the right shape and is why §1 asks for a dispatch table —
     every other handler is two lines and this one is a pipeline.
+
+    The spectator store is the **read** side only: this handler asks who is
+    watching so the fan-out can include them, and has no way to subscribe
+    anybody. Joining is `SpectatorHandler`'s.
     """
     return MoveSubmissionHandler(
         moves=moves,
         rooms=rooms,
         broadcaster=broadcaster,
         buffer=buffer,
+        spectators=spectators,
         idempotency=RedisMoveIdempotencyStore(pools.cache),
         limiter=limiter,
         metrics=get_gateway_metrics(),
@@ -401,6 +451,7 @@ def build_gateway_service(
     rooms: GameRoomService,
     moves: MoveSubmissionHandler,
     resumes: ResumeHandler,
+    spectators: SpectatorHandler,
     sockets: LocalSocketRegistry,
     presence: PresenceRecorderDep,
     clock: Clock,
@@ -422,6 +473,7 @@ def build_gateway_service(
         rooms=rooms,
         moves=moves,
         resumes=resumes,
+        spectators=spectators,
         sockets=sockets,
         presence=presence,
         metrics=get_gateway_metrics(),
@@ -441,6 +493,7 @@ def get_gateway_service(
     rooms: RoomServiceDep,
     moves: MoveHandlerDep,
     resumes: ResumeHandlerDep,
+    spectators: SpectatorHandlerDep,
     sockets: LocalSocketsDep,
     presence: PresenceRecorderDep,
     clock: ClockDep,
@@ -454,6 +507,7 @@ def get_gateway_service(
         rooms=rooms,
         moves=moves,
         resumes=resumes,
+        spectators=spectators,
         sockets=sockets,
         presence=presence,
         clock=clock,
@@ -467,6 +521,10 @@ GatewayServiceDep = Annotated[GatewayConnectionService, Depends(get_gateway_serv
 
 __all__ = [
     "ConnectionRegistryDep",
+    "SpectatorHandlerDep",
+    "SpectatorStoreDep",
+    "get_spectator_handler",
+    "get_spectator_store",
     "ConnectionRouterDep",
     "GatewayServiceDep",
     "GatewaySettingsDep",

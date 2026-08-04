@@ -192,6 +192,32 @@ class ResumeOutcome(StrEnum):
     """Refused. Covers an unknown match too — the two are one answer."""
 
 
+#: Spectator joins that were admitted — §7.
+SPECTATOR_JOINS: Final = "gateway.spectator_joins_total"
+
+#: Spectator joins refused, by bounded reason — §7.
+SPECTATOR_REJECTIONS: Final = "gateway.spectator_rejections_total"
+
+#: Spectators detached, by how — §7's "active spectator count", counted as
+#: transitions for the reason every other count on this tier is: there is no
+#: gauge, because a gauge is read at scrape time and needs the exporter to
+#: call into the process.
+SPECTATOR_LEAVES: Final = "gateway.spectator_leaves_total"
+
+#: Frames a spectator could not be sent — §7's "spectator delivery
+#: failures". Separate from the participants' `LOCAL_DELIVERIES`, because a
+#: spectator that missed a frame resynchronises and a participant that
+#: missed one is mid-game.
+SPECTATOR_DELIVERY_FAILURES: Final = "gateway.spectator_delivery_failures_total"
+
+
+class SpectatorLeaveReason(StrEnum):
+    """How a spectator stopped watching."""
+
+    CLIENT = "client"
+    DISCONNECT = "disconnect"
+
+
 class RouteLocality(StrEnum):
     """Whether a recipient connection is held by this process."""
 

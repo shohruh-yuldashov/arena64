@@ -35,12 +35,34 @@ the same process — which is the failure `REMOTE_PUBLISHES` exists to make
 visible, because it looks identical to a working system until the fleet
 grows.
 
+## One recipient set, participants and audience together — A64-016.7 §5
+
+§5 forbids a second broadcast pipeline, so spectators are not a second
+`deliver` and not a second plan. They are extra recipients on the existing
+one, resolved by the same router, split by the same partition and written by
+the same loop.
+
+Two things make that safe rather than merely convenient:
+
+    the event must be spectator-safe   `SPECTATOR_SAFE_EVENTS`, checked here
+                                       rather than by the caller, so a future
+                                       participant-only frame cannot leak by
+                                       a call site forgetting
+    a spectator's *watching* socket    a viewer with two tabs subscribed one
+                                       of them; the other is not an audience
+                                       member and gets nothing
+
+The second is why spectators arrive as `(player, connection)` pairs while
+participants arrive as bare player ids. A participant is in the room on every
+tab they have open — that is what a room is — and a spectator is watching on
+the tab they pressed watch in.
+
 ## What is not here
 
-No retry, no ordering guarantee, no acknowledgement of remote delivery, no
-transport. The publisher is a port with a logging implementation behind it
-until A64-016.4 gives it a bus (§9 — "do not build a full distributed gateway
-broker in this task").
+No retry, no ordering guarantee, no acknowledgement of remote delivery, and
+no delay. AD-10 allows a delayed spectator feed and names no interval, so
+this delivers immediately and the seam that would hold a frame back is this
+one function — see `docs/01-architecture/websocket.md`.
 """
 
 import logging
@@ -52,6 +74,7 @@ from app.gateway.metrics import (
     LOCAL_DELIVERIES,
     REMOTE_PUBLISH_FAILURES,
     REMOTE_PUBLISHES,
+    SPECTATOR_DELIVERY_FAILURES,
 )
 from app.gateway.ports import (
     ConnectionClosed,
@@ -61,8 +84,10 @@ from app.gateway.ports import (
     GatewaySocket,
     LocalSocketRegistry,
     RemoteNodePublisher,
+    RoutingPlan,
 )
 from app.gateway.protocol import GatewayMessage
+from app.gateway.spectators import SPECTATOR_SAFE_EVENTS, SpectatorSubscription
 from app.platform.metrics import MetricsRecorder
 
 logger = logging.getLogger(__name__)
@@ -88,6 +113,16 @@ class DeliveryReport:
     """Recipients that could not be reached: a socket that had gone away,
     or a node whose publish was refused."""
 
+    spectator_failures: int = 0
+    """How many of `failures` were spectators — A64-016.7 §7.
+
+    Counted apart because the two mean different things to an operator: a
+    participant that missed a frame is mid-game and will resynchronise into
+    a position it must have, while a spectator that missed one has a stale
+    board and no stake in it. A rate that rises only here is a fan-out
+    problem nobody is losing a game over.
+    """
+
 
 class RoomBroadcaster:
     """Sends one frame to every live connection of a set of players."""
@@ -106,26 +141,50 @@ class RoomBroadcaster:
         self._metrics = metrics
 
     async def deliver(
-        self, message: GatewayMessage, *, recipients: Sequence[UUID]
+        self,
+        message: GatewayMessage,
+        *,
+        recipients: Sequence[UUID],
+        spectators: Sequence[SpectatorSubscription] = (),
     ) -> DeliveryReport:
-        """Fans `message` out. Never raises.
+        """Fans `message` out to participants and audience. Never raises.
 
         The frame is encoded **once**, before the split, for two reasons:
         the remote half needs a string anyway (`ForwardingRequest.frame`),
         and encoding per recipient would make a fan-out to a player with
         four tabs do four `json.dumps` of identical bytes.
+
+        `spectators` is dropped entirely when the message is not
+        spectator-safe — see this module's docstring on why that check is
+        here rather than at the call site.
         """
-        plan = await self._router.plan_for(recipients)
+        audience = _audience_of(message, spectators)
+        plan = _restricted(
+            await self._router.plan_for([*recipients, *(sub.player_id for sub in audience)]),
+            audience,
+        )
+        watchers = frozenset(sub.connection_id for sub in audience)
         frame = message.to_json()
 
-        delivered, lost = await self._deliver_locally(plan.local, message)
-        published, refused = await self._publish_remotely(plan.remote, frame)
+        delivered, lost, lost_watching = await self._deliver_locally(plan.local, message, watchers)
+        published, refused, refused_watching = await self._publish_remotely(
+            plan.remote, frame, watchers
+        )
 
-        return DeliveryReport(local=delivered, remote_nodes=published, failures=lost + refused)
+        self._metrics.increment(SPECTATOR_DELIVERY_FAILURES, by=lost_watching + refused_watching)
+        return DeliveryReport(
+            local=delivered,
+            remote_nodes=published,
+            failures=lost + refused,
+            spectator_failures=lost_watching + refused_watching,
+        )
 
     async def _deliver_locally(
-        self, routes: Sequence[ConnectionRoute], message: GatewayMessage
-    ) -> tuple[int, int]:
+        self,
+        routes: Sequence[ConnectionRoute],
+        message: GatewayMessage,
+        watchers: frozenset[UUID],
+    ) -> tuple[int, int, int]:
         """Writes to the sockets this process holds.
 
         A route whose socket is absent is counted as lost and **not**
@@ -136,11 +195,13 @@ class RoomBroadcaster:
         """
         delivered = 0
         lost = 0
+        lost_watching = 0
 
         for route in routes:
             socket = self._sockets.socket_for(route.connection_id)
             if socket is None:
                 lost += 1
+                lost_watching += route.connection_id in watchers
                 continue
 
             try:
@@ -148,26 +209,36 @@ class RoomBroadcaster:
             except ConnectionClosed:
                 # The ordinary case, not an error — a player closed a tab.
                 lost += 1
+                lost_watching += route.connection_id in watchers
             except Exception as exc:  # noqa: BLE001 — one socket must not stop a fan-out
                 lost += 1
+                lost_watching += route.connection_id in watchers
                 logger.warning("gateway_local_delivery_failed", extra={"error": type(exc).__name__})
             else:
                 delivered += 1
 
         self._metrics.increment(LOCAL_DELIVERIES, by=delivered)
-        return delivered, lost
+        return delivered, lost, lost_watching
 
     async def _publish_remotely(
-        self, remote: Mapping[str, Sequence[ConnectionRoute]], frame: str
-    ) -> tuple[int, int]:
+        self,
+        remote: Mapping[str, Sequence[ConnectionRoute]],
+        frame: str,
+        watchers: frozenset[UUID],
+    ) -> tuple[int, int, int]:
         """Hands one forwarding request to each remote node.
 
         Iterates the plan's **grouping**, which is what makes "one publish
         per node" structural rather than a rule this code has to remember —
         there is no per-connection loop here to get wrong.
+
+        A refused publish loses every route in that request, so the
+        spectators among them are counted individually rather than as one
+        node: the operator's question is how many viewers went stale.
         """
         published = 0
         refused = 0
+        refused_watching = 0
 
         for node_id, routes in remote.items():
             request = ForwardingRequest(
@@ -179,10 +250,60 @@ class RoomBroadcaster:
                 published += 1
             else:
                 refused += 1
+                refused_watching += sum(route.connection_id in watchers for route in routes)
 
         self._metrics.increment(REMOTE_PUBLISHES, by=published)
         self._metrics.increment(REMOTE_PUBLISH_FAILURES, by=refused)
-        return published, refused
+        return published, refused, refused_watching
+
+
+def _audience_of(
+    message: GatewayMessage, spectators: Sequence[SpectatorSubscription]
+) -> tuple[SpectatorSubscription, ...]:
+    """The subscriptions this message may reach — A64-016.7 §4, §5.
+
+    Empty for anything not on the allowlist, which is the whole of the
+    read-only guarantee on the *event* side: a participant-only frame passed
+    here by a caller that did not think about spectators reaches nobody it
+    should not, because this function does not trust the caller to have
+    thought about it.
+    """
+    if message.type not in SPECTATOR_SAFE_EVENTS:
+        return ()
+    return tuple(spectators)
+
+
+def _restricted(plan: RoutingPlan, spectators: Sequence[SpectatorSubscription]) -> RoutingPlan:
+    """The plan with a spectator's non-watching connections removed.
+
+    The router resolves **every** live connection of every player named,
+    which is right for a participant — they are in the room on every tab —
+    and wrong for a spectator, who is watching on the one tab they pressed
+    watch in. A viewer with a second window open would otherwise receive a
+    game they never asked to see.
+
+    Pure, and separate from `deliver`, because "which routes survive" is the
+    part of the fan-out with an argument behind it; the rest is a loop.
+    """
+    if not spectators:
+        return plan
+
+    viewers = frozenset(sub.player_id for sub in spectators)
+    watching = frozenset((sub.player_id, sub.connection_id) for sub in spectators)
+
+    def keeps(route: ConnectionRoute) -> bool:
+        if route.player_id not in viewers:
+            return True
+        return (route.player_id, route.connection_id) in watching
+
+    return RoutingPlan(
+        local=tuple(route for route in plan.local if keeps(route)),
+        remote={
+            node: kept
+            for node, routes in plan.remote.items()
+            if (kept := tuple(route for route in routes if keeps(route)))
+        },
+    )
 
 
 class LoggingRemoteNodePublisher:

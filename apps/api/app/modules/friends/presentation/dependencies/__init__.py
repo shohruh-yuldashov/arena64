@@ -33,18 +33,23 @@ the same rows.
 """
 
 import logging
+from collections.abc import Mapping, Sequence
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import Depends
+from fastapi import Depends, WebSocket
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.deps import ClockDep, DbSessionDep, FriendsSettingsDep, RedisPoolsDep
 from app.api.outbox_deps import EventPublisherDep
+from app.database.session import open_session
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.friends.application.ports import SocialGraphCache
 from app.modules.friends.application.services import (
     BlockingService,
     FriendRequestService,
     FriendshipService,
+    PairingExclusionService,
     PresenceAudienceService,
 )
 from app.modules.friends.application.validators import FriendRequestValidator
@@ -57,6 +62,7 @@ from app.modules.friends.infrastructure.repositories import (
     SqlAlchemyFriendRequestRepository,
     SqlAlchemyFriendshipRepository,
 )
+from app.modules.friends.public import PairingExclusions
 from app.modules.users.application.services import UserService
 from app.modules.users.application.services.public_profile_service import PublicProfileService
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
@@ -236,8 +242,48 @@ def get_friendship_service(
 FriendshipServiceDep = Annotated[FriendshipService, Depends(get_friendship_service)]
 
 
+class SessionScopedPairingExclusions:
+    """`PairingExclusions` that opens a session per read — A64-016.7 §1.
+
+    The same arrangement `game`'s `SessionScopedSnapshots` uses, and for the
+    same reason: the caller is a WebSocket, whose request scope is the whole
+    connection, so a repository resolved through `DbSessionDep` would hold
+    one PostgreSQL session per open socket for as long as somebody watched a
+    game.
+
+    A block check is one indexed read and the session ends with it.
+    """
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def blocked_pairs_among(
+        self, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, frozenset[UUID]]:
+        async with open_session(self._session_factory) as session:
+            return await PairingExclusionService(
+                SqlAlchemyBlockedPlayerRepository(session)
+            ).blocked_pairs_among(player_ids)
+
+
+def get_pairing_exclusions_ws(websocket: WebSocket) -> PairingExclusions:
+    """`friends`' BL-2 read, for a WebSocket route.
+
+    Typed as the published port, so the caller holds one method: it can ask
+    which of a set of players exclude each other and cannot read the block
+    graph, list a player's blocks, or write one.
+    """
+    return SessionScopedPairingExclusions(websocket.app.state.db.session_factory)
+
+
+WebSocketPairingExclusionsDep = Annotated[PairingExclusions, Depends(get_pairing_exclusions_ws)]
+
+
 __all__ = [
     "BlockingServiceDep",
+    "SessionScopedPairingExclusions",
+    "WebSocketPairingExclusionsDep",
+    "get_pairing_exclusions_ws",
     "PresenceAudienceServiceDep",
     "SocialGraphCacheDep",
     "FriendRequestServiceDep",

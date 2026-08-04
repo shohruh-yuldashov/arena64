@@ -216,6 +216,19 @@ class MessageType(StrEnum):
     rather than silently sending a snapshot, so a client can count how often
     it falls too far behind."""
 
+    SPECTATOR_JOIN = "spectator.join"
+    """Client to server — A64-016.7 §2. Carries `match_id`. The viewer is
+    the socket's authenticated identity."""
+
+    SPECTATOR_LEAVE = "spectator.leave"
+    """Client to server. Idempotent."""
+
+    SPECTATOR_JOINED = "spectator.joined"
+    """Server to client, with the safe snapshot and the audience size."""
+
+    SPECTATOR_LEFT = "spectator.left"
+    """Server to client. Sent for an idempotent leave too."""
+
     ERROR = "error"
     """Server to client. Always carries a `GatewayErrorCode`, never prose."""
 
@@ -279,6 +292,17 @@ class GatewayErrorCode(StrEnum):
     """The match is not being played. One code for still-in-acceptance,
     declined, expired and finished, because the client's response to all
     four is identical: stop sending moves."""
+
+    NOT_SPECTATABLE = "not_spectatable"
+    """No such match, or it is not in a state that has a game to watch.
+    **One code for both** — a client cannot enumerate live match identifiers
+    by sending spectator joins."""
+
+    SPECTATING_FORBIDDEN = "spectating_forbidden"
+    """A block stands between this viewer and a participant, or they are
+    playing. Distinguishable from `not_spectatable` only to somebody who
+    already knows why: BL-1 keeps a block invisible, and this says nothing
+    about which direction it runs in."""
 
     CLOCK_EXPIRED = "clock_expired"
     """The mover's flag had already fallen when the frame arrived —
@@ -609,6 +633,36 @@ def resync_required(*, match_id: UUID, request_id: str | None) -> GatewayMessage
     )
 
 
+def spectator_joined(
+    payload: dict[str, Any], *, audience: int, request_id: str | None
+) -> GatewayMessage:
+    """Confirmation, with the safe snapshot — §2, §4.
+
+    The **same projection** a participant's resume receives, deliberately:
+    §4 lists what a spectator may see and it is the whole of the public
+    state. A second, narrower snapshot format would be a second thing to
+    keep in step with the position, and the redaction that matters is on the
+    *event* stream rather than on the board — which is public by the time
+    anybody can watch it.
+    """
+    return GatewayMessage(
+        type=MessageType.SPECTATOR_JOINED,
+        payload={**payload, "audience": audience},
+        request_id=request_id,
+        channel=Channel.GAME,
+    )
+
+
+def spectator_left(*, match_id: UUID, request_id: str | None) -> GatewayMessage:
+    """Confirmation that this connection has stopped watching."""
+    return GatewayMessage(
+        type=MessageType.SPECTATOR_LEFT,
+        payload={"match_id": str(match_id)},
+        request_id=request_id,
+        channel=Channel.GAME,
+    )
+
+
 def room_left(*, match_id: UUID, request_id: str | None) -> GatewayMessage:
     """Confirmation that this connection has left a room.
 
@@ -731,6 +785,8 @@ __all__ = [
     "move_rejected",
     "pong",
     "resumed",
+    "spectator_joined",
+    "spectator_left",
     "resync_required",
     "room_joined",
     "room_left",

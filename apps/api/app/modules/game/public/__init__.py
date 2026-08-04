@@ -69,6 +69,7 @@ to tell "still waiting" from "your opponent declined", and a second enum
 mirroring it would be two places that answer diverges.
 """
 
+from app.modules.game.domain.result import TerminationReason
 from app.modules.game.domain.variants import (
     ProductVariant,
     VariantNotOffered,
@@ -190,6 +191,7 @@ __all__ = [
     "PendingMatchView",
     "PlayerSide",
     "ProductVariant",
+    "TerminationReason",
     "RecentOpponentReader",
     "VariantNotOffered",
     "board_variant_of",

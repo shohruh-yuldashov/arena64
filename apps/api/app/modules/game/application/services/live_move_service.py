@@ -102,7 +102,7 @@ from app.modules.game.application.ports import (
 )
 from app.modules.game.domain.clock import ClockState
 from app.modules.game.domain.draws import DrawRuleSet
-from app.modules.game.domain.events import MatchCompleted, MoveApplied
+from app.modules.game.domain.events import MatchCompleted, MoveApplied, SeatSummary
 from app.modules.game.domain.exceptions import (
     ClockExpired,
     IllegalMoveSubmitted,
@@ -112,7 +112,7 @@ from app.modules.game.domain.exceptions import (
     StaleMatchState,
 )
 from app.modules.game.domain.match import Match, MatchStatus
-from app.modules.game.domain.match_record import MatchRecord, MatchRecordStatus
+from app.modules.game.domain.match_record import MatchRecord, MatchRecordStatus, MatchSeat
 from app.modules.game.domain.move_log import MoveRecord
 from app.modules.game.domain.result import MatchResult
 from app.modules.game.domain.variants import board_variant_of
@@ -384,6 +384,10 @@ class LiveMoveService:
                 termination_reason=result.reason,
                 winner=result.winner,
                 ply_number=aggregate.ply_number,
+                engine_version=record.engine_version.as_primitive(),
+                speed_class=record.light.rating.speed_class if record.light.rating else None,
+                light=_seat_summary(record.light),
+                dark=_seat_summary(record.dark),
             )
         )
         logger.info(
@@ -567,3 +571,23 @@ def _result_for(
 
 
 __all__ = ["LiveMoveService"]
+
+
+def _seat_summary(seat: MatchSeat) -> SeatSummary | None:
+    """A seat's persisted rating snapshot, for the completion event.
+
+    `None` when the seat has none — a match created before A64-017.2.
+    `rating` treats that as "not rateable", which is correct: nothing
+    captured what these players rated, so nothing can compute what they
+    should rate now without inventing it.
+    """
+    if seat.rating is None:
+        return None
+    return SeatSummary(
+        player_id=seat.player_id,
+        rating_value=seat.rating.value,
+        rating_deviation=seat.rating.deviation,
+        rating_volatility=seat.rating.volatility,
+        games_played=seat.rating.games_played,
+        is_provisional=seat.rating.is_provisional,
+    )

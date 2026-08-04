@@ -147,6 +147,7 @@ class TestTheSurfaceIsDeliberate:
         "MatchParticipant",
         "PlayerSide",
         "SeatRating",
+        "TerminationReason",
         # A64-015.4 — the second half of that same edge. Two commands
         # `game` accepts (accept, decline), one view it hands out, the
         # sweep the reconciler drives, and the two reads the pairing scan

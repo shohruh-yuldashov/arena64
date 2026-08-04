@@ -249,6 +249,31 @@ class PlayerRating:
 
         return updated, adjustment
 
+    def based_on(self, snapshot: Glicko2Rating) -> "PlayerRating":
+        """This aggregate with its triple replaced by a captured snapshot.
+
+        **PR-3's mechanism.** The counters — games played, peak, last rated
+        at, frozen — are facts about the player *now* and come from the
+        stored row. The triple the arithmetic runs on is the one captured
+        when the match was created, and this is where the two are combined.
+
+        Without it a caller would have to choose between using the stored
+        rating (which two concurrent matches would each see mid-update) and
+        losing the counters. Both are wrong; this is the third option, and
+        it is the only one that satisfies PR-3.
+        """
+        return PlayerRating(
+            player_id=self.player_id,
+            key=self.key,
+            rating=snapshot,
+            games_played=self.games_played,
+            is_frozen=self.is_frozen,
+            peak_value=self.peak_value,
+            peak_at=self.peak_at,
+            last_rated_at=self.last_rated_at,
+            season_id=self.season_id,
+        )
+
     def frozen(self) -> "PlayerRating":
         """This rating, held against adjustment — PR-5.
 

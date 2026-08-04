@@ -307,6 +307,38 @@ class MoveApplied(DomainEvent):
 
 
 @dataclass(frozen=True)
+class SeatSummary:
+    """One seat on the completion event — who played, and what they rated.
+
+    Primitive-only, because it is serialised into an outbox row and read
+    back by a different process. The rating is the **snapshot captured at
+    match creation** (SPEC-RATING §7.6), never a current value: carrying
+    the current one would make the consumer's arithmetic depend on when the
+    relay happened to run.
+    """
+
+    player_id: UUID
+    rating_value: float
+    rating_deviation: float
+    rating_volatility: float
+    games_played: int
+    is_provisional: bool
+
+
+def _seat_payload(seat: "SeatSummary | None") -> dict[str, Any] | None:
+    if seat is None:
+        return None
+    return {
+        "player_id": str(seat.player_id),
+        "rating_value": seat.rating_value,
+        "rating_deviation": seat.rating_deviation,
+        "rating_volatility": seat.rating_volatility,
+        "games_played": seat.games_played,
+        "is_provisional": seat.is_provisional,
+    }
+
+
+@dataclass(frozen=True)
 class MatchCompleted(DomainEvent):
     """A match was played to an end — A64-016.4 §6.
 
@@ -337,6 +369,31 @@ class MatchCompleted(DomainEvent):
     plies" is an incident and reading it from a completion event is the
     only way to see it without joining the move log."""
 
+    # --- A64-017.3: everything `rating` needs, so it reads nothing back ---
+    #
+    # Added **additively**: every field above is unchanged and every
+    # existing consumer keeps working (`services.md` §10.2 — payloads are
+    # bounded and self-contained). What they buy is that the rating
+    # consumer never re-reads the match, which matters because by the time
+    # a relay delivers this the row may have been archived — and because
+    # re-reading is how a calculation ends up using a *current* rating
+    # instead of the seat snapshot PR-3 requires.
+    engine_version: int = 0
+    """The rules build this match was played under — AD-15.
+
+    Carried rather than inferred: a consumer that assumed the current build
+    would mis-explain any match played across an upgrade."""
+
+    light: "SeatSummary | None" = None
+    dark: "SeatSummary | None" = None
+    """The two seats, each with the rating snapshot captured at creation.
+
+    `None` for a match created before A64-017.2, which has no snapshot and
+    therefore cannot be rated — see `SeatSummary`."""
+
+    speed_class: str | None = None
+    """The rating key's second component. `None` for the same reason."""
+
     @property
     def aggregate_id(self) -> UUID:
         return self.match_id
@@ -350,11 +407,16 @@ class MatchCompleted(DomainEvent):
             "termination_reason": self.termination_reason.value,
             "winner": self.winner.value if self.winner is not None else None,
             "ply_number": self.ply_number,
+            "engine_version": self.engine_version,
+            "speed_class": self.speed_class,
+            "light": _seat_payload(self.light),
+            "dark": _seat_payload(self.dark),
         }
 
 
 __all__ = [
     "MATCH_AGGREGATE",
+    "SeatSummary",
     "MatchAcceptanceExpired",
     "MatchAcceptedByPlayer",
     "MatchActivated",

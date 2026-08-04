@@ -3,11 +3,12 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-TOURNAMENT` |
-| **Status** | Approved for v0.x — Single Elimination only |
+| **Status** | Approved for v0.x — Single Elimination only. Audited and closed by A64-019.7 |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-05 — A64-019.6, final results and public reads (§6f, §6g) |
+| **Last updated** | 2026-08-05 — A64-019.7, audit and stabilisation |
 | **Related specs** | [`rating.md`](./rating.md), [`replay.md`](./replay.md), [`matchmaking.md`](./matchmaking.md) |
+| **Audit** | [`tournament/audit.md`](./tournament/audit.md) — reachability, concurrency, performance and the limitations this ships with |
 | **Related** | `services.md` §11.3, `database.md` §18.3, `domain-model.md` §16.2 and R-25 |
 
 ---
@@ -593,4 +594,5 @@ Where a resource is not visible, the answer is the platform's existing rule: **`
 | OQ-1 | Who may cancel a tournament, remove a participant, or override a result? | Moderation — waits for the Administration epic and `specs/admin.md` |
 | OQ-2 | ~~Is check-in required, and what is the no-show window?~~ **Answered by A64-019.5H** — §6e: no check-in, and a 300-second attendance deadline enforced by a bounded sweep. What remains open is only the *rating* treatment of a repeat offender, which waits on `fairplay` | — |
 | OQ-3 | Time control per tournament | `specs/rating.md` OQ-1 and OQ-2 — the catalogue does not exist, so every match is the platform default |
-| OQ-4 | Retention for cancelled tournaments | Append-only in v0.x, like everything else |
+| OQ-4 | Retention for cancelled tournaments | Append-only in v0.x. A completed tournament is permanent history (A-4) and correctly retained; a **cancelled or never-started** one is churn nothing prunes — see [`tournament/audit.md`](./tournament/audit.md) §12 |
+| OQ-5 | **Nothing creates, opens, joins, seeds or starts a tournament in the running application.** Every one of those use cases is implemented and tested, and reachable from no route, task or consumer — T-3 puts creation behind administrators and `specs/admin.md` does not exist | The whole write path. Pinned by `test_tournament_audit.py` so it cannot go stale; see [`tournament/audit.md`](./tournament/audit.md) §4.2 |

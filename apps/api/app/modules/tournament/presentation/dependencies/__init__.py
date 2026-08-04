@@ -16,12 +16,21 @@ from app.api.deps import ClockDep, DbSessionDep
 from app.api.outbox_deps import EventPublisherDep
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
+from app.modules.rating.presentation.dependencies import get_rating_reader
 from app.modules.tournament.application.services.registration_service import (
     TournamentDeadlineService,
     TournamentRegistrationService,
 )
+from app.modules.tournament.application.services.seeding_service import (
+    TournamentSeedingService,
+)
+from app.modules.tournament.infrastructure.rating_snapshots import (
+    PublishedRatingSnapshots,
+)
 from app.modules.tournament.infrastructure.repositories.tournament_repository import (
+    SqlAlchemyPairingRepository,
     SqlAlchemyRegistrationRepository,
+    SqlAlchemySeedRepository,
     SqlAlchemyTournamentRepository,
 )
 from app.modules.users.presentation.dependencies import UserServiceDep
@@ -71,6 +80,35 @@ def build_deadline_service(
     )
 
 
+def get_seeding_service(
+    session: DbSessionDep, events: EventPublisherDep, clock: ClockDep
+) -> TournamentSeedingService:
+    """Seeding and first-round planning — A64-019.3 §11.
+
+    `PublishedRatingSnapshots` is named here, which is what a composition
+    root is for: the service holds `RatingSnapshots`, a one-method port, so
+    it can read a batch of ratings and cannot reach an adjustment, a
+    leaderboard, or anything that writes.
+
+    **No production entry point yet.** Nothing calls this in the running
+    application: A64-019.4 drives it when a tournament starts. It is
+    composed now so that phase wires a factory rather than inventing one,
+    and the reachability registry is deliberately unchanged — see the
+    phase report.
+    """
+    return TournamentSeedingService(
+        tournaments=SqlAlchemyTournamentRepository(session),
+        seeds=SqlAlchemySeedRepository(session),
+        pairings=SqlAlchemyPairingRepository(session),
+        ratings=PublishedRatingSnapshots(get_rating_reader(session)),
+        events=events,
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )
+
+
+TournamentSeedingServiceDep = Annotated[TournamentSeedingService, Depends(get_seeding_service)]
+
 TournamentRegistrationServiceDep = Annotated[
     TournamentRegistrationService, Depends(get_registration_service)
 ]
@@ -78,6 +116,8 @@ TournamentRegistrationServiceDep = Annotated[
 
 __all__ = [
     "TournamentRegistrationServiceDep",
+    "TournamentSeedingServiceDep",
+    "get_seeding_service",
     "build_deadline_service",
     "get_registration_service",
 ]

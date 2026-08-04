@@ -21,10 +21,19 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.tournament.application.ports import AlreadyRegistered, TournamentIsFull
+from app.modules.tournament.application.ports import (
+    AlreadyRegistered,
+    PlanAlreadyExists,
+    TournamentIsFull,
+)
 from app.modules.tournament.domain.registration import Registration, RegistrationStatus
+from app.modules.tournament.domain.seeding import PlannedPairing, Seed
 from app.modules.tournament.domain.tournament import Tournament, TournamentStatus
-from app.modules.tournament.infrastructure.models import RegistrationModel, TournamentModel
+from app.modules.tournament.infrastructure.models import (
+    PairingModel,
+    RegistrationModel,
+    TournamentModel,
+)
 
 _DUPLICATE_CONSTRAINT = "pk_registration"
 
@@ -197,4 +206,133 @@ def _to_domain(row: TournamentModel) -> Tournament:
     )
 
 
-__all__ = ["SqlAlchemyRegistrationRepository", "SqlAlchemyTournamentRepository"]
+class SqlAlchemySeedRepository:
+    """`SeedRepository` — the eligible field and its assigned seeds."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def active_entrants(self, tournament_id: uuid.UUID) -> list[uuid.UUID]:
+        """Every player with a live registration — §2.
+
+        Withdrawn entries are excluded by the status predicate; duplicates
+        are impossible by the primary key. Ordered by `player_id` so the
+        input to seeding is itself deterministic — the sort is total either
+        way, but a stable input makes a failing test reproducible.
+        """
+        rows = await self._session.scalars(
+            select(RegistrationModel.player_id)
+            .where(
+                RegistrationModel.tournament_id == tournament_id,
+                RegistrationModel.status == RegistrationStatus.REGISTERED,
+            )
+            .order_by(RegistrationModel.player_id)
+        )
+        return list(rows)
+
+    async def assign(self, tournament_id: uuid.UUID, seeds: list[Seed]) -> None:
+        """Writes seed numbers onto the registrations — §4.
+
+        One statement per seed rather than a bulk update, because the field
+        is at most 128 and a `CASE` expression over it would be harder to
+        read than the loop it replaces.
+        """
+        for seed in seeds:
+            row = await self._session.get(RegistrationModel, (tournament_id, seed.player_id))
+            if row is not None:
+                row.seed_number = seed.number
+        await self._session.flush()
+
+    async def seeds_for(self, tournament_id: uuid.UUID) -> list[Seed]:
+        """The persisted seeding, in seed order."""
+        rows = await self._session.scalars(
+            select(RegistrationModel)
+            .where(
+                RegistrationModel.tournament_id == tournament_id,
+                RegistrationModel.seed_number.is_not(None),
+            )
+            .order_by(RegistrationModel.seed_number)
+        )
+        return [
+            Seed(
+                player_id=row.player_id,
+                number=row.seed_number or 0,
+                # The rating that produced the seed is not stored: the seed
+                # *is* the persisted answer, and keeping the input beside it
+                # would be a second copy that a rating change makes wrong.
+                rating=0.0,
+                deviation=0.0,
+                is_provisional=False,
+            )
+            for row in rows
+        ]
+
+
+class SqlAlchemyPairingRepository:
+    """`PairingRepository` — a round's slots, written once."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def plan_for(
+        self, tournament_id: uuid.UUID, *, round_number: int
+    ) -> list[PlannedPairing]:
+        rows = await self._session.scalars(
+            select(PairingModel)
+            .where(
+                PairingModel.tournament_id == tournament_id,
+                PairingModel.round_number == round_number,
+            )
+            .order_by(PairingModel.slot)
+        )
+        return [
+            PlannedPairing(
+                round_number=row.round_number,
+                slot=row.slot,
+                light_player_id=row.light_player_id,
+                dark_player_id=row.dark_player_id,
+                light_seed=row.light_seed,
+                dark_seed=row.dark_seed,
+            )
+            for row in rows
+        ]
+
+    async def save_plan(
+        self, tournament_id: uuid.UUID, pairings: list[PlannedPairing]
+    ) -> list[PlannedPairing]:
+        """Writes a round's slots. Raises on a collision — §12.
+
+        The primary key is the guard: two workers seeding at once cannot
+        both insert, so the loser reads the winner's plan rather than
+        overwriting it. Check-then-insert would let both through.
+        """
+        for pairing in pairings:
+            self._session.add(
+                PairingModel(
+                    tournament_id=tournament_id,
+                    round_number=pairing.round_number,
+                    slot=pairing.slot,
+                    light_player_id=pairing.light_player_id,
+                    dark_player_id=pairing.dark_player_id,
+                    light_seed=pairing.light_seed,
+                    dark_seed=pairing.dark_seed,
+                )
+            )
+        try:
+            await self._session.flush()
+        except IntegrityError as violation:
+            if "pk_pairing" not in str(violation.orig):
+                raise
+            raise PlanAlreadyExists(
+                f"round {pairings[0].round_number} is already planned"
+            ) from violation
+
+        return pairings
+
+
+__all__ = [
+    "SqlAlchemyPairingRepository",
+    "SqlAlchemyRegistrationRepository",
+    "SqlAlchemySeedRepository",
+    "SqlAlchemyTournamentRepository",
+]

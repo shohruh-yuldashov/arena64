@@ -141,6 +141,18 @@ class RegistrationModel(Base, TimestampMixin):
     registered_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     withdrawn_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
+    seed_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """This entrant's seed, assigned when the tournament was seeded — §4.
+
+    **Persisted rather than recomputed.** Ratings move; the bracket does
+    not. A later phase that re-derived seeding from current ratings would
+    produce a different order from the one that was published, which is the
+    same class of error as reseeding a tournament mid-round.
+
+    `NULL` until seeding runs, which is also what makes seeding idempotent:
+    a second attempt finds the numbers already there.
+    """
+
     __table_args__ = (
         # "How many slots are taken" — the count the capacity guard runs
         # inside its lock. Partial on the status, so it is an index over
@@ -170,4 +182,66 @@ class RegistrationModel(Base, TimestampMixin):
     )
 
 
-__all__ = ["TOURNAMENT_SCHEMA", "RegistrationModel", "TournamentModel"]
+class PairingModel(Base, TimestampMixin):
+    """`tournaments.pairing` — one slot of one round.
+
+    Written when a round's plan is created and **never rewritten**: §6's
+    immutability is the primary key doing the work, since a second plan for
+    the same slot cannot be inserted. That is also what makes seeding
+    idempotent — a retry collides rather than producing a second bracket.
+
+    Both player columns are nullable because a **bye is an empty slot**
+    (§7), not a fake player. Exactly one filled means a bye; both filled
+    means a match will be created in A64-019.5; neither cannot happen in
+    round one and is left unconstrained because later rounds legitimately
+    start empty.
+    """
+
+    __tablename__ = "pairing"
+
+    tournament_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True)
+    round_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slot: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    light_player_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    dark_player_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    light_seed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dark_seed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tournament_id"],
+            [f"{TOURNAMENT_SCHEMA}.tournament.id"],
+            name="fk_pairing__tournament",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("round_number >= 1", name="ck_pairing__round_from_one"),
+        CheckConstraint("slot >= 0", name="ck_pairing__slot_not_negative"),
+        # A seat with a player has a seed and vice versa. Not decoration:
+        # the seed is how a later phase explains *why* this pairing exists,
+        # and half of one would be a bracket that cannot be justified.
+        CheckConstraint(
+            "(light_player_id IS NULL) = (light_seed IS NULL)",
+            name="ck_pairing__light_seat_is_complete",
+        ),
+        CheckConstraint(
+            "(dark_player_id IS NULL) = (dark_seed IS NULL)",
+            name="ck_pairing__dark_seat_is_complete",
+        ),
+        # Nobody plays themselves — the one malformed pairing this relation
+        # can detect on its own.
+        CheckConstraint(
+            "light_player_id IS NULL OR dark_player_id IS NULL "
+            "OR light_player_id <> dark_player_id",
+            name="ck_pairing__distinct_players",
+        ),
+        {"schema": TOURNAMENT_SCHEMA},
+    )
+
+
+__all__ = [
+    "TOURNAMENT_SCHEMA",
+    "PairingModel",
+    "RegistrationModel",
+    "TournamentModel",
+]

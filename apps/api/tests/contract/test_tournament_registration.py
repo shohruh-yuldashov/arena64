@@ -17,10 +17,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.game.public import ProductVariant
+from app.modules.rating.infrastructure.repositories.player_rating_repository import (
+    SqlAlchemyRatingReader,
+)
 from app.modules.rating.public import SpeedClass
 from app.modules.tournament.application.ports import (
     AlreadyRegistered,
     NotRegistered,
+    NotSeedable,
     RegistrationNotOpen,
     TournamentIsFull,
 )
@@ -28,9 +32,17 @@ from app.modules.tournament.application.services.registration_service import (
     TournamentDeadlineService,
     TournamentRegistrationService,
 )
+from app.modules.tournament.application.services.seeding_service import (
+    TournamentSeedingService,
+)
 from app.modules.tournament.domain.tournament import TournamentStatus
+from app.modules.tournament.infrastructure.rating_snapshots import (
+    PublishedRatingSnapshots,
+)
 from app.modules.tournament.infrastructure.repositories.tournament_repository import (
+    SqlAlchemyPairingRepository,
     SqlAlchemyRegistrationRepository,
+    SqlAlchemySeedRepository,
     SqlAlchemyTournamentRepository,
 )
 from tests.fakes.outbox import NullUnitOfWork  # noqa: F401 — kept for parity
@@ -80,6 +92,20 @@ async def _open_tournament(
         registration_deadline=deadline,
     )
     return await service.open_registration(tournament.id)
+
+
+def _seeding(session: AsyncSession) -> TournamentSeedingService:
+    """The seeding service over one session — the composition root's graph,
+    assembled here so the test drives the same collaborators."""
+    return TournamentSeedingService(
+        tournaments=SqlAlchemyTournamentRepository(session),
+        seeds=SqlAlchemySeedRepository(session),
+        pairings=SqlAlchemyPairingRepository(session),
+        ratings=PublishedRatingSnapshots(SqlAlchemyRatingReader(session)),
+        events=RecordingPublisher(),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=MovableClock(NOW),
+    )
 
 
 class TestRegistering:
@@ -267,3 +293,88 @@ class TestTheDeadlineSweep:
         assert (await tournaments.by_id(future.id)).status is (  # type: ignore[union-attr]
             TournamentStatus.REGISTRATION_OPEN
         )
+
+
+class TestSeeding:
+    """A64-019.3 §11, §12 — persistence, idempotency and the race.
+
+    The algorithm is `tests/unit/test_tournament_seeding.py`'s. What only a
+    database can show is that a retry returns the *same* plan and that two
+    workers cannot write two.
+    """
+
+    async def test_seeding_requires_a_closed_registration_and_is_idempotent(
+        self, contract_session: AsyncSession
+    ) -> None:
+        """§2 and §11 in one, because they are the same guarantee twice.
+
+        Seeding an **open** tournament would build a bracket from a field
+        that can still change, and the plan is immutable once written — so
+        it is refused rather than tolerated, since the failure is otherwise
+        invisible: the bracket would simply be missing whoever registered
+        next.
+
+        A **second** call returns the persisted plan unchanged. Not merely
+        "does not raise": the slots, seats and seeds are compared, because a
+        retry that recomputed from current ratings would produce a plausible
+        but different bracket, and that is the failure §10 exists to
+        prevent.
+        """
+        players = [uuid4() for _ in range(6)]
+        directory = _KnownPlayers(*players)
+        service = _service(contract_session, players=directory)
+        seeding = _seeding(contract_session)
+
+        tournament = await _open_tournament(service, capacity=8)
+        for player in players:
+            await service.register(tournament.id, player)
+
+        with pytest.raises(NotSeedable):
+            await seeding.seed_tournament(tournament.id)
+
+        await service.close_registration(tournament.id)
+
+        first = await seeding.seed_tournament(tournament.id)
+        second = await seeding.seed_tournament(tournament.id)
+
+        assert first == second
+        # Six entrants in an eight-bracket: four slots, two of them byes.
+        assert len(first) == 4
+        assert sum(1 for pairing in first if pairing.is_bye) == 2
+        # Seeds are persisted, so no later phase reseeds from live ratings.
+        seeds = await SqlAlchemySeedRepository(contract_session).seeds_for(tournament.id)
+        assert [seed.number for seed in seeds] == [1, 2, 3, 4, 5, 6]
+
+    async def test_two_workers_cannot_write_two_plans(self, contract_engine: AsyncEngine) -> None:
+        """§12 — the race, decided by the primary key.
+
+        Both workers compute a plan; `(tournament, round, slot)` lets
+        exactly one insert, and the loser re-reads the winner's. That is
+        only safe because seeding is **deterministic**: if the two could
+        differ, re-reading would silently accept a bracket the loser did not
+        compute. So the assertion is that both callers see the *same* plan,
+        not merely that one succeeded.
+        """
+        players = [uuid4() for _ in range(4)]
+        directory = _KnownPlayers(*players)
+
+        async with AsyncSession(contract_engine) as setup:
+            service = _service(setup, players=directory)
+            tournament = await _open_tournament(service, capacity=4)
+            for player in players:
+                await service.register(tournament.id, player)
+            await service.close_registration(tournament.id)
+            await setup.commit()
+
+        async def seed() -> list[object]:
+            async with AsyncSession(contract_engine) as session:
+                return await _seeding(session).seed_tournament(tournament.id)
+
+        first, second = await asyncio.gather(seed(), seed())
+
+        assert first == second
+        async with AsyncSession(contract_engine) as check:
+            stored = await SqlAlchemyPairingRepository(check).plan_for(
+                tournament.id, round_number=1
+            )
+        assert len(stored) == 2

@@ -83,6 +83,92 @@ window over a pool of reserved tickets, which is a different question with a dif
 immutable**: once a round is published its pairings do not change, so a player who read the
 bracket is looking at the same bracket the results will be recorded against.
 
+## 6a. Seeding and pairing — A64-019.3
+
+### Seed order
+
+```
+rating DESC, deviation ASC, player_id ASC
+```
+
+**Total**, and that is correctness rather than tidiness: a non-deterministic
+seeding produces a *different bracket on a retry*, and the retry is exactly when
+it matters. The third key is unique, so no two entrants compare equal.
+
+Deviation second for the leaderboard's reason — between two players on the same
+rating, the one the platform is more sure about seeds higher. **Provisional players are
+seeded, not excluded**; their large deviation already places them below an established
+player on the same number.
+
+Seed numbers start at 1 and are **persisted** on the registration. A later phase must
+never re-derive seeding from current ratings: ratings move and a published bracket does
+not.
+
+Ratings are read in **one batch**, and the reason is correctness rather than speed —
+seeding reads ratings *at a moment*, and a per-player loop spreads that moment across the
+field. The key is the tournament's own variant with `CLASSICAL`; nothing infers another.
+
+### Bracket size
+
+The smallest power of two at or above the **active entrant** count — never
+`tournament.capacity`, which is the registration maximum. Capacity 10 with 6 entrants
+plays an 8-bracket with two byes, not a 16-bracket with ten.
+
+Fewer than two active entrants is refused.
+
+### Seed placement
+
+Standard recursive doubling:
+
+```
+order(1)  = [1]
+order(2n) = interleave(order(n), [2n + 1 - s for s in order(n)])
+
+size 2   [1, 2]
+size 4   [1, 4, 2, 3]
+size 8   [1, 8, 4, 5, 2, 7, 3, 6]
+```
+
+The list is seed numbers in bracket-slot order; slot `2j` plays slot `2j+1`. What it
+guarantees, and naive `1v2, 3v4` does not:
+
+| Property | Why it holds |
+| --- | --- |
+| Seeds 1 and 2 meet only in the final | They sit at opposite ends, so their halves never intersect |
+| Seeds 1–4 are in distinct quarters | Each doubling splits the previous order across the new halves |
+| Seed *s* faces `size + 1 - s` | The reward for seeding well is monotone, not incidental |
+
+### Byes
+
+A bye is an **empty bracket slot** — never a fake player, never a match, and no `game`
+match is created for one. A seed higher than the entrant count has no player, so the
+pairing carries one participant and one `None`.
+
+**Highest seeds receive byes first**, and that falls out of the placement rather than
+being applied: seed `size` is opposite seed 1, so the absent seeds land against the top
+of the field. A64-019.4 advances the present player without a match.
+
+### Side assignment
+
+The higher seed takes the light seat on **even** slots and the dark seat on **odd** ones.
+Deterministic, and alternating so moving first is not always the better player's.
+
+No historical colour balancing: single elimination gives a player at most `log2(size)`
+games, so there is no history to balance.
+
+### Immutability and idempotency
+
+Once a round's plan is written it does not change. The primary key
+`(tournament_id, round_number, slot)` is the mechanism — a second plan cannot be
+inserted — so:
+
+- a **retry** reads the persisted plan and returns it unchanged;
+- **two workers** racing both compute a plan, one inserts, and the loser re-reads the
+  winner's.
+
+The second is safe only because seeding is deterministic: if the two could differ,
+re-reading would silently accept a bracket the loser did not compute.
+
 ## 7. Privacy
 
 Tournaments and their brackets are **public**. A private tournament is deferred with

@@ -169,6 +169,71 @@ inserted — so:
 The second is safe only because seeding is deterministic: if the two could differ,
 re-reading would silently accept a bracket the loser did not compute.
 
+## 6b. Bracket materialisation and advancement — A64-019.4
+
+### The tree is built whole, once
+
+Every round and every node is written in **one transaction**, before any match exists.
+Later rounds are materialised **empty** rather than created when the previous one finishes.
+
+A bracket generated lazily from current results can differ from the one players read, and
+"who could I meet in the semi-final" stops being answerable in advance. The cost is
+`size - 1` rows written once; the benefit is that placement is never recomputed.
+
+A partial bracket is impossible: the transaction has every round and every node or none.
+
+### Rounds
+
+`tournaments.round`, unique `(tournament_id, round_number)`, numbered from 1. The status
+machine lives in the domain aggregate — a repository that decided transitions would be a
+second copy of the rule.
+
+Round one is created **published**, because its participants are known the moment the
+bracket exists and publication is what freezes them. Later rounds are `PENDING` until
+their participants are known.
+
+### Bye propagation
+
+A node with exactly one participant has a winner without a match, and filling its parent
+may leave *that* node with one participant — so propagation runs to a **fixed point**.
+
+The rule that stops it deciding too early: a node above round one is a bye only when
+**nothing beneath it can still deliver a participant**. A semi-final holding one player
+because the other semi has not been played is *waiting*, not a bye, and deciding it would
+skip a match that has to happen.
+
+Two empty seats stop the chain — there is nothing to decide, and inventing a winner would
+be a phantom advancement.
+
+Idempotent: applied to its own output nothing changes.
+
+### Winner advancement
+
+```
+UPDATE pairing SET winner_id = :w WHERE … AND winner_id IS NULL
+```
+
+The guard is in the `WHERE`, so two workers processing one completed match cannot both
+write. The loser reads the stored winner: if it agrees, the work was done and it returns
+idempotently; if it disagrees, that is a **conflict** and it raises rather than
+overwriting. On a bracket an overwrite means a player advancing out of a node they lost,
+visible only after the rounds above are recorded.
+
+Read-then-write would let both through.
+
+A winner who did not play in the node is refused by the aggregate *and* by a check
+constraint — the one bracket error nothing downstream detects.
+
+### Persisted seeds
+
+`PersistedSeed` holds **only what is stored**: the tournament, the player and the seed
+number. The rating and deviation that produced the seed are deliberately absent.
+
+A64-019.3's repository returned the live `Seed` type with `rating=0.0, deviation=0.0,
+is_provisional=False`, and those read like measurements — a caller that trusted them would
+have reseeded a tournament to all-equal. A64-019.4 replaced the type rather than the
+values, so the absence is in the signature.
+
 ## 7. Privacy
 
 Tournaments and their brackets are **public**. A private tournament is deferred with

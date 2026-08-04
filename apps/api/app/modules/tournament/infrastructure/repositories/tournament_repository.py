@@ -16,8 +16,9 @@ sweep, and it is the reason both live here rather than behind one helper.
 
 import uuid
 from datetime import datetime
+from typing import Any, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,13 +27,16 @@ from app.modules.tournament.application.ports import (
     PlanAlreadyExists,
     TournamentIsFull,
 )
+from app.modules.tournament.domain.bracket_plan import BracketSlot, PersistedSeed
 from app.modules.tournament.domain.registration import Registration, RegistrationStatus
+from app.modules.tournament.domain.rounds import TournamentRound
 from app.modules.tournament.domain.seeding import PlannedPairing, Seed
 from app.modules.tournament.domain.tournament import Tournament, TournamentStatus
 from app.modules.tournament.infrastructure.models import (
     PairingModel,
     RegistrationModel,
     TournamentModel,
+    TournamentRoundModel,
 )
 
 _DUPLICATE_CONSTRAINT = "pk_registration"
@@ -243,8 +247,16 @@ class SqlAlchemySeedRepository:
                 row.seed_number = seed.number
         await self._session.flush()
 
-    async def seeds_for(self, tournament_id: uuid.UUID) -> list[Seed]:
-        """The persisted seeding, in seed order."""
+    async def seeds_for(self, tournament_id: uuid.UUID) -> list[PersistedSeed]:
+        """The persisted seeding, in seed order — §4.
+
+        Returns `PersistedSeed`, which holds **only what is stored**. The
+        earlier version returned the live `Seed` with `rating=0.0,
+        deviation=0.0, is_provisional=False`, and those numbers read like
+        measurements: a caller that trusted them would have reseeded a
+        tournament to all-equal. A64-019.4 replaced the type rather than
+        the values, so the absence is in the signature.
+        """
         rows = await self._session.scalars(
             select(RegistrationModel)
             .where(
@@ -254,15 +266,10 @@ class SqlAlchemySeedRepository:
             .order_by(RegistrationModel.seed_number)
         )
         return [
-            Seed(
+            PersistedSeed(
+                tournament_id=tournament_id,
                 player_id=row.player_id,
-                number=row.seed_number or 0,
-                # The rating that produced the seed is not stored: the seed
-                # *is* the persisted answer, and keeping the input beside it
-                # would be a second copy that a rating change makes wrong.
-                rating=0.0,
-                deviation=0.0,
-                is_provisional=False,
+                seed_number=row.seed_number or 0,
             )
             for row in rows
         ]
@@ -331,8 +338,178 @@ class SqlAlchemyPairingRepository:
 
 
 __all__ = [
+    "SqlAlchemyBracketRepository",
     "SqlAlchemyPairingRepository",
     "SqlAlchemyRegistrationRepository",
     "SqlAlchemySeedRepository",
     "SqlAlchemyTournamentRepository",
 ]
+
+
+class SqlAlchemyBracketRepository:
+    """The materialised tree, and the compare-and-set that moves winners.
+
+    ## Advancement is a conditional UPDATE, never read-then-write
+
+    `SET winner_id = :w WHERE … AND winner_id IS NULL` — so two workers
+    processing the same completed match cannot both succeed. The loser gets
+    zero rows and re-reads: if the stored winner is the one it wanted, the
+    work was done and it returns idempotently; if it differs, that is a
+    genuine conflict and it says so.
+
+    Read-then-write would let both through and the second would silently
+    replace the first, which on a bracket means a player advancing out of a
+    node they lost.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def exists(self, tournament_id: uuid.UUID) -> bool:
+        """Whether a bracket has already been materialised — §5's idempotency.
+
+        Asked of the **round** relation, not the pairing one. Seeding
+        (A64-019.3) already wrote round one's slots into `pairing`, so a
+        pairing count is true the moment a tournament is seeded and would
+        make materialisation a no-op that returns half a tree. The rounds
+        are materialisation's own marker, written by nothing else.
+        """
+        return bool(
+            await self._session.scalar(
+                select(func.count())
+                .select_from(TournamentRoundModel)
+                .where(TournamentRoundModel.tournament_id == tournament_id)
+            )
+        )
+
+    async def materialise(
+        self, tournament_id: uuid.UUID, nodes: list[BracketSlot], rounds: list[TournamentRound]
+    ) -> None:
+        """Writes the whole tree and its rounds. Raises on a collision.
+
+        One flush, so a partial bracket is impossible: the caller's
+        transaction either has every round and every node or none of them.
+        """
+        for round_ in rounds:
+            self._session.add(
+                TournamentRoundModel(
+                    tournament_id=tournament_id,
+                    round_number=round_.round_number,
+                    status=round_.status,
+                    published_at=round_.published_at,
+                    started_at=round_.started_at,
+                    completed_at=round_.completed_at,
+                )
+            )
+        # **Only the rounds seeding did not write.** Round one's slots are
+        # already in `pairing` from A64-019.3; re-inserting them would
+        # collide with their own primary key. Their resolved byes are
+        # applied afterwards by the caller's propagation pass.
+        for node in nodes:
+            if node.round_number == 1:
+                continue
+            self._session.add(
+                PairingModel(
+                    tournament_id=tournament_id,
+                    round_number=node.round_number,
+                    slot=node.slot,
+                    light_player_id=node.light_player_id,
+                    dark_player_id=node.dark_player_id,
+                    light_seed=node.light_seed,
+                    dark_seed=node.dark_seed,
+                    winner_id=node.winner_id,
+                )
+            )
+
+        try:
+            await self._session.flush()
+        except IntegrityError as violation:
+            if "pk_pairing" not in str(violation.orig) and "pk_round" not in str(violation.orig):
+                raise
+            raise PlanAlreadyExists(
+                f"tournament {tournament_id} already has a bracket"
+            ) from violation
+
+    async def nodes_for(self, tournament_id: uuid.UUID) -> list[BracketSlot]:
+        rows = await self._session.scalars(
+            select(PairingModel)
+            .where(PairingModel.tournament_id == tournament_id)
+            .order_by(PairingModel.round_number, PairingModel.slot)
+        )
+        return [_to_slot(row) for row in rows]
+
+    async def claim_winner(
+        self, tournament_id: uuid.UUID, *, round_number: int, slot: int, winner_id: uuid.UUID
+    ) -> bool:
+        """Sets the winner if there is none. Returns whether this call did it.
+
+        `False` means somebody else got there first — the caller re-reads to
+        decide whether that is agreement or a conflict. The guard is in the
+        `WHERE`, so the decision is the database's.
+        """
+        # `cast`, because `AsyncSession.execute` is typed as returning
+        # `Result` while an UPDATE always yields a `CursorResult` — and
+        # `rowcount` is the whole point of this call.
+        result = cast(
+            "CursorResult[Any]",
+            await self._session.execute(
+                update(PairingModel)
+                .where(
+                    PairingModel.tournament_id == tournament_id,
+                    PairingModel.round_number == round_number,
+                    PairingModel.slot == slot,
+                    PairingModel.winner_id.is_(None),
+                )
+                .values(winner_id=winner_id),
+            ),
+        )
+        await self._session.flush()
+        return bool(result.rowcount)
+
+    async def fill_seat(
+        self,
+        tournament_id: uuid.UUID,
+        *,
+        round_number: int,
+        slot: int,
+        player_id: uuid.UUID,
+        seed: int | None,
+        light: bool,
+    ) -> None:
+        """Puts an advancing winner into a parent seat.
+
+        Guarded on the seat being empty for the same reason `claim_winner`
+        is: a retry must not overwrite a seat somebody else filled, and the
+        seed travels with the player because the relation's check constraint
+        pairs the two columns.
+        """
+        column = PairingModel.light_player_id if light else PairingModel.dark_player_id
+        values = (
+            {"light_player_id": player_id, "light_seed": seed}
+            if light
+            else {"dark_player_id": player_id, "dark_seed": seed}
+        )
+        await self._session.execute(
+            update(PairingModel)
+            .where(
+                PairingModel.tournament_id == tournament_id,
+                PairingModel.round_number == round_number,
+                PairingModel.slot == slot,
+                column.is_(None),
+            )
+            .values(**values)
+        )
+        await self._session.flush()
+
+
+def _to_slot(row: PairingModel) -> BracketSlot:
+    return BracketSlot(
+        round_number=row.round_number,
+        slot=row.slot,
+        light_player_id=row.light_player_id,
+        dark_player_id=row.dark_player_id,
+        light_seed=row.light_seed,
+        dark_seed=row.dark_seed,
+        winner_id=row.winner_id,
+        match_id=row.match_id,
+    )

@@ -28,6 +28,10 @@ from app.modules.tournament.application.ports import (
     RegistrationNotOpen,
     TournamentIsFull,
 )
+from app.modules.tournament.application.services.bracket_service import (
+    ConflictingWinner,
+    TournamentBracketService,
+)
 from app.modules.tournament.application.services.registration_service import (
     TournamentDeadlineService,
     TournamentRegistrationService,
@@ -35,11 +39,13 @@ from app.modules.tournament.application.services.registration_service import (
 from app.modules.tournament.application.services.seeding_service import (
     TournamentSeedingService,
 )
+from app.modules.tournament.domain.exceptions import InvalidBracketPosition
 from app.modules.tournament.domain.tournament import TournamentStatus
 from app.modules.tournament.infrastructure.rating_snapshots import (
     PublishedRatingSnapshots,
 )
 from app.modules.tournament.infrastructure.repositories.tournament_repository import (
+    SqlAlchemyBracketRepository,
     SqlAlchemyPairingRepository,
     SqlAlchemyRegistrationRepository,
     SqlAlchemySeedRepository,
@@ -102,6 +108,18 @@ def _seeding(session: AsyncSession) -> TournamentSeedingService:
         seeds=SqlAlchemySeedRepository(session),
         pairings=SqlAlchemyPairingRepository(session),
         ratings=PublishedRatingSnapshots(SqlAlchemyRatingReader(session)),
+        events=RecordingPublisher(),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=MovableClock(NOW),
+    )
+
+
+def _bracket(session: AsyncSession) -> TournamentBracketService:
+    return TournamentBracketService(
+        tournaments=SqlAlchemyTournamentRepository(session),
+        seeds=SqlAlchemySeedRepository(session),
+        pairings=SqlAlchemyPairingRepository(session),
+        bracket=SqlAlchemyBracketRepository(session),
         events=RecordingPublisher(),
         unit_of_work=SessionUnitOfWork(session),
         clock=MovableClock(NOW),
@@ -343,7 +361,7 @@ class TestSeeding:
         assert sum(1 for pairing in first if pairing.is_bye) == 2
         # Seeds are persisted, so no later phase reseeds from live ratings.
         seeds = await SqlAlchemySeedRepository(contract_session).seeds_for(tournament.id)
-        assert [seed.number for seed in seeds] == [1, 2, 3, 4, 5, 6]
+        assert [seed.seed_number for seed in seeds] == [1, 2, 3, 4, 5, 6]
 
     async def test_two_workers_cannot_write_two_plans(self, contract_engine: AsyncEngine) -> None:
         """§12 — the race, decided by the primary key.
@@ -378,3 +396,138 @@ class TestSeeding:
                 tournament.id, round_number=1
             )
         assert len(stored) == 2
+
+
+class TestBracket:
+    """A64-019.4 §5, §7, §8 — materialisation, advancement and the race."""
+
+    async def test_the_whole_tree_is_written_once_and_a_retry_returns_it(
+        self, contract_session: AsyncSession
+    ) -> None:
+        """§1, §5 — built whole, not lazily, and idempotent.
+
+        Later rounds are materialised **empty** rather than created when the
+        previous one finishes: a bracket generated from current results can
+        differ from the one players read, and "who could I meet in the
+        semi-final" stops being answerable in advance.
+
+        The retry is compared node by node, not merely for absence of an
+        error — a second materialisation that recomputed placement would
+        produce a plausible but different tree, which is what §1's
+        immutability exists to prevent.
+        """
+        players = [uuid4() for _ in range(4)]
+        directory = _KnownPlayers(*players)
+        service = _service(contract_session, players=directory)
+        tournament = await _open_tournament(service, capacity=4)
+        for player in players:
+            await service.register(tournament.id, player)
+        await service.close_registration(tournament.id)
+        await _seeding(contract_session).seed_tournament(tournament.id)
+
+        bracket = _bracket(contract_session)
+        first = await bracket.materialise(tournament.id)
+        second = await bracket.materialise(tournament.id)
+
+        assert first == second
+        assert len(first) == 3  # two semi-finals and a final
+        assert {(n.round_number, n.slot) for n in first} == {(1, 0), (1, 1), (2, 0)}
+        # The final is materialised empty and waiting.
+        final = next(n for n in first if n.round_number == 2)
+        assert final.participants == ()
+
+    async def test_advancing_a_winner_fills_the_parent_and_repeats_harmlessly(
+        self, contract_session: AsyncSession
+    ) -> None:
+        """§7 — the parent seat, filled exactly once.
+
+        Even slots feed the light seat and odd ones the dark, so a retry
+        lands in the same seat rather than a second one. The repeat is
+        asserted to leave the bracket **identical**, not merely to avoid
+        raising: an advancement that filled the other seat would produce a
+        final where one player appears twice.
+
+        A winner who did not play in the node is refused — the one bracket
+        error nothing downstream detects.
+        """
+        players = [uuid4() for _ in range(4)]
+        directory = _KnownPlayers(*players)
+        service = _service(contract_session, players=directory)
+        tournament = await _open_tournament(service, capacity=4)
+        for player in players:
+            await service.register(tournament.id, player)
+        await service.close_registration(tournament.id)
+        await _seeding(contract_session).seed_tournament(tournament.id)
+
+        bracket = _bracket(contract_session)
+        nodes = await bracket.materialise(tournament.id)
+        semi = next(n for n in nodes if n.round_number == 1 and n.slot == 0)
+        winner = semi.participants[0]
+
+        advanced = await bracket.advance_winner(
+            tournament.id, round_number=1, slot=0, winner_id=winner
+        )
+        final = next(n for n in advanced if n.round_number == 2)
+        assert final.light_player_id == winner
+        assert final.light_seed is not None
+
+        repeated = await bracket.advance_winner(
+            tournament.id, round_number=1, slot=0, winner_id=winner
+        )
+        assert repeated == advanced
+
+        with pytest.raises(InvalidBracketPosition):
+            await bracket.advance_winner(tournament.id, round_number=1, slot=0, winner_id=uuid4())
+
+    async def test_two_workers_cannot_advance_two_different_winners(
+        self, contract_engine: AsyncEngine
+    ) -> None:
+        """§8 — the compare-and-set, under real concurrency.
+
+        Two workers process the same node with **different** winners. The
+        `UPDATE … WHERE winner_id IS NULL` lets exactly one write; the other
+        finds a stored winner it disagrees with and raises rather than
+        overwriting.
+
+        Overwriting is the failure that matters: on a bracket it means a
+        player advancing out of a node they lost, and by the time it is
+        visible the rounds above have been recorded. Read-then-write would
+        let both through.
+        """
+        players = [uuid4() for _ in range(4)]
+        directory = _KnownPlayers(*players)
+
+        async with AsyncSession(contract_engine) as setup:
+            service = _service(setup, players=directory)
+            tournament = await _open_tournament(service, capacity=4)
+            for player in players:
+                await service.register(tournament.id, player)
+            await service.close_registration(tournament.id)
+            await _seeding(setup).seed_tournament(tournament.id)
+            nodes = await _bracket(setup).materialise(tournament.id)
+            await setup.commit()
+
+        semi = next(n for n in nodes if n.round_number == 1 and n.slot == 0)
+        light, dark = semi.light_player_id, semi.dark_player_id
+
+        async def advance(winner: UUID) -> str:
+            async with AsyncSession(contract_engine) as session:
+                try:
+                    await _bracket(session).advance_winner(
+                        tournament.id, round_number=1, slot=0, winner_id=winner
+                    )
+                except ConflictingWinner:
+                    return "conflict"
+                return "won"
+
+        outcomes = await asyncio.gather(advance(light), advance(dark))
+
+        assert sorted(outcomes) == ["conflict", "won"]
+
+        async with AsyncSession(contract_engine) as check:
+            stored = await SqlAlchemyBracketRepository(check).nodes_for(tournament.id)
+        decided = next(n for n in stored if (n.round_number, n.slot) == (1, 0))
+        assert decided.winner_id in (light, dark)
+        final = next(n for n in stored if n.round_number == 2)
+        # Exactly one player advanced — not both.
+        assert len(final.participants) == 1

@@ -22,7 +22,9 @@ from uuid import UUID
 from app.core.exceptions import DomainError
 from app.modules.game.public import ProductVariant
 from app.modules.rating.public import RatingSnapshot, SpeedClass
+from app.modules.tournament.domain.bracket_plan import BracketSlot, PersistedSeed
 from app.modules.tournament.domain.registration import Registration
+from app.modules.tournament.domain.rounds import TournamentRound
 from app.modules.tournament.domain.seeding import PlannedPairing, Seed
 from app.modules.tournament.domain.tournament import Tournament
 
@@ -138,8 +140,13 @@ class SeedRepository(Protocol):
         """Persists seed numbers onto the registrations — §4."""
         ...
 
-    async def seeds_for(self, tournament_id: UUID) -> list[Seed]:
-        """The persisted seeding, for a retry to return unchanged."""
+    async def seeds_for(self, tournament_id: UUID) -> list[PersistedSeed]:
+        """The persisted seeding, for a retry to return unchanged — §4.
+
+        `PersistedSeed`, not `Seed`: storage holds a number, not the rating
+        that produced it, and a type that carried both would have to invent
+        the half it does not have.
+        """
         ...
 
 
@@ -165,6 +172,51 @@ class RatingSnapshots(Protocol):
         starting triple rather than omitting them, so a caller cannot
         silently drop an entrant by reading a key that is absent.
         """
+        ...
+
+
+class BracketRepository(Protocol):
+    """The materialised tree. Written whole, advanced by compare-and-set."""
+
+    async def exists(self, tournament_id: UUID) -> bool: ...
+
+    async def materialise(
+        self,
+        tournament_id: UUID,
+        nodes: list[BracketSlot],
+        rounds: list[TournamentRound],
+    ) -> None:
+        """Writes every round and every node in one flush — §10.
+
+        Raises `PlanAlreadyExists` on a collision, which is how two workers
+        materialising at once resolve: one writes, the other re-reads.
+        """
+        ...
+
+    async def nodes_for(self, tournament_id: UUID) -> list[BracketSlot]: ...
+
+    async def claim_winner(
+        self, tournament_id: UUID, *, round_number: int, slot: int, winner_id: UUID
+    ) -> bool:
+        """Sets the winner **if there is none**. Returns whether this call did.
+
+        The compare-and-set §8 requires: the guard is in the `WHERE`, so two
+        workers cannot both write and the loser learns it lost rather than
+        overwriting.
+        """
+        ...
+
+    async def fill_seat(
+        self,
+        tournament_id: UUID,
+        *,
+        round_number: int,
+        slot: int,
+        player_id: UUID,
+        seed: int | None,
+        light: bool,
+    ) -> None:
+        """Puts an advancing winner into a parent seat, if it is empty."""
         ...
 
 
@@ -224,6 +276,7 @@ class RegistrationRepository(Protocol):
 
 __all__ = [
     "AlreadyRegistered",
+    "BracketRepository",
     "NotSeedable",
     "PairingRepository",
     "PlanAlreadyExists",

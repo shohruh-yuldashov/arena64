@@ -10,6 +10,11 @@ from uuid import UUID
 
 import pytest
 
+from app.modules.tournament.domain.bracket_plan import (
+    PersistedSeed,
+    bracket_for,
+    propagated,
+)
 from app.modules.tournament.domain.exceptions import InvalidCapacity
 from app.modules.tournament.domain.seeding import (
     SeedInput,
@@ -160,3 +165,62 @@ class TestByesAndSides:
         # Slot 0: the higher seed is LIGHT. Slot 1: the higher seed is DARK.
         assert pairings[0].light_seed == 1
         assert pairings[1].dark_seed == 4
+
+
+class TestByePropagation:
+    """A64-019.4 §6 — the fixed point, and the case it must not decide."""
+
+    def test_a_bye_chain_advances_and_stops_where_a_match_is_needed(self) -> None:
+        """Five entrants in an eight-bracket: three byes, one match.
+
+        Seeds 1, 2 and 3 have no round-one opponent and advance without a
+        match — the byes land on the **highest** seeds because seed *s*
+        faces `size + 1 - s`, so the absent seeds sit opposite the top.
+
+        The chain then **stops correctly** in two different ways, and both
+        matter:
+
+        - round 2 slot 1 holds seeds 2 and 3, which is a real match;
+        - round 2 slot 0 holds seed 1 **alone and waiting**, because the
+          5-versus-4 match beneath it has not been played.
+
+        The second is the case a naive propagation gets wrong: one
+        participant looks exactly like a bye, and deciding it would skip a
+        match that has to happen. `_children_settled` is what distinguishes
+        "nobody is coming" from "nobody has arrived yet".
+        """
+        seeds_ = seeded([_entrant(i, rating=2000.0 - i * 100) for i in range(1, 6)])
+        persisted = [
+            PersistedSeed(tournament_id=_player(0), player_id=s.player_id, seed_number=s.number)
+            for s in seeds_
+        ]
+
+        tree = bracket_for(persisted, first_round_pairings(seeds_))
+        by_coordinate = {(n.round_number, n.slot): n for n in tree}
+
+        assert len(tree) == 7  # 4 + 2 + 1
+
+        decided_in_round_one = {
+            n.light_seed or n.dark_seed for n in tree if n.round_number == 1 and n.winner_id
+        }
+        assert decided_in_round_one == {1, 2, 3}
+
+        assert by_coordinate[(2, 1)].needs_a_match is True
+        waiting = by_coordinate[(2, 0)]
+        assert waiting.participants and waiting.winner_id is None
+        assert by_coordinate[(3, 0)].participants == ()
+
+    def test_propagation_is_idempotent(self) -> None:
+        """Applied to its own output, nothing changes.
+
+        That is what makes it safe to run after every advancement and on a
+        retry: every node it could decide already is.
+        """
+        seeds_ = seeded([_entrant(i, rating=2000.0 - i * 100) for i in range(1, 4)])
+        persisted = [
+            PersistedSeed(tournament_id=_player(0), player_id=s.player_id, seed_number=s.number)
+            for s in seeds_
+        ]
+
+        once = bracket_for(persisted, first_round_pairings(seeds_))
+        assert propagated(once) == once

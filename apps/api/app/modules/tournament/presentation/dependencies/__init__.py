@@ -17,6 +17,9 @@ from app.api.outbox_deps import EventPublisherDep
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.rating.presentation.dependencies import get_rating_reader
+from app.modules.tournament.application.services.bracket_service import (
+    TournamentBracketService,
+)
 from app.modules.tournament.application.services.registration_service import (
     TournamentDeadlineService,
     TournamentRegistrationService,
@@ -28,6 +31,7 @@ from app.modules.tournament.infrastructure.rating_snapshots import (
     PublishedRatingSnapshots,
 )
 from app.modules.tournament.infrastructure.repositories.tournament_repository import (
+    SqlAlchemyBracketRepository,
     SqlAlchemyPairingRepository,
     SqlAlchemyRegistrationRepository,
     SqlAlchemySeedRepository,
@@ -107,6 +111,29 @@ def get_seeding_service(
     )
 
 
+def get_bracket_service(
+    session: DbSessionDep, events: EventPublisherDep, clock: ClockDep
+) -> TournamentBracketService:
+    """Bracket materialisation and winner advancement — A64-019.4.
+
+    **No production entry point yet.** Nothing in the running application
+    calls it: A64-019.5 materialises when a tournament starts and advances
+    when a match completes. Composed now so that phase wires this factory
+    rather than inventing one, and the reachability registry is unchanged.
+    """
+    return TournamentBracketService(
+        tournaments=SqlAlchemyTournamentRepository(session),
+        seeds=SqlAlchemySeedRepository(session),
+        pairings=SqlAlchemyPairingRepository(session),
+        bracket=SqlAlchemyBracketRepository(session),
+        events=events,
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )
+
+
+TournamentBracketServiceDep = Annotated[TournamentBracketService, Depends(get_bracket_service)]
+
 TournamentSeedingServiceDep = Annotated[TournamentSeedingService, Depends(get_seeding_service)]
 
 TournamentRegistrationServiceDep = Annotated[
@@ -116,7 +143,9 @@ TournamentRegistrationServiceDep = Annotated[
 
 __all__ = [
     "TournamentRegistrationServiceDep",
+    "TournamentBracketServiceDep",
     "TournamentSeedingServiceDep",
+    "get_bracket_service",
     "get_seeding_service",
     "build_deadline_service",
     "get_registration_service",

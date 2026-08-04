@@ -44,6 +44,7 @@ from app.database.types import UtcDateTime
 from app.modules.game.public import ProductVariant
 from app.modules.rating.public import SpeedClass
 from app.modules.tournament.domain.registration import RegistrationStatus
+from app.modules.tournament.domain.rounds import RoundStatus
 from app.modules.tournament.domain.tournament import (
     MAX_CAPACITY,
     MIN_CAPACITY,
@@ -182,6 +183,43 @@ class RegistrationModel(Base, TimestampMixin):
     )
 
 
+class TournamentRoundModel(Base, TimestampMixin):
+    """`tournaments.round` — one round's lifecycle. §2.
+
+    The status machine lives in `domain/rounds.py`; this stores where a
+    round is, never how it may move. A repository that decided transitions
+    would be a second copy of the rule, and the copy is what goes stale.
+    """
+
+    __tablename__ = "round"
+
+    tournament_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True)
+    round_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    status: Mapped[RoundStatus] = mapped_column(_enum(RoundStatus, "round_status"), nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tournament_id"],
+            [f"{TOURNAMENT_SCHEMA}.tournament.id"],
+            name="fk_round__tournament",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("round_number >= 1", name="ck_round__number_from_one"),
+        # Each instant is set by the transition that names it, so a round
+        # that says it is published without saying when is a write that
+        # skipped the aggregate.
+        CheckConstraint(
+            "(status = 'pending') = (published_at IS NULL)",
+            name="ck_round__published_iff_instant",
+        ),
+        {"schema": TOURNAMENT_SCHEMA},
+    )
+
+
 class PairingModel(Base, TimestampMixin):
     """`tournaments.pairing` — one slot of one round.
 
@@ -207,6 +245,24 @@ class PairingModel(Base, TimestampMixin):
     dark_player_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
     light_seed: Mapped[int | None] = mapped_column(Integer, nullable=True)
     dark_seed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    winner_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    """Who advanced from this node — §7.
+
+    The **compare-and-set target**: advancement is
+    `UPDATE … SET winner_id = :w WHERE … AND winner_id IS NULL`, so two
+    workers processing the same completed match cannot both write. Read
+    then write would let both through.
+    """
+
+    match_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    """The `game` match this node was played as, once one exists.
+
+    Opaque — this module never dereferences it, and `game` holds the other
+    half as `origin_ref` (A64-019.0, R-25). **No foreign key in either
+    direction** (DB-03): a tournament is prunable and a match is permanent,
+    so the constraint would forbid a retention the other schema will need.
+    """
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -235,12 +291,28 @@ class PairingModel(Base, TimestampMixin):
             "OR light_player_id <> dark_player_id",
             name="ck_pairing__distinct_players",
         ),
+        # A winner played here. The database's half of the rule
+        # `BracketSlot.with_winner` enforces — a row written by a backfill
+        # cannot advance somebody who was never in the node.
+        CheckConstraint(
+            "winner_id IS NULL OR winner_id = light_player_id OR winner_id = dark_player_id",
+            name="ck_pairing__winner_played_here",
+        ),
+        # One node per match. Two nodes claiming one match would be two
+        # advancements from one result.
+        Index(
+            "uq_pairing__match",
+            "match_id",
+            unique=True,
+            postgresql_where=text("match_id IS NOT NULL"),
+        ),
         {"schema": TOURNAMENT_SCHEMA},
     )
 
 
 __all__ = [
     "TOURNAMENT_SCHEMA",
+    "TournamentRoundModel",
     "PairingModel",
     "RegistrationModel",
     "TournamentModel",

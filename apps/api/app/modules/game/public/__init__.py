@@ -97,8 +97,10 @@ from app.modules.game.public.events import (
     MatchAcceptanceExpired,
     MatchAcceptedByPlayer,
     MatchActivated,
+    MatchCompleted,
     MatchCreated,
     MatchDeclined,
+    MoveApplied,
 )
 from app.modules.game.public.matches import (
     CreateMatchRequest,
@@ -133,6 +135,8 @@ from app.modules.game.public.retention import AbandonedMatchRetention
 from app.modules.game.public.rooms import MatchRoster, MatchRosterReader
 
 __all__ = [
+    "MoveApplied",
+    "MatchCompleted",
     "SubmitMoveUseCase",
     "SubmitMoveResult",
     "SubmitMoveRequest",

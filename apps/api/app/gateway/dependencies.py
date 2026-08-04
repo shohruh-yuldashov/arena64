@@ -45,12 +45,9 @@ from app.api.deps import ClockDep, RateLimiterDep, RedisPoolsDep, SettingsDep
 from app.config.settings import GatewaySettings
 from app.core.clock import Clock
 from app.core.rate_limiting import RateLimitRule, RateLimitScope
+from app.gateway.bus import BusRemoteNodePublisher, GatewayBus, InProcessGatewayBus
 from app.gateway.connections import GatewayConnectionService, GatewayPolicy
-from app.gateway.delivery import (
-    InMemoryLocalSockets,
-    LoggingRemoteNodePublisher,
-    RoomBroadcaster,
-)
+from app.gateway.delivery import InMemoryLocalSockets, RoomBroadcaster
 from app.gateway.idempotency import RedisMoveIdempotencyStore
 from app.gateway.move_limits import ConnectionMoveLimiter, UnlimitedMoves
 from app.gateway.moves import MoveSubmissionHandler
@@ -203,21 +200,35 @@ def get_connection_router(registry: ConnectionRegistryDep, node_id: NodeIdDep) -
 ConnectionRouterDep = Annotated[ConnectionRouter, Depends(get_connection_router)]
 
 
+@lru_cache(maxsize=1)
+def get_gateway_bus() -> GatewayBus:
+    """The transport frames cross between gateway processes — A64-016.4 §9.
+
+    Cached, so one bus serves the process. `InProcessGatewayBus` is the
+    **single-node production adapter** and the test adapter both — it
+    implements the contract completely and simply does not cross a process
+    boundary, which is the one thing a single-node deployment does not need.
+
+    A multi-node deployment needs `RedisStreamGatewayBus` against the `bus`
+    Redis role, which is one class against this same port. See
+    `app/gateway/bus.py` for the stream shape and the bound it needs.
+    """
+    return InProcessGatewayBus()
+
+
 def get_remote_publisher() -> RemoteNodePublisher:
     """Where a remote node's share of a fan-out goes — §9.
 
-    `LoggingRemoteNodePublisher` until there is a bus. Everything upstream
-    is real: the plan is computed from the live registry, the grouping is
-    one request per node, and the frame is the exact bytes a socket would
-    receive. Only the transport is missing, which is what §9 asks for
-    ("do not build a full distributed gateway broker in this task").
+    Over the bus since A64-016.4 §9. The publisher decides *what* to send
+    from the routing plan; the bus decides *how* it travels. A64-016.3 had
+    a log line here and recorded what that cost — frames silently
+    undelivered on a multi-node deployment — and this is the seam that
+    replaces it.
 
-    A deployment running more than one gateway node today therefore has
-    silently undelivered frames. `REMOTE_PUBLISHES` is what makes that
-    visible, and single-node is the only supported topology until
-    A64-016.4 — stated in `docs/01-architecture/websocket.md` §16.
+    Still one publish per node, not per connection: the grouping is the
+    routing plan's and this only translates it.
     """
-    return LoggingRemoteNodePublisher()
+    return BusRemoteNodePublisher(get_gateway_bus())
 
 
 def get_broadcaster(router: ConnectionRouterDep, sockets: LocalSocketsDep) -> RoomBroadcaster:
@@ -376,6 +387,7 @@ __all__ = [
     "get_connection_registry",
     "get_gateway_metrics",
     "get_connection_router",
+    "get_gateway_bus",
     "get_gateway_service",
     "get_gateway_settings",
     "get_node_id",

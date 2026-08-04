@@ -34,6 +34,12 @@ from uuid import uuid4
 import pytest
 
 from app.core.identifiers import generate_uuid7
+from app.gateway.bus import (
+    BusMessage,
+    BusRemoteNodePublisher,
+    InProcessGatewayBus,
+    connection_ids_of,
+)
 from app.gateway.connections import (
     CLOSE_INTERNAL_ERROR,
     CLOSE_POLICY_VIOLATION,
@@ -43,11 +49,14 @@ from app.gateway.connections import (
 from app.gateway.delivery import InMemoryLocalSockets, RoomBroadcaster
 from app.gateway.metrics import CloseReason
 from app.gateway.moves import MoveSubmissionHandler
+from app.gateway.ports import ForwardingRequest
 from app.gateway.protocol import (
     PROTOCOL_VERSION,
     Channel,
     GatewayErrorCode,
     MessageType,
+    decode,
+    move_accepted,
     move_applied,
 )
 from app.gateway.room_service import GameRoomService
@@ -1019,3 +1028,105 @@ class TestRoutingPlanTransport:
         assert sorted(len(r.connection_ids) for r in publisher.published) == [1, 2]
         # An offline player contributes nothing and is not a failure.
         assert report.failures == 0
+
+
+class TestTheRemoteTransportBus:
+    """The bus seam — A64-016.4 §9, §11.8.
+
+    A64-016.3 shipped `RemoteNodePublisher` with a log line behind it. This
+    is the transport it now has, and the properties worth asserting are the
+    ones a bus can silently get wrong: who a message was for, and whether it
+    survived the journey unchanged.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_bus_preserves_node_channel_envelope_and_request_id(self) -> None:
+        """§11.8 — the four things a transport must not touch.
+
+        A frame goes in through the publisher, crosses the bus, and comes
+        back out of `consume` for the node it was addressed to. Every field
+        is asserted **after decoding the delivered frame**, not on the
+        message that was handed in, because the failure this catches is a
+        transport that re-encodes: `request_id` and `channel` live inside
+        the envelope, and a bus that rebuilt it would be a second encoder
+        able to disagree with the first.
+
+        The primitive round trip is asserted too. §9 requires a "stable
+        primitive payload" and forbids socket references, and the property
+        that makes that true rather than remembered is that the message
+        survives `json.dumps` — anything that could not cross a process
+        boundary could not be put in it.
+        """
+        bus = InProcessGatewayBus()
+        publisher = BusRemoteNodePublisher(bus)
+        recipients = (uuid4(), uuid4())
+        sent = move_applied(
+            match_id=generate_uuid7(),
+            ply=7,
+            side_to_move="dark",
+            fingerprint="fp-7",
+            path=["c3", "e5", "g3"],
+            captured=["d4", "f4"],
+            promoted_to=None,
+        )
+
+        assert await publisher.publish(
+            ForwardingRequest(node_id="node-b", connection_ids=recipients, frame=sent.to_json())
+        )
+
+        # Addressed to one node: another node's consume finds nothing.
+        assert await bus.consume("node-a", limit=10) == ()
+
+        delivered = await bus.consume("node-b", limit=10)
+        assert len(delivered) == 1
+        assert delivered[0].node_id == "node-b"
+        assert connection_ids_of(delivered[0]) == recipients
+
+        # The envelope, decoded from what would actually reach a socket.
+        arrived = decode(delivered[0].frame, max_bytes=64 * 1024)
+        assert arrived.type is MessageType.MOVE_APPLIED
+        assert arrived.channel is Channel.GAME
+        assert arrived.payload == sent.payload
+
+        # Consuming removes: a second drain finds nothing.
+        assert await bus.consume("node-b", limit=10) == ()
+
+        # And the whole message is JSON-round-trippable — §9's "stable
+        # primitive payload", checked rather than asserted.
+        primitive = json.loads(json.dumps(delivered[0].to_primitive()))
+        assert BusMessage.from_primitive(primitive) == delivered[0]
+
+    @pytest.mark.asyncio
+    async def test_a_correlated_acknowledgement_survives_the_bus_unchanged(self) -> None:
+        """`request_id` specifically, because it is the field a transport is
+        most likely to lose.
+
+        It lives inside the envelope rather than on the bus message, which
+        is deliberate — §9 asks that it be preserved, and preserving it by
+        **not touching it** is the form of that guarantee least able to go
+        wrong. This asserts the consequence: a frame carrying a correlation
+        token arrives carrying the same one.
+        """
+        bus = InProcessGatewayBus()
+        acknowledgement = move_accepted(
+            match_id=generate_uuid7(),
+            ply=3,
+            side_to_move="light",
+            fingerprint="fp-3",
+            path=["b6", "a5"],
+            captured=[],
+            promoted_to=None,
+            request_id="move-42",
+            result={"outcome": "win", "termination_reason": "no_legal_moves", "winner": "light"},
+        )
+
+        await BusRemoteNodePublisher(bus).publish(
+            ForwardingRequest(
+                node_id="node-c", connection_ids=(uuid4(),), frame=acknowledgement.to_json()
+            )
+        )
+
+        arrived = decode((await bus.consume("node-c", limit=1))[0].frame, max_bytes=64 * 1024)
+        assert arrived.request_id == "move-42"
+        assert arrived.channel is Channel.GAME
+        assert arrived.payload["result"]["winner"] == "light"

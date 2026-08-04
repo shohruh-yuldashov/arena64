@@ -49,7 +49,7 @@ The server knows precisely what happened and says so in its logs.
 """
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Final
@@ -404,8 +404,9 @@ def move_accepted(
     captured: Sequence[str],
     promoted_to: str | None,
     request_id: str | None,
+    result: Mapping[str, Any] | None = None,
 ) -> GatewayMessage:
-    """The submitter's acknowledgement — A64-016.3 §3.
+    """The submitter's acknowledgement — A64-016.3 §3, A64-016.4 §7.
 
     Correlated by `request_id`, which is the envelope's existing field: §7
     forbids inventing a second identifier, and there is nothing a move
@@ -416,16 +417,25 @@ def move_accepted(
     and a way to detect divergence, and a full position on every move would
     be the largest payload in the protocol multiplied by every move of
     every game.
+
+    Since A64-016.4 it is sent **only after the durable transaction
+    commits** (§7). `result` is present exactly when this move ended the
+    game, so `side_to_move` on a completed match is whoever would have
+    moved next — which a client renders as nothing.
     """
+    payload: dict[str, Any] = {
+        "match_id": str(match_id),
+        "ply": ply,
+        "side_to_move": side_to_move,
+        "fingerprint": fingerprint,
+        "applied": _applied_payload(path, captured, promoted_to),
+    }
+    if result is not None:
+        payload["result"] = dict(result)
+
     return GatewayMessage(
         type=MessageType.MOVE_ACCEPTED,
-        payload={
-            "match_id": str(match_id),
-            "ply": ply,
-            "side_to_move": side_to_move,
-            "fingerprint": fingerprint,
-            "applied": _applied_payload(path, captured, promoted_to),
-        },
+        payload=payload,
         request_id=request_id,
         channel=Channel.GAME,
     )
@@ -458,6 +468,7 @@ def move_applied(
     path: Sequence[str],
     captured: Sequence[str],
     promoted_to: str | None,
+    result: Mapping[str, Any] | None = None,
 ) -> GatewayMessage:
     """The broadcast both participants receive.
 
@@ -465,18 +476,23 @@ def move_applied(
     anybody's request. The submitter receives it *as well as* their
     acknowledgement, which is what lets a client treat the broadcast
     uniformly — one code path advances the board whoever moved.
+
+    Carries the same `result` as the acknowledgement when the move ended
+    the game, so the **opponent** learns the game is over from the frame
+    that shows them the move that ended it — rather than from a separate
+    completion message that could arrive in either order.
     """
-    return GatewayMessage(
-        type=MessageType.MOVE_APPLIED,
-        payload={
-            "match_id": str(match_id),
-            "ply": ply,
-            "side_to_move": side_to_move,
-            "fingerprint": fingerprint,
-            "applied": _applied_payload(path, captured, promoted_to),
-        },
-        channel=Channel.GAME,
-    )
+    payload: dict[str, Any] = {
+        "match_id": str(match_id),
+        "ply": ply,
+        "side_to_move": side_to_move,
+        "fingerprint": fingerprint,
+        "applied": _applied_payload(path, captured, promoted_to),
+    }
+    if result is not None:
+        payload["result"] = dict(result)
+
+    return GatewayMessage(type=MessageType.MOVE_APPLIED, payload=payload, channel=Channel.GAME)
 
 
 def _applied_payload(

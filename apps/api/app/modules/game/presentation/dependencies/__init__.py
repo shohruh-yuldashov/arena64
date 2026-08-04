@@ -38,12 +38,16 @@ from uuid import UUID
 from fastapi import Depends, Request, WebSocket
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.api.deps import SettingsDep
+from app.api.deps import ClockDep, SettingsDep
+from app.core.clock import Clock
 from app.database.session import open_session
 from app.modules.game.application.ports import LiveMatchStore
 from app.modules.game.application.services import GameMatchRoster, LiveMoveService
 from app.modules.game.infrastructure import RedisLiveMatchStore
-from app.modules.game.infrastructure.repositories import SqlAlchemyMatchRecordRepository
+from app.modules.game.infrastructure.repositories import (
+    SqlAlchemyMatchRecordRepository,
+    SqlAlchemyMoveLogRepository,
+)
 from app.modules.game.public import (
     GameEngineServices,
     MatchRoster,
@@ -53,6 +57,7 @@ from app.modules.game.public import (
     SubmitMoveUseCase,
     engine_services,
 )
+from app.platform.outbox import OutboxEventPublisher, SqlAlchemyOutboxRepository
 
 
 class SessionScopedMatchRosters:
@@ -133,26 +138,54 @@ class SessionScopedLiveMoves:
         session_factory: async_sessionmaker[AsyncSession],
         live: LiveMatchStore,
         engine: GameEngineServices,
+        clock: Clock,
         live_state_ttl_seconds: int,
     ) -> None:
         self._session_factory = session_factory
         self._live = live
         self._engine = engine
+        self._clock = clock
         self._live_state_ttl_seconds = live_state_ttl_seconds
 
     async def submit(self, request: SubmitMoveRequest) -> SubmitMoveResult:
+        """One move, in one transaction, acknowledged only after it commits.
+
+        **The commit is here** — A64-016.4 §7: "return an accepted
+        acknowledgement only after the durable transaction commits", and
+        "if persistence fails, do not acknowledge the move as accepted".
+
+        Both follow from the `async with`: `open_session` rolls back on any
+        path that does not reach the explicit `commit`, so a failure
+        propagates as an exception the gateway maps to a rejection, and a
+        result can only be returned after the move row, the match write and
+        the outbox events are durable.
+
+        Placed at this boundary rather than inside `LiveMoveService` for
+        the reason every service on this platform declines to commit: the
+        unit of work belongs to whoever opened it, and a service that
+        committed could not be composed into a larger transaction.
+        """
         async with open_session(self._session_factory) as session:
             service = LiveMoveService(
                 matches=SqlAlchemyMatchRecordRepository(session),
+                moves=SqlAlchemyMoveLogRepository(session),
                 live=self._live,
+                events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
                 generator=self._engine.generator,
                 applier=self._engine.applier,
+                evaluator=self._engine.terminal,
+                draw_rules=self._engine.draw_rules,
+                clock=self._clock,
                 live_state_ttl_seconds=self._live_state_ttl_seconds,
             )
-            return await service.submit(request)
+            result = await service.submit(request)
+            await session.commit()
+            return result
 
 
-def get_live_moves_ws(websocket: WebSocket, settings: SettingsDep) -> SubmitMoveUseCase:
+def get_live_moves_ws(
+    websocket: WebSocket, settings: SettingsDep, clock: ClockDep
+) -> SubmitMoveUseCase:
     """`game`'s live-play command, for a WebSocket route.
 
     The **`live` Redis role**, not `cache` — see `RedisLiveMatchStore` on
@@ -166,6 +199,7 @@ def get_live_moves_ws(websocket: WebSocket, settings: SettingsDep) -> SubmitMove
         session_factory=websocket.app.state.db.session_factory,
         live=RedisLiveMatchStore(websocket.app.state.redis_pools.live),
         engine=engine_services(),
+        clock=clock,
         live_state_ttl_seconds=settings.game.live_state_ttl_seconds,
     )
 

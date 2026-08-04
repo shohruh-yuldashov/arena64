@@ -1,14 +1,11 @@
 # Realtime / WebSocket Architecture
 
 > **Status:** Approved for what exists — the authenticated connection foundation (A64-016.1),
-> game room sessions (A64-016.2) and live move submission (A64-016.3). Clocks, spectators,
-> reconnection replay and the cross-node *transport* are specified in outline only and are
-> marked as such.
->
-> **Read §18 before building on this.** The durable move log AD-18 pairs with the Redis live
-> position does not exist, so an in-flight game is not yet recoverable.
+> game room sessions (A64-016.2), live move submission (A64-016.3) and the durable move log
+> with terminal settlement (A64-016.4). Clocks, spectators and reconnection replay are
+> specified in outline only and are marked as such.
 > **Owner:** _Unassigned_
-> **Last reviewed:** 2026-08-02 (A64-016.3)
+> **Last reviewed:** 2026-08-04 (A64-016.4)
 > **Implements:** architecture.md AD-09 (single-use tickets), AD-11 (one multiplexed socket),
 > R-7 (the gateway contains no domain logic)
 > **Code:** `apps/api/app/gateway/`
@@ -34,9 +31,10 @@ one. A64-016.1 built the connection; everything a connection *carries* arrives l
 | Game room sessions and membership | **Built** — A64-016.2, §15 |
 | Move submission, validation and fan-out | **Built** — A64-016.3, §17 |
 | Per-connection move rate limiting | **Built** — A64-016.3, §17.6 |
-| Durable move log (AD-18's second half) | **Not built** — §18, and the reason to read it |
-| Clocks, spectators, chat | **Deferred** — §9 |
-| Cross-node message *transport* | **Deferred** — §9, §14.3 |
+| Durable move log (AD-18's second half) | **Built** — A64-016.4, §18 |
+| Terminal detection and match settlement | **Built** — A64-016.4, §18.4 |
+| Remote transport bus seam | **Built** — A64-016.4, §18.6. Single-node adapter only |
+| Clocks, spectators, chat | **Deferred** — §9, and A64-016.5 for clocks |
 | Reconnection replay (AD-12) | **Deferred** — §9 |
 
 ---
@@ -444,7 +442,7 @@ client a code.
 | `GATEWAY_MOVE_RATE_LIMIT` | 30 | Per connection |
 | `GATEWAY_MOVE_RATE_LIMIT_WINDOW_SECONDS` | 10 | |
 | `GATEWAY_MOVE_IDEMPOTENCY_TTL_SECONDS` | 60 | §17.5 |
-| `GAME_LIVE_STATE_TTL_SECONDS` | 14400 | The one TTL whose expiry loses something unrebuildable — §18 |
+| `GAME_LIVE_STATE_TTL_SECONDS` | 14400 | A **cache** since A64-016.4 — expiry costs a rebuild from the log, not a game (§18.5) |
 
 There is **no kill switch**. Presence and the friends cache have one because they degrade to a
 working platform with a feature missing; a gateway with no registry cannot answer "does this
@@ -459,9 +457,10 @@ position is "broken" is not a switch — turning the gateway off is a deploy dec
 | --- | --- | --- |
 | ~~No contract suite over `wsticket:v1:` or `gwconn:v1:`~~ | **Closed by A64-016.2** | — |
 | ~~No contract suite over `gwroom:v1:`~~ | **Closed by A64-016.3.** `tests/contract/test_gateway_redis.py` proves atomic membership, per-connection removal, the empty-room TTL and the monotonic sequence CAS against real Redis | — |
-| **No durable move log** | **See §18.** The headline gap of A64-016.3 | A64-016.4 or earlier |
-| `RemoteNodePublisher` is a log line | A fan-out to a connection on another node is silently not delivered. **Single-node is the only supported topology** | The transport (§14.3) |
-| No terminal-state detection | A game that has been won continues to accept moves until the engine has no legal move, and nothing settles the match | The lifecycle task |
+| ~~No durable move log~~ | **Closed by A64-016.4** — §18 | — |
+| ~~No terminal-state detection~~ | **Closed by A64-016.4** — §18.4 | — |
+| `GatewayBus` has no multi-node adapter | A fan-out to another node is queued in memory and never crosses. **Single-node is the only supported topology** | `RedisStreamGatewayBus` — §18.6 |
+| No clocks | A game cannot be lost on time; the move log's clock columns are null | A64-016.5 |
 | No per-connection limit on non-move frames | `room.join` and `ping` are bounded only by what a socket can send. Both are cheap; neither is free | A second rule if it becomes worth spending |
 
 ---
@@ -836,7 +835,7 @@ socket, no FastAPI object, no engine type, because the eventual transport serial
 
 **Delivery never fails a move.** By the time it runs the move is committed in `game`, so a socket
 that went away between the plan and the write is counted and logged, never raised (§9, §10). The
-implementation behind `RemoteNodePublisher` is a **log line** until A64-016.4 — see §18.
+implementation behind `RemoteNodePublisher` is a **log line** until a multi-node adapter exists — see §18.6.
 
 ### 17.9 Room state — the live projection
 
@@ -854,44 +853,141 @@ an older ply and send a resynchronising client backwards.
 
 ---
 
-## 18. The durable move log — the gap to read before building on this
+## 18. The durable move log and terminal settlement — A64-016.4
 
-AD-18: *"Live position lives in Redis. **Moves are appended durably to PostgreSQL.**"*
+AD-18: *"Live position lives in Redis. **Moves are appended durably to
+PostgreSQL.**"* A64-016.3 built the first sentence. This is the second, and with it the
+mitigation AD-19 depends on — *"the durable move log allows a match to be reconstructed by replay
+through the engine"*.
 
-A64-016.3 built the first sentence and not the second. `game:live:v1:<match_id>` holds the
-position and the ply; nothing writes a move anywhere durable.
+### 18.1 The schema
 
-### What that costs, precisely
+```
+game.move   id, match_id, ply_number, seat, path[], captured[], promoted_to,
+            position_hash, engine_version, think_time_ms, remaining_clock_ms, created_at
+```
 
-AD-19 says nothing competitive lives only in Redis, and names the mitigation: *"the durable move
-log allows a match to be reconstructed by replay through the engine."* Without it:
-
-| Event | Consequence |
+| Constraint | Rule |
 | --- | --- |
-| Redis primary fails | Every in-flight game is lost, unrecoverably. There is nothing to replay from |
-| `GAME_LIVE_STATE_TTL_SECONDS` lapses | The same, for one game |
-| A position decodes as malformed | The service falls back to the **opening position** — the wrong game, logged at `ERROR` |
+| `uq_move__ply` | Unique `(match_id, ply_number)`. **The concurrency mechanism**, not a safety net |
+| `ck_move__ply_positive` | Contiguous from 1 (MT-5) |
+| `ck_move__path_is_a_move` | At least two squares |
+| `ck_move__position_hash_present` | Non-**empty**, not merely non-null — an empty hash is a replay that cannot check itself |
+| `fk_move__match` | `ON DELETE CASCADE`. A log without its match is unreadable, and retention cannot reach a `completed` match — `ix_match__abandoned` excludes it |
 
-The third is the one that would be hardest to notice in production, which is why the decoder logs
-at `ERROR` rather than `WARNING` like every other tolerant decoder on this platform.
+**Append-only** (MT-5): no `updated_at`, no `deleted_at`, and no transition on `MoveRecord`. The
+stronger form `database.md` §8.4 asks for is a runtime role without `UPDATE`/`DELETE` on this
+table — a grant rather than a migration, and the next step.
 
-### Why it shipped anyway
+`game.match` gains `ply_number`, `outcome`, `termination_reason`, `winner`, `ended_at`, and the
+status enum gains `completed`.
 
-Because no rated game is played yet: matchmaking creates matches, the acceptance handshake works,
-and nothing consumes a result. The engine's own audit records the same posture for the same
-reason — three draw thresholds are undecided, and they block "anything that stores a rated
-result" rather than blocking play.
+### 18.2 What this is, against `database.md` §8.4
 
-**This is the thing to build before a real game is played.** It is not a refinement of what is
-here; it is the half of AD-18 that makes the other half safe.
+§8.4 specifies the relation at scale. This is the subset that ships, documented the way §8.2a
+documents `game.match`'s own:
 
-### What it needs
+| §8.4 | Here | Why |
+| --- | --- | --- |
+| Partitioned monthly on `match_created_at` | Not partitioned | `game.match` is not either, and a child partitioned on a parent key that does not exist cannot declare a foreign key. Both move together (DB-13) |
+| `path` as `smallint[]` of PDN numbers | `text[]` of algebraic squares | There is no PDN numbering on `BoardCoordinate`. The engine round-trips algebraic (`parse`/`__str__`), and storing a numbering it cannot produce would be the lossy translation §4 forbids |
+| `position_hash` as `bytea` | `text` | `MoveRecord.resulting_position_hash` **is** `Position.fingerprint`, a string. Hashing it would add a second representation of one value |
+| Clock columns `NOT NULL` | Nullable | A64-016.5 fills them. Null rather than zero: a clock reading of zero is a flagged player |
+| `client_move_id` | Absent | `uq_move__ply` is the duplicate guard; the client's retry token is `request_id`, and A64-016.3 §7 forbids a second one |
+| `received_at` | Absent | It exists for the flag race (MT-9), which is clocks |
 
-`game.move` — database.md §8.4 already specifies it as the platform's largest relation,
-partitioned, append-only. One insert per move inside the same transaction that advances the ply,
-and `ReplayEngine` (which exists, is tested, and has no caller) to reconstruct a position from it.
+### 18.3 The transaction
 
----
+One PostgreSQL transaction per move:
+
+```
+1. lock the match row          FOR UPDATE, no SKIP LOCKED
+2. rebuild the Match           replay the durable log
+3. match.play(...)             validate, apply, evaluate terminal, evaluate draws
+4. append the move row         uq_move__ply refuses a duplicate ply
+5. advance or complete         compare-and-set on ply_number
+6. stage the outbox events     same transaction (AD-16)
+7. commit  ──►  acknowledge
+```
+
+"Match advanced but move record missing" is impossible because 4 and 5 are one transaction.
+
+**The acknowledgement is sent after the commit** (§7) and the commit is at the composition-root
+boundary, not in the service — `open_session` rolls back on any path that does not reach it, so a
+persistence failure propagates as an exception the gateway maps to a rejection rather than as an
+accepted move.
+
+**Concurrency**, three mechanisms, none process-local:
+
+| Mechanism | Covers |
+| --- | --- |
+| The row lock (`FOR UPDATE`, no `SKIP LOCKED`) | Two players of one match. The second waits and then sees what the first wrote — a skipping lock would report "no such match" to somebody who has one |
+| `uq_move__ply` | A duplicate ply, whatever took the lock. §2 forbids in-memory deduplication; this is the mechanism |
+| `advance`'s compare-and-set | A match write whose ply moved, if a future path forgets the lock |
+
+### 18.4 Terminal settlement
+
+**Through `Match.play`, not around it.** The aggregate has done this since A64-014.7:
+
+```
+apply  ──►  TerminalStateEvaluator  ──►  DrawRuleSet
+```
+
+The evaluator is asked first and a win short-circuits, which is §5's "a decisive terminal result
+must remain higher priority than a draw": a position can be both a third repetition and a win for
+the side that just moved, and a game that was won is not a game that was drawn.
+
+Reimplementing that sequence in the service would have been the duplication §5 forbids, and it
+would have been a second copy of a priority rule that only shows its absence in a game somebody
+loses. It also makes replay and live play the **same code path** — `ReplayEngine` calls
+`match.play` too — so a replayed game reaches the result it reached when it was played by
+construction rather than by agreement.
+
+On settlement: `status = completed`, the result decomposed into three columns, `ended_at`, and
+`game.match_completed` through the outbox. Further moves are refused with `match_not_active`,
+checked **under the row lock**, so a move racing its own game's settlement is refused rather than
+applied to a finished board.
+
+### 18.5 Replay compatibility
+
+`PersistedMatchReplay` builds `ReplayData` from the match row and the log. It is deliberately
+tiny, because the log was designed to be replay-compatible rather than translated into
+compatibility: `for_replay` already returns `MoveRecord`s, the variant fixes the opening position
+deterministically, and §4's prohibition on persisting occurrence counts is what makes replay the
+only way to get them — so replaying is not a fallback, it is the mechanism.
+
+`expected_result` is filled for a completed match **so that a replay can fail**. A replay that
+could not disagree with the record would prove nothing.
+
+The live Redis position is now a **cache of a replay**. The log is the source; a cache miss costs
+a rebuild rather than a game.
+
+### 18.6 The remote transport bus
+
+`GatewayBus` — `publish(BusMessage)` and `consume(node_id, limit)`. Framework-independent: no
+FastAPI, no Redis, no socket.
+
+`BusMessage` is primitive-only and JSON-round-trippable, which is what makes §9's "no direct
+socket references in bus payloads" structural rather than remembered. **`request_id` and
+`channel` travel inside the frame**, where the protocol already puts them — lifting them onto the
+envelope would be a second copy of two fields that must not disagree.
+
+| Property | Value |
+| --- | --- |
+| Delivery | At-least-once. The frame carries a ply and a client ignores a repeat |
+| Ordering | None. The ply is the sequence, and the room projection refuses to move backwards |
+| Failure | Returned, never raised — the move is committed before anything is delivered |
+| Adapter today | `InProcessGatewayBus`. Complete against the contract, and does not cross a process boundary — correct for **single-node**, which remains the supported topology |
+| Adapter next | `RedisStreamGatewayBus` on the `bus` role: a stream per node (`gwbus:v1:<node_id>`), `MAXLEN`-bounded, consumed by that node's own reader task |
+
+### 18.7 What is still missing
+
+| Gap | Consequence | Closes with |
+| --- | --- | --- |
+| No clocks | A game has no time control and cannot be lost on time. `think_time_ms` and `remaining_clock_ms` are null | A64-016.5 |
+| No multi-node bus adapter | A fan-out to another node is queued in memory and never crosses. Single-node only | A64-016.5 |
+| No `UPDATE`/`DELETE` revocation on `game.move` | Append-only is held by the code and the absence of a mutating method, not by a grant | A privilege change |
+| No draw thresholds | Three of four are undecided product rules (`specs/game-engine/audit.md` §8), so those draws cannot fire | A product decision |
 
 ---
 

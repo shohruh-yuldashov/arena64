@@ -57,6 +57,7 @@ from typing import Any, ClassVar
 from uuid import UUID
 
 from app.modules.engine import PlayerSide
+from app.modules.game.domain.result import MatchOutcome, TerminationReason
 from app.modules.game.domain.variants import ProductVariant
 from app.platform.events import DomainEvent
 
@@ -261,11 +262,104 @@ class MatchAcceptanceExpired(_MatchEvent):
         }
 
 
+@dataclass(frozen=True)
+class MoveApplied(DomainEvent):
+    """One move was played and durably logged — A64-016.4 §10.
+
+    Published per ply, which makes it the highest-volume event on the
+    platform by a wide margin: one row per move of every game, where
+    `MatchCreated` is one per pairing. That is deliberate and is what the
+    outbox is for — a consumer rebuilding a projection, a fair-play
+    analyser, or the spectator feed all need the sequence rather than a
+    summary, and none of them can reconstruct it from a completion event.
+
+    **Carries no board.** The path and the resulting fingerprint are enough
+    for a consumer to follow along or to detect divergence; a position per
+    move would multiply the outbox's largest stream by the size of a board.
+    """
+
+    event_type: ClassVar[str] = "game.move_applied"
+    aggregate_type: ClassVar[str] = MATCH_AGGREGATE
+
+    match_id: UUID
+    ply_number: int
+    side: PlayerSide
+    path: tuple[str, ...]
+    """The squares the piece occupied, in order — never an origin and a
+    destination. Two capture routes can share endpoints, so the pair is
+    lossy and a consumer replaying from it would reconstruct a different
+    game."""
+
+    resulting_position_hash: str
+
+    @property
+    def aggregate_id(self) -> UUID:
+        return self.match_id
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "match_id": str(self.match_id),
+            "ply_number": self.ply_number,
+            "side": self.side.value,
+            "path": list(self.path),
+            "resulting_position_hash": self.resulting_position_hash,
+        }
+
+
+@dataclass(frozen=True)
+class MatchCompleted(DomainEvent):
+    """A match was played to an end — A64-016.4 §6.
+
+    The event `rating` and `statistics` key on, and the first on this
+    platform that says a *game* happened rather than a pairing. `rated`
+    travels with it for exactly that reason: a consumer deciding whether to
+    move a rating must not have to read the match back, because by the time
+    a relay delivers this the row may have been archived.
+
+    Emitted on the ply that ends the game and on no other, so a consumer
+    counting completions counts games.
+    """
+
+    event_type: ClassVar[str] = "game.match_completed"
+    aggregate_type: ClassVar[str] = MATCH_AGGREGATE
+
+    match_id: UUID
+    variant: ProductVariant
+    rated: bool
+    outcome: MatchOutcome
+    termination_reason: TerminationReason
+    winner: PlayerSide | None
+    """`None` for a draw and for an aborted match. Never `None` for a win —
+    the pairing is `MatchResult`'s invariant and a database `CHECK`."""
+
+    ply_number: int
+    """How long the game was. Carried because "games are ending in four
+    plies" is an incident and reading it from a completion event is the
+    only way to see it without joining the move log."""
+
+    @property
+    def aggregate_id(self) -> UUID:
+        return self.match_id
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "match_id": str(self.match_id),
+            "variant": self.variant.value,
+            "rated": self.rated,
+            "outcome": self.outcome.value,
+            "termination_reason": self.termination_reason.value,
+            "winner": self.winner.value if self.winner is not None else None,
+            "ply_number": self.ply_number,
+        }
+
+
 __all__ = [
     "MATCH_AGGREGATE",
     "MatchAcceptanceExpired",
     "MatchAcceptedByPlayer",
     "MatchActivated",
+    "MatchCompleted",
     "MatchCreated",
     "MatchDeclined",
+    "MoveApplied",
 ]

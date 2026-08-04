@@ -36,11 +36,15 @@ from app.modules.game.domain.events import (
     MatchAcceptanceExpired,
     MatchAcceptedByPlayer,
     MatchActivated,
+    MatchCompleted,
     MatchCreated,
     MatchDeclined,
+    MoveApplied,
 )
 
 __all__ = [
+    "MatchCompleted",
+    "MoveApplied",
     "MATCH_AGGREGATE",
     "MatchAcceptanceExpired",
     "MatchAcceptedByPlayer",

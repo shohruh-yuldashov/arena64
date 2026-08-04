@@ -72,6 +72,11 @@ class SqlAlchemyMatchRecordRepository:
             acceptance_deadline=row.acceptance_deadline,
             status=row.status,
             declined_by=row.declined_by,
+            ply_number=row.ply_number,
+            outcome=row.outcome,
+            termination_reason=row.termination_reason,
+            winner=row.winner,
+            ended_at=row.ended_at,
             settled_at=row.settled_at,
         )
 
@@ -225,6 +230,46 @@ class SqlAlchemyMatchRecordRepository:
             ),
         )
         return int(result.rowcount) == 1
+
+    async def advance(self, record: MatchRecord, *, expected_ply: int) -> bool:
+        """Writes a match one move further on, only if its ply is still
+        `expected_ply` — A64-016.4 §3, §8.
+
+        The compare-and-set that makes "only one move may win for one match
+        version" true even if a caller forgets the row lock. `lock` is what
+        actually serialises two players, and this is the guard that holds
+        when the two are separated — the same belt-and-braces
+        `settle` above keeps for the acceptance handshake.
+
+        Writes the settlement columns unconditionally, because a move that
+        ends a game advances the ply *and* completes the match, and two
+        statements would be a window in which a match is one move on and
+        has no result.
+
+        Returns `False` for a losing write. The caller turns that into
+        `StaleMatchState` and never retries internally — see
+        `LiveMoveService`.
+        """
+        result = cast(
+            "CursorResult[Any]",
+            await self._session.execute(
+                update(MatchRecordModel)
+                .where(
+                    MatchRecordModel.id == record.id,
+                    MatchRecordModel.ply_number == expected_ply,
+                    MatchRecordModel.status == MatchRecordStatus.ACTIVE,
+                )
+                .values(
+                    status=record.status,
+                    ply_number=record.ply_number,
+                    outcome=record.outcome,
+                    termination_reason=record.termination_reason,
+                    winner=record.winner,
+                    ended_at=record.ended_at,
+                )
+            ),
+        )
+        return result.rowcount == 1
 
     async def claim_overdue(self, *, now: datetime, limit: int) -> Sequence[MatchRecord]:
         """Takes up to `limit` overdue pending matches for this worker.

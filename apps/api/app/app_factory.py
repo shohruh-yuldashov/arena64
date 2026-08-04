@@ -126,6 +126,13 @@ from app.modules.rating.application.services.match_rating_service import MatchRa
 from app.modules.rating.infrastructure.repositories.player_rating_repository import (
     SqlAlchemyPlayerRatingRepository,
 )
+from app.modules.tournament.infrastructure.tasks import (
+    TournamentDeadlineTask,
+)
+from app.modules.tournament.infrastructure.tasks import (
+    deadline_request as tournament_deadline_request,
+)
+from app.modules.tournament.presentation.dependencies import build_deadline_service
 from app.modules.users.infrastructure.presence import (
     NoPresenceProvider,
     RedisPresenceProvider,
@@ -787,6 +794,26 @@ def build_task_schedulers(
         # process.
         logger.warning("gateway_forwarding_disabled", extra={"reason": "configuration"})
 
+    # A64-019.2 §2, §9. `registration_deadline` is a promise to players:
+    # registration closes when it is reached without an operator being
+    # awake. A task rather than a timer, for AD-21's reason — a timer lives
+    # on one node and a deploy takes it with them, and those tournaments
+    # then never close, they hang.
+    #
+    # Idempotent by predicate: the claim is "open **and** overdue", so a
+    # tournament already closed does not match and a second worker finds
+    # nothing. There is no ledger to keep.
+    handlers.append(
+        TournamentDeadlineTask(
+            session_factory=db.session_factory,
+            service_factory=lambda session: build_deadline_service(
+                session,
+                events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
+                clock=clock,
+            ),
+        )
+    )
+
     # A64-015.6 §6. Always registered — there is no switch, because the
     # accumulator is filled by services that are always wired and a process
     # that never drained it would hold counters forever and report none.
@@ -843,6 +870,16 @@ def build_task_schedulers(
             )
             for pool in every_pool()
         )
+    schedulers.append(
+        PeriodicTaskScheduler(
+            dispatcher=dispatcher,
+            request=tournament_deadline_request(),
+            # A minute: a registration that closes a few seconds late costs
+            # nobody a game, and a tighter tick would be a sweep that is
+            # almost always empty.
+            interval_seconds=60.0,
+        )
+    )
     schedulers.append(
         PeriodicTaskScheduler(
             dispatcher=dispatcher,

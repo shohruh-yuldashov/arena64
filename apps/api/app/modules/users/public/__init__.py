@@ -119,6 +119,9 @@ through `UserAccountCreator`, not the whole class.
 
 from uuid import UUID
 
+from app.modules.users.application.services.user_profile_service import (
+    UserProfileService,
+)
 from app.modules.users.domain.events import PresenceOffline, PresenceOnline
 from app.modules.users.domain.exceptions import (
     EmailAlreadyExists,
@@ -243,6 +246,7 @@ __all__ = [
     "UserCredentials",
     "UserId",
     "UserProfileReader",
+    "UserProfileService",
     "UserNotFound",
     "UserRead",
     "UserSummary",

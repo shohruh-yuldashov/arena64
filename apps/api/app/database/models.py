@@ -28,6 +28,7 @@ from app.modules.game.infrastructure import models as _game_models  # noqa: F401
 from app.modules.matchmaking.infrastructure import models as _matchmaking_models  # noqa: F401
 from app.modules.rating.infrastructure import models as _rating_models  # noqa: F401
 from app.modules.statistics.infrastructure import models as _statistics_models  # noqa: F401
+from app.modules.tournament.infrastructure import models as _tournament_models  # noqa: F401
 from app.modules.users.infrastructure import models as _users_models  # noqa: F401
 from app.modules.users.infrastructure.search_ddl import register_search_ddl
 

@@ -1,0 +1,200 @@
+"""SQLAlchemy adapters for `tournament`'s two repositories.
+
+## Two locks, opposite choices, both deliberate
+
+`lock` uses `FOR UPDATE` **without** `SKIP LOCKED`: two players registering
+at the same instant compete for the same slot, and skipping one would drop
+a registration rather than serialising it.
+
+`close_overdue` uses `FOR UPDATE SKIP LOCKED`: a tournament another worker
+is already closing is one this worker should leave alone. Waiting would
+make two workers take turns doing the same work.
+
+The same split `game` already makes between a match write and a retention
+sweep, and it is the reason both live here rather than behind one helper.
+"""
+
+import uuid
+from datetime import datetime
+
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.modules.tournament.application.ports import AlreadyRegistered, TournamentIsFull
+from app.modules.tournament.domain.registration import Registration, RegistrationStatus
+from app.modules.tournament.domain.tournament import Tournament, TournamentStatus
+from app.modules.tournament.infrastructure.models import RegistrationModel, TournamentModel
+
+_DUPLICATE_CONSTRAINT = "pk_registration"
+
+
+class SqlAlchemyTournamentRepository:
+    """`TournamentRepository` over one session."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def create(self, tournament: Tournament) -> Tournament:
+        self._session.add(_to_model(tournament))
+        await self._session.flush()
+        return tournament
+
+    async def by_id(self, tournament_id: uuid.UUID) -> Tournament | None:
+        row = await self._session.get(TournamentModel, tournament_id)
+        return _to_domain(row) if row else None
+
+    async def lock(self, tournament_id: uuid.UUID) -> Tournament | None:
+        """`FOR UPDATE`, no `SKIP LOCKED` — see this module's docstring."""
+        row = await self._session.scalar(
+            select(TournamentModel).where(TournamentModel.id == tournament_id).with_for_update()
+        )
+        return _to_domain(row) if row else None
+
+    async def save(self, tournament: Tournament) -> None:
+        row = await self._session.get(TournamentModel, tournament.id)
+        if row is None:
+            return
+        row.status = tournament.status
+        await self._session.flush()
+
+    async def close_overdue(self, *, now: datetime) -> list[uuid.UUID]:
+        """Closes every open tournament past its deadline. Idempotent.
+
+        The predicate is the whole guard: a tournament already closed does
+        not match, so a second worker — or a second run of the same one —
+        finds nothing and does nothing. That is what makes the task safe to
+        schedule rather than something to coordinate.
+        """
+        claimed = (
+            select(TournamentModel)
+            .where(
+                TournamentModel.status == TournamentStatus.REGISTRATION_OPEN,
+                TournamentModel.registration_deadline.is_not(None),
+                TournamentModel.registration_deadline <= now,
+            )
+            .with_for_update(skip_locked=True)
+        )
+
+        closed: list[uuid.UUID] = []
+        for row in (await self._session.scalars(claimed)).all():
+            row.status = TournamentStatus.REGISTRATION_CLOSED
+            closed.append(row.id)
+
+        await self._session.flush()
+        return closed
+
+
+class SqlAlchemyRegistrationRepository:
+    """`RegistrationRepository` over one session."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, registration: Registration, *, capacity: int) -> Registration:
+        """Counts and inserts in one transaction, under the caller's lock.
+
+        The count is **inside** the caller's `FOR UPDATE` on the tournament
+        row, so two concurrent registrations serialise on that row and the
+        second sees the first's insert. Counting outside the lock is
+        precisely the check-then-insert §6 forbids.
+
+        The duplicate is still the database's: the primary key refuses a
+        second entry whatever its status, which is §4's no-re-registration
+        rule made structural.
+        """
+        taken = await self.count_active(registration.tournament_id)
+        if taken >= capacity:
+            raise TournamentIsFull(f"this tournament is full ({taken}/{capacity})")
+
+        self._session.add(
+            RegistrationModel(
+                tournament_id=registration.tournament_id,
+                player_id=registration.player_id,
+                status=registration.status,
+                registered_at=registration.registered_at,
+                withdrawn_at=registration.withdrawn_at,
+            )
+        )
+        try:
+            await self._session.flush()
+        except IntegrityError as violation:
+            if _DUPLICATE_CONSTRAINT not in str(violation.orig):
+                raise
+            raise AlreadyRegistered(
+                "this player is already entered in this tournament"
+            ) from violation
+
+        return registration
+
+    async def withdraw(self, registration: Registration) -> None:
+        row = await self._session.get(
+            RegistrationModel, (registration.tournament_id, registration.player_id)
+        )
+        if row is None:
+            return
+        row.status = registration.status
+        row.withdrawn_at = registration.withdrawn_at
+        await self._session.flush()
+
+    async def find(self, tournament_id: uuid.UUID, player_id: uuid.UUID) -> Registration | None:
+        row = await self._session.get(RegistrationModel, (tournament_id, player_id))
+        if row is None:
+            return None
+        return Registration(
+            tournament_id=row.tournament_id,
+            player_id=row.player_id,
+            registered_at=row.registered_at,
+            status=row.status,
+            withdrawn_at=row.withdrawn_at,
+        )
+
+    async def count_active(self, tournament_id: uuid.UUID) -> int:
+        """Served by `ix_registration__active`, which is partial on the
+        status — so it is an index over exactly the rows that count."""
+        return int(
+            await self._session.scalar(
+                select(func.count())
+                .select_from(RegistrationModel)
+                .where(
+                    RegistrationModel.tournament_id == tournament_id,
+                    RegistrationModel.status == RegistrationStatus.REGISTERED,
+                )
+            )
+            or 0
+        )
+
+
+def _to_model(tournament: Tournament) -> TournamentModel:
+    return TournamentModel(
+        id=tournament.id,
+        name=tournament.name,
+        format=tournament.format,
+        variant=tournament.variant,
+        speed_class=tournament.speed_class,
+        status=tournament.status,
+        rated=tournament.rated,
+        capacity=tournament.capacity,
+        created_by=tournament.created_by,
+        registration_deadline=tournament.registration_deadline,
+        created_at=tournament.created_at,
+    )
+
+
+def _to_domain(row: TournamentModel) -> Tournament:
+    return Tournament(
+        id=row.id,
+        name=row.name,
+        format=row.format,
+        variant=row.variant,
+        speed_class=row.speed_class,
+        rated=row.rated,
+        capacity=row.capacity,
+        created_by=row.created_by,
+        created_at=row.created_at,
+        registration_deadline=row.registration_deadline,
+        status=row.status,
+    )
+
+
+__all__ = ["SqlAlchemyRegistrationRepository", "SqlAlchemyTournamentRepository"]

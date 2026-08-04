@@ -72,7 +72,7 @@ from uuid import UUID
 
 from app.core.exceptions import DomainError
 from app.modules.engine import EngineVersion, PlayerSide
-from app.modules.game.domain.variants import ProductVariant
+from app.modules.game.domain.variants import MatchOrigin, ProductVariant
 
 
 class MatchCreationRefused(DomainError):
@@ -222,6 +222,21 @@ class CreateMatchRequest:
 
     dark: MatchParticipant
 
+    origin: MatchOrigin = MatchOrigin.QUEUE
+    """Where this match came from — R-25, A64-019.0.
+
+    Defaulted, so `matchmaking` — the only caller today — is unchanged: a
+    queue pairing is a queue pairing whether or not it says so.
+    """
+
+    origin_ref: UUID | None = None
+    """The originating context's own identifier, opaque to `game`.
+
+    A tournament passes its pairing id here and recognises the match again
+    when `match_completed` carries it back. That round trip is the entire
+    mechanism `services.md` §11.3 assumed already existed.
+    """
+
     def __post_init__(self) -> None:
         # A pairing of somebody with themselves is not a match, and it is
         # the one malformed request this port can detect on its own. It
@@ -296,6 +311,7 @@ class MatchCreationUseCase(Protocol):
 
 
 __all__ = [
+    "MatchOrigin",
     "SeatRating",
     "CreateMatchRequest",
     "CreateMatchResult",

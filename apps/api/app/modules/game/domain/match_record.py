@@ -71,7 +71,7 @@ from app.modules.game.domain.exceptions import (
     NotAMatchParticipant,
 )
 from app.modules.game.domain.result import MatchOutcome, MatchResult, TerminationReason
-from app.modules.game.domain.variants import ProductVariant
+from app.modules.game.domain.variants import MatchOrigin, ProductVariant
 
 
 class MatchRecordStatus(StrEnum):
@@ -255,6 +255,19 @@ class MatchRecord:
     is: a match written under one reservation TTL must not be silently
     re-dated by a deploy that changes it. Equal by construction to both
     tickets' `reserved_until` — see this module's docstring.
+    """
+
+    origin: MatchOrigin = MatchOrigin.QUEUE
+    """Where this match came from — R-25. Defaults to `QUEUE`, which is what
+    every match created before A64-019.0 was."""
+
+    origin_ref: UUID | None = None
+    """The originating context's own identifier, **opaque**.
+
+    A tournament pairing, a challenge, a rematch offer. `game` never
+    dereferences it and there is no foreign key (DB-03): a constraint here
+    would make `game` and `tournaments` undeployable apart, which is the one
+    seam `architecture.md` §16 exists to keep open.
     """
 
     status: MatchRecordStatus = MatchRecordStatus.PENDING_ACCEPTANCE

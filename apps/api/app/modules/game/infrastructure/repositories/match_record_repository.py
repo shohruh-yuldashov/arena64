@@ -63,6 +63,8 @@ class SqlAlchemyMatchRecordRepository:
             pairing_id=row.pairing_id,
             variant=row.variant,
             rated=row.rated,
+            origin=row.origin,
+            origin_ref=row.origin_ref,
             engine_version=EngineVersion(number=row.engine_version),
             light=MatchSeat(
                 player_id=row.light_player_id,
@@ -129,6 +131,8 @@ class SqlAlchemyMatchRecordRepository:
             pairing_id=record.pairing_id,
             variant=record.variant,
             rated=record.rated,
+            origin=record.origin,
+            origin_ref=record.origin_ref,
             engine_version=record.engine_version.as_primitive(),
             light_player_id=record.light.player_id,
             light_ticket_id=record.light.queue_ticket_id,

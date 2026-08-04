@@ -128,7 +128,7 @@ from app.database.types import UtcDateTime
 from app.modules.engine import PlayerSide
 from app.modules.game.domain.match_record import MatchRecordStatus
 from app.modules.game.domain.result import MatchOutcome, TerminationReason
-from app.modules.game.domain.variants import ProductVariant
+from app.modules.game.domain.variants import MatchOrigin, ProductVariant
 
 #: database.md §222 — one schema per bounded context.
 GAME_SCHEMA = "game"
@@ -252,6 +252,15 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
         # abandoned however old it looks, and one that is old *and* pending
         # is a reconciliation failure the sweep must surface rather than
         # delete.
+        # "Every match this context produced" — a tournament reconciling its
+        # own round. Partial: `origin_ref` is null for the queue matches
+        # that are almost all of this table.
+        Index(
+            "ix_match__origin_ref",
+            "origin",
+            "origin_ref",
+            postgresql_where=text("origin_ref IS NOT NULL"),
+        ),
         Index(
             "ix_match__abandoned",
             "settled_at",
@@ -357,6 +366,29 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
     dark_player_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     dark_ticket_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     dark_accepted_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    origin: Mapped[MatchOrigin] = mapped_column(
+        _enum(MatchOrigin, "match_origin"),
+        nullable=False,
+        server_default=text(f"'{MatchOrigin.QUEUE.value}'"),
+    )
+    """Where this match came from — R-25, A64-019.0.
+
+    `server_default` rather than a backfill: every match written before this
+    column existed came from the queue, which is what the default says, so
+    the migration states a fact rather than guessing one."""
+
+    origin_ref: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    """The originating context's own identifier — **opaque, and no foreign
+    key** (DB-03).
+
+    A constraint here would make `game` and `tournaments` undeployable
+    apart, which is the seam `architecture.md` §16 exists to keep open. It
+    would also outlive its usefulness: a tournament is prunable and a match
+    is permanent, so the constraint would forbid the retention the other
+    schema will eventually need — the same argument this file already makes
+    about queue tickets.
+    """
 
     # --- seat rating snapshots — SPEC-RATING §7.6, MT-4 ---------------
     #

@@ -81,6 +81,9 @@ class PersistentMatchCreation:
             pairing_id=request.pairing_id,
             variant=request.variant,
             rated=request.rated,
+            # R-25 — stored and handed back, never interpreted.
+            origin=request.origin,
+            origin_ref=request.origin_ref,
             engine_version=request.engine_version,
             # The seat snapshots travel from `matchmaking` and are stored
             # unchanged — SPEC-RATING §7.6. `game` copies them onto the

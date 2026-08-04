@@ -100,3 +100,36 @@ __all__ = [
     "require_offered",
     "variant_catalogue",
 ]
+
+
+class MatchOrigin(StrEnum):
+    """Where a match came from — `domain-model.md` R-25, A64-019.0.
+
+    **`game` knows the member and nothing behind it.** `TOURNAMENT` does not
+    make this module aware of brackets, rounds or seeding: it is a label on
+    a row, paired with an opaque `origin_ref` that carries no foreign key
+    (DB-03) and no meaning here.
+
+    That is the whole of R-25, and it is what lets `services.md` §11.3's
+    claim — *tournaments require no new mechanism* — actually hold. Without
+    it a tournament can create a match through `game.public` and has no way
+    to recognise it again when `match_completed` comes back.
+
+    Populated from day one rather than added per feature. `domain-model.md`
+    R-19 makes the argument for `TerminationReason` and it applies here
+    unchanged: adding `tournament` later, after months of matches were
+    recorded as `queue`, makes every historical query about origin wrong and
+    unfixable.
+    """
+
+    QUEUE = "queue"
+    """Paired by `matchmaking`. The only origin anything produces today."""
+
+    CHALLENGE = "challenge"
+    """A direct invitation. `domain-model.md` §21 — not built."""
+
+    REMATCH = "rematch"
+    """Offered at the end of a finished game. Not built."""
+
+    TOURNAMENT = "tournament"
+    """One round of a bracket. `origin_ref` is the pairing — opaque here."""

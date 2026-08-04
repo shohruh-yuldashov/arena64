@@ -22,11 +22,14 @@ import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.engine import PlayerSide
-from app.modules.game.domain.match_record import MatchRecordStatus
+from app.modules.engine import EngineVersion, PlayerSide
+from app.modules.game.domain.match_record import MatchRecord, MatchRecordStatus, MatchSeat
 from app.modules.game.domain.result import MatchOutcome, TerminationReason
-from app.modules.game.domain.variants import ProductVariant
+from app.modules.game.domain.variants import MatchOrigin, ProductVariant
 from app.modules.game.infrastructure.models import MatchRecordModel, MoveLogModel
+from app.modules.game.infrastructure.repositories.match_record_repository import (
+    SqlAlchemyMatchRecordRepository,
+)
 from app.modules.game.presentation.dependencies import get_match_history, get_match_replay
 from app.modules.game.public import UnsupportedEngineVersion
 from tests.contract.contract_app import build_contract_app, contract_client
@@ -428,3 +431,80 @@ class TestTheAuditScenarios:
         # Two of six are rated, newest first, each exactly once.
         assert seen == [str(_id(600)), str(_id(603))]
         assert cursor is None
+
+
+class TestMatchOrigin:
+    """R-25 — A64-019.0's whole point, round-tripped.
+
+    `services.md` §11.3 and `database.md` §18.3 both claim tournaments need
+    no new mechanism *because* a match can carry an opaque reference to the
+    context that created it. It could not; this asserts that it now can.
+    """
+
+    async def test_an_opaque_origin_reference_survives_the_round_trip(
+        self, contract_session: AsyncSession
+    ) -> None:
+        """Create with an origin, read it back, unchanged.
+
+        Through `MatchRecordRepository` rather than raw SQL, because the
+        mechanism is only real if it survives the mapping in both
+        directions — a column nothing reads back would be the same defect
+        the epic exists to fix, one layer down.
+
+        The reference is a uuid `game` has never seen and cannot resolve.
+        That is the requirement, not a limitation: a foreign key here would
+        make the two schemas undeployable apart.
+        """
+        pairing_ref = _id(910_001)
+        record = await SqlAlchemyMatchRecordRepository(contract_session).create(
+            MatchRecord(
+                id=_id(900),
+                pairing_id=_id(901),
+                variant=ProductVariant.RUSSIAN_8X8,
+                rated=True,
+                engine_version=EngineVersion(number=2),
+                light=MatchSeat(player_id=_id(1), queue_ticket_id=_id(902)),
+                dark=MatchSeat(player_id=_id(2), queue_ticket_id=_id(903)),
+                created_at=NOW,
+                acceptance_deadline=NOW + timedelta(seconds=30),
+                origin=MatchOrigin.TOURNAMENT,
+                origin_ref=pairing_ref,
+            )
+        )
+        assert record[1] is True
+
+        stored = await SqlAlchemyMatchRecordRepository(contract_session).by_id(_id(900))
+
+        assert stored is not None
+        assert stored.origin is MatchOrigin.TOURNAMENT
+        assert stored.origin_ref == pairing_ref
+
+    async def test_a_match_created_without_one_is_a_queue_match(
+        self, contract_session: AsyncSession
+    ) -> None:
+        """The default states a fact rather than guessing one.
+
+        Every match written before this column existed came from the queue,
+        and `matchmaking` — the only caller today — passes no origin at all.
+        So the default is what those matches actually were, which is why the
+        migration needs no backfill.
+        """
+        await SqlAlchemyMatchRecordRepository(contract_session).create(
+            MatchRecord(
+                id=_id(920),
+                pairing_id=_id(921),
+                variant=ProductVariant.RUSSIAN_8X8,
+                rated=True,
+                engine_version=EngineVersion(number=2),
+                light=MatchSeat(player_id=_id(1), queue_ticket_id=_id(922)),
+                dark=MatchSeat(player_id=_id(2), queue_ticket_id=_id(923)),
+                created_at=NOW,
+                acceptance_deadline=NOW + timedelta(seconds=30),
+            )
+        )
+
+        stored = await SqlAlchemyMatchRecordRepository(contract_session).by_id(_id(920))
+
+        assert stored is not None
+        assert stored.origin is MatchOrigin.QUEUE
+        assert stored.origin_ref is None

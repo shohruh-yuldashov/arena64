@@ -322,18 +322,23 @@ twice, create a third attempt, or overwrite an advancement. The guarantees are t
 database's: `unique (pairing_id, attempt_number)`, `unique match_id`, and the
 `winner_id IS NULL` compare-and-set A64-019.4 already uses.
 
-### The queue ticket a tournament does not have — a recorded wart
+### The queue ticket a tournament does not have — corrected in A64-019.6
 
-`game.public.MatchParticipant` requires a `queue_ticket_id` per seat, and `game.match` stores
-it `NOT NULL` with a unique index. It is **provenance for a queue pairing**, and a tournament
-has none. A64-019.5 supplies a pair derived from the attempt (`attempts.seat_references`):
-distinct, stable across retries, and satisfying every constraint.
+A64-019.5 shipped a derived uuid5 as each seat's `queue_ticket_id`, because
+`game.public.MatchParticipant` required one and `game.match` stored it `NOT NULL`. That
+recorded a queue ticket that never existed — a fabricated fact in a permanent record (A-4), and
+one `settlements_for` would have answered questions about.
 
-It is recorded here rather than worked around because it is a field saying something untrue.
-Making it nullable is the correct fix and is **not** A64-019.5's: it changes `game.match`'s
-schema, `MatchSeat`, `MatchRecord.ticket_ids()`, and `_MatchEvent`'s payload — which every
-`matchmaking` consumer reads. That is a `game` change with its own phase, not a side effect of
-wiring a tournament.
+A64-019.6 makes the column nullable instead. A tournament seat now passes `None`, and the
+requirement is **origin-specific rather than dropped**:
+
+| Origin | `queue_ticket_id` |
+| --- | --- |
+| `queue` | **Required** — both seats, distinct. `CreateMatchRequest` and `MatchRecord` refuse a queue match without them, because a queue match with no tickets is one no reconciler can recover |
+| `tournament`, `challenge`, `rematch` | `None`. Where the match came from is `origin` and `origin_ref` (R-25), which is what it always should have been |
+
+The unique indexes are unchanged: PostgreSQL treats each `NULL` as distinct, so two matches
+still cannot claim one ticket while any number of ticketless matches coexist.
 
 ## 6d. Live tournament matches — A64-019.5
 

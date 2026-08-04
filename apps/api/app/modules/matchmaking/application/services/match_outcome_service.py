@@ -345,9 +345,14 @@ def _parse(entry: OutboxEntry) -> FailedHandshake:
     """
     payload = entry.payload
     accepted: list[UUID] = []
-    if bool(payload["light_accepted"]):
+    # A seat with **no** ticket is skipped rather than parsed. Since
+    # A64-019.6 a match need not have come from the queue, and this policy
+    # requeues the ticket a player arrived on — there is nothing to requeue
+    # for somebody who arrived by a bracket. `None` reaching `UUID()` would
+    # be a per-entry failure the relay retried forever.
+    if bool(payload["light_accepted"]) and payload.get("light_ticket_id") is not None:
         accepted.append(UUID(str(payload["light_ticket_id"])))
-    if bool(payload["dark_accepted"]):
+    if bool(payload["dark_accepted"]) and payload.get("dark_ticket_id") is not None:
         accepted.append(UUID(str(payload["dark_ticket_id"])))
 
     declined_by = (

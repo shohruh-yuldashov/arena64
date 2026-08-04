@@ -59,7 +59,6 @@ from app.modules.tournament.domain.attempts import (
     AttemptStatus,
     PairingAttempt,
     match_key,
-    seat_references,
 )
 from app.modules.tournament.domain.bracket_plan import BracketSlot
 from app.modules.tournament.domain.tournament import Tournament
@@ -174,7 +173,6 @@ class TournamentMatchLauncher:
         snapshots: Mapping[UUID, RatingSnapshot],
         deadline: datetime,
     ) -> PairingAttempt:
-        light_reference, dark_reference = seat_references(plan.pairing_id, plan.attempt_number)
         result = await self._matches.create_match(
             CreateMatchRequest(
                 pairing_id=match_key(plan.pairing_id, plan.attempt_number),
@@ -184,12 +182,18 @@ class TournamentMatchLauncher:
                 acceptance_deadline=deadline,
                 light=MatchParticipant(
                     player_id=plan.light_player_id,
-                    queue_ticket_id=light_reference,
+                    # **No ticket, and that is the fact.** A tournament
+                    # entrant did not arrive through a queue. A64-019.5
+                    # derived a uuid5 here to satisfy a `NOT NULL` and so
+                    # recorded a ticket that never existed; A64-019.6 made
+                    # the column nullable instead — see `specs/tournament.md`
+                    # §6c, which recorded the wart before it was fixed.
+                    queue_ticket_id=None,
                     rating=_seat(snapshots[plan.light_player_id], tournament.speed_class),
                 ),
                 dark=MatchParticipant(
                     player_id=plan.dark_player_id,
-                    queue_ticket_id=dark_reference,
+                    queue_ticket_id=None,
                     rating=_seat(snapshots[plan.dark_player_id], tournament.speed_class),
                 ),
                 # R-25's round trip. **The node's own id**, never an

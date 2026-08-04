@@ -183,26 +183,6 @@ def match_key(pairing_id: UUID, attempt_number: int) -> UUID:
     return uuid5(pairing_id, f"attempt:{attempt_number}")
 
 
-def seat_references(pairing_id: UUID, attempt_number: int) -> tuple[UUID, UUID]:
-    """The `(light, dark)` provenance ids a tournament match is created with.
-
-    `game.public.MatchParticipant` requires a `queue_ticket_id` per seat —
-    provenance for a match that came from the queue, and a required field
-    for one that did not. A tournament has no tickets, so it supplies a pair
-    **derived from the attempt**: distinct (`game` refuses two equal ones,
-    and its unique indexes refuse a collision with any other match) and
-    stable across retries, which is what keeps the retry above idempotent
-    rather than merely repeatable.
-
-    A random pair would satisfy the constraints and lose the second
-    property. What neither can do is make the field honest — see
-    `specs/tournament.md` §6c on why `game` keeping the column required is
-    recorded as a wart rather than worked around here.
-    """
-    seat = uuid5(pairing_id, f"attempt:{attempt_number}:seat")
-    return (uuid5(seat, "light"), uuid5(seat, "dark"))
-
-
 def rematch_seats(attempt: PairingAttempt) -> tuple[UUID, UUID]:
     """The rematch's `(light, dark)` — the first attempt's, swapped.
 
@@ -224,5 +204,4 @@ __all__ = [
     "decide",
     "match_key",
     "rematch_seats",
-    "seat_references",
 ]

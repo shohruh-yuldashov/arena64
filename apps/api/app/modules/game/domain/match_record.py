@@ -181,13 +181,24 @@ class MatchSeat:
     """DM-06's opaque cross-context identifier. `game` cannot resolve it to
     a person and does not need to."""
 
-    queue_ticket_id: UUID
-    """Which queue ticket this player arrived on.
+    queue_ticket_id: UUID | None = None
+    """Which queue ticket this player arrived on, or `None` — R-25.
 
     Provenance, and the **durable link back to the pairing** A64-015.3
     recorded as missing: it is what lets a reconciler holding an orphaned
     reserved ticket find out whether its match was ever created, without
     having to know who the partner was.
+
+    **`None` when the match did not come from the queue.** A tournament
+    pairing, a challenge and a rematch each produce a match and none of them
+    produces a ticket. A64-019.5 wrote a derived uuid5 here to satisfy a
+    `NOT NULL`, which made the column assert a ticket existed when none did
+    — a fabricated fact in a permanent record, and one `settlements_for`
+    would happily answer questions about.
+
+    Where a match came from is `origin` and `origin_ref`; this is only the
+    queue's provenance. A consumer that needs a ticket asks for
+    `MatchOrigin.QUEUE`, which is what guarantees one.
     """
 
     rating: SeatRating | None = None
@@ -371,8 +382,16 @@ class MatchRecord:
         # authoritative copies (BE-06).
         if self.light.player_id == self.dark.player_id:
             raise ValueError("a match needs two different players")
-        if self.light.queue_ticket_id == self.dark.queue_ticket_id:
+        # Two *present* tickets must differ. Two absent ones are the
+        # ordinary shape of a match that did not come from the queue, and
+        # comparing `None` to `None` would refuse every one of them.
+        if (
+            self.light.queue_ticket_id is not None
+            and self.light.queue_ticket_id == self.dark.queue_ticket_id
+        ):
             raise ValueError("a match needs two different queue tickets")
+        if self.origin is MatchOrigin.QUEUE and None in self.ticket_ids():
+            raise ValueError("a queue match records the ticket each player arrived on")
         if self.acceptance_deadline <= self.created_at:
             raise ValueError("an acceptance window cannot close before it opens")
         if self.status.is_settled != (self.settled_at is not None):
@@ -476,9 +495,25 @@ class MatchRecord:
         """Both players, light first."""
         return (self.light.player_id, self.dark.player_id)
 
-    def ticket_ids(self) -> tuple[UUID, UUID]:
-        """Both source queue tickets, light first."""
+    def ticket_ids(self) -> tuple[UUID | None, UUID | None]:
+        """Both source queue tickets, light first, `None` where there is none.
+
+        The pair is kept positional rather than filtered, because a caller
+        asking "which ticket sat light" must not have to guess from a list
+        of one. `queue_ticket_ids` below is for the callers that want only
+        the tickets that exist.
+        """
         return (self.light.queue_ticket_id, self.dark.queue_ticket_id)
+
+    def queue_ticket_ids(self) -> tuple[UUID, ...]:
+        """Only the tickets this match actually has.
+
+        Empty for a tournament, a challenge or a rematch. What
+        `settlements_for` keys on, so a match with no tickets simply
+        matches no reconciliation query rather than matching a fabricated
+        one.
+        """
+        return tuple(ticket for ticket in self.ticket_ids() if ticket is not None)
 
     def opponent_of(self, player_id: UUID) -> UUID:
         """The other player. Raises `NotAMatchParticipant` for a stranger."""

@@ -208,6 +208,13 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
         # A queue ticket produces at most one match. Two indexes rather
         # than one because a ticket may be either side, and a composite
         # would not constrain the pair.
+        #
+        # Nullable since A64-019.6, and the uniqueness is unaffected:
+        # PostgreSQL treats each `NULL` as distinct, so every match that did
+        # not come from the queue coexists freely while two matches still
+        # cannot claim one ticket. The indexes also become smaller as
+        # non-queue origins grow, which is the shape a partial index would
+        # have been chosen for anyway.
         Index("uq_match__light_ticket", "light_ticket_id", unique=True),
         Index("uq_match__dark_ticket", "dark_ticket_id", unique=True),
         # "Which match must this player answer" — one per side, both
@@ -360,11 +367,11 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
     """
 
     light_player_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    light_ticket_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    light_ticket_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     light_accepted_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
     dark_player_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    dark_ticket_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    dark_ticket_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     dark_accepted_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
     origin: Mapped[MatchOrigin] = mapped_column(

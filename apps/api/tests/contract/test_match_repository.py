@@ -32,9 +32,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.core.identifiers import generate_uuid7
 from app.modules.engine import CURRENT_ENGINE_VERSION, EngineVersion, PlayerSide
+from app.modules.game.application.services.pairing_settlement_service import (
+    GamePairingSettlements,
+)
 from app.modules.game.domain.match_record import MatchRecord, MatchRecordStatus, MatchSeat
 from app.modules.game.infrastructure import MatchRecordModel, SqlAlchemyMatchRecordRepository
-from app.modules.game.public import ProductVariant
+from app.modules.game.public import MatchOrigin, ProductVariant
 
 NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 
@@ -71,6 +74,27 @@ def _record(
         acceptance_deadline=at + WINDOW,
         status=status,
         settled_at=None if status.is_pending else at,
+    )
+
+
+def _tournament_record(*, origin_ref: UUID, at: datetime = NOW) -> MatchRecord:
+    """A match created by a bracket — A64-019.6.
+
+    No queue tickets, because the entrant did not arrive through a queue.
+    `origin` and `origin_ref` carry where it came from instead, which is
+    R-25's mechanism and the reason the ticket columns never had to.
+    """
+    return MatchRecord(
+        pairing_id=generate_uuid7(),
+        variant=ProductVariant.RUSSIAN_8X8,
+        rated=True,
+        engine_version=CURRENT_ENGINE_VERSION,
+        light=MatchSeat(player_id=generate_uuid7()),
+        dark=MatchSeat(player_id=generate_uuid7()),
+        created_at=at,
+        acceptance_deadline=at + WINDOW,
+        origin=MatchOrigin.TOURNAMENT,
+        origin_ref=origin_ref,
     )
 
 
@@ -492,6 +516,89 @@ class TestTheTwoPublishedReads:
         self, matches: SqlAlchemyMatchRecordRepository
     ) -> None:
         assert await matches.latest_opponent_among([generate_uuid7()]) == {}
+
+
+class TestNonQueueParticipants:
+    """A64-019.6 — a match need not have come from a queue.
+
+    The four cases are one property seen from both sides: a queue pairing
+    still records real tickets and is still reconcilable by them, and every
+    other origin records none and is invisible to that lookup rather than
+    answering it with a fabricated id.
+    """
+
+    async def test_a_queue_match_persists_its_real_tickets(
+        self, matches: SqlAlchemyMatchRecordRepository
+    ) -> None:
+        """The behaviour that must not change. `matchmaking` supplies two
+        real ticket ids and both survive the round trip — the durable link
+        A64-015.3 recorded as missing and A64-015.4 added."""
+        record, _ = await matches.create(_record())
+
+        stored = await matches.by_id(record.id)
+
+        assert stored is not None
+        assert stored.origin is MatchOrigin.QUEUE
+        assert stored.light.queue_ticket_id == record.light.queue_ticket_id
+        assert stored.dark.queue_ticket_id == record.dark.queue_ticket_id
+        assert stored.queue_ticket_ids() == record.ticket_ids()
+
+    async def test_a_tournament_match_persists_null_tickets_and_round_trips(
+        self, matches: SqlAlchemyMatchRecordRepository
+    ) -> None:
+        """The correction. A tournament entrant arrived through a bracket,
+        so the column says so by being empty rather than by holding a
+        derived uuid5 that asserts a ticket nobody ever held.
+
+        `origin` and `origin_ref` are what survive instead, which is R-25's
+        whole mechanism — asserted here because a round trip that lost them
+        would leave a match the tournament could never recognise again.
+        """
+        reference = generate_uuid7()
+        record, created = await matches.create(_tournament_record(origin_ref=reference))
+
+        assert created
+        stored = await matches.by_id(record.id)
+
+        assert stored is not None
+        assert stored.origin is MatchOrigin.TOURNAMENT
+        assert stored.origin_ref == reference
+        assert stored.light.queue_ticket_id is None
+        assert stored.dark.queue_ticket_id is None
+        assert stored.queue_ticket_ids() == ()
+
+    async def test_two_tournament_matches_coexist_without_colliding(
+        self, matches: SqlAlchemyMatchRecordRepository
+    ) -> None:
+        """`uq_match__light_ticket` is unique over a nullable column, and
+        PostgreSQL treats each `NULL` as distinct — so a second ticketless
+        match is not a duplicate. This is the assertion that says the
+        indexes did not have to be rewritten as partial ones."""
+        await matches.create(_tournament_record(origin_ref=generate_uuid7()))
+        second, created = await matches.create(_tournament_record(origin_ref=generate_uuid7()))
+
+        assert created
+        assert second.light.queue_ticket_id is None
+
+    async def test_reconciliation_still_resolves_queue_matches_and_ignores_the_rest(
+        self, matches: SqlAlchemyMatchRecordRepository
+    ) -> None:
+        """`matchmaking`'s recovery is unchanged, and a ticketless match is
+        simply not an answer to its question.
+
+        Both halves matter: the first is the regression this change could
+        have caused, and the second is what stops a tournament match being
+        returned for a ticket that was never issued.
+        """
+        queued, _ = await matches.create(_record())
+        await matches.create(_tournament_record(origin_ref=generate_uuid7()))
+
+        settlements = await GamePairingSettlements(matches).settlements_for(
+            [queued.light.queue_ticket_id, generate_uuid7()]
+        )
+
+        assert list(settlements) == [queued.light.queue_ticket_id]
+        assert settlements[queued.light.queue_ticket_id].match_id == queued.id
 
 
 class TestTheDatabaseHoldsTheInvariants:

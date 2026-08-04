@@ -141,12 +141,19 @@ class MatchParticipant:
     """DM-06's opaque cross-context identifier. `game` cannot resolve it to
     a person and does not need to."""
 
-    queue_ticket_id: UUID
-    """Which queue ticket this player arrived on.
+    queue_ticket_id: UUID | None
+    """Which queue ticket this player arrived on, or `None`.
 
     Provenance, not identity: it lets a stored match be traced back to the
     pairing that produced it, and it is what makes `pairing_id` verifiable
     rather than merely asserted.
+
+    **`None` for any origin but the queue.** A tournament pairing, a
+    challenge and a rematch each produce a match and none produces a
+    ticket; requiring one made a caller invent an id, which put a
+    fabricated fact in a permanent record. `CreateMatchRequest` still
+    *requires* both for `MatchOrigin.QUEUE` — see its `__post_init__`, and
+    note that the requirement is origin-specific rather than dropped.
     """
 
     rating: "SeatRating"
@@ -245,8 +252,26 @@ class CreateMatchRequest:
         # defect, and failing here is how it stays one line long.
         if self.light.player_id == self.dark.player_id:
             raise ValueError("a match needs two different players")
-        if self.light.queue_ticket_id == self.dark.queue_ticket_id:
+
+        # Two *present* tickets must differ. Two absent ones are the
+        # ordinary shape of a non-queue match, and comparing `None` to
+        # `None` would refuse every one of them.
+        if (
+            self.light.queue_ticket_id is not None
+            and self.light.queue_ticket_id == self.dark.queue_ticket_id
+        ):
             raise ValueError("a match needs two different queue tickets")
+
+        # **Origin-specific, not relaxed.** A64-019.6 made the field
+        # nullable so a tournament need not invent one; it did not make a
+        # queue pairing's provenance optional. A queue match without its
+        # tickets is one no reconciler can recover, which is exactly the
+        # gap A64-015.4 closed.
+        if self.origin is MatchOrigin.QUEUE and None in (
+            self.light.queue_ticket_id,
+            self.dark.queue_ticket_id,
+        ):
+            raise ValueError("a queue match records the ticket each player arrived on")
 
     def player_ids(self) -> tuple[UUID, UUID]:
         """Both players, light first. For logging and for the caller that

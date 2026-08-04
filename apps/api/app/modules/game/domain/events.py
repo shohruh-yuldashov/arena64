@@ -68,6 +68,15 @@ from app.platform.events import DomainEvent
 MATCH_AGGREGATE = "match"
 
 
+def _optional(identifier: UUID | None) -> str | None:
+    """A uuid as a payload carries it, or `null`.
+
+    One helper rather than a conditional at each site, so a nullable id
+    cannot be serialised as the string `"None"` by a call that forgot.
+    """
+    return str(identifier) if identifier is not None else None
+
+
 @dataclass(frozen=True)
 class _MatchEvent(DomainEvent):
     """The identity all five share.
@@ -102,8 +111,20 @@ class _MatchEvent(DomainEvent):
     pairing_id: UUID
     light_player_id: UUID
     dark_player_id: UUID
-    light_ticket_id: UUID
-    dark_ticket_id: UUID
+    light_ticket_id: UUID | None
+    dark_ticket_id: UUID | None
+    """The queue tickets, or `None` where there are none — A64-019.6.
+
+    Nullable because a match need not have come from the queue. Every
+    consumer that reads these already asks a question that only makes sense
+    for a queue pairing — `matchmaking`'s acceptance-failure policy requeues
+    the ticket somebody arrived on — and each now skips a seat with none
+    rather than being handed a fabricated id.
+
+    Widening a field is additive for a *reader*: a consumer written before
+    this change parses the same key, and gets `null` only for matches that
+    never existed when it was written.
+    """
 
     @property
     def aggregate_id(self) -> UUID:
@@ -115,8 +136,8 @@ class _MatchEvent(DomainEvent):
             "pairing_id": str(self.pairing_id),
             "light_player_id": str(self.light_player_id),
             "dark_player_id": str(self.dark_player_id),
-            "light_ticket_id": str(self.light_ticket_id),
-            "dark_ticket_id": str(self.dark_ticket_id),
+            "light_ticket_id": _optional(self.light_ticket_id),
+            "dark_ticket_id": _optional(self.dark_ticket_id),
         }
 
 

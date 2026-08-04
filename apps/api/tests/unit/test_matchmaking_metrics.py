@@ -48,6 +48,7 @@ from tests.fakes.pairing import (
     RecordingMatchCreation,
     RefusingMatchCreation,
     StubExclusions,
+    StubRatings,
     StubRecentOpponents,
 )
 from tests.fakes.presence_redis import MovableClock
@@ -102,6 +103,7 @@ def _service(
         engine=PairingEngine(GENEROUS),
         exclusions=exclusions,
         opponents=opponents,
+        ratings=StubRatings(),
         matches=matches if matches is not None else RecordingMatchCreation(),  # type: ignore[arg-type]
         events=RecordingPublisher(),
         unit_of_work=NullUnitOfWork(),

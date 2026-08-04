@@ -1,70 +1,79 @@
-"""The implementation of `application.ports.RatingSnapshotProvider`.
+"""`application.ports.RatingSnapshotProvider` over `rating.public`.
 
-One class, and it returns a constant. That is the honest implementation of
-"what is this player's rating" on a platform where domain-model.md Q-3 —
-"Elo or Glicko-2, or another system?" — is an **open question** and the
-`rating` module does not exist.
+A64-017.2 replaced the constant this file used to return. Its docstring
+predicted the change exactly:
 
-## Why this is not a stub, and what would make it one
+> On the day `rating` ships, its published reader satisfies this port,
+> `matchmaking.presentation.dependencies` names it instead of this class,
+> and no use case, no aggregate and no test changes.
 
-The distinction `PresenceRecorder` draws in `users.public.ports`: a stub is
-a method with no caller and no correctness story, while this has both.
+That is what happened. `QueueService` is untouched, `QueueTicket` is
+untouched, and QT-2's rule — a ticket carries the rating it was entered
+with, not a reference to a live one — is unchanged; only the number is real
+now.
 
-QT-2's rule is that a ticket carries the rating it was entered with rather
-than a reference to a live one, and that rule is *fully implemented* — the
-column exists, the aggregate holds it, the event carries it, and nothing
-re-reads it while the ticket waits. What is provisional is only the number,
-and PR-6 already says how a provisional rating must be treated: marked, and
-never mistaken for a measurement.
+## Why this adapter exists rather than handing the reader straight over
 
-The seam is what matters. On the day `rating` ships, its published reader
-satisfies this port, `matchmaking.presentation.dependencies` names it
-instead of this class, and no use case, no aggregate and no test changes.
-Reaching for `PROVISIONAL_RATING` inside `QueueService` would have been one
-line shorter and would have made that day a change to a service.
+Two vocabularies meet here and neither should learn the other's. `rating`
+answers by `RatingKey` — `(variant, speed class)` — and `matchmaking` asks
+by `QueueType`, which is `ranked` or `casual` and says nothing about a
+speed. Something has to translate, and doing it here keeps `QueueService`
+free of a rating key and keeps `rating` free of a queue concept.
 
-## Why it does not read `profiles`
+## The variant, and why it is a constant here
 
-`profiles` composes a public profile and reports `PlayerRatings.unrated()`
-— the same 1500, for the same reason. It is not published (`profiles.public`
-exposes one port, a profile renderer), and importing another module's
-`domain` is exactly what R-1 forbids.
+The port's signature carries no variant, because when it was written the
+platform had one and `QueueType` was the only axis. It still has one
+(`ProductVariant.RUSSIAN_8X8`), so the translation is exact rather than a
+guess. When a second variant ships, the port's argument widens to a
+`QueuePool` — which already carries a variant — and this class reads it
+instead of the constant.
 
-Nor should it be published. A *public profile's* starting value and a
-*matchmaker's* are the same number by coincidence: the first is what a
-stranger sees and is governed by privacy, the second is a pairing input that
-must be deterministic within a scan. Coupling them would mean a change to
-what profiles display could move who gets paired with whom.
+## Casual games are rated *reads*, not rated *writes*
+
+A `casual` ticket still gets a real rating, because pairing a casual game by
+skill is what makes it a game rather than a coin toss. What `casual` decides
+is whether the *result* moves anything, and that is `rated` on the match
+(SPEC-RATING §9) — a decision `game` and `rating` make, not this one.
 """
 
 import logging
 from uuid import UUID
 
+from app.modules.game.public import ProductVariant
 from app.modules.matchmaking.domain.queue_pool import QueueType
-from app.modules.matchmaking.domain.queue_ticket import PROVISIONAL_RATING
+from app.modules.rating.public import DEFAULT_SPEED_CLASS, RatingKey, RatingReader, RatingSnapshot
 
 logger = logging.getLogger(__name__)
 
+#: The variant every pool offers today — see this module's docstring on why
+#: this is a constant rather than a lookup, and what replaces it.
+_VARIANT = ProductVariant.RUSSIAN_8X8
 
-class ProvisionalRatingProvider:
-    """Every player rates at the provisional starting value.
 
-    Stateless and infallible: no session, no Redis, no settings. It ignores
-    both arguments, which is the honest signature when the answer is the
-    same for everyone — and the reason there is no `NoRatingProvider`
-    fallback beside it, because there is nothing here that can fail.
+class PublishedRatingProvider:
+    """Reads a player's rating through `rating`'s published surface.
 
-    Logged at `DEBUG` rather than `WARNING`, unlike the platform's other
-    provisional adapters. `NoPresenceProvider` and
-    `NoMatchesStatisticsProvider` are *degradations* — a working feature
-    switched off — and an operator needs to know one is running. This is
-    not a degradation: it is the only answer that exists, on every tier,
-    until `rating` is built.
+    Holds a `RatingReader` and nothing else, so it cannot move a rating,
+    read an adjustment, or reach `rating`'s persistence — R-4's one-way
+    chain as a constructor argument rather than a rule to remember.
     """
 
-    async def rating_for(self, player_id: UUID, *, queue_type: QueueType) -> int:
-        logger.debug(
-            "rating_snapshot_provisional",
-            extra={"player_id": str(player_id), "queue_type": queue_type.value},
+    def __init__(self, ratings: RatingReader) -> None:
+        self._ratings = ratings
+
+    async def rating_for(self, player_id: UUID, *, queue_type: QueueType) -> RatingSnapshot:
+        """The player's triple in the key this pool rates in.
+
+        `queue_type` is accepted and deliberately unused: ranked and casual
+        pools rate against the **same** key, because skill does not change
+        with whether the result counts — see this module's docstring. The
+        argument stays because it is the port's, and a narrower signature
+        here would stop this class satisfying it.
+        """
+        return await self._ratings.rating_for(
+            player_id, key=RatingKey(variant=_VARIANT, speed_class=DEFAULT_SPEED_CLASS)
         )
-        return PROVISIONAL_RATING
+
+
+__all__ = ["PublishedRatingProvider"]

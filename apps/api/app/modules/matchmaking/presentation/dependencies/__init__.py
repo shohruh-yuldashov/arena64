@@ -6,7 +6,7 @@ The graph assembled per request:
 
     AsyncSession                        one per request (`app.api.deps`)
       -> SqlAlchemyQueueRepository
-      -> ProvisionalRatingProvider      until `rating` exists
+      -> PublishedRatingProvider        over `rating.public` (A64-017.2)
       -> QueueEligibilityPolicy         presence-backed, or the permissive one
       -> OutboxEventPublisher           over the same session (AD-16)
       -> SessionUnitOfWork
@@ -143,12 +143,15 @@ from app.modules.matchmaking.application.services import (
 )
 from app.modules.matchmaking.domain.pairing import PairingEngine, RatingWindowPolicy
 from app.modules.matchmaking.infrastructure import (
-    ProvisionalRatingProvider,
+    PublishedRatingProvider,
     SqlAlchemyCooldownAuditRepository,
     SqlAlchemyCooldownRepository,
     SqlAlchemyQueueRepository,
     SqlAlchemyQueueRetentionStore,
     SqlAlchemyReconciliationTimelineRepository,
+)
+from app.modules.rating.infrastructure.repositories.player_rating_repository import (
+    SqlAlchemyRatingReader,
 )
 from app.modules.users.application.services.public_profile_service import PublicProfileService
 from app.modules.users.application.services.user_service import UserService
@@ -263,9 +266,10 @@ def build_queue_service(
     """
     return QueueService(
         tickets=SqlAlchemyQueueRepository(session),
-        # Until `rating` exists. See `ProvisionalRatingProvider` on why the
-        # port is here rather than a constant inside the service.
-        ratings=ProvisionalRatingProvider(),
+        # `rating.public`'s reader since A64-017.2 — the constant this
+        # used to be is gone. See `PublishedRatingProvider` on why the
+        # translation lives in an adapter rather than in the service.
+        ratings=PublishedRatingProvider(SqlAlchemyRatingReader(session)),
         eligibility=eligibility,
         # Built over the **same** session as the repository, which is what
         # puts the outbox row in the ticket's transaction rather than beside
@@ -606,6 +610,7 @@ def build_pairing_service(
         engine=PairingEngine(build_rating_window(settings)),
         exclusions=exclusions,
         opponents=opponents,
+        ratings=PublishedRatingProvider(SqlAlchemyRatingReader(session)),
         matches=matches,
         # Built over the **same** session as the repository, which is what
         # puts `PlayersPaired` in the transaction that marks both tickets

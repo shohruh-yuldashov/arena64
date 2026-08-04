@@ -109,6 +109,7 @@ from app.modules.game.public.matches import (
     MatchCreationUseCase,
     MatchParticipant,
     PlayerSide,
+    SeatRating,
 )
 from app.modules.game.public.metrics import (
     MATCH_ANSWER_LATENCY,
@@ -179,6 +180,7 @@ __all__ = [
     "MatchNotPending",
     "MatchOutcome",
     "MatchParticipant",
+    "SeatRating",
     "MatchRecordStatus",
     "MatchRoster",
     "MatchRosterReader",

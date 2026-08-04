@@ -24,6 +24,7 @@ directly, exactly as it consumes `PublicProfileReader`. See
 module's published ports rather than locally declared ones.
 """
 
+from app.modules.profiles.infrastructure.rating_compatibility import PublishedRatingProvider
 from app.modules.profiles.infrastructure.rating_providers import UnratedRatingProvider
 from app.modules.profiles.infrastructure.relationship_providers import (
     FriendshipRelationshipProvider,
@@ -43,5 +44,6 @@ __all__ = [
     "NoRelationshipsProvider",
     "SocialGraphBlockedPlayersProvider",
     "NoMatchesStatisticsProvider",
+    "PublishedRatingProvider",
     "UnratedRatingProvider",
 ]

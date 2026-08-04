@@ -109,9 +109,11 @@ from uuid import UUID
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Float,
     ForeignKeyConstraint,
     Index,
     Integer,
+    String,
     Text,
     Uuid,
     text,
@@ -355,6 +357,42 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
     dark_player_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     dark_ticket_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     dark_accepted_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    # --- seat rating snapshots — SPEC-RATING §7.6, MT-4 ---------------
+    #
+    # What each player rated **when the match was created**. Written once,
+    # by `matchmaking` through `CreateMatchRequest`, and never updated:
+    # PR-3 requires the rating calculation to run on these rather than on
+    # whatever the players rate by the time the game ends.
+    #
+    # `game` stores them and hands them back on `match_completed`. It does
+    # not read `rating`, cannot compute one, and has no foreign key to
+    # `rating.player_rating` — the seat is a snapshot of a past fact, not a
+    # reference to a live row that would move under it.
+    #
+    # Nullable because every match created before A64-017.2 has none. Null
+    # means "created before ratings existed", not "unknown", and such a
+    # match cannot be rated — which is correct, since nothing rated it.
+    light_rating_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    light_rating_deviation: Mapped[float | None] = mapped_column(Float, nullable=True)
+    light_rating_volatility: Mapped[float | None] = mapped_column(Float, nullable=True)
+    light_rating_games: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    light_rating_provisional: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    dark_rating_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dark_rating_deviation: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dark_rating_volatility: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dark_rating_games: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dark_rating_provisional: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    rating_speed_class: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    """The rating key's second component — the variant is `variant` above.
+
+    A `String` rather than an enum type, deliberately: the members belong to
+    `rating`, and a second native enum here would be a type `game` owns
+    listing values `rating` decides. It is written from
+    `SeatRating.speed_class` and read back by `rating`, which validates it.
+    """
 
     # **No `received_at` here.** MT-9's flag-race authority is per *move*,
     # not per match, and its owner is `MoveLogModel.received_at`. A copy on

@@ -38,7 +38,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.engine import EngineVersion, PlayerSide
 from app.modules.game.domain.clock import ClockState, TimeControl
-from app.modules.game.domain.match_record import MatchRecord, MatchRecordStatus, MatchSeat
+from app.modules.game.domain.match_record import (
+    MatchRecord,
+    MatchRecordStatus,
+    MatchSeat,
+    SeatRating,
+)
 from app.modules.game.infrastructure.models import MatchRecordModel
 
 logger = logging.getLogger(__name__)
@@ -63,11 +68,27 @@ class SqlAlchemyMatchRecordRepository:
                 player_id=row.light_player_id,
                 queue_ticket_id=row.light_ticket_id,
                 accepted_at=row.light_accepted_at,
+                rating=_seat_rating(
+                    row.light_rating_value,
+                    row.light_rating_deviation,
+                    row.light_rating_volatility,
+                    row.light_rating_games,
+                    row.light_rating_provisional,
+                    row.rating_speed_class,
+                ),
             ),
             dark=MatchSeat(
                 player_id=row.dark_player_id,
                 queue_ticket_id=row.dark_ticket_id,
                 accepted_at=row.dark_accepted_at,
+                rating=_seat_rating(
+                    row.dark_rating_value,
+                    row.dark_rating_deviation,
+                    row.dark_rating_volatility,
+                    row.dark_rating_games,
+                    row.dark_rating_provisional,
+                    row.rating_speed_class,
+                ),
             ),
             created_at=row.created_at,
             acceptance_deadline=row.acceptance_deadline,
@@ -112,9 +133,26 @@ class SqlAlchemyMatchRecordRepository:
             light_player_id=record.light.player_id,
             light_ticket_id=record.light.queue_ticket_id,
             light_accepted_at=record.light.accepted_at,
+            light_rating_value=record.light.rating.value if record.light.rating else None,
+            light_rating_deviation=(record.light.rating.deviation if record.light.rating else None),
+            light_rating_volatility=(
+                record.light.rating.volatility if record.light.rating else None
+            ),
+            light_rating_games=record.light.rating.games_played if record.light.rating else None,
+            light_rating_provisional=(
+                record.light.rating.is_provisional if record.light.rating else None
+            ),
             dark_player_id=record.dark.player_id,
             dark_ticket_id=record.dark.queue_ticket_id,
             dark_accepted_at=record.dark.accepted_at,
+            dark_rating_value=record.dark.rating.value if record.dark.rating else None,
+            dark_rating_deviation=record.dark.rating.deviation if record.dark.rating else None,
+            dark_rating_volatility=(record.dark.rating.volatility if record.dark.rating else None),
+            dark_rating_games=record.dark.rating.games_played if record.dark.rating else None,
+            dark_rating_provisional=(
+                record.dark.rating.is_provisional if record.dark.rating else None
+            ),
+            rating_speed_class=record.light.rating.speed_class if record.light.rating else None,
             created_at=record.created_at,
             acceptance_deadline=record.acceptance_deadline,
             status=record.status,
@@ -238,7 +276,36 @@ class SqlAlchemyMatchRecordRepository:
                     declined_by=record.declined_by,
                     settled_at=record.settled_at,
                     light_accepted_at=record.light.accepted_at,
+                    light_rating_value=record.light.rating.value if record.light.rating else None,
+                    light_rating_deviation=(
+                        record.light.rating.deviation if record.light.rating else None
+                    ),
+                    light_rating_volatility=(
+                        record.light.rating.volatility if record.light.rating else None
+                    ),
+                    light_rating_games=record.light.rating.games_played
+                    if record.light.rating
+                    else None,
+                    light_rating_provisional=(
+                        record.light.rating.is_provisional if record.light.rating else None
+                    ),
                     dark_accepted_at=record.dark.accepted_at,
+                    dark_rating_value=record.dark.rating.value if record.dark.rating else None,
+                    dark_rating_deviation=record.dark.rating.deviation
+                    if record.dark.rating
+                    else None,
+                    dark_rating_volatility=(
+                        record.dark.rating.volatility if record.dark.rating else None
+                    ),
+                    dark_rating_games=record.dark.rating.games_played
+                    if record.dark.rating
+                    else None,
+                    dark_rating_provisional=(
+                        record.dark.rating.is_provisional if record.dark.rating else None
+                    ),
+                    rating_speed_class=record.light.rating.speed_class
+                    if record.light.rating
+                    else None,
                 )
             ),
         )
@@ -430,3 +497,38 @@ def _constraint_of(error: IntegrityError) -> str:
 
 
 __all__ = ["SqlAlchemyMatchRecordRepository"]
+
+
+def _seat_rating(
+    value: float | None,
+    deviation: float | None,
+    volatility: float | None,
+    games_played: int | None,
+    is_provisional: bool | None,
+    speed_class: str | None,
+) -> SeatRating | None:
+    """A row's seat columns as a snapshot, or `None` if it has none.
+
+    **All or nothing.** A match created before A64-017.2 has every column
+    null; a partially-written seat would be a snapshot the rating
+    calculation could not use, so it is treated as absent rather than
+    reconstructed with defaults — a default here would be a made-up rating
+    on a permanent record.
+    """
+    if (
+        value is None
+        or deviation is None
+        or volatility is None
+        or games_played is None
+        or is_provisional is None
+        or speed_class is None
+    ):
+        return None
+    return SeatRating(
+        value=value,
+        deviation=deviation,
+        volatility=volatility,
+        games_played=games_played,
+        is_provisional=is_provisional,
+        speed_class=speed_class,
+    )

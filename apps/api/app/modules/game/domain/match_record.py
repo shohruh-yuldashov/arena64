@@ -146,6 +146,26 @@ class MatchRecordStatus(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class SeatRating:
+    """The Glicko-2 triple a seat carries — the domain's own copy.
+
+    `game.public.SeatRating` restated inside the domain for the reason every
+    published type is: the port is a contract with `matchmaking`, and the
+    aggregate must not hold a type whose shape another module's callers
+    decide.
+
+    Frozen, and never refreshed. It is a fact about the past.
+    """
+
+    value: float
+    deviation: float
+    volatility: float
+    games_played: int
+    is_provisional: bool
+    speed_class: str
+
+
+@dataclass(frozen=True, slots=True)
 class MatchSeat:
     """One side's player, the ticket that put them there, and whether they
     have answered.
@@ -168,6 +188,18 @@ class MatchSeat:
     recorded as missing: it is what lets a reconciler holding an orphaned
     reserved ticket find out whether its match was ever created, without
     having to know who the partner was.
+    """
+
+    rating: SeatRating | None = None
+    """What this player rated when the match was created — MT-4.
+
+    Written once, at creation, and never updated: PR-3 requires the rating
+    calculation to run on the values captured before the game was played.
+    `game` stores it and hands it back on completion; it never computes one.
+
+    `None` for a match created before A64-017.2, and for any created without
+    a snapshot. Such a match cannot be rated, which is correct — nothing
+    rated it.
     """
 
     accepted_at: datetime | None = None

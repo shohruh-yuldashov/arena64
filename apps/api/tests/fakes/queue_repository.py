@@ -32,6 +32,8 @@ from app.modules.matchmaking.domain.queue_ticket import (
     QueueStatus,
     QueueTicket,
 )
+from app.modules.rating.domain.glicko2 import INITIAL_DEVIATION, INITIAL_VOLATILITY
+from app.modules.rating.public import RatingSnapshot
 from app.modules.users.domain.presence import DeviceType, Presence
 from app.platform.events import DomainEvent
 from app.platform.outbox import OutboxEntry
@@ -238,9 +240,22 @@ class FixedRatingProvider:
         self.rating = rating
         self.calls: list[tuple[UUID, QueueType]] = []
 
-    async def rating_for(self, player_id: UUID, *, queue_type: QueueType) -> int:
+    async def rating_for(self, player_id: UUID, *, queue_type: QueueType) -> RatingSnapshot:
+        """The chosen number as a Glicko-2 triple — A64-017.2.
+
+        The port returns the whole triple since `rating` shipped, because
+        the seat snapshot needs the deviation and volatility (PR-3). These
+        tests are about the *ticket*, which records only the value, so the
+        other two are the starting figures and are not what is asserted.
+        """
         self.calls.append((player_id, queue_type))
-        return self.rating
+        return RatingSnapshot(
+            value=float(self.rating),
+            deviation=INITIAL_DEVIATION,
+            volatility=INITIAL_VOLATILITY,
+            games_played=0,
+            is_provisional=True,
+        )
 
 
 class StubPresence:

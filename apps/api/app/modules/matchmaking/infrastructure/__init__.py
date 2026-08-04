@@ -3,7 +3,7 @@ SQLAlchemy or a session exists.
 
     models.py               the schema, `queue_ticket` and `queue_cooldown`
     repositories/           the three adapters, incl. the SKIP LOCKED claims
-    rating_providers.py     the provisional `RatingSnapshotProvider`
+    rating_providers.py     `RatingSnapshotProvider` over `rating.public`
     pending_match_sinks.py  where a realtime offer goes (A64-015.5 §4)
     tasks.py                the four `platform.tasks` handlers
 
@@ -29,7 +29,7 @@ from app.modules.matchmaking.infrastructure.pending_match_sinks import (
     LoggingPendingMatchSink,
     NullPendingMatchSink,
 )
-from app.modules.matchmaking.infrastructure.rating_providers import ProvisionalRatingProvider
+from app.modules.matchmaking.infrastructure.rating_providers import PublishedRatingProvider
 from app.modules.matchmaking.infrastructure.repositories import (
     SqlAlchemyCooldownAuditRepository,
     SqlAlchemyCooldownRepository,
@@ -74,7 +74,7 @@ __all__ = [
     "PairingReconciliationTask",
     "PairingServiceFactory",
     "PairingTask",
-    "ProvisionalRatingProvider",
+    "PublishedRatingProvider",
     "QueueExpiryTask",
     "QueueRetentionServiceFactory",
     "QueueRetentionTask",

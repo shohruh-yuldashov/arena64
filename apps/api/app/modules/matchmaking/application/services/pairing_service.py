@@ -72,6 +72,7 @@ from app.modules.game.public import (
     MatchCreationRefused,
     MatchCreationUseCase,
     MatchParticipant,
+    SeatRating,
     game_engine_version,
 )
 from app.modules.matchmaking.application.metrics import (
@@ -81,11 +82,16 @@ from app.modules.matchmaking.application.metrics import (
     ExclusionReason,
     ScanOutcome,
 )
-from app.modules.matchmaking.application.ports import QueueRepository, RecentOpponentProvider
+from app.modules.matchmaking.application.ports import (
+    QueueRepository,
+    RatingSnapshotProvider,
+    RecentOpponentProvider,
+)
 from app.modules.matchmaking.domain.events import PlayersPaired
 from app.modules.matchmaking.domain.pairing import PairExclusions, PairingEngine, TicketPair
 from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType
 from app.modules.matchmaking.domain.queue_ticket import QueueTicket
+from app.modules.rating.public import DEFAULT_SPEED_CLASS, RatingSnapshot
 from app.platform.metrics import MetricsRecorder
 from app.platform.outbox import EventPublisher
 
@@ -141,6 +147,7 @@ class PairingService:
         engine: PairingEngine,
         exclusions: PairingExclusions,
         opponents: RecentOpponentProvider,
+        ratings: RatingSnapshotProvider,
         matches: MatchCreationUseCase,
         events: EventPublisher,
         unit_of_work: UnitOfWork,
@@ -153,6 +160,10 @@ class PairingService:
         self._engine = engine
         self._exclusions = exclusions
         self._opponents = opponents
+        # Read at *creation* rather than off the ticket: QT-2 records one
+        # number for pairing, and PR-3's seat snapshot needs the whole
+        # Glicko-2 triple — see `SeatRating`.
+        self._ratings = ratings
         self._matches = matches
         self._events = events
         self._unit_of_work = unit_of_work
@@ -261,7 +272,7 @@ class PairingService:
 
         try:
             result = await self._matches.create_match(
-                self._request_for(claimed, pool=pool, acceptance_deadline=deadline)
+                await self._request_for(claimed, pool=pool, acceptance_deadline=deadline)
             )
         except MatchCreationRefused as refusal:
             await self._release(claimed, pool=pool, reason=type(refusal).__name__)
@@ -359,7 +370,7 @@ class PairingService:
 
         return TicketPair.of(reserved[0], reserved[1]), until
 
-    def _request_for(
+    async def _request_for(
         self, pair: TicketPair, *, pool: QueuePool, acceptance_deadline: datetime
     ) -> CreateMatchRequest:
         """The command `game` receives.
@@ -379,8 +390,23 @@ class PairingService:
             rated=pool.queue_type is QueueType.RANKED,
             engine_version=game_engine_version(),
             acceptance_deadline=acceptance_deadline,
-            light=MatchParticipant(player_id=pair.light.player_id, queue_ticket_id=pair.light.id),
-            dark=MatchParticipant(player_id=pair.dark.player_id, queue_ticket_id=pair.dark.id),
+            # The seat snapshots — SPEC-RATING §7.6, MT-4. Read here, at
+            # creation, because PR-3 requires the rating calculation to run
+            # on the values captured before the game was played.
+            light=MatchParticipant(
+                player_id=pair.light.player_id,
+                queue_ticket_id=pair.light.id,
+                rating=_seat_rating(
+                    await self._ratings.rating_for(pair.light.player_id, queue_type=pool.queue_type)
+                ),
+            ),
+            dark=MatchParticipant(
+                player_id=pair.dark.player_id,
+                queue_ticket_id=pair.dark.id,
+                rating=_seat_rating(
+                    await self._ratings.rating_for(pair.dark.player_id, queue_type=pool.queue_type)
+                ),
+            ),
         )
 
     async def _complete(self, pair: TicketPair, *, pool: QueuePool, match_id: UUID) -> None:
@@ -484,3 +510,20 @@ def _longest_wait(pair: TicketPair, until: datetime) -> float:
     """
     entered = min(pair.light.entered_at, pair.dark.entered_at)
     return (until - entered).total_seconds()
+
+
+def _seat_rating(snapshot: RatingSnapshot) -> SeatRating:
+    """`rating`'s published reading as `game`'s seat snapshot.
+
+    A translation rather than a shared type, because `game` must not import
+    `rating` (R-4's one-way chain) — so the same six numbers are spelled
+    twice and this is the one place they meet.
+    """
+    return SeatRating(
+        value=snapshot.value,
+        deviation=snapshot.deviation,
+        volatility=snapshot.volatility,
+        games_played=snapshot.games_played,
+        is_provisional=snapshot.is_provisional,
+        speed_class=DEFAULT_SPEED_CLASS.value,
+    )

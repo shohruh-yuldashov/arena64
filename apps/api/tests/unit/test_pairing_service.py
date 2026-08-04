@@ -31,6 +31,7 @@ from tests.fakes.pairing import (
     RecordingMatchCreation,
     RefusingMatchCreation,
     StubExclusions,
+    StubRatings,
     StubRecentOpponents,
 )
 from tests.fakes.presence_redis import MovableClock
@@ -110,6 +111,10 @@ def _service(
         engine=PairingEngine(GENEROUS),
         exclusions=exclusions,
         opponents=opponents,
+        # A64-017.2: the seat snapshot's source. Its contents are
+        # `test_rating_persistence.py`'s; these tests only need one to
+        # reach the creation request.
+        ratings=StubRatings(),
         matches=matches,  # type: ignore[arg-type]
         events=events,
         unit_of_work=unit_of_work,

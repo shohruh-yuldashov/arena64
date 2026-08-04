@@ -21,6 +21,8 @@ from app.modules.game.public import (
     CreateMatchResult,
     MatchCreationRefused,
 )
+from app.modules.matchmaking.domain.queue_pool import QueueType
+from app.modules.rating.public import RatingSnapshot
 
 
 class StubExclusions:
@@ -157,3 +159,21 @@ __all__ = [
     "StubExclusions",
     "StubRecentOpponents",
 ]
+
+
+class StubRatings:
+    """A `RatingSnapshotProvider` that answers with one triple.
+
+    The seat snapshot's *contents* are `test_rating_persistence.py`'s and
+    the arithmetic is `test_glicko2.py`'s. What the pairing tests need is
+    only that a snapshot reaches the creation request, so this returns a
+    fixed one rather than modelling a rating store.
+    """
+
+    def __init__(self, snapshot: RatingSnapshot | None = None) -> None:
+        self.snapshot = snapshot if snapshot is not None else RatingSnapshot.unrated()
+        self.asked: list[UUID] = []
+
+    async def rating_for(self, player_id: UUID, *, queue_type: QueueType) -> RatingSnapshot:
+        self.asked.append(player_id)
+        return self.snapshot

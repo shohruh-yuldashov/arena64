@@ -181,6 +181,77 @@ forbidden_modules =
     app.modules.profiles.infrastructure
 allow_indirect_imports = True
 
+# A64-017.2. `rating` is the newest context and the most protected: A-4 makes
+# its records permanent, and R-4 makes `game -> rating -> leaderboard` a
+# one-way chain. Both fail the same way — a module that reached
+# `rating.domain` could compute a rating of its own, and a second place that
+# knows the Glicko-2 parameters is a second answer to "what does this player
+# rate", on the one dataset the platform promises never to corrupt.
+#
+# `profiles` is a *consumer* and appears here as a source, deliberately: it
+# holds the deprecated `RatingCategory` alias and must translate it through
+# `rating.public`'s `SpeedClass` rather than reaching for the domain enum.
+[importlinter:contract:rating-internals-are-private]
+name = rating internals are reachable only through rating.public
+type = forbidden
+source_modules =
+    app.gateway
+    app.modules.auth
+    app.modules.avatars
+    app.modules.friends
+    app.modules.game
+    app.modules.matchmaking.domain
+    app.modules.matchmaking.application
+    app.modules.matchmaking.infrastructure
+    app.modules.notifications
+    app.modules.profiles.domain
+    app.modules.profiles.application
+    app.modules.statistics
+    app.modules.users
+forbidden_modules =
+    app.modules.rating.domain
+    app.modules.rating.application
+    app.modules.rating.infrastructure
+allow_indirect_imports = True
+
+# `rating` reaches other contexts only through their published surfaces, like
+# every context before it. It needs exactly one thing from outside: the
+# variant a rating is keyed by.
+[importlinter:contract:rating-reaches-modules-through-public]
+name = rating reaches every module only through its published surface
+type = forbidden
+source_modules =
+    app.modules.rating
+forbidden_modules =
+    app.modules.auth.domain
+    app.modules.auth.application
+    app.modules.auth.infrastructure
+    app.modules.avatars
+    app.modules.engine
+    app.modules.friends.domain
+    app.modules.friends.application
+    app.modules.friends.infrastructure
+    app.modules.game.domain
+    app.modules.game.application
+    app.modules.game.infrastructure
+    app.modules.matchmaking
+    app.modules.notifications
+    app.modules.profiles
+    app.modules.statistics
+    app.modules.users.domain
+    app.modules.users.application
+    app.modules.users.infrastructure
+allow_indirect_imports = True
+
+[importlinter:contract:layers-rating]
+name = rating layers point inward
+type = layers
+layers =
+    app.modules.rating.presentation
+    app.modules.rating.infrastructure
+    app.modules.rating.application
+    app.modules.rating.domain
+
 [importlinter:contract:statistics-internals-are-private]
 name = statistics internals are reachable only through statistics.public
 type = forbidden

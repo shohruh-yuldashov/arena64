@@ -231,6 +231,23 @@ class TestTheSurfaceIsDeliberate:
         "MatchSnapshot",
         "MatchSnapshotReader",
         "PlacedPiece",
+        # A64-019.5 — the other half of R-25's round trip, and the decision
+        # is that a *originating context* gets to recognise its own matches
+        # without `game` learning what a tournament is.
+        #
+        # `MatchOrigin` was declared by A64-019.0 and published by nothing,
+        # so a caller could set an origin only by importing `game.domain` —
+        # which the import contract refuses. A command with an argument no
+        # consumer can name is a command with a default.
+        #
+        # `OriginMatchReader` is the second reconciliation read, keyed by
+        # `origin_ref` rather than by queue ticket, because a tournament has
+        # no ticket to key on. It is a **read**: a consumer can learn what
+        # became of the matches it asked for and can change none of them.
+        "MatchOrigin",
+        "OriginMatchOutcome",
+        "OriginMatchReader",
+        "OriginMatchState",
     }
 
     def test_nothing_is_published_by_accident(self) -> None:

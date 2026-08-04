@@ -1,7 +1,10 @@
 """The `tournaments` schema — `database.md` §3.1 reserved it, this fills it.
 
-    tournaments.tournament    one row per tournament
-    tournaments.registration  one row per (tournament, player), ever
+    tournaments.tournament       one row per tournament
+    tournaments.registration     one row per (tournament, player), ever
+    tournaments.round            one row per round
+    tournaments.pairing          one row per bracket node
+    tournaments.pairing_attempt  one row per `game` match played for a node
 
 ## No foreign key leaves this schema
 
@@ -43,6 +46,13 @@ from app.database.mixins import TimestampMixin
 from app.database.types import UtcDateTime
 from app.modules.game.public import ProductVariant
 from app.modules.rating.public import SpeedClass
+from app.modules.tournament.domain.attempts import (
+    FIRST_ATTEMPT,
+    MAX_ATTEMPTS,
+    AdvancementReason,
+    AttemptOutcome,
+    AttemptStatus,
+)
 from app.modules.tournament.domain.registration import RegistrationStatus
 from app.modules.tournament.domain.rounds import RoundStatus
 from app.modules.tournament.domain.tournament import (
@@ -241,6 +251,26 @@ class PairingModel(Base, TimestampMixin):
     round_number: Mapped[int] = mapped_column(Integer, primary_key=True)
     slot: Mapped[int] = mapped_column(Integer, primary_key=True)
 
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), nullable=False, unique=True, default=uuid.uuid4
+    )
+    """A stable surrogate identity, **beside** the coordinates — §6c.
+
+    The primary key stays `(tournament_id, round_number, slot)`, because
+    that is what makes a second plan for one slot impossible and is the
+    whole of §6's immutability. What the coordinates cannot be is a
+    reference handed to another context: a match records
+    `origin_ref = pairing.id` (R-25), and encoding a tournament, a round and
+    a slot into that would publish this module's own arithmetic and freeze
+    it — a bracket that later renumbered rounds would orphan every match
+    already played.
+
+    `default` here and `server_default` in the migration, deliberately both:
+    the Python default is what lets the ORM know the id it inserted without
+    a round trip, and the server default is what gives a row written by a
+    repair script or a backfill an id at all.
+    """
+
     light_player_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
     dark_player_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
     light_seed: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -255,13 +285,17 @@ class PairingModel(Base, TimestampMixin):
     then write would let both through.
     """
 
-    match_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
-    """The `game` match this node was played as, once one exists.
+    advancement_reason: Mapped[AdvancementReason | None] = mapped_column(
+        _enum(AdvancementReason, "advancement_reason"), nullable=True
+    )
+    """**Why** this node's winner advanced, or `NULL` while it has none.
 
-    Opaque — this module never dereferences it, and `game` holds the other
-    half as `origin_ref` (A64-019.0, R-25). **No foreign key in either
-    direction** (DB-03): a tournament is prunable and a match is permanent,
-    so the constraint would forbid a retention the other schema will need.
+    Beside `winner_id` rather than derived from it, because the three cases
+    are indistinguishable afterwards and one of them is a competitive fact
+    somebody will ask about: a player who won a game, a player who had no
+    opponent, and a player the bracket awarded the node to after two draws
+    (§6c). Recomputing "was this an adjudication" from the attempt rows
+    would work until the attempts are pruned and the tournament is not.
     """
 
     __table_args__ = (
@@ -298,13 +332,123 @@ class PairingModel(Base, TimestampMixin):
             "winner_id IS NULL OR winner_id = light_player_id OR winner_id = dark_player_id",
             name="ck_pairing__winner_played_here",
         ),
-        # One node per match. Two nodes claiming one match would be two
-        # advancements from one result.
+        # A reason accompanies a winner and never stands alone — the same
+        # "both halves of a fact or neither" the withdrawal instant keeps.
+        # A node with a reason and no winner would claim an advancement
+        # nobody made.
+        CheckConstraint(
+            "(winner_id IS NULL) = (advancement_reason IS NULL)",
+            name="ck_pairing__reason_iff_winner",
+        ),
+        {"schema": TOURNAMENT_SCHEMA},
+    )
+
+
+class PairingAttemptModel(Base, TimestampMixin):
+    """`tournaments.pairing_attempt` — one `game` match played for one node.
+
+    A **relation rather than a list in a column**, and §6c's reason is that
+    the rules a list would need enforcing in code are constraints here: one
+    row per attempt, one match per attempt, and no third attempt. A pairing
+    with two matches modelled as `match_id` and `rematch_match_id` would be
+    two columns and a third the day the bound changes.
+
+    `pairing.match_id` is **removed** in the same migration. It could no
+    longer truthfully represent a pairing with two matches, and two
+    competing sources of truth is worse than a migration — the feature is
+    unreleased, so the model is corrected now rather than preserved.
+
+    ## The foreign key is to `pairing.id`, not to its coordinates
+
+    Three columns would work and would tie every attempt to a round number
+    and a slot — the arithmetic §6c deliberately keeps free to change. The
+    surrogate is what makes the reference opaque on both sides of the
+    boundary: `game` holds it as `origin_ref`, and so does this.
+    """
+
+    __tablename__ = "pairing_attempt"
+
+    id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True)
+
+    pairing_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    match_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False)
+    """The `game` match this attempt was played as.
+
+    Opaque and **not null**: an attempt exists because a match was created
+    for it, so a row without one would be an attempt that never happened.
+    No foreign key in either direction (DB-03) — a tournament is prunable
+    and a match is permanent, so the constraint would forbid a retention
+    the other schema will need.
+    """
+
+    light_player_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False)
+    dark_player_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False)
+    """The seats **as this attempt was played**, not as the pairing plans
+    them: a rematch swaps them (§6c), so reading the pairing to learn who
+    was light in attempt two would give the wrong answer."""
+
+    status: Mapped[AttemptStatus] = mapped_column(
+        _enum(AttemptStatus, "attempt_status"), nullable=False
+    )
+    outcome: Mapped[AttemptOutcome | None] = mapped_column(
+        _enum(AttemptOutcome, "attempt_outcome"), nullable=True
+    )
+    winner_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["pairing_id"],
+            [f"{TOURNAMENT_SCHEMA}.pairing.id"],
+            name="fk_pairing_attempt__pairing",
+            ondelete="RESTRICT",
+        ),
+        # **The idempotency guarantee.** A redelivered `match.completed`
+        # cannot create a second rematch, because the row it would insert
+        # already exists — §6c. Read-then-insert would let two deliveries
+        # through, and two rematches for one pairing is two games two
+        # players did not agree to.
         Index(
-            "uq_pairing__match",
-            "match_id",
+            "uq_pairing_attempt__pairing_number",
+            "pairing_id",
+            "attempt_number",
             unique=True,
-            postgresql_where=text("match_id IS NOT NULL"),
+        ),
+        # One attempt per match. Two attempts claiming one match would be
+        # two advancements from one result — the guarantee `uq_pairing__match`
+        # used to hold, moved to where the match now lives.
+        Index("uq_pairing_attempt__match", "match_id", unique=True),
+        # The bound, in the schema. A third attempt cannot exist even if
+        # something above forgets §6c's rule — which matters because an
+        # unbounded rematch chain is a tournament that never finishes.
+        CheckConstraint(
+            f"attempt_number BETWEEN {FIRST_ATTEMPT} AND {MAX_ATTEMPTS}",
+            name="ck_pairing_attempt__number_in_range",
+        ),
+        # A completed attempt has an outcome and an instant; a live one has
+        # neither. Three columns that must agree, so the database holds the
+        # agreement rather than every writer remembering it.
+        CheckConstraint(
+            f"(status = '{AttemptStatus.COMPLETED.value}') = (outcome IS NOT NULL) "
+            f"AND (status = '{AttemptStatus.COMPLETED.value}') = (completed_at IS NOT NULL)",
+            name="ck_pairing_attempt__completed_iff_outcome",
+        ),
+        # A winner played in this attempt, and a draw has none. The same
+        # rule `ck_pairing__winner_played_here` keeps one level up, and the
+        # one error nothing downstream detects.
+        CheckConstraint(
+            "winner_id IS NULL OR winner_id = light_player_id OR winner_id = dark_player_id",
+            name="ck_pairing_attempt__winner_played_here",
+        ),
+        CheckConstraint(
+            f"(outcome = '{AttemptOutcome.DECISIVE.value}') = (winner_id IS NOT NULL)",
+            name="ck_pairing_attempt__winner_iff_decisive",
+        ),
+        CheckConstraint(
+            "light_player_id <> dark_player_id",
+            name="ck_pairing_attempt__distinct_players",
         ),
         {"schema": TOURNAMENT_SCHEMA},
     )
@@ -313,6 +457,7 @@ class PairingModel(Base, TimestampMixin):
 __all__ = [
     "TOURNAMENT_SCHEMA",
     "TournamentRoundModel",
+    "PairingAttemptModel",
     "PairingModel",
     "RegistrationModel",
     "TournamentModel",

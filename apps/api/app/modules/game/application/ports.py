@@ -29,6 +29,7 @@ from uuid import UUID
 from app.modules.engine import EngineVersion, PlayerSide, Position
 from app.modules.game.domain.match_record import MatchRecord
 from app.modules.game.domain.move_log import MoveRecord
+from app.modules.game.domain.variants import MatchOrigin
 from app.modules.game.public.history import (
     HistoryCursor,
     MatchHistoryEntry,
@@ -174,6 +175,19 @@ class MatchRecordRepository(Protocol):
         One statement for the batch. Serves
         `game.public.PairingReconciliationReader`, whose contract explains
         why the key is the ticket rather than the pairing.
+        """
+        ...
+
+    async def by_origin_refs(
+        self, origin_refs: Sequence[UUID], *, origin: MatchOrigin
+    ) -> Sequence[MatchRecord]:
+        """Every match one context created for these references — R-25.
+
+        One statement for the batch, served by `ix_match__origin_ref`, which
+        is partial on `origin_ref IS NOT NULL` and therefore covers exactly
+        the matches somebody else asked for. Serves
+        `game.public.OriginMatchReader`, whose contract explains why the key
+        is the reference rather than the match id.
         """
         ...
 

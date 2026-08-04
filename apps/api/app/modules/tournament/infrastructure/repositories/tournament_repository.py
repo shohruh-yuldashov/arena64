@@ -15,6 +15,7 @@ sweep, and it is the reason both live here rather than behind one helper.
 """
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, cast
 
@@ -24,15 +25,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.tournament.application.ports import (
     AlreadyRegistered,
+    AttemptAlreadyExists,
     PlanAlreadyExists,
     TournamentIsFull,
 )
-from app.modules.tournament.domain.bracket_plan import BracketSlot, PersistedSeed
+from app.modules.tournament.domain.attempts import AdvancementReason, PairingAttempt
+from app.modules.tournament.domain.bracket_plan import (
+    BracketSlot,
+    LocatedNode,
+    PersistedSeed,
+)
 from app.modules.tournament.domain.registration import Registration, RegistrationStatus
 from app.modules.tournament.domain.rounds import TournamentRound
 from app.modules.tournament.domain.seeding import PlannedPairing, Seed
 from app.modules.tournament.domain.tournament import Tournament, TournamentStatus
 from app.modules.tournament.infrastructure.models import (
+    PairingAttemptModel,
     PairingModel,
     RegistrationModel,
     TournamentModel,
@@ -70,6 +78,23 @@ class SqlAlchemyTournamentRepository:
             return
         row.status = tournament.status
         await self._session.flush()
+
+    async def in_progress(self, *, limit: int) -> list[uuid.UUID]:
+        """Up to `limit` tournaments being played, claimed for this worker.
+
+        `FOR UPDATE SKIP LOCKED` and a ceiling, for the reasons
+        `close_overdue` gives: a tournament another reconciler holds is one
+        to leave alone, and an unbounded sweep is an outage waiting for
+        enough tournaments. Ordered by id so a run is reproducible.
+        """
+        claimed = (
+            select(TournamentModel.id)
+            .where(TournamentModel.status == TournamentStatus.IN_PROGRESS)
+            .order_by(TournamentModel.id)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        return list(await self._session.scalars(claimed))
 
     async def close_overdue(self, *, now: datetime) -> list[uuid.UUID]:
         """Closes every open tournament past its deadline. Idempotent.
@@ -337,10 +362,185 @@ class SqlAlchemyPairingRepository:
         return pairings
 
 
+class SqlAlchemyPairingAttemptRepository:
+    """`PairingAttemptRepository` — the matches played for a bracket node.
+
+    ## Every guarantee here is a constraint, not a check
+
+    `record` inserts and translates the violation; it does not read first.
+    Two deliveries of one completed match both compute the same rematch, and
+    only `uq_pairing_attempt__pairing_number` decides which one exists — a
+    prior read would let both through, and two rematches for one pairing is
+    two games two players did not agree to.
+
+    `complete` is the same compare-and-set `claim_winner` uses, guarded on
+    `outcome IS NULL`. The loser re-reads rather than overwriting: a result
+    replaced by an identical-looking one is indistinguishable from a result
+    replaced by a different one.
+
+    ## The insert runs inside a `SAVEPOINT`, and it has to
+
+    A collision here is **ordinary**, not exceptional: every retry of a
+    launch reaches it, which is the whole point of insert-and-catch. But a
+    failed statement poisons the enclosing transaction — PostgreSQL refuses
+    every subsequent one until a rollback — so a caller that caught
+    `AttemptAlreadyExists` and then read the winning row would find its
+    session dead.
+
+    `begin_nested()` scopes the rollback to the statement. The constraint is
+    still the guard; what changes is that the loser can carry on and read
+    what the winner wrote, which is the entire recovery path.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def record(self, attempt: PairingAttempt) -> PairingAttempt:
+        """Writes a newly created attempt. Raises on a collision.
+
+        The savepoint is not an optimisation — see this class's docstring on
+        why the caller could not continue without it.
+        """
+        try:
+            async with self._session.begin_nested():
+                self._session.add(
+                    PairingAttemptModel(
+                        id=attempt.id,
+                        pairing_id=attempt.pairing_id,
+                        attempt_number=attempt.attempt_number,
+                        match_id=attempt.match_id,
+                        light_player_id=attempt.light_player_id,
+                        dark_player_id=attempt.dark_player_id,
+                        status=attempt.status,
+                        outcome=attempt.outcome,
+                        winner_id=attempt.winner_id,
+                        completed_at=attempt.completed_at,
+                    )
+                )
+                await self._session.flush()
+        except IntegrityError as violation:
+            if not any(
+                marker in str(violation.orig)
+                for marker in ("uq_pairing_attempt__pairing_number", "uq_pairing_attempt__match")
+            ):
+                raise
+            raise AttemptAlreadyExists(
+                f"pairing {attempt.pairing_id} already has attempt {attempt.attempt_number}"
+            ) from violation
+
+        return attempt
+
+    async def complete(self, attempt: PairingAttempt) -> bool:
+        """Records a result if there is none. Returns whether this call did it."""
+        result = cast(
+            "CursorResult[Any]",
+            await self._session.execute(
+                update(PairingAttemptModel)
+                .where(
+                    PairingAttemptModel.id == attempt.id,
+                    PairingAttemptModel.outcome.is_(None),
+                )
+                .values(
+                    status=attempt.status,
+                    outcome=attempt.outcome,
+                    winner_id=attempt.winner_id,
+                    completed_at=attempt.completed_at,
+                ),
+            ),
+        )
+        await self._session.flush()
+        return bool(result.rowcount)
+
+    async def by_match(self, match_id: uuid.UUID) -> PairingAttempt | None:
+        row = await self._session.scalar(
+            select(PairingAttemptModel).where(PairingAttemptModel.match_id == match_id)
+        )
+        return _to_attempt(row) if row else None
+
+    async def for_pairings(self, pairing_ids: Sequence[uuid.UUID]) -> list[PairingAttempt]:
+        if not pairing_ids:
+            return []
+
+        rows = await self._session.scalars(
+            select(PairingAttemptModel)
+            .where(PairingAttemptModel.pairing_id.in_(pairing_ids))
+            .order_by(PairingAttemptModel.pairing_id, PairingAttemptModel.attempt_number)
+        )
+        return [_to_attempt(row) for row in rows]
+
+    async def latest_for(self, pairing_id: uuid.UUID) -> PairingAttempt | None:
+        row = await self._session.scalar(
+            select(PairingAttemptModel)
+            .where(PairingAttemptModel.pairing_id == pairing_id)
+            .order_by(PairingAttemptModel.attempt_number.desc())
+            .limit(1)
+        )
+        return _to_attempt(row) if row else None
+
+
+def _to_attempt(row: PairingAttemptModel) -> PairingAttempt:
+    return PairingAttempt(
+        id=row.id,
+        pairing_id=row.pairing_id,
+        attempt_number=row.attempt_number,
+        match_id=row.match_id,
+        light_player_id=row.light_player_id,
+        dark_player_id=row.dark_player_id,
+        status=row.status,
+        outcome=row.outcome,
+        winner_id=row.winner_id,
+        completed_at=row.completed_at,
+    )
+
+
+class SqlAlchemyRoundRepository:
+    """`RoundRepository` — where each round is, never how it may move.
+
+    The status machine lives in `domain/rounds.py`. A repository that
+    decided transitions would be a second copy of the rule, and the copy is
+    what goes stale.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def rounds_for(self, tournament_id: uuid.UUID) -> list[TournamentRound]:
+        rows = await self._session.scalars(
+            select(TournamentRoundModel)
+            .where(TournamentRoundModel.tournament_id == tournament_id)
+            .order_by(TournamentRoundModel.round_number)
+        )
+        return [
+            TournamentRound(
+                tournament_id=row.tournament_id,
+                round_number=row.round_number,
+                status=row.status,
+                published_at=row.published_at,
+                started_at=row.started_at,
+                completed_at=row.completed_at,
+            )
+            for row in rows
+        ]
+
+    async def save(self, round_: TournamentRound) -> None:
+        row = await self._session.get(
+            TournamentRoundModel, (round_.tournament_id, round_.round_number)
+        )
+        if row is None:
+            return
+        row.status = round_.status
+        row.published_at = round_.published_at
+        row.started_at = round_.started_at
+        row.completed_at = round_.completed_at
+        await self._session.flush()
+
+
 __all__ = [
     "SqlAlchemyBracketRepository",
+    "SqlAlchemyPairingAttemptRepository",
     "SqlAlchemyPairingRepository",
     "SqlAlchemyRegistrationRepository",
+    "SqlAlchemyRoundRepository",
     "SqlAlchemySeedRepository",
     "SqlAlchemyTournamentRepository",
 ]
@@ -418,6 +618,10 @@ class SqlAlchemyBracketRepository:
                     light_seed=node.light_seed,
                     dark_seed=node.dark_seed,
                     winner_id=node.winner_id,
+                    # Written with the winner, never after it: a bye chain
+                    # can decide a later round at materialisation time, and
+                    # `ck_pairing__reason_iff_winner` refuses one half.
+                    advancement_reason=node.advancement_reason,
                 )
             )
 
@@ -438,14 +642,36 @@ class SqlAlchemyBracketRepository:
         )
         return [_to_slot(row) for row in rows]
 
+    async def locate(self, pairing_id: uuid.UUID) -> LocatedNode | None:
+        """One node by its surrogate id — served by `uq_pairing__id`.
+
+        The tournament travels with it because a completion carries only the
+        opaque reference: without this, "which bracket does this match
+        belong to" would need a scan.
+        """
+        row = await self._session.scalar(select(PairingModel).where(PairingModel.id == pairing_id))
+        if row is None:
+            return None
+        return LocatedNode(tournament_id=row.tournament_id, node=_to_slot(row))
+
     async def claim_winner(
-        self, tournament_id: uuid.UUID, *, round_number: int, slot: int, winner_id: uuid.UUID
+        self,
+        tournament_id: uuid.UUID,
+        *,
+        round_number: int,
+        slot: int,
+        winner_id: uuid.UUID,
+        reason: AdvancementReason,
     ) -> bool:
         """Sets the winner if there is none. Returns whether this call did it.
 
         `False` means somebody else got there first — the caller re-reads to
         decide whether that is agreement or a conflict. The guard is in the
         `WHERE`, so the decision is the database's.
+
+        The reason goes in the same statement: `ck_pairing__reason_iff_winner`
+        refuses one without the other, and a second write would be a window
+        in which the bracket says somebody advanced and cannot say why.
         """
         # `cast`, because `AsyncSession.execute` is typed as returning
         # `Result` while an UPDATE always yields a `CursorResult` — and
@@ -460,7 +686,7 @@ class SqlAlchemyBracketRepository:
                     PairingModel.slot == slot,
                     PairingModel.winner_id.is_(None),
                 )
-                .values(winner_id=winner_id),
+                .values(winner_id=winner_id, advancement_reason=reason),
             ),
         )
         await self._session.flush()
@@ -511,5 +737,6 @@ def _to_slot(row: PairingModel) -> BracketSlot:
         light_seed=row.light_seed,
         dark_seed=row.dark_seed,
         winner_id=row.winner_id,
-        match_id=row.match_id,
+        advancement_reason=row.advancement_reason,
+        id=row.id,
     )

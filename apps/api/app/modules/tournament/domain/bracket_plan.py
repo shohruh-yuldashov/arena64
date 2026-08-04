@@ -50,6 +50,7 @@ from dataclasses import dataclass, replace
 from typing import Final
 from uuid import UUID
 
+from app.modules.tournament.domain.attempts import AdvancementReason
 from app.modules.tournament.domain.exceptions import (
     InvalidBracketPosition,
     InvalidRoundNumber,
@@ -97,7 +98,25 @@ class BracketSlot:
     dark_seed: int | None = None
 
     winner_id: UUID | None = None
-    match_id: UUID | None = None
+    advancement_reason: AdvancementReason | None = None
+    """Why the winner advanced. Set exactly when `winner_id` is — §6c.
+
+    Carried rather than derived, because the three cases are
+    indistinguishable afterwards and one of them is a competitive fact: a
+    player who won a game, a player who had no opponent, and a player the
+    bracket awarded the node to after two draws.
+    """
+
+    id: UUID | None = None
+    """This node's stable surrogate identity, once it is persisted.
+
+    `None` for a node the domain has just computed and storage has not yet
+    seen — the tree is built before any row exists, so a required id would
+    mean inventing one per computation and discarding it. What needs it is
+    the boundary: a match created for this node records
+    `origin_ref = id` (R-25), and the round trip is how the tournament
+    recognises the match again.
+    """
 
     def __post_init__(self) -> None:
         if self.round_number < FIRST_ROUND:
@@ -143,16 +162,21 @@ class BracketSlot:
         """
         return self.slot % 2 == 0
 
-    def with_winner(self, player_id: UUID) -> "BracketSlot":
+    def with_winner(self, player_id: UUID, *, reason: AdvancementReason) -> "BracketSlot":
         """This node decided. Raises unless the winner played in it.
 
         The one bracket error nothing downstream detects: an advancement by
         somebody who was never here produces a final between players who
         never met, visible only after the rounds beneath it are recorded.
+
+        The reason is **required** rather than defaulted, for the argument
+        CLAUDE.md §2.4 makes about illegal states: a default would be the
+        one a caller forgets to override, and "won a game" is the wrong
+        answer for both of the other two cases.
         """
         if player_id not in self.participants:
             raise InvalidBracketPosition("the winner of a node must be one of its participants")
-        return replace(self, winner_id=player_id)
+        return replace(self, winner_id=player_id, advancement_reason=reason)
 
     def with_participant(self, player_id: UUID, *, seed: int | None, light: bool) -> "BracketSlot":
         """This node with one seat filled by an advancing winner.
@@ -173,6 +197,21 @@ class BracketSlot:
         if player_id == self.dark_player_id:
             return self.dark_seed
         return None
+
+
+@dataclass(frozen=True, slots=True)
+class LocatedNode:
+    """One node, and the tournament it belongs to.
+
+    What a lookup **by node id** has to return: a completion arrives naming
+    only `origin_ref`, and every question after that — which round, which
+    bracket, is the tournament still running — needs the tournament the node
+    sits in. `BracketSlot` deliberately does not carry it, because a list of
+    a tournament's own nodes would then repeat one id per row.
+    """
+
+    tournament_id: UUID
+    node: "BracketSlot"
 
 
 def round_count(size: int) -> int:
@@ -236,7 +275,7 @@ def propagated(nodes: list[BracketSlot]) -> list[BracketSlot]:
                 continue
 
             winner = node.participants[0]
-            decided = node.with_winner(winner)
+            decided = node.with_winner(winner, reason=AdvancementReason.BYE)
             by_coordinate[coordinate] = decided
 
             parent = by_coordinate.get(decided.parent())
@@ -290,6 +329,7 @@ def bracket_for(seeds: list[PersistedSeed], first_round: list[PlannedPairing]) -
 __all__ = [
     "FIRST_ROUND",
     "BracketSlot",
+    "LocatedNode",
     "PersistedSeed",
     "bracket_for",
     "materialised",

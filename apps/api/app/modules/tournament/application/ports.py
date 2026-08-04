@@ -1,7 +1,12 @@
 """What `tournament`'s use cases need from the world — AD-06.
 
-Two repositories and one published reader from `users`. Nothing else: this
-phase creates no matches, reads no ratings and delivers no notifications.
+Storage for the aggregate and everything beneath it, plus three narrow views
+of other contexts: whether a player exists (`users`), what a field rates
+(`rating`), and — since A64-019.5 — the ability to ask `game` for a match
+and to learn what became of one. Every cross-context entry here is a
+`Protocol` declared in *this* module and satisfied structurally by the other
+one's published surface, which is what keeps `tournament` holding the
+narrowest thing that answers its question.
 
 ## Why the capacity check is the repository's, not a service's
 
@@ -22,7 +27,12 @@ from uuid import UUID
 from app.core.exceptions import DomainError
 from app.modules.game.public import ProductVariant
 from app.modules.rating.public import RatingSnapshot, SpeedClass
-from app.modules.tournament.domain.bracket_plan import BracketSlot, PersistedSeed
+from app.modules.tournament.domain.attempts import AdvancementReason, PairingAttempt
+from app.modules.tournament.domain.bracket_plan import (
+    BracketSlot,
+    LocatedNode,
+    PersistedSeed,
+)
 from app.modules.tournament.domain.registration import Registration
 from app.modules.tournament.domain.rounds import TournamentRound
 from app.modules.tournament.domain.seeding import PlannedPairing, Seed
@@ -90,6 +100,16 @@ class NotSeedable(DomainError):
     Registration must be **closed** first: seeding an open tournament would
     build a bracket from a field that can still change, and the plan is
     immutable once written.
+    """
+
+
+class TournamentNotStartable(DomainError):
+    """The tournament cannot be started — §5.
+
+    Distinct from `NotSeedable`, which is about building a bracket from a
+    field that can still change. This is about the lifecycle: a draft, an
+    open registration, a completed tournament and a cancelled one are all
+    refusals, and none of them is a seeding problem.
     """
 
 
@@ -195,14 +215,35 @@ class BracketRepository(Protocol):
 
     async def nodes_for(self, tournament_id: UUID) -> list[BracketSlot]: ...
 
+    async def locate(self, pairing_id: UUID) -> LocatedNode | None:
+        """One node by its surrogate id, with the tournament it belongs to.
+
+        The lookup a completion needs: `match.completed` carries
+        `origin_ref` and nothing that says which tournament it is — which is
+        the point of an opaque reference (§6c), and the reason this cannot
+        be answered by `nodes_for`.
+        """
+        ...
+
     async def claim_winner(
-        self, tournament_id: UUID, *, round_number: int, slot: int, winner_id: UUID
+        self,
+        tournament_id: UUID,
+        *,
+        round_number: int,
+        slot: int,
+        winner_id: UUID,
+        reason: AdvancementReason,
     ) -> bool:
         """Sets the winner **if there is none**. Returns whether this call did.
 
         The compare-and-set §8 requires: the guard is in the `WHERE`, so two
         workers cannot both write and the loser learns it lost rather than
         overwriting.
+
+        The reason is written in the same statement, because the table's
+        `ck_pairing__reason_iff_winner` refuses one without the other — and
+        because a second write to set it would be a window in which the
+        bracket says somebody advanced and cannot say why.
         """
         ...
 
@@ -217,6 +258,82 @@ class BracketRepository(Protocol):
         light: bool,
     ) -> None:
         """Puts an advancing winner into a parent seat, if it is empty."""
+        ...
+
+
+class AttemptAlreadyExists(DomainError):
+    """This pairing already has an attempt with that number — §6c.
+
+    Raised from `unique (pairing_id, attempt_number)` rather than from a
+    prior read, so a redelivered `match.completed` cannot produce a second
+    rematch. The caller treats it as a signal to re-read: the work was done
+    by whoever won.
+    """
+
+
+class PairingAttemptRepository(Protocol):
+    """The `game` matches played for a bracket node — §6c.
+
+    A relation rather than a column, so the rules are the database's: one
+    row per attempt, one match per attempt, and no third attempt.
+    """
+
+    async def record(self, attempt: PairingAttempt) -> PairingAttempt:
+        """Writes a newly created attempt. Raises `AttemptAlreadyExists`.
+
+        The insert **is** the idempotency guard, and it is why a caller
+        creates the `game` match first: `game`'s own key returns the same
+        match on a retry, so the loser here discards nothing.
+        """
+        ...
+
+    async def complete(self, attempt: PairingAttempt) -> bool:
+        """Records an attempt's result **if it has none**. Returns whether
+        this call did it.
+
+        The same compare-and-set shape as `BracketRepository.claim_winner`,
+        and for the same reason: two deliveries of one completion must not
+        both write, and the loser learns it lost rather than overwriting a
+        result with an identical one it cannot distinguish from a different
+        one.
+        """
+        ...
+
+    async def by_match(self, match_id: UUID) -> PairingAttempt | None:
+        """The attempt a `game` match was played for, or `None`.
+
+        Keyed by match because that is what a completion carries. Served by
+        `uq_pairing_attempt__match`.
+        """
+        ...
+
+    async def for_pairings(self, pairing_ids: Sequence[UUID]) -> list[PairingAttempt]:
+        """Every attempt of these nodes, in one statement.
+
+        Batched for the reconciler's sake: it claims a bounded page of nodes
+        per tick, and a query per node would make the recovery job the N+1
+        it exists to avoid.
+        """
+        ...
+
+    async def latest_for(self, pairing_id: UUID) -> PairingAttempt | None:
+        """The highest-numbered attempt of one node, or `None`."""
+        ...
+
+
+class RoundRepository(Protocol):
+    """A tournament's rounds and their lifecycle — §6b.
+
+    Separate from `BracketRepository`, which writes them once at
+    materialisation: this is what moves them afterwards, and a repository
+    that could do both would let a publish be written as a materialise.
+    """
+
+    async def rounds_for(self, tournament_id: UUID) -> list[TournamentRound]: ...
+
+    async def save(self, round_: TournamentRound) -> None:
+        """Persists a round's transition. The state machine is the
+        aggregate's — see `domain/rounds.py`."""
         ...
 
 
@@ -239,6 +356,18 @@ class TournamentRepository(Protocol):
 
     async def save(self, tournament: Tournament) -> None:
         """Persists a lifecycle transition."""
+        ...
+
+    async def in_progress(self, *, limit: int) -> list[UUID]:
+        """Up to `limit` tournaments currently being played — the
+        reconciler's claim.
+
+        `FOR UPDATE SKIP LOCKED`, like `close_overdue` and for the same
+        reason: a tournament another worker is already reconciling is one
+        this worker should leave alone rather than wait for. Bounded,
+        because a sweep with no ceiling is an outage waiting for enough
+        tournaments.
+        """
         ...
 
     async def close_overdue(self, *, now: datetime) -> list[UUID]:
@@ -276,11 +405,14 @@ class RegistrationRepository(Protocol):
 
 __all__ = [
     "AlreadyRegistered",
+    "AttemptAlreadyExists",
     "BracketRepository",
     "NotSeedable",
+    "PairingAttemptRepository",
     "PairingRepository",
     "PlanAlreadyExists",
     "RatingSnapshots",
+    "RoundRepository",
     "SeedRepository",
     "PlayerDirectory",
     "NotRegistered",
@@ -288,5 +420,6 @@ __all__ = [
     "RegistrationRepository",
     "TournamentIsFull",
     "TournamentNotFound",
+    "TournamentNotStartable",
     "TournamentRepository",
 ]

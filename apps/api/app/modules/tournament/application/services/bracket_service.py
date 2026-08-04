@@ -40,6 +40,7 @@ from app.modules.tournament.application.ports import (
     TournamentNotFound,
     TournamentRepository,
 )
+from app.modules.tournament.domain.attempts import AdvancementReason
 from app.modules.tournament.domain.bracket_plan import (
     FIRST_ROUND,
     BracketSlot,
@@ -153,7 +154,13 @@ class TournamentBracketService:
         return nodes
 
     async def advance_winner(
-        self, tournament_id: UUID, *, round_number: int, slot: int, winner_id: UUID
+        self,
+        tournament_id: UUID,
+        *,
+        round_number: int,
+        slot: int,
+        winner_id: UUID,
+        reason: AdvancementReason = AdvancementReason.PLAYED,
     ) -> list[BracketSlot]:
         """Records a node's winner and propagates. Idempotent — §7, §8.
 
@@ -161,6 +168,11 @@ class TournamentBracketService:
         *different* winner raises `ConflictingWinner`. Nothing here decides
         between two disagreeing results — that is a moderation question the
         Administration epic owns.
+
+        `reason` defaults to `PLAYED` because that is what an advancement
+        through this method almost always is; A64-019.5's adjudicated
+        advancement (§6c) is the caller that passes something else, and it
+        has to say so explicitly.
         """
         async with self._unit_of_work:
             await self._tournaments.lock(tournament_id)
@@ -175,7 +187,11 @@ class TournamentBracketService:
                 raise InvalidBracketPosition("the winner of a node must be one of its participants")
 
             claimed = await self._bracket.claim_winner(
-                tournament_id, round_number=round_number, slot=slot, winner_id=winner_id
+                tournament_id,
+                round_number=round_number,
+                slot=slot,
+                winner_id=winner_id,
+                reason=reason,
             )
             if not claimed:
                 # Somebody was here first — agreement or conflict.
@@ -190,7 +206,7 @@ class TournamentBracketService:
                 await self._unit_of_work.commit()
                 return current
 
-            decided = node.with_winner(winner_id)
+            decided = node.with_winner(winner_id, reason=reason)
             parent_coordinate = decided.parent()
             if parent_coordinate in nodes:
                 await self._bracket.fill_seat(
@@ -227,6 +243,9 @@ class TournamentBracketService:
                     round_number=resolved.round_number,
                     slot=resolved.slot,
                     winner_id=resolved.winner_id,
+                    # Everything this pass decides is a bye — `propagated`
+                    # decides nothing else, by construction.
+                    reason=AdvancementReason.BYE,
                 )
             for light in (True, False):
                 new = resolved.light_player_id if light else resolved.dark_player_id

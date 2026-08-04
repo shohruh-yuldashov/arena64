@@ -226,6 +226,11 @@ class ClockAdjudicationService:
                 speed_class=record.light.rating.speed_class if record.light.rating else None,
                 light=_seat_summary(record.light),
                 dark=_seat_summary(record.dark),
+                # A match that flags is as much a completion as one that is
+                # played out, so the originating context must recognise it
+                # here too — see `MatchCompleted`.
+                origin=record.origin,
+                origin_ref=record.origin_ref,
             )
         )
         logger.info(

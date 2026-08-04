@@ -6,7 +6,7 @@
 | **Status** | Approved for v0.x — Single Elimination only |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-05 |
+| **Last updated** | 2026-08-05 — A64-019.5, live tournament matches (§6c, §6d) |
 | **Related specs** | [`rating.md`](./rating.md), [`replay.md`](./replay.md), [`matchmaking.md`](./matchmaking.md) |
 | **Related** | `services.md` §11.3, `database.md` §18.3, `domain-model.md` §16.2 and R-25 |
 
@@ -55,6 +55,19 @@ them, and that is the whole of the "no new mechanism" claim becoming true.
 | `origin` | `queue`, `challenge`, `rematch`, `tournament` — where the match came from |
 | `origin_ref` | **Opaque** uuid. No foreign key (DB-03), no meaning to `game` |
 
+**A64-019.0 shipped only the outbound half.** The columns were written and
+`game.match_completed` did not carry them, so the originating context saw a match end and could
+not tell it was one of its own. A64-019.5 adds both fields to that payload, additively and with
+defaults, which completes the round trip:
+
+```
+tournament -> game.public.CreateMatch   origin = tournament, origin_ref = pairing.id
+game       -> game.match_completed      origin, origin_ref, echoed back
+```
+
+`game` still knows nothing about brackets. It stores an enum member and an opaque id, and hands
+both back.
+
 **`game` stays tournament-agnostic.** It stores an enum member and an opaque id, hands both back
 on `match.completed`, and has no idea what a bracket is. A foreign key here would make the two
 schemas undeployable apart, which is precisely the seam `architecture.md` §16 keeps open.
@@ -68,6 +81,17 @@ schemas undeployable apart, which is precisely the seam `architecture.md` §16 k
 `tournament` **never** writes to `game`'s schema (R-3) and never references its relations with a
 foreign key (DB-03). It calls `game.public`'s `CreateMatch` — the same port `matchmaking` uses —
 and consumes `game.match_completed` through the subscriber-agnostic outbox (BE-10).
+
+A64-019.5 adds one published **read**, `game.public.OriginMatchReader`: what became of the
+matches an originating context asked for, keyed by `origin_ref`. It is the counterpart to
+`PairingReconciliationReader` and exists for the same reason — creating a match and recording
+that it was created are two transactions BE-05 forbids collapsing, so something has to be able
+to ask afterwards. The queue asks about its tickets; a tournament has none to ask about.
+
+The import contract is stricter here than for any other consumer of `game.public`:
+`tournament-reaches-modules-through-public` covers this module's **composition root** as well,
+which every other module's contract exempts. So `game`'s concrete classes are named only in
+`app/app_factory.py` and passed in.
 
 ## 6. Bracket and pairing
 
@@ -298,6 +322,77 @@ twice, create a third attempt, or overwrite an advancement. The guarantees are t
 database's: `unique (pairing_id, attempt_number)`, `unique match_id`, and the
 `winner_id IS NULL` compare-and-set A64-019.4 already uses.
 
+### The queue ticket a tournament does not have — a recorded wart
+
+`game.public.MatchParticipant` requires a `queue_ticket_id` per seat, and `game.match` stores
+it `NOT NULL` with a unique index. It is **provenance for a queue pairing**, and a tournament
+has none. A64-019.5 supplies a pair derived from the attempt (`attempts.seat_references`):
+distinct, stable across retries, and satisfying every constraint.
+
+It is recorded here rather than worked around because it is a field saying something untrue.
+Making it nullable is the correct fix and is **not** A64-019.5's: it changes `game.match`'s
+schema, `MatchSeat`, `MatchRecord.ticket_ids()`, and `_MatchEvent`'s payload — which every
+`matchmaking` consumer reads. That is a `game` change with its own phase, not a side effect of
+wiring a tournament.
+
+## 6d. Live tournament matches — A64-019.5
+
+### Starting
+
+| Step | Guarantee |
+| --- | --- |
+| Materialise the bracket | Idempotent, its own transaction (A64-019.4 §5) |
+| `REGISTRATION_CLOSED` → `IN_PROGRESS` | Under the row lock; a retry finds it already moved |
+| Round one `PUBLISHED` → `IN_PROGRESS` | The aggregate's table, not a repository's opinion |
+| One `game` match per node that `needs_a_match` | **A bye creates none** — it has one participant, so it never qualifies |
+| `tournament.started` | Outbox, same transaction (AD-16) |
+
+Two transactions rather than one, because materialisation is composed rather than reimplemented.
+Both halves are idempotent, so a worker that dies between them leaves a bracket the retry reuses.
+
+**Effects before bookkeeping.** The `game` match is created *before* the attempt row is written,
+and the winner is advanced *before* the attempt is marked completed. The recoverable state is
+the one where more has happened than has been recorded: asking `game` again returns the same
+match (its unique key on the derived `pairing_id`), whereas an attempt row naming a match that
+was never created is unrecoverable.
+
+### `game`'s idempotency key is derived, not stored
+
+`CreateMatchRequest.pairing_id` is `uuid5(pairing.id, "attempt:<n>")` — **per attempt**, because
+a pairing may have two matches and `game`'s key admits one match each. Deriving it is what makes
+every retry above safe: the same input computes the same key, and `game` returns the existing
+match with `created = False`.
+
+### Completion
+
+`tournament.match_completed`, its own `processed_event` partition. An entry is **skipped, not
+failed**, when `origin` is not `tournament`, when there is no reference, when no attempt names
+the match, or when the outcome is not a result — none becomes true by being retried. Anything
+else is a per-entry failure; the consumer never raises, so one poison entry cannot stop a batch.
+
+An **aborted** match (`MatchOutcome.NONE`) advances nobody. It is not a draw — nothing was
+played — and §6c's rematch is a rule about games that were.
+
+### Reconciliation
+
+`tournament.bracket.reconcile`, maintenance queue, five minutes, bounded, `FOR UPDATE SKIP
+LOCKED`, never raises. It compares `game`'s matches for a node against this module's attempts:
+
+| State | Action |
+| --- | --- |
+| Node owed a match, `game` has none | Launch it |
+| `game` has a match, no attempt row | Record the attempt, numbered by creation order |
+| Match decided or drawn, nothing followed | Re-apply it through the same service the consumer uses |
+| Attempt names a match `game` no longer has | **Reported, not repaired** |
+| Match ended with no result at all | **Reported, not repaired** |
+
+The last two are the same undecided question and are logged at `ERROR` with a counter. Both
+mean a node whose match will never produce a result, and **who advances then is OQ-2** — no-show
+policy waits on the Administration epic. Guessing would write a permanent competitive record
+nobody chose. A tournament match uses `game`'s ordinary acceptance handshake with a five-minute
+window (wider than a queue pairing's thirty seconds, because an entrant registered earlier and is
+waiting for a round to be called), so an unaccepted match is the realistic cause.
+
 ## 7. Privacy
 
 Tournaments and their brackets are **public**. A private tournament is deferred with
@@ -311,6 +406,6 @@ Where a resource is not visible, the answer is the platform's existing rule: **`
 | # | Question | Blocked work |
 | --- | --- | --- |
 | OQ-1 | Who may cancel a tournament, remove a participant, or override a result? | Moderation — waits for the Administration epic and `specs/admin.md` |
-| OQ-2 | Is check-in required, and what is the no-show window? | Defaulted to "no check-in" in v0.x |
+| OQ-2 | Is check-in required, and what is the no-show window? **And who advances when a tournament match ends with no result — nobody accepted it, it was declined, or it was aborted?** | Defaulted to "no check-in" in v0.x. A64-019.5's reconciler detects and reports the case and deliberately does not decide it — see §6d |
 | OQ-3 | Time control per tournament | `specs/rating.md` OQ-1 and OQ-2 — the catalogue does not exist, so every match is the platform default |
 | OQ-4 | Retention for cancelled tournaments | Append-only in v0.x, like everything else |

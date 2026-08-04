@@ -388,6 +388,10 @@ class LiveMoveService:
                 speed_class=record.light.rating.speed_class if record.light.rating else None,
                 light=_seat_summary(record.light),
                 dark=_seat_summary(record.dark),
+                # R-25's round trip: the originating context recognises its
+                # own match here rather than by reading `game`'s table.
+                origin=record.origin,
+                origin_ref=record.origin_ref,
             )
         )
         logger.info(

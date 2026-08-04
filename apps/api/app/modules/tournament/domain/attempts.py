@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Final
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from app.modules.tournament.domain.exceptions import InvalidBracketPosition
 
@@ -166,6 +166,43 @@ def decide(
     )
 
 
+def match_key(pairing_id: UUID, attempt_number: int) -> UUID:
+    """The idempotency key `game` stores as `CreateMatchRequest.pairing_id`.
+
+    **Derived, not random**, and that is what makes creating a match safe to
+    retry: `game`'s unique index on `match.pairing_id` returns the match an
+    earlier attempt created rather than making a second one, so a worker
+    that died after `game` committed and before this module recorded the
+    attempt can simply ask again.
+
+    Per **attempt** rather than per pairing, because a pairing may have two
+    matches and `game`'s key admits one match each. The pairing's own id is
+    the uuid5 namespace, so no constant has to be invented and no two
+    tournaments can collide.
+    """
+    return uuid5(pairing_id, f"attempt:{attempt_number}")
+
+
+def seat_references(pairing_id: UUID, attempt_number: int) -> tuple[UUID, UUID]:
+    """The `(light, dark)` provenance ids a tournament match is created with.
+
+    `game.public.MatchParticipant` requires a `queue_ticket_id` per seat —
+    provenance for a match that came from the queue, and a required field
+    for one that did not. A tournament has no tickets, so it supplies a pair
+    **derived from the attempt**: distinct (`game` refuses two equal ones,
+    and its unique indexes refuse a collision with any other match) and
+    stable across retries, which is what keeps the retry above idempotent
+    rather than merely repeatable.
+
+    A random pair would satisfy the constraints and lose the second
+    property. What neither can do is make the field honest — see
+    `specs/tournament.md` §6c on why `game` keeping the column required is
+    recorded as a wart rather than worked around here.
+    """
+    seat = uuid5(pairing_id, f"attempt:{attempt_number}:seat")
+    return (uuid5(seat, "light"), uuid5(seat, "dark"))
+
+
 def rematch_seats(attempt: PairingAttempt) -> tuple[UUID, UUID]:
     """The rematch's `(light, dark)` — the first attempt's, swapped.
 
@@ -185,5 +222,7 @@ __all__ = [
     "AttemptStatus",
     "PairingAttempt",
     "decide",
+    "match_key",
     "rematch_seats",
+    "seat_references",
 ]

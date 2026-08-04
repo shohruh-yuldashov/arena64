@@ -58,7 +58,7 @@ from uuid import UUID
 
 from app.modules.engine import PlayerSide
 from app.modules.game.domain.result import MatchOutcome, TerminationReason
-from app.modules.game.domain.variants import ProductVariant
+from app.modules.game.domain.variants import MatchOrigin, ProductVariant
 from app.platform.events import DomainEvent
 
 #: The `aggregate_type` every event here carries — domain-model.md §10.4's
@@ -394,6 +394,24 @@ class MatchCompleted(DomainEvent):
     speed_class: str | None = None
     """The rating key's second component. `None` for the same reason."""
 
+    # --- A64-019.5: the round trip R-25 promised, completed ---
+    #
+    # A64-019.0 gave `game.match` an `origin` and an opaque `origin_ref` so a
+    # tournament could recognise its own matches. It handed neither back:
+    # the columns were written and the completion event did not carry them,
+    # so the originating context saw a match end and could not tell it was
+    # one of its own. The mechanism `services.md` §11.3 assumed existed was
+    # therefore still half absent — this is the other half.
+    #
+    # Additive with defaults, like the block above: every consumer written
+    # before this ignores two fields it does not know about, and a match
+    # recorded before A64-019.0 correctly reads as having come from the
+    # queue.
+    origin: MatchOrigin = MatchOrigin.QUEUE
+    origin_ref: UUID | None = None
+    """The originating context's own identifier. **Opaque to `game`** — it
+    is stored, echoed here, and never dereferenced."""
+
     @property
     def aggregate_id(self) -> UUID:
         return self.match_id
@@ -411,6 +429,8 @@ class MatchCompleted(DomainEvent):
             "speed_class": self.speed_class,
             "light": _seat_payload(self.light),
             "dark": _seat_payload(self.dark),
+            "origin": self.origin.value,
+            "origin_ref": str(self.origin_ref) if self.origin_ref is not None else None,
         }
 
 

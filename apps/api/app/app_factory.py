@@ -40,6 +40,7 @@ from app.modules.friends.infrastructure.cache import (
     RedisSocialGraphCache,
 )
 from app.modules.game.application.services import ClockAdjudicationService
+from app.modules.game.application.services.origin_match_service import GameOriginMatches
 from app.modules.game.infrastructure import (
     ClockAdjudicationTask,
     RedisClockDeadlineStore,
@@ -126,13 +127,34 @@ from app.modules.rating.application.services.match_rating_service import MatchRa
 from app.modules.rating.infrastructure.repositories.player_rating_repository import (
     SqlAlchemyPlayerRatingRepository,
 )
+from app.modules.tournament.application.services.match_completion_consumer import (
+    CONSUMER_NAME as TOURNAMENT_CONSUMER,
+)
+from app.modules.tournament.application.services.match_completion_consumer import (
+    TournamentMatchCompletionConsumer,
+)
+from app.modules.tournament.application.services.reconciliation_service import (
+    TournamentReconciliationService,
+)
 from app.modules.tournament.infrastructure.tasks import (
     TournamentDeadlineTask,
+    TournamentReconciliationTask,
 )
 from app.modules.tournament.infrastructure.tasks import (
     deadline_request as tournament_deadline_request,
 )
-from app.modules.tournament.presentation.dependencies import build_deadline_service
+from app.modules.tournament.infrastructure.tasks import (
+    reconciliation_request as tournament_reconciliation_request,
+)
+from app.modules.tournament.presentation.dependencies import (
+    build_deadline_service,
+    build_match_completion_consumer,
+)
+from app.modules.tournament.presentation.dependencies import (
+    # Aliased: `matchmaking` publishes a factory of the same name for its
+    # own reconciler, and the two recover different things.
+    build_reconciliation_service as build_tournament_reconciliation,
+)
 from app.modules.users.infrastructure.presence import (
     NoPresenceProvider,
     RedisPresenceProvider,
@@ -489,6 +511,24 @@ def build_outbox_worker(
             event_types=frozenset({MATCH_COMPLETED}),
         )
     )
+    # A64-019.5. The other half of A64-019.0: `game` hands `origin_ref` back
+    # on completion, and this is what recognises the match as a tournament's
+    # own and moves the bracket. Without it a tournament creates matches and
+    # never advances — the same shape of silent absence the rating consumer
+    # above was added to close.
+    #
+    # Its **own** `processed_event` partition, like every consumer here. It
+    # subscribes to the same event the rating consumer does, and neither may
+    # mark the other's work done: a redelivery the ladder has already
+    # applied must still reach the bracket.
+    handlers.append(
+        SessionScopedNotificationHandler(
+            session_factory=db.session_factory,
+            dispatcher_factory=lambda session: _tournament_consumer_for(session, clock),
+            consumer=TOURNAMENT_CONSUMER,
+            event_types=frozenset({MATCH_COMPLETED}),
+        )
+    )
     if settings.matchmaking.realtime_delivery_enabled:
         handlers.append(
             SessionScopedNotificationHandler(
@@ -526,6 +566,12 @@ def build_outbox_worker(
                 ConsumerPolicy(ACCEPTANCE_FAILURE_CONSUMER, timeout_seconds=15.0),
                 ConsumerPolicy(CONSUMER_NAME, timeout_seconds=20.0),
                 ConsumerPolicy(PENDING_MATCH_CONSUMER, timeout_seconds=10.0),
+                # The most expensive consumer on this list, and the budget
+                # says so rather than hiding it: one completion can advance a
+                # winner, publish the next round and create every match in
+                # it — several transactions and a call into `game` — where
+                # every other entry here is one or two indexed writes.
+                ConsumerPolicy(TOURNAMENT_CONSUMER, timeout_seconds=30.0),
             ]
         ),
         # One handler today. The list is the extension point: a second
@@ -613,6 +659,54 @@ def _rating_consumer_for(session: AsyncSession, clock: SystemClock) -> MatchComp
             unit_of_work=SessionUnitOfWork(session),
             clock=clock,
         )
+    )
+
+
+def _tournament_consumer_for(
+    session: AsyncSession, clock: SystemClock
+) -> TournamentMatchCompletionConsumer:
+    """The tournament consumer over one session — A64-019.5 §9.
+
+    Named concretely here, which is what a composition root is for: this is
+    the **only** place permitted to hand `tournament` a `game` command
+    object. Its own `tournament-reaches-modules-through-public` contract
+    covers its composition root as well, so `build_match_creation` — which
+    names `game`'s `PersistentMatchCreation` — is called from here and
+    passed in.
+
+    Everything is built over the **same** session, so a bracket advancement,
+    the matches it creates and the events both emit are one transaction each
+    (AD-16) rather than a graph spread across connections.
+    """
+    events = OutboxEventPublisher(SqlAlchemyOutboxRepository(session))
+    return build_match_completion_consumer(
+        session,
+        matches=build_match_creation(session, events=events, clock=clock),
+        events=events,
+        clock=clock,
+    )
+
+
+def _tournament_reconciliation_for(
+    session: AsyncSession, clock: SystemClock
+) -> TournamentReconciliationService:
+    """One reconciliation pass's graph — A64-019.5 §10.
+
+    Two published `game` collaborators, both named here for the reason
+    above: the command that creates a match, and the read that says what
+    became of the ones this module already asked for.
+
+    `GameOriginMatches` is `game`'s own adapter over its repository —
+    assembled here rather than in `tournament`, which must not be able to
+    name a `game` table.
+    """
+    events = OutboxEventPublisher(SqlAlchemyOutboxRepository(session))
+    return build_tournament_reconciliation(
+        session,
+        matches=build_match_creation(session, events=events, clock=clock),
+        origin_matches=GameOriginMatches(SqlAlchemyMatchRecordRepository(session)),
+        events=events,
+        clock=clock,
     )
 
 
@@ -814,6 +908,22 @@ def build_task_schedulers(
         )
     )
 
+    # A64-019.5 §10. Creating a tournament match is two writes that cannot
+    # share a transaction (BE-05): `game` commits the match, then
+    # `tournament` records the attempt. A worker that dies between them
+    # leaves a bracket waiting on a match it does not know exists — this is
+    # what finds it.
+    #
+    # Always registered, like the deadline sweep: the drift it repairs is
+    # caused by a process dying, so a deployment that ran tournaments
+    # without it would have no way back from its own crashes.
+    handlers.append(
+        TournamentReconciliationTask(
+            session_factory=db.session_factory,
+            service_factory=lambda session: _tournament_reconciliation_for(session, clock),
+        )
+    )
+
     # A64-015.6 §6. Always registered — there is no switch, because the
     # accumulator is filled by services that are always wired and a process
     # that never drained it would hold counters forever and report none.
@@ -878,6 +988,19 @@ def build_task_schedulers(
             # nobody a game, and a tighter tick would be a sweep that is
             # almost always empty.
             interval_seconds=60.0,
+        )
+    )
+    schedulers.append(
+        PeriodicTaskScheduler(
+            dispatcher=dispatcher,
+            request=tournament_reconciliation_request(),
+            # Five minutes. The drift it repairs is created by a process
+            # dying, which is rare, and every one of its repairs is also
+            # reached by the ordinary path — the outbox redelivers, and a
+            # start is idempotent. A tighter tick would be a sweep that is
+            # almost always empty and a claim that contends with the
+            # consumer for the same rows.
+            interval_seconds=300.0,
         )
     )
     schedulers.append(

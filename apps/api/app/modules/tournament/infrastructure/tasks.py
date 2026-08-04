@@ -8,10 +8,11 @@ pool (AD-20) and both idempotent:
                                            players; this keeps it
     tournament.bracket.reconcile           a match `game` has and this
                                            module does not, or the reverse
+    tournament.no_show.adjudicate          a fixture nobody turned up for
 
-They are separate handlers rather than one sweep with two halves, because
+They are separate handlers rather than one sweep with three parts, because
 they claim different rows on different intervals and a slow reconciliation
-must not delay a registration close.
+must not delay a registration close or a no-show.
 
 ## The scheduled close
 
@@ -43,6 +44,9 @@ from typing import Any, Final
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.modules.tournament.application.services.no_show_service import (
+    TournamentNoShowService,
+)
 from app.modules.tournament.application.services.reconciliation_service import (
     TournamentReconciliationService,
 )
@@ -60,6 +64,10 @@ DEADLINE_TASK: Final = "tournament.registration.close_overdue"
 #: committing a match and this module recording the attempt.
 RECONCILIATION_TASK: Final = "tournament.bracket.reconcile"
 
+#: A64-019.6, §6e. What replaced the acceptance handshake when tournament
+#: matches became system-activated: a match nobody turned up for.
+NO_SHOW_TASK: Final = "tournament.no_show.adjudicate"
+
 #: AD-20's pool. **`maintenance`**, not `realtime`: a registration that
 #: closes a few seconds late costs nobody a game, and sharing the realtime
 #: pool would let this sweep delay a clock adjudication.
@@ -68,6 +76,8 @@ MAINTENANCE_QUEUE: Final = "maintenance"
 DeadlineServiceFactory = Callable[[AsyncSession], TournamentDeadlineService]
 
 ReconciliationServiceFactory = Callable[[AsyncSession], TournamentReconciliationService]
+
+NoShowServiceFactory = Callable[[AsyncSession], TournamentNoShowService]
 
 
 def deadline_request() -> TaskRequest:
@@ -78,6 +88,11 @@ def deadline_request() -> TaskRequest:
 def reconciliation_request() -> TaskRequest:
     """The request that asks for one reconciliation pass."""
     return TaskRequest(name=RECONCILIATION_TASK, queue=MAINTENANCE_QUEUE)
+
+
+def no_show_request() -> TaskRequest:
+    """The request that asks for one no-show pass."""
+    return TaskRequest(name=NO_SHOW_TASK, queue=MAINTENANCE_QUEUE)
 
 
 class TournamentDeadlineTask:
@@ -141,14 +156,47 @@ class TournamentReconciliationTask:
             await self._service_factory(session).reconcile_once()
 
 
+class TournamentNoShowTask:
+    """`platform.tasks.TaskHandler` — one no-show pass, one session.
+
+    A task rather than a timer, for AD-21's reason: a deadline held in
+    process lives on one node, and a deploy takes every one it held with it
+    — those matches then never adjudicate, they hang. The deadline is a row,
+    so any worker can enforce it and a restart loses nothing.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        service_factory: NoShowServiceFactory,
+    ) -> None:
+        self._session_factory = session_factory
+        self._service_factory = service_factory
+
+    @property
+    def name(self) -> str:
+        return NO_SHOW_TASK
+
+    async def run(self, payload: Mapping[str, Any]) -> None:
+        """Ignores the payload. The batch size is the service's, from
+        `TOURNAMENT_NO_SHOW_BATCH_SIZE`."""
+        async with self._session_factory() as session:
+            await self._service_factory(session).adjudicate_once()
+
+
 __all__ = [
     "DEADLINE_TASK",
     "MAINTENANCE_QUEUE",
+    "NO_SHOW_TASK",
     "RECONCILIATION_TASK",
     "DeadlineServiceFactory",
+    "NoShowServiceFactory",
     "ReconciliationServiceFactory",
     "TournamentDeadlineTask",
+    "TournamentNoShowTask",
     "TournamentReconciliationTask",
     "deadline_request",
+    "no_show_request",
     "reconciliation_request",
 ]

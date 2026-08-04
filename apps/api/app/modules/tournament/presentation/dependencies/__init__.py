@@ -20,13 +20,16 @@ claim that tournaments need no new mechanism holds only while the edge is
 exactly `tournament -> game.public`.
 """
 
+from datetime import datetime
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import Depends
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import Depends, WebSocket
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.deps import ClockDep, DbSessionDep
 from app.api.outbox_deps import EventPublisherDep
+from app.config.settings import TournamentSettings
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.game.public import MatchCreationUseCase
@@ -43,6 +46,9 @@ from app.modules.tournament.application.services.match_completion_consumer impor
 )
 from app.modules.tournament.application.services.match_launcher import (
     TournamentMatchLauncher,
+)
+from app.modules.tournament.application.services.no_show_service import (
+    TournamentNoShowService,
 )
 from app.modules.tournament.application.services.reconciliation_service import (
     TournamentReconciliationService,
@@ -69,6 +75,7 @@ from app.modules.tournament.infrastructure.repositories.tournament_repository im
     SqlAlchemySeedRepository,
     SqlAlchemyTournamentRepository,
 )
+from app.modules.tournament.public import TournamentAttendance
 from app.modules.users.presentation.dependencies import UserServiceDep
 from app.modules.users.public import UserProfileService
 from app.platform.outbox import EventPublisher
@@ -171,7 +178,11 @@ def get_bracket_service(
 
 
 def build_match_launcher(
-    session: AsyncSession, *, matches: MatchCreationUseCase, clock: Clock
+    session: AsyncSession,
+    *,
+    matches: MatchCreationUseCase,
+    clock: Clock,
+    settings: TournamentSettings,
 ) -> TournamentMatchLauncher:
     """The one edge from `tournament` into `game` — A64-019.5.
 
@@ -189,6 +200,7 @@ def build_match_launcher(
         ratings=PublishedRatingSnapshots(get_rating_reader(session)),
         attempts=SqlAlchemyPairingAttemptRepository(session),
         clock=clock,
+        no_show_seconds=settings.no_show_seconds,
     )
 
 
@@ -196,6 +208,7 @@ def build_start_service(
     session: AsyncSession,
     *,
     matches: MatchCreationUseCase,
+    settings: TournamentSettings,
     events: EventPublisher,
     clock: Clock,
 ) -> TournamentStartService:
@@ -211,7 +224,7 @@ def build_start_service(
         bracket=SqlAlchemyBracketRepository(session),
         rounds=SqlAlchemyRoundRepository(session),
         attempts=SqlAlchemyPairingAttemptRepository(session),
-        launcher=build_match_launcher(session, matches=matches, clock=clock),
+        launcher=build_match_launcher(session, matches=matches, clock=clock, settings=settings),
         events=events,
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
@@ -222,6 +235,7 @@ def build_advancement_service(
     session: AsyncSession,
     *,
     matches: MatchCreationUseCase,
+    settings: TournamentSettings,
     events: EventPublisher,
     clock: Clock,
 ) -> TournamentAdvancementService:
@@ -236,7 +250,7 @@ def build_advancement_service(
         brackets=build_bracket_service(session, events=events, clock=clock),
         rounds=SqlAlchemyRoundRepository(session),
         attempts=SqlAlchemyPairingAttemptRepository(session),
-        launcher=build_match_launcher(session, matches=matches, clock=clock),
+        launcher=build_match_launcher(session, matches=matches, clock=clock, settings=settings),
         events=events,
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
@@ -247,13 +261,96 @@ def build_match_completion_consumer(
     session: AsyncSession,
     *,
     matches: MatchCreationUseCase,
+    settings: TournamentSettings,
     events: EventPublisher,
     clock: Clock,
 ) -> TournamentMatchCompletionConsumer:
     """`game.match_completed` -> a bracket advancement, over one relay tick's
     session — A64-019.5 §9."""
     return TournamentMatchCompletionConsumer(
-        build_advancement_service(session, matches=matches, events=events, clock=clock)
+        build_advancement_service(
+            session, matches=matches, settings=settings, events=events, clock=clock
+        )
+    )
+
+
+class SessionScopedAttendance:
+    """`TournamentAttendance` that opens a session per write — §6e.
+
+    The same arrangement `game`'s `SessionScopedMatchRosters` uses and for
+    the same reason: the caller is a WebSocket, whose "request" scope is the
+    whole connection, and a dependency resolved through `DbSessionDep` would
+    hold one PostgreSQL session per open socket for the length of a game.
+
+    A join holds a connection for one guarded `UPDATE`, and commits it —
+    unlike the roster read beside it, this one writes, and a room join is
+    not inside anybody else's transaction.
+
+    Holds only a session factory, so nothing per-call survives the method
+    and one of these can live for the length of a connection.
+    """
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def mark_present(self, match_id: UUID, player_id: UUID, *, at: datetime) -> bool:
+        async with self._session_factory() as session:
+            recorded = await SqlAlchemyPairingAttemptRepository(session).mark_present(
+                match_id, player_id, at=at
+            )
+            await session.commit()
+        return recorded
+
+
+def build_attendance(session: AsyncSession) -> TournamentAttendance:
+    """The gateway's one inbound command, over a caller's session — §6e.
+
+    The repository satisfies `tournament.public.TournamentAttendance`
+    structurally, and nothing wider crosses: the transport tier can record
+    that a player reached a match and can neither read a bracket nor move
+    one.
+    """
+    return SqlAlchemyPairingAttemptRepository(session)
+
+
+def get_attendance_ws(websocket: WebSocket) -> TournamentAttendance:
+    """The gateway's attendance writer, for a WebSocket route.
+
+    Reads the session **factory** off `app.state` rather than taking a
+    resolved session — see `SessionScopedAttendance`. A socket-only variant
+    because the only caller is a room join; if an HTTP route ever needs
+    this, it takes `build_attendance` over its request session.
+    """
+    return SessionScopedAttendance(websocket.app.state.db.session_factory)
+
+
+def build_no_show_service(
+    session: AsyncSession,
+    *,
+    matches: MatchCreationUseCase,
+    origin_matches: OriginMatchReader,
+    settings: TournamentSettings,
+    events: EventPublisher,
+    clock: Clock,
+) -> TournamentNoShowService:
+    """The no-show sweep — §6e.
+
+    Holds the **same** advancement service the outbox consumer does, so a
+    real result that arrives while an attempt is claimed is applied through
+    one path rather than two that could disagree about what it means.
+    """
+    return TournamentNoShowService(
+        tournaments=SqlAlchemyTournamentRepository(session),
+        bracket=SqlAlchemyBracketRepository(session),
+        brackets=build_bracket_service(session, events=events, clock=clock),
+        attempts=SqlAlchemyPairingAttemptRepository(session),
+        advancement=build_advancement_service(
+            session, matches=matches, settings=settings, events=events, clock=clock
+        ),
+        origin_matches=origin_matches,
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+        batch_size=settings.no_show_batch_size,
     )
 
 
@@ -261,6 +358,7 @@ def build_reconciliation_service(
     session: AsyncSession,
     *,
     matches: MatchCreationUseCase,
+    settings: TournamentSettings,
     origin_matches: OriginMatchReader,
     events: EventPublisher,
     clock: Clock,
@@ -276,12 +374,16 @@ def build_reconciliation_service(
         bracket=SqlAlchemyBracketRepository(session),
         attempts=SqlAlchemyPairingAttemptRepository(session),
         origin_matches=origin_matches,
-        launcher=build_match_launcher(session, matches=matches, clock=clock),
-        advancement=build_advancement_service(session, matches=matches, events=events, clock=clock),
+        launcher=build_match_launcher(session, matches=matches, clock=clock, settings=settings),
+        advancement=build_advancement_service(
+            session, matches=matches, settings=settings, events=events, clock=clock
+        ),
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
     )
 
+
+WebSocketTournamentAttendanceDep = Annotated[TournamentAttendance, Depends(get_attendance_ws)]
 
 TournamentBracketServiceDep = Annotated[TournamentBracketService, Depends(get_bracket_service)]
 
@@ -297,10 +399,14 @@ __all__ = [
     "TournamentBracketServiceDep",
     "TournamentSeedingServiceDep",
     "build_advancement_service",
+    "build_attendance",
     "build_bracket_service",
     "build_deadline_service",
     "build_match_completion_consumer",
     "build_match_launcher",
+    "build_no_show_service",
+    "WebSocketTournamentAttendanceDep",
+    "get_attendance_ws",
     "build_reconciliation_service",
     "build_start_service",
     "get_bracket_service",

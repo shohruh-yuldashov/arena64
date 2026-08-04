@@ -398,12 +398,40 @@ class PairingAttemptModel(Base, TimestampMixin):
     winner_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
+    no_show_deadline: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    """When this attempt stops waiting for absent players — §6e.
+
+    Written at creation from `TOURNAMENT_NO_SHOW_SECONDS` and never
+    recomputed, so a deploy that changes the setting cannot move a deadline
+    a player was already given. `NULL` only for a row written before
+    A64-019.6, which the sweep's predicate therefore never claims.
+    """
+
+    light_present_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    dark_present_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    """When each player **first** reached the match.
+
+    Set once by a guarded `UPDATE ... WHERE ... IS NULL` and never cleared,
+    because §6e's rule is that a transient disconnect after somebody turned
+    up is not a no-show. A "connected now" flag would make a dropped socket
+    indistinguishable from an absence.
+    """
+
     __table_args__ = (
         ForeignKeyConstraint(
             ["pairing_id"],
             [f"{TOURNAMENT_SCHEMA}.pairing.id"],
             name="fk_pairing_attempt__pairing",
             ondelete="RESTRICT",
+        ),
+        # The no-show sweep's whole query: unsettled attempts whose deadline
+        # has passed. Partial on `outcome IS NULL`, so it indexes exactly the
+        # rows that can still be claimed and shrinks as a tournament is
+        # played rather than growing with it.
+        Index(
+            "ix_pairing_attempt__no_show_due",
+            "no_show_deadline",
+            postgresql_where=text("outcome IS NULL AND no_show_deadline IS NOT NULL"),
         ),
         # **The idempotency guarantee.** A redelivered `match.completed`
         # cannot create a second rematch, because the row it would insert
@@ -442,8 +470,13 @@ class PairingAttemptModel(Base, TimestampMixin):
             "winner_id IS NULL OR winner_id = light_player_id OR winner_id = dark_player_id",
             name="ck_pairing_attempt__winner_played_here",
         ),
+        # A draw names nobody; every other settled outcome names somebody.
+        # Written this way round rather than as "decisive implies a winner"
+        # because A64-019.6 added `no_show`, which also advances a player —
+        # and a rule phrased in terms of the members that *do* is one a
+        # third member silently escapes.
         CheckConstraint(
-            f"(outcome = '{AttemptOutcome.DECISIVE.value}') = (winner_id IS NOT NULL)",
+            f"outcome IS NULL OR (outcome = '{AttemptOutcome.DRAW.value}') = (winner_id IS NULL)",
             name="ck_pairing_attempt__winner_iff_decisive",
         ),
         CheckConstraint(

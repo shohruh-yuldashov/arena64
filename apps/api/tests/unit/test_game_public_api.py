@@ -248,6 +248,15 @@ class TestTheSurfaceIsDeliberate:
         "OriginMatchOutcome",
         "OriginMatchReader",
         "OriginMatchState",
+        # A64-019.6 — whether a match waits to be accepted.
+        #
+        # A named policy on the request rather than a boolean or something
+        # inferred from `origin`, and published because the *caller* decides
+        # it: a tournament pairing is a fixture two people entered a
+        # tournament to play, and a queue pairing is an offer made to two
+        # people who have not seen each other. `game` cannot tell those
+        # apart and should not try.
+        "AcceptancePolicy",
     }
 
     def test_nothing_is_published_by_accident(self) -> None:

@@ -41,6 +41,7 @@ from uuid import UUID, uuid4
 
 from app.core.clock import Clock
 from app.modules.game.public import (
+    AcceptancePolicy,
     CreateMatchRequest,
     MatchCreationUseCase,
     MatchOrigin,
@@ -65,18 +66,18 @@ from app.modules.tournament.domain.tournament import Tournament
 
 logger = logging.getLogger(__name__)
 
-#: How long a tournament match waits for its two acceptances.
+#: The acceptance window a tournament match nominally carries.
 #:
-#: Wider than a queue pairing's thirty seconds, and the difference is what
-#: the two windows are measured against. A queue pairing interrupts somebody
-#: who is sitting in front of the queue; a tournament entrant registered
-#: earlier and is waiting for a round to be called, so a window that assumed
-#: they were watching would expire matches for players who are exactly as
-#: available as they said they would be.
+#: **Nothing uses it.** A64-019.6 makes these matches system-activated
+#: (`AcceptancePolicy.SYSTEM`): they are created already `ACTIVE`, so there
+#: is no handshake to miss and the expiry sweep never claims one. The field
+#: is required by `CreateMatchRequest` and `MatchRecord` enforces only that
+#: it is after `created_at`, so it is set to the no-show window for the one
+#: reason a reader would want — the two numbers describing "how long this
+#: match waits for its players" should not disagree.
 #:
-#: A constant rather than a setting, for the reason `TournamentDeadlineTask`'s
-#: interval is one: there is one number, nothing deploys a different one, and
-#: a setting would be a knob whose only documented value is this.
+#: What actually ends an unattended tournament match is §6e's no-show
+#: deadline, which is a *tournament* policy and is configured as one.
 ACCEPTANCE_WINDOW_SECONDS: Final = 5 * 60
 
 
@@ -136,11 +137,13 @@ class TournamentMatchLauncher:
         ratings: RatingSnapshots,
         attempts: PairingAttemptRepository,
         clock: Clock,
+        no_show_seconds: int,
     ) -> None:
         self._matches = matches
         self._ratings = ratings
         self._attempts = attempts
         self._clock = clock
+        self._no_show_seconds = no_show_seconds
 
     async def launch(
         self, tournament: Tournament, planned: Sequence[PlannedAttempt]
@@ -159,11 +162,15 @@ class TournamentMatchLauncher:
             return []
 
         snapshots = await self._snapshots(tournament, planned)
-        deadline = self._clock.now() + timedelta(seconds=ACCEPTANCE_WINDOW_SECONDS)
+        # **Computed once per launch, from the injected clock.** Every match
+        # a round starts waits the same window from the same instant, so two
+        # players in the same round are never given different deadlines
+        # because one node happened to be created a second later.
+        no_show_deadline = self._clock.now() + timedelta(seconds=self._no_show_seconds)
 
         recorded: list[PairingAttempt] = []
         for plan in planned:
-            recorded.append(await self._launch_one(tournament, plan, snapshots, deadline))
+            recorded.append(await self._launch_one(tournament, plan, snapshots, no_show_deadline))
         return recorded
 
     async def _launch_one(
@@ -171,7 +178,7 @@ class TournamentMatchLauncher:
         tournament: Tournament,
         plan: PlannedAttempt,
         snapshots: Mapping[UUID, RatingSnapshot],
-        deadline: datetime,
+        no_show_deadline: datetime,
     ) -> PairingAttempt:
         result = await self._matches.create_match(
             CreateMatchRequest(
@@ -179,7 +186,13 @@ class TournamentMatchLauncher:
                 variant=tournament.variant,
                 rated=tournament.rated,
                 engine_version=game_engine_version(),
-                acceptance_deadline=deadline,
+                acceptance_deadline=no_show_deadline,
+                # **System-activated** — A64-019.6, §6e. Nobody is asked to
+                # accept a fixture they entered a tournament to play, so the
+                # match is created already `ACTIVE` and the players may join
+                # it through the live gateway immediately. What replaces the
+                # handshake is the no-show deadline below.
+                acceptance=AcceptancePolicy.SYSTEM,
                 light=MatchParticipant(
                     player_id=plan.light_player_id,
                     # **No ticket, and that is the fact.** A tournament
@@ -213,6 +226,10 @@ class TournamentMatchLauncher:
             light_player_id=plan.light_player_id,
             dark_player_id=plan.dark_player_id,
             status=AttemptStatus.CREATED,
+            # Stored on the attempt rather than recomputed at adjudication
+            # time, so a deploy that changes the setting cannot move a
+            # deadline a player was already given — §6e.
+            no_show_deadline=no_show_deadline,
         )
 
         try:

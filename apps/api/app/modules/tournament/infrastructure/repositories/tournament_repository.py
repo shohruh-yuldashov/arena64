@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy import CursorResult, and_, case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -436,6 +436,9 @@ class SqlAlchemyPairingAttemptRepository:
                         outcome=attempt.outcome,
                         winner_id=attempt.winner_id,
                         completed_at=attempt.completed_at,
+                        no_show_deadline=attempt.no_show_deadline,
+                        light_present_at=attempt.light_present_at,
+                        dark_present_at=attempt.dark_present_at,
                     )
                 )
                 await self._session.flush()
@@ -471,6 +474,83 @@ class SqlAlchemyPairingAttemptRepository:
         )
         await self._session.flush()
         return bool(result.rowcount)
+
+    async def mark_present(
+        self, match_id: uuid.UUID, player_id: uuid.UUID, *, at: datetime
+    ) -> bool:
+        """Records that a player reached this match. Returns whether it did.
+
+        **One guarded statement, no read** — §6e. It runs on every gateway
+        room join, including for matches no tournament owns, so a read
+        first would put a `pairing_attempt` lookup on the WebSocket path for
+        every game on the platform. A match this module does not own matches
+        no row and the statement is a no-op.
+
+        Guarded on `IS NULL`, so it records the **first** arrival and a
+        reconnect is idempotent — which is exactly §6e's rule that a
+        transient disconnect after somebody turned up is not a no-show.
+
+        Both seats in one statement, because a player sits in one of them
+        and which is not worth a branch: the `CASE` writes the seat that
+        names them and leaves the other alone.
+        """
+        result = cast(
+            "CursorResult[Any]",
+            await self._session.execute(
+                update(PairingAttemptModel)
+                .where(
+                    PairingAttemptModel.match_id == match_id,
+                    or_(
+                        and_(
+                            PairingAttemptModel.light_player_id == player_id,
+                            PairingAttemptModel.light_present_at.is_(None),
+                        ),
+                        and_(
+                            PairingAttemptModel.dark_player_id == player_id,
+                            PairingAttemptModel.dark_present_at.is_(None),
+                        ),
+                    ),
+                )
+                .values(
+                    light_present_at=case(
+                        (PairingAttemptModel.light_player_id == player_id, at),
+                        else_=PairingAttemptModel.light_present_at,
+                    ),
+                    dark_present_at=case(
+                        (PairingAttemptModel.dark_player_id == player_id, at),
+                        else_=PairingAttemptModel.dark_present_at,
+                    ),
+                )
+            ),
+        )
+        await self._session.flush()
+        return bool(result.rowcount)
+
+    async def claim_no_show(self, *, now: datetime, limit: int) -> list[PairingAttempt]:
+        """Up to `limit` unsettled attempts past their deadline, for this
+        worker.
+
+        `FOR UPDATE SKIP LOCKED`: an attempt another sweep already holds is
+        one this worker should leave alone rather than wait for. Bounded,
+        and ordered by deadline so the longest-waiting bracket moves first.
+
+        Claiming is **not** deciding. The rows stay unsettled; the caller
+        re-reads the authoritative match state and adjudicates in its own
+        transaction, so a worker that dies between the two leaves attempts
+        the next tick simply claims again.
+        """
+        claimed = (
+            select(PairingAttemptModel)
+            .where(
+                PairingAttemptModel.outcome.is_(None),
+                PairingAttemptModel.no_show_deadline.is_not(None),
+                PairingAttemptModel.no_show_deadline <= now,
+            )
+            .order_by(PairingAttemptModel.no_show_deadline, PairingAttemptModel.id)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        return [_to_attempt(row) for row in (await self._session.scalars(claimed)).all()]
 
     async def by_match(self, match_id: uuid.UUID) -> PairingAttempt | None:
         row = await self._session.scalar(
@@ -511,6 +591,9 @@ def _to_attempt(row: PairingAttemptModel) -> PairingAttempt:
         outcome=row.outcome,
         winner_id=row.winner_id,
         completed_at=row.completed_at,
+        no_show_deadline=row.no_show_deadline,
+        light_present_at=row.light_present_at,
+        dark_present_at=row.dark_present_at,
     )
 
 

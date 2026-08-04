@@ -67,12 +67,43 @@ component and this request gains a field, in one change.
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
 from app.core.exceptions import DomainError
 from app.modules.engine import EngineVersion, PlayerSide
 from app.modules.game.domain.variants import MatchOrigin, ProductVariant
+
+
+class AcceptancePolicy(StrEnum):
+    """Whether a match waits for its two players to answer — A64-019.6.
+
+    A **named policy on the request**, rather than a boolean or something
+    inferred from `origin`. A boolean parameter selecting behaviour is what
+    CLAUDE.md §2.3 forbids, and inferring it from the origin would silently
+    decide the question for `challenge` and `rematch` the day either ships —
+    those are offers somebody may refuse, and a tournament pairing is not.
+
+    The distinction is *who agreed, and when*. A queue pairing is an offer
+    made to two people who have not seen each other; a tournament pairing is
+    a fixture two people entered a tournament to play, and the agreement
+    happened at registration.
+    """
+
+    BILATERAL = "bilateral"
+    """Both players must accept before the match becomes playable. The queue
+    handshake A64-015.4 built."""
+
+    SYSTEM = "system"
+    """The match is created **already active**.
+
+    There is nobody to ask: the participants committed when they entered.
+    A match created this way has no acceptance window to miss, so it can
+    never expire unanswered — whether the players actually turn up is a
+    question the originating context answers with its own policy, and for a
+    tournament that is `specs/tournament.md` §6e's no-show deadline.
+    """
 
 
 class MatchCreationRefused(DomainError):
@@ -244,6 +275,15 @@ class CreateMatchRequest:
     mechanism `services.md` §11.3 assumed already existed.
     """
 
+    acceptance: AcceptancePolicy = AcceptancePolicy.BILATERAL
+    """Whether this match waits to be accepted — A64-019.6.
+
+    Defaulted, so `matchmaking` is unchanged: a queue pairing is an offer
+    and stays one. A tournament asks for `SYSTEM`, and
+    `acceptance_deadline` then describes a window nothing will ever use —
+    see `AcceptancePolicy.SYSTEM`.
+    """
+
     def __post_init__(self) -> None:
         # A pairing of somebody with themselves is not a match, and it is
         # the one malformed request this port can detect on its own. It
@@ -336,6 +376,7 @@ class MatchCreationUseCase(Protocol):
 
 
 __all__ = [
+    "AcceptancePolicy",
     "MatchOrigin",
     "SeatRating",
     "CreateMatchRequest",

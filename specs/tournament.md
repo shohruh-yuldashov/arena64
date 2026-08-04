@@ -6,7 +6,7 @@
 | **Status** | Approved for v0.x — Single Elimination only |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-05 — A64-019.5, live tournament matches (§6c, §6d) |
+| **Last updated** | 2026-08-05 — A64-019.6, activation and no-show adjudication (§6e) |
 | **Related specs** | [`rating.md`](./rating.md), [`replay.md`](./replay.md), [`matchmaking.md`](./matchmaking.md) |
 | **Related** | `services.md` §11.3, `database.md` §18.3, `domain-model.md` §16.2 and R-25 |
 
@@ -391,12 +391,88 @@ LOCKED`, never raises. It compares `game`'s matches for a node against this modu
 | Attempt names a match `game` no longer has | **Reported, not repaired** |
 | Match ended with no result at all | **Reported, not repaired** |
 
-The last two are the same undecided question and are logged at `ERROR` with a counter. Both
-mean a node whose match will never produce a result, and **who advances then is OQ-2** — no-show
-policy waits on the Administration epic. Guessing would write a permanent competitive record
-nobody chose. A tournament match uses `game`'s ordinary acceptance handshake with a five-minute
-window (wider than a queue pairing's thirty seconds, because an entrant registered earlier and is
-waiting for a round to be called), so an unaccepted match is the realistic cause.
+The last two are logged at `ERROR` with a counter rather than repaired, because neither has an
+answer this module may invent. **A64-019.6 removed their most common cause**: a tournament match
+is now system-activated (§6e), so it cannot expire unanswered, and a fixture nobody turns up for
+is decided by the no-show deadline rather than left for the reconciler to find.
+
+## 6e. Activation and the no-show deadline — A64-019.6
+
+### A tournament match is a fixture, not an offer
+
+Tournament matches do **not** use the bilateral acceptance handshake. The participants
+committed when they entered the tournament, so there is nobody to ask: the match is created
+already `ACTIVE` (`game.public.AcceptancePolicy.SYSTEM`) and both players may join it through
+the existing live gateway immediately. Acceptance polling is not required for `TOURNAMENT`
+origin, and such a match can never expire unanswered.
+
+The policy is a **named enum on the request**, not a boolean and not inferred from `origin`: a
+boolean parameter selecting behaviour is what CLAUDE.md §2.3 forbids, and inferring it would
+silently decide the question for `challenge` and `rematch` the day either ships — those are
+offers somebody may refuse.
+
+### What replaced it: attendance
+
+The question stops being "did they answer" and becomes **"did they turn up"**. A player turns
+up by joining the match's room through the gateway, which is the only component that observes
+one; it tells the tournament through `tournament.public.TournamentAttendance` — one guarded
+`UPDATE`, no read, on every join. A match no tournament owns matches no row.
+
+Attendance records the **first** arrival and is never cleared, so a transient disconnect after
+somebody turned up is not a no-show, and a reconnect before the deadline counts as present.
+A liveness flag would make a dropped socket indistinguishable from an absence.
+
+### The deadline
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `TOURNAMENT_NO_SHOW_SECONDS` | **300** | How long a match waits for its two players |
+| `TOURNAMENT_NO_SHOW_INTERVAL_SECONDS` | 30 | How often lapsed deadlines are claimed |
+| `TOURNAMENT_NO_SHOW_BATCH_SIZE` | 100 | How many one pass claims |
+
+Written **onto the attempt** when the match is created, never read from configuration at
+adjudication time: a deploy that lengthens the setting must not reprieve a player whose
+deadline already passed, and one that shortens it must not eliminate somebody who was inside
+the window they were given.
+
+### The policy
+
+| At the deadline | What happens |
+| --- | --- |
+| Both present | Nothing. Play proceeds; what happens next is the game's business |
+| Exactly one present | The **present player** advances, reason `ADJUDICATION` |
+| Neither present | The **higher seed** advances, reason `ADJUDICATION` |
+
+The higher seed for §6c's reason: it is the one answer already earned, recorded before anyone
+played, and there is nobody present to award it to instead.
+
+### Rating behaviour
+
+**No game result is fabricated.** The `game` match is left exactly as it is — no outcome, no
+winner, no termination reason — so there is no completion, no `match.completed`, and no rating
+adjustment. `specs/rating.md`'s termination allowlist is unchanged, exactly as for §6c's
+two-draw adjudication. The attempt is closed as `AttemptOutcome.NO_SHOW` rather than
+`DECISIVE`, because nobody won a game and a permanent record saying otherwise would be
+indistinguishable afterwards from a played result.
+
+### A real result always beats a stale worker
+
+Held in three independent places rather than by ordering alone:
+
+1. **The claim is not the decision.** A claimed attempt is re-read against `game`'s
+   authoritative state, and one whose match is `DECIDED` or `DRAWN` is handed to the ordinary
+   advancement path — the same service the outbox consumer drives, so a repair and a delivery
+   cannot disagree about what a result means.
+2. **Attendance stops it.** A match both players reached is never adjudicated for absence. A
+   match being *played* is by definition one both reached, so a stale deadline cannot reach a
+   started match.
+3. **Every write is a compare-and-set.** `outcome IS NULL` on the attempt and
+   `winner_id IS NULL` on the node, so two workers cannot both adjudicate and the loser cannot
+   overwrite.
+
+The sweep is a `platform.tasks` handler with an injected clock, a durable row-held deadline,
+`FOR UPDATE SKIP LOCKED`, a bounded batch and no in-process timer — a deadline held in process
+lives on one node, and a deploy takes every one it held with it (AD-21).
 
 ## 7. Privacy
 
@@ -411,6 +487,6 @@ Where a resource is not visible, the answer is the platform's existing rule: **`
 | # | Question | Blocked work |
 | --- | --- | --- |
 | OQ-1 | Who may cancel a tournament, remove a participant, or override a result? | Moderation — waits for the Administration epic and `specs/admin.md` |
-| OQ-2 | Is check-in required, and what is the no-show window? **And who advances when a tournament match ends with no result — nobody accepted it, it was declined, or it was aborted?** | Defaulted to "no check-in" in v0.x. A64-019.5's reconciler detects and reports the case and deliberately does not decide it — see §6d |
+| OQ-2 | ~~Is check-in required, and what is the no-show window?~~ **Answered by A64-019.6** — §6e: no check-in, and a 300-second attendance deadline enforced by a bounded sweep. What remains open is only the *rating* treatment of a repeat offender, which waits on `fairplay` | — |
 | OQ-3 | Time control per tournament | `specs/rating.md` OQ-1 and OQ-2 — the catalogue does not exist, so every match is the platform default |
 | OQ-4 | Retention for cancelled tournaments | Append-only in v0.x, like everything else |

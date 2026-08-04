@@ -320,6 +320,26 @@ class PairingAttemptRepository(Protocol):
         """The highest-numbered attempt of one node, or `None`."""
         ...
 
+    async def mark_present(self, match_id: UUID, player_id: UUID, *, at: datetime) -> bool:
+        """Records that a player reached this match — §6e. Returns whether
+        this call did it.
+
+        One guarded statement and no read, because it runs on every gateway
+        room join including for matches no tournament owns. Idempotent on a
+        reconnect: the guard is `IS NULL`, so the instant recorded is the
+        **first** arrival.
+        """
+        ...
+
+    async def claim_no_show(self, *, now: datetime, limit: int) -> list[PairingAttempt]:
+        """Up to `limit` unsettled attempts past their deadline — §6e.
+
+        `FOR UPDATE SKIP LOCKED` and bounded, so two sweeps take disjoint
+        sets and neither waits. Claiming is not deciding: the rows stay
+        unsettled and the caller adjudicates in its own transaction.
+        """
+        ...
+
 
 class RoundRepository(Protocol):
     """A tournament's rounds and their lifecycle — §6b.

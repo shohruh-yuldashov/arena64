@@ -118,6 +118,7 @@ from app.modules.game.public.history import (
     UnsupportedEngineVersion,
 )
 from app.modules.game.public.matches import (
+    AcceptancePolicy,
     CreateMatchRequest,
     CreateMatchResult,
     MatchCreationRefused,
@@ -180,6 +181,7 @@ __all__ = [
     "AbandonedMatchRetention",
     "MATCH_ANSWER_LATENCY",
     "MATCH_OUTCOMES",
+    "AcceptancePolicy",
     "AcceptanceWindowClosed",
     "AnswerLatency",
     "CreateMatchRequest",

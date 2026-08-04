@@ -174,7 +174,7 @@ class TournamentAdvancementService:
             attempt,
             outcome=completion.outcome,
             winner_id=self._winner_of(attempt, completion.winner_seat),
-            higher_seed_player_id=_higher_seed_of(located.node),
+            higher_seed_player_id=higher_seed_of(located.node),
         )
 
         if advancement.rematch_due:
@@ -381,7 +381,7 @@ class TournamentAdvancementService:
         return self._clock.now()
 
 
-def _higher_seed_of(node: BracketSlot) -> UUID:
+def higher_seed_of(node: BracketSlot) -> UUID:
     """The better-seeded of a node's two participants — §6c's tie-break.
 
     From the **pairing**, never from an attempt's seats: a rematch swaps
@@ -412,4 +412,5 @@ __all__ = [
     "CompletedTournamentMatch",
     "TournamentAdvancementService",
     "UnknownAttempt",
+    "higher_seed_of",
 ]

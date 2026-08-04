@@ -549,6 +549,35 @@ class MatchRecord:
             return accepted
         return accepted._with(status=MatchRecordStatus.ACTIVE, settled_at=at)
 
+    def system_activated(self, at: datetime) -> "MatchRecord":
+        """This match, active without either player having been asked.
+
+        For a fixture rather than an offer — a tournament pairing two people
+        entered a tournament to play (`game.public.AcceptancePolicy.SYSTEM`).
+        There is nobody to ask, so there is no window to miss and the match
+        can never expire unanswered.
+
+        Both `accepted_at` instants are set to `at`, which is not a fiction
+        about who clicked what: `ck_match__active_iff_both_accepted` and
+        this aggregate's own invariant both read "active means two seats
+        answered", and the system answered for both. Whether the players
+        then *turn up* is a different question, and one the originating
+        context answers with its own policy rather than by leaving a match
+        pending forever.
+
+        Only from `PENDING_ACCEPTANCE`, and it says so: activating a
+        cancelled or expired match would resurrect one, and activating an
+        active one is a caller that has lost track of its own request.
+        """
+        if self.status is not MatchRecordStatus.PENDING_ACCEPTANCE:
+            raise MatchNotPending("Only a pending match can be activated.")
+        return self._with(
+            light=self.light.accepting(at),
+            dark=self.dark.accepting(at),
+            status=MatchRecordStatus.ACTIVE,
+            settled_at=at,
+        )
+
     def declined(self, side: PlayerSide, *, at: datetime) -> "MatchRecord":
         """This match, cancelled because `side` said no.
 
@@ -599,19 +628,28 @@ class MatchRecord:
         written once when the handshake ends. A transition that had to
         clear one would be a transition this state machine does not have.
 
-        `id`, `pairing_id` and the six creation-time facts are carried
-        verbatim, which is what makes them immutable without a guard.
+        Every other field is carried verbatim, which is what makes the
+        creation-time facts immutable without a guard.
+
+        **`replace`, not a fresh `MatchRecord`.** Naming the fields to carry
+        across meant carrying the ones that existed when this was written:
+        `origin` and `origin_ref` were added by A64-019.0 and never added
+        here, so a system-activated tournament match lost both on the way to
+        storage and became a queue match with no reference — the round trip
+        R-25 exists for, broken at its first step. `ply_number`, the clock
+        and the result columns were dropped the same way; those happen to be
+        empty at every point this is reached today, which is exactly why
+        nothing noticed. Same defect as `MatchSeat.accepting`, same fix.
         """
-        return MatchRecord(
-            id=self.id,
-            pairing_id=self.pairing_id,
-            variant=self.variant,
-            rated=self.rated,
-            engine_version=self.engine_version,
+        # `None` means "unchanged" rather than "cleared", which is safe
+        # because none of the five is ever *un*-set: a seat only gains an
+        # `accepted_at`, and the other three are written once when the
+        # handshake ends. A transition that had to clear one would be a
+        # transition this state machine does not have.
+        return replace(
+            self,
             light=light if light is not None else self.light,
             dark=dark if dark is not None else self.dark,
-            created_at=self.created_at,
-            acceptance_deadline=self.acceptance_deadline,
             status=status if status is not None else self.status,
             declined_by=declined_by if declined_by is not None else self.declined_by,
             settled_at=settled_at if settled_at is not None else self.settled_at,

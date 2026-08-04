@@ -67,6 +67,20 @@ class AttemptOutcome(StrEnum):
     DECISIVE = "decisive"
     DRAW = "draw"
 
+    NO_SHOW = "no_show"
+    """Nobody played it — §6e.
+
+    A settlement rather than a result, and it is a *third* member rather
+    than a flag on `DECISIVE` because the difference is what a reader of the
+    permanent record needs: a player who advanced because their opponent did
+    not turn up did not win a game, and a tournament that recorded it as one
+    would be claiming a competitive fact that never happened.
+
+    **Moves no rating**, for the same reason the adjudicated advancement in
+    §6c does not: there is no game. `specs/rating.md`'s termination allowlist
+    is untouched.
+    """
+
 
 class AdvancementReason(StrEnum):
     PLAYED = "played"
@@ -100,6 +114,37 @@ class PairingAttempt:
     outcome: AttemptOutcome | None = None
     winner_id: UUID | None = None
     completed_at: datetime | None = None
+
+    no_show_deadline: datetime | None = None
+    """When this attempt stops waiting for absent players — §6e.
+
+    **Stored per attempt**, not derived from a setting at adjudication
+    time: a deploy that lengthens `TOURNAMENT_NO_SHOW_SECONDS` must not
+    retroactively reprieve a player whose deadline already passed, and one
+    that shortens it must not eliminate somebody who was inside the window
+    they were given.
+
+    `None` only for a row written before A64-019.6, which cannot be
+    adjudicated for absence and correctly is not claimed by the sweep.
+    """
+
+    light_present_at: datetime | None = None
+    dark_present_at: datetime | None = None
+    """When each player first reached the match, or `None`.
+
+    **First**, and never cleared: §6e's rule is that a transient disconnect
+    after somebody has turned up is not a no-show. Storing "connected now"
+    would make a dropped socket look identical to an absence, which is the
+    one thing this policy must not confuse.
+    """
+
+    @property
+    def attendance(self) -> "Attendance":
+        """Who turned up, as the no-show policy reads it."""
+        return Attendance(
+            light_present=self.light_present_at is not None,
+            dark_present=self.dark_present_at is not None,
+        )
 
     def __post_init__(self) -> None:
         if not FIRST_ATTEMPT <= self.attempt_number <= MAX_ATTEMPTS:
@@ -166,6 +211,63 @@ def decide(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class Attendance:
+    """Which of a pairing's two seats reached the match — §6e."""
+
+    light_present: bool
+    dark_present: bool
+
+    @property
+    def both_arrived(self) -> bool:
+        return self.light_present and self.dark_present
+
+    @property
+    def nobody_arrived(self) -> bool:
+        return not self.light_present and not self.dark_present
+
+
+def adjudicate_absence(
+    attempt: PairingAttempt, *, higher_seed_player_id: UUID
+) -> Advancement | None:
+    """Who advances when a match's no-show deadline passes — §6e.
+
+    Pure, and the whole policy in one function for `decide`'s reason: a
+    caller cannot reach a different conclusion by taking branches in a
+    different order.
+
+        both arrived     `None` — nothing to adjudicate. They turned up, so
+                         whatever happens next is the *game*'s business and
+                         this policy has no opinion about it
+        one arrived      that player advances
+        neither arrived  the higher seed advances
+
+    Every non-`None` answer is `ADJUDICATION`, never `PLAYED`: no game was
+    played, and recording one as won would be a competitive fact that never
+    happened. It creates no match and therefore no rating adjustment —
+    `specs/rating.md`'s termination allowlist is untouched, exactly as for
+    §6c's two-draw adjudication.
+
+    The **higher seed** for a double absence, and for §6c's reason: it is
+    the one answer already earned, recorded before anyone played. A coin
+    would make a permanent competitive record depend on chance, and there
+    is nobody present to award it to instead.
+    """
+    attendance = attempt.attendance
+    if attendance.both_arrived:
+        return None
+
+    if attendance.nobody_arrived:
+        return Advancement(
+            winner_id=higher_seed_player_id,
+            reason=AdvancementReason.ADJUDICATION,
+            rematch_due=False,
+        )
+
+    present = attempt.light_player_id if attendance.light_present else attempt.dark_player_id
+    return Advancement(winner_id=present, reason=AdvancementReason.ADJUDICATION, rematch_due=False)
+
+
 def match_key(pairing_id: UUID, attempt_number: int) -> UUID:
     """The idempotency key `game` stores as `CreateMatchRequest.pairing_id`.
 
@@ -198,9 +300,11 @@ __all__ = [
     "MAX_ATTEMPTS",
     "Advancement",
     "AdvancementReason",
+    "Attendance",
     "AttemptOutcome",
     "AttemptStatus",
     "PairingAttempt",
+    "adjudicate_absence",
     "decide",
     "match_key",
     "rematch_seats",

@@ -133,15 +133,22 @@ from app.modules.tournament.application.services.match_completion_consumer impor
 from app.modules.tournament.application.services.match_completion_consumer import (
     TournamentMatchCompletionConsumer,
 )
+from app.modules.tournament.application.services.no_show_service import (
+    TournamentNoShowService,
+)
 from app.modules.tournament.application.services.reconciliation_service import (
     TournamentReconciliationService,
 )
 from app.modules.tournament.infrastructure.tasks import (
     TournamentDeadlineTask,
+    TournamentNoShowTask,
     TournamentReconciliationTask,
 )
 from app.modules.tournament.infrastructure.tasks import (
     deadline_request as tournament_deadline_request,
+)
+from app.modules.tournament.infrastructure.tasks import (
+    no_show_request as tournament_no_show_request,
 )
 from app.modules.tournament.infrastructure.tasks import (
     reconciliation_request as tournament_reconciliation_request,
@@ -149,6 +156,7 @@ from app.modules.tournament.infrastructure.tasks import (
 from app.modules.tournament.presentation.dependencies import (
     build_deadline_service,
     build_match_completion_consumer,
+    build_no_show_service,
 )
 from app.modules.tournament.presentation.dependencies import (
     # Aliased: `matchmaking` publishes a factory of the same name for its
@@ -524,7 +532,7 @@ def build_outbox_worker(
     handlers.append(
         SessionScopedNotificationHandler(
             session_factory=db.session_factory,
-            dispatcher_factory=lambda session: _tournament_consumer_for(session, clock),
+            dispatcher_factory=lambda session: _tournament_consumer_for(session, settings, clock),
             consumer=TOURNAMENT_CONSUMER,
             event_types=frozenset({MATCH_COMPLETED}),
         )
@@ -663,7 +671,7 @@ def _rating_consumer_for(session: AsyncSession, clock: SystemClock) -> MatchComp
 
 
 def _tournament_consumer_for(
-    session: AsyncSession, clock: SystemClock
+    session: AsyncSession, settings: Settings, clock: SystemClock
 ) -> TournamentMatchCompletionConsumer:
     """The tournament consumer over one session — A64-019.5 §9.
 
@@ -682,13 +690,14 @@ def _tournament_consumer_for(
     return build_match_completion_consumer(
         session,
         matches=build_match_creation(session, events=events, clock=clock),
+        settings=settings.tournament,
         events=events,
         clock=clock,
     )
 
 
 def _tournament_reconciliation_for(
-    session: AsyncSession, clock: SystemClock
+    session: AsyncSession, settings: Settings, clock: SystemClock
 ) -> TournamentReconciliationService:
     """One reconciliation pass's graph — A64-019.5 §10.
 
@@ -705,6 +714,29 @@ def _tournament_reconciliation_for(
         session,
         matches=build_match_creation(session, events=events, clock=clock),
         origin_matches=GameOriginMatches(SqlAlchemyMatchRecordRepository(session)),
+        settings=settings.tournament,
+        events=events,
+        clock=clock,
+    )
+
+
+def _tournament_no_show_for(
+    session: AsyncSession, settings: Settings, clock: SystemClock
+) -> TournamentNoShowService:
+    """One no-show pass's graph — A64-019.6 §6e.
+
+    Tournament matches are system-activated, so `game`'s acceptance expiry
+    never claims one and nothing else would ever end a fixture nobody turned
+    up for. This is what does, and it reads `game`'s authoritative state
+    through the same published reader the reconciler uses — a real result
+    always beats a lapsed deadline.
+    """
+    events = OutboxEventPublisher(SqlAlchemyOutboxRepository(session))
+    return build_no_show_service(
+        session,
+        matches=build_match_creation(session, events=events, clock=clock),
+        origin_matches=GameOriginMatches(SqlAlchemyMatchRecordRepository(session)),
+        settings=settings.tournament,
         events=events,
         clock=clock,
     )
@@ -920,7 +952,24 @@ def build_task_schedulers(
     handlers.append(
         TournamentReconciliationTask(
             session_factory=db.session_factory,
-            service_factory=lambda session: _tournament_reconciliation_for(session, clock),
+            service_factory=lambda session: _tournament_reconciliation_for(
+                session, settings, clock
+            ),
+        )
+    )
+
+    # A64-019.6 §6e. A tournament match is **system-activated** — nobody is
+    # asked to accept a fixture they entered a tournament to play — so
+    # `game`'s acceptance expiry never claims one, and without this a
+    # bracket would wait forever on a player who never arrived.
+    #
+    # Always registered, like the two sweeps above: a deployment running
+    # tournaments without it is one whose rounds stall on the first
+    # absentee.
+    handlers.append(
+        TournamentNoShowTask(
+            session_factory=db.session_factory,
+            service_factory=lambda session: _tournament_no_show_for(session, settings, clock),
         )
     )
 
@@ -1001,6 +1050,17 @@ def build_task_schedulers(
             # almost always empty and a claim that contends with the
             # consumer for the same rows.
             interval_seconds=300.0,
+        )
+    )
+    schedulers.append(
+        PeriodicTaskScheduler(
+            dispatcher=dispatcher,
+            request=tournament_no_show_request(),
+            # The **resolution of the adjudication**: a no-show is decided
+            # within this of its deadline, and a round waiting on one waits
+            # this much longer than it has to. `TournamentSettings` checks it
+            # stays well below the deadline it enforces.
+            interval_seconds=settings.tournament.no_show_interval_seconds,
         )
     )
     schedulers.append(

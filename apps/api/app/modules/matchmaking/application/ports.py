@@ -43,6 +43,7 @@ from app.modules.matchmaking.domain.pending_match import PendingMatchOffer
 from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType
 from app.modules.matchmaking.domain.queue_ticket import QueueSnapshot, QueueTicket
 from app.modules.matchmaking.domain.reconciliation_timeline import ReconciliationEntry
+from app.modules.rating.public import RatingSnapshot
 
 
 class QueueRepository(Protocol):
@@ -307,25 +308,34 @@ class RatingSnapshotProvider(Protocol):
     module), so the only honest snapshot today is the provisional starting
     value.
 
-    Declaring it as a port now means the day `rating` ships, this is
-    satisfied by `rating.public` and no use case, no aggregate and no test
-    changes. Declaring it later would mean `QueueService` reaching for a
-    constant, and a constant is not something another module can replace.
+    That day arrived with A64-017.2: `rating.public.RatingReader` satisfies
+    this port, and no use case, no aggregate and no test changed — which is
+    what the port was for. What *did* change is the return type, from an
+    `int` to the Glicko-2 triple, because ADR-001 made a rating a triple and
+    §7.6's seat snapshot needs all three.
     """
 
-    async def rating_for(self, player_id: UUID, *, queue_type: QueueType) -> int:
+    async def rating_for(self, player_id: UUID, *, queue_type: QueueType) -> RatingSnapshot:
         """The player's rating in the pool they are joining.
 
         Per pool rather than per player, because that is what a rating is:
-        `RatingCategory` already splits classic, rapid and blitz, and a
-        single number would have to pick one. `QueueType` is the axis this
-        task has; when time controls arrive the argument widens and callers
-        do not.
+        `RatingKey` splits `(variant, speed class)`, and a single number
+        would have to pick one. `QueueType` is the axis this task has; when
+        time controls arrive the argument widens and callers do not.
+
+        **The whole triple**, not just the value. The ticket records only
+        the value (QT-2 — pairing sorts on one number), but the same read
+        feeds the seat snapshot at match creation, and PR-3 requires the
+        rating calculation to run on the deviation and volatility captured
+        then. A port that returned an `int` would make PR-3 unimplementable,
+        and the failure would appear as two concurrent matches computing
+        against each other's partial results.
 
         Never raises and never returns `None`. A player with no measured
-        rating has a provisional one (PR-6), which is a value rather than an
-        absence — and a join that failed because a rating could not be read
-        would take matchmaking down for a number that has a safe default.
+        rating has the provisional starting triple (PR-6), which is a value
+        rather than an absence — and a join that failed because a rating
+        could not be read would take matchmaking down for a number that has
+        a safe default.
         """
         ...
 

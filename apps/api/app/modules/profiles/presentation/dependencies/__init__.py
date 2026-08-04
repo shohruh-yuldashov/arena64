@@ -9,7 +9,8 @@ The graph assembled per request:
       -> SessionUnitOfWork    unused on this path — see below
       -> UserService
       -> PublicProfileService adapts it to the published port
-    UnratedRatingProvider     placeholder, stateless
+    PublishedRatingProvider   over `rating.public`, with the deprecated
+                              `RatingCategory` alias mapped at this boundary
     DatabaseStatisticsProvider
     RedisPresenceProvider     the `cache` Redis role, A64-012.7
       -> ProfileService
@@ -95,7 +96,10 @@ from app.modules.profiles.infrastructure import (
     NoMatchesStatisticsProvider,
     NoRelationshipsProvider,
     SocialGraphBlockedPlayersProvider,
-    UnratedRatingProvider,
+)
+from app.modules.profiles.infrastructure.rating_compatibility import PublishedRatingProvider
+from app.modules.rating.infrastructure.repositories.player_rating_repository import (
+    SqlAlchemyRatingReader,
 )
 from app.modules.statistics.application.services import StatisticsService
 from app.modules.statistics.infrastructure.repositories import SqlAlchemyStatisticsRepository
@@ -223,15 +227,19 @@ def get_preferences_editor(session: DbSessionDep, clock: ClockDep) -> Preference
 PreferencesEditorDep = Annotated[PreferencesEditor, Depends(get_preferences_editor)]
 
 
-def get_rating_provider() -> RatingProvider:
-    """Ratings — **placeholder until the `rating` module exists.**
+def get_rating_provider(session: DbSessionDep) -> RatingProvider:
+    """Ratings, read through `rating.public` — A64-017.2.
 
-    Returns every player as unrated: the starting value in each category,
-    each marked provisional. See `infrastructure/rating_providers.py`.
+    The placeholder this replaced returned every player as unrated. The
+    response shape is unchanged (SPEC-RATING §14): `ratings.{classic, rapid,
+    blitz}` still ships, with `classic` now an alias for
+    `SpeedClass.CLASSICAL`. See `infrastructure/rating_compatibility.py` —
+    it is the only place on the platform that knows the old spelling.
 
-    Stateless, so a per-request instance costs one attribute assignment.
+    Typed as `RatingReader` inside the adapter, so a profile can read a
+    rating and has no way to move one.
     """
-    return UnratedRatingProvider()
+    return PublishedRatingProvider(SqlAlchemyRatingReader(session))
 
 
 RatingProviderDep = Annotated[RatingProvider, Depends(get_rating_provider)]
@@ -500,7 +508,7 @@ def build_profile_renderer(
     changes per call.
     """
     composer = get_profile_composer(
-        ratings=get_rating_provider(),
+        ratings=get_rating_provider(session),
         statistics=get_statistics_provider(session, settings.statistics),
         presence=get_presence_provider(pools, settings.presence, clock),
         relationships=get_relationship_provider(session, settings.friends, cache),

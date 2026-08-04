@@ -23,7 +23,10 @@ from app.config.environment import Environment, current_environment, env_file_fo
 # more than explicit configuration. Never valid for a deployed tier — see
 # Settings._forbid_local_defaults_outside_local below, which is what makes
 # this safe rather than merely convenient.
-_LOCAL_POSTGRES_DSN = "postgresql+asyncpg://arena64:arena64@localhost:5432/arena64"
+#: Port 55432, matching docker/docker-compose.yml. Not 5432, because a
+#: system Postgres on the standard port is the common case and the
+#: container must not have to fight it for the binding.
+_LOCAL_POSTGRES_DSN = "postgresql+asyncpg://arena64:arena64@localhost:55432/arena64"
 _LOCAL_JWT_SECRET_KEY = (
     # 64 characters, so it clears `JWT_SECRET_MIN_LENGTH` and `local` runs
     # with no configuration at all. The literal words are load-bearing: if

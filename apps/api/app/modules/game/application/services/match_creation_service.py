@@ -36,8 +36,12 @@ from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork
 from app.modules.game.application.ports import MatchRecordRepository
 from app.modules.game.domain.events import MatchCreated
-from app.modules.game.domain.match_record import MatchRecord, MatchSeat
-from app.modules.game.public.matches import CreateMatchRequest, CreateMatchResult
+from app.modules.game.domain.match_record import MatchRecord, MatchSeat, SeatRating
+from app.modules.game.public.matches import (
+    CreateMatchRequest,
+    CreateMatchResult,
+)
+from app.modules.game.public.matches import SeatRating as PublishedSeatRating
 from app.platform.outbox import EventPublisher
 
 logger = logging.getLogger(__name__)
@@ -78,13 +82,19 @@ class PersistentMatchCreation:
             variant=request.variant,
             rated=request.rated,
             engine_version=request.engine_version,
+            # The seat snapshots travel from `matchmaking` and are stored
+            # unchanged — SPEC-RATING §7.6. `game` copies them onto the
+            # aggregate and never looks a rating up: it has no reader to
+            # look one up with (`services.md` §10.2).
             light=MatchSeat(
                 player_id=request.light.player_id,
                 queue_ticket_id=request.light.queue_ticket_id,
+                rating=_seat_rating(request.light.rating),
             ),
             dark=MatchSeat(
                 player_id=request.dark.player_id,
                 queue_ticket_id=request.dark.queue_ticket_id,
+                rating=_seat_rating(request.dark.rating),
             ),
             created_at=at,
             acceptance_deadline=request.acceptance_deadline,
@@ -128,3 +138,23 @@ class PersistentMatchCreation:
 
 
 __all__ = ["PersistentMatchCreation"]
+
+
+def _seat_rating(published: PublishedSeatRating | None) -> SeatRating | None:
+    """The port's seat snapshot as the aggregate's own.
+
+    Two identical shapes and one conversion, for the reason every published
+    type is restated in a domain: the port is a contract `matchmaking`'s
+    callers shape, and the aggregate must not hold a type another module
+    decides. The conversion is the boundary.
+    """
+    if published is None:
+        return None
+    return SeatRating(
+        value=published.value,
+        deviation=published.deviation,
+        volatility=published.volatility,
+        games_played=published.games_played,
+        is_provisional=published.is_provisional,
+        speed_class=published.speed_class,
+    )

@@ -109,9 +109,11 @@ from uuid import UUID
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Float,
     ForeignKeyConstraint,
     Index,
     Integer,
+    String,
     Text,
     Uuid,
     text,
@@ -356,19 +358,52 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
     dark_ticket_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     dark_accepted_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
-    received_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
-    """When the **gateway** saw the frame — MT-9, A64-016.5 §3.
+    # --- seat rating snapshots — SPEC-RATING §7.6, MT-4 ---------------
+    #
+    # What each player rated **when the match was created**. Written once,
+    # by `matchmaking` through `CreateMatchRequest`, and never updated:
+    # PR-3 requires the rating calculation to run on these rather than on
+    # whatever the players rate by the time the game ends.
+    #
+    # `game` stores them and hands them back on `match_completed`. It does
+    # not read `rating`, cannot compute one, and has no foreign key to
+    # `rating.player_rating` — the seat is a snapshot of a past fact, not a
+    # reference to a live row that would move under it.
+    #
+    # Nullable because every match created before A64-017.2 has none. Null
+    # means "created before ratings existed", not "unknown", and such a
+    # match cannot be rated — which is correct, since nothing rated it.
+    light_rating_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    light_rating_deviation: Mapped[float | None] = mapped_column(Float, nullable=True)
+    light_rating_volatility: Mapped[float | None] = mapped_column(Float, nullable=True)
+    light_rating_games: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    light_rating_provisional: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
-    The temporal authority for the flag race, and a different fact from
-    `created_at`: that is when the row was appended, which is later by the
-    width of every queue, lock and validation between the two. Collapsing
-    them would make the platform's own queueing delay part of the flag
-    decision, which outcome tenet T-2 forbids.
+    dark_rating_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dark_rating_deviation: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dark_rating_volatility: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dark_rating_games: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dark_rating_provisional: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
-    Nullable because every move A64-016.4 wrote has none — the field did not
-    exist. Null means "before A64-016.5", not "unknown when", and a
-    backfilled guess would be worse than an honest gap.
+    rating_speed_class: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    """The rating key's second component — the variant is `variant` above.
+
+    A `String` rather than an enum type, deliberately: the members belong to
+    `rating`, and a second native enum here would be a type `game` owns
+    listing values `rating` decides. It is written from
+    `SeatRating.speed_class` and read back by `rating`, which validates it.
     """
+
+    # **No `received_at` here.** MT-9's flag-race authority is per *move*,
+    # not per match, and its owner is `MoveLogModel.received_at`. A copy on
+    # this row was mapped by A64-016.5 and never migrated, so it existed in
+    # `Base.metadata` — and therefore in every schema built by
+    # `create_all` — while no migration-built database had the column. Every
+    # ORM read and write of `game.match` failed there.
+    #
+    # Removed rather than migrated: nothing read or wrote it, and adding the
+    # column would have entrenched a duplicate of a fact that belongs to the
+    # move log.
 
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     """Written from the injected clock (AD-07), never `server_default=now()`:

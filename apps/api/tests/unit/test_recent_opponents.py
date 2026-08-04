@@ -25,7 +25,7 @@ from app.modules.matchmaking.domain.queue_ticket import QueueStatus, QueueTicket
 from app.platform.metrics import NullMetrics
 from tests.fakes.matches import InMemoryMatchRecordRepository
 from tests.fakes.outbox import NullUnitOfWork
-from tests.fakes.pairing import RecordingMatchCreation, StubExclusions
+from tests.fakes.pairing import RecordingMatchCreation, StubExclusions, StubRatings
 from tests.fakes.presence_redis import MovableClock
 from tests.fakes.queue_repository import InMemoryQueueRepository, RecordingPublisher
 
@@ -249,6 +249,7 @@ def _service(tickets: InMemoryQueueRepository, opponents: GameRecentOpponents) -
         engine=PairingEngine(GENEROUS),
         exclusions=StubExclusions(),
         opponents=opponents,
+        ratings=StubRatings(),
         matches=RecordingMatchCreation(),
         events=RecordingPublisher(),
         unit_of_work=NullUnitOfWork(),

@@ -36,7 +36,7 @@ from tests.contract._models import ContractWidget  # noqa: F401 — registers th
 
 _TEST_DSN = os.environ.get(
     "CONTRACT_TEST_POSTGRES_DSN",
-    "postgresql+asyncpg://arena64:arena64@localhost:5432/arena64_test",
+    "postgresql+asyncpg://arena64:arena64@localhost:55432/arena64_test",
 )
 
 #: A64-011.8. Database **15**, never 0-4, which is what `local` points the

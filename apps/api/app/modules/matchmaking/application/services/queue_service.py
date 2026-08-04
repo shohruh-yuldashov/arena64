@@ -142,7 +142,13 @@ class QueueService:
         if await self._tickets.active_ticket(player_id, now=self._clock.now()) is not None:
             raise AlreadyQueued("You are already in a matchmaking queue.")
 
-        rating = await self._ratings.rating_for(player_id, queue_type=pool.queue_type)
+        # The ticket records the **value** only: QT-2's rule is that pairing
+        # sorts on one deterministic number. The deviation and volatility from
+        # the same read reach the seat snapshot at match creation instead
+        # (SPEC-RATING §7.6).
+        rating = round(
+            (await self._ratings.rating_for(player_id, queue_type=pool.queue_type)).value
+        )
         at = self._clock.now()
         ticket = QueueTicket.enter(
             player_id=player_id,

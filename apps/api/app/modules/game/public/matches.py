@@ -91,6 +91,44 @@ class MatchCreationRefused(DomainError):
 
 
 @dataclass(frozen=True, slots=True)
+class SeatRating:
+    """A rating as it stood when a match was created — the seat snapshot.
+
+    Primitive-only and `game`-agnostic, like every other type on this port.
+    It is `rating.public.RatingSnapshot`'s content restated rather than that
+    type imported, because `game` must not depend on `rating` at all — R-4
+    makes the chain `game -> rating`, and an import here would be the
+    back-edge that lets a leaderboard rebuild alter a historical rating.
+
+    **Immutable, and never refreshed.** Once written it is a fact about the
+    past: what these two players rated when they sat down. A later read of
+    their current rating is a different question, and answering this one
+    with it is precisely what PR-3 forbids.
+    """
+
+    value: float
+    deviation: float
+    volatility: float
+    """The Glicko-2 triple. All three, because the calculation needs all
+    three — a snapshot carrying only the value would make PR-3
+    unimplementable."""
+
+    games_played: int
+    is_provisional: bool
+    """PR-6's mark, captured with the rest so the record explains itself.
+    Recomputing it later from `games_played` would need the threshold, which
+    is `rating`'s and may change."""
+
+    speed_class: str
+    """The rating key's second component — SPEC-RATING §7.1.
+
+    A `str` rather than `rating`'s enum, for the same reason this whole
+    class restates rather than imports. The variant is on the match itself
+    and is not repeated per seat.
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class MatchParticipant:
     """One side's player, and the ticket that put them here.
 
@@ -109,6 +147,21 @@ class MatchParticipant:
     Provenance, not identity: it lets a stored match be traced back to the
     pairing that produced it, and it is what makes `pairing_id` verifiable
     rather than merely asserted.
+    """
+
+    rating: "SeatRating"
+    """This player's rating **at match creation** — SPEC-RATING §7.6, MT-4.
+
+    Carried on the seat rather than looked up later, because PR-3 requires
+    the rating calculation to run on the values captured before the game
+    was played. Two matches completing concurrently would otherwise each
+    compute against the other's partial result, and neither would be
+    reproducible from the record.
+
+    Supplied by `matchmaking`, which reads it through `rating.public`.
+    **`game` never reads a rating** (`services.md` §10.2 — gameplay core may
+    not depend on projections): it stores this and hands it back on
+    `match_completed`, and could not compute one if it wanted to.
     """
 
 
@@ -243,6 +296,7 @@ class MatchCreationUseCase(Protocol):
 
 
 __all__ = [
+    "SeatRating",
     "CreateMatchRequest",
     "CreateMatchResult",
     "MatchCreationRefused",

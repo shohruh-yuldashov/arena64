@@ -1845,6 +1845,75 @@ class GameSettings(BaseSettings):
     """
 
 
+class TournamentSettings(BaseSettings):
+    """`tournament` — SPEC-TOURNAMENT §6e (A64-019.5H).
+
+    The no-show policy's two numbers. They are settings rather than
+    constants because both are *product* judgements about how long a
+    tournament waits for a player, and an operator running a rapid event
+    will want a different answer from one running a weekend open — which is
+    the test AD-19 applies to decide what deserves a knob.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="TOURNAMENT_", frozen=True, extra="forbid")
+
+    no_show_seconds: int = Field(default=300, ge=30, le=3600)
+    """How long a tournament match waits for its two players to turn up.
+
+    **Five minutes.** Long enough that somebody who stepped away between
+    rounds is not eliminated for it, and short enough that a bracket does
+    not stall for an hour on one absentee — a tournament that cannot finish
+    is the failure §6c's rematch bound exists to prevent, and a no-show is
+    the other way to reach it.
+
+    Stored **per attempt** when the match is created, not read at
+    adjudication time: a deploy that lengthens this must not retroactively
+    reprieve a player whose deadline already passed, and one that shortens
+    it must not eliminate somebody who was inside the window they were
+    given.
+
+    The floor of thirty seconds is a guard against a value that would
+    adjudicate matches faster than a client can connect.
+    """
+
+    no_show_interval_seconds: float = Field(default=30.0, ge=5.0, le=600.0)
+    """How often lapsed deadlines are claimed.
+
+    **The resolution of the adjudication**, not a tuning knob: a no-show is
+    decided within this interval of its deadline, and a round that is
+    waiting on one is waiting this much longer than it has to.
+
+    Well below `no_show_seconds`, and the relationship is checked below —
+    a sweep that ran less often than the deadline it enforces would make
+    the deadline advisory.
+    """
+
+    no_show_batch_size: int = Field(default=100, ge=1, le=1000)
+    """How many lapsed attempts one pass claims.
+
+    Bounds the transaction count of a single pass, which matters on the
+    tick after an outage when every deadline that lapsed meanwhile is due
+    at once.
+    """
+
+    @model_validator(mode="after")
+    def _sweep_faster_than_the_deadline(self) -> "TournamentSettings":
+        """A sweep slower than the window it enforces is not enforcing it.
+
+        Checked rather than documented, for the reason
+        `MatchmakingSettings` checks its own pair: two numbers that must
+        stay in a relationship are two numbers somebody will eventually set
+        independently.
+        """
+        if self.no_show_interval_seconds >= self.no_show_seconds:
+            raise ValueError(
+                "TOURNAMENT_NO_SHOW_INTERVAL_SECONDS must be shorter than "
+                "TOURNAMENT_NO_SHOW_SECONDS, or a deadline is enforced no "
+                "sooner than one sweep after it lapses"
+            )
+        return self
+
+
 class GatewaySettings(BaseSettings):
     """`gateway` — the realtime WebSocket transport (A64-016.1, AD-09).
 
@@ -2140,6 +2209,7 @@ class Settings(BaseModel):
     matchmaking: MatchmakingSettings
     gateway: GatewaySettings
     game: GameSettings
+    tournament: TournamentSettings
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":
@@ -2228,4 +2298,5 @@ def get_settings() -> Settings:
         matchmaking=MatchmakingSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         gateway=GatewaySettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         game=GameSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        tournament=TournamentSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

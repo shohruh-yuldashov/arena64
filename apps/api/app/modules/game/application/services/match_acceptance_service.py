@@ -31,6 +31,7 @@ the wire (CLAUDE.md §9.7).
 import logging
 from collections.abc import Sequence
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from app.core.clock import Clock
@@ -308,7 +309,12 @@ def _events_for(
     needs to announce a created `Match` adds an entry here rather than a
     branch at the call site.
     """
-    identity = {
+    # `Any`-valued rather than inferred, because the two ticket ids are
+    # nullable since A64-019.5H and every other entry is not — an inferred
+    # `dict[str, UUID | None]` would then widen the four that are never
+    # absent. The events' own signatures are where each field's nullability
+    # is stated; this mapping only carries them.
+    identity: dict[str, Any] = {
         "match_id": record.id,
         "pairing_id": record.pairing_id,
         "light_player_id": record.light.player_id,

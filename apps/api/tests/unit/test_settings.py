@@ -26,6 +26,7 @@ from app.config.settings import (
     Settings,
     StatisticsSettings,
     StorageSettings,
+    TournamentSettings,
     get_settings,
 )
 
@@ -106,6 +107,7 @@ class TestSettings:
             matchmaking=MatchmakingSettings(),
             gateway=GatewaySettings(),
             game=GameSettings(),
+            tournament=TournamentSettings(),
         )
         assert settings.environment is Environment.TEST
 
@@ -138,6 +140,7 @@ class TestSettings:
                 matchmaking=MatchmakingSettings(),
                 gateway=GatewaySettings(),
                 game=GameSettings(),
+                tournament=TournamentSettings(),
             )
 
     def test_production_rejects_a_left_default_redis_role(self) -> None:
@@ -162,6 +165,7 @@ class TestSettings:
                 matchmaking=MatchmakingSettings(),
                 gateway=GatewaySettings(),
                 game=GameSettings(),
+                tournament=TournamentSettings(),
             )
 
     def test_production_accepts_fully_explicit_configuration(self) -> None:
@@ -191,6 +195,7 @@ class TestSettings:
             matchmaking=MatchmakingSettings(),
             gateway=GatewaySettings(),
             game=GameSettings(),
+            tournament=TournamentSettings(),
         )
         assert settings.environment is Environment.PRODUCTION
 
@@ -213,6 +218,7 @@ class TestSettings:
             matchmaking=MatchmakingSettings(),
             gateway=GatewaySettings(),
             game=GameSettings(),
+            tournament=TournamentSettings(),
         )
         with pytest.raises(PydanticValidationError):
             settings.environment = Environment.PRODUCTION  # type: ignore[misc]
@@ -325,6 +331,7 @@ class TestJWTProductionGuard:
             matchmaking=MatchmakingSettings(),
             gateway=GatewaySettings(),
             game=GameSettings(),
+            tournament=TournamentSettings(),
             jwt=JWTSettings(**jwt_overrides),  # type: ignore[arg-type]
         )
 
@@ -361,6 +368,7 @@ class TestJWTProductionGuard:
             matchmaking=MatchmakingSettings(),
             gateway=GatewaySettings(),
             game=GameSettings(),
+            tournament=TournamentSettings(),
             jwt=JWTSettings(),
         )
 

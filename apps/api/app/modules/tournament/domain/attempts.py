@@ -1,0 +1,311 @@
+"""Match attempts and the advancement they decide — SPEC-TOURNAMENT §6c.
+
+Single elimination needs one winner per pairing, and this platform's games
+can draw: threefold repetition is live on the only variant
+(`engine/variant.py` uses `THREEFOLD_REPETITION_ONLY`). The v0.x policy is a
+**bounded rematch**.
+
+    attempt 1 decisive   the winner advances
+    attempt 1 drawn      one rematch, sides swapped
+    attempt 2 decisive   the winner advances
+    attempt 2 drawn      the higher seed advances, by adjudication
+
+Bounded at two, and the bound is the point: an unbounded rematch chain is a
+tournament that can never finish, and nothing would force one — every match
+on this platform is untimed today (`specs/rating.md` §8).
+
+## Why the higher seed rather than a third game or a coin
+
+A third game repeats the question that twice failed to answer it. A random
+winner is a permanent competitive record decided by chance. Manual
+adjudication needs an `admin` module that does not exist, and until it did
+the tournament would be frozen.
+
+The higher seed is the one answer already earned: it is the rating the field
+was seeded on, recorded before anyone played. Stated as a **v0.x** policy
+because a dedicated tie-break — a faster rematch under a real time control —
+is the better answer once `reference.time_control` exists.
+
+## The adjudicated advancement is not a game
+
+It creates no third match and therefore no rating adjustment. Both *drawn*
+games were ordinary rated draws and moved ratings normally; the bracket
+decision on top of them is a tournament fact, not a competitive result. That
+is why `specs/rating.md`'s termination allowlist is untouched.
+"""
+
+from dataclasses import dataclass
+from datetime import datetime
+from enum import StrEnum
+from typing import Final
+from uuid import UUID, uuid5
+
+from app.modules.tournament.domain.exceptions import InvalidBracketPosition
+
+#: Attempts are numbered from 1, like rounds and plies.
+FIRST_ATTEMPT: Final = 1
+
+#: The bound. A third attempt is refused rather than discouraged.
+MAX_ATTEMPTS: Final = 2
+
+
+class AttemptStatus(StrEnum):
+    CREATED = "created"
+    """A `game` match exists; nothing has come back yet."""
+
+    COMPLETED = "completed"
+
+
+class AttemptOutcome(StrEnum):
+    """What an attempt settled, in this module's vocabulary.
+
+    Deliberately **not** `game.public.MatchOutcome`: a tournament cares only
+    whether the node was decided, and translating at the boundary keeps a
+    `game` enum out of the bracket's own record.
+    """
+
+    DECISIVE = "decisive"
+    DRAW = "draw"
+
+    NO_SHOW = "no_show"
+    """Nobody played it — §6e.
+
+    A settlement rather than a result, and it is a *third* member rather
+    than a flag on `DECISIVE` because the difference is what a reader of the
+    permanent record needs: a player who advanced because their opponent did
+    not turn up did not win a game, and a tournament that recorded it as one
+    would be claiming a competitive fact that never happened.
+
+    **Moves no rating**, for the same reason the adjudicated advancement in
+    §6c does not: there is no game. `specs/rating.md`'s termination allowlist
+    is untouched.
+    """
+
+
+class AdvancementReason(StrEnum):
+    PLAYED = "played"
+    """They won a game."""
+
+    BYE = "bye"
+    """No opponent — A64-019.4 §7."""
+
+    ADJUDICATION = "adjudication"
+    """Two draws; the higher seed advances. **No rating effect.**"""
+
+
+@dataclass(frozen=True, slots=True)
+class PairingAttempt:
+    """One `game` match played for one pairing.
+
+    A relation rather than a list in a column: two attempts are two rows, so
+    `unique (pairing_id, attempt_number)` and `unique match_id` do the work
+    application code would otherwise have to remember.
+    """
+
+    id: UUID
+    pairing_id: UUID
+    attempt_number: int
+
+    match_id: UUID
+    light_player_id: UUID
+    dark_player_id: UUID
+
+    status: AttemptStatus = AttemptStatus.CREATED
+    outcome: AttemptOutcome | None = None
+    winner_id: UUID | None = None
+    completed_at: datetime | None = None
+
+    no_show_deadline: datetime | None = None
+    """When this attempt stops waiting for absent players — §6e.
+
+    **Stored per attempt**, not derived from a setting at adjudication
+    time: a deploy that lengthens `TOURNAMENT_NO_SHOW_SECONDS` must not
+    retroactively reprieve a player whose deadline already passed, and one
+    that shortens it must not eliminate somebody who was inside the window
+    they were given.
+
+    `None` only for a row written before A64-019.5H, which cannot be
+    adjudicated for absence and correctly is not claimed by the sweep.
+    """
+
+    light_present_at: datetime | None = None
+    dark_present_at: datetime | None = None
+    """When each player first reached the match, or `None`.
+
+    **First**, and never cleared: §6e's rule is that a transient disconnect
+    after somebody has turned up is not a no-show. Storing "connected now"
+    would make a dropped socket look identical to an absence, which is the
+    one thing this policy must not confuse.
+    """
+
+    @property
+    def attendance(self) -> "Attendance":
+        """Who turned up, as the no-show policy reads it."""
+        return Attendance(
+            light_present=self.light_present_at is not None,
+            dark_present=self.dark_present_at is not None,
+        )
+
+    def __post_init__(self) -> None:
+        if not FIRST_ATTEMPT <= self.attempt_number <= MAX_ATTEMPTS:
+            raise InvalidBracketPosition(
+                f"attempt numbers run from {FIRST_ATTEMPT} to {MAX_ATTEMPTS}, "
+                f"got {self.attempt_number}"
+            )
+
+    @property
+    def is_final_attempt(self) -> bool:
+        return self.attempt_number >= MAX_ATTEMPTS
+
+
+@dataclass(frozen=True, slots=True)
+class Advancement:
+    """What one completed attempt decided for its node.
+
+    Returned rather than applied, so the decision is a value a test can
+    inspect and a caller cannot half-perform: either a player advances, or a
+    rematch is due, or neither.
+    """
+
+    winner_id: UUID | None
+    reason: AdvancementReason | None
+    rematch_due: bool
+
+    @property
+    def decided(self) -> bool:
+        return self.winner_id is not None
+
+
+def decide(
+    attempt: PairingAttempt,
+    *,
+    outcome: AttemptOutcome,
+    winner_id: UUID | None,
+    higher_seed_player_id: UUID,
+) -> Advancement:
+    """What this attempt's result means for the bracket.
+
+    Pure, and the whole policy in one function: a caller cannot reach a
+    different conclusion by taking branches in a different order.
+
+    `higher_seed_player_id` is **passed**, not looked up, because seeding is
+    persisted (A64-019.3 §4) — an adjudication must use the seed the
+    tournament was built on, never a rating read at the moment of the
+    decision.
+    """
+    if outcome is AttemptOutcome.DECISIVE:
+        if winner_id is None:
+            raise InvalidBracketPosition("a decisive attempt must name a winner")
+        return Advancement(winner_id=winner_id, reason=AdvancementReason.PLAYED, rematch_due=False)
+
+    if not attempt.is_final_attempt:
+        # One rematch, sides swapped. Nobody advances yet.
+        return Advancement(winner_id=None, reason=None, rematch_due=True)
+
+    # Two draws: the higher seed advances. No third match, so no rating
+    # adjustment — see this module's docstring.
+    return Advancement(
+        winner_id=higher_seed_player_id,
+        reason=AdvancementReason.ADJUDICATION,
+        rematch_due=False,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class Attendance:
+    """Which of a pairing's two seats reached the match — §6e."""
+
+    light_present: bool
+    dark_present: bool
+
+    @property
+    def both_arrived(self) -> bool:
+        return self.light_present and self.dark_present
+
+    @property
+    def nobody_arrived(self) -> bool:
+        return not self.light_present and not self.dark_present
+
+
+def adjudicate_absence(
+    attempt: PairingAttempt, *, higher_seed_player_id: UUID
+) -> Advancement | None:
+    """Who advances when a match's no-show deadline passes — §6e.
+
+    Pure, and the whole policy in one function for `decide`'s reason: a
+    caller cannot reach a different conclusion by taking branches in a
+    different order.
+
+        both arrived     `None` — nothing to adjudicate. They turned up, so
+                         whatever happens next is the *game*'s business and
+                         this policy has no opinion about it
+        one arrived      that player advances
+        neither arrived  the higher seed advances
+
+    Every non-`None` answer is `ADJUDICATION`, never `PLAYED`: no game was
+    played, and recording one as won would be a competitive fact that never
+    happened. It creates no match and therefore no rating adjustment —
+    `specs/rating.md`'s termination allowlist is untouched, exactly as for
+    §6c's two-draw adjudication.
+
+    The **higher seed** for a double absence, and for §6c's reason: it is
+    the one answer already earned, recorded before anyone played. A coin
+    would make a permanent competitive record depend on chance, and there
+    is nobody present to award it to instead.
+    """
+    attendance = attempt.attendance
+    if attendance.both_arrived:
+        return None
+
+    if attendance.nobody_arrived:
+        return Advancement(
+            winner_id=higher_seed_player_id,
+            reason=AdvancementReason.ADJUDICATION,
+            rematch_due=False,
+        )
+
+    present = attempt.light_player_id if attendance.light_present else attempt.dark_player_id
+    return Advancement(winner_id=present, reason=AdvancementReason.ADJUDICATION, rematch_due=False)
+
+
+def match_key(pairing_id: UUID, attempt_number: int) -> UUID:
+    """The idempotency key `game` stores as `CreateMatchRequest.pairing_id`.
+
+    **Derived, not random**, and that is what makes creating a match safe to
+    retry: `game`'s unique index on `match.pairing_id` returns the match an
+    earlier attempt created rather than making a second one, so a worker
+    that died after `game` committed and before this module recorded the
+    attempt can simply ask again.
+
+    Per **attempt** rather than per pairing, because a pairing may have two
+    matches and `game`'s key admits one match each. The pairing's own id is
+    the uuid5 namespace, so no constant has to be invented and no two
+    tournaments can collide.
+    """
+    return uuid5(pairing_id, f"attempt:{attempt_number}")
+
+
+def rematch_seats(attempt: PairingAttempt) -> tuple[UUID, UUID]:
+    """The rematch's `(light, dark)` — the first attempt's, swapped.
+
+    Swapped rather than repeated: the first attempt's sides came from the
+    bracket's alternating rule, and repeating them would give one player the
+    first move in both games of a tie.
+    """
+    return (attempt.dark_player_id, attempt.light_player_id)
+
+
+__all__ = [
+    "FIRST_ATTEMPT",
+    "MAX_ATTEMPTS",
+    "Advancement",
+    "AdvancementReason",
+    "Attendance",
+    "AttemptOutcome",
+    "AttemptStatus",
+    "PairingAttempt",
+    "adjudicate_absence",
+    "decide",
+    "match_key",
+    "rematch_seats",
+]

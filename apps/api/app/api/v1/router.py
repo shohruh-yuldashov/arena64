@@ -35,6 +35,10 @@ from app.modules.matchmaking.presentation.router import matchmaking_router
 from app.modules.profiles.presentation.router import profiles_router
 from app.modules.profiles.presentation.search_router import user_search_router
 from app.modules.profiles.presentation.self_router import my_profile_router
+from app.modules.tournament.presentation.router import (
+    player_tournaments_router,
+    tournaments_router,
+)
 from app.modules.users.presentation.router import users_router
 
 v1_router = APIRouter(prefix=API_V1_PREFIX)
@@ -69,3 +73,11 @@ v1_router.include_router(matchmaking_router)
 # is a different first segment, so registration order is immaterial here too.
 v1_router.include_router(history_router)
 v1_router.include_router(replay_router)
+
+# A64-019.6. Two prefixes, and registration order is immaterial for both:
+# `/tournaments/{id}`, `/tournaments/{id}/bracket` and
+# `/tournaments/{id}/standings` differ in segment count, and
+# `/players/{id}/tournaments` differs from `/players/{id}/matches` in its
+# last segment. No path a caller can send matches two of them.
+v1_router.include_router(tournaments_router)
+v1_router.include_router(player_tournaments_router)

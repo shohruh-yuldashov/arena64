@@ -31,17 +31,25 @@ duplicate without being handed extras by the producer.
 """
 
 import logging
+from typing import Any
 
 from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork
 from app.modules.game.application.ports import MatchRecordRepository
-from app.modules.game.domain.events import MatchCreated
-from app.modules.game.domain.match_record import MatchRecord, MatchSeat, SeatRating
+from app.modules.game.domain.events import MatchActivated, MatchCreated
+from app.modules.game.domain.match_record import (
+    MatchRecord,
+    MatchRecordStatus,
+    MatchSeat,
+    SeatRating,
+)
 from app.modules.game.public.matches import (
+    AcceptancePolicy,
     CreateMatchRequest,
     CreateMatchResult,
 )
 from app.modules.game.public.matches import SeatRating as PublishedSeatRating
+from app.platform.events import DomainEvent
 from app.platform.outbox import EventPublisher
 
 logger = logging.getLogger(__name__)
@@ -81,6 +89,9 @@ class PersistentMatchCreation:
             pairing_id=request.pairing_id,
             variant=request.variant,
             rated=request.rated,
+            # R-25 — stored and handed back, never interpreted.
+            origin=request.origin,
+            origin_ref=request.origin_ref,
             engine_version=request.engine_version,
             # The seat snapshots travel from `matchmaking` and are stored
             # unchanged — SPEC-RATING §7.6. `game` copies them onto the
@@ -99,24 +110,14 @@ class PersistentMatchCreation:
             created_at=at,
             acceptance_deadline=request.acceptance_deadline,
         )
+        if request.acceptance is AcceptancePolicy.SYSTEM:
+            record = record.system_activated(at)
 
         async with self._unit_of_work:
             stored, created = await self._matches.create(record)
             if created:
-                await self._events.publish(
-                    MatchCreated(
-                        occurred_at=stored.created_at,
-                        match_id=stored.id,
-                        pairing_id=stored.pairing_id,
-                        light_player_id=stored.light.player_id,
-                        dark_player_id=stored.dark.player_id,
-                        light_ticket_id=stored.light.queue_ticket_id,
-                        dark_ticket_id=stored.dark.queue_ticket_id,
-                        variant=stored.variant,
-                        rated=stored.rated,
-                        acceptance_deadline=stored.acceptance_deadline,
-                    )
-                )
+                for event in _announcements(stored):
+                    await self._events.publish(event)
             await self._unit_of_work.commit()
 
         logger.info(
@@ -135,6 +136,48 @@ class PersistentMatchCreation:
             },
         )
         return CreateMatchResult(match_id=stored.id, pairing_id=stored.pairing_id, created=created)
+
+
+def _announcements(record: MatchRecord) -> tuple[DomainEvent, ...]:
+    """What bringing this match into existence announces.
+
+    A bilateral match announces `match_created` — an offer two people must
+    answer. A **system-activated** one announces that *and* `match_activated`
+    in the same transaction, because both are true at once and consumers
+    key on different halves: a notification tells two people they have a
+    game, and `rating`, `statistics` and the live transport all wake on the
+    activation.
+
+    Publishing only the creation would leave every consumer of
+    `match_activated` blind to tournament games — the silent-absence failure
+    A64-016.8 and A64-017.6 both were.
+    """
+    identity: dict[str, Any] = {
+        "match_id": record.id,
+        "pairing_id": record.pairing_id,
+        "light_player_id": record.light.player_id,
+        "dark_player_id": record.dark.player_id,
+        "light_ticket_id": record.light.queue_ticket_id,
+        "dark_ticket_id": record.dark.queue_ticket_id,
+    }
+    created = MatchCreated(
+        occurred_at=record.created_at,
+        **identity,
+        variant=record.variant,
+        rated=record.rated,
+        acceptance_deadline=record.acceptance_deadline,
+    )
+    if record.status is not MatchRecordStatus.ACTIVE:
+        return (created,)
+    return (
+        created,
+        MatchActivated(
+            occurred_at=record.settled_at or record.created_at,
+            **identity,
+            variant=record.variant,
+            rated=record.rated,
+        ),
+    )
 
 
 __all__ = ["PersistentMatchCreation"]

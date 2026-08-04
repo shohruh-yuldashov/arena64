@@ -28,8 +28,9 @@ A64-016.2 should add.
 
 import asyncio
 import json
+import logging
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -139,8 +140,29 @@ def tickets() -> FakeTicketRedeemer:
     return FakeTicketRedeemer()
 
 
+class RecordingAttendance:
+    """A `tournament.public.TournamentAttendance` a test can inspect.
+
+    The tournament's own behaviour is `tests/contract/test_tournament_matches.py`'s;
+    what these tests need is that a join *tells* it, and that a failure to
+    tell it does not cost two people their game.
+    """
+
+    def __init__(self, *, fails: bool = False) -> None:
+        self.marked: list[tuple[UUID, UUID]] = []
+        self._fails = fails
+
+    async def mark_present(self, match_id: UUID, player_id: UUID, *, at: datetime) -> bool:
+        if self._fails:
+            raise RuntimeError("the tournaments schema is unreachable")
+        self.marked.append((match_id, player_id))
+        return True
+
+
 def _rooms(
-    rosters: StubMatchRosters | None = None, members: FakeRoomMemberStore | None = None
+    rosters: StubMatchRosters | None = None,
+    members: FakeRoomMemberStore | None = None,
+    attendance: RecordingAttendance | None = None,
 ) -> GameRoomService:
     """The real room service over in-memory storage.
 
@@ -151,6 +173,7 @@ def _rooms(
     return GameRoomService(
         rosters=rosters if rosters is not None else StubMatchRosters(),
         members=members if members is not None else FakeRoomMemberStore(),
+        attendance=attendance if attendance is not None else RecordingAttendance(),
         metrics=RecordingMetrics(),
         clock=MovableClock(NOW),
         room_ttl_seconds=3600,
@@ -567,23 +590,30 @@ class TestGameRooms:
     ) -> None:
         """§12.5, and the channel half of §12.8 with it.
 
-        Three things at once, because none of them is worth a connection of
+        Four things at once, because none of them is worth a connection of
         its own: the join is admitted for a participant, the confirmation
         comes back on the **`game` channel** rather than `system` (which is
-        what makes AD-11's multiplexing observable), and `both_connected` is
+        what makes AD-11's multiplexing observable), `both_connected` is
         `False` while the opponent has not arrived — the state a client
-        renders as "waiting for your opponent".
+        renders as "waiting for your opponent" — and the tournament is told
+        somebody turned up.
+
+        The last is A64-019.5H §6e: a room join is what "turned up" means for
+        a live game, and this is the only component that observes one. A
+        match no tournament owns is unaffected, because the write matches no
+        row.
         """
         player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
         rosters = StubMatchRosters()
         rosters.add(match_id, light=player_id, dark=opponent_id)
+        attendance = RecordingAttendance()
 
         tickets.add(VALID_TICKET, player_id)
         socket = FakeGatewaySocket(
             [_frame("room.join", channel="game", payload={"match_id": str(match_id)})]
         )
 
-        await _service(tickets, registry, presence, _rooms(rosters)).run(
+        await _service(tickets, registry, presence, _rooms(rosters, attendance=attendance)).run(
             socket, ticket=VALID_TICKET
         )
 
@@ -591,6 +621,52 @@ class TestGameRooms:
         assert joined.channel is Channel.GAME
         assert joined.payload["both_connected"] is False
         assert set(joined.payload["participants"]) == {str(player_id), str(opponent_id)}
+        assert attendance.marked == [(match_id, player_id)]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_attendance_write_still_lets_the_players_in(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A64-019.5H §6e — telling the tournament must never cost a game.
+
+        Attendance is written on the join path, so an unreachable
+        `tournaments` schema would otherwise turn "the no-show policy may
+        mis-adjudicate" into "nobody can play at all". The degradation is
+        deliberately one-sided: the join completes, the socket is admitted,
+        and the failure is an `ERROR` an operator can see.
+
+        Safe because the sweep does not trust attendance alone — it re-reads
+        `game`'s authoritative state first, so a started match is protected
+        even when this write is lost.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters = StubMatchRosters()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        attendance = RecordingAttendance(fails=True)
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [_frame("room.join", channel="game", payload={"match_id": str(match_id)})]
+        )
+
+        with caplog.at_level(logging.ERROR):
+            await _service(tickets, registry, presence, _rooms(rosters, attendance=attendance)).run(
+                socket, ticket=VALID_TICKET
+            )
+
+        # The join succeeded — same reply a healthy tournament produces.
+        joined = next(m for m in socket.sent if m.type is MessageType.ROOM_JOINED)
+        assert joined.channel is Channel.GAME
+        assert set(joined.payload["participants"]) == {str(player_id), str(opponent_id)}
+        # Nothing was refused, and no error frame reached the client.
+        assert not [m for m in socket.sent if m.type is MessageType.ERROR]
+        assert attendance.marked == []
+        # The operator is told.
+        assert "gateway_attendance_write_failed" in caplog.text
 
     @pytest.mark.asyncio
     async def test_a_player_who_is_not_in_the_match_is_refused(

@@ -48,7 +48,11 @@ class GamePairingSettlements:
         return {
             ticket_id: _settlement(record)
             for record in records
-            for ticket_id in record.ticket_ids()
+            # `queue_ticket_ids`, not `ticket_ids`: a match with no tickets
+            # — a tournament's, a challenge's — contributes no keys rather
+            # than a `None` one. A reconciler asks about tickets, so a match
+            # that has none is simply not an answer to its question.
+            for ticket_id in record.queue_ticket_ids()
             if ticket_id in wanted
         }
 

@@ -20,8 +20,8 @@ site for consumers.
 
 `matches.py` — `CreateMatchRequest`, `CreateMatchResult`,
     `MatchParticipant`, `MatchCreationUseCase`, `MatchCreationRefused`,
-    `PlayerSide`. The "creates match" edge architecture.md §7 draws from
-    `matchmaking`.
+    `PlayerSide`, `MatchOrigin`. The "creates match" edge architecture.md §7
+    draws from `matchmaking`, and — since A64-019.0 — from `tournament`.
 
 `acceptance.py` — `PendingMatchView`, `MatchAcceptanceUseCase`,
     `MatchAcceptanceExpiryUseCase`, `MatchRecordStatus` and the three
@@ -31,9 +31,12 @@ site for consumers.
 `opponents.py` — `RecentOpponentReader`. QT-3's rematch guard, which
     A64-015.3 declared and could not implement.
 
-`reconciliation.py` — `PairingSettlement`, `PairingReconciliationReader`.
-    The one fact `matchmaking` cannot hold: did this reserved ticket's
-    match get created.
+`reconciliation.py` — `PairingSettlement`, `PairingReconciliationReader`,
+    `OriginMatchOutcome`, `OriginMatchReader`, `OriginMatchState`. The one
+    fact an originating context cannot hold: did the match it asked for get
+    created, and what became of it. Two readers because two callers key
+    differently — `matchmaking` by queue ticket, `tournament` by R-25's
+    opaque `origin_ref` (A64-019.5).
 
 `events.py` — the five durable match events. R-3 requires downstream
     modules to "subscribe to its events", and a subscriber that cannot name
@@ -71,6 +74,7 @@ mirroring it would be two places that answer diverges.
 
 from app.modules.game.domain.result import TerminationReason
 from app.modules.game.domain.variants import (
+    MatchOrigin,
     ProductVariant,
     VariantNotOffered,
     board_variant_of,
@@ -114,6 +118,7 @@ from app.modules.game.public.history import (
     UnsupportedEngineVersion,
 )
 from app.modules.game.public.matches import (
+    AcceptancePolicy,
     CreateMatchRequest,
     CreateMatchResult,
     MatchCreationRefused,
@@ -142,6 +147,9 @@ from app.modules.game.public.moves import (
 )
 from app.modules.game.public.opponents import RecentOpponentReader
 from app.modules.game.public.reconciliation import (
+    OriginMatchOutcome,
+    OriginMatchReader,
+    OriginMatchState,
     PairingReconciliationReader,
     PairingSettlement,
 )
@@ -173,6 +181,7 @@ __all__ = [
     "AbandonedMatchRetention",
     "MATCH_ANSWER_LATENCY",
     "MATCH_OUTCOMES",
+    "AcceptancePolicy",
     "AcceptanceWindowClosed",
     "AnswerLatency",
     "CreateMatchRequest",
@@ -189,6 +198,7 @@ __all__ = [
     "MatchDeclined",
     "MatchNotFound",
     "MatchNotPending",
+    "MatchOrigin",
     "HistoryCursor",
     "MatchHistoryEntry",
     "MatchHistoryPage",
@@ -204,6 +214,9 @@ __all__ = [
     "MatchRoster",
     "MatchRosterReader",
     "NotAMatchParticipant",
+    "OriginMatchOutcome",
+    "OriginMatchReader",
+    "OriginMatchState",
     "PairingReconciliationReader",
     "PairingSettlement",
     "PendingMatchView",

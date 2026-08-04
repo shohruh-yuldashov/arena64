@@ -79,6 +79,9 @@ from app.modules.game.presentation.dependencies import (
     WebSocketMatchRosterReaderDep,
     WebSocketMatchSnapshotDep,
 )
+from app.modules.tournament.presentation.dependencies import (
+    WebSocketTournamentAttendanceDep,
+)
 from app.modules.users.presentation.dependencies import PresenceRecorderDep
 from app.platform.metrics import MetricsRecorder, process_metrics
 
@@ -168,6 +171,7 @@ RoomStoreDep = Annotated[RoomMemberStore, Depends(get_room_store)]
 def get_room_service(
     rosters: WebSocketMatchRosterReaderDep,
     members: RoomStoreDep,
+    attendance: WebSocketTournamentAttendanceDep,
     clock: ClockDep,
     settings: GatewaySettingsDep,
 ) -> GameRoomService:
@@ -187,6 +191,11 @@ def get_room_service(
     return GameRoomService(
         rosters=rosters,
         members=members,
+        # §6e. A room join is what "turned up" means for a live game, and
+        # this is the only component that observes one — see
+        # `tournament.public.attendance` on why the tournament is told
+        # directly rather than through an event the relay would delay.
+        attendance=attendance,
         metrics=get_gateway_metrics(),
         clock=clock,
         room_ttl_seconds=settings.room_ttl_seconds,

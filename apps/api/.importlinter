@@ -191,6 +191,78 @@ allow_indirect_imports = True
 # `profiles` is a *consumer* and appears here as a source, deliberately: it
 # holds the deprecated `RatingCategory` alias and must translate it through
 # `rating.public`'s `SpeedClass` rather than reaching for the domain enum.
+# A64-019.1. `tournament` is the newest context, and the contract matters
+# here for a reason `services.md` §11.3 states as a prediction: tournaments
+# need no new mechanism *provided* they reach `game` through its published
+# port and never touch its schema (R-3, DB-03). A module that could import
+# `game.domain` would be one that could write a match, and the prediction
+# would stop being true on the first shortcut.
+[importlinter:contract:tournament-internals-are-private]
+name = tournament internals are reachable only through tournament.public
+type = forbidden
+source_modules =
+    app.gateway
+    app.modules.auth
+    app.modules.avatars
+    app.modules.friends
+    app.modules.game
+    app.modules.matchmaking
+    app.modules.notifications
+    app.modules.profiles
+    app.modules.rating
+    app.modules.statistics
+    app.modules.users
+forbidden_modules =
+    app.modules.tournament.domain
+    app.modules.tournament.application
+    app.modules.tournament.infrastructure
+allow_indirect_imports = True
+
+# `tournament` reaches other contexts only through their published surfaces.
+# It needs exactly two things today — the variant a match is played under
+# and the speed class a rating is keyed by — and the list below is what it
+# is *forbidden* rather than what it happens to use, so an unused
+# dependency added "for later" fails instead of accumulating.
+[importlinter:contract:tournament-reaches-modules-through-public]
+name = tournament reaches every module only through its published surface
+type = forbidden
+source_modules =
+    app.modules.tournament
+forbidden_modules =
+    app.modules.auth.domain
+    app.modules.auth.application
+    app.modules.auth.infrastructure
+    app.modules.avatars
+    app.modules.engine
+    app.modules.friends.domain
+    app.modules.friends.application
+    app.modules.friends.infrastructure
+    app.modules.game.domain
+    app.modules.game.application
+    app.modules.game.infrastructure
+    app.modules.matchmaking
+    app.modules.notifications
+    app.modules.profiles.domain
+    app.modules.profiles.application
+    app.modules.profiles.infrastructure
+    app.modules.rating.domain
+    app.modules.rating.application
+    app.modules.rating.infrastructure
+    app.modules.statistics
+    app.modules.users.domain
+    app.modules.users.application
+    app.modules.users.infrastructure
+allow_indirect_imports = True
+
+[importlinter:contract:layers-tournament]
+name = tournament layers point inward
+type = layers
+layers =
+    app.modules.tournament.presentation
+    app.modules.tournament.infrastructure
+    app.modules.tournament.application
+    app.modules.tournament.domain
+
 [importlinter:contract:rating-internals-are-private]
 name = rating internals are reachable only through rating.public
 type = forbidden

@@ -67,12 +67,43 @@ component and this request gains a field, in one change.
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
 from app.core.exceptions import DomainError
 from app.modules.engine import EngineVersion, PlayerSide
-from app.modules.game.domain.variants import ProductVariant
+from app.modules.game.domain.variants import MatchOrigin, ProductVariant
+
+
+class AcceptancePolicy(StrEnum):
+    """Whether a match waits for its two players to answer — A64-019.5H.
+
+    A **named policy on the request**, rather than a boolean or something
+    inferred from `origin`. A boolean parameter selecting behaviour is what
+    CLAUDE.md §2.3 forbids, and inferring it from the origin would silently
+    decide the question for `challenge` and `rematch` the day either ships —
+    those are offers somebody may refuse, and a tournament pairing is not.
+
+    The distinction is *who agreed, and when*. A queue pairing is an offer
+    made to two people who have not seen each other; a tournament pairing is
+    a fixture two people entered a tournament to play, and the agreement
+    happened at registration.
+    """
+
+    BILATERAL = "bilateral"
+    """Both players must accept before the match becomes playable. The queue
+    handshake A64-015.4 built."""
+
+    SYSTEM = "system"
+    """The match is created **already active**.
+
+    There is nobody to ask: the participants committed when they entered.
+    A match created this way has no acceptance window to miss, so it can
+    never expire unanswered — whether the players actually turn up is a
+    question the originating context answers with its own policy, and for a
+    tournament that is `specs/tournament.md` §6e's no-show deadline.
+    """
 
 
 class MatchCreationRefused(DomainError):
@@ -141,12 +172,19 @@ class MatchParticipant:
     """DM-06's opaque cross-context identifier. `game` cannot resolve it to
     a person and does not need to."""
 
-    queue_ticket_id: UUID
-    """Which queue ticket this player arrived on.
+    queue_ticket_id: UUID | None
+    """Which queue ticket this player arrived on, or `None`.
 
     Provenance, not identity: it lets a stored match be traced back to the
     pairing that produced it, and it is what makes `pairing_id` verifiable
     rather than merely asserted.
+
+    **`None` for any origin but the queue.** A tournament pairing, a
+    challenge and a rematch each produce a match and none produces a
+    ticket; requiring one made a caller invent an id, which put a
+    fabricated fact in a permanent record. `CreateMatchRequest` still
+    *requires* both for `MatchOrigin.QUEUE` — see its `__post_init__`, and
+    note that the requirement is origin-specific rather than dropped.
     """
 
     rating: "SeatRating"
@@ -222,6 +260,30 @@ class CreateMatchRequest:
 
     dark: MatchParticipant
 
+    origin: MatchOrigin = MatchOrigin.QUEUE
+    """Where this match came from — R-25, A64-019.0.
+
+    Defaulted, so `matchmaking` — the only caller today — is unchanged: a
+    queue pairing is a queue pairing whether or not it says so.
+    """
+
+    origin_ref: UUID | None = None
+    """The originating context's own identifier, opaque to `game`.
+
+    A tournament passes its pairing id here and recognises the match again
+    when `match_completed` carries it back. That round trip is the entire
+    mechanism `services.md` §11.3 assumed already existed.
+    """
+
+    acceptance: AcceptancePolicy = AcceptancePolicy.BILATERAL
+    """Whether this match waits to be accepted — A64-019.5H.
+
+    Defaulted, so `matchmaking` is unchanged: a queue pairing is an offer
+    and stays one. A tournament asks for `SYSTEM`, and
+    `acceptance_deadline` then describes a window nothing will ever use —
+    see `AcceptancePolicy.SYSTEM`.
+    """
+
     def __post_init__(self) -> None:
         # A pairing of somebody with themselves is not a match, and it is
         # the one malformed request this port can detect on its own. It
@@ -230,8 +292,26 @@ class CreateMatchRequest:
         # defect, and failing here is how it stays one line long.
         if self.light.player_id == self.dark.player_id:
             raise ValueError("a match needs two different players")
-        if self.light.queue_ticket_id == self.dark.queue_ticket_id:
+
+        # Two *present* tickets must differ. Two absent ones are the
+        # ordinary shape of a non-queue match, and comparing `None` to
+        # `None` would refuse every one of them.
+        if (
+            self.light.queue_ticket_id is not None
+            and self.light.queue_ticket_id == self.dark.queue_ticket_id
+        ):
             raise ValueError("a match needs two different queue tickets")
+
+        # **Origin-specific, not relaxed.** A64-019.5H made the field
+        # nullable so a tournament need not invent one; it did not make a
+        # queue pairing's provenance optional. A queue match without its
+        # tickets is one no reconciler can recover, which is exactly the
+        # gap A64-015.4 closed.
+        if self.origin is MatchOrigin.QUEUE and None in (
+            self.light.queue_ticket_id,
+            self.dark.queue_ticket_id,
+        ):
+            raise ValueError("a queue match records the ticket each player arrived on")
 
     def player_ids(self) -> tuple[UUID, UUID]:
         """Both players, light first. For logging and for the caller that
@@ -296,6 +376,8 @@ class MatchCreationUseCase(Protocol):
 
 
 __all__ = [
+    "AcceptancePolicy",
+    "MatchOrigin",
     "SeatRating",
     "CreateMatchRequest",
     "CreateMatchResult",

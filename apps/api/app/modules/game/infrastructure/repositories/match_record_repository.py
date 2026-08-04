@@ -44,6 +44,7 @@ from app.modules.game.domain.match_record import (
     MatchSeat,
     SeatRating,
 )
+from app.modules.game.domain.variants import MatchOrigin
 from app.modules.game.infrastructure.models import MatchRecordModel
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,8 @@ class SqlAlchemyMatchRecordRepository:
             pairing_id=row.pairing_id,
             variant=row.variant,
             rated=row.rated,
+            origin=row.origin,
+            origin_ref=row.origin_ref,
             engine_version=EngineVersion(number=row.engine_version),
             light=MatchSeat(
                 player_id=row.light_player_id,
@@ -129,6 +132,8 @@ class SqlAlchemyMatchRecordRepository:
             pairing_id=record.pairing_id,
             variant=record.variant,
             rated=record.rated,
+            origin=record.origin,
+            origin_ref=record.origin_ref,
             engine_version=record.engine_version.as_primitive(),
             light_player_id=record.light.player_id,
             light_ticket_id=record.light.queue_ticket_id,
@@ -410,6 +415,27 @@ class SqlAlchemyMatchRecordRepository:
                     MatchRecordModel.light_ticket_id.in_(ticket_ids),
                     MatchRecordModel.dark_ticket_id.in_(ticket_ids),
                 )
+            )
+        )
+        return [self._to_domain(row) for row in rows]
+
+    async def by_origin_refs(
+        self, origin_refs: Sequence[UUID], *, origin: MatchOrigin
+    ) -> Sequence[MatchRecord]:
+        """Every match this context created for these references — R-25.
+
+        `origin` is part of the predicate rather than assumed, which is what
+        makes `ix_match__origin_ref` — a composite partial index on
+        `(origin, origin_ref)` — the one that serves it, and what stops one
+        context reading another's matches by guessing a reference.
+        """
+        if not origin_refs:
+            return ()
+
+        rows = await self._session.scalars(
+            select(MatchRecordModel).where(
+                MatchRecordModel.origin == origin,
+                MatchRecordModel.origin_ref.in_(origin_refs),
             )
         )
         return [self._to_domain(row) for row in rows]

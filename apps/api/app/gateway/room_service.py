@@ -51,6 +51,7 @@ from app.gateway.metrics import (
 from app.gateway.ports import RoomMemberStore
 from app.gateway.rooms import GameRoomSession, RoomMember
 from app.modules.game.public import MatchRecordStatus, MatchRosterReader
+from app.modules.tournament.public import TournamentAttendance
 from app.platform.metrics import MetricsRecorder
 
 logger = logging.getLogger(__name__)
@@ -86,12 +87,14 @@ class GameRoomService:
         *,
         rosters: MatchRosterReader,
         members: RoomMemberStore,
+        attendance: TournamentAttendance,
         metrics: MetricsRecorder,
         clock: Clock,
         room_ttl_seconds: int,
     ) -> None:
         self._rosters = rosters
         self._members = members
+        self._attendance = attendance
         self._metrics = metrics
         self._clock = clock
         self._room_ttl_seconds = room_ttl_seconds
@@ -145,6 +148,8 @@ class GameRoomService:
             observed_at=self._clock.now(),
         )
 
+        await self._record_attendance(match_id, player_id)
+
         self._metrics.increment(ROOM_JOINS)
         self._metrics.increment(ROOM_STATES, labels={"state": room.status})
         logger.info(
@@ -157,6 +162,36 @@ class GameRoomService:
             },
         )
         return room
+
+    async def _record_attendance(self, match_id: UUID, player_id: UUID) -> None:
+        """Tells a tournament that one of its players turned up — §6e.
+
+        Called **after** the join has succeeded, so attendance records
+        somebody who is actually in the room rather than somebody who tried.
+
+        **Never fails a join.** A tournament that cannot be told is a
+        no-show policy that may adjudicate somebody who was present — bad,
+        and strictly better than refusing to let two people play because a
+        write to another module's table failed. The `ERROR` is what makes it
+        visible, and the sweep's own re-read of `game` is what keeps a
+        started match safe even then.
+
+        A match no tournament owns matches no row and this changes nothing;
+        see `tournament.public.attendance` on why that is one guarded
+        statement rather than a lookup on every join.
+        """
+        try:
+            await self._attendance.mark_present(match_id, player_id, at=self._clock.now())
+        except Exception as exc:  # noqa: BLE001 — a join must not fail on this
+            logger.error(
+                "gateway_attendance_write_failed",
+                extra={
+                    "match_id": str(match_id),
+                    "user_id": str(player_id),
+                    "error": type(exc).__name__,
+                },
+                exc_info=exc,
+            )
 
     async def leave(
         self, match_id: UUID, *, player_id: UUID, connection_id: UUID

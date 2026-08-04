@@ -58,7 +58,7 @@ from uuid import UUID
 
 from app.modules.engine import PlayerSide
 from app.modules.game.domain.result import MatchOutcome, TerminationReason
-from app.modules.game.domain.variants import ProductVariant
+from app.modules.game.domain.variants import MatchOrigin, ProductVariant
 from app.platform.events import DomainEvent
 
 #: The `aggregate_type` every event here carries — domain-model.md §10.4's
@@ -66,6 +66,15 @@ from app.platform.events import DomainEvent
 #: operator querying the outbox "by subject" is querying this exact string,
 #: and `matchmaking.PlayersPaired` already uses it for the same subject.
 MATCH_AGGREGATE = "match"
+
+
+def _optional(identifier: UUID | None) -> str | None:
+    """A uuid as a payload carries it, or `null`.
+
+    One helper rather than a conditional at each site, so a nullable id
+    cannot be serialised as the string `"None"` by a call that forgot.
+    """
+    return str(identifier) if identifier is not None else None
 
 
 @dataclass(frozen=True)
@@ -102,8 +111,20 @@ class _MatchEvent(DomainEvent):
     pairing_id: UUID
     light_player_id: UUID
     dark_player_id: UUID
-    light_ticket_id: UUID
-    dark_ticket_id: UUID
+    light_ticket_id: UUID | None
+    dark_ticket_id: UUID | None
+    """The queue tickets, or `None` where there are none — A64-019.5H.
+
+    Nullable because a match need not have come from the queue. Every
+    consumer that reads these already asks a question that only makes sense
+    for a queue pairing — `matchmaking`'s acceptance-failure policy requeues
+    the ticket somebody arrived on — and each now skips a seat with none
+    rather than being handed a fabricated id.
+
+    Widening a field is additive for a *reader*: a consumer written before
+    this change parses the same key, and gets `null` only for matches that
+    never existed when it was written.
+    """
 
     @property
     def aggregate_id(self) -> UUID:
@@ -115,8 +136,8 @@ class _MatchEvent(DomainEvent):
             "pairing_id": str(self.pairing_id),
             "light_player_id": str(self.light_player_id),
             "dark_player_id": str(self.dark_player_id),
-            "light_ticket_id": str(self.light_ticket_id),
-            "dark_ticket_id": str(self.dark_ticket_id),
+            "light_ticket_id": _optional(self.light_ticket_id),
+            "dark_ticket_id": _optional(self.dark_ticket_id),
         }
 
 
@@ -394,6 +415,24 @@ class MatchCompleted(DomainEvent):
     speed_class: str | None = None
     """The rating key's second component. `None` for the same reason."""
 
+    # --- A64-019.5: the round trip R-25 promised, completed ---
+    #
+    # A64-019.0 gave `game.match` an `origin` and an opaque `origin_ref` so a
+    # tournament could recognise its own matches. It handed neither back:
+    # the columns were written and the completion event did not carry them,
+    # so the originating context saw a match end and could not tell it was
+    # one of its own. The mechanism `services.md` §11.3 assumed existed was
+    # therefore still half absent — this is the other half.
+    #
+    # Additive with defaults, like the block above: every consumer written
+    # before this ignores two fields it does not know about, and a match
+    # recorded before A64-019.0 correctly reads as having come from the
+    # queue.
+    origin: MatchOrigin = MatchOrigin.QUEUE
+    origin_ref: UUID | None = None
+    """The originating context's own identifier. **Opaque to `game`** — it
+    is stored, echoed here, and never dereferenced."""
+
     @property
     def aggregate_id(self) -> UUID:
         return self.match_id
@@ -411,6 +450,8 @@ class MatchCompleted(DomainEvent):
             "speed_class": self.speed_class,
             "light": _seat_payload(self.light),
             "dark": _seat_payload(self.dark),
+            "origin": self.origin.value,
+            "origin_ref": str(self.origin_ref) if self.origin_ref is not None else None,
         }
 
 

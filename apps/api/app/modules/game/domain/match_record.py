@@ -71,7 +71,7 @@ from app.modules.game.domain.exceptions import (
     NotAMatchParticipant,
 )
 from app.modules.game.domain.result import MatchOutcome, MatchResult, TerminationReason
-from app.modules.game.domain.variants import ProductVariant
+from app.modules.game.domain.variants import MatchOrigin, ProductVariant
 
 
 class MatchRecordStatus(StrEnum):
@@ -181,13 +181,24 @@ class MatchSeat:
     """DM-06's opaque cross-context identifier. `game` cannot resolve it to
     a person and does not need to."""
 
-    queue_ticket_id: UUID
-    """Which queue ticket this player arrived on.
+    queue_ticket_id: UUID | None = None
+    """Which queue ticket this player arrived on, or `None` — R-25.
 
     Provenance, and the **durable link back to the pairing** A64-015.3
     recorded as missing: it is what lets a reconciler holding an orphaned
     reserved ticket find out whether its match was ever created, without
     having to know who the partner was.
+
+    **`None` when the match did not come from the queue.** A tournament
+    pairing, a challenge and a rematch each produce a match and none of them
+    produces a ticket. A64-019.5 wrote a derived uuid5 here to satisfy a
+    `NOT NULL`, which made the column assert a ticket existed when none did
+    — a fabricated fact in a permanent record, and one `settlements_for`
+    would happily answer questions about.
+
+    Where a match came from is `origin` and `origin_ref`; this is only the
+    queue's provenance. A consumer that needs a ticket asks for
+    `MatchOrigin.QUEUE`, which is what guarantees one.
     """
 
     rating: SeatRating | None = None
@@ -215,9 +226,23 @@ class MatchSeat:
         return self.accepted_at is not None
 
     def accepting(self, at: datetime) -> "MatchSeat":
-        return MatchSeat(
-            player_id=self.player_id, queue_ticket_id=self.queue_ticket_id, accepted_at=at
-        )
+        """This seat, having answered yes.
+
+        `replace` rather than a fresh `MatchSeat`, and the difference is a
+        rating outage. Naming three of four fields silently dropped
+        `rating` — the snapshot captured at creation (MT-4, PR-3) — and
+        `MatchRecordRepository.settle` writes every rating column from the
+        record it is given, so accepting a match **nulled its own seat
+        snapshots in the database**. `MatchCompleted` then carried
+        `light=None, dark=None`, the rating consumer correctly read that as
+        "not rateable", and no rating on this platform would ever have
+        moved.
+
+        Constructing by name is what let a field be forgotten. `replace`
+        cannot forget one, so a fifth field added later inherits this
+        instead of needing to be remembered here.
+        """
+        return replace(self, accepted_at=at)
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,6 +280,19 @@ class MatchRecord:
     is: a match written under one reservation TTL must not be silently
     re-dated by a deploy that changes it. Equal by construction to both
     tickets' `reserved_until` — see this module's docstring.
+    """
+
+    origin: MatchOrigin = MatchOrigin.QUEUE
+    """Where this match came from — R-25. Defaults to `QUEUE`, which is what
+    every match created before A64-019.0 was."""
+
+    origin_ref: UUID | None = None
+    """The originating context's own identifier, **opaque**.
+
+    A tournament pairing, a challenge, a rematch offer. `game` never
+    dereferences it and there is no foreign key (DB-03): a constraint here
+    would make `game` and `tournaments` undeployable apart, which is the one
+    seam `architecture.md` §16 exists to keep open.
     """
 
     status: MatchRecordStatus = MatchRecordStatus.PENDING_ACCEPTANCE
@@ -344,8 +382,16 @@ class MatchRecord:
         # authoritative copies (BE-06).
         if self.light.player_id == self.dark.player_id:
             raise ValueError("a match needs two different players")
-        if self.light.queue_ticket_id == self.dark.queue_ticket_id:
+        # Two *present* tickets must differ. Two absent ones are the
+        # ordinary shape of a match that did not come from the queue, and
+        # comparing `None` to `None` would refuse every one of them.
+        if (
+            self.light.queue_ticket_id is not None
+            and self.light.queue_ticket_id == self.dark.queue_ticket_id
+        ):
             raise ValueError("a match needs two different queue tickets")
+        if self.origin is MatchOrigin.QUEUE and None in self.ticket_ids():
+            raise ValueError("a queue match records the ticket each player arrived on")
         if self.acceptance_deadline <= self.created_at:
             raise ValueError("an acceptance window cannot close before it opens")
         if self.status.is_settled != (self.settled_at is not None):
@@ -449,9 +495,25 @@ class MatchRecord:
         """Both players, light first."""
         return (self.light.player_id, self.dark.player_id)
 
-    def ticket_ids(self) -> tuple[UUID, UUID]:
-        """Both source queue tickets, light first."""
+    def ticket_ids(self) -> tuple[UUID | None, UUID | None]:
+        """Both source queue tickets, light first, `None` where there is none.
+
+        The pair is kept positional rather than filtered, because a caller
+        asking "which ticket sat light" must not have to guess from a list
+        of one. `queue_ticket_ids` below is for the callers that want only
+        the tickets that exist.
+        """
         return (self.light.queue_ticket_id, self.dark.queue_ticket_id)
+
+    def queue_ticket_ids(self) -> tuple[UUID, ...]:
+        """Only the tickets this match actually has.
+
+        Empty for a tournament, a challenge or a rematch. What
+        `settlements_for` keys on, so a match with no tickets simply
+        matches no reconciliation query rather than matching a fabricated
+        one.
+        """
+        return tuple(ticket for ticket in self.ticket_ids() if ticket is not None)
 
     def opponent_of(self, player_id: UUID) -> UUID:
         """The other player. Raises `NotAMatchParticipant` for a stranger."""
@@ -486,6 +548,35 @@ class MatchRecord:
         if not (accepted.light.has_accepted and accepted.dark.has_accepted):
             return accepted
         return accepted._with(status=MatchRecordStatus.ACTIVE, settled_at=at)
+
+    def system_activated(self, at: datetime) -> "MatchRecord":
+        """This match, active without either player having been asked.
+
+        For a fixture rather than an offer — a tournament pairing two people
+        entered a tournament to play (`game.public.AcceptancePolicy.SYSTEM`).
+        There is nobody to ask, so there is no window to miss and the match
+        can never expire unanswered.
+
+        Both `accepted_at` instants are set to `at`, which is not a fiction
+        about who clicked what: `ck_match__active_iff_both_accepted` and
+        this aggregate's own invariant both read "active means two seats
+        answered", and the system answered for both. Whether the players
+        then *turn up* is a different question, and one the originating
+        context answers with its own policy rather than by leaving a match
+        pending forever.
+
+        Only from `PENDING_ACCEPTANCE`, and it says so: activating a
+        cancelled or expired match would resurrect one, and activating an
+        active one is a caller that has lost track of its own request.
+        """
+        if self.status is not MatchRecordStatus.PENDING_ACCEPTANCE:
+            raise MatchNotPending("Only a pending match can be activated.")
+        return self._with(
+            light=self.light.accepting(at),
+            dark=self.dark.accepting(at),
+            status=MatchRecordStatus.ACTIVE,
+            settled_at=at,
+        )
 
     def declined(self, side: PlayerSide, *, at: datetime) -> "MatchRecord":
         """This match, cancelled because `side` said no.
@@ -537,19 +628,28 @@ class MatchRecord:
         written once when the handshake ends. A transition that had to
         clear one would be a transition this state machine does not have.
 
-        `id`, `pairing_id` and the six creation-time facts are carried
-        verbatim, which is what makes them immutable without a guard.
+        Every other field is carried verbatim, which is what makes the
+        creation-time facts immutable without a guard.
+
+        **`replace`, not a fresh `MatchRecord`.** Naming the fields to carry
+        across meant carrying the ones that existed when this was written:
+        `origin` and `origin_ref` were added by A64-019.0 and never added
+        here, so a system-activated tournament match lost both on the way to
+        storage and became a queue match with no reference — the round trip
+        R-25 exists for, broken at its first step. `ply_number`, the clock
+        and the result columns were dropped the same way; those happen to be
+        empty at every point this is reached today, which is exactly why
+        nothing noticed. Same defect as `MatchSeat.accepting`, same fix.
         """
-        return MatchRecord(
-            id=self.id,
-            pairing_id=self.pairing_id,
-            variant=self.variant,
-            rated=self.rated,
-            engine_version=self.engine_version,
+        # `None` means "unchanged" rather than "cleared", which is safe
+        # because none of the five is ever *un*-set: a seat only gains an
+        # `accepted_at`, and the other three are written once when the
+        # handshake ends. A transition that had to clear one would be a
+        # transition this state machine does not have.
+        return replace(
+            self,
             light=light if light is not None else self.light,
             dark=dark if dark is not None else self.dark,
-            created_at=self.created_at,
-            acceptance_deadline=self.acceptance_deadline,
             status=status if status is not None else self.status,
             declined_by=declined_by if declined_by is not None else self.declined_by,
             settled_at=settled_at if settled_at is not None else self.settled_at,

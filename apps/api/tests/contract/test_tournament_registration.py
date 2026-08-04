@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.database.unit_of_work import SessionUnitOfWork
@@ -25,6 +26,7 @@ from app.modules.tournament.application.ports import (
     AlreadyRegistered,
     NotRegistered,
     NotSeedable,
+    PlanAlreadyExists,
     RegistrationNotOpen,
     TournamentIsFull,
 )
@@ -40,6 +42,7 @@ from app.modules.tournament.application.services.seeding_service import (
     TournamentSeedingService,
 )
 from app.modules.tournament.domain.exceptions import InvalidBracketPosition
+from app.modules.tournament.domain.seeding import PlannedPairing
 from app.modules.tournament.domain.tournament import TournamentStatus
 from app.modules.tournament.infrastructure.rating_snapshots import (
     PublishedRatingSnapshots,
@@ -396,6 +399,70 @@ class TestSeeding:
                 tournament.id, round_number=1
             )
         assert len(stored) == 2
+
+    async def test_a_losing_worker_can_read_the_winning_plan_in_its_own_session(
+        self, contract_engine: AsyncEngine
+    ) -> None:
+        """§12's recovery, which the test above never actually reaches.
+
+        `test_two_workers_cannot_write_two_plans` gathers two coroutines on
+        one event loop, and they interleave such that the second usually
+        finds the persisted plan on its **first read** and returns early —
+        so it exercises the idempotent path, not the collision. This forces
+        the collision instead: the winner commits, then a second session
+        inserts the same plan and must survive to read what the winner
+        wrote.
+
+        Without a `SAVEPOINT` around the insert that read raises
+        `PendingRollbackError`: a failed statement poisons the enclosing
+        transaction, so the loser's recovery fails at precisely the moment
+        it exists for. The defect was invisible because it needs a *real*
+        collision in a session that is then reused.
+
+        An unrelated constraint still propagates as itself — the savepoint
+        scopes the rollback, it does not swallow the error.
+        """
+        players = [uuid4() for _ in range(4)]
+        directory = _KnownPlayers(*players)
+
+        async with AsyncSession(contract_engine) as setup:
+            service = _service(setup, players=directory)
+            tournament = await _open_tournament(service, capacity=4)
+            for player in players:
+                await service.register(tournament.id, player)
+            await service.close_registration(tournament.id)
+            await setup.commit()
+
+        async with AsyncSession(contract_engine) as winner:
+            plan = await _seeding(winner).seed_tournament(tournament.id)
+            await winner.commit()
+
+        async with AsyncSession(contract_engine) as loser:
+            repository = SqlAlchemyPairingRepository(loser)
+
+            with pytest.raises(PlanAlreadyExists):
+                await repository.save_plan(tournament.id, plan)
+
+            # The assertion the fix exists for: this session still works.
+            assert await repository.plan_for(tournament.id, round_number=1) == plan
+
+            # A different constraint is not a plan collision, and is not
+            # translated into one — a round nobody planned, with a player
+            # facing themselves.
+            with pytest.raises(IntegrityError):
+                await repository.save_plan(
+                    tournament.id,
+                    [
+                        PlannedPairing(
+                            round_number=9,
+                            slot=0,
+                            light_player_id=players[0],
+                            dark_player_id=players[0],
+                            light_seed=1,
+                            dark_seed=2,
+                        )
+                    ],
+                )
 
 
 class TestBracket:

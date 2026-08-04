@@ -301,7 +301,23 @@ class SqlAlchemySeedRepository:
 
 
 class SqlAlchemyPairingRepository:
-    """`PairingRepository` — a round's slots, written once."""
+    """`PairingRepository` — a round's slots, written once.
+
+    ## The insert runs inside a `SAVEPOINT`, and the retry path needs it to
+
+    A collision here is the **expected** outcome of the race §12 describes:
+    two workers compute an identical plan, one inserts, and the loser is
+    supposed to re-read the winner's. But a failed statement poisons the
+    enclosing transaction — PostgreSQL refuses every subsequent one until a
+    rollback — so the loser's `plan_for` would raise `PendingRollbackError`
+    instead of returning the plan, and the recovery the design describes
+    would fail exactly when it was needed.
+
+    `begin_nested()` scopes the rollback to the statement. The primary key
+    is still the guard; what changes is that the loser can carry on. The
+    same correction `SqlAlchemyPairingAttemptRepository.record` carries, for
+    the same reason.
+    """
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -337,21 +353,26 @@ class SqlAlchemyPairingRepository:
         The primary key is the guard: two workers seeding at once cannot
         both insert, so the loser reads the winner's plan rather than
         overwriting it. Check-then-insert would let both through.
+
+        **Inside a `SAVEPOINT`**, and that is what makes "the loser reads
+        the winner's plan" true rather than merely intended — see this
+        class's docstring.
         """
-        for pairing in pairings:
-            self._session.add(
-                PairingModel(
-                    tournament_id=tournament_id,
-                    round_number=pairing.round_number,
-                    slot=pairing.slot,
-                    light_player_id=pairing.light_player_id,
-                    dark_player_id=pairing.dark_player_id,
-                    light_seed=pairing.light_seed,
-                    dark_seed=pairing.dark_seed,
-                )
-            )
         try:
-            await self._session.flush()
+            async with self._session.begin_nested():
+                for pairing in pairings:
+                    self._session.add(
+                        PairingModel(
+                            tournament_id=tournament_id,
+                            round_number=pairing.round_number,
+                            slot=pairing.slot,
+                            light_player_id=pairing.light_player_id,
+                            dark_player_id=pairing.dark_player_id,
+                            light_seed=pairing.light_seed,
+                            dark_seed=pairing.dark_seed,
+                        )
+                    )
+                await self._session.flush()
         except IntegrityError as violation:
             if "pk_pairing" not in str(violation.orig):
                 raise
@@ -589,44 +610,51 @@ class SqlAlchemyBracketRepository:
 
         One flush, so a partial bracket is impossible: the caller's
         transaction either has every round and every node or none of them.
-        """
-        for round_ in rounds:
-            self._session.add(
-                TournamentRoundModel(
-                    tournament_id=tournament_id,
-                    round_number=round_.round_number,
-                    status=round_.status,
-                    published_at=round_.published_at,
-                    started_at=round_.started_at,
-                    completed_at=round_.completed_at,
-                )
-            )
-        # **Only the rounds seeding did not write.** Round one's slots are
-        # already in `pairing` from A64-019.3; re-inserting them would
-        # collide with their own primary key. Their resolved byes are
-        # applied afterwards by the caller's propagation pass.
-        for node in nodes:
-            if node.round_number == 1:
-                continue
-            self._session.add(
-                PairingModel(
-                    tournament_id=tournament_id,
-                    round_number=node.round_number,
-                    slot=node.slot,
-                    light_player_id=node.light_player_id,
-                    dark_player_id=node.dark_player_id,
-                    light_seed=node.light_seed,
-                    dark_seed=node.dark_seed,
-                    winner_id=node.winner_id,
-                    # Written with the winner, never after it: a bye chain
-                    # can decide a later round at materialisation time, and
-                    # `ck_pairing__reason_iff_winner` refuses one half.
-                    advancement_reason=node.advancement_reason,
-                )
-            )
 
+        The flush is wrapped in a `SAVEPOINT` for the reason
+        `SqlAlchemyPairingRepository.save_plan` records — the loser of the
+        race is expected to re-read the winner's tree in this same session,
+        and a poisoned transaction would refuse the read.
+        """
         try:
-            await self._session.flush()
+            async with self._session.begin_nested():
+                for round_ in rounds:
+                    self._session.add(
+                        TournamentRoundModel(
+                            tournament_id=tournament_id,
+                            round_number=round_.round_number,
+                            status=round_.status,
+                            published_at=round_.published_at,
+                            started_at=round_.started_at,
+                            completed_at=round_.completed_at,
+                        )
+                    )
+                # **Only the rounds seeding did not write.** Round one's
+                # slots are already in `pairing` from A64-019.3;
+                # re-inserting them would collide with their own primary
+                # key. Their resolved byes are applied afterwards by the
+                # caller's propagation pass.
+                for node in nodes:
+                    if node.round_number == 1:
+                        continue
+                    self._session.add(
+                        PairingModel(
+                            tournament_id=tournament_id,
+                            round_number=node.round_number,
+                            slot=node.slot,
+                            light_player_id=node.light_player_id,
+                            dark_player_id=node.dark_player_id,
+                            light_seed=node.light_seed,
+                            dark_seed=node.dark_seed,
+                            winner_id=node.winner_id,
+                            # Written with the winner, never after it: a bye
+                            # chain can decide a later round at
+                            # materialisation time, and
+                            # `ck_pairing__reason_iff_winner` refuses one half.
+                            advancement_reason=node.advancement_reason,
+                        )
+                    )
+                await self._session.flush()
         except IntegrityError as violation:
             if "pk_pairing" not in str(violation.orig) and "pk_round" not in str(violation.orig):
                 raise

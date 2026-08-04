@@ -160,6 +160,38 @@ class MoveRejection(StrEnum):
     visible without parsing logs."""
 
 
+#: Reconnect attempts, by how they were answered — A64-016.6.
+RESUMES: Final = "gateway.resumes_total"
+
+
+class ResumeOutcome(StrEnum):
+    """How a reconnect was answered.
+
+    The distribution is the operational question, and it is why these are
+    five labels on one counter rather than five counters: `incremental`
+    should dominate, `snapshot` should be rare, and a rising
+    `resync_required` means the event buffer is too small for the
+    disconnection lengths this deployment actually sees.
+    """
+
+    CURRENT = "current"
+    """The client had missed nothing. The fast path, and the common one for
+    a socket that dropped and returned within a second."""
+
+    INCREMENTAL = "incremental"
+    """The buffer proved it held the whole gap. What should dominate."""
+
+    SNAPSHOT = "snapshot"
+    """The client asked to start over, or was too far behind."""
+
+    RESYNC_REQUIRED = "resync_required"
+    """The gap could not be proven complete. A rising rate is the signal to
+    lengthen the buffer rather than a defect."""
+
+    NOT_A_PARTICIPANT = "not_a_participant"
+    """Refused. Covers an unknown match too — the two are one answer."""
+
+
 class RouteLocality(StrEnum):
     """Whether a recipient connection is held by this process."""
 

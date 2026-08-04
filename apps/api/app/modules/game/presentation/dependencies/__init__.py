@@ -42,7 +42,12 @@ from app.api.deps import ClockDep, SettingsDep
 from app.core.clock import Clock
 from app.database.session import open_session
 from app.modules.game.application.ports import ClockDeadlineStore, LiveMatchStore
-from app.modules.game.application.services import GameMatchRoster, LiveMoveService
+from app.modules.game.application.services import (
+    GameMatchRoster,
+    GameMatchSnapshot,
+    LiveMoveService,
+    PersistedMatchReplay,
+)
 from app.modules.game.infrastructure import RedisClockDeadlineStore, RedisLiveMatchStore
 from app.modules.game.infrastructure.repositories import (
     SqlAlchemyMatchRecordRepository,
@@ -52,6 +57,8 @@ from app.modules.game.public import (
     GameEngineServices,
     MatchRoster,
     MatchRosterReader,
+    MatchSnapshot,
+    MatchSnapshotReader,
     SubmitMoveRequest,
     SubmitMoveResult,
     SubmitMoveUseCase,
@@ -211,12 +218,69 @@ def get_live_moves_ws(
 WebSocketLiveMovesDep = Annotated[SubmitMoveUseCase, Depends(get_live_moves_ws)]
 
 
+class SessionScopedSnapshots:
+    """`MatchSnapshotReader` that opens a session per read — A64-016.6 §1.
+
+    Same arrangement as `SessionScopedMatchRosters` and for the same reason:
+    a WebSocket's request scope is the whole connection, so a reader
+    resolved through `DbSessionDep` would hold one PostgreSQL session per
+    open socket for the length of a game.
+
+    A snapshot is a replay of the durable log — one indexed read of the
+    match row, one of the move log, and the engine — and the session ends
+    with it.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        engine: GameEngineServices,
+        clock: Clock,
+    ) -> None:
+        self._session_factory = session_factory
+        self._engine = engine
+        self._clock = clock
+
+    async def snapshot_of(self, match_id: UUID) -> MatchSnapshot | None:
+        async with open_session(self._session_factory) as session:
+            matches = SqlAlchemyMatchRecordRepository(session)
+            return await GameMatchSnapshot(
+                matches=matches,
+                replays=PersistedMatchReplay(
+                    matches=matches, moves=SqlAlchemyMoveLogRepository(session)
+                ),
+                engine=self._engine.replay,
+                clock=self._clock,
+            ).snapshot_of(match_id)
+
+
+def get_match_snapshot_ws(websocket: WebSocket, clock: ClockDep) -> MatchSnapshotReader:
+    """`game`'s live snapshot, for a WebSocket route.
+
+    Typed as the port, so the gateway holds one method: it can ask where a
+    match is and cannot enumerate matches, read a private field, or change
+    anything.
+    """
+    return SessionScopedSnapshots(
+        session_factory=websocket.app.state.db.session_factory,
+        engine=engine_services(),
+        clock=clock,
+    )
+
+
+WebSocketMatchSnapshotDep = Annotated[MatchSnapshotReader, Depends(get_match_snapshot_ws)]
+
+
 MatchRosterReaderDep = Annotated[MatchRosterReader, Depends(get_match_roster_reader)]
 WebSocketMatchRosterReaderDep = Annotated[MatchRosterReader, Depends(get_match_roster_reader_ws)]
 
 
 __all__ = [
     "MatchRosterReaderDep",
+    "SessionScopedSnapshots",
+    "WebSocketMatchSnapshotDep",
+    "get_match_snapshot_ws",
     "SessionScopedLiveMoves",
     "SessionScopedMatchRosters",
     "WebSocketLiveMovesDep",

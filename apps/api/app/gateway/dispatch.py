@@ -126,6 +126,7 @@ CLIENT_SENDABLE: frozenset[MessageType] = frozenset(
         MessageType.ROOM_JOIN,
         MessageType.ROOM_LEAVE,
         MessageType.MOVE_SUBMIT,
+        MessageType.RESUME,
     }
 )
 
@@ -142,6 +143,7 @@ CLIENT_CHANNELS: Mapping[MessageType, Channel] = {
     MessageType.ROOM_JOIN: Channel.GAME,
     MessageType.ROOM_LEAVE: Channel.GAME,
     MessageType.MOVE_SUBMIT: Channel.GAME,
+    MessageType.RESUME: Channel.GAME,
 }
 
 

@@ -50,6 +50,7 @@ from app.database.redis import RedisPools
 from app.gateway.bus import BusRemoteNodePublisher, GatewayBus
 from app.gateway.connections import GatewayConnectionService, GatewayPolicy
 from app.gateway.delivery import InMemoryLocalSockets, RoomBroadcaster
+from app.gateway.event_buffer import RedisMatchEventBuffer
 from app.gateway.idempotency import RedisMoveIdempotencyStore
 from app.gateway.move_limits import ConnectionMoveLimiter, UnlimitedMoves
 from app.gateway.moves import MoveSubmissionHandler
@@ -63,6 +64,7 @@ from app.gateway.ports import (
     RoomMemberStore,
 )
 from app.gateway.registry import RedisConnectionRegistry
+from app.gateway.resume import ResumeHandler
 from app.gateway.room_service import GameRoomService
 from app.gateway.room_store import RedisRoomMemberStore
 from app.gateway.routing import FleetConnectionRouter
@@ -71,6 +73,7 @@ from app.modules.auth.presentation.dependencies import WebSocketTicketServiceDep
 from app.modules.game.presentation.dependencies import (
     WebSocketLiveMovesDep,
     WebSocketMatchRosterReaderDep,
+    WebSocketMatchSnapshotDep,
 )
 from app.modules.users.presentation.dependencies import PresenceRecorderDep
 from app.platform.metrics import MetricsRecorder, process_metrics
@@ -302,10 +305,59 @@ def get_move_limiter(
     )
 
 
+@lru_cache(maxsize=1)
+def _event_buffer_for(redis: Redis, max_events: int, ttl_seconds: int) -> RedisMatchEventBuffer:
+    """One buffer per process, cached on its collaborators — the same shape
+    the bus uses, and for the same reason: the object is cheap and the
+    script registration is not."""
+    return RedisMatchEventBuffer(redis, max_events=max_events, ttl_seconds=ttl_seconds)
+
+
+def get_event_buffer(pools: RedisPoolsDep, settings: GatewaySettingsDep) -> RedisMatchEventBuffer:
+    """The bounded replay buffer a reconnect reads — A64-016.6 §3.
+
+    On the **`cache`** role. Losing it costs a full snapshot rather than a
+    game, which is exactly the derived-and-expendable posture that instance
+    is configured for — and is why it is not beside the live position.
+    """
+    return _event_buffer_for(
+        pools.cache,
+        settings.event_buffer_length,
+        settings.event_buffer_ttl_seconds,
+    )
+
+
+EventBufferDep = Annotated[RedisMatchEventBuffer, Depends(get_event_buffer)]
+
+
+def get_resume_handler(
+    snapshots: WebSocketMatchSnapshotDep,
+    events: EventBufferDep,
+    rooms: RoomServiceDep,
+) -> ResumeHandler:
+    """The reconnect path — §4.
+
+    Holds `game`'s published snapshot reader, the buffer, and the room
+    service. No socket, no node identity and no bus: a resume reads
+    fleet-wide state and rejoins a room, which is why §5's cross-node case
+    needs nothing special.
+    """
+    return ResumeHandler(
+        snapshots=snapshots,
+        events=events,
+        rooms=rooms,
+        metrics=get_gateway_metrics(),
+    )
+
+
+ResumeHandlerDep = Annotated[ResumeHandler, Depends(get_resume_handler)]
+
+
 def get_move_handler(
     moves: WebSocketLiveMovesDep,
     rooms: RoomServiceDep,
     broadcaster: Annotated[RoomBroadcaster, Depends(get_broadcaster)],
+    buffer: EventBufferDep,
     limiter: Annotated[MoveRateLimiter, Depends(get_move_limiter)],
     pools: RedisPoolsDep,
     settings: GatewaySettingsDep,
@@ -320,6 +372,7 @@ def get_move_handler(
         moves=moves,
         rooms=rooms,
         broadcaster=broadcaster,
+        buffer=buffer,
         idempotency=RedisMoveIdempotencyStore(pools.cache),
         limiter=limiter,
         metrics=get_gateway_metrics(),
@@ -347,6 +400,7 @@ def build_gateway_service(
     registry: ConnectionRegistryDep,
     rooms: GameRoomService,
     moves: MoveSubmissionHandler,
+    resumes: ResumeHandler,
     sockets: LocalSocketRegistry,
     presence: PresenceRecorderDep,
     clock: Clock,
@@ -367,6 +421,7 @@ def build_gateway_service(
         registry=registry,
         rooms=rooms,
         moves=moves,
+        resumes=resumes,
         sockets=sockets,
         presence=presence,
         metrics=get_gateway_metrics(),
@@ -385,6 +440,7 @@ def get_gateway_service(
     registry: ConnectionRegistryDep,
     rooms: RoomServiceDep,
     moves: MoveHandlerDep,
+    resumes: ResumeHandlerDep,
     sockets: LocalSocketsDep,
     presence: PresenceRecorderDep,
     clock: ClockDep,
@@ -397,6 +453,7 @@ def get_gateway_service(
         registry=registry,
         rooms=rooms,
         moves=moves,
+        resumes=resumes,
         sockets=sockets,
         presence=presence,
         clock=clock,

@@ -100,6 +100,7 @@ from app.gateway.protocol import (
     room_joined,
     room_left,
 )
+from app.gateway.resume import ResumeHandler
 from app.gateway.room_service import GameRoomService, RoomJoinRefused
 from app.modules.users.public import DeviceType, PresenceRecorder
 from app.platform.metrics import MetricsRecorder
@@ -158,6 +159,7 @@ class GatewayConnectionService:
         registry: ConnectionRegistry,
         rooms: GameRoomService,
         moves: MoveSubmissionHandler,
+        resumes: ResumeHandler,
         sockets: LocalSocketRegistry,
         presence: PresenceRecorder,
         metrics: MetricsRecorder,
@@ -168,6 +170,7 @@ class GatewayConnectionService:
         self._registry = registry
         self._rooms = rooms
         self._moves = moves
+        self._resumes = resumes
         self._sockets = sockets
         self._presence = presence
         self._metrics = metrics
@@ -373,6 +376,9 @@ class GatewayConnectionService:
                     message, player_id=player_id, connection_id=connection_id
                 ),
                 MessageType.ROOM_LEAVE: lambda message: self._leave_room(
+                    message, player_id=player_id, connection_id=connection_id
+                ),
+                MessageType.RESUME: lambda message: self._resumes.handle(
                     message, player_id=player_id, connection_id=connection_id
                 ),
                 MessageType.MOVE_SUBMIT: lambda message: self._moves.handle(

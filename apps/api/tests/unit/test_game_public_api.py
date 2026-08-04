@@ -215,6 +215,12 @@ class TestTheSurfaceIsDeliberate:
         # can show a countdown and cannot construct one.
         "ClockExpired",
         "ClockView",
+        # A64-016.6 — the authoritative snapshot a reconnect resumes from.
+        # The gateway must not assemble one from `game` internals, so the
+        # projection crosses as primitives and `Position` stays withheld.
+        "MatchSnapshot",
+        "MatchSnapshotReader",
+        "PlacedPiece",
     }
 
     def test_nothing_is_published_by_accident(self) -> None:

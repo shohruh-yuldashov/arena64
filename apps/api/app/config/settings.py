@@ -2015,6 +2015,25 @@ class GatewaySettings(BaseSettings):
     Refreshed on every publish, so a live node's stream never lapses.
     """
 
+    event_buffer_length: int = Field(default=64, ge=4, le=4096)
+    """How many recent events a match's replay buffer keeps — A64-016.6 §3.
+
+    Sixty-four plies is most of a draughts game, so a client that dropped
+    for a minute gets incremental events rather than a snapshot. The bound
+    exists because a long game must not accumulate frames forever, and the
+    cost of it being too small is a full snapshot — a fallback that already
+    exists, which is why this can be generous rather than exact.
+    """
+
+    event_buffer_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
+    """How long a match's replay buffer survives without an event.
+
+    An hour, measured against a game rather than a heartbeat — the same
+    argument `GATEWAY_ROOM_TTL_SECONDS` makes. It bounds a *finished* match:
+    a capped buffer is still one key per match ever played, which is
+    unbounded in history rather than in size.
+    """
+
     move_idempotency_ttl_seconds: int = Field(default=60, ge=5, le=3600)
     """How long one `(connection, request_id)` answer is remembered — §7.
 

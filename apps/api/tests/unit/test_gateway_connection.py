@@ -28,7 +28,7 @@ A64-016.2 should add.
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -59,9 +59,13 @@ from app.gateway.protocol import (
     move_accepted,
     move_applied,
 )
+from app.gateway.resume import ResumeHandler
 from app.gateway.room_service import GameRoomService
+from app.gateway.rooms import RoomMember
 from app.gateway.routing import FleetConnectionRouter
+from app.modules.engine import PlayerSide
 from app.modules.game.public import (
+    ClockView,
     IllegalMoveSubmitted,
     MatchNotActive,
     NotYourTurn,
@@ -74,10 +78,12 @@ from tests.fakes.gateway import (
     FakeRoomMemberStore,
     FakeSubmitMoves,
     FakeTicketRedeemer,
+    InMemoryEventBuffer,
     InMemoryMoveIdempotency,
     RecordingPresence,
     RecordingRemotePublisher,
     StubMatchRosters,
+    StubMatchSnapshots,
 )
 from tests.fakes.metrics import RecordingMetrics
 from tests.fakes.presence_redis import MovableClock
@@ -151,6 +157,7 @@ def _moves(
     publisher: RecordingRemotePublisher | None = None,
     sockets: InMemoryLocalSockets | None = None,
     registry: FakeConnectionRegistry | None = None,
+    buffer: InMemoryEventBuffer | None = None,
 ) -> MoveSubmissionHandler:
     """The real move handler over in-memory collaborators.
 
@@ -172,10 +179,26 @@ def _moves(
             publisher=publisher if publisher is not None else RecordingRemotePublisher(),
             metrics=RecordingMetrics(),
         ),
+        buffer=buffer if buffer is not None else InMemoryEventBuffer(),
         idempotency=InMemoryMoveIdempotency(),
         limiter=limiter if limiter is not None else CountingMoveLimiter(allowance=100),
         metrics=RecordingMetrics(),
         idempotency_ttl_seconds=60,
+    )
+
+
+def _resumes(
+    rooms: GameRoomService,
+    *,
+    snapshots: StubMatchSnapshots | None = None,
+    buffer: InMemoryEventBuffer | None = None,
+) -> ResumeHandler:
+    """The real reconnect handler over in-memory collaborators."""
+    return ResumeHandler(
+        snapshots=snapshots if snapshots is not None else StubMatchSnapshots(),
+        events=buffer if buffer is not None else InMemoryEventBuffer(),  # type: ignore[arg-type]
+        rooms=rooms,
+        metrics=RecordingMetrics(),
     )
 
 
@@ -186,6 +209,7 @@ def _service(
     rooms: GameRoomService | None = None,
     moves: MoveSubmissionHandler | None = None,
     sockets: InMemoryLocalSockets | None = None,
+    resumes: ResumeHandler | None = None,
 ) -> GatewayConnectionService:
     resolved_rooms = rooms if rooms is not None else _rooms()
     return GatewayConnectionService(
@@ -193,6 +217,7 @@ def _service(
         registry=registry,
         rooms=resolved_rooms,
         moves=moves if moves is not None else _moves(resolved_rooms),
+        resumes=resumes if resumes is not None else _resumes(resolved_rooms),
         sockets=sockets if sockets is not None else InMemoryLocalSockets(),
         presence=presence,
         metrics=RecordingMetrics(),
@@ -474,6 +499,7 @@ class TestCleanup:
             registry=registry,
             rooms=_rooms(),
             moves=_moves(_rooms()),
+            resumes=_resumes(_rooms()),
             sockets=InMemoryLocalSockets(),
             presence=presence,
             metrics=RecordingMetrics(),
@@ -1130,3 +1156,370 @@ class TestTheRemoteTransportBus:
         assert arrived.request_id == "move-42"
         assert arrived.channel is Channel.GAME
         assert arrived.payload["result"]["winner"] == "light"
+
+
+class TestReconnection:
+    """A64-016.6 §9 — putting a client back where it was.
+
+    The real `ResumeHandler`, the real room service and the real protocol
+    codec run here; the snapshot reader is stubbed because how `game`
+    replays a log to build one is `tests/contract/test_move_log.py`'s.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_small_gap_is_answered_with_ordered_incremental_events(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§9.1, and §2's ordering.
+
+        The client saw ply 2 and the server is at ply 5. The buffer holds
+        every ply, so it proves continuity and the three missed frames come
+        back **in sequence order** — asserted by decoding them, because the
+        frames are opaque strings to everything between the buffer and the
+        client and an out-of-order replay would rebuild a different board.
+
+        They are the *same bytes* a live socket received, which is why the
+        buffer stores the encoded frame rather than a decoded event: a
+        second encoder is a second thing able to disagree.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters, members)
+
+        snapshots = StubMatchSnapshots()
+        snapshots.add(match_id, light=player_id, dark=opponent_id, sequence=5)
+        buffer = InMemoryEventBuffer()
+        for ply in range(1, 6):
+            await buffer.append(
+                match_id,
+                sequence=ply,
+                frame=move_applied(
+                    match_id=match_id,
+                    ply=ply,
+                    side_to_move="dark",
+                    fingerprint=f"fp-{ply}",
+                    path=["c3", "d4"],
+                    captured=[],
+                    promoted_to=None,
+                ).to_json(),
+            )
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [
+                _frame(
+                    "game.resume",
+                    channel="game",
+                    request_id="r1",
+                    payload={"match_id": str(match_id), "last_known_sequence": 2},
+                )
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            resumes=_resumes(rooms, snapshots=snapshots, buffer=buffer),
+        ).run(socket, ticket=VALID_TICKET)
+
+        answer = next(m for m in socket.sent if m.type is MessageType.EVENTS)
+        assert answer.request_id == "r1"
+        assert answer.channel is Channel.GAME
+        replayed = [decode(frame, max_bytes=64 * 1024) for frame in answer.payload["frames"]]
+        assert [frame.payload["ply"] for frame in replayed] == [3, 4, 5]
+
+    @pytest.mark.asyncio
+    async def test_a_gap_the_buffer_cannot_prove_forces_a_resync(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§9.2 and §9.8, and §6's prohibition on silent partial recovery.
+
+        The client saw ply 2; the buffer has trimmed and now starts at ply
+        7. It **can** return four frames — and returning them would leave
+        the client missing plies 3 to 6 while believing it was current,
+        which is the failure §6 exists to prevent.
+
+        So the answer is `game.resync_required` rather than a snapshot the
+        client did not ask for: it is told to start over, and it can count
+        how often that happens, which is what says the buffer is too small
+        for the disconnections this deployment actually sees.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters = StubMatchRosters()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters)
+
+        snapshots = StubMatchSnapshots()
+        snapshots.add(match_id, light=player_id, dark=opponent_id, sequence=10)
+        buffer = InMemoryEventBuffer()
+        for ply in range(7, 11):
+            await buffer.append(match_id, sequence=ply, frame=f'{{"ply":{ply}}}')
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [
+                _frame(
+                    "game.resume",
+                    channel="game",
+                    payload={"match_id": str(match_id), "last_known_sequence": 2},
+                )
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            resumes=_resumes(rooms, snapshots=snapshots, buffer=buffer),
+        ).run(socket, ticket=VALID_TICKET)
+
+        assert MessageType.RESYNC_REQUIRED in socket.types()
+        assert MessageType.EVENTS not in socket.types()
+
+    @pytest.mark.asyncio
+    async def test_a_client_with_nothing_gets_a_snapshot_carrying_the_clock(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§9.2, §9.5 and §9.6 — the snapshot, its sequence, and the clock.
+
+        A client reporting no sequence is asking to start over, so it gets
+        the full state. Three things are asserted about it:
+
+        **The sequence** is the match's, which becomes the client's new
+        synchronisation baseline (§6) — everything after it is incremental.
+
+        **The clock is absolute.** §7 forbids a client extrapolating from
+        stale values, and a reconnecting client is exactly the one whose own
+        countdown drifted for the whole disconnection. A `deadline` and a
+        `server_time` let it correct its skew; a duration would drift by the
+        latency it was meant to describe.
+
+        **No handles and no ratings.** Those are `users`' and are composed by
+        whoever renders them — asserted, because a snapshot that grew them
+        would make `game` depend on a module it has no business knowing.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters = StubMatchRosters()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters)
+
+        snapshots = StubMatchSnapshots()
+        snapshots.add(
+            match_id,
+            light=player_id,
+            dark=opponent_id,
+            sequence=4,
+            clock=ClockView(
+                light_ms=42_000,
+                dark_ms=51_000,
+                active_side=PlayerSide.LIGHT,
+                deadline=NOW + timedelta(seconds=42),
+                server_time=NOW,
+            ),
+        )
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [_frame("game.resume", channel="game", payload={"match_id": str(match_id)})]
+        )
+
+        await _service(
+            tickets, registry, presence, rooms, resumes=_resumes(rooms, snapshots=snapshots)
+        ).run(socket, ticket=VALID_TICKET)
+
+        snapshot = next(m for m in socket.sent if m.type is MessageType.SNAPSHOT)
+        assert snapshot.payload["sequence"] == 4
+        assert snapshot.payload["clock"]["light_ms"] == 42_000
+        assert snapshot.payload["clock"]["active_side"] == "light"
+        # Absolute, so a client corrects its skew rather than accumulating it.
+        assert snapshot.payload["clock"]["deadline"].startswith("2026-")
+        assert snapshot.payload["clock"]["server_time"].startswith("2026-")
+        assert "handle" not in json.dumps(snapshot.payload)
+        assert "rating" not in json.dumps(snapshot.payload)
+
+    @pytest.mark.asyncio
+    async def test_a_non_participant_cannot_resume_and_learns_nothing(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§9.3, and the disclosure rule the whole subsystem keeps.
+
+        A non-participant and an unknown match get the **same** code, so a
+        client cannot enumerate live match identifiers by sending resume
+        frames — the same argument the room join and the move path both
+        make.
+
+        Nothing is attached in either case, asserted against the store: a
+        refusal that still joined the room would put a stranger's connection
+        in a fan-out's recipient set.
+        """
+        outsider, match_id = generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rooms = _rooms(rosters, members)
+
+        snapshots = StubMatchSnapshots()
+        snapshots.add(match_id, light=generate_uuid7(), dark=generate_uuid7(), sequence=3)
+
+        tickets.add(VALID_TICKET, outsider)
+        socket = FakeGatewaySocket(
+            [
+                _frame("game.resume", channel="game", payload={"match_id": str(match_id)}),
+                _frame(
+                    "game.resume",
+                    channel="game",
+                    payload={"match_id": str(generate_uuid7())},
+                ),
+            ]
+        )
+
+        await _service(
+            tickets, registry, presence, rooms, resumes=_resumes(rooms, snapshots=snapshots)
+        ).run(socket, ticket=VALID_TICKET)
+
+        refusals = [m for m in socket.sent if m.type is MessageType.ERROR]
+        assert len(refusals) == 2
+        assert all(
+            m.payload == {"code": GatewayErrorCode.NOT_A_PARTICIPANT.value} for m in refusals
+        )
+        assert MessageType.SNAPSHOT not in socket.types()
+        assert members.rooms.get(match_id, []) == []
+
+    @pytest.mark.asyncio
+    async def test_a_resume_on_another_node_rejoins_without_moving_a_socket(
+        self,
+        tickets: FakeTicketRedeemer,
+        presence: RecordingPresence,
+    ) -> None:
+        """§9.4 and §5 — cross-node resume, and why it needs nothing special.
+
+        The player's first connection is registered on `node-a`; they
+        reconnect and land on this node. Afterwards the registry holds
+        **both** connections on their own nodes and the room holds both
+        members — no socket moved, and neither node knows about the other's.
+
+        That is the whole of §5: every store a resume touches is
+        fleet-wide, so the new node reads exactly the state the old one
+        wrote. The stale connection is left to its own cleanup or its TTL,
+        which A64-016.1 §7 already guarantees.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        registry = FakeConnectionRegistry()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters, members)
+
+        snapshots = StubMatchSnapshots()
+        snapshots.add(match_id, light=player_id, dark=opponent_id, sequence=2)
+        buffer = InMemoryEventBuffer()
+        for ply in (1, 2):
+            await buffer.append(match_id, sequence=ply, frame=f'{{"ply":{ply}}}')
+
+        # The connection they had before, on another node, still registered.
+        elsewhere = uuid4()
+        await registry.register(player_id, elsewhere, node_id="node-a", ttl_seconds=90)
+        await members.join(
+            match_id, RoomMember(player_id=player_id, connection_id=elsewhere), ttl_seconds=3600
+        )
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [
+                _frame(
+                    "game.resume",
+                    channel="game",
+                    payload={"match_id": str(match_id), "last_known_sequence": 1},
+                )
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            resumes=_resumes(rooms, snapshots=snapshots, buffer=buffer),
+        ).run(socket, ticket=VALID_TICKET)
+
+        assert MessageType.EVENTS in socket.types()
+        # The old node's connection is untouched — no socket moved.
+        assert registry.connections[player_id][elsewhere] == "node-a"
+        assert any(member.connection_id == elsewhere for member in members.rooms[match_id])
+
+    @pytest.mark.asyncio
+    async def test_a_repeated_resume_is_idempotent_and_a_current_client_is_told_so(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§9.7 and §8, plus the fast path.
+
+        The same resume three times with one `request_id`. Room membership
+        must not double — a duplicated member would put one connection in a
+        fan-out's recipient set three times — and the answer must be the
+        same each time.
+
+        A client that has missed nothing gets `game.resumed` rather than a
+        snapshot, which is the common case for a socket that dropped and
+        returned within a second: sending it a snapshot it already has would
+        make every flaky network a full replay.
+
+        There is deliberately **no** `request_id` cache on this path, unlike
+        the move path: a move applies something and a resume does not, so
+        replaying a stored answer would be caching a read.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters, members)
+
+        snapshots = StubMatchSnapshots()
+        snapshots.add(match_id, light=player_id, dark=opponent_id, sequence=3)
+
+        retried = _frame(
+            "game.resume",
+            channel="game",
+            request_id="same",
+            payload={"match_id": str(match_id), "last_known_sequence": 3},
+        )
+        tickets.add(VALID_TICKET, player_id)
+        # Held open, so membership is asserted while the connection is live —
+        # the lifecycle's own cleanup empties the room on disconnect, which
+        # is correct and would hide the duplication this is about.
+        socket = FakeGatewaySocket([retried, retried, retried], holds_open=True)
+
+        served = asyncio.create_task(
+            _service(
+                tickets, registry, presence, rooms, resumes=_resumes(rooms, snapshots=snapshots)
+            ).run(socket, ticket=VALID_TICKET)
+        )
+        # The three scripted frames are consumed without suspending on
+        # anything real, so one scheduler turn per frame is enough — the
+        # socket only blocks once its script is exhausted.
+        for _ in range(len(socket.sent) + 8):
+            await asyncio.sleep(0)
+
+        answers = [m for m in socket.sent if m.type is MessageType.RESUMED]
+        assert len(answers) == 3
+        assert {m.to_json() for m in answers} == {answers[0].to_json()}
+        assert all(m.payload["sequence"] == 3 for m in answers)
+        # One connection, one membership — three joins did not duplicate it.
+        assert len(members.rooms[match_id]) == 1
+
+        socket.hang_up()
+        await served

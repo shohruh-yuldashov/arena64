@@ -53,6 +53,7 @@ from typing import Final
 from uuid import UUID
 
 from app.gateway.delivery import RoomBroadcaster
+from app.gateway.event_buffer import RedisMatchEventBuffer
 from app.gateway.metrics import (
     MOVE_SUBMISSIONS,
     MOVES_ACCEPTED,
@@ -145,6 +146,7 @@ class MoveSubmissionHandler:
         moves: SubmitMoveUseCase,
         rooms: GameRoomService,
         broadcaster: RoomBroadcaster,
+        buffer: RedisMatchEventBuffer,
         idempotency: MoveIdempotency,
         limiter: MoveRateLimiter,
         metrics: MetricsRecorder,
@@ -153,6 +155,7 @@ class MoveSubmissionHandler:
         self._moves = moves
         self._rooms = rooms
         self._broadcaster = broadcaster
+        self._buffer = buffer
         self._idempotency = idempotency
         self._limiter = limiter
         self._metrics = metrics
@@ -256,19 +259,30 @@ class MoveSubmissionHandler:
             fingerprint=result.fingerprint,
         )
 
-        report = await self._broadcaster.deliver(
-            move_applied(
-                match_id=result.match_id,
-                ply=result.ply,
-                side_to_move=result.side_to_move.value,
-                fingerprint=result.fingerprint,
-                path=result.applied.path,
-                captured=result.applied.captured,
-                promoted_to=result.applied.promoted_to,
-                result=_result_payload(result),
-            ),
-            recipients=room.participants,
+        applied = move_applied(
+            match_id=result.match_id,
+            ply=result.ply,
+            side_to_move=result.side_to_move.value,
+            fingerprint=result.fingerprint,
+            path=result.applied.path,
+            captured=result.applied.captured,
+            promoted_to=result.applied.promoted_to,
+            result=_result_payload(result),
         )
+
+        # **Buffered before it is delivered** — A64-016.6 §2, §3. A client
+        # that reconnects a moment after a move must find it in the buffer,
+        # and delivery is the slower of the two: it writes sockets and may
+        # publish to another node. Buffering second would leave a window in
+        # which the move is on somebody's screen and not in the replay.
+        #
+        # The frame is the *same string* that goes to a live socket, so a
+        # resuming client applies bytes identical to the ones it would have
+        # received — see `match_events` on why re-encoding would be a second
+        # encoder able to disagree with the first.
+        await self._buffer.append(result.match_id, sequence=result.ply, frame=applied.to_json())
+
+        report = await self._broadcaster.deliver(applied, recipients=room.participants)
 
         # One line per move rather than per recipient (§15), and no board,
         # no path and no fingerprint in it: the payload is the game.

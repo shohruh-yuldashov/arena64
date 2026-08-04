@@ -66,7 +66,7 @@ Proposed ──▶ Accepted ──▶ Superseded
 
 | ID | Title | Status | Date |
 | --- | --- | --- | --- |
-| _None yet_ | | | |
+| [ADR-001](./ADR-001-glicko2-incremental.md) | Glicko-2, applied incrementally, with lazy RD inflation | Accepted | 2026-08-04 |
 
 ## TODO
 

@@ -146,7 +146,15 @@ class TestTheSurfaceIsDeliberate:
         "MatchCreationUseCase",
         "MatchParticipant",
         "PlayerSide",
+        "HistoryCursor",
+        "MatchHistoryEntry",
+        "MatchHistoryPage",
+        "MatchHistoryReader",
+        "MatchReplay",
+        "MatchReplayReader",
+        "ReplayPly",
         "SeatRating",
+        "UnsupportedEngineVersion",
         "TerminationReason",
         # A64-015.4 — the second half of that same edge. Two commands
         # `game` accepts (accept, decline), one view it hands out, the

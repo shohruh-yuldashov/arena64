@@ -29,6 +29,11 @@ from uuid import UUID
 from app.modules.engine import EngineVersion, PlayerSide, Position
 from app.modules.game.domain.match_record import MatchRecord
 from app.modules.game.domain.move_log import MoveRecord
+from app.modules.game.public.history import (
+    HistoryCursor,
+    MatchHistoryEntry,
+    MatchHistoryPage,
+)
 
 
 class MatchRecordRepository(Protocol):
@@ -415,5 +420,35 @@ class ClockDeadlineStore(Protocol):
         Two workers must receive disjoint sets, which is a property of the
         store rather than of the worker — see `RedisClockDeadlineStore`.
         Bounded, like every read on this platform.
+        """
+        ...
+
+
+class MatchHistoryStore(Protocol):
+    """Finished matches, read for a history page — SPEC-REPLAY §1.
+
+    Its own port rather than a method on `MatchRecordRepository`, and the
+    split is the *question* rather than the table: that repository loads and
+    mutates an aggregate under a lock, and this one answers a paginated
+    read over rows nobody will write again. A reader holding the write
+    repository could `lock` a finished match, which nothing should.
+    """
+
+    async def finished_for(
+        self, player_id: UUID, *, after: HistoryCursor | None, limit: int
+    ) -> MatchHistoryPage:
+        """One page of this player's finished matches, newest first.
+
+        Keyset by `(created_at, match_id)`, so the order is total and a page
+        cannot skip or repeat a match when a game finishes between reads.
+        """
+        ...
+
+    async def finished_entry(self, match_id: UUID) -> MatchHistoryEntry | None:
+        """One finished match's stored facts, or `None`.
+
+        The read a visibility check makes before deciding (SPEC-REPLAY §3):
+        it says who played and whether the match was rated, and touches no
+        move log.
         """
         ...

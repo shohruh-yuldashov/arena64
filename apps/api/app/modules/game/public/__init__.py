@@ -103,6 +103,16 @@ from app.modules.game.public.events import (
     MatchDeclined,
     MoveApplied,
 )
+from app.modules.game.public.history import (
+    HistoryCursor,
+    MatchHistoryEntry,
+    MatchHistoryPage,
+    MatchHistoryReader,
+    MatchReplay,
+    MatchReplayReader,
+    ReplayPly,
+    UnsupportedEngineVersion,
+)
 from app.modules.game.public.matches import (
     CreateMatchRequest,
     CreateMatchResult,
@@ -179,7 +189,15 @@ __all__ = [
     "MatchDeclined",
     "MatchNotFound",
     "MatchNotPending",
+    "HistoryCursor",
+    "MatchHistoryEntry",
+    "MatchHistoryPage",
+    "MatchHistoryReader",
     "MatchOutcome",
+    "MatchReplay",
+    "MatchReplayReader",
+    "ReplayPly",
+    "UnsupportedEngineVersion",
     "MatchParticipant",
     "SeatRating",
     "MatchRecordStatus",

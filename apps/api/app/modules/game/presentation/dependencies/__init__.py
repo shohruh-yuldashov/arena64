@@ -38,7 +38,7 @@ from uuid import UUID
 from fastapi import Depends, Request, WebSocket
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.api.deps import ClockDep, SettingsDep
+from app.api.deps import ClockDep, DbSessionDep, SettingsDep
 from app.core.clock import Clock
 from app.database.session import open_session
 from app.modules.game.application.ports import ClockDeadlineStore, LiveMatchStore
@@ -48,13 +48,22 @@ from app.modules.game.application.services import (
     LiveMoveService,
     PersistedMatchReplay,
 )
+from app.modules.game.application.services.match_history_service import (
+    GameMatchHistory,
+    GameMatchReplay,
+)
 from app.modules.game.infrastructure import RedisClockDeadlineStore, RedisLiveMatchStore
 from app.modules.game.infrastructure.repositories import (
     SqlAlchemyMatchRecordRepository,
     SqlAlchemyMoveLogRepository,
 )
+from app.modules.game.infrastructure.repositories.match_history_repository import (
+    SqlAlchemyMatchHistoryRepository,
+)
 from app.modules.game.public import (
     GameEngineServices,
+    MatchHistoryReader,
+    MatchReplayReader,
     MatchRoster,
     MatchRosterReader,
     MatchSnapshot,
@@ -276,7 +285,43 @@ MatchRosterReaderDep = Annotated[MatchRosterReader, Depends(get_match_roster_rea
 WebSocketMatchRosterReaderDep = Annotated[MatchRosterReader, Depends(get_match_roster_reader_ws)]
 
 
+def get_match_history(session: DbSessionDep) -> MatchHistoryReader:
+    """A player's finished matches — SPEC-REPLAY §1.
+
+    Typed as the port, so a consumer can list finished games and cannot
+    reach a lock, a write, or the move log. Request-scoped: a history page
+    is one indexed read and the session ends with it.
+    """
+    return GameMatchHistory(SqlAlchemyMatchHistoryRepository(session))
+
+
+def get_match_replay(session: DbSessionDep) -> MatchReplayReader:
+    """One finished match, played back — SPEC-REPLAY §1, §4.
+
+    Holds `ReplayEngine`, which is `game`'s and stays `game`'s: R-2 lets
+    `replay` import the engine but §6 keeps the reconstruction here, so a
+    consumer receives boards and never a `Match`.
+
+    Refuses an unsupported engine version rather than approximating it —
+    the refusal is `ReplayEngine`'s and is translated to the published
+    `UnsupportedEngineVersion` by `GameMatchReplay`.
+    """
+    matches = SqlAlchemyMatchRecordRepository(session)
+    return GameMatchReplay(
+        replays=PersistedMatchReplay(matches=matches, moves=SqlAlchemyMoveLogRepository(session)),
+        engine=engine_services().replay,
+    )
+
+
+MatchHistoryReaderDep = Annotated[MatchHistoryReader, Depends(get_match_history)]
+MatchReplayReaderDep = Annotated[MatchReplayReader, Depends(get_match_replay)]
+
+
 __all__ = [
+    "MatchHistoryReaderDep",
+    "MatchReplayReaderDep",
+    "get_match_history",
+    "get_match_replay",
     "MatchRosterReaderDep",
     "SessionScopedSnapshots",
     "WebSocketMatchSnapshotDep",

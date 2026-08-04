@@ -51,6 +51,18 @@ class ErrorCode(StrEnum):
     RULE_VIOLATION = "rule_violation"
     RATE_LIMITED = "rate_limited"
 
+    # A64-018.3 — match history and replay.
+    UNSUPPORTED_ENGINE_VERSION = "unsupported_engine_version"
+    """The match was played under rules this build cannot reproduce, so its
+    replay is refused rather than approximated (A64-014.8). Its own code
+    because a client's response is specific: show the game's metadata and
+    hide the replay control, which `conflict` alone could not say."""
+
+    INVALID_CURSOR = "invalid_cursor"
+    """A pagination cursor this API did not issue. Distinct from a generic
+    validation error because the client's recovery is specific — ask for
+    the first page — and it must not be confused with a bad filter."""
+
     # InfrastructureError and its children
     INFRASTRUCTURE_ERROR = "infrastructure_error"
     TRANSIENT_INFRASTRUCTURE_ERROR = "transient_infrastructure_error"

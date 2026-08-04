@@ -52,6 +52,10 @@ from app.modules.game.application.services.match_history_service import (
     GameMatchHistory,
     GameMatchReplay,
 )
+from app.modules.game.application.services.match_visibility_service import (
+    VisibleMatchHistory,
+    VisibleMatchReplay,
+)
 from app.modules.game.infrastructure import RedisClockDeadlineStore, RedisLiveMatchStore
 from app.modules.game.infrastructure.repositories import (
     SqlAlchemyMatchRecordRepository,
@@ -313,12 +317,39 @@ def get_match_replay(session: DbSessionDep) -> MatchReplayReader:
     )
 
 
+def get_visible_history(session: DbSessionDep) -> VisibleMatchHistory:
+    """A player's history, narrowed to what the viewer may see — §3.
+
+    The visibility rule is applied here rather than at the route, so the
+    second reader of match history inherits it instead of having to
+    remember it.
+    """
+    return VisibleMatchHistory(get_match_history(session))
+
+
+def get_visible_replay(session: DbSessionDep) -> VisibleMatchReplay:
+    """One match played back, gated by the same rule.
+
+    Holds the history reader as well as the replay reader: the gate reads
+    the match's stored facts first, so a casual match a stranger asks for
+    costs one row rather than a reconstruction that is then discarded.
+    """
+    return VisibleMatchReplay(history=get_match_history(session), replays=get_match_replay(session))
+
+
+VisibleMatchHistoryDep = Annotated[VisibleMatchHistory, Depends(get_visible_history)]
+VisibleMatchReplayDep = Annotated[VisibleMatchReplay, Depends(get_visible_replay)]
+
 MatchHistoryReaderDep = Annotated[MatchHistoryReader, Depends(get_match_history)]
 MatchReplayReaderDep = Annotated[MatchReplayReader, Depends(get_match_replay)]
 
 
 __all__ = [
     "MatchHistoryReaderDep",
+    "VisibleMatchHistoryDep",
+    "VisibleMatchReplayDep",
+    "get_visible_history",
+    "get_visible_replay",
     "MatchReplayReaderDep",
     "get_match_history",
     "get_match_replay",

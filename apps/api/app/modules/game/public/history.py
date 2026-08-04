@@ -33,17 +33,18 @@ two are separate surfaces.
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from typing import ClassVar, Protocol
 from uuid import UUID
 
-from app.core.exceptions import DomainError
+from app.core.error_codes import ErrorCode
+from app.core.exceptions import ConflictError
 from app.modules.engine import PlayerSide
 from app.modules.game.domain.result import MatchOutcome, TerminationReason
 from app.modules.game.domain.variants import ProductVariant
 from app.modules.game.public.snapshots import PlacedPiece
 
 
-class UnsupportedEngineVersion(DomainError):
+class UnsupportedEngineVersion(ConflictError):
     """This match was played under rules this build cannot reproduce — §4.
 
     `SUPPORTED_ENGINE_VERSIONS` holds version 2 only, and A64-014.8's rule
@@ -57,6 +58,8 @@ class UnsupportedEngineVersion(DomainError):
     detail; replaying it anyway would make the archive disagree with
     history.
     """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.UNSUPPORTED_ENGINE_VERSION
 
 
 @dataclass(frozen=True, slots=True)

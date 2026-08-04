@@ -18,6 +18,8 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
+import pytest_asyncio
+from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.engine import PlayerSide
@@ -27,8 +29,22 @@ from app.modules.game.domain.variants import ProductVariant
 from app.modules.game.infrastructure.models import MatchRecordModel
 from app.modules.game.presentation.dependencies import get_match_history, get_match_replay
 from app.modules.game.public import UnsupportedEngineVersion
+from tests.contract.contract_app import build_contract_app, contract_client
+from tests.contract.test_matchmaking_queue_api import register
 
 NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+
+
+@pytest_asyncio.fixture
+async def client(contract_session: AsyncSession):
+    """The real API, over this suite's session.
+
+    The whole point of §7: a route file that exists without router
+    registration is incomplete, and only a request that reaches it proves
+    otherwise.
+    """
+    async with contract_client(build_contract_app(contract_session)) as http:
+        yield http
 
 
 def _id(suffix: int) -> UUID:
@@ -179,3 +195,127 @@ class TestReplayIsReachableAndRefusesOldRules:
         probe for match ids by watching which error came back.
         """
         assert await get_match_replay(contract_session).replay_of(_id(999)) is None
+
+
+class TestTheApiIsReachable:
+    """§7 — the route, the dependency and the mapper, through the real app.
+
+    Driven with the API client rather than by calling the handler: a route
+    file that exists without router registration is incomplete, and only a
+    request that reaches it proves otherwise. These four also cover §9's
+    visibility cases end to end.
+    """
+
+    async def test_a_rated_match_is_public_and_a_casual_one_is_not(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """§3, from a stranger's side.
+
+        The rated match appears; the casual one is **absent** rather than
+        redacted, because a placeholder would confirm it exists.
+        """
+        stranger = await register(client)
+        owner = _id(700)
+        await _finished(
+            contract_session,
+            match_id=_id(400),
+            light=owner,
+            dark=_id(9),
+            created_at=NOW,
+            rated=True,
+        )
+        await _finished(
+            contract_session,
+            match_id=_id(401),
+            light=owner,
+            dark=_id(9),
+            created_at=NOW - timedelta(hours=1),
+            rated=False,
+        )
+        await contract_session.commit()
+
+        response = await client.get(f"/api/v1/players/{owner}/matches", headers=stranger.auth)
+
+        assert response.status_code == 200, response.text
+        seen = {entry["match_id"] for entry in response.json()["data"]["entries"]}
+        assert seen == {str(_id(400))}
+
+    async def test_a_participant_sees_their_own_casual_match_and_the_opponent(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """§3 and §4 — the same casual match, read by somebody who played it.
+
+        `opponent_id` is populated only for a participant: it makes a
+        personal history readable and is meaningless when a stranger reads
+        somebody else's record.
+        """
+        player = await register(client)
+        await _finished(
+            contract_session,
+            match_id=_id(410),
+            light=player.id,
+            dark=_id(9),
+            created_at=NOW,
+            rated=False,
+        )
+        await contract_session.commit()
+
+        response = await client.get(f"/api/v1/players/{player.id}/matches", headers=player.auth)
+
+        entries = response.json()["data"]["entries"]
+        assert [entry["match_id"] for entry in entries] == [str(_id(410))]
+        assert entries[0]["opponent_id"] == str(_id(9))
+        assert entries[0]["rated"] is False
+
+    async def test_a_hidden_match_and_an_unknown_match_are_indistinguishable(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """§3 and §8 — the assertion the privacy rule rests on.
+
+        A casual match the viewer did not play and an id that was never
+        issued produce the **same** status and the same code. A `403` on the
+        first would confirm it exists, which is enough to enumerate match
+        ids and learn who plays casually with whom.
+        """
+        stranger = await register(client)
+        await _finished(
+            contract_session,
+            match_id=_id(420),
+            light=_id(8),
+            dark=_id(9),
+            created_at=NOW,
+            rated=False,
+        )
+        await contract_session.commit()
+
+        hidden = await client.get(f"/api/v1/matches/{_id(420)}/replay", headers=stranger.auth)
+        unknown = await client.get(f"/api/v1/matches/{_id(999)}/replay", headers=stranger.auth)
+
+        assert hidden.status_code == unknown.status_code == 404
+        assert hidden.json()["code"] == unknown.json()["code"] == "not_found"
+
+    async def test_an_unsupported_version_returns_its_own_stable_code(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """§4 and §8 — refused, specifically, and only to somebody entitled.
+
+        The viewer played this match, so they could already see it in their
+        history; the refusal therefore discloses nothing and is allowed to
+        be specific. A client shows the game and hides the replay control,
+        which a bare `conflict` could not tell it to do.
+        """
+        player = await register(client)
+        await _finished(
+            contract_session,
+            match_id=_id(430),
+            light=player.id,
+            dark=_id(9),
+            created_at=NOW,
+            engine_version=1,
+        )
+        await contract_session.commit()
+
+        response = await client.get(f"/api/v1/matches/{_id(430)}/replay", headers=player.auth)
+
+        assert response.status_code == 409, response.text
+        assert response.json()["code"] == "unsupported_engine_version"

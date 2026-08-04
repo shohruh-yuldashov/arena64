@@ -105,6 +105,60 @@ replay  ->  game.public  ->  game.application  ->  ReplayEngine  ->  engine
 composition root — `tests/unit/test_reachability.py`, added in A64-018.1. Two consecutive epics
 shipped complete, tested, unreachable components; that check is the answer.
 
+## 6a. Endpoint contracts — A64-018.3
+
+| Method | Path | Answers |
+| --- | --- | --- |
+| `GET` | `/api/v1/players/{player_id}/matches` | That player's finished matches, as the **authenticated viewer** may see them |
+| `GET` | `/api/v1/matches/{match_id}/replay` | One match, ply by ply |
+
+Both require authentication. **The viewer is the authenticated user, never a
+request value**: `player_id` says whose history to read and the token says who is asking, and a
+client cannot swap them.
+
+### Pagination
+
+Keyset. `?after=<opaque cursor>&limit=<1..100>`, and `next_cursor` is `null` on the last page.
+
+The cursor is **opaque** — base64 over `(created_at, match_id)`. Its contents are an
+implementation detail of the ordering, and publishing them as fields would make the ordering a
+contract that cannot change. It is encoded rather than encrypted: it carries nothing a caller
+could not read in the page it came from.
+
+`OFFSET` is not used. It re-scans, and it shifts when a match finishes between two page reads —
+so a player paging back through their record could see a game twice or miss one.
+
+### Errors
+
+| Condition | Status | Code |
+| --- | --- | --- |
+| Unknown match | 404 | `not_found` |
+| Casual match, viewer is not a participant | **404** | **`not_found`** — identical to the above |
+| Cursor this API did not issue | 422 | `invalid_cursor` |
+| Match played under an unsupported engine version | 409 | `unsupported_engine_version` |
+
+**A hidden match is never `403`.** A `403` confirms the match is real, which is enough to
+enumerate match ids and learn who is playing casually with whom. The two cases share a status, a
+code and a code path.
+
+`unsupported_engine_version` is allowed to be specific because it is reached only *after* the
+viewer is entitled to see the match — they could already read it in their history, so the refusal
+discloses nothing. Its own code rather than a bare `conflict` because the client's response is
+specific: show the game's metadata, hide the replay control.
+
+### Metadata versus replay
+
+A history entry is **stored facts** and costs one indexed row: match id, participants, opponent
+(when the viewer played), result, rated flag, variant, engine version, ply count, start and end.
+No board, no move, no reconstruction.
+
+A replay is a **reconstruction** and costs one log read plus one engine application per ply: the
+opening position, every ply with its full path, captures, promotion, the resulting board, the
+position fingerprint, think time and remaining clock, and the final result.
+
+The split is what makes §4 expressible — a match whose replay is refused still has a history
+entry, because nothing in that entry depends on the engine.
+
 ## 7. Non-functional
 
 | Property | Rule |

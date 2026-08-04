@@ -30,6 +30,7 @@ from app.core.constants import API_V1_PREFIX
 from app.modules.auth.presentation.router import auth_router
 from app.modules.avatars.presentation.router import avatar_router
 from app.modules.friends.presentation.router import blocks_router, friends_router
+from app.modules.game.presentation.router import history_router, replay_router
 from app.modules.matchmaking.presentation.router import matchmaking_router
 from app.modules.profiles.presentation.router import profiles_router
 from app.modules.profiles.presentation.search_router import user_search_router
@@ -61,3 +62,10 @@ v1_router.include_router(blocks_router)
 # `/matchmaking/queue/me` differ in segment count and neither is
 # parameterised, so there is no path a caller can send that both would match.
 v1_router.include_router(matchmaking_router)
+
+# A64-018.3. Two prefixes rather than one: a player's history hangs off
+# `/players`, a replay off `/matches`, and neither path is one the other
+# could match. `/players/{id}/matches` is parameterised and `/matches/{id}/replay`
+# is a different first segment, so registration order is immaterial here too.
+v1_router.include_router(history_router)
+v1_router.include_router(replay_router)

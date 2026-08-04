@@ -255,6 +255,12 @@ class GatewayErrorCode(StrEnum):
     declined, expired and finished, because the client's response to all
     four is identical: stop sending moves."""
 
+    CLOCK_EXPIRED = "clock_expired"
+    """The mover's flag had already fallen when the frame arrived —
+    A64-016.5 §4. Distinct from `not_your_turn` because it is not a
+    synchronisation problem: the move was legal and it was their turn, and
+    they were simply too late. The client stops sending moves."""
+
     RATE_LIMITED = "rate_limited"
     """Too many moves from this connection. The connection **stays open**
     — §13 forbids closing it for one ordinary violation."""

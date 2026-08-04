@@ -40,12 +40,14 @@ from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends
+from redis.asyncio import Redis
 
 from app.api.deps import ClockDep, RateLimiterDep, RedisPoolsDep, SettingsDep
 from app.config.settings import GatewaySettings
 from app.core.clock import Clock
 from app.core.rate_limiting import RateLimitRule, RateLimitScope
-from app.gateway.bus import BusRemoteNodePublisher, GatewayBus, InProcessGatewayBus
+from app.database.redis import RedisPools
+from app.gateway.bus import BusRemoteNodePublisher, GatewayBus
 from app.gateway.connections import GatewayConnectionService, GatewayPolicy
 from app.gateway.delivery import InMemoryLocalSockets, RoomBroadcaster
 from app.gateway.idempotency import RedisMoveIdempotencyStore
@@ -64,6 +66,7 @@ from app.gateway.registry import RedisConnectionRegistry
 from app.gateway.room_service import GameRoomService
 from app.gateway.room_store import RedisRoomMemberStore
 from app.gateway.routing import FleetConnectionRouter
+from app.gateway.stream_bus import RedisStreamGatewayBus
 from app.modules.auth.presentation.dependencies import WebSocketTicketServiceDep
 from app.modules.game.presentation.dependencies import (
     WebSocketLiveMovesDep,
@@ -200,8 +203,32 @@ def get_connection_router(registry: ConnectionRegistryDep, node_id: NodeIdDep) -
 ConnectionRouterDep = Annotated[ConnectionRouter, Depends(get_connection_router)]
 
 
+def get_gateway_bus_for(pools: RedisPools, settings: GatewaySettings) -> GatewayBus:
+    """The transport frames cross between gateway processes — §9.
+
+    `RedisStreamGatewayBus` on the **`bus`** Redis role since A64-016.5.
+    AD-03 assigns that instance to pub/sub fan-out and nothing used it until
+    now, which is the point: cross-node realtime traffic must not compete
+    with live match positions (`live`) or with anything evictable (`cache`).
+
+    Cached per process, because the adapter remembers which consumer groups
+    it has created — a per-request instance would issue an `XGROUP CREATE`
+    on every publish.
+    """
+    return _bus_for(pools.bus, settings.bus_max_stream_length, settings.bus_stream_ttl_seconds)
+
+
 @lru_cache(maxsize=1)
-def get_gateway_bus() -> GatewayBus:
+def _bus_for(redis: Redis, max_stream_length: int, stream_ttl_seconds: int) -> GatewayBus:
+    """One bus per process. Cached on its collaborators so a test that
+    varies them gets a fresh one, and production — where all three are
+    fixed — gets exactly one."""
+    return RedisStreamGatewayBus(
+        redis, max_stream_length=max_stream_length, stream_ttl_seconds=stream_ttl_seconds
+    )
+
+
+def get_gateway_bus(pools: RedisPoolsDep, settings: GatewaySettingsDep) -> GatewayBus:
     """The transport frames cross between gateway processes — A64-016.4 §9.
 
     Cached, so one bus serves the process. `InProcessGatewayBus` is the
@@ -209,14 +236,16 @@ def get_gateway_bus() -> GatewayBus:
     implements the contract completely and simply does not cross a process
     boundary, which is the one thing a single-node deployment does not need.
 
-    A multi-node deployment needs `RedisStreamGatewayBus` against the `bus`
-    Redis role, which is one class against this same port. See
-    `app/gateway/bus.py` for the stream shape and the bound it needs.
+    See `get_gateway_bus_for`, which is what a caller without a request
+    resolves.
     """
-    return InProcessGatewayBus()
+    return get_gateway_bus_for(pools, settings)
 
 
-def get_remote_publisher() -> RemoteNodePublisher:
+GatewayBusDep = Annotated[GatewayBus, Depends(get_gateway_bus)]
+
+
+def get_remote_publisher(bus: GatewayBusDep) -> RemoteNodePublisher:
     """Where a remote node's share of a fan-out goes — §9.
 
     Over the bus since A64-016.4 §9. The publisher decides *what* to send
@@ -228,15 +257,19 @@ def get_remote_publisher() -> RemoteNodePublisher:
     Still one publish per node, not per connection: the grouping is the
     routing plan's and this only translates it.
     """
-    return BusRemoteNodePublisher(get_gateway_bus())
+    return BusRemoteNodePublisher(bus)
 
 
-def get_broadcaster(router: ConnectionRouterDep, sockets: LocalSocketsDep) -> RoomBroadcaster:
+def get_broadcaster(
+    router: ConnectionRouterDep,
+    sockets: LocalSocketsDep,
+    publisher: Annotated[RemoteNodePublisher, Depends(get_remote_publisher)],
+) -> RoomBroadcaster:
     """The room fan-out, over the routing plan — §8."""
     return RoomBroadcaster(
         router=router,
         sockets=sockets,
-        publisher=get_remote_publisher(),
+        publisher=publisher,
         metrics=get_gateway_metrics(),
     )
 
@@ -388,6 +421,7 @@ __all__ = [
     "get_gateway_metrics",
     "get_connection_router",
     "get_gateway_bus",
+    "get_gateway_bus_for",
     "get_gateway_service",
     "get_gateway_settings",
     "get_node_id",

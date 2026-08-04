@@ -48,6 +48,7 @@ the log where the caller cannot read it.
 """
 
 import logging
+from datetime import datetime
 from typing import Final
 from uuid import UUID
 
@@ -68,6 +69,7 @@ from app.gateway.protocol import (
 )
 from app.gateway.room_service import GameRoomService
 from app.modules.game.public import (
+    ClockExpired,
     IllegalMoveSubmitted,
     MatchNotActive,
     MatchNotFound,
@@ -115,6 +117,11 @@ _REJECTIONS: Final[dict[type[Exception], tuple[GatewayErrorCode, MoveRejection, 
         MoveRejection.ILLEGAL_MOVE,
         "That is not a legal move.",
     ),
+    ClockExpired: (
+        GatewayErrorCode.CLOCK_EXPIRED,
+        MoveRejection.CLOCK_EXPIRED,
+        "Your time ran out.",
+    ),
     StaleMatchState: (
         GatewayErrorCode.STALE_STATE,
         MoveRejection.STALE_STATE,
@@ -152,7 +159,12 @@ class MoveSubmissionHandler:
         self._idempotency_ttl_seconds = idempotency_ttl_seconds
 
     async def handle(
-        self, message: GatewayMessage, *, player_id: UUID, connection_id: UUID
+        self,
+        message: GatewayMessage,
+        *,
+        player_id: UUID,
+        connection_id: UUID,
+        received_at: datetime,
     ) -> GatewayMessage:
         """One submission. Returns the frame to send back to the submitter.
 
@@ -173,7 +185,7 @@ class MoveSubmissionHandler:
                 request_id=message.request_id,
             )
 
-        submission = _submission_of(message, player_id=player_id)
+        submission = _submission_of(message, player_id=player_id, received_at=received_at)
         if submission is None:
             return self._refuse(
                 GatewayErrorCode.MALFORMED_MESSAGE,
@@ -373,7 +385,9 @@ def _accepted_frame(result: SubmitMoveResult, *, request_id: str | None) -> Gate
     )
 
 
-def _submission_of(message: GatewayMessage, *, player_id: UUID) -> SubmitMoveRequest | None:
+def _submission_of(
+    message: GatewayMessage, *, player_id: UUID, received_at: datetime
+) -> SubmitMoveRequest | None:
     """A decoded frame as a command, or `None` if the payload is not one.
 
     Validated here rather than in `protocol.decode`, because the envelope
@@ -381,9 +395,12 @@ def _submission_of(message: GatewayMessage, *, player_id: UUID) -> SubmitMoveReq
     and making it know would be the beginning of a schema registry inside
     the codec.
 
-    **`player_id` comes from the caller**, never the payload (§4). The
-    protocol has no field for one, so this is structural: there is no
-    client-supplied identity in scope to prefer by accident.
+    **`player_id` and `received_at` come from the caller**, never the
+    payload. The protocol has no field for either, so this is structural
+    rather than remembered: there is no client-supplied identity or
+    timestamp in scope to prefer by accident — and a client that could
+    supply its own `received_at` could claim to have moved before its flag
+    fell (A64-016.5 §2).
     """
     raw_match = message.payload.get("match_id")
     raw_path = message.payload.get("path")
@@ -398,7 +415,12 @@ def _submission_of(message: GatewayMessage, *, player_id: UUID) -> SubmitMoveReq
     except ValueError:
         return None
 
-    return SubmitMoveRequest(match_id=match_id, player_id=player_id, path=tuple(raw_path))
+    return SubmitMoveRequest(
+        match_id=match_id,
+        player_id=player_id,
+        received_at=received_at,
+        path=tuple(raw_path),
+    )
 
 
 __all__ = ["MoveSubmissionHandler"]

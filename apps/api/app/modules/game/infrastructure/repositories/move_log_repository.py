@@ -74,6 +74,7 @@ class SqlAlchemyMoveLogRepository:
                 engine_version=entry.engine_version.number,
                 think_time_ms=entry.record.think_time_ms,
                 remaining_clock_ms=entry.record.remaining_clock_ms,
+                received_at=entry.received_at,
                 created_at=entry.created_at,
             )
         )

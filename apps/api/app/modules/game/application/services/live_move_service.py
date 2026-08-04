@@ -93,15 +93,18 @@ from app.modules.engine import (
     initial_board,
 )
 from app.modules.game.application.ports import (
+    ClockDeadlineStore,
     LiveMatchState,
     LiveMatchStore,
     LoggedMove,
     MatchRecordRepository,
     MoveLogRepository,
 )
+from app.modules.game.domain.clock import ClockState
 from app.modules.game.domain.draws import DrawRuleSet
 from app.modules.game.domain.events import MatchCompleted, MoveApplied
 from app.modules.game.domain.exceptions import (
+    ClockExpired,
     IllegalMoveSubmitted,
     MatchNotActive,
     MatchNotFound,
@@ -115,6 +118,7 @@ from app.modules.game.domain.result import MatchResult
 from app.modules.game.domain.variants import board_variant_of
 from app.modules.game.public.moves import (
     AppliedMove,
+    ClockView,
     SubmitMoveRequest,
     SubmitMoveResult,
 )
@@ -132,6 +136,7 @@ class LiveMoveService:
         matches: MatchRecordRepository,
         moves: MoveLogRepository,
         live: LiveMatchStore,
+        deadlines: ClockDeadlineStore,
         events: EventPublisher,
         generator: MoveGenerator,
         applier: MoveApplier,
@@ -143,6 +148,7 @@ class LiveMoveService:
         self._matches = matches
         self._moves = moves
         self._live = live
+        self._deadlines = deadlines
         self._events = events
         self._generator = generator
         self._applier = applier
@@ -158,6 +164,12 @@ class LiveMoveService:
         written here, which is what makes §3's atomicity a property of the
         transaction rather than of the ordering below.
         """
+        # **First**, before anything that could take time. MT-9 makes the
+        # gateway receive instant authoritative, and a fallback taken here
+        # rather than after the lock is what keeps an untimed caller from
+        # being charged for the lock it waited on.
+        received_at = request.received_at or self._clock.now()
+
         record = await self._locked(request)
         aggregate = await self._rebuild(record)
 
@@ -165,16 +177,30 @@ class LiveMoveService:
         if aggregate.side_to_move is not side:
             raise NotYourTurn("It is not your turn.")
 
+        # §4 step 3, and it is before the engine deliberately: a move from a
+        # player whose flag had already fallen when the frame arrived is not
+        # a legal move that loses, it is a move that never happened.
+        if record.clock is not None and record.clock.has_flagged(received_at):
+            raise ClockExpired("Your time ran out.")
+
         move = self._legal_move_for(aggregate.position, request.path)
         aggregate.play(move, self._applier, self._evaluator, self._draw_rules)
 
+        clock = _charged(record, at=received_at)
         at = self._clock.now()
-        await self._append(record, aggregate, move=move, side=side, at=at)
-        settled = await self._advance(record, aggregate, expected_ply=record.ply_number, at=at)
+        await self._append(
+            record, aggregate, move=move, side=side, at=at, received_at=received_at, clock=clock
+        )
+        settled = await self._advance(
+            record, aggregate, expected_ply=record.ply_number, at=at, clock=clock
+        )
         await self._publish(settled, aggregate, move=move, side=side, at=at)
+        await self._reschedule(settled, clock=clock)
         await self._cache(aggregate, match_id=record.id)
 
-        return _result_for(request, aggregate=aggregate, move=move, settled=settled)
+        return _result_for(
+            request, aggregate=aggregate, move=move, settled=settled, clock=clock, at=at
+        )
 
     async def _locked(self, request: SubmitMoveRequest) -> MatchRecord:
         """The match row, locked for this transaction — §3, §8.
@@ -241,8 +267,10 @@ class LiveMoveService:
         move: Move,
         side: PlayerSide,
         at: datetime,
+        received_at: datetime,
+        clock: ClockState | None,
     ) -> None:
-        """Writes the move row — §1.
+        """Writes the move row — §1, and its clock readings — A64-016.5 §3.
 
         `uq_move__ply` is what refuses a duplicate, and its refusal is
         caught here and reported as `StaleMatchState`: a second submission
@@ -250,20 +278,24 @@ class LiveMoveService:
         two clients racing, and the client's recourse is to re-read and
         retry.
 
-        The clock fields go in as `None`. AD-05 says think time is
-        capturable only at move time, which is why the columns exist now —
-        A64-016.5 fills them, and a clock task that had to backfill would
-        have nothing to backfill from.
+        The clock readings go in **in the same transaction**, which AD-05
+        requires ("capturable only at move time") and §3 restates ("do not
+        backfill these values later"). They are `None` for an untimed match
+        and never for a timed one, which is what makes "null means no clock"
+        readable rather than ambiguous.
         """
         entry = LoggedMove(
             record=MoveRecord(
                 ply_number=aggregate.ply_number,
                 move=move,
                 resulting_position_hash=aggregate.position.fingerprint,
+                think_time_ms=(record.clock.elapsed_ms(received_at) if record.clock else None),
+                remaining_clock_ms=clock.remaining(side) if clock else None,
             ),
             seat=side,
             engine_version=record.engine_version,
             created_at=at,
+            received_at=received_at,
         )
 
         try:
@@ -276,7 +308,13 @@ class LiveMoveService:
             raise StaleMatchState("The match moved on; re-read and retry.") from conflict
 
     async def _advance(
-        self, record: MatchRecord, aggregate: Match, *, expected_ply: int, at: datetime
+        self,
+        record: MatchRecord,
+        aggregate: Match,
+        *,
+        expected_ply: int,
+        at: datetime,
+        clock: ClockState | None = None,
     ) -> MatchRecord:
         """Writes the match's new ply, and its result if the game ended.
 
@@ -290,9 +328,11 @@ class LiveMoveService:
         without locking gets a refusal instead of a silent overwrite.
         """
         advanced = (
-            record.completed(_result_of(aggregate), ply_number=aggregate.ply_number, at=at)
+            record.completed(
+                _result_of(aggregate), ply_number=aggregate.ply_number, at=at, clock=clock
+            )
             if aggregate.status is MatchStatus.COMPLETED
-            else record.advanced(ply_number=aggregate.ply_number)
+            else record.advanced(ply_number=aggregate.ply_number, clock=clock)
         )
 
         if not await self._matches.advance(advanced, expected_ply=expected_ply):
@@ -355,6 +395,41 @@ class LiveMoveService:
                 "plies": aggregate.ply_number,
             },
         )
+
+    async def _reschedule(self, record: MatchRecord, *, clock: ClockState | None) -> None:
+        """Moves the match's deadline to the new active side — §5.
+
+        Cancelled rather than rescheduled once the match completes, which is
+        §5's "remove deadline after Match completion": a finished game with a
+        live deadline is one a worker will claim and then correctly refuse,
+        which is work nobody needs done.
+
+        **Never raises.** The move is already applied and about to be
+        committed, so a deadline that could not be written is a match that
+        will not flag — bad, and strictly better than a move that fails
+        after it was made. A rising `clock_deadline_write_failed` is what
+        makes it visible.
+        """
+        if clock is None:
+            return
+
+        try:
+            if record.status is not MatchRecordStatus.ACTIVE:
+                await self._deadlines.cancel(record.id)
+                return
+
+            await self._deadlines.schedule(
+                record.id,
+                ply_number=record.ply_number,
+                side=clock.active_side,
+                deadline=clock.deadline(),
+            )
+        except Exception as exc:  # noqa: BLE001 — a deadline must not fail a move
+            logger.error(
+                "clock_deadline_write_failed",
+                extra={"match_id": str(record.id), "error": type(exc).__name__},
+                exc_info=exc,
+            )
 
     async def _cache(self, aggregate: Match, *, match_id: UUID) -> None:
         """Warms the live-position cache.
@@ -431,8 +506,40 @@ def _result_of(aggregate: Match) -> MatchResult:
     return result
 
 
+def _charged(record: MatchRecord, *, at: datetime) -> ClockState | None:
+    """The clock after this move, or `None` for an untimed match.
+
+    `at` is the mover's `received_at`, never the instant this ran — MT-9,
+    and the whole of §7's guarantee: the elapsed time charged is what the
+    player actually spent, and the platform's own delay between receiving
+    the frame and committing it is charged to nobody.
+    """
+    if record.clock is None or record.time_control is None:
+        return None
+    return record.clock.charged(record.time_control, at=at)
+
+
+def _clock_view(clock: ClockState | None, *, at: datetime) -> ClockView | None:
+    """The clock as a client renders it. `None` for an untimed match."""
+    if clock is None:
+        return None
+    return ClockView(
+        light_ms=clock.light_ms,
+        dark_ms=clock.dark_ms,
+        active_side=clock.active_side,
+        deadline=clock.deadline(),
+        server_time=at,
+    )
+
+
 def _result_for(
-    request: SubmitMoveRequest, *, aggregate: Match, move: Move, settled: MatchRecord
+    request: SubmitMoveRequest,
+    *,
+    aggregate: Match,
+    move: Move,
+    settled: MatchRecord,
+    clock: ClockState | None = None,
+    at: datetime,
 ) -> SubmitMoveResult:
     """The published result for a move that was applied.
 
@@ -452,6 +559,7 @@ def _result_for(
             captured=tuple(str(square) for square in move.captured),
             promoted_to=move.promotes_to.value if move.promotes_to is not None else None,
         ),
+        clock=_clock_view(clock, at=at),
         outcome=result.outcome if result is not None else None,
         termination_reason=result.reason if result is not None else None,
         winner=result.winner if result is not None else None,

@@ -118,6 +118,8 @@ from app.modules.game.public.metrics import (
 )
 from app.modules.game.public.moves import (
     AppliedMove,
+    ClockExpired,
+    ClockView,
     IllegalMoveSubmitted,
     MatchNotActive,
     NotYourTurn,
@@ -135,6 +137,8 @@ from app.modules.game.public.retention import AbandonedMatchRetention
 from app.modules.game.public.rooms import MatchRoster, MatchRosterReader
 
 __all__ = [
+    "ClockView",
+    "ClockExpired",
     "MoveApplied",
     "MatchCompleted",
     "SubmitMoveUseCase",

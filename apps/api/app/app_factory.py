@@ -35,6 +35,13 @@ from app.modules.friends.infrastructure.cache import (
     NoSocialGraphCache,
     RedisSocialGraphCache,
 )
+from app.modules.game.application.services import ClockAdjudicationService
+from app.modules.game.infrastructure import (
+    ClockAdjudicationTask,
+    RedisClockDeadlineStore,
+    adjudication_request,
+)
+from app.modules.game.infrastructure.repositories import SqlAlchemyMatchRecordRepository
 from app.modules.matchmaking.application.ports import PendingMatchSink
 from app.modules.matchmaking.application.services import (
     MatchOutcomeService,
@@ -492,6 +499,25 @@ def build_outbox_worker(
     )
 
 
+def _clock_adjudication_for(
+    session: AsyncSession, redis_pools: RedisPools, settings: Settings, clock: SystemClock
+) -> ClockAdjudicationService:
+    """One adjudication pass's graph — AD-21.
+
+    The deadline store is on the **`live`** role beside the position it is
+    about; a deadline on an evictable instance would make the eviction
+    policy a way for a game to stop flagging.
+    """
+    return ClockAdjudicationService(
+        matches=SqlAlchemyMatchRecordRepository(session),
+        deadlines=RedisClockDeadlineStore(redis_pools.live),
+        events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+        batch_size=settings.game.clock_batch_size,
+    )
+
+
 def build_presence_sweeper(
     db: DatabaseSessionManager, redis_pools: RedisPools, settings: Settings
 ) -> PresenceSweeperWorker | None:
@@ -663,6 +689,26 @@ def build_task_schedulers(
         # in cache.
         logger.warning("queue_retention_disabled", extra={"reason": "configuration"})
 
+    # A64-016.5 §6, AD-21. The clock is adjudicated by a worker against
+    # Redis rather than by in-process timers, because a timer lives on one
+    # node and a node that is deployed takes every timer it held with it —
+    # and those matches then never flag, they hang.
+    if settings.game.clock_enabled:
+        handlers.append(
+            ClockAdjudicationTask(
+                session_factory=db.session_factory,
+                service_factory=lambda session: _clock_adjudication_for(
+                    session, redis_pools, settings, clock
+                ),
+            )
+        )
+    else:
+        # `WARNING`: with it off, moves still charge time and the move log
+        # still records it, and **no match ever flags**. That is a game
+        # nobody can lose on time, which is a silent product change rather
+        # than a degraded feature.
+        logger.warning("clock_adjudication_disabled", extra={"reason": "configuration"})
+
     # A64-015.6 §6. Always registered — there is no switch, because the
     # accumulator is filled by services that are always wired and a process
     # that never drained it would hold counters forever and report none.
@@ -688,6 +734,14 @@ def build_task_schedulers(
                 dispatcher=dispatcher,
                 request=expiry_request(),
                 interval_seconds=settings.matchmaking.expiry_interval_seconds,
+            )
+        )
+    if settings.game.clock_enabled:
+        schedulers.append(
+            PeriodicTaskScheduler(
+                dispatcher=dispatcher,
+                request=adjudication_request(),
+                interval_seconds=settings.game.clock_interval_seconds,
             )
         )
     if settings.matchmaking.pairing_enabled:

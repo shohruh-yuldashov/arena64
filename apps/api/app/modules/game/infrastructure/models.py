@@ -310,6 +310,22 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
             name="ck_match__winner_iff_decisive",
         ),
         CheckConstraint("ply_number >= 0", name="ck_match__ply_non_negative"),
+        # A64-016.5. A clock is present exactly when a time control is —
+        # a budget nothing counts down and a countdown with no budget are
+        # both matches nothing can adjudicate.
+        CheckConstraint(
+            "(time_control_initial_ms IS NULL) = (clock_light_ms IS NULL) "
+            "AND (time_control_initial_ms IS NULL) = (clock_dark_ms IS NULL) "
+            "AND (time_control_initial_ms IS NULL) = (clock_turn_started_at IS NULL) "
+            "AND (time_control_initial_ms IS NULL) = (time_control_increment_ms IS NULL)",
+            name="ck_match__clock_iff_time_control",
+        ),
+        CheckConstraint(
+            "time_control_initial_ms IS NULL OR ("
+            "time_control_initial_ms > 0 AND time_control_increment_ms >= 0 "
+            "AND clock_light_ms >= 0 AND clock_dark_ms >= 0)",
+            name="ck_match__clock_values_sane",
+        ),
         {"schema": GAME_SCHEMA},
     )
 
@@ -340,6 +356,20 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
     dark_ticket_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     dark_accepted_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
+    received_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    """When the **gateway** saw the frame — MT-9, A64-016.5 §3.
+
+    The temporal authority for the flag race, and a different fact from
+    `created_at`: that is when the row was appended, which is later by the
+    width of every queue, lock and validation between the two. Collapsing
+    them would make the platform's own queueing delay part of the flag
+    decision, which outcome tenet T-2 forbids.
+
+    Nullable because every move A64-016.4 wrote has none — the field did not
+    exist. Null means "before A64-016.5", not "unknown when", and a
+    backfilled guess would be worse than an honest gap.
+    """
+
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     """Written from the injected clock (AD-07), never `server_default=now()`:
     it is the ordering key of the recent-opponent read and the instant a
@@ -366,6 +396,22 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
     """The authoritative sequence. The column two concurrent moves contend
     on, read under the row lock that serialises them — see
     `MatchRecord.ply_number`."""
+
+    # --- A64-016.5: the clock, or five nulls for an untimed match --------
+    time_control_initial_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    time_control_increment_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    clock_light_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    clock_dark_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    clock_turn_started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    """The clock, decomposed. Five columns rather than one blob, so
+    `ClockState`'s invariants — non-negative balances, a control present
+    exactly when a clock is — are `CHECK`s as well as constructors (BE-06).
+
+    The active side is **not** a column: it equals the position's side to
+    move, which equals `ply_number` parity from the opening. Storing it
+    would be a third copy of one fact. `ClockState.active_side` is derived
+    on rehydration.
+    """
 
     outcome: Mapped[MatchOutcome | None] = mapped_column(_OUTCOME_ENUM, nullable=True)
     termination_reason: Mapped[TerminationReason | None] = mapped_column(
@@ -533,5 +579,19 @@ class MoveLogModel(UUIDPrimaryKeyMixin, Base):
     """Nullable until A64-016.5. AD-05: capturable only at move time, which
     is why the columns exist now — a clock task that had to backfill them
     would have nothing to backfill from."""
+
+    received_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    """When the **gateway** saw the frame — MT-9, A64-016.5 §3.
+
+    The temporal authority for the flag race, and a different fact from
+    `created_at`: that is when the row was appended, which is later by the
+    width of every queue, lock and validation between the two. Collapsing
+    them would make the platform's own queueing delay part of the flag
+    decision, which outcome tenet T-2 forbids.
+
+    Nullable because every move A64-016.4 wrote has none — the field did not
+    exist. Null means "before A64-016.5", not "unknown when", and a
+    backfilled guess would be worse than an honest gap.
+    """
 
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)

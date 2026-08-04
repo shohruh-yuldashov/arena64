@@ -41,9 +41,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.api.deps import ClockDep, SettingsDep
 from app.core.clock import Clock
 from app.database.session import open_session
-from app.modules.game.application.ports import LiveMatchStore
+from app.modules.game.application.ports import ClockDeadlineStore, LiveMatchStore
 from app.modules.game.application.services import GameMatchRoster, LiveMoveService
-from app.modules.game.infrastructure import RedisLiveMatchStore
+from app.modules.game.infrastructure import RedisClockDeadlineStore, RedisLiveMatchStore
 from app.modules.game.infrastructure.repositories import (
     SqlAlchemyMatchRecordRepository,
     SqlAlchemyMoveLogRepository,
@@ -137,12 +137,14 @@ class SessionScopedLiveMoves:
         *,
         session_factory: async_sessionmaker[AsyncSession],
         live: LiveMatchStore,
+        deadlines: ClockDeadlineStore,
         engine: GameEngineServices,
         clock: Clock,
         live_state_ttl_seconds: int,
     ) -> None:
         self._session_factory = session_factory
         self._live = live
+        self._deadlines = deadlines
         self._engine = engine
         self._clock = clock
         self._live_state_ttl_seconds = live_state_ttl_seconds
@@ -170,6 +172,7 @@ class SessionScopedLiveMoves:
                 matches=SqlAlchemyMatchRecordRepository(session),
                 moves=SqlAlchemyMoveLogRepository(session),
                 live=self._live,
+                deadlines=self._deadlines,
                 events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
                 generator=self._engine.generator,
                 applier=self._engine.applier,
@@ -198,6 +201,7 @@ def get_live_moves_ws(
     return SessionScopedLiveMoves(
         session_factory=websocket.app.state.db.session_factory,
         live=RedisLiveMatchStore(websocket.app.state.redis_pools.live),
+        deadlines=RedisClockDeadlineStore(websocket.app.state.redis_pools.live),
         engine=engine_services(),
         clock=clock,
         live_state_ttl_seconds=settings.game.live_state_ttl_seconds,

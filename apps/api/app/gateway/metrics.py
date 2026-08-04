@@ -144,6 +144,12 @@ class MoveRejection(StrEnum):
     be refused, and an operator comparing it against the others is asking
     the right question."""
 
+    CLOCK_EXPIRED = "clock_expired"
+    """The mover had already flagged when the frame arrived. A rising rate
+    against a flat `moves_accepted_total` means players are running out of
+    time, which is a game outcome rather than a defect — it is here so an
+    operator can tell that apart from a platform delay."""
+
     MALFORMED = "malformed"
     """The frame decoded but its payload was not a move — no `match_id`, no
     `path`, or a `path` that is not a list of strings."""

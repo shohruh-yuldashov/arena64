@@ -1793,6 +1793,35 @@ class GameSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="GAME_", frozen=True, extra="forbid")
 
+    clock_enabled: bool = True
+    """Whether the clock worker runs — A64-016.5 §6, AD-21.
+
+    `False` stops adjudication and nothing else: moves still charge time,
+    the move log still records it, and no match ever flags. That is the
+    honest degradation for a switch on a *worker* rather than on a feature,
+    and it exists because the alternative to a documented switch is somebody
+    stopping a process and forgetting which one.
+
+    Untimed matches are unaffected either way — they have no deadline.
+    """
+
+    clock_interval_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
+    """How often expired deadlines are claimed.
+
+    **The resolution of the flag**, not a tuning knob: a player whose time
+    runs out is told so within this interval, and on a bullet game an
+    interval of ten seconds would let them keep moving for nine of them.
+
+    One second is one `ZRANGEBYSCORE` per worker per second against an index
+    that is empty when nothing is expiring — the same cost and the same
+    argument as `OUTBOX_POLL_INTERVAL_SECONDS`.
+    """
+
+    clock_batch_size: int = Field(default=100, ge=1, le=1000)
+    """How many deadlines one pass claims. Bounds the transaction count of a
+    single pass, which matters on the tick after an outage when every
+    deadline that lapsed meanwhile is due at once."""
+
     live_state_ttl_seconds: int = Field(default=14400, ge=300, le=604800)
     """How long a match's live position survives without a move.
 
@@ -1966,6 +1995,24 @@ class GatewaySettings(BaseSettings):
     is a player losing to somebody else's bug.
 
     A violation refuses the frame and **keeps the connection open** (§13).
+    """
+
+    bus_max_stream_length: int = Field(default=1024, ge=16, le=100_000)
+    """How many entries one node's cross-node stream holds — §9.
+
+    The bound that makes a node which has gone away safe: its stream stops
+    growing and the oldest entries are dropped, which for realtime frames is
+    the correct loss — a client that missed a ply resynchronises, and one
+    that missed the *newest* ply is looking at a stale board anyway.
+    """
+
+    bus_stream_ttl_seconds: int = Field(default=300, ge=30, le=86400)
+    """How long a node's stream survives without a publish.
+
+    The half the length cap does not give: a node that never comes back
+    leaves a capped-but-permanent key, and one key per node that ever
+    existed is unbounded in the fleet's *history* rather than its size.
+    Refreshed on every publish, so a live node's stream never lapses.
     """
 
     move_idempotency_ttl_seconds: int = Field(default=60, ge=5, le=3600)

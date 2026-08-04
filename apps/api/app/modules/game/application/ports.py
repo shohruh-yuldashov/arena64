@@ -251,6 +251,16 @@ class LoggedMove:
     engine_version: EngineVersion
     created_at: datetime
 
+    received_at: datetime
+    """When the **gateway** saw the frame — MT-9, A64-016.5 §2.
+
+    The temporal authority for the flag race, and deliberately not
+    `created_at`: that is when the row was appended, which is later by the
+    width of every queue, lock and validation between the two. Collapsing
+    them would make the platform's own processing delay part of the flag
+    decision, which outcome tenet T-2 forbids.
+    """
+
 
 class MoveLogRepository(Protocol):
     """The append-only move log — MT-5, A64-016.4 §1.
@@ -352,5 +362,58 @@ class LiveMatchStore(Protocol):
         long may a game sit idle before its live state is dropped" is
         visible at the call site and configurable — see
         `GameSettings.live_state_ttl_seconds`.
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedDeadline:
+    """One expired clock deadline, claimed by exactly one worker.
+
+    A **token**, not a fact: it names the position the deadline was written
+    for, and the worker checks that against the authoritative match row
+    before adjudicating. A deadline whose ply has moved on was superseded by
+    a move, and adjudicating it would flag a player who had already moved.
+    """
+
+    match_id: UUID
+    ply_number: int
+    side: PlayerSide
+
+
+class ClockDeadlineStore(Protocol):
+    """Where AD-21's deadlines live — A64-016.5 §5.
+
+    "The clock is adjudicated by a worker against Redis, not by in-process
+    timers." An `asyncio` timer per match lives on one node; a deadline in a
+    sorted set is owned by no node and adjudicated by whichever worker is
+    healthy.
+
+    **Never raises on a write.** A deadline that could not be written is a
+    match that will not flag — bad, and strictly better than a move that
+    fails after it was applied, which is what propagating would produce.
+    """
+
+    async def schedule(
+        self, match_id: UUID, *, ply_number: int, side: PlayerSide, deadline: datetime
+    ) -> None:
+        """Writes this match's deadline, **replacing** whatever it had.
+
+        Replace rather than add, so a match cannot hold two live deadlines —
+        which would flag it twice, once for a position it had left.
+        """
+        ...
+
+    async def cancel(self, match_id: UUID) -> None:
+        """Removes this match's deadline. Idempotent — a finished or untimed
+        match has none, and removing nothing is not a failure."""
+        ...
+
+    async def claim_expired(self, *, now: datetime, limit: int) -> Sequence[ClaimedDeadline]:
+        """Up to `limit` passed deadlines, claimed **exclusively**.
+
+        Two workers must receive disjoint sets, which is a property of the
+        store rather than of the worker — see `RedisClockDeadlineStore`.
+        Bounded, like every read on this platform.
         """
         ...

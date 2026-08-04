@@ -63,6 +63,7 @@ from uuid import UUID
 
 from app.core.identifiers import generate_uuid7
 from app.modules.engine import EngineVersion, PlayerSide
+from app.modules.game.domain.clock import ClockState, TimeControl
 from app.modules.game.domain.exceptions import (
     AcceptanceWindowClosed,
     InvalidMatchTransition,
@@ -243,6 +244,28 @@ class MatchRecord:
     over the log inside every move's critical section.
     """
 
+    time_control: TimeControl | None = None
+    """How much time each side gets, or `None` for an untimed match.
+
+    `None` today for every match, because `reference.time_control` does not
+    exist and `matchmaking` therefore cannot supply one — see
+    `game.domain.clock`. An untimed match runs the whole clock machinery not
+    at all: no deadline, no flag, and null clock columns on its moves.
+    """
+
+    clock: ClockState | None = None
+    """The clock as of the last move, or `None` for an untimed match.
+
+    Set exactly when `time_control` is, which a database `CHECK` enforces as
+    well as this record (BE-06): a match with a budget and no clock would be
+    one nothing could adjudicate, and a clock with no budget would be one
+    nothing could credit.
+
+    The **version is `ply_number`**, not a field here — see
+    `game.domain.clock` on why a second sequence would be a second thing to
+    keep in step.
+    """
+
     outcome: MatchOutcome | None = None
     termination_reason: TerminationReason | None = None
     winner: PlayerSide | None = None
@@ -303,6 +326,8 @@ class MatchRecord:
             raise ValueError("an active match has been accepted by both players")
         if self.ply_number < 0:
             raise ValueError("a ply count cannot be negative")
+        if (self.time_control is None) != (self.clock is None):
+            raise ValueError("a clock is present exactly when a time control is")
         if (self.status is MatchRecordStatus.COMPLETED) != (self.outcome is not None):
             raise ValueError("an outcome is recorded exactly when the match completed")
         if (self.outcome is not None) != (self.ended_at is not None):
@@ -326,7 +351,14 @@ class MatchRecord:
             return None
         return MatchResult(outcome=self.outcome, reason=self.termination_reason, winner=self.winner)
 
-    def completed(self, result: MatchResult, *, ply_number: int, at: datetime) -> "MatchRecord":
+    def completed(
+        self,
+        result: MatchResult,
+        *,
+        ply_number: int,
+        at: datetime,
+        clock: ClockState | None = None,
+    ) -> "MatchRecord":
         """This match, played to an end — §6.
 
         A new value rather than a mutation, like every other transition on
@@ -346,17 +378,23 @@ class MatchRecord:
             self,
             status=MatchRecordStatus.COMPLETED,
             ply_number=ply_number,
+            clock=clock or self.clock,
             outcome=result.outcome,
             termination_reason=result.reason,
             winner=result.winner,
             ended_at=at,
         )
 
-    def advanced(self, *, ply_number: int) -> "MatchRecord":
-        """This match, one move further on and still being played."""
+    def advanced(self, *, ply_number: int, clock: ClockState | None = None) -> "MatchRecord":
+        """This match, one move further on and still being played.
+
+        `clock` is `None` for an untimed match and for a caller with nothing
+        to change; passing one replaces the stored state, which is what a
+        timed move does in the same write that advances the ply.
+        """
         if self.status is not MatchRecordStatus.ACTIVE:
             raise InvalidMatchTransition(f"A {self.status.value} match cannot be advanced.")
-        return replace(self, ply_number=ply_number)
+        return replace(self, ply_number=ply_number, clock=clock or self.clock)
 
     def seat(self, side: PlayerSide) -> MatchSeat:
         return self.light if side is PlayerSide.LIGHT else self.dark

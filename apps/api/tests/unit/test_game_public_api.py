@@ -210,6 +210,11 @@ class TestTheSurfaceIsDeliberate:
         # key on.
         "MatchCompleted",
         "MoveApplied",
+        # A64-016.5 — the clock. `ClockView` is what a client renders; a
+        # `ClockState` is a domain value and stays withheld, so the gateway
+        # can show a countdown and cannot construct one.
+        "ClockExpired",
+        "ClockView",
     }
 
     def test_nothing_is_published_by_accident(self) -> None:

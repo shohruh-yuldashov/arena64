@@ -1,11 +1,12 @@
 # Redis Keyspaces, Caching and TTL Policy
 
 > **Status:** Approved for the keyspaces that exist — `rl:v1:`, `presence:v1:`, `wsticket:v1:`,
-> `gwconn:v2:`, `gwroom:v1:`, `gwroomstate:v1:`, `gwmove:v1:`, `game:live:v1:`,
-> `friends:v1:` and Celery's. Sections marked *Not yet allocated* describe
-> workloads with no implementation.
+> `gwconn:v2:`, `gwroom:v1:`, `gwconnroom:v1:`, `gwroomstate:v1:`, `gwmove:v1:`,
+> `gwevent:v1:`, `gwbus:v1:`, `gwspec:v1:`, `gwspecconn:v1:`, `game:live:v1:`,
+> `clock:v1:deadlines`, `friends:v1:` and Celery's. Sections marked
+> *Not yet allocated* describe workloads with no implementation.
 > **Owner:** Backend platform
-> **Last reviewed:** 2026-08-01 (A64-013.8 — full Redis audit, §8)
+> **Last reviewed:** 2026-08-04 (A64-016.8 — Live Game audit, §8.1)
 
 ## Purpose
 
@@ -416,7 +417,12 @@ and what happens when it stops fitting.**
 | `gwconnroom:v1:<connection_id>` | gateway | `cache` | Same as the room key | Degrades. A stale entry costs one wasted `ZREM`; the room key is authoritative — websocket.md §15.1 |
 | `gwroomstate:v1:<match_id>` | gateway | `cache` | `GATEWAY_ROOM_TTL_SECONDS`, `PEXPIRE` inside the script | Degrades. A projection; `game` is authoritative. Written by a **monotonic** CAS so an out-of-order fan-out cannot move it backwards — websocket.md §17.9 |
 | `gwmove:v1:<connection_id>:<request_id>` | gateway | `cache` | `GATEWAY_MOVE_IDEMPOTENCY_TTL_SECONDS` | Degrades. A lost entry costs a retry being reprocessed, which the ply CAS then refuses as stale — websocket.md §17.5 |
-| `game:live:v1:<match_id>` | `game` | **`live`** | `GAME_LIVE_STATE_TTL_SECONDS`, `PEXPIRE` inside the script | **Propagates, and is the one keyspace on this platform that is not reconstructible.** AD-18's live position; the durable move log that would allow replay does not exist yet — websocket.md §18 |
+| `gwevent:v1:<match_id>` | gateway | `cache` | `GATEWAY_EVENT_BUFFER_TTL_SECONDS`, `PEXPIRE` inside the script; also capped at `GATEWAY_EVENT_BUFFER_LENGTH` entries by rank | Degrades. A reconnecting client that cannot be proven current gets a full snapshot, which is the fallback §6 already requires — websocket.md §20 |
+| `gwbus:v1:<node_id>` | gateway | **`bus`** | `GATEWAY_BUS_STREAM_TTL_SECONDS`, refreshed per publish; capped at `GATEWAY_BUS_MAX_STREAM_LENGTH` by `MAXLEN ~` | Degrades. A dropped frame costs one client a resynchronisation. **A stream nobody drains loses everything** — see websocket.md §19.4 on the forwarding loop that drains it |
+| `gwspec:v1:<match_id>` | gateway | `cache` | `GATEWAY_SPECTATOR_TTL_SECONDS` per member, by score; `EXPIRE` on the key | Degrades. A lost subscription costs a viewer pressing watch again; no game depends on it — websocket.md §21 |
+| `gwspecconn:v1:<connection_id>` | gateway | `cache` | Same as the spectator key | Degrades. A stale entry costs one wasted `ZREM`; the match key is authoritative |
+| `game:live:v1:<match_id>` | `game` | **`live`** | `GAME_LIVE_STATE_TTL_SECONDS`, `PEXPIRE` inside the script | Degrades **since A64-016.4**: the durable move log in `game.move` is the source of truth, so a lapsed key costs a rebuild by replay rather than a game. It was the one non-reconstructible keyspace on this platform until that task; it is now a cache, and stays on `live` because rebuilding it costs a full replay — websocket.md §18.5 |
+| `clock:v1:deadlines` | `game` | **`live`** | **None** — a member is removed when it is claimed or superseded | **Propagates.** A deadline that cannot be written is a match that will never flag, so the write is part of the move's transaction boundary. One global sorted set scored by expiry — websocket.md §19.2 |
 | `celery-*` | Celery | `broker` | `result_expires` | Celery's |
 
 **Sessions are not in this table, and that is the finding.** `auth`'s refresh
@@ -438,6 +444,10 @@ registrations, because every keyspace here is keyed by *activity*.
 | `presence:v1:roster` | Concurrent players | The sweeper, then explicit sign-out | ~60 B per member |
 | `friends:v1:friends:` | Players **read** in the TTL window, not players who exist | `FRIENDS_CACHE_TTL_SECONDS` + invalidation | ~40 B per friend, per cached player |
 | `friends:v1:blocked:` | Same | Same | ~40 B per block |
+| `gwevent:v1:` | Matches played **in the TTL window** | `GATEWAY_EVENT_BUFFER_LENGTH` entries, then the key TTL | ~300 B per buffered frame, so ~19 KB per match at the default 64 |
+| `gwbus:v1:` | **Nodes**, not players or matches | `GATEWAY_BUS_MAX_STREAM_LENGTH` entries per node | ~350 B per entry, so ~350 KB per node at the default 1024 |
+| `gwspec:v1:` | Concurrent viewers | `GATEWAY_SPECTATOR_TTL_SECONDS` by score | ~80 B per subscription |
+| `clock:v1:deadlines` | Concurrent **timed** matches | Claimed on expiry; superseded on every move | ~60 B per live match |
 
 The one entry that is not self-limiting by count is `friends:v1:friends:` for
 a player with an unusually large friend list, and `blocked:` for one with a

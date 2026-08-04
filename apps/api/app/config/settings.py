@@ -2034,6 +2034,38 @@ class GatewaySettings(BaseSettings):
     unbounded in history rather than in size.
     """
 
+    forwarding_enabled: bool = Field(default=True)
+    """Whether this node drains its cross-node bus stream — A64-016.8.
+
+    A switch rather than an assumption, like the clock's, and the same
+    shape: with it off a multi-node deployment publishes frames nothing
+    reads, which is precisely the state A64-016.5 shipped in. It exists so
+    a single-node deployment can turn off a tick that has nothing to do,
+    and so an operator can stop a node draining while they investigate one.
+    """
+
+    forwarding_interval_seconds: float = Field(default=0.25, ge=0.01, le=10.0)
+    """How often a node reads its own bus stream.
+
+    A quarter second, and the number is a **latency budget** rather than a
+    tuning knob: it is the worst-case delay this design adds to a move that
+    has to cross a node boundary, on top of the network. Small enough to sit
+    inside the round trip a player already accepts, large enough that an
+    idle fleet is not spending a Redis read per node per ten milliseconds.
+
+    See `app/gateway/forwarding.py` on why this is a poll rather than a
+    blocking `XREADGROUP`.
+    """
+
+    forwarding_batch_size: int = Field(default=256, ge=1, le=4096)
+    """How many bus entries one pass takes.
+
+    Bounded so a node returning from a pause drains at a rate its sockets
+    can absorb: an unbounded read would hand one pass a backlog of every
+    frame published while it was away, and write all of them before
+    yielding.
+    """
+
     spectator_ttl_seconds: int = Field(default=900, ge=60, le=86400)
     """How long one spectator subscription survives — A64-016.7 §3, §6.
 

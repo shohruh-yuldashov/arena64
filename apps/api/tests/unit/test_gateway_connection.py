@@ -47,6 +47,7 @@ from app.gateway.connections import (
     GatewayPolicy,
 )
 from app.gateway.delivery import InMemoryLocalSockets, RoomBroadcaster
+from app.gateway.forwarding import ForwardingRun, GatewayForwarder
 from app.gateway.metrics import CloseReason
 from app.gateway.moves import MoveSubmissionHandler
 from app.gateway.ports import ForwardingRequest
@@ -1927,3 +1928,137 @@ class TestSpectating:
         # The explicit leave, and the disconnect that took the other with it.
         assert store.watching[left_id] == set()
         assert store.watching[dropped_id] == set()
+
+
+class TestCrossNodeForwarding:
+    """A64-016.8 — the loop A64-016.5 left out.
+
+    The transport had a writer and a reader and nothing between them, so a
+    frame published for another node was written to that node's stream and
+    read by nobody. These two tests are the round trip end to end: what one
+    node publishes, the other node's forwarding pass delivers to the socket
+    it actually holds.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_frame_published_for_another_node_reaches_that_nodes_socket(
+        self, registry: FakeConnectionRegistry
+    ) -> None:
+        """Publish on node A, forward on node B, and the socket has it.
+
+        Driven through the **real** fan-out rather than by handing the
+        forwarder a message: the assertion that matters is that the bytes a
+        remote client receives are the bytes `RoomBroadcaster` produced, and
+        a test that constructed the `BusMessage` itself would prove the
+        forwarder works against a message no publisher writes.
+
+        Node B's own recipient list is one connection, so a pass that
+        delivered to every connection it knows about rather than to the
+        ones the publisher named would still pass — which is why the
+        opponent below has a second tab that node B does not hold.
+        """
+        here, there = generate_uuid7(), generate_uuid7()
+        bus = InProcessGatewayBus()
+
+        # Node A: the publisher. It holds nothing and delivers nothing.
+        remote_connection = uuid4()
+        await registry.register(there, remote_connection, node_id="node-b", ttl_seconds=90)
+        await registry.register(here, uuid4(), node_id="node-a", ttl_seconds=90)
+
+        report = await RoomBroadcaster(
+            router=FleetConnectionRouter(
+                registry=registry, node_id="node-a", metrics=RecordingMetrics()
+            ),
+            sockets=InMemoryLocalSockets(),
+            publisher=BusRemoteNodePublisher(bus),
+            metrics=RecordingMetrics(),
+        ).deliver(
+            move_applied(
+                match_id=generate_uuid7(),
+                ply=7,
+                side_to_move="light",
+                fingerprint="fp-7",
+                path=["e5", "f6"],
+                captured=[],
+                promoted_to=None,
+            ),
+            recipients=[here, there],
+        )
+        assert report.remote_nodes == 1
+
+        # Node B: the addressee. Its own socket registry, its own pass.
+        sockets = InMemoryLocalSockets()
+        socket = FakeGatewaySocket()
+        sockets.attach(remote_connection, socket)
+
+        run = await GatewayForwarder(
+            bus=bus,
+            sockets=sockets,
+            metrics=RecordingMetrics(),
+            node_id="node-b",
+            batch_size=64,
+        ).forward_once()
+
+        assert run == ForwardingRun(consumed=1, delivered=1, missing=0)
+        assert socket.types() == [MessageType.MOVE_APPLIED]
+        assert socket.sent[0].payload["ply"] == 7
+
+    @pytest.mark.asyncio
+    async def test_a_pass_tolerates_a_recipient_whose_socket_has_gone(self) -> None:
+        """§10's tolerance, on the far side of the bus.
+
+        A connection that closed between the publishing node building its
+        plan and this pass running is the ordinary case — the registry entry
+        it was resolved from has not lapsed yet — so the frame reaches the
+        tab that is still open and the one that is not is counted, not
+        raised.
+
+        A pass that raised here would stop the schedule, and a node that has
+        silently stopped forwarding is invisible until somebody's opponent
+        appears to have frozen.
+        """
+        bus = InProcessGatewayBus()
+        live_connection, closed_connection = uuid4(), uuid4()
+
+        # Through the real publisher, which is what turns a
+        # `ForwardingRequest`'s `UUID`s into the wire strings a `BusMessage`
+        # carries — a test that published directly would exercise a shape
+        # nothing produces.
+        await BusRemoteNodePublisher(bus).publish(
+            ForwardingRequest(
+                node_id="node-b",
+                connection_ids=(live_connection, closed_connection),
+                frame=move_applied(
+                    match_id=generate_uuid7(),
+                    ply=1,
+                    side_to_move="dark",
+                    fingerprint="fp-1",
+                    path=["c3", "d4"],
+                    captured=[],
+                    promoted_to=None,
+                ).to_json(),
+            )
+        )
+
+        sockets = InMemoryLocalSockets()
+        socket = FakeGatewaySocket()
+        sockets.attach(live_connection, socket)
+
+        run = await GatewayForwarder(
+            bus=bus,
+            sockets=sockets,
+            metrics=RecordingMetrics(),
+            node_id="node-b",
+            batch_size=64,
+        ).forward_once()
+
+        assert run == ForwardingRun(consumed=1, delivered=1, missing=1)
+        assert socket.types() == [MessageType.MOVE_APPLIED]
+        # Acknowledged: a second pass has nothing left to read.
+        assert await GatewayForwarder(
+            bus=bus,
+            sockets=sockets,
+            metrics=RecordingMetrics(),
+            node_id="node-b",
+            batch_size=64,
+        ).forward_once() == ForwardingRun(consumed=0, delivered=0, missing=0)

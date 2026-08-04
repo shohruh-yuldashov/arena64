@@ -218,6 +218,20 @@ class SpectatorLeaveReason(StrEnum):
     DISCONNECT = "disconnect"
 
 
+#: Frames delivered to a local socket on behalf of another node — A64-016.8.
+#:
+#: The counter that would have made A64-016.5's gap visible. `REMOTE_PUBLISHES`
+#: says a frame was handed to the bus; this says one came off it and reached a
+#: socket. A deployment where the first rises and the second stays at zero is
+#: a fleet whose nodes cannot talk to each other, which is exactly the state
+#: this platform shipped in until the forwarding loop existed.
+FORWARDED_FRAMES: Final = "gateway.forwarded_frames_total"
+
+#: Forwarded frames that reached nobody — the connection had closed, or the
+#: entry could not be parsed. Not an error on its own: see `ForwardingRun`.
+FORWARDING_FAILURES: Final = "gateway.forwarding_failures_total"
+
+
 class RouteLocality(StrEnum):
     """Whether a recipient connection is held by this process."""
 

@@ -29,6 +29,10 @@ from app.database.rate_limiter import RedisRateLimiter
 from app.database.redis import RedisPools, create_redis_pools
 from app.database.session_manager import DatabaseSessionManager
 from app.database.unit_of_work import SessionUnitOfWork
+from app.gateway.dependencies import get_gateway_bus_for, get_local_sockets
+from app.gateway.forwarding import GatewayForwarder
+from app.gateway.forwarding_tasks import GatewayForwardingTask, forwarding_request
+from app.gateway.node import resolve_node_id
 from app.gateway.router import gateway_router
 from app.modules.friends.application.ports import SocialGraphCache
 from app.modules.friends.infrastructure.cache import (
@@ -709,6 +713,33 @@ def build_task_schedulers(
         # than a degraded feature.
         logger.warning("clock_adjudication_disabled", extra={"reason": "configuration"})
 
+    # A64-016.8, closing A64-016.5 §9. Until this existed, a frame published
+    # for another node was written to that node's stream and read by nobody:
+    # the transport had a writer and a reader and no loop between them, so a
+    # multi-node deployment lost every cross-node frame while reporting them
+    # delivered. See `app/gateway/forwarding.py`.
+    if settings.gateway.forwarding_enabled:
+        handlers.append(
+            GatewayForwardingTask(
+                GatewayForwarder(
+                    bus=get_gateway_bus_for(redis_pools, settings.gateway),
+                    # The **process-wide** registry, shared with the request
+                    # path — see `get_local_sockets` on why a second instance
+                    # would be a forwarder delivering into an empty map.
+                    sockets=get_local_sockets(),
+                    metrics=_metrics(),
+                    node_id=resolve_node_id(settings.gateway),
+                    batch_size=settings.gateway.forwarding_batch_size,
+                )
+            )
+        )
+    else:
+        # `WARNING`: with it off, a node publishes to its peers and reads
+        # nothing back, which on more than one node is a fleet whose players
+        # can only see opponents who happen to have landed on the same
+        # process.
+        logger.warning("gateway_forwarding_disabled", extra={"reason": "configuration"})
+
     # A64-015.6 §6. Always registered — there is no switch, because the
     # accumulator is filled by services that are always wired and a process
     # that never drained it would hold counters forever and report none.
@@ -742,6 +773,14 @@ def build_task_schedulers(
                 dispatcher=dispatcher,
                 request=adjudication_request(),
                 interval_seconds=settings.game.clock_interval_seconds,
+            )
+        )
+    if settings.gateway.forwarding_enabled:
+        schedulers.append(
+            PeriodicTaskScheduler(
+                dispatcher=dispatcher,
+                request=forwarding_request(),
+                interval_seconds=settings.gateway.forwarding_interval_seconds,
             )
         )
     if settings.matchmaking.pairing_enabled:

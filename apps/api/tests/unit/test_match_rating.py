@@ -17,8 +17,14 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.engine import PlayerSide
+from app.modules.game.domain.events import MatchCompleted, SeatSummary
+from app.modules.game.domain.result import MatchOutcome
 from app.modules.game.public import ProductVariant, TerminationReason
 from app.modules.rating.application.ports import PlayerRatingRepository
+from app.modules.rating.application.services.match_completion_consumer import (
+    MatchCompletionConsumer,
+)
 from app.modules.rating.application.services.match_rating_service import (
     CompletedMatch,
     CompletedSeat,
@@ -28,6 +34,7 @@ from app.modules.rating.application.services.match_rating_service import (
 from app.modules.rating.domain.glicko2 import Glicko2Rating
 from app.modules.rating.domain.keys import RatingKey, SpeedClass
 from app.modules.rating.domain.player_rating import PlayerRating
+from app.platform.outbox import OutboxEntry
 from tests.fakes.outbox import NullUnitOfWork
 from tests.fakes.presence_redis import MovableClock
 from tests.fakes.queue_repository import RecordingPublisher
@@ -59,6 +66,19 @@ def _completion(
         winner=winner,
         light=light or _seat(),
         dark=dark or _seat(),
+    )
+
+
+def _entry(event: MatchCompleted) -> OutboxEntry:
+    """The event as the relay hands it back — payload only, no domain type."""
+    return OutboxEntry(
+        id=uuid4(),
+        aggregate_type=event.aggregate_type,
+        aggregate_id=event.aggregate_id,
+        event_type=event.event_type,
+        event_version=1,
+        payload=event.payload(),
+        occurred_at=event.occurred_at,
     )
 
 
@@ -271,4 +291,78 @@ class TestExactlyOnceAndAtomicity:
 
         assert (completion.light.player_id, KEY) not in ratings.stored
         assert ratings.adjustments == []
+        assert events.published == []
+
+
+class TestTheConsumer:
+    """A64-017.6 — the seam A64-017.3 left open.
+
+    `MatchRatingService` was built, tested and had no caller: a match
+    completed, the outbox row was written, and no rating on this platform
+    ever moved. Every part worked and the feature did not exist, which is
+    the same failure the cross-node bus had in A64-016.8.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_completion_payload_moves_both_ratings(self) -> None:
+        """The round trip, from the bytes the relay actually stores.
+
+        Driven through `MatchCompleted.payload()` rather than a
+        hand-written dict: the assertion that matters is that the shape
+        `game` publishes is the shape `rating` can decode, and a test that
+        built its own dict would prove the decoder works against a payload
+        nothing produces.
+        """
+        ratings, events = InMemoryPlayerRatings(), RecordingPublisher()
+        light_id, dark_id = uuid4(), uuid4()
+
+        published = MatchCompleted(
+            occurred_at=NOW,
+            match_id=uuid4(),
+            variant=ProductVariant.RUSSIAN_8X8,
+            rated=True,
+            outcome=MatchOutcome.WIN,
+            termination_reason=TerminationReason.RESIGNATION,
+            winner=PlayerSide.LIGHT,
+            ply_number=42,
+            engine_version=2,
+            speed_class=SpeedClass.CLASSICAL.value,
+            light=SeatSummary(light_id, 1500.0, 200.0, 0.06, 10, True),
+            dark=SeatSummary(dark_id, 1600.0, 150.0, 0.06, 30, False),
+        )
+
+        failures = await MatchCompletionConsumer(_service(ratings, events)).handle(
+            [_entry(published)]
+        )
+
+        assert failures == []
+        assert ratings.stored[(light_id, KEY)].rating.value > 1500.0
+        assert ratings.stored[(dark_id, KEY)].rating.value < 1600.0
+        assert len(events.published) == 2
+
+    @pytest.mark.asyncio
+    async def test_a_payload_with_no_seat_snapshots_is_dropped_not_retried(self) -> None:
+        """A match created before A64-017.2 carries no snapshots.
+
+        There is nothing legitimate to compute from — SPEC-RATING §7.6
+        makes the snapshot the *only* input — so the entry is skipped and
+        **not** returned as a failure. Returning one would make the relay
+        retry a payload that can never become rateable, forever.
+        """
+        ratings, events = InMemoryPlayerRatings(), RecordingPublisher()
+        legacy = MatchCompleted(
+            occurred_at=NOW,
+            match_id=uuid4(),
+            variant=ProductVariant.RUSSIAN_8X8,
+            rated=True,
+            outcome=MatchOutcome.WIN,
+            termination_reason=TerminationReason.RESIGNATION,
+            winner=PlayerSide.LIGHT,
+            ply_number=42,
+        )
+
+        failures = await MatchCompletionConsumer(_service(ratings, events)).handle([_entry(legacy)])
+
+        assert failures == []
+        assert ratings.stored == {}
         assert events.published == []

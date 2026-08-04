@@ -115,6 +115,17 @@ from app.modules.notifications.presentation.dependencies import (
     build_social_notification_dispatcher,
 )
 from app.modules.profiles.presentation.dependencies import build_profile_renderer
+from app.modules.rating.application.services.match_completion_consumer import (
+    CONSUMER_NAME as RATING_CONSUMER,
+)
+from app.modules.rating.application.services.match_completion_consumer import (
+    MATCH_COMPLETED,
+    MatchCompletionConsumer,
+)
+from app.modules.rating.application.services.match_rating_service import MatchRatingService
+from app.modules.rating.infrastructure.repositories.player_rating_repository import (
+    SqlAlchemyPlayerRatingRepository,
+)
 from app.modules.users.infrastructure.presence import (
     NoPresenceProvider,
     RedisPresenceProvider,
@@ -454,6 +465,23 @@ def build_outbox_worker(
             event_types=TIMELINE_EVENTS,
         )
     )
+    # A64-017.6, closing the seam A64-017.3 left open. `MatchRatingService`
+    # was built and had no caller, so a match completed, the outbox row was
+    # written, and **no rating on this platform ever moved** — every part
+    # working and the feature absent, which is the same failure A64-016.8
+    # found in the cross-node bus.
+    #
+    # Its own `processed_event` partition, like every consumer here: a
+    # redelivery the timeline projector has handled must still reach this
+    # one, and neither may mark the other's work done.
+    handlers.append(
+        SessionScopedNotificationHandler(
+            session_factory=db.session_factory,
+            dispatcher_factory=lambda session: _rating_consumer_for(session, clock),
+            consumer=RATING_CONSUMER,
+            event_types=frozenset({MATCH_COMPLETED}),
+        )
+    )
     if settings.matchmaking.realtime_delivery_enabled:
         handlers.append(
             SessionScopedNotificationHandler(
@@ -559,6 +587,25 @@ def build_presence_sweeper(
         session_factory=db.session_factory,
         sweeper_factory=sweeper_for,
         interval_seconds=settings.presence.sweep_interval_seconds,
+    )
+
+
+def _rating_consumer_for(session: AsyncSession, clock: SystemClock) -> MatchCompletionConsumer:
+    """The rating consumer over one session — A64-017.6.
+
+    Named concretely here, which is what a composition root is for: the
+    consumer holds `MatchRatingService`, which holds a repository, a
+    publisher and a unit of work over the **same** session — so the two
+    adjustments, the two rating rows and both `rating.updated` outbox rows
+    are one transaction (§4).
+    """
+    return MatchCompletionConsumer(
+        MatchRatingService(
+            ratings=SqlAlchemyPlayerRatingRepository(session),
+            events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
+            unit_of_work=SessionUnitOfWork(session),
+            clock=clock,
+        )
     )
 
 

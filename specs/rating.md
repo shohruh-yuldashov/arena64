@@ -295,14 +295,43 @@ rating that was applied is always announced and one that was not never is.
 
 ---
 
-## 12. Seasons
+## 12. Seasons — **A64-017.5: DEFERRED BY PRODUCT DECISION**
+
+> **Status:** Deferred, not skipped. Deliberately out of v0.5.0 scope by the C-5 decision, and
+> **blocked on unresolved product decisions** — §12.2.
 
 Only the **data model** is forward compatible. `season_id` is a nullable column on
 `player_rating` and `rating_adjustment`, always `NULL` in v0.5.0.
 
-No `Season` entity, no automatic seasons, no reset logic, no rewards. The column exists because a
-rating adjustment is permanent: a season introduced later cannot be written onto adjustments that
-have already happened, so the field has to exist before the first one is recorded.
+No `Season` entity, no repository, no service, no lifecycle, no reset and no rollover logic. The
+column exists because a rating adjustment is permanent: a season introduced later cannot be
+written onto adjustments that have already happened, so the field has to exist before the first
+one is recorded.
+
+### 12.1 Why it was deferred rather than missed
+
+The epic's plan lists **A64-017.5 Rating Seasons** as a task. It was not built, and it was not
+overlooked: product decision **C-5** removed it from v0.5.0 in the same round that scoped the
+rest of this specification, in these words —
+
+> Introduce nullable `season_id` where required. Do **not** implement Season behaviour. Do **not**
+> create automatic seasons. Do **not** create reset logic. Only make the data model forward
+> compatible.
+
+Building it during A64-017.5 would have contradicted a decision marked final. The task is
+therefore **deferred by product decision**, and the audit records it as a documented limitation
+rather than a gap (`specs/rating/audit.md` §7).
+
+### 12.2 What must be decided before it can be built
+
+| # | Question | Why it blocks |
+| --- | --- | --- |
+| S-1 | What opens and closes a season? | Operator action, a schedule, or neither — this decides whether a worker exists at all |
+| S-2 | What happens to ratings at a boundary? | Full reset, soft reset toward the mean, or nothing. **This one touches A-4 data**: a reset rewrites the permanent record, so guessing it would mean writing logic that edits played history |
+| S-3 | Are a finished season's standings retained? | If yes they are a permanent competitive record and need their own retention policy |
+| S-4 | Who fills `season_id`, and when? | The active season at write time, or a backfill — and a backfill over immutable adjustments is a contradiction that needs resolving before the first row is written |
+
+S-2 is the blocking one. Everything else can follow a decision; that one *is* the decision.
 
 ---
 

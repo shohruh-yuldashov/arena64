@@ -253,6 +253,7 @@ class MoveSubmissionHandler:
                 path=result.applied.path,
                 captured=result.applied.captured,
                 promoted_to=result.applied.promoted_to,
+                result=_result_payload(result),
             ),
             recipients=room.participants,
         )
@@ -340,6 +341,24 @@ class MoveSubmissionHandler:
         return move_rejected(code, request_id=request_id, reason=reason)
 
 
+def _result_payload(result: SubmitMoveResult) -> dict[str, str | None] | None:
+    """The match result, when this move ended the game — A64-016.4 §7.
+
+    `None` while the match continues, which is the overwhelmingly common
+    answer. Rendered here rather than in `protocol` because it is a
+    projection of `game`'s published result onto the wire, and the protocol
+    module deliberately knows nothing about `game`.
+    """
+    if result.outcome is None or result.termination_reason is None:
+        return None
+
+    return {
+        "outcome": result.outcome.value,
+        "termination_reason": result.termination_reason.value,
+        "winner": result.winner.value if result.winner is not None else None,
+    }
+
+
 def _accepted_frame(result: SubmitMoveResult, *, request_id: str | None) -> GatewayMessage:
     return move_accepted(
         match_id=result.match_id,
@@ -350,6 +369,7 @@ def _accepted_frame(result: SubmitMoveResult, *, request_id: str | None) -> Gate
         captured=result.applied.captured,
         promoted_to=result.applied.promoted_to,
         request_id=request_id,
+        result=_result_payload(result),
     )
 
 

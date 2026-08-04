@@ -26,8 +26,9 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from app.modules.engine import Position
+from app.modules.engine import EngineVersion, PlayerSide, Position
 from app.modules.game.domain.match_record import MatchRecord
+from app.modules.game.domain.move_log import MoveRecord
 
 
 class MatchRecordRepository(Protocol):
@@ -108,6 +109,25 @@ class MatchRecordRepository(Protocol):
         that needs no rule of its own. Served by the two partial indexes on
         `(player_id) WHERE status = 'pending_acceptance'`, so the read is
         bounded by concurrency rather than by history.
+        """
+        ...
+
+    async def advance(self, record: MatchRecord, *, expected_ply: int) -> bool:
+        """Writes a match one move further on, only if its ply is still
+        `expected_ply` — A64-016.4 §3, §8.
+
+        The compare-and-set that keeps "only one move may win for one match
+        version" true even where the row lock is not held. `lock` is what
+        actually serialises two players; this is the guarantee that
+        survives a future path forgetting it.
+
+        Writes the settlement columns in the same statement, because a move
+        that ends a game advances the ply *and* completes the match — two
+        writes would be a window in which a match is one move on and has no
+        result.
+
+        Returns `False` for a losing write, which the caller turns into
+        `StaleMatchState`.
         """
         ...
 
@@ -207,6 +227,58 @@ class MatchRetentionStore(Protocol):
         sweep has stopped, and two players are holding an offer nothing will
         ever resolve. `PruneResult` carries `retained_unpublished` for
         exactly the same reason.
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class LoggedMove:
+    """One move, as the durable log stores it — A64-016.4 §1.
+
+    `MoveRecord` plus the two facts it deliberately does not carry: who
+    moved, and which engine build applied it.
+
+    `MoveRecord` is the *aggregate's* entry and lives inside a `Match` that
+    already knows both — the side from parity and the version from the
+    match. The **row** carries them explicitly for §8.4's own reason: a
+    takeback would break the parity assumption, and an engine version bump
+    mid-match is exactly when a replay needs to know which build produced a
+    ply.
+    """
+
+    record: MoveRecord
+    seat: PlayerSide
+    engine_version: EngineVersion
+    created_at: datetime
+
+
+class MoveLogRepository(Protocol):
+    """The append-only move log — MT-5, A64-016.4 §1.
+
+    Two operations and no third: no `update`, no `delete`, no `replace`. A
+    repository that could amend an entry would make "append-only" a
+    convention rather than a property.
+    """
+
+    async def append(self, match_id: UUID, entry: LoggedMove) -> None:
+        """Appends one move. Flushes, never commits.
+
+        **Does not check for a duplicate first.** §2 forbids relying on
+        in-memory deduplication, and a check-then-insert is exactly that:
+        two concurrent submissions for the same ply both pass the check and
+        the database refuses one of them anyway. `uq_move__ply` is the
+        mechanism; the caller catches its refusal and answers
+        `StaleMatchState`.
+        """
+        ...
+
+    async def for_replay(self, match_id: UUID) -> Sequence[MoveRecord]:
+        """Every move of one match, in order.
+
+        **Unbounded**, uniquely among this platform's list reads. A replay
+        that saw a page would reconstruct a different game, silently, and
+        there is no correct page size for "all of it". The bound is the
+        game.
         """
         ...
 

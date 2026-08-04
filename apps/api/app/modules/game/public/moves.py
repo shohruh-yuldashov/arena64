@@ -57,6 +57,7 @@ from app.modules.game.domain.exceptions import (
     NotYourTurn,
     StaleMatchState,
 )
+from app.modules.game.domain.result import MatchOutcome, TerminationReason
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +135,23 @@ class SubmitMoveResult:
     `Position.fingerprint`, whose contract this forwards unchanged."""
 
     applied: AppliedMove
+
+    outcome: MatchOutcome | None = None
+    termination_reason: TerminationReason | None = None
+    winner: PlayerSide | None = None
+    """The result, when this move ended the game — A64-016.4 §7.
+
+    `None` while the match continues, which is the overwhelmingly common
+    answer and is modelled in the type rather than as a "still playing"
+    sentinel — DM-08's reasoning, and the reason `side_to_move` above stays
+    meaningful either way: a completed match's `side_to_move` is whoever
+    would have moved next, which a client renders as nothing.
+
+    Three fields rather than a `MatchResult`, because that type lives in
+    `game.domain` and the gateway may not hold one. The pairing between an
+    outcome and its winner is `MatchResult`'s invariant and is preserved by
+    the service that fills these.
+    """
 
 
 class SubmitMoveUseCase(Protocol):

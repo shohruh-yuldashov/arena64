@@ -56,7 +56,7 @@ acceptance deadline are *the same value in two rows* rather than two timers
 somebody has to keep in step. See `PairingService._claim`.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
@@ -65,9 +65,11 @@ from app.core.identifiers import generate_uuid7
 from app.modules.engine import EngineVersion, PlayerSide
 from app.modules.game.domain.exceptions import (
     AcceptanceWindowClosed,
+    InvalidMatchTransition,
     MatchNotPending,
     NotAMatchParticipant,
 )
+from app.modules.game.domain.result import MatchOutcome, MatchResult, TerminationReason
 from app.modules.game.domain.variants import ProductVariant
 
 
@@ -95,6 +97,23 @@ class MatchRecordStatus(StrEnum):
 
     ACTIVE = "active"
     """Both players accepted. The contest exists and may be played."""
+
+    COMPLETED = "completed"
+    """The contest was played to an end — A64-016.4 §6.
+
+    Reached from `active` alone, by a move whose resulting position the
+    terminal evaluator or the draw rules declared final. Terminal, and
+    permanently so: MT-10 makes a completed match a permanent record, and
+    §6's "reject all later move submissions" is that rule applied to the
+    live path.
+
+    Distinct from `cancelled` and `expired`, which are the two ways a
+    pairing ends *without being played*. Collapsing them would make
+    "matches that were games" unanswerable, and it is the exact predicate
+    retention uses to decide what it may delete — `ix_match__abandoned`
+    excludes this status, so a completed match with its move log is
+    structurally out of reach of the queue's sweep.
+    """
 
     CANCELLED = "cancelled"
     """A participant declined.
@@ -211,6 +230,44 @@ class MatchRecord:
     """Which side declined, or `None`. Set exactly when `status` is
     `cancelled` — a database CHECK enforces the same pairing (BE-06)."""
 
+    ply_number: int = 0
+    """How many moves have been played — A64-016.4 §3.
+
+    The **authoritative sequence**, and the column two concurrent moves
+    contend on. `0` for a match nobody has moved in, which is also every
+    match this platform created before A64-016.4.
+
+    Kept here as well as being derivable from the move log because it is
+    the value the transaction reads under a row lock to decide which ply a
+    submission becomes — deriving it would mean a `COUNT(*)` or a `MAX()`
+    over the log inside every move's critical section.
+    """
+
+    outcome: MatchOutcome | None = None
+    termination_reason: TerminationReason | None = None
+    winner: PlayerSide | None = None
+    """The result, or `None` while the match is not completed — §6.
+
+    Three columns rather than one, because the domain's `MatchResult` is a
+    value with an invariant (`winner` is set exactly for a win) and storing
+    it as a blob would put that invariant beyond a `CHECK`. Rehydrated into
+    a `MatchResult` by `result`, so nothing above this layer handles the
+    three separately.
+
+    DM-08's reasoning applies unchanged: there is no "pending" sentinel,
+    because a sentinel is what the code computing a rating forgets to
+    check.
+    """
+
+    ended_at: datetime | None = None
+    """When the contest ended, and `None` while it has not — §6.
+
+    Distinct from `settled_at`, which is when the *handshake* ended. For a
+    played match `settled_at` is when both players accepted and `ended_at`
+    is when the last move was made; collapsing them would make "how long
+    did this game take" unanswerable.
+    """
+
     settled_at: datetime | None = None
     """When the handshake ended, and `None` while it has not.
 
@@ -244,10 +301,62 @@ class MatchRecord:
             self.light.has_accepted and self.dark.has_accepted
         ):
             raise ValueError("an active match has been accepted by both players")
+        if self.ply_number < 0:
+            raise ValueError("a ply count cannot be negative")
+        if (self.status is MatchRecordStatus.COMPLETED) != (self.outcome is not None):
+            raise ValueError("an outcome is recorded exactly when the match completed")
+        if (self.outcome is not None) != (self.ended_at is not None):
+            raise ValueError("ended_at is set exactly when there is an outcome")
+        if (self.winner is not None) != (self.outcome is MatchOutcome.WIN):
+            raise ValueError("a winner is recorded exactly for a decisive result")
 
     @property
     def is_pending(self) -> bool:
         return self.status.is_pending
+
+    @property
+    def result(self) -> MatchResult | None:
+        """The result as the domain models it, or `None` if unfinished.
+
+        Assembled from the three columns rather than stored as one, so the
+        pairing between an outcome and its winner is enforced by a `CHECK`
+        as well as by `MatchResult`'s own constructor (BE-06).
+        """
+        if self.outcome is None or self.termination_reason is None:
+            return None
+        return MatchResult(outcome=self.outcome, reason=self.termination_reason, winner=self.winner)
+
+    def completed(self, result: MatchResult, *, ply_number: int, at: datetime) -> "MatchRecord":
+        """This match, played to an end — §6.
+
+        A new value rather than a mutation, like every other transition on
+        this record: the repository writes what it is given, and a caller
+        holding the previous value still holds what it read.
+
+        **Idempotent by construction at the caller.** A second settlement
+        of an already-completed match is refused by the same row lock and
+        status check that refuses a move — see `LiveMoveService`. This
+        method itself refuses anything that is not `active`, so a repair
+        script cannot resurrect a cancelled pairing as a played game.
+        """
+        if self.status is not MatchRecordStatus.ACTIVE:
+            raise InvalidMatchTransition(f"A {self.status.value} match cannot be completed.")
+
+        return replace(
+            self,
+            status=MatchRecordStatus.COMPLETED,
+            ply_number=ply_number,
+            outcome=result.outcome,
+            termination_reason=result.reason,
+            winner=result.winner,
+            ended_at=at,
+        )
+
+    def advanced(self, *, ply_number: int) -> "MatchRecord":
+        """This match, one move further on and still being played."""
+        if self.status is not MatchRecordStatus.ACTIVE:
+            raise InvalidMatchTransition(f"A {self.status.value} match cannot be advanced.")
+        return replace(self, ply_number=ply_number)
 
     def seat(self, side: PlayerSide) -> MatchSeat:
         return self.light if side is PlayerSide.LIGHT else self.dark

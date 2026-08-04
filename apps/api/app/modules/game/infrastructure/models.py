@@ -106,7 +106,17 @@ it — the same division that already has `matchmaking` driving
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Boolean, CheckConstraint, Index, Integer, Uuid, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    Text,
+    Uuid,
+    text,
+)
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import ENUM as PgEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -115,6 +125,7 @@ from app.database.mixins.uuid_pk import UUIDPrimaryKeyMixin
 from app.database.types import UtcDateTime
 from app.modules.engine import PlayerSide
 from app.modules.game.domain.match_record import MatchRecordStatus
+from app.modules.game.domain.result import MatchOutcome, TerminationReason
 from app.modules.game.domain.variants import ProductVariant
 
 #: database.md §222 — one schema per bounded context.
@@ -159,9 +170,18 @@ _ABANDONED_PREDICATE = (
     f"status IN ('{MatchRecordStatus.CANCELLED.value}', '{MatchRecordStatus.EXPIRED.value}')"
 )
 
+#: The SQL spelling of "this match was played to an end" — A64-016.4 §6.
+#:
+#: Derived from the enum for the reason the two above are: a status added
+#: later must not silently join or leave the set the move log's foreign key
+#: and retention's predicate disagree about.
+_COMPLETED_PREDICATE = f"status = '{MatchRecordStatus.COMPLETED.value}'"
+
 _VARIANT_ENUM = _enum(ProductVariant, "match_variant")
 _STATUS_ENUM = _enum(MatchRecordStatus, "match_status")
 _SIDE_ENUM = _enum(PlayerSide, "player_side")
+_OUTCOME_ENUM = _enum(MatchOutcome, "match_outcome")
+_TERMINATION_ENUM = _enum(TerminationReason, "match_termination_reason")
 
 
 class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
@@ -270,6 +290,26 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
             "acceptance_deadline > created_at", name="ck_match__acceptance_window_positive"
         ),
         CheckConstraint("engine_version >= 1", name="ck_match__engine_version_positive"),
+        # A64-016.4 §6. The three settlement invariants, each the database's
+        # copy of one `MatchRecord.__post_init__` check — BE-06's rule that
+        # a row written by a repair script is bound by the same rules as one
+        # written by the aggregate.
+        CheckConstraint(
+            f"(status = '{MatchRecordStatus.COMPLETED.value}') = (outcome IS NOT NULL)",
+            name="ck_match__outcome_iff_completed",
+        ),
+        CheckConstraint(
+            "(outcome IS NOT NULL) = (ended_at IS NOT NULL)",
+            name="ck_match__ended_at_iff_outcome",
+        ),
+        # A winner exactly for a decisive result. Without it a draw could
+        # name a winner, which is the one corruption that would survive
+        # every read path and reach a rating.
+        CheckConstraint(
+            f"(winner IS NOT NULL) = (outcome = '{MatchOutcome.WIN.value}')",
+            name="ck_match__winner_iff_decisive",
+        ),
+        CheckConstraint("ply_number >= 0", name="ck_match__ply_non_negative"),
         {"schema": GAME_SCHEMA},
     )
 
@@ -320,8 +360,178 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
     declined_by: Mapped[PlayerSide | None] = mapped_column(_SIDE_ENUM, nullable=True)
 
     settled_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    # --- A64-016.4: the played half of a match's life ---------------------
+    ply_number: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    """The authoritative sequence. The column two concurrent moves contend
+    on, read under the row lock that serialises them — see
+    `MatchRecord.ply_number`."""
+
+    outcome: Mapped[MatchOutcome | None] = mapped_column(_OUTCOME_ENUM, nullable=True)
+    termination_reason: Mapped[TerminationReason | None] = mapped_column(
+        _TERMINATION_ENUM, nullable=True
+    )
+    winner: Mapped[PlayerSide | None] = mapped_column(_SIDE_ENUM, nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    """The result, decomposed. Three columns and an instant rather than one
+    blob, so `MatchResult`'s own invariant — a winner exactly for a decisive
+    outcome — is a `CHECK` as well as a constructor (BE-06)."""
     """When the handshake ended. Null while it has not — see the CHECK
     above, which makes the pairing unrepresentable otherwise."""
 
 
 __all__ = ["GAME_SCHEMA", "MatchRecordModel"]
+
+
+class MoveLogModel(UUIDPrimaryKeyMixin, Base):
+    """The `game.move` row — the durable move log. A64-016.4 §1, §2.
+
+    AD-18's second half, and the thing A64-016.3 shipped without: "Live
+    position lives in Redis. **Moves are appended durably to PostgreSQL.**"
+    Until this table existed, a Redis failure lost an in-flight game with
+    nothing to replay from, which is the mitigation AD-19 depends on.
+
+    ## What this is, against `database.md` §8.4
+
+    §8.4 specifies the relation this becomes at scale: partitioned monthly
+    by `match_created_at`, `path` as `smallint[]` of PDN square numbers,
+    `client_move_id`, `received_at`, non-null clock columns. This is the
+    subset that ships now, documented the way `game.match` §8.2a already
+    documents its own — and the divergences are decisions rather than
+    omissions:
+
+        not partitioned     `game.match` is not partitioned either, and a
+                            child partitioned on a parent's key that does
+                            not exist would be a foreign key that cannot be
+                            declared. Both move together (DB-13)
+        `path` as `text[]`  there is no PDN numbering on `BoardCoordinate`;
+                            the engine round-trips algebraic notation
+                            (`parse`/`__str__`) and that round trip is
+                            tested. Storing a numbering the engine cannot
+                            produce would be the lossy translation §4
+                            forbids
+        `position_hash`     `text`, because `MoveRecord.resulting_position_
+                            hash` *is* `Position.fingerprint`, a string.
+                            Hashing it to `bytea` would add a second
+                            representation of one value
+        clock columns       nullable, per §1 — they are filled by A64-016.5
+        no `client_move_id` the duplicate guard is `uq_move__ply`; the
+                            client's retry token is `request_id`, scoped to
+                            a connection at the gateway, and A64-016.3 §7
+                            forbids inventing a second one
+        no `received_at`    it exists for the flag race (MT-9), which is
+                            clocks
+
+    ## Append-only, and how that is actually held
+
+    MT-5. There is no `updated_at`, no `deleted_at` and no transition on
+    `MoveRecord` — the aggregate has `_append` and nothing else. The
+    stronger guarantee §8.4 asks for is a runtime role without `UPDATE` or
+    `DELETE` on this table, which is a grant rather than a migration and is
+    recorded in the spec as the next step.
+
+    The `ON DELETE CASCADE` is deliberate and is not a hole in that: a move
+    log without its match is unreadable, and the only thing that deletes a
+    match is retention — which cannot reach a `completed` one, because
+    `ix_match__abandoned` excludes it.
+    """
+
+    __tablename__ = "move"
+    __table_args__ = (
+        # **The concurrency mechanism** — A64-016.4 §2 and §8. Two moves
+        # submitted for the same expected ply produce one row and one
+        # `IntegrityError`, decided by the index rather than by a check
+        # either writer would pass. It is the belt to the row lock's braces:
+        # the lock serialises them, and this is what holds if a future path
+        # forgets to take it.
+        Index("uq_move__ply", "match_id", "ply_number", unique=True),
+        # "Replay this match": every move in order. Covering, so a replay
+        # reads the index and never the heap for the ordering.
+        Index("ix_move__replay", "match_id", "ply_number"),
+        ForeignKeyConstraint(
+            ["match_id"],
+            [f"{GAME_SCHEMA}.match.id"],
+            name="fk_move__match",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("ply_number >= 1", name="ck_move__ply_positive"),
+        # A move covers at least two squares — the same rule
+        # `Move.__post_init__` enforces, held here too because a row written
+        # by anything else must not be a move the engine cannot replay.
+        CheckConstraint("array_length(path, 1) >= 2", name="ck_move__path_is_a_move"),
+        # §2: "position hash required for every accepted move". Non-null is
+        # not enough — an empty string would satisfy it and would be a
+        # replay that cannot check itself.
+        CheckConstraint("position_hash <> ''", name="ck_move__position_hash_present"),
+        CheckConstraint(
+            "think_time_ms IS NULL OR think_time_ms >= 0", name="ck_move__think_time_non_negative"
+        ),
+        CheckConstraint(
+            "remaining_clock_ms IS NULL OR remaining_clock_ms >= 0",
+            name="ck_move__remaining_clock_non_negative",
+        ),
+        {"schema": GAME_SCHEMA},
+    )
+
+    match_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    ply_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    """1-based and contiguous (MT-5). Assigned by the transaction that
+    appends the row, from the match's locked `ply_number`."""
+
+    seat: Mapped[PlayerSide] = mapped_column(_SIDE_ENUM, nullable=False)
+    """Who moved.
+
+    Stored although it is derivable from ply parity, for §8.4's own reason:
+    a takeback or an adjudicated correction breaks the parity assumption,
+    and every consumer that derived seat from parity would silently
+    mis-attribute every move after the first one.
+    """
+
+    path: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False)
+    """The squares the piece occupied, in order, in algebraic notation.
+
+    **The move** (R-15). Never an origin and a destination: a multi-jump
+    reaches its destination by a specific route capturing specific pieces,
+    and two routes can share endpoints — so origin-and-destination produces
+    an archive that cannot replay its own games.
+    """
+
+    captured: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
+    """The squares of the pieces taken, in the order they were jumped.
+
+    Empty rather than null for a quiet move: an array that is sometimes
+    null and sometimes empty is two representations of "nothing", and the
+    reader that forgets one is the bug.
+    """
+
+    promoted_to: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The rank the piece ends with when the move crowns it, else `None`.
+
+    A rank rather than a boolean, unlike §8.4's `did_promote`: a variant
+    whose promotion produces something other than a king would make a
+    boolean lossy, and the engine already carries `PieceRank`.
+    """
+
+    position_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    """`Position.fingerprint` of the position this move produced.
+
+    Recorded per ply so a replay checks itself **as it goes** — a
+    divergence caught on the move that caused it names the rule that
+    changed; one caught at the end names nothing.
+    """
+
+    engine_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    """Stamped per move, not only per match (§8.4).
+
+    The match's version is what it was created under; this is what actually
+    applied the move. They are equal today and would not be across a
+    version bump mid-match, which is precisely when a replay needs to know.
+    """
+
+    think_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    remaining_clock_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """Nullable until A64-016.5. AD-05: capturable only at move time, which
+    is why the columns exist now — a clock task that had to backfill them
+    would have nothing to backfill from."""
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)

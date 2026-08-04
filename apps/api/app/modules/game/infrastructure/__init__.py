@@ -9,13 +9,14 @@ case names a contract and never one of these classes.
 """
 
 from app.modules.game.infrastructure.live_match_store import RedisLiveMatchStore
-from app.modules.game.infrastructure.models import GAME_SCHEMA, MatchRecordModel
+from app.modules.game.infrastructure.models import GAME_SCHEMA, MatchRecordModel, MoveLogModel
 from app.modules.game.infrastructure.repositories import (
     SqlAlchemyMatchRecordRepository,
     SqlAlchemyMatchRetentionStore,
 )
 
 __all__ = [
+    "MoveLogModel",
     "RedisLiveMatchStore",
     "GAME_SCHEMA",
     "MatchRecordModel",

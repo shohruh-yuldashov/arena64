@@ -203,6 +203,13 @@ class TestTheSurfaceIsDeliberate:
         "MatchNotActive",
         "NotYourTurn",
         "StaleMatchState",
+        # A64-016.4 — the two events a played game produces. `MoveApplied`
+        # is the platform's highest-volume event by a wide margin (one per
+        # ply); `MatchCompleted` is the first that says a *game* happened
+        # rather than a pairing, and is what `rating` and `statistics` will
+        # key on.
+        "MatchCompleted",
+        "MoveApplied",
     }
 
     def test_nothing_is_published_by_accident(self) -> None:

@@ -234,6 +234,70 @@ is_provisional=False`, and those read like measurements — a caller that truste
 have reseeded a tournament to all-equal. A64-019.4 replaced the type rather than the
 values, so the absence is in the signature.
 
+## 6c. Draws in single elimination — the bounded rematch
+
+Single elimination needs one winner per pairing, and this platform's games **can draw**:
+threefold repetition is live on the only variant. The v0.x policy:
+
+| Attempt | Result | What happens |
+| --- | --- | --- |
+| 1 | decisive | The winner advances |
+| 1 | **draw** | Exactly one rematch, **sides swapped**, same pairing, new `game` match |
+| 2 | decisive | The winner advances |
+| 2 | **draw** | The **higher seed** advances, reason `ADJUDICATION`. No third match |
+
+**Bounded at two, and the bound is the point.** An unbounded rematch chain is a
+tournament that can never finish, and nothing would force one — every match is untimed
+today (`specs/rating.md` §8).
+
+**Why the higher seed rather than a third game or a coin.** A third game repeats the
+question that twice failed to answer it. A random winner is a permanent competitive record
+decided by chance. Manual adjudication needs an `admin` module that does not exist, and
+until it did the tournament would be frozen. The seed is the one answer already earned —
+the rating the field was seeded on, recorded before anyone played.
+
+**This is a v0.x policy and is expected to be revisited** once `reference.time_control`
+exists: a faster rematch under a real time control is the better tie-break, and it is
+unavailable only because the catalogue is not built (`specs/rating.md` OQ-1, OQ-2).
+
+### Rating behaviour
+
+Each drawn game is an **ordinary rated draw** and moves ratings normally when the
+tournament is rated. The adjudicated bracket advancement on top of them is **not a
+game**: it creates no third match and therefore no rating adjustment, and
+`specs/rating.md`'s termination allowlist is unchanged.
+
+### The attempt model
+
+A pairing may have up to two `game` matches, held as rows in
+`tournaments.pairing_attempt` rather than a list in a column:
+
+| Constraint | Rule |
+| --- | --- |
+| `unique (pairing_id, attempt_number)` | One row per attempt |
+| `unique match_id` | One `game` match belongs to at most one attempt |
+| `attempt_number` in 1…2 | A third attempt cannot exist |
+| Attempt 2 requires attempt 1 completed as `DRAW` | A rematch has a cause |
+| Attempt 2 swaps the seats | The first move is not the same player's twice |
+
+`pairing.match_id` is **removed**: it could no longer truthfully represent a pairing with
+two matches, and two competing sources of truth is worse than a migration. The feature is
+unreleased, so the model is corrected now rather than preserved.
+
+### Identity across the boundary
+
+Every pairing carries a stable surrogate UUID. A match created for it records
+`origin = TOURNAMENT` and `origin_ref = pairing.id` — **never** an encoding of the
+tournament, round or slot, so the reference stays opaque and the coordinates stay free to
+be an implementation detail.
+
+### Idempotency
+
+A duplicate `match.completed` delivery must not create two rematches, advance a player
+twice, create a third attempt, or overwrite an advancement. The guarantees are the
+database's: `unique (pairing_id, attempt_number)`, `unique match_id`, and the
+`winner_id IS NULL` compare-and-set A64-019.4 already uses.
+
 ## 7. Privacy
 
 Tournaments and their brackets are **public**. A private tournament is deferred with

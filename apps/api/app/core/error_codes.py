@@ -63,6 +63,26 @@ class ErrorCode(StrEnum):
     validation error because the client's recovery is specific — ask for
     the first page — and it must not be confused with a bad filter."""
 
+    # A64-019.8 — tournament registration and withdrawal.
+    #
+    # Six codes rather than `conflict` for all of them, and the test is the
+    # one this enum's docstring applies: a client's *response* differs for
+    # every one. "The field is full" offers a different tournament, "you
+    # already entered" is a no-op the UI should reconcile, "registration
+    # has closed" hides the button, and "the deadline passed" says when.
+    # Collapsing them would make the client parse a message to decide.
+    TOURNAMENT_NOT_FOUND = "tournament_not_found"
+    REGISTRATION_NOT_OPEN = "registration_not_open"
+    REGISTRATION_DEADLINE_PASSED = "registration_deadline_passed"
+    TOURNAMENT_FULL = "tournament_full"
+    ALREADY_REGISTERED = "already_registered"
+    REGISTRATION_NOT_FOUND = "registration_not_found"
+    INVALID_TOURNAMENT_STATE = "invalid_tournament_state"
+    """A lifecycle command asked for a transition the aggregate refuses —
+    seeding an open tournament, starting an unseeded one. One code for the
+    family, because the operator's answer is always "look at the status"
+    and naming each transition would publish the state machine."""
+
     # InfrastructureError and its children
     INFRASTRUCTURE_ERROR = "infrastructure_error"
     TRANSIENT_INFRASTRUCTURE_ERROR = "transient_infrastructure_error"

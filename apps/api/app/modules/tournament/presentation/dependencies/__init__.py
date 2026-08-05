@@ -35,6 +35,7 @@ from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.game.public import MatchCreationUseCase
 from app.modules.game.public.reconciliation import OriginMatchReader
 from app.modules.rating.presentation.dependencies import get_rating_reader
+from app.modules.tournament.application.ports import PlayerDirectory, TournamentRepository
 from app.modules.tournament.application.services.advancement_service import (
     TournamentAdvancementService,
 )
@@ -88,13 +89,19 @@ from app.modules.users.public import UserProfileService
 from app.platform.outbox import EventPublisher
 
 
-def get_registration_service(
-    session: DbSessionDep,
-    players: UserServiceDep,
-    events: EventPublisherDep,
-    clock: ClockDep,
+def build_registration_service(
+    session: AsyncSession,
+    *,
+    players: PlayerDirectory,
+    events: EventPublisher,
+    clock: Clock,
 ) -> TournamentRegistrationService:
-    """The registration use cases, over this request's session.
+    """The registration use cases, over a session the caller opened.
+
+    Plain arguments rather than `Depends`, for `build_deadline_service`'s
+    reason — A64-019.8 gave this two callers with no request to resolve
+    against: the participant routes (through `get_registration_service`
+    below) and `app.operator.tournament`.
 
     The outbox publisher is built over the **same** session as the
     repositories, which is what puts a lifecycle event in the transaction
@@ -103,10 +110,37 @@ def get_registration_service(
     return TournamentRegistrationService(
         tournaments=SqlAlchemyTournamentRepository(session),
         registrations=SqlAlchemyRegistrationRepository(session),
-        players=UserProfileService(players),
+        players=players,
         events=events,
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
+    )
+
+
+def build_tournament_reader(session: AsyncSession) -> TournamentRepository:
+    """The aggregate, read-only from the caller's point of view.
+
+    Typed as the **port**, so the operator profile can ask what state a
+    tournament is in — which is how its lifecycle commands stay idempotent
+    — without holding anything that could seed or start one.
+    """
+    return SqlAlchemyTournamentRepository(session)
+
+
+def get_registration_service(
+    session: DbSessionDep,
+    players: UserServiceDep,
+    events: EventPublisherDep,
+    clock: ClockDep,
+) -> TournamentRegistrationService:
+    """The same graph, over this request's session — A64-019.8 §1.
+
+    Reached by the two participant endpoints. `UserProfileService` is
+    resolved here because `users` publishes it per request; the operator
+    profile builds its own from the same class.
+    """
+    return build_registration_service(
+        session, players=UserProfileService(players), events=events, clock=clock
     )
 
 
@@ -130,8 +164,8 @@ def build_deadline_service(
     )
 
 
-def get_seeding_service(
-    session: DbSessionDep, events: EventPublisherDep, clock: ClockDep
+def build_seeding_service(
+    session: AsyncSession, *, events: EventPublisher, clock: Clock
 ) -> TournamentSeedingService:
     """Seeding and first-round planning — A64-019.3 §11.
 
@@ -140,11 +174,8 @@ def get_seeding_service(
     it can read a batch of ratings and cannot reach an adjustment, a
     leaderboard, or anything that writes.
 
-    **No production entry point yet.** Nothing calls this in the running
-    application: A64-019.4 drives it when a tournament starts. It is
-    composed now so that phase wires a factory rather than inventing one,
-    and the reachability registry is deliberately unchanged — see the
-    phase report.
+    Reached by `app.operator.tournament seed` — A64-019.8 closed the gap
+    where this was composed and called by nothing.
     """
     return TournamentSeedingService(
         tournaments=SqlAlchemyTournamentRepository(session),
@@ -155,6 +186,13 @@ def get_seeding_service(
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
     )
+
+
+def get_seeding_service(
+    session: DbSessionDep, events: EventPublisherDep, clock: ClockDep
+) -> TournamentSeedingService:
+    """The same graph, over this request's session."""
+    return build_seeding_service(session, events=events, clock=clock)
 
 
 def build_bracket_service(
@@ -457,7 +495,10 @@ __all__ = [
     "get_attendance_ws",
     "get_tournament_results",
     "build_reconciliation_service",
+    "build_registration_service",
+    "build_seeding_service",
     "build_start_service",
+    "build_tournament_reader",
     "get_bracket_service",
     "get_registration_service",
     "get_seeding_service",

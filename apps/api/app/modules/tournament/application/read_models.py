@@ -40,6 +40,7 @@ from app.modules.tournament.domain.attempts import (
     AttemptOutcome,
     AttemptStatus,
 )
+from app.modules.tournament.domain.registration import RegistrationStatus
 from app.modules.tournament.domain.rounds import RoundStatus
 from app.modules.tournament.domain.standings import FinalStatus
 from app.modules.tournament.domain.tournament import (
@@ -177,6 +178,27 @@ class PlayerTournamentEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class RegistrationDetail:
+    """One player's own entry, as the participant endpoints return it — §2.
+
+    Read back after the write rather than assembled from what the service
+    happened to know, and in **one** statement: the seed and the
+    tournament's status both live outside the `Registration` value, and
+    inferring them from "we just registered, so it must be open and
+    unseeded" would be a response that is right only until the endpoint is
+    reused.
+    """
+
+    tournament_id: UUID
+    player_id: UUID
+    status: RegistrationStatus
+    registered_at: datetime
+    withdrawn_at: datetime | None
+    seed_number: int | None
+    tournament_status: TournamentStatus
+
+
+@dataclass(frozen=True, slots=True)
 class HistoryCursor:
     """Where a player's tournament history resumes — §12.
 
@@ -207,6 +229,7 @@ __all__ = [
     "HistoryCursor",
     "PlayerTournamentEntry",
     "PlayerTournamentPage",
+    "RegistrationDetail",
     "RoundView",
     "StandingView",
     "TournamentSummary",

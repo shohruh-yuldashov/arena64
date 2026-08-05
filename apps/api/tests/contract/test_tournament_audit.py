@@ -48,6 +48,7 @@ from app.modules.tournament.infrastructure.repositories.tournament_repository im
     SqlAlchemyStandingRepository,
     SqlAlchemyTournamentRepository,
 )
+from app.operator import tournament as operator_tournament
 from tests.contract.contract_app import build_contract_app, contract_client
 from tests.contract.test_matchmaking_queue_api import register as register_account
 from tests.contract.test_tournament_results import (
@@ -275,39 +276,55 @@ class TestEveryTournamentEntryPointIsWired:
         assert "TOURNAMENT_CONSUMER" in root
         assert "_tournament_consumer_for" in root
 
-    def test_the_write_path_has_no_production_entry_point(self) -> None:
-        """**The audit's headline finding, pinned so it cannot go stale.**
+    async def test_every_write_use_case_has_a_production_entry_point(
+        self, contract_session: AsyncSession
+    ) -> None:
+        """**A64-019.8 closed the audit's headline finding**, and this is now
+        the assertion that keeps it closed.
 
-        Creating a tournament, registering a player, seeding and starting
-        are implemented, tested against real PostgreSQL, and reachable from
-        **no route, no task and no consumer**. T-3 puts creation behind
-        administrators and the Administration epic does not exist, so this
-        is a deferral rather than a bug — but an undocumented deferral is
-        indistinguishable from the A64-017.6 defect, where a whole module
-        was built and never called.
+        Until A64-019.8 this test asserted the opposite — that creating,
+        opening, closing, seeding, starting, registering and withdrawing were
+        reachable from nothing — so that the gap could not go stale and
+        silently become the A64-017.6 defect, where a whole module was built
+        and never called.
 
-        So it is asserted. The day a route or a task drives one of these,
-        this test fails and tells the reader to move the name into the wired
-        list above — which is exactly the notification a silent gap does not
-        give.
+        It now asserts the two surfaces that replaced it: participant writes
+        on the real v1 router, and operator writes on the process entry point
+        `python -m app.operator.tournament`. A future change that removes
+        either fails here.
         """
-        routers = "\n".join(
-            path.read_text(encoding="utf-8")
-            for path in _APP.rglob("*.py")
-            if path.name in {"router.py", "self_router.py", "search_router.py"}
-            or path.name == "app_factory.py"
-        )
+        paths = {path for path, _ in api_routes(build_contract_app(contract_session))}
+        assert {
+            "/api/v1/tournaments/{tournament_id}/registrations",
+            "/api/v1/tournaments/{tournament_id}/registrations/me",
+        } <= paths
 
-        for use_case in (
-            "get_registration_service",
-            "get_seeding_service",
-            "get_bracket_service",
-            "build_start_service",
-        ):
-            assert use_case not in routers, (
-                f"{use_case} is now reachable — move it out of the deferred list "
-                f"in tests/contract/test_tournament_audit.py and in specs/tournament/audit.md"
-            )
+        for command in ("create", "open_registration", "close_registration", "seed", "start"):
+            assert callable(getattr(operator_tournament, command)), command
+
+    async def test_no_operator_command_is_exposed_over_http(
+        self, contract_session: AsyncSession
+    ) -> None:
+        """The other half, and the one that matters for security.
+
+        This platform has no administrator — no role on `users.User`, no
+        scope on `auth.TokenClaims`, no permission primitive. So the
+        lifecycle commands must be reachable by a **process** and by nothing
+        an authenticated player can send, and the strongest way to hold that
+        is for no such route to exist at all.
+
+        Asserted over the whole route table rather than by trying a few
+        paths, so a route added under any prefix is caught.
+        """
+        paths = {path for path, _ in api_routes(build_contract_app(contract_session))}
+
+        assert not [path for path in paths if "/admin" in path]
+        assert not [
+            path
+            for path in paths
+            if path.startswith("/api/v1/tournaments")
+            and any(command in path for command in ("/seed", "/start", "/registration/"))
+        ]
 
     def test_no_tournament_service_defines_an_unreachable_entry_point(self) -> None:
         """No `handle`/`run`/`consume` in this module escapes the registry.

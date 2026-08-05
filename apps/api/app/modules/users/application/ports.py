@@ -11,13 +11,26 @@ Every method takes and returns **domain types** — `User`, `Username`,
 """
 
 from collections.abc import Sequence
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from app.core.pagination import CursorPageInfo, CursorPageParams
 from app.modules.users.domain.entities import User
 from app.modules.users.domain.value_objects import Email, Username
-from app.modules.users.public.search import UserSearchQuery
+
+if TYPE_CHECKING:
+    # **Deferred, and the deferral is load-bearing.** Importing
+    # `users.public.search` runs `users.public.__init__`, which imports
+    # `users.application.services`, which imports *this* module — a genuine
+    # cycle that only resolves when something else happens to import
+    # `users.public` first. `app_factory` does, so the running application
+    # never saw it; `python -m app.operator.tournament` (A64-019.8) does
+    # not, and hit `ImportError: cannot import name 'UserRepository' from
+    # partially initialized module`.
+    #
+    # The name is used in one annotation and nowhere at runtime, so
+    # deferring it removes the cycle rather than reordering around it.
+    from app.modules.users.public.search import UserSearchQuery
 
 
 class UserRepository(Protocol):
@@ -154,7 +167,7 @@ class UserRepository(Protocol):
         every query has an owner and an index can be designed for it."""
         ...
 
-    async def search(self, query: UserSearchQuery) -> tuple[Sequence[User], str | None]:
+    async def search(self, query: "UserSearchQuery") -> tuple[Sequence[User], str | None]:
         """Ranked, keyset-paginated search over username and display name —
         A64-013.1. Returns the page and the cursor for the next one.
 

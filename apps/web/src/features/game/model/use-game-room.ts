@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useReducer, useRef } from "react";
 
 import { isAuthenticated } from "@/entities/session";
@@ -8,6 +9,8 @@ import {
   initialState,
   reduce,
 } from "@/features/game/model/state";
+import { matchHistoryKeys } from "@/features/match-history/api/keys";
+import { profileKeys } from "@/features/profile/api/keys";
 import { reportError } from "@/shared/lib/report-error";
 import {
   type DrawDeclinedPayload,
@@ -103,6 +106,28 @@ export function useGameRoom(matchId: string): GameRoom {
   const sideRef = useRef(state.side);
   sideRef.current = state.side;
 
+  // --- what a completed game changes elsewhere — A64-020.5F §25 -----------
+  //
+  // Statistics and match history are durable HTTP reads that the game this
+  // player just finished has invalidated. Nothing refreshed them before:
+  // a player finished a game, went to their profile, and saw the count from
+  // before it.
+  //
+  // **Scoped, and never awaited.** Two keys, not `invalidateQueries()` with
+  // no filter — and fired rather than awaited, because the terminal result
+  // is already on screen and must not wait for a refetch that may not even
+  // have a mounted observer (§25).
+  //
+  // The counters are eventually consistent by design: the projection is an
+  // outbox consumer, so the relay may not have run when this fires. That is
+  // why `staleTime` on both keys is short rather than infinite — the next
+  // navigation or focus catches what this missed.
+  const client = useQueryClient();
+  const refreshDurableRecords = useCallback(() => {
+    void client.invalidateQueries({ queryKey: profileKeys.me() });
+    void client.invalidateQueries({ queryKey: matchHistoryKeys.root });
+  }, [client]);
+
   // --- inbound ------------------------------------------------------------
 
   useFrames(
@@ -135,6 +160,9 @@ export function useGameRoom(matchId: string): GameRoom {
             // ran. What each does to the board is the same, and writing it
             // twice would be two chances to diverge.
             dispatch({ type: "applied", payload: move });
+            // A move that ended the game changes the same durable records
+            // a resignation does — §25.
+            if (move.result != null) refreshDurableRecords();
             return;
           }
 
@@ -176,6 +204,7 @@ export function useGameRoom(matchId: string): GameRoom {
             // asked for. A resignation that raced an accepted draw ends as
             // the server settled it.
             dispatch({ type: "completed", payload: completed });
+            refreshDurableRecords();
             return;
           }
 
@@ -219,7 +248,7 @@ export function useGameRoom(matchId: string): GameRoom {
             return;
         }
       },
-      [matchId, viewerId],
+      [matchId, viewerId, refreshDurableRecords],
     ),
   );
 

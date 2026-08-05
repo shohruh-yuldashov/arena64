@@ -91,6 +91,19 @@ class MatchHistoryEntry:
     termination_reason: TerminationReason | None
     winner: PlayerSide | None
 
+    time_control: MatchTimeControl | None
+    speed_class: str | None
+    """How much time each side had, and which rating a result moved —
+    A64-020.5F §14.
+
+    Both were absent, and `speed_class` was worse than absent: the response
+    schema declared it and the mapper hardcoded `None`, so every history row
+    ever served claimed the match had no speed class. Read from the row now,
+    where both have always been.
+
+    `None` for an untimed match, which is a real state rather than a gap.
+    """
+
     ply_number: int
     ended_at: datetime | None
     created_at: datetime
@@ -205,6 +218,62 @@ class MatchReplay:
     ended_at: datetime | None
 
 
+@dataclass(frozen=True, slots=True)
+class CompletedMatchRecord:
+    """One finished match, for a projection to fold — A64-020.5F §11.
+
+    Deliberately not `MatchHistoryEntry`: that is what a *list* renders and
+    carries a variant, an engine version, a ply count and a speed class, all
+    of which a counter ignores. A narrow shape is what keeps a rebuild from
+    quietly depending on a field it should not.
+
+    `completed_at` is `ended_at`, which is when the contest ended (§6) — the
+    same instant the live consumer reads from the event envelope, so the two
+    paths order matches identically.
+    """
+
+    match_id: UUID
+    light_player_id: UUID
+    dark_player_id: UUID
+    outcome: MatchOutcome
+    winner: PlayerSide | None
+    rated: bool
+    termination_reason: TerminationReason
+    completed_at: datetime
+
+
+class CompletedMatchScanner(Protocol):
+    """Every finished match, in a stable order — §11.
+
+    Its own port rather than a method on `MatchHistoryReader`, because that
+    one is *a player's* history and this is *all* of it: a reader that could
+    do both would let a caller page through every game on the platform by
+    passing a nullable player id, which is not a read any product surface
+    should be able to make.
+
+    Exists for the statistics backfill and for nothing else. That is stated
+    rather than implied, because an "all matches" scan is the kind of port
+    that acquires callers.
+    """
+
+    async def scan_completed(
+        self, *, after: tuple[datetime, UUID] | None, limit: int
+    ) -> Sequence[CompletedMatchRecord]:
+        """One bounded page, ordered by `(ended_at, match_id)` ascending.
+
+        **Keyset, never `OFFSET`** — §10. An offset scan re-reads every row
+        it skips, so a backfill's last page costs the whole table; and a row
+        inserted mid-run shifts every subsequent offset, which is how a
+        resumable job silently skips a match.
+
+        The order is the same total order the projection compares
+        watermarks with, so a backfill folds matches in the order they
+        actually happened and the streaks it produces are the streaks the
+        live consumer would have produced.
+        """
+        ...
+
+
 class MatchHistoryReader(Protocol):
     """A player's finished matches — read-only."""
 
@@ -250,6 +319,8 @@ __all__ = [
     "MatchHistoryPage",
     "MatchHistoryReader",
     "MatchReplay",
+    "CompletedMatchRecord",
+    "CompletedMatchScanner",
     "MatchReplayReader",
     "ReplayPly",
     "ReplaySeat",

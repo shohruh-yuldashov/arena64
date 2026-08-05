@@ -66,114 +66,6 @@ def decode_cursor(value: str) -> HistoryCursor:
         raise InvalidCursor("the pagination cursor is not valid") from malformed
 
 
-class MatchHistoryEntryResponse(BaseModel):
-    """One finished match, as a list renders it.
-
-    `opponent_id` is present only when the viewer played — it is the field
-    that makes a personal history readable, and it is meaningless when a
-    stranger reads somebody else's record.
-    """
-
-    match_id: UUID
-    variant: str
-    speed_class: str | None = Field(
-        default=None,
-        description="The rating key's speed class, when the match recorded one.",
-    )
-    rated: bool
-    engine_version: int = Field(
-        description="Replay is refused for versions this build cannot reproduce."
-    )
-
-    light_player_id: UUID
-    dark_player_id: UUID
-    opponent_id: UUID | None = Field(
-        default=None, description="The other player, when the viewer is a participant."
-    )
-
-    outcome: str | None
-    termination_reason: str | None
-    winner: str | None
-    ply_number: int
-
-    started_at: datetime
-    ended_at: datetime | None
-
-    @classmethod
-    def of(cls, entry: MatchHistoryEntry, *, viewer_id: UUID) -> "MatchHistoryEntryResponse":
-        opponent = _opponent_of(entry, viewer_id)
-        return cls(
-            match_id=entry.match_id,
-            variant=entry.variant.value,
-            speed_class=None,
-            rated=entry.rated,
-            engine_version=entry.engine_version,
-            light_player_id=entry.light_player_id,
-            dark_player_id=entry.dark_player_id,
-            opponent_id=opponent,
-            outcome=entry.outcome.value if entry.outcome else None,
-            termination_reason=(
-                entry.termination_reason.value if entry.termination_reason else None
-            ),
-            winner=entry.winner.value if entry.winner else None,
-            ply_number=entry.ply_number,
-            started_at=entry.created_at,
-            ended_at=entry.ended_at,
-        )
-
-
-class MatchHistoryResponse(BaseModel):
-    entries: list[MatchHistoryEntryResponse]
-    next_cursor: str | None = Field(
-        default=None, description="Opaque. Send it back as `after`; `null` on the last page."
-    )
-
-    @classmethod
-    def of(cls, page: MatchHistoryPage, *, viewer_id: UUID) -> "MatchHistoryResponse":
-        return cls(
-            entries=[
-                MatchHistoryEntryResponse.of(entry, viewer_id=viewer_id) for entry in page.entries
-            ],
-            next_cursor=encode_cursor(page.next_cursor) if page.next_cursor else None,
-        )
-
-
-class PlacedPieceResponse(BaseModel):
-    square: str
-    side: str
-    rank: str
-
-
-class ReplayPlyResponse(BaseModel):
-    """One ply, and the board it produced."""
-
-    ply_number: int
-    side: str
-    path: list[str]
-    captured: list[str]
-    promoted_to: str | None
-    fingerprint: str
-    pieces: list[PlacedPieceResponse]
-    think_time_ms: int | None
-    remaining_clock_ms: int | None
-
-    @classmethod
-    def of(cls, ply: ReplayPly) -> "ReplayPlyResponse":
-        return cls(
-            ply_number=ply.ply_number,
-            side=ply.side.value,
-            path=list(ply.path),
-            captured=list(ply.captured),
-            promoted_to=ply.promoted_to,
-            fingerprint=ply.fingerprint,
-            pieces=[
-                PlacedPieceResponse(square=p.square, side=p.side, rank=p.rank) for p in ply.pieces
-            ],
-            think_time_ms=ply.think_time_ms,
-            remaining_clock_ms=ply.remaining_clock_ms,
-        )
-
-
 class ReplayTimeControlResponse(BaseModel):
     """How much time each side had. `null` for an untimed match."""
 
@@ -213,6 +105,189 @@ class ReplaySeatResponse(BaseModel):
             rating_value=seat.rating_value,
             rating_deviation=seat.rating_deviation,
             is_provisional=seat.is_provisional,
+        )
+
+
+class MatchHistoryEntryResponse(BaseModel):
+    """One finished match, as a list renders it.
+
+    `opponent_id` is present only when the viewer played — it is the field
+    that makes a personal history readable, and it is meaningless when a
+    stranger reads somebody else's record.
+    """
+
+    match_id: UUID
+    variant: str
+    speed_class: str | None = Field(
+        default=None,
+        description="The rating key's speed class, when the match recorded one.",
+    )
+    rated: bool
+    engine_version: int = Field(
+        description="Replay is refused for versions this build cannot reproduce."
+    )
+
+    light_player_id: UUID
+    dark_player_id: UUID
+    opponent_id: UUID | None = Field(
+        default=None, description="The other player, when the viewer is a participant."
+    )
+
+    outcome: str | None
+    termination_reason: str | None
+    winner: str | None
+    ply_number: int
+
+    opponent: ReplaySeatResponse | None = Field(
+        default=None,
+        description=(
+            "The other player's public identity, when the viewer is a participant. "
+            "Composed from `users`' privacy-gated read; `null` for a deactivated "
+            "account or when the viewer did not play."
+        ),
+    )
+
+    time_control: ReplayTimeControlResponse | None = Field(
+        default=None, description="How much time each side had. `null` for an untimed match."
+    )
+
+    started_at: datetime
+    ended_at: datetime | None
+
+    @classmethod
+    def of(
+        cls,
+        entry: MatchHistoryEntry,
+        *,
+        viewer_id: UUID,
+        profiles: Mapping[UUID, PublicUserProfile] | None = None,
+    ) -> "MatchHistoryEntryResponse":
+        opponent = _opponent_of(entry, viewer_id)
+        seen = profiles or {}
+        return cls(
+            match_id=entry.match_id,
+            variant=entry.variant.value,
+            # Read from the entry rather than hardcoded — A64-020.5F. This
+            # was `None` on every row ever served, under a schema field that
+            # declared it.
+            speed_class=entry.speed_class,
+            rated=entry.rated,
+            engine_version=entry.engine_version,
+            light_player_id=entry.light_player_id,
+            dark_player_id=entry.dark_player_id,
+            opponent_id=opponent,
+            # Reuses the replay's seat shape rather than declaring a second
+            # one: a client renders "who was this" identically in a history
+            # row and on a replay page, and two shapes would be two things
+            # to keep in step. The rating fields are absent here because the
+            # history entry does not carry a seat snapshot — a `null` rating
+            # is the honest answer rather than a fabricated one.
+            opponent=(
+                ReplaySeatResponse.of(
+                    ReplaySeat(
+                        player_id=opponent,
+                        rating_value=None,
+                        rating_deviation=None,
+                        is_provisional=None,
+                    ),
+                    seen.get(opponent),
+                )
+                if opponent is not None
+                else None
+            ),
+            time_control=(
+                ReplayTimeControlResponse(
+                    initial_ms=entry.time_control.initial_ms,
+                    increment_ms=entry.time_control.increment_ms,
+                )
+                if entry.time_control is not None
+                else None
+            ),
+            outcome=entry.outcome.value if entry.outcome else None,
+            termination_reason=(
+                entry.termination_reason.value if entry.termination_reason else None
+            ),
+            winner=entry.winner.value if entry.winner else None,
+            ply_number=entry.ply_number,
+            started_at=entry.created_at,
+            ended_at=entry.ended_at,
+        )
+
+
+class MatchHistoryResponse(BaseModel):
+    entries: list[MatchHistoryEntryResponse]
+    next_cursor: str | None = Field(
+        default=None, description="Opaque. Send it back as `after`; `null` on the last page."
+    )
+
+    @classmethod
+    def of(
+        cls,
+        page: MatchHistoryPage,
+        *,
+        viewer_id: UUID,
+        profiles: Mapping[UUID, PublicUserProfile] | None = None,
+    ) -> "MatchHistoryResponse":
+        return cls(
+            entries=[
+                MatchHistoryEntryResponse.of(entry, viewer_id=viewer_id, profiles=profiles)
+                for entry in page.entries
+            ],
+            next_cursor=encode_cursor(page.next_cursor) if page.next_cursor else None,
+        )
+
+    @staticmethod
+    def opponents_in(page: MatchHistoryPage, *, viewer_id: UUID) -> list[UUID]:
+        """Every opponent on this page, deduplicated — A64-020.5F §17.
+
+        Here rather than in the route so the composition and the rendering
+        agree on *which* ids matter: `_opponent_of` decides that a stranger
+        reading somebody else's record has no "opponent" at all, and a route
+        collecting both seats would fetch profiles the response then
+        discards.
+
+        Deduplicated because a history page is very often the same two
+        players — one batched lookup of two ids rather than twenty.
+        """
+        wanted = {
+            found for entry in page.entries if (found := _opponent_of(entry, viewer_id)) is not None
+        }
+        return sorted(wanted)
+
+
+class PlacedPieceResponse(BaseModel):
+    square: str
+    side: str
+    rank: str
+
+
+class ReplayPlyResponse(BaseModel):
+    """One ply, and the board it produced."""
+
+    ply_number: int
+    side: str
+    path: list[str]
+    captured: list[str]
+    promoted_to: str | None
+    fingerprint: str
+    pieces: list[PlacedPieceResponse]
+    think_time_ms: int | None
+    remaining_clock_ms: int | None
+
+    @classmethod
+    def of(cls, ply: ReplayPly) -> "ReplayPlyResponse":
+        return cls(
+            ply_number=ply.ply_number,
+            side=ply.side.value,
+            path=list(ply.path),
+            captured=list(ply.captured),
+            promoted_to=ply.promoted_to,
+            fingerprint=ply.fingerprint,
+            pieces=[
+                PlacedPieceResponse(square=p.square, side=p.side, rank=p.rank) for p in ply.pieces
+            ],
+            think_time_ms=ply.think_time_ms,
+            remaining_clock_ms=ply.remaining_clock_ms,
         )
 
 

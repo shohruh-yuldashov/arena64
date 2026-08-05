@@ -592,5 +592,30 @@
       "body": "Nimadir xato ketdi. Birozdan keyin qayta urinib ko'ring."
     },
     "openReplay": "Takrorlashni ko'rish"
+  },
+  "history": {
+    "title": "O'yinlar tarixi",
+    "loading": "O'yinlaringiz yuklanmoqda…",
+    "error": "O'yinlaringizni yuklab bo'lmadi.",
+    "backToProfile": "Profilga qaytish",
+    "versus": "{opponent} bilan",
+    "unknownOpponent": "Noma'lum o'yinchi",
+    "replayOf": "{opponent} bilan o'yinni takrorlash",
+    "loadMore": "Yana yuklash",
+    "loadingMore": "Yuklanmoqda…",
+    "end": "Barcha o'yinlar shu.",
+    "result": {
+      "won": "Yutdingiz",
+      "lost": "Yutqazdingiz",
+      "draw": "Durang",
+      "lightWon": "Oq yutdi",
+      "darkWon": "Qora yutdi",
+      "unfinished": "Natija yo'q"
+    },
+    "empty": {
+      "title": "Hali o'yin yo'q",
+      "body": "O'ynang va u shu yerda paydo bo'ladi — takrorlash bilan birga.",
+      "action": "O'yin topish"
+    }
   }
 }

@@ -1,30 +1,51 @@
 """The ports `statistics` programs against — AD-06: declared in
 `application/`, satisfied by `infrastructure/`.
 
-One port, because this module has one job today: read a player's record.
-There is deliberately no writer.
+Two ports. `StatisticsRepository` is the read this module shipped with;
+`MatchProjectionUseCase` is the write A64-020.5F adds.
 
-## Why there is no write port yet
+## The writer arrived, and the conditions it was waiting for
 
-A64-012.6 excludes game result processing, and a projection's writer is not
-a repository method — it is a consumer of `match.completed` folding results
-in idempotently (domain-model.md §227: "downstream contexts consume
-`match.completed` as a self-contained fact and never call back"). That
-consumer needs a watermark column, a dead-letter path and an ordering
-guarantee, none of which exist.
+A64-012.6 recorded why there was none: "a projection's writer is not a
+repository method — it is a consumer of `match.completed` folding results
+in idempotently... That consumer needs a watermark column, a dead-letter
+path and an ordering guarantee, none of which exist."
 
-Publishing an `upsert` now would be a method with no caller and no
-correctness story, which is exactly the speculative generality CLAUDE.md §1
-rule 7 rules out. The seam that matters — that `profiles` reads through a
-port and never touches this table — is already in place, and a writer joins
-the same `application/` layer when there is something to write.
+All three exist now. The watermark is `(counted_at, counted_match_id)` on
+`player_statistics`; the dead-letter path is the outbox relay's retry and
+attempt cap; the ordering guarantee is that same watermark compared as a
+total order, so a match arriving late still counts and does not rewrite a
+streak (§3).
+
+`StatisticsRepository` gains the three operations a projection needs, and
+they are deliberately the smallest set that can express one: claim a match
+for a player, read the row under a lock, write it back. Anything wider —
+"set games_played", "reset a player" — would be a way to produce a row no
+sequence of matches could produce.
+
+The port returns **values**, never ORM rows: `ProjectionState` carries the
+counters and the watermark, and the mapping stays in infrastructure. That
+is what `statistics layers point inward` enforces, and it is why the lock
+and the write are two calls rather than a handle the application holds.
+
+`MatchProjectionUseCase` abstracts something different — the *transaction
+boundary*, so the consumer and the backfill can call one service without
+either knowing how the other batches.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Protocol
+from datetime import datetime
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
+from app.modules.statistics.domain.projection import Projected, ProjectionState
 from app.modules.statistics.domain.statistics import PlayerStatistics
+
+if TYPE_CHECKING:
+    from app.modules.statistics.application.services.match_projection_service import (
+        CompletedMatchFacts,
+        ProjectionOutcome,
+    )
 
 
 class StatisticsRepository(Protocol):
@@ -71,5 +92,62 @@ class StatisticsRepository(Protocol):
         statement. `WHERE player_id = ANY('{}')` is a round trip that can
         only return nothing, and an empty page is the ordinary result of a
         search nobody matched.
+        """
+        ...
+
+
+class StatisticsProjectionRepository(Protocol):
+    """The writes a projection needs — A64-020.5F §4.
+
+    Separate from `StatisticsRepository` above, which is the read every
+    other module consumes through `statistics.public`. Splitting them is
+    what keeps a reader unable to write: `profiles` holds the first and has
+    no way to reach the second.
+    """
+
+    async def claim(self, match_id: UUID, player_id: UUID, *, at: datetime) -> bool:
+        """Records that this player has been credited with this match.
+
+        `True` if this call made the record, `False` if it already existed.
+        **The exactly-once mechanism** — the decision is a unique
+        constraint's, not a read the caller could lose a race on.
+        """
+        ...
+
+    async def state_for_update(self, player_id: UUID) -> "ProjectionState":
+        """This player's counters and watermark, with the row locked.
+
+        Creates the row if absent: a player's first completed match is
+        exactly when one should appear, and the absence of a row is a
+        legitimate state for a projection (DM-03).
+
+        The lock is held for the caller's transaction, which is what makes
+        the separate `write` below safe without a compare-and-set.
+        """
+        ...
+
+    async def write(self, player_id: UUID, projected: "Projected") -> None:
+        """Stores a folded record. Requires the row locked by
+        `state_for_update` in the same transaction."""
+        ...
+
+
+class MatchProjectionUseCase(Protocol):
+    """Counting one completed match into both players' records — §8.
+
+    Held by the consumer and by the backfill, so neither knows whether the
+    transaction is per event or per batch. That is the only thing this
+    abstracts, and it is the only thing that genuinely differs between
+    them: the rules, the marker and the ordering are identical by
+    construction, because both call the same service.
+    """
+
+    async def apply(self, facts: "CompletedMatchFacts") -> "ProjectionOutcome":
+        """Folds one match in, exactly once per player.
+
+        Idempotent by construction: a match already counted for a player
+        returns `ALREADY_PROCESSED` rather than counting twice. The
+        guarantee is `pk_processed_match`, not this contract — a caller
+        cannot break it by calling twice.
         """
         ...

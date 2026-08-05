@@ -1,5 +1,8 @@
 """`game`'s repositories — one per aggregate root (repositories.md)."""
 
+from app.modules.game.infrastructure.repositories.match_history_repository import (
+    SqlAlchemyMatchHistoryRepository,
+)
 from app.modules.game.infrastructure.repositories.match_record_repository import (
     SqlAlchemyMatchRecordRepository,
 )
@@ -11,6 +14,7 @@ from app.modules.game.infrastructure.repositories.move_log_repository import (
 )
 
 __all__ = [
+    "SqlAlchemyMatchHistoryRepository",
     "SqlAlchemyMatchRecordRepository",
     "SqlAlchemyMatchRetentionStore",
     "SqlAlchemyMoveLogRepository",

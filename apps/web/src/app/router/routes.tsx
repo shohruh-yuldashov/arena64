@@ -291,6 +291,24 @@ export const replayRoute = createRoute({
   component: protectedPage(() => import("@/pages/replay")),
 });
 
+/**
+ * `/games/history` — the authenticated player's finished matches.
+ *
+ * A64-020.5F. No route parameter: whose history this is comes from the
+ * session, so there is nothing in the URL to tamper with. A public
+ * `/players/$username/games` would be a different surface with a different
+ * privacy answer, and nothing links to one yet.
+ *
+ * Under `/games/` rather than `/profile/history`, because a match belongs
+ * to the game surface and this is where `/games/$matchId/replay` already
+ * lives — the two are read together.
+ */
+export const historyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/games/history",
+  component: protectedPage(() => import("@/pages/history")),
+});
+
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
@@ -310,5 +328,9 @@ export const routeTree = rootRoute.addChildren([
   searchRoute,
   playRoute,
   gameRoute,
+  // **Before** `/games/$matchId`, so the literal wins over the parameter —
+  // otherwise "history" would be read as a match id and the page would ask
+  // the gateway to join a room called `history`.
+  historyRoute,
   replayRoute,
 ]);

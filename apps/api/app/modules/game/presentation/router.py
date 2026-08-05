@@ -69,6 +69,7 @@ _MAX_LIMIT = 100
 async def player_match_history(
     user: CurrentUser,
     history: VisibleMatchHistoryDep,
+    players: ReplayPlayersDep,
     player_id: Annotated[UUID, Path(description="Whose history to read.")],
     after: Annotated[
         str | None, Query(description="An opaque cursor from a previous page.")
@@ -91,7 +92,18 @@ async def player_match_history(
         after=decode_cursor(after) if after else None,
         limit=limit,
     )
-    return build_response(MatchHistoryResponse.of(page, viewer_id=user.id))
+
+    # **One batched lookup for the whole page** — A64-020.5F §17, and the
+    # same arrangement the replay route and `matchmaking`'s pending-match
+    # route already make. Without it a client would issue one profile
+    # request per row to turn an opponent id into a name, which is the N+1
+    # §23 forbids and the reason this is composed here at all.
+    #
+    # Deduplicated first: a history page is very often the same two players,
+    # so this is usually a lookup of one or two ids rather than twenty.
+    opponents = MatchHistoryResponse.opponents_in(page, viewer_id=user.id)
+    profiles = await players.find_public_profiles(opponents) if opponents else {}
+    return build_response(MatchHistoryResponse.of(page, viewer_id=user.id, profiles=profiles))
 
 
 @replay_router.get(

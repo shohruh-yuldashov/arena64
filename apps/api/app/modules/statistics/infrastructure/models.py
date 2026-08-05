@@ -65,11 +65,12 @@ queried by nobody; this is the reverse.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, Index, Integer, text
+from sqlalchemy import CheckConstraint, Index, Integer, PrimaryKeyConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base
 from app.database.mixins import TimestampMixin
+from app.database.types import UtcDateTime
 from app.modules.statistics.domain.statistics import DEFAULT_RATING
 
 STATISTICS_SCHEMA = "statistics"
@@ -125,6 +126,12 @@ class PlayerStatisticsModel(Base, TimestampMixin):
             "best_win_streak >= GREATEST(current_streak, 0)",
             name="best_win_streak_covers_current",
         ),
+        # The watermark is a pair or it is absent — a half-set one would be
+        # a row whose ordering question has no answer (BE-06).
+        CheckConstraint(
+            "(counted_at IS NULL) = (counted_match_id IS NULL)",
+            name="watermark_is_whole",
+        ),
         {"schema": STATISTICS_SCHEMA},
     )
 
@@ -160,6 +167,26 @@ class PlayerStatisticsModel(Base, TimestampMixin):
     # beside it the first time a result is corrected or a rebuild runs.
     # Computed on read by `PlayerStatistics.win_rate`.
 
+    counted_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    counted_match_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    """The total-order position of the last match folded into this row —
+    A64-020.5F §3.
+
+    `(counted_at, counted_match_id)`, and the pair is the point: a
+    timestamp alone is not a total order, so two matches finishing in the
+    same instant would compare equal and "which came last" would depend on
+    arrival order. The match id breaks the tie identically in the live
+    consumer and in the backfill.
+
+    Only the **streak** reads it. The counts commute, so a match arriving
+    late still belongs in the totals; a streak is a statement about the most
+    recent games and folding an older one into it would describe a sequence
+    that never happened.
+
+    Null on a row that has counted nothing — including every row a rebuild
+    creates before its first match.
+    """
+
     created_at: Mapped[datetime]
     updated_at: Mapped[datetime | None]
 
@@ -168,3 +195,47 @@ class PlayerStatisticsModel(Base, TimestampMixin):
             f"<PlayerStatisticsModel player_id={self.player_id!r} "
             f"games_played={self.games_played!r}>"
         )
+
+
+class ProcessedMatchModel(Base):
+    """One player's projection of one match, recorded — A64-020.5F §5.
+
+    **The exactly-once mechanism, and it is structural rather than
+    procedural.** A `UNIQUE (match_id, player_id)` is what makes a second
+    application impossible; a read-then-check would be a race under two
+    relay processes, and the platform's `processed_event` ledger cannot
+    serve here because the backfill has no event id to key on.
+
+    The identity is deliberately the **match and the player**, not the
+    event: that is the pair both paths share, so a match counted live and
+    the same match reached by a backfill collide on the constraint and the
+    second one is refused. §5's "backfill overlapping with live
+    consumption" is answered by that collision and by nothing else.
+
+    Its own relation rather than a column on `player_statistics`, because a
+    player has many matches and a row has one set of counters — and because
+    the marker must be insertable in the same transaction as the counter
+    update without touching the counter row's shape.
+    """
+
+    __tablename__ = "processed_match"
+    __table_args__ = (
+        PrimaryKeyConstraint("match_id", "player_id", name="pk_processed_match"),
+        # "Which matches has this player already been credited with", for a
+        # backfill checking its own progress. The primary key answers the
+        # other direction.
+        Index("ix_processed_match__player", "player_id", "processed_at"),
+        {"schema": STATISTICS_SCHEMA},
+    )
+
+    match_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    player_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    """Both opaque (DM-06). **No foreign keys** — to `game.match` or to
+    `users.user` — for the reason `player_statistics.player_id` records:
+    a `statistics` schema that could not deploy without `game`'s would make
+    architecture.md §16's extraction seam decorative."""
+
+    processed_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    """When the projection counted it. Diagnostic: it says whether a row
+    came from live consumption or from a backfill run, without a flag that
+    would need to mean something."""

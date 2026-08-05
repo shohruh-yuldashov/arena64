@@ -592,5 +592,30 @@
       "body": "Something went wrong. Try again in a moment."
     },
     "openReplay": "View replay"
+  },
+  "history": {
+    "title": "Match history",
+    "loading": "Loading your matches…",
+    "error": "Your matches could not be loaded.",
+    "backToProfile": "Back to profile",
+    "versus": "vs {opponent}",
+    "unknownOpponent": "Unknown player",
+    "replayOf": "Replay the match against {opponent}",
+    "loadMore": "Load more",
+    "loadingMore": "Loading…",
+    "end": "That is every match.",
+    "result": {
+      "won": "Won",
+      "lost": "Lost",
+      "draw": "Draw",
+      "lightWon": "Light won",
+      "darkWon": "Dark won",
+      "unfinished": "No result"
+    },
+    "empty": {
+      "title": "No matches yet",
+      "body": "Play a game and it will appear here, with a replay you can step through.",
+      "action": "Find a game"
+    }
   }
 }

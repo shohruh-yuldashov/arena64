@@ -1354,7 +1354,87 @@ Two, both isolated in their own commits before the UI:
   the eleven termination reasons are not the board's, and the result check
   demanded the board produce them anyway.
 
-## 18. Open questions
+## 18. Match history — A64-020.5F
+
+`/games/history`, a lazy route behind `RequireAuth`. The authenticated
+player's finished matches, newest first.
+
+### 18.1 One request per page, none per row
+
+The opponent and the time control arrive **composed** in the history
+response — one batched `find_public_profiles` on the server for the whole
+page, deduplicated first. A client turning twenty opponent ids into twenty
+names would be the N+1 §17 forbids; this could not make one, because there
+is no per-row query in the tree.
+
+Measured in the E2E: one `GET` for the page, zero profile reads.
+
+### 18.2 The cursor is opaque and stays that way
+
+`useInfiniteQuery` over the backend's cursor: `getNextPageParam` returns
+what the last page said and the next request sends it back verbatim.
+Decoding it would couple the client to the endpoint's ordering, and offsets
+are forbidden outright — a match completing mid-scroll shifts every offset
+and silently duplicates or skips a row.
+
+The cursor is **not** in the query key. One entry owns the page chain, which
+is the whole reason to use an infinite query: a key per cursor would make
+"load more" a new cache entry and leave the earlier pages to be collected
+out from under the list.
+
+### 18.3 What a row shows
+
+Opponent (thumbnail, name), result, rated/casual, time control, speed
+class, date, termination reason, and a replay link. Every field is the
+server's; nothing is recomputed and no result is derived from a board.
+
+The result is a **word** as well as a colour, and each replay link names its
+opponent — "Replay" repeated down a list gives a screen reader twenty
+identical links.
+
+### 18.4 Filters
+
+**None, deliberately.** The endpoint has no filter contract, and §18's
+alternative — fetching every page and filtering locally — is exactly what a
+cursor-paginated endpoint exists to prevent. A filter contract is a
+backend change with its own index questions, and this phase did not need
+it to be useful.
+
+### 18.5 Profile integration
+
+A link, not an inline preview: the profile's request count is unchanged and
+the history page owns its own pagination. The statistics panel already
+rendered `StatisticsResponse` — it now shows real numbers because the
+projection exists, with no frontend change at all.
+
+### 18.6 Invalidation on completion
+
+A finished game invalidates two scoped keys — the profile and the history
+root — fired rather than awaited, so the terminal result never waits for a
+refetch. Nothing else is touched.
+
+The counters are **eventually consistent by design**: the projection is an
+outbox consumer, so the relay may not have run when the invalidation fires.
+That is why both keys carry a short `staleTime` rather than an infinite one
+— the next navigation or focus catches what this missed.
+
+### 18.7 E2E
+
+`tests/e2e/history.spec.ts` is last in the project chain and queues for
+nothing: it reads matches the earlier projects finished, asserts the
+profile's counters are non-zero, pages the history, counts the requests,
+and opens a replay from a row. If the account has no history it fails
+loudly rather than skipping.
+
+### 18.8 Backend
+
+Specified in `specs/statistics.md`. What a frontend needs to know: the
+counters are a projection of completed matches, they are eventually
+consistent, and `win_rate` is derived server-side — §2 forbids recomputing
+it here, and the reason is that a second answer can disagree with the four
+counts printed beside it.
+
+## 19. Open questions
 
 | # | Question | Blocked work |
 | --- | --- | --- |

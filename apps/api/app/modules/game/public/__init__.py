@@ -126,6 +126,8 @@ from app.modules.game.public.events import (
     MoveApplied,
 )
 from app.modules.game.public.history import (
+    CompletedMatchRecord,
+    CompletedMatchScanner,
     HistoryCursor,
     MatchHistoryEntry,
     MatchHistoryPage,
@@ -231,6 +233,8 @@ __all__ = [
     "MatchNotFound",
     "MatchNotPending",
     "MatchOrigin",
+    "CompletedMatchRecord",
+    "CompletedMatchScanner",
     "HistoryCursor",
     "MatchHistoryEntry",
     "MatchHistoryPage",

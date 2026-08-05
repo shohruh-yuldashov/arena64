@@ -675,7 +675,28 @@ class RateLimitSettings(BaseSettings):
     # brute-forcing one account; per-email bounds a *distributed* attempt on
     # one account, which is exactly what per-IP cannot see. Credential
     # stuffing is the distributed case by definition.
-    login_ip_limit: int = Field(default=5, ge=1)
+    #
+    # **A64-020.6 raised the per-IP limit from 5 to 20** and left the
+    # per-email limit alone. The two are not interchangeable, and which one
+    # moved matters:
+    #
+    #   - An **IP is not a user.** A household, an office, a school and every
+    #     mobile carrier behind CGNAT share one egress address, so five
+    #     attempts per quarter hour is five *people* — the sixth is locked
+    #     out of a platform that is working perfectly. That is a denial of
+    #     service this file inflicts on its own users, and it scales with how
+    #     successful the product is.
+    #   - The per-IP rule was never the anti-brute-force control. Guessing
+    #     one account's password is bounded by `login_email_limit` (ten an
+    #     hour, unchanged, and unevadable by adding hosts), by Argon2id at
+    #     ~20ms, and by `users.locked_until`. Twenty per quarter hour is
+    #     eighty an hour from one host against *all* accounts, which
+    #     credential stuffing needs millions of to be worth running.
+    #
+    # So this loosens the rule that was punishing shared egress and keeps the
+    # rule that actually bounds an attack. Both remain configurable, and
+    # lowering either is one environment variable during an incident.
+    login_ip_limit: int = Field(default=20, ge=1)
     login_ip_window_seconds: int = Field(default=15 * 60, ge=1)
     login_email_limit: int = Field(default=10, ge=1)
     login_email_window_seconds: int = Field(default=60 * 60, ge=1)
@@ -683,7 +704,19 @@ class RateLimitSettings(BaseSettings):
     # --- POST /auth/register ------------------------------------------------
     # Per IP only: there is no account yet, so there is no per-account
     # dimension to count. Bounds mass account creation.
-    register_ip_limit: int = Field(default=3, ge=1)
+    #
+    # **A64-020.6 raised this from 3 to 10 an hour**, for the reason above
+    # applied to a harsher case: registration is the *first* thing a new user
+    # does, so the failure is invisible — a classroom, a games night or a
+    # family signing up together silently stops working at the fourth person,
+    # and nobody reports it because they never got an account to report it
+    # from.
+    #
+    # Ten an hour from one address still makes mass account creation
+    # uneconomic: a botnet is the only way to create accounts at scale, and a
+    # per-IP counter has never been the control for that — email
+    # verification is (`users.is_verified`, A64-011.6).
+    register_ip_limit: int = Field(default=10, ge=1)
     register_ip_window_seconds: int = Field(default=60 * 60, ge=1)
 
     # --- POST /auth/password/forgot -----------------------------------------

@@ -29,15 +29,23 @@ from app.config.settings import RateLimitSettings
 from app.core.rate_limiting import RateLimitScope
 from app.modules.auth.presentation.rate_limits import build_rules
 
-#: Every endpoint A64-011.8 lists, with the limits it specifies. Written
-#: out as data rather than derived from `build_rules`, which would make the
-#: test agree with the implementation by construction and assert nothing.
+#: Every endpoint A64-011.8 lists, with the limits in force. Written out as
+#: data rather than derived from `build_rules`, which would make the test
+#: agree with the implementation by construction and assert nothing.
+#:
+#: Two figures are **not** A64-011.8's, and both were raised by A64-020.6:
+#: `login_ip` 5 -> 20 and `register_ip` 3 -> 10. An IP is not a user, so the
+#: old numbers locked out the sixth person on a shared connection and the
+#: fourth person signing up together. The rules that bound an *attack* —
+#: `login_email`, Argon2id, `users.locked_until`, email verification — are
+#: unchanged, which is the property this table exists to keep visible: a
+#: future loosening of `login_email` should look wrong here.
 #:
 #: `(path, rule name, scope, limit, window seconds)`
 EXPECTED: list[tuple[str, str, RateLimitScope, int, int]] = [
-    ("/api/v1/auth/login", "login_ip", RateLimitScope.IP, 5, 15 * 60),
+    ("/api/v1/auth/login", "login_ip", RateLimitScope.IP, 20, 15 * 60),
     ("/api/v1/auth/login", "login_email", RateLimitScope.EMAIL, 10, 60 * 60),
-    ("/api/v1/auth/register", "register_ip", RateLimitScope.IP, 3, 60 * 60),
+    ("/api/v1/auth/register", "register_ip", RateLimitScope.IP, 10, 60 * 60),
     (
         "/api/v1/auth/password/forgot",
         "forgot_password_email",
@@ -62,11 +70,11 @@ EXPECTED: list[tuple[str, str, RateLimitScope, int, int]] = [
     # `/auth/browser/register` are two doors into one action, and separate
     # counters would double every allowance for anybody willing to alternate.
     #
-    # Absent from this table until now, which is how five guarded endpoints
-    # went untested for four phases — see the decision check below.
-    ("/api/v1/auth/browser/login", "login_ip", RateLimitScope.IP, 5, 15 * 60),
+    # Absent from this table before A64-020.6, which is how five guarded
+    # endpoints went untested for four phases — see the count below.
+    ("/api/v1/auth/browser/login", "login_ip", RateLimitScope.IP, 20, 15 * 60),
     ("/api/v1/auth/browser/login", "login_email", RateLimitScope.EMAIL, 10, 60 * 60),
-    ("/api/v1/auth/browser/register", "register_ip", RateLimitScope.IP, 3, 60 * 60),
+    ("/api/v1/auth/browser/register", "register_ip", RateLimitScope.IP, 10, 60 * 60),
     ("/api/v1/auth/browser/refresh", "refresh_ip", RateLimitScope.IP, 30, 60),
 ]
 

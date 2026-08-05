@@ -293,8 +293,8 @@ failures, not rendering ones. Each phase adds at most eight.
 
 Two limits bound the suite, and both are production behaviour that must stay on:
 
-    register   3 per IP per hour
-    login      5 per IP per 15 minutes
+    register   10 per IP per hour
+    login      20 per IP per 15 minutes
 
 A64-020.3 registered a fresh account per run and became unrunnable on the fourth. A social
 suite needs two accounts and would have hit the register cap on its second run and the

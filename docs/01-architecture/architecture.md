@@ -120,7 +120,7 @@ flowchart TB
     end
 
     subgraph clients["Client applications"]
-        WEB["apps/web — Next.js player client"]
+        WEB["apps/web — Vite React SPA, player client"]
         ADM["apps/admin — Next.js operations console"]
     end
 
@@ -1033,7 +1033,7 @@ correspondence game, where an in-process timer is obviously untenable.
 
 ```mermaid
 flowchart TB
-    ROUTE["Route layer — Next.js App Router, server components"]
+    ROUTE["Route layer — TanStack Router, lazy route components"]
     FEAT["Feature modules — mirroring backend bounded contexts"]
     VM["View model layer — presentation logic, selectors"]
     DOMC["Client rules kernel — TypeScript engine"]

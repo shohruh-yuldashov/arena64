@@ -67,6 +67,7 @@ Proposed ──▶ Accepted ──▶ Superseded
 | ID | Title | Status | Date |
 | --- | --- | --- | --- |
 | [ADR-001](./ADR-001-glicko2-incremental.md) | Glicko-2, applied incrementally, with lazy RD inflation | Accepted | 2026-08-04 |
+| [ADR-002](./ADR-002-frontend-spa.md) | `apps/web` is a Vite single-page application, not Next.js | Accepted | 2026-08-05 |
 
 ## TODO
 

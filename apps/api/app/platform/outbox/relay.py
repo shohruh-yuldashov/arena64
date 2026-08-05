@@ -127,6 +127,25 @@ class OutboxRelay:
         self._max_attempts = max_attempts
         self._retry_base_seconds = retry_base_seconds
         self._retry_max_seconds = retry_max_seconds
+        # A64-020.5F. Guards **this relay's own session** — the one
+        # `_claim`, the idempotency filter and the ledger write share.
+        #
+        # `_dispatch` runs the consumers under `asyncio.gather`, and each
+        # `_deliver` opens `self._unit_of_work` twice around it. The
+        # handlers themselves are isolated (each opens its own session), but
+        # those two blocks were not: N consumers interleaved statements on
+        # one `AsyncSession`, which is exactly what `_dispatch`'s own
+        # docstring says asyncpg does not permit.
+        #
+        # It surfaced as `IllegalStateChangeError` from a rollback that
+        # could not run, and it was invisible to the suite because the unit
+        # tests drive the relay with `NullUnitOfWork`.
+        #
+        # A lock rather than a session per consumer, because the shared work
+        # is two short statements and the concurrency worth having is the
+        # *handlers'* — which this does not touch.
+        self._session_lock = asyncio.Lock()
+
         # A64-015.6 §5. Defaulted rather than required, so every existing
         # construction site keeps working and a caller that names no policy
         # still gets a timeout — see `ConsumerPolicies.timeout_for` on why
@@ -157,12 +176,17 @@ class OutboxRelay:
         the composition root. `gather` makes a tick cost the slowest one
         instead.
 
-        Safe because the consumers share nothing: each opens its own session
-        (`SessionScopedNotificationHandler`), writes its own
-        `processed_event` partition, and reports failures per entry. Two
-        handlers on one session would interleave statements on one
+        Safe because the consumers share nothing **of their own**: each
+        opens its own session (`SessionScopedNotificationHandler`), writes
+        its own `processed_event` partition, and reports failures per entry.
+        Two handlers on one session would interleave statements on one
         connection, which asyncpg does not permit — and is the reason that
         adapter exists.
+
+        What they *do* share is this relay's session, for the idempotency
+        filter and the ledger write that bracket every delivery. Those are
+        serialised by `_session_lock` — A64-020.5F, which is the defect this
+        paragraph described and did not cover.
 
         `return_exceptions=True` because `_deliver` already converts a
         handler's exception into per-entry failures; anything that still
@@ -273,7 +297,7 @@ class OutboxRelay:
         entries it did not report as failed. Writing it first would mark an
         event handled that a crash then prevented from being handled.
         """
-        async with self._unit_of_work:
+        async with self._session_lock, self._unit_of_work:
             fresh_ids = await self._processed.unprocessed(
                 handler.consumer, [entry.id for entry in entries]
             )
@@ -303,9 +327,13 @@ class OutboxRelay:
         failed_ids = {failure.entry_id for failure in reported}
         delivered = [entry.id for entry in fresh if entry.id not in failed_ids]
 
-        async with self._unit_of_work:
-            await self._processed.mark_processed(handler.consumer, delivered, at=self._clock.now())
-            await self._unit_of_work.commit()
+        # **Shielded from the budget timeout**, and the reason is the whole
+        # of `_deliver_within_budget`'s contract: a cancellation here would
+        # abandon the shared session mid-statement and leave the *next*
+        # consumer's block to fail on it. The handler's own work is already
+        # committed at this point, so what is being protected is the record
+        # that it happened.
+        await asyncio.shield(self._mark(handler, delivered))
 
         for failure in reported:
             logger.warning(
@@ -318,6 +346,15 @@ class OutboxRelay:
             )
 
         return [DeliveryFailure(failure.entry_id, failure.reason) for failure in reported]
+
+    async def _mark(self, handler: EventHandler, delivered: Sequence[UUID]) -> None:
+        """Writes the ledger for what this consumer handled.
+
+        Its own method so it can be shielded — see the call site.
+        """
+        async with self._session_lock, self._unit_of_work:
+            await self._processed.mark_processed(handler.consumer, delivered, at=self._clock.now())
+            await self._unit_of_work.commit()
 
     async def _record(self, entries: Sequence[OutboxEntry], failures: dict[UUID, str]) -> RelayTick:
         """Transaction B: publishes what succeeded, schedules what did not.

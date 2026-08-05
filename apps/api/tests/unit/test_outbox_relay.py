@@ -13,6 +13,7 @@ loses `SKIP LOCKED`, which is why that one property is asserted in
 `tests/contract/test_outbox_repository.py` instead of pretended to here.
 """
 
+import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -24,7 +25,12 @@ import pytest
 from app.platform.events import DomainEvent
 from app.platform.outbox import OutboxEntry, OutboxEventPublisher
 from app.platform.outbox.relay import DeliveryFailure, OutboxRelay
-from tests.fakes.outbox import InMemoryOutbox, InMemoryProcessedEvents, NullUnitOfWork
+from tests.fakes.outbox import (
+    InMemoryOutbox,
+    InMemoryProcessedEvents,
+    NullUnitOfWork,
+    SingleUseUnitOfWork,
+)
 from tests.fakes.presence_redis import MovableClock
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
@@ -108,12 +114,13 @@ def _relay(
     *handlers: _Handler,
     batch_size: int = 50,
     max_attempts: int = 5,
+    unit_of_work: object | None = None,
 ) -> OutboxRelay:
     return OutboxRelay(
         outbox=cast(Any, outbox),
         processed=cast(Any, processed),
         handlers=cast(Any, list(handlers)),
-        unit_of_work=cast(Any, NullUnitOfWork()),
+        unit_of_work=cast(Any, unit_of_work or NullUnitOfWork()),
         clock=clock,
         worker_id="test-worker",
         batch_size=batch_size,
@@ -448,3 +455,61 @@ def _unpublish(entry: OutboxEntry) -> OutboxEntry:
     from dataclasses import replace
 
     return replace(entry, published_at=None, attempt_count=0, next_attempt_at=None)
+
+
+class TestTheRelaySessionIsNotShared:
+    @pytest.mark.asyncio
+    async def test_concurrent_consumers_never_enter_the_relay_session_together(self) -> None:
+        """The regression for a defect that reached production —
+        A64-020.5F.
+
+        `_dispatch` runs the consumers under `asyncio.gather`, and each
+        delivery brackets its handler with two blocks on the relay's **own**
+        session: the idempotency filter before, the ledger write after. Those
+        were unguarded, so two consumers interleaved statements on one
+        `AsyncSession` — which asyncpg refuses and SQLAlchemy reports as
+        `IllegalStateChangeError` from a rollback that could not run.
+
+        It reached production because every test here drove the relay with
+        `NullUnitOfWork`, which models a transaction boundary over nothing
+        and cannot express "a session is one connection".
+        `SingleUseUnitOfWork` models exactly that and nothing else.
+
+        The handlers below **await** inside `handle`, which is what makes
+        the interleaving happen: without a suspension point the event loop
+        never switches and the bug hides.
+        """
+        outbox = InMemoryOutbox()
+        processed = InMemoryProcessedEvents()
+        clock = MovableClock(NOW)
+        await _enqueue(outbox)
+
+        class _Slow(_Handler):
+            async def handle(self, entries: Sequence[OutboxEntry]) -> Sequence[DeliveryFailure]:
+                # Two suspensions, so this consumer is guaranteed to be
+                # mid-flight while the others run their own bracketing
+                # blocks.
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                return await super().handle(entries)
+
+        session = SingleUseUnitOfWork()
+        relay = _relay(
+            outbox,
+            processed,
+            clock,
+            _Slow(consumer="alpha"),
+            _Slow(consumer="beta"),
+            _Slow(consumer="gamma"),
+            unit_of_work=session,
+        )
+
+        tick = await relay.run_once()
+
+        # Every consumer delivered, and none of them found the session
+        # occupied — which is the assertion, because the fake raises rather
+        # than recording if they had.
+        assert tick.published == 1
+        assert tick.failed == 0
+        for consumer in ("alpha", "beta", "gamma"):
+            assert any(record[0] == consumer for record in processed.records)

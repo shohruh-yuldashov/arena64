@@ -14,6 +14,7 @@ two real sessions — for the same reason `tests/fakes/rate_limiter.py` does
 not reimplement the limiter's Lua.
 """
 
+import asyncio
 from collections.abc import Sequence
 from datetime import datetime
 from types import TracebackType
@@ -139,6 +140,58 @@ class NullUnitOfWork:
 
     async def rollback(self) -> None:
         return None
+
+
+class SingleUseUnitOfWork(NullUnitOfWork):
+    """A unit of work that refuses to be entered twice at once.
+
+    The one behaviour of a real `AsyncSession` that matters for the relay's
+    concurrency and that `NullUnitOfWork` does not model: a session is a
+    single connection, and two coroutines inside it at the same moment
+    interleave statements — which asyncpg refuses and SQLAlchemy reports as
+    `IllegalStateChangeError`.
+
+    That gap is why A64-020.5F's defect reached production: the relay
+    dispatched its consumers under `asyncio.gather` while bracketing each
+    with two blocks on **one** shared session, and every unit test drove it
+    with a fake that did not care.
+
+    Raises rather than counting, because the failure being modelled is not
+    a statistic — it is an operation that cannot happen.
+
+    **It suspends where a real session does.** Without that the bug hides:
+    the in-memory ledger fake never awaits anything real, so a whole
+    `async with` block runs to completion without the event loop switching
+    and two coroutines never actually overlap. A real session round-trips
+    to PostgreSQL on entry and on commit, and it is in those windows that
+    the interleaving happens.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = False
+
+    async def __aenter__(self) -> Self:
+        if self.entered:
+            raise RuntimeError(
+                "two coroutines are inside one session at once; a real "
+                "AsyncSession would raise IllegalStateChangeError here"
+            )
+        self.entered = True
+        await asyncio.sleep(0)
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.entered = False
+
+    async def commit(self) -> None:
+        await asyncio.sleep(0)
+        await super().commit()
 
 
 def _replace(entry: OutboxEntry, **changes: object) -> OutboxEntry:

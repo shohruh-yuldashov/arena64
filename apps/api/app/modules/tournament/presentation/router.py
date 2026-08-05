@@ -1,14 +1,18 @@
 """A tournament's public reads — SPEC-TOURNAMENT §7, A64-019.6 §9–§13.
 
-Four endpoints, all read-only. Thin, like every other router on this
-platform: each handler resolves a service, converts a path parameter and
-maps a value to a response — no SQL, no placement arithmetic and no
-visibility rule of its own.
+Five read endpoints. Thin, like every other router on this platform: each
+handler resolves a service, converts a parameter and maps a value to a
+response — no SQL, no placement arithmetic and no visibility rule of its
+own.
 
+    GET /tournaments                  the lobby, newest first
     GET /tournaments/{id}             the detail page
     GET /tournaments/{id}/bracket     rounds, nodes and attempts
     GET /tournaments/{id}/standings   the immutable final result
     GET /players/{id}/tournaments     one player's participation
+
+`/tournaments` and `/tournaments/{id}` differ in segment count, so no path
+a caller can send matches both.
 
 ## Public, and what that means here
 
@@ -59,8 +63,15 @@ from app.api.responses import build_response
 from app.core.exceptions import NotFoundError
 from app.core.responses import ApiResponse
 from app.modules.auth.presentation.dependencies import CurrentUser
-from app.modules.tournament.application.read_models import RegistrationDetail
+from app.modules.game.public import ProductVariant
+from app.modules.rating.public import SpeedClass
+from app.modules.tournament.application.read_models import (
+    RegistrationDetail,
+    TournamentFilter,
+)
+from app.modules.tournament.domain.tournament import TournamentFormat, TournamentStatus
 from app.modules.tournament.presentation.dependencies import (
+    TournamentDirectoryDep,
     TournamentRegistrationServiceDep,
     TournamentResultsDep,
 )
@@ -69,8 +80,10 @@ from app.modules.tournament.presentation.schemas.results import (
     BracketResponse,
     PlayerTournamentsResponse,
     StandingsResponse,
+    TournamentListResponse,
     TournamentResponse,
     decode_cursor,
+    decode_list_cursor,
 )
 
 #: Two prefixes, so each path reads as the resource it is about. A player's
@@ -83,6 +96,68 @@ player_tournaments_router = APIRouter(prefix="/players", tags=["tournaments"])
 #: the only thing that bounds it — the repository takes whatever it is given.
 _DEFAULT_LIMIT = 20
 _MAX_LIMIT = 100
+
+
+@tournaments_router.get(
+    "",
+    response_model=ApiResponse[TournamentListResponse],
+    status_code=status.HTTP_200_OK,
+    summary="The tournament lobby",
+    responses=error_response(422, "The pagination cursor is not valid"),
+)
+async def tournament_lobby(
+    user: CurrentUser,
+    directory: TournamentDirectoryDep,
+    tournament_status: Annotated[
+        TournamentStatus | None, Query(alias="status", description="Only this lifecycle state.")
+    ] = None,
+    format: Annotated[
+        TournamentFormat | None, Query(description="Only this tournament format.")
+    ] = None,
+    variant: Annotated[ProductVariant | None, Query(description="Only this rule set.")] = None,
+    speed_class: Annotated[SpeedClass | None, Query(description="Only this speed class.")] = None,
+    rated: Annotated[bool | None, Query(description="Only rated, or only casual.")] = None,
+    after: Annotated[
+        str | None, Query(description="An opaque cursor from a previous page.")
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=_MAX_LIMIT)] = _DEFAULT_LIMIT,
+) -> ApiResponse[TournamentListResponse]:
+    """Every public tournament, newest first — A64-020.0B.
+
+    **Keyset**, ordered `created_at DESC, id DESC`. Total, because two
+    tournaments created in the same millisecond would otherwise page
+    unstably; never `OFFSET`, whose cost grows with the page number and
+    whose window shifts the moment a tournament is created mid-walk.
+
+    **Every status by default**, completed and cancelled among them. A lobby
+    that hid finished tournaments would answer "what happened here?" with
+    silence, and `status` is what narrows the view to what a player can
+    still enter.
+
+    Public in the same sense as everything else here (§7): visible to every
+    authenticated player, with no viewer narrower than another. Private
+    tournaments do not exist in v0.x, so there is no visibility predicate to
+    get wrong.
+
+    The five filters are a **closed set** and each is an enum or a boolean
+    the tournament already stores, so an unknown value is a `422` from
+    FastAPI's own validation rather than an empty page that looks like a
+    combination nobody runs. There is no creator filter, no free text and no
+    caller-chosen ordering: each would be either a product decision nobody
+    has made or a scan whose cost this endpoint could not state.
+    """
+    page = await directory.listing(
+        filters=TournamentFilter(
+            status=tournament_status,
+            format=format,
+            variant=variant,
+            speed_class=speed_class,
+            rated=rated,
+        ),
+        after=decode_list_cursor(after) if after else None,
+        limit=limit,
+    )
+    return build_response(TournamentListResponse.of(page))
 
 
 @tournaments_router.get(
@@ -265,7 +340,7 @@ async def _entry_of(
     response_model=ApiResponse[PlayerTournamentsResponse],
     status_code=status.HTTP_200_OK,
     summary="A player's tournaments",
-    responses=error_response(400, "The pagination cursor is not valid"),
+    responses=error_response(422, "The pagination cursor is not valid"),
 )
 async def player_tournaments(
     user: CurrentUser,

@@ -117,6 +117,41 @@ class LeaderboardPage:
     """
 
 
+@dataclass(frozen=True, slots=True)
+class LeaderboardNeighbourhood:
+    """One player's own place on the ladder, with the rows around it —
+    A64-020.0A.
+
+    The question a player asks about themselves — *where am I?* — which a
+    page cannot answer: finding yourself by paging a ladder of any size is
+    a linear scan a client should never perform.
+
+    `rank` is **derived, not stored.** It is "how many rows sort strictly
+    above this one, plus one", computed at read time, because a rank is a
+    property of the whole relation rather than of a row: storing one would
+    mean every rating update rewrote an unbounded number of rows, and a
+    stale rank is worse than none.
+
+    Ranks here are **dense in the ordering, not in ties**: the ordering is
+    total (`rating DESC, deviation ASC, player_id ASC`), so no two rows
+    compare equal and no two players share a rank. That is deliberate and
+    different from a tournament's placement, where a shared tier is the
+    product rule — a ladder position is a total order by construction.
+    """
+
+    rank: int
+    """This player's position, counting from 1."""
+
+    entry: LeaderboardEntry
+    """The player's own row, so a caller needs no second read."""
+
+    above: Sequence[LeaderboardEntry]
+    """The rows immediately better, nearest last."""
+
+    below: Sequence[LeaderboardEntry]
+    """The rows immediately worse, nearest first."""
+
+
 class LeaderboardReader(Protocol):
     """Standings for one `RatingKey`. **Read-only** — §8.
 
@@ -137,10 +172,26 @@ class LeaderboardReader(Protocol):
         """
         ...
 
+    async def around(
+        self, player_id: UUID, *, key: RatingKey, span: int = 5
+    ) -> LeaderboardNeighbourhood | None:
+        """Where this player stands, and who is next to them.
+
+        `None` when the player has no rating in this key — which is a
+        legitimate answer rather than an error: an unrated player is not on
+        the ladder, and `RatingSnapshot.unrated` is what describes them.
+
+        `span` bounds each side, so the result is at most `2 * span + 1`
+        rows however large the ladder is. Bounded like every other read on
+        this surface (§10.5).
+        """
+        ...
+
 
 __all__ = [
     "LeaderboardCursor",
     "LeaderboardEntry",
+    "LeaderboardNeighbourhood",
     "LeaderboardPage",
     "LeaderboardReader",
 ]

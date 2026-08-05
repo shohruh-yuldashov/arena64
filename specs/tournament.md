@@ -6,7 +6,7 @@
 | **Status** | Approved for v0.x — Single Elimination only. Audited and closed by A64-019.7 |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-05 — A64-019.8, tournament write entry points (§6h) |
+| **Last updated** | 2026-08-05 — A64-020.0C, the history read costs one statement (§6g) |
 | **Related specs** | [`rating.md`](./rating.md), [`replay.md`](./replay.md), [`matchmaking.md`](./matchmaking.md) |
 | **Audit** | [`tournament/audit.md`](./tournament/audit.md) — reachability, concurrency, performance and the limitations this ships with |
 | **Related** | `services.md` §11.3, `database.md` §18.3, `domain-model.md` §16.2 and R-25 |
@@ -561,6 +561,7 @@ observing a state that cannot exist.
 
 | Endpoint | Returns |
 | --- | --- |
+| `GET /api/v1/tournaments` | The lobby — every tournament, newest first, **keyset** paginated (§6i) |
 | `GET /api/v1/tournaments/{id}` | Configuration, entrant count, current round, lifecycle instants |
 | `GET /api/v1/tournaments/{id}/bracket` | Rounds, nodes, seeds, winners, advancement reasons, attempt summaries with `match_id` |
 | `GET /api/v1/tournaments/{id}/standings` | The immutable placement, ordered `final_rank`, `seed_number`, `player_id` |
@@ -578,6 +579,12 @@ visibility rule.
 
 A player's history uses `(registered_at, tournament_id)` descending — both keys, because a
 single-key order over an unbounded history pages unstably. Never `OFFSET`.
+
+**One statement per page, whatever the limit — A64-020.0C.** `entrant_count` and `current_round`
+were read per tournament, so a page of a hundred issued 201 statements while every test written
+against a page of one passed. They are the same correlated subqueries §6i's lobby uses, so the
+two paginated reads on this surface cost the same and cannot disagree about a number. The
+response is byte-for-byte what it was; only the SQL changed.
 
 ## 6h. Write entry points — A64-019.8
 
@@ -637,6 +644,82 @@ the aggregate refuses the second.
 
 When the Administration epic ships a role, these commands become the thing its
 routes call. The use cases do not change; only who may reach them.
+
+## 6i. The lobby — A64-020.0B
+
+`GET /api/v1/tournaments`. The only tournament read a client reaches **without already knowing
+an id**, and therefore the entry point of the Tournament UI.
+
+### Visibility
+
+Every tournament, for every authenticated player. Private tournaments do not exist in v0.x (§7),
+so there is no visibility predicate and no privacy field — a lobby that filtered by viewer would
+be implementing a product decision nobody has made.
+
+### Ordering
+
+```
+created_at DESC, tournament_id DESC
+```
+
+**Total**, and that is a correctness property rather than tidiness: two tournaments created in
+the same millisecond would otherwise page unstably, which on a keyset is a row seen twice or
+skipped entirely.
+
+### Pagination
+
+**Keyset, never `OFFSET`.** The lobby grows without bound, and an offset scan costs more with
+every page and shifts its window the moment a tournament is created mid-walk.
+
+`next_cursor` is **opaque** — base64 over `(created_at, tournament_id)`, sent back unread.
+Publishing the pair as fields would make the ordering a contract that cannot change without
+breaking clients. Every malformed variant — bad base64, a missing separator, an unparseable
+instant or id — collapses to one **`422 invalid_cursor`**: a caller can do nothing differently
+for any of them, and distinguishing them would narrate the encoding to whoever is probing it.
+
+`limit` is 1–100, default 20, and `limit + 1` rows are read so "is there a next page" is a fact
+rather than a second `COUNT`.
+
+### Filters
+
+A **closed** set of five. Each is an enum or a boolean the tournament already stores, so every
+combination is a predicate over indexed columns and no filter can be expensive.
+
+| Filter | Values |
+| --- | --- |
+| `status` | Any `TournamentStatus` |
+| `format` | Any `TournamentFormat` |
+| `variant` | Any `ProductVariant` |
+| `speed_class` | Any `SpeedClass` |
+| `rated` | `true` / `false` |
+
+An unsupported **value** is a `422` from validation, never an empty page that looks like a
+combination nobody runs.
+
+Deliberately absent, and each for its own reason: a creator filter (`created_by` is operational
+and is not published at all), region, prize, a private/public flag (§7), free text, and any
+caller-chosen ordering — the last would be a list endpoint whose cost its author cannot state.
+
+**No status is hidden by default.** `COMPLETED` and `CANCELLED` are included unless `status`
+narrows them out; a lobby that hid finished tournaments would answer "what happened here?" with
+silence.
+
+### Fields
+
+The same `TournamentSummary` the detail endpoint returns, through the same mapper — so a field
+cannot be published on one surface and withheld on the other. `registration_deadline` joins it
+here, because a lobby that cannot say *when* a tournament closes is one a player misses. Withheld
+exactly as §6g lists.
+
+### Cost
+
+**One statement per page, whatever the limit.** The two derived numbers — `entrant_count` and
+`current_round` — are correlated scalar subqueries rather than a call per row: the per-row
+version would issue 81 queries for a page of 40 and pass every test written against a page of
+one. Measured at the driver, not assumed.
+
+No cache and no Redis. `ix_registration__active` is partial on `REGISTERED`, so the count is a
+bounded lookup per returned row.
 
 ## 7. Privacy
 

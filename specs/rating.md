@@ -6,7 +6,7 @@
 | **Status** | Approved |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-04 |
-| **Last updated** | 2026-08-04 |
+| **Last updated** | 2026-08-05 |
 | **Related ADRs** | `docs/07-decisions/ADR-001-glicko2-incremental.md` |
 | **Related specs** | [`leaderboard.md`](./leaderboard.md), [`matchmaking.md`](./matchmaking.md) |
 
@@ -368,6 +368,33 @@ nothing below it knows `RatingCategory` exists.
 **Migration path.** The profile response gains a `ratings_by_key` object keyed by
 `variant/speed_class`; `ratings` is marked deprecated in OpenAPI and removed in a major version
 once clients have moved.
+
+### 14.1 The dedicated read surface — A64-020.0A
+
+Two routes, both authenticated, both read-only. There is deliberately no endpoint anywhere on
+this surface that could *request* an adjustment: a rating moves in response to
+`game.match_completed` and nowhere else (§9).
+
+| Route | Answers |
+| --- | --- |
+| `GET /api/v1/ratings/me` | Every speed class for the authenticated caller, in `SpeedClass` order |
+| `GET /api/v1/players/{player_id}/ratings` | The same summary for anybody |
+
+**Every key, always.** A class the player has never played is present and marked provisional with
+zero games, because `RatingSnapshot.unrated()` is what §7.5 answers for an absent row. Omitting
+them would push "has this player played blitz?" onto every client, and a client getting it wrong
+would render a missing rating as a rating of zero. One query serves all of them —
+`ratings_across` exists precisely so a page showing several classes is not one query per class.
+
+**`value`, `deviation`, `games_played` and `is_provisional` are published; `volatility` is not.**
+It is an input to the next calculation rather than a fact about the player, and publishing it
+would invite a client to render a number whose scale is an implementation detail of §7.2.
+
+**No `404` for an unknown player**, deliberately: `rating` answers every id with a snapshot, so
+"no such account" and "never played" are indistinguishable here — and making them distinguishable
+would turn the endpoint into an account-existence oracle. Whether a player exists is `users`'
+question. A *ranking* is the opposite case and does answer `404`
+([`leaderboard.md`](./leaderboard.md) §7.2).
 
 ---
 

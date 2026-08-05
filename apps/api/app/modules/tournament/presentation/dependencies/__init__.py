@@ -35,7 +35,11 @@ from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.game.public import MatchCreationUseCase
 from app.modules.game.public.reconciliation import OriginMatchReader
 from app.modules.rating.presentation.dependencies import get_rating_reader
-from app.modules.tournament.application.ports import PlayerDirectory, TournamentRepository
+from app.modules.tournament.application.ports import (
+    PlayerDirectory,
+    TournamentDirectory,
+    TournamentRepository,
+)
 from app.modules.tournament.application.services.advancement_service import (
     TournamentAdvancementService,
 )
@@ -386,6 +390,22 @@ def get_tournament_results(session: DbSessionDep) -> SqlAlchemyTournamentResults
 TournamentResultsDep = Annotated[SqlAlchemyTournamentResults, Depends(get_tournament_results)]
 
 
+def get_tournament_directory(session: DbSessionDep) -> TournamentDirectory:
+    """The lobby's one read, over this request's session — A64-020.0B.
+
+    The same adapter as `get_tournament_results`, held through the
+    **narrower** port: a route that lists tournaments needs one method, and
+    typing it as the application protocol is what stops the other seven
+    being reachable from the lobby handler. The concrete class is named here
+    and nowhere above — the composition root is the only place presentation
+    meets infrastructure.
+    """
+    return SqlAlchemyTournamentResults(session)
+
+
+TournamentDirectoryDep = Annotated[TournamentDirectory, Depends(get_tournament_directory)]
+
+
 def build_attendance(session: AsyncSession) -> TournamentAttendance:
     """The gateway's one inbound command, over a caller's session — §6e.
 
@@ -491,8 +511,10 @@ __all__ = [
     "build_match_launcher",
     "build_no_show_service",
     "WebSocketTournamentAttendanceDep",
+    "TournamentDirectoryDep",
     "TournamentResultsDep",
     "get_attendance_ws",
+    "get_tournament_directory",
     "get_tournament_results",
     "build_reconciliation_service",
     "build_registration_service",

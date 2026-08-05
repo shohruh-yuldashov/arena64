@@ -35,6 +35,7 @@ from app.modules.matchmaking.presentation.router import matchmaking_router
 from app.modules.profiles.presentation.router import profiles_router
 from app.modules.profiles.presentation.search_router import user_search_router
 from app.modules.profiles.presentation.self_router import my_profile_router
+from app.modules.rating.presentation.router import leaderboard_router, ratings_router
 from app.modules.tournament.presentation.router import (
     player_tournaments_router,
     tournaments_router,
@@ -73,6 +74,13 @@ v1_router.include_router(matchmaking_router)
 # is a different first segment, so registration order is immaterial here too.
 v1_router.include_router(history_router)
 v1_router.include_router(replay_router)
+
+# A64-020.0A. `/ratings/me` and `/players/{id}/ratings` are unparameterised
+# and parameterised respectively but differ in their first segment, and
+# `/leaderboard` and `/leaderboard/around/{id}` differ in segment count — so
+# no path a caller can send matches two of these.
+v1_router.include_router(ratings_router)
+v1_router.include_router(leaderboard_router)
 
 # A64-019.6. Two prefixes, and registration order is immaterial for both:
 # `/tournaments/{id}`, `/tournaments/{id}/bracket` and

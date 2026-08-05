@@ -35,6 +35,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+from app.modules.game.public import ProductVariant
+from app.modules.rating.public import SpeedClass
 from app.modules.tournament.domain.attempts import (
     AdvancementReason,
     AttemptOutcome,
@@ -74,6 +76,14 @@ class TournamentSummary:
     current_round: int | None
     """The round being played, or `None` before the bracket exists and after
     the tournament finishes."""
+
+    registration_deadline: datetime | None
+    """When entries close on their own, or `None` for operator-closed —
+    A64-020.0B.
+
+    Published because a lobby that cannot say *when* a tournament closes is
+    one a player misses. The **fact** is public; the sweep that acts on it is
+    not — see `infrastructure/tasks.py`, which is what claims the column."""
 
     created_at: datetime
     started_at: datetime | None
@@ -199,6 +209,71 @@ class RegistrationDetail:
 
 
 @dataclass(frozen=True, slots=True)
+class TournamentFilter:
+    """Which tournaments a lobby page is asking for — A64-020.0B.
+
+    A **closed** set of five, and that is the contract rather than a
+    starting point. Each one is an enum or a boolean the tournament already
+    stores, so every combination is a predicate over indexed columns and no
+    filter can be expensive.
+
+    What is deliberately absent: a creator filter (`created_by` is
+    operational and is not published at all), a region, a prize, a
+    private/public flag — private tournaments do not exist in v0.x (§7) —
+    free text, and any caller-chosen ordering. Each of those is either a
+    product decision nobody has made or an unbounded scan, and a list
+    endpoint that accepts an arbitrary sort is one whose cost its author
+    cannot state.
+    """
+
+    status: TournamentStatus | None = None
+    format: TournamentFormat | None = None
+    variant: ProductVariant | None = None
+    speed_class: SpeedClass | None = None
+    rated: bool | None = None
+
+    @property
+    def is_empty(self) -> bool:
+        """Whether this asks for everything — the lobby's default.
+
+        Completed and cancelled tournaments are **included** by default.
+        A lobby that hid them would answer "what happened here?" with
+        silence, and the status filter is what narrows the view when a
+        client wants only what it can enter.
+        """
+        return not any(
+            value is not None
+            for value in (self.status, self.format, self.variant, self.speed_class, self.rated)
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TournamentListCursor:
+    """Where a lobby page resumes — A64-020.0B.
+
+    `(created_at, tournament_id)`, descending. The second key makes the
+    order **total**: two tournaments created in the same millisecond would
+    otherwise page unstably, which on a keyset is a row seen twice or not at
+    all. The same shape `HistoryCursor` has, over the tournament's own
+    instant rather than a registration's.
+    """
+
+    created_at: datetime
+    tournament_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class TournamentPage:
+    """One page of the lobby, newest first — A64-020.0B."""
+
+    entries: tuple[TournamentSummary, ...]
+    next_cursor: TournamentListCursor | None
+    """`None` on the last page. Keyset rather than `OFFSET`: the lobby grows
+    without bound, and an offset scan costs more with every page and shifts
+    the moment a tournament is created mid-walk."""
+
+
+@dataclass(frozen=True, slots=True)
 class HistoryCursor:
     """Where a player's tournament history resumes — §12.
 
@@ -232,5 +307,8 @@ __all__ = [
     "RegistrationDetail",
     "RoundView",
     "StandingView",
+    "TournamentFilter",
+    "TournamentListCursor",
+    "TournamentPage",
     "TournamentSummary",
 ]

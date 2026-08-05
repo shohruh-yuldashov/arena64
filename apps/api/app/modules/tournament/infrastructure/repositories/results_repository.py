@@ -17,16 +17,30 @@ is looking at it.
 ## Bounded, and keyset where it matters
 
 A bracket and a standings list are bounded by the field size (≤ 128, T-2),
-so both are read whole. A player's tournament history is **not** bounded,
-so it pages by `(registered_at, tournament_id)` descending — never `OFFSET`,
-whose cost grows with the page number and whose results shift when a row is
-inserted mid-scan.
+so both are read whole. A player's tournament history and the lobby are
+**not** bounded, so both page by a descending two-key order — never
+`OFFSET`, whose cost grows with the page number and whose results shift when
+a row is inserted mid-scan.
+
+## Both pages cost one statement — A64-020.0C
+
+`entrant_count` and `current_round` are the two numbers a tournament summary
+carries that are not columns on its row, and the obvious implementation
+reads each of them per tournament. The history did exactly that until
+A64-020.0C: 201 statements for a page of a hundred, correct in every test
+written against a page of one.
+
+They are correlated scalar subqueries now (`_entrant_count_of`,
+`_current_round_of`), shared by both paginated reads, so neither can regress
+without the other and the two surfaces cannot disagree about a number.
+`summary` still reads them separately, and that is not an oversight: it
+returns one tournament, so there is no N to multiply.
 """
 
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import Select, and_, func, select, tuple_
+from sqlalchemy import ColumnElement, ScalarSelect, Select, and_, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.tournament.application.read_models import (
@@ -39,6 +53,9 @@ from app.modules.tournament.application.read_models import (
     RegistrationDetail,
     RoundView,
     StandingView,
+    TournamentFilter,
+    TournamentListCursor,
+    TournamentPage,
     TournamentSummary,
 )
 from app.modules.tournament.domain.registration import RegistrationStatus
@@ -69,21 +86,53 @@ class SqlAlchemyTournamentResults:
         row = await self._session.get(TournamentModel, tournament_id)
         if row is None:
             return None
-        return TournamentSummary(
-            id=row.id,
-            name=row.name,
-            format=row.format,
-            variant=row.variant.value,
-            speed_class=row.speed_class.value,
-            rated=row.rated,
-            capacity=row.capacity,
-            status=row.status,
+        return _summary_of(
+            row,
             entrant_count=await self._entrant_count(tournament_id),
             current_round=await self._current_round(tournament_id),
-            created_at=row.created_at,
-            started_at=row.started_at,
-            completed_at=row.completed_at,
         )
+
+    async def listing(
+        self,
+        *,
+        filters: TournamentFilter,
+        after: TournamentListCursor | None,
+        limit: int,
+    ) -> TournamentPage:
+        """The lobby, newest first — A64-020.0B.
+
+        **One statement**, whatever the page size. The two derived numbers a
+        lobby renders — how full a tournament is, and which round is being
+        played — are correlated scalar subqueries rather than a call per
+        row, because the per-row version is the N+1 this endpoint would
+        otherwise be: a page of 40 would issue 81 queries and look correct
+        in every test written against a page of one.
+
+        Each subquery is served by an index over exactly the rows it counts
+        (`ix_registration__active` is partial on `REGISTERED`), so the plan
+        is a bounded lookup per returned row rather than a scan.
+
+        `limit + 1` rows are read, so "is there a next page" is a fact
+        rather than a second `COUNT`.
+        """
+        statement = (
+            select(TournamentModel, _entrant_count_of(), _current_round_of())
+            .where(*_filter_clauses(filters))
+            .order_by(TournamentModel.created_at.desc(), TournamentModel.id.desc())
+            .limit(limit + 1)
+        )
+        rows = (await self._session.execute(_listed_after(statement, after))).all()
+
+        entries = tuple(
+            _summary_of(tournament, entrant_count=entrants, current_round=current)
+            for tournament, entrants, current in rows[:limit]
+        )
+        cursor = (
+            TournamentListCursor(created_at=entries[-1].created_at, tournament_id=entries[-1].id)
+            if len(rows) > limit and entries
+            else None
+        )
+        return TournamentPage(entries=entries, next_cursor=cursor)
 
     async def registration_of(
         self, tournament_id: uuid.UUID, player_id: uuid.UUID
@@ -201,9 +250,21 @@ class SqlAlchemyTournamentResults:
 
         `limit + 1` rows are read so the presence of a next page is a fact
         rather than a second `COUNT`.
+
+        **One statement**, whatever the page size — A64-020.0C. It was three
+        for a page of one and 201 for a page of a hundred, because
+        `entrant_count` and `current_round` were read per tournament. Both
+        are now the same correlated subqueries `listing` uses, so the two
+        paginated reads on this surface cost the same and cannot drift.
         """
         statement = (
-            select(RegistrationModel, TournamentModel, StandingModel)
+            select(
+                RegistrationModel,
+                TournamentModel,
+                StandingModel,
+                _entrant_count_of(),
+                _current_round_of(),
+            )
             .join(TournamentModel, TournamentModel.id == RegistrationModel.tournament_id)
             .outerjoin(
                 StandingModel,
@@ -223,26 +284,12 @@ class SqlAlchemyTournamentResults:
 
         entries = [
             PlayerTournamentEntry(
-                tournament=TournamentSummary(
-                    id=tournament.id,
-                    name=tournament.name,
-                    format=tournament.format,
-                    variant=tournament.variant.value,
-                    speed_class=tournament.speed_class.value,
-                    rated=tournament.rated,
-                    capacity=tournament.capacity,
-                    status=tournament.status,
-                    entrant_count=await self._entrant_count(tournament.id),
-                    current_round=await self._current_round(tournament.id),
-                    created_at=tournament.created_at,
-                    started_at=tournament.started_at,
-                    completed_at=tournament.completed_at,
-                ),
+                tournament=_summary_of(tournament, entrant_count=entrants, current_round=current),
                 seed_number=registration.seed_number,
                 final_rank=standing.final_rank if standing else None,
                 final_status=standing.final_status if standing else None,
             )
-            for registration, tournament, standing in rows[:limit]
+            for registration, tournament, standing, entrants, current in rows[:limit]
         ]
 
         cursor = (
@@ -322,6 +369,104 @@ class SqlAlchemyTournamentResults:
                 )
             )
         return {pairing_id: tuple(items) for pairing_id, items in grouped.items()}
+
+
+def _summary_of(
+    row: TournamentModel, *, entrant_count: int, current_round: int | None
+) -> TournamentSummary:
+    """One tournament as every public read shows it.
+
+    The single safe mapper — the detail page, a player's history and the
+    lobby all come through here, so a field cannot be published on one
+    surface and withheld on another. `created_by` is absent because it is
+    absent from `TournamentSummary`: what a reader may see is decided by the
+    read model, not by each caller remembering.
+    """
+    return TournamentSummary(
+        id=row.id,
+        name=row.name,
+        format=row.format,
+        variant=row.variant.value,
+        speed_class=row.speed_class.value,
+        rated=row.rated,
+        capacity=row.capacity,
+        status=row.status,
+        entrant_count=entrant_count,
+        current_round=current_round,
+        registration_deadline=row.registration_deadline,
+        created_at=row.created_at,
+        started_at=row.started_at,
+        completed_at=row.completed_at,
+    )
+
+
+def _entrant_count_of() -> ScalarSelect[int]:
+    """Live registrations, correlated to the tournament row beside it.
+
+    A scalar subquery rather than a `GROUP BY` join, because a join would
+    drop tournaments with no entrants unless written as an outer one, and an
+    outer join with an aggregate is a longer way to say the same thing.
+    """
+    return (
+        select(func.count())
+        .select_from(RegistrationModel)
+        .where(
+            RegistrationModel.tournament_id == TournamentModel.id,
+            RegistrationModel.status == RegistrationStatus.REGISTERED,
+        )
+        .correlate(TournamentModel)
+        .scalar_subquery()
+    )
+
+
+def _current_round_of() -> ScalarSelect[int | None]:
+    """The lowest round being played, or `NULL` — the same rule as
+    `_current_round`, correlated instead of called per row."""
+    return (
+        select(func.min(TournamentRoundModel.round_number))
+        .where(
+            TournamentRoundModel.tournament_id == TournamentModel.id,
+            TournamentRoundModel.status.in_((RoundStatus.PUBLISHED, RoundStatus.IN_PROGRESS)),
+        )
+        .correlate(TournamentModel)
+        .scalar_subquery()
+    )
+
+
+def _filter_clauses(filters: TournamentFilter) -> list[ColumnElement[bool]]:
+    """The approved filters as predicates. An absent one narrows nothing.
+
+    Five, all of them equalities on stored enums or a boolean, so no
+    combination can be expensive and none of them can be a scan. The empty
+    filter is the lobby's default and includes **every** status — a
+    completed or cancelled tournament is part of what happened here.
+    """
+    clauses: list[ColumnElement[bool]] = []
+    if filters.status is not None:
+        clauses.append(TournamentModel.status == filters.status)
+    if filters.format is not None:
+        clauses.append(TournamentModel.format == filters.format)
+    if filters.variant is not None:
+        clauses.append(TournamentModel.variant == filters.variant)
+    if filters.speed_class is not None:
+        clauses.append(TournamentModel.speed_class == filters.speed_class)
+    if filters.rated is not None:
+        clauses.append(TournamentModel.rated == filters.rated)
+    return clauses
+
+
+def _listed_after(statement: Select, cursor: TournamentListCursor | None) -> Select:  # type: ignore[type-arg]
+    """The lobby's keyset predicate, or the statement unchanged.
+
+    A row comparison for the same reason `_after` uses one: `(a, b) < (:a,
+    :b)` is the form PostgreSQL serves from a composite index directly.
+    """
+    if cursor is None:
+        return statement
+    return statement.where(
+        tuple_(TournamentModel.created_at, TournamentModel.id)
+        < (cursor.created_at, cursor.tournament_id)
+    )
 
 
 def _after(statement: Select, cursor: HistoryCursor | None) -> Select:  # type: ignore[type-arg]

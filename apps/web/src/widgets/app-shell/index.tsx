@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+import { SessionMenu } from "@/widgets/session-menu";
 import { ThemeToggle } from "@/widgets/theme-toggle";
 
 /**
@@ -22,9 +23,14 @@ import { ThemeToggle } from "@/widgets/theme-toggle";
  *
  * ## No business content
  *
- * No navigation to features that do not exist, no user menu, no locale
- * switcher. Each of those belongs to the phase that ships what it links
- * to; a header full of dead links is worse than a bare one.
+ * No navigation to features that do not exist and no locale switcher —
+ * each belongs to the phase that ships what it links to, and a header full
+ * of dead links is worse than a bare one.
+ *
+ * `SessionMenu` is the exception, and it earns it: sign-in and sign-out are
+ * what A64-020.2 builds, and a sign-out action that no screen exposes is
+ * the "implemented and reachable from nothing" failure the backend audits
+ * kept finding.
  */
 export function AppShell({ children }: { children: ReactNode }) {
   return (
@@ -39,7 +45,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       <header className="border-b">
         <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
           <span className="text-sm font-semibold tracking-tight">Arena64</span>
-          <ThemeToggle />
+          <div className="flex items-center gap-2">
+            <SessionMenu />
+            <ThemeToggle />
+          </div>
         </div>
       </header>
 

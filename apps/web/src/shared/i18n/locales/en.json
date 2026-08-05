@@ -26,5 +26,105 @@
   },
   "locale": {
     "label": "Language"
+  },
+  "auth": {
+    "common": {
+      "email": "Email",
+      "password": "Password",
+      "username": "Username",
+      "confirmPassword": "Confirm password",
+      "submitting": "Submitting…",
+      "showPassword": "Show password",
+      "hidePassword": "Hide password",
+      "errorSummary": "The form could not be submitted"
+    },
+    "login": {
+      "title": "Sign in",
+      "subtitle": "Sign in to play on Arena64.",
+      "submit": "Sign in",
+      "noAccount": "No account yet?",
+      "register": "Create one",
+      "forgot": "Forgot your password?"
+    },
+    "register": {
+      "title": "Create an account",
+      "subtitle": "A few seconds and you are playing.",
+      "submit": "Create account",
+      "haveAccount": "Already have an account?",
+      "login": "Sign in",
+      "successTitle": "Account created",
+      "successBody": "We sent a confirmation link to your email. Some features stay limited until you open it."
+    },
+    "verifyEmail": {
+      "title": "Confirm your email",
+      "verifying": "Confirming…",
+      "successTitle": "Email confirmed",
+      "successBody": "Everything is available now.",
+      "invalidTitle": "That link did not work",
+      "invalidBody": "The link has expired or has already been used. Ask for a new one.",
+      "missingToken": "The link is incomplete. Copy the whole link from your email.",
+      "resendTitle": "Send a new link",
+      "resend": "Send link",
+      "resendSent": "If an account exists for that address, we have sent a link.",
+      "toLogin": "Go to sign in"
+    },
+    "forgotPassword": {
+      "title": "Reset your password",
+      "subtitle": "Enter your address and we will send a reset link.",
+      "submit": "Send link",
+      "sentTitle": "Link sent",
+      "sentBody": "If an account exists for that address, we have sent a reset link. Check your email.",
+      "backToLogin": "Go to sign in"
+    },
+    "resetPassword": {
+      "title": "New password",
+      "subtitle": "Enter your new password twice.",
+      "submit": "Update password",
+      "successTitle": "Password updated",
+      "successBody": "You can sign in with your new password.",
+      "missingToken": "The link is incomplete. Copy the whole link from your email."
+    },
+    "errors": {
+      "invalid_credentials": "That email or password is wrong.",
+      "inactive_account": "This account is not active.",
+      "account_locked": "This account is temporarily locked. Try again later.",
+      "authentication_required": "Sign in to continue.",
+      "invalid_token": "Your session is not valid. Sign in again.",
+      "expired_token": "Your session has expired. Sign in again.",
+      "invalid_session": "Your session is not valid. Sign in again.",
+      "session_expired": "Your session has expired. Sign in again.",
+      "username_already_exists": "That username is taken.",
+      "email_already_exists": "That address is already registered.",
+      "invalid_username": "That username is not valid.",
+      "invalid_email": "That email address is not valid.",
+      "weak_password": "That password is not strong enough.",
+      "invalid_verification_token": "That confirmation link is invalid or has expired.",
+      "invalid_reset_token": "That reset link is invalid or has expired.",
+      "validation_error": "Check what you entered.",
+      "rate_limited": "Too many attempts. Try again shortly.",
+      "permission_denied": "That is not allowed.",
+      "network": "We could not reach the server. Check your connection.",
+      "unexpected": "Something went wrong. Try again."
+    },
+    "validation": {
+      "emailRequired": "Enter your email address.",
+      "emailInvalid": "That email address is not valid.",
+      "passwordRequired": "Enter your password.",
+      "passwordTooShort": "At least {min} characters.",
+      "passwordTooLong": "At most {max} characters.",
+      "passwordWeak": "Include an upper-case letter, a lower-case letter, a digit and a symbol.",
+      "passwordsDoNotMatch": "The passwords do not match.",
+      "usernameRequired": "Enter a username.",
+      "usernameTooShort": "At least {min} characters.",
+      "usernameTooLong": "At most {max} characters.",
+      "usernameInvalid": "Letters, digits and underscores only."
+    },
+    "session": {
+      "unavailableTitle": "We could not check your session",
+      "unavailableBody": "The server could not be reached, so we could not tell whether you are signed in.",
+      "retry": "Try again",
+      "signOut": "Sign out",
+      "signOutFailed": "Signing out on the server failed, but the session was cleared on this device."
+    }
   }
 }

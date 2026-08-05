@@ -2,18 +2,23 @@ import type { QueryClient } from "@tanstack/react-query";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 
+import type { AuthChannel } from "@/features/auth/model/auth-channel";
+import { SessionProvider } from "@/features/auth/model/session-provider";
 import UnexpectedErrorPage from "@/pages/unexpected-error";
 import { createQueryClient } from "@/shared/api";
+import { I18nProvider } from "@/shared/i18n";
 import { ThemeProvider } from "@/shared/theme/theme-context";
 import { ErrorBoundary } from "@/shared/ui";
 
 /**
  * The provider graph, composed once.
  *
- *     ErrorBoundary          catches everything below, including the router
- *       └─ ThemeProvider     the error page must be themed too
- *            └─ QueryClientProvider
- *                 └─ children (the router, then a layout, then a page)
+ *     ErrorBoundary            catches everything below, including the router
+ *       └─ ThemeProvider       the error page must be themed too
+ *            └─ I18nProvider   ...and translated
+ *                 └─ QueryClientProvider
+ *                      └─ SessionProvider
+ *                           └─ children (router → layout → page)
  *
  * ## Why this order and no other
  *
@@ -28,9 +33,15 @@ import { ErrorBoundary } from "@/shared/ui";
  * *inside* the boundary rather than outside so that a throw in the theme
  * effect is still caught.
  *
- * **`QueryClientProvider` is innermost** because nothing above it issues a
- * query. Hoisting it higher would only widen what a cache failure can take
- * down.
+ * **`QueryClientProvider` is above `SessionProvider`** and not below it,
+ * because signing out has to clear the cache: every query was fetched *as
+ * somebody*, and leaving it would show the previous user's data to whoever
+ * signs in next on the device. `SessionProvider` calls `useQueryClient`, so
+ * it has to be inside.
+ *
+ * **`SessionProvider` is innermost** because everything below it — the
+ * router, the guards, every page — reads the session, and nothing above it
+ * does.
  *
  * ## One client, created once
  *
@@ -44,9 +55,11 @@ import { ErrorBoundary } from "@/shared/ui";
 export function AppProviders({
   children,
   queryClient,
+  authChannel,
 }: {
   children: ReactNode;
   queryClient?: QueryClient;
+  authChannel?: AuthChannel;
 }) {
   const [fallbackClient] = useState(createQueryClient);
   const client = queryClient ?? fallbackClient;
@@ -56,12 +69,20 @@ export function AppProviders({
       scope="app-root"
       fallback={({ reset }) => (
         <ThemeProvider>
-          <UnexpectedErrorPage reset={reset} />
+          <I18nProvider>
+            <UnexpectedErrorPage reset={reset} />
+          </I18nProvider>
         </ThemeProvider>
       )}
     >
       <ThemeProvider>
-        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+        <I18nProvider>
+          <QueryClientProvider client={client}>
+            <SessionProvider {...(authChannel ? { channel: authChannel } : {})}>
+              {children}
+            </SessionProvider>
+          </QueryClientProvider>
+        </I18nProvider>
       </ThemeProvider>
     </ErrorBoundary>
   );

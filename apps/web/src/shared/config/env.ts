@@ -12,8 +12,27 @@ import { z } from "zod";
  * frontend secret; anything read here is public by construction.
  */
 const envSchema = z.object({
+  /**
+   * Where the API is, from the browser's point of view.
+   *
+   * **A relative path by default, and that is the deployment contract.**
+   * The refresh cookie is `HttpOnly` and same-site, so the page and the
+   * API must share an origin: in development the Vite proxy provides that
+   * (`vite.config.ts`), and in production a reverse proxy must route
+   * `/api` to FastAPI. Nothing here names a host.
+   *
+   * An absolute URL is accepted for the one case that needs it — pointing
+   * a build at a separate API host — but then the browser session will not
+   * work, because the cookie will not cross origins. See
+   * `specs/frontend.md` §12.
+   */
   VITE_API_URL: z
-    .url()
+    .string()
+    .default("/api/v1")
+    .refine(
+      (value) => value.startsWith("/") || /^https?:\/\//.test(value),
+      "must be a relative path such as /api/v1, or an absolute http(s) URL",
+    )
     // No trailing slash — `shared/api/client.ts` joins paths onto this
     // directly, and `//matches` is a different URL from `/matches` to
     // every router that has ever existed.

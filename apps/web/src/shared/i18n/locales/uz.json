@@ -26,5 +26,105 @@
   },
   "locale": {
     "label": "Til"
+  },
+  "auth": {
+    "common": {
+      "email": "Elektron pochta",
+      "password": "Parol",
+      "username": "Foydalanuvchi nomi",
+      "confirmPassword": "Parolni tasdiqlang",
+      "submitting": "Yuborilmoqda…",
+      "showPassword": "Parolni ko'rsatish",
+      "hidePassword": "Parolni yashirish",
+      "errorSummary": "Formani yuborib bo'lmadi"
+    },
+    "login": {
+      "title": "Hisobingizga kiring",
+      "subtitle": "Arena64 da o'ynash uchun tizimga kiring.",
+      "submit": "Kirish",
+      "noAccount": "Hisobingiz yo'qmi?",
+      "register": "Ro'yxatdan o'tish",
+      "forgot": "Parolni unutdingizmi?"
+    },
+    "register": {
+      "title": "Hisob yarating",
+      "subtitle": "Bir necha soniya — va o'ynashni boshlaysiz.",
+      "submit": "Ro'yxatdan o'tish",
+      "haveAccount": "Hisobingiz bormi?",
+      "login": "Kirish",
+      "successTitle": "Hisobingiz yaratildi",
+      "successBody": "Pochtangizga tasdiqlash havolasi yubordik. Havolani ochmaguningizcha ba'zi imkoniyatlar cheklangan bo'ladi."
+    },
+    "verifyEmail": {
+      "title": "Pochtani tasdiqlash",
+      "verifying": "Tasdiqlanmoqda…",
+      "successTitle": "Pochta tasdiqlandi",
+      "successBody": "Endi hamma narsadan foydalanishingiz mumkin.",
+      "invalidTitle": "Havola ishlamadi",
+      "invalidBody": "Havolaning muddati o'tgan yoki u allaqachon ishlatilgan. Yangisini so'rang.",
+      "missingToken": "Havola to'liq emas. Pochtangizdagi havolani to'liq nusxalang.",
+      "resendTitle": "Yangi havola so'rash",
+      "resend": "Havolani yuborish",
+      "resendSent": "Agar bu manzil bilan hisob mavjud bo'lsa, havola yubordik.",
+      "toLogin": "Kirish sahifasiga"
+    },
+    "forgotPassword": {
+      "title": "Parolni tiklash",
+      "subtitle": "Manzilingizni kiriting — tiklash havolasini yuboramiz.",
+      "submit": "Havolani yuborish",
+      "sentTitle": "Havola yuborildi",
+      "sentBody": "Agar bu manzil bilan hisob mavjud bo'lsa, tiklash havolasini yubordik. Pochtangizni tekshiring.",
+      "backToLogin": "Kirish sahifasiga"
+    },
+    "resetPassword": {
+      "title": "Yangi parol",
+      "subtitle": "Yangi parolni ikki marta kiriting.",
+      "submit": "Parolni yangilash",
+      "successTitle": "Parol yangilandi",
+      "successBody": "Yangi parolingiz bilan kirishingiz mumkin.",
+      "missingToken": "Havola to'liq emas. Pochtangizdagi havolani to'liq nusxalang."
+    },
+    "errors": {
+      "invalid_credentials": "Pochta yoki parol noto'g'ri.",
+      "inactive_account": "Bu hisob faol emas.",
+      "account_locked": "Hisob vaqtincha bloklangan. Birozdan so'ng urinib ko'ring.",
+      "authentication_required": "Davom etish uchun tizimga kiring.",
+      "invalid_token": "Sessiya yaroqsiz. Qaytadan kiring.",
+      "expired_token": "Sessiya muddati tugadi. Qaytadan kiring.",
+      "invalid_session": "Sessiya yaroqsiz. Qaytadan kiring.",
+      "session_expired": "Sessiya muddati tugadi. Qaytadan kiring.",
+      "username_already_exists": "Bu foydalanuvchi nomi band.",
+      "email_already_exists": "Bu pochta manzili allaqachon ro'yxatdan o'tgan.",
+      "invalid_username": "Foydalanuvchi nomi yaroqsiz.",
+      "invalid_email": "Pochta manzili yaroqsiz.",
+      "weak_password": "Parol yetarlicha kuchli emas.",
+      "invalid_verification_token": "Tasdiqlash havolasi yaroqsiz yoki muddati o'tgan.",
+      "invalid_reset_token": "Tiklash havolasi yaroqsiz yoki muddati o'tgan.",
+      "validation_error": "Kiritilgan ma'lumotni tekshiring.",
+      "rate_limited": "Juda ko'p urinish. Birozdan so'ng qayta urining.",
+      "permission_denied": "Bu amalga ruxsat yo'q.",
+      "network": "Serverga ulanib bo'lmadi. Internetni tekshiring.",
+      "unexpected": "Kutilmagan xatolik. Qayta urinib ko'ring."
+    },
+    "validation": {
+      "emailRequired": "Pochta manzilini kiriting.",
+      "emailInvalid": "Pochta manzili yaroqsiz.",
+      "passwordRequired": "Parolni kiriting.",
+      "passwordTooShort": "Parol kamida {min} ta belgidan iborat bo'lsin.",
+      "passwordTooLong": "Parol {max} ta belgidan oshmasin.",
+      "passwordWeak": "Parolda katta harf, kichik harf, raqam va maxsus belgi bo'lsin.",
+      "passwordsDoNotMatch": "Parollar mos kelmadi.",
+      "usernameRequired": "Foydalanuvchi nomini kiriting.",
+      "usernameTooShort": "Kamida {min} ta belgi.",
+      "usernameTooLong": "Ko'pi bilan {max} ta belgi.",
+      "usernameInvalid": "Faqat harflar, raqamlar va pastki chiziq."
+    },
+    "session": {
+      "unavailableTitle": "Sessiyani tekshirib bo'lmadi",
+      "unavailableBody": "Serverga ulanib bo'lmadi, shuning uchun tizimga kirganingizni aniqlay olmadik.",
+      "retry": "Qayta urinish",
+      "signOut": "Chiqish",
+      "signOutFailed": "Serverdan chiqishda xatolik bo'ldi, lekin bu qurilmada sessiya tozalandi."
+    }
   }
 }

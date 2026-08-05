@@ -12,19 +12,35 @@ package expresses: `matchmaking.domain`, `.application` and
 that needs something has no way to reach past this file and must add a port
 here instead.
 
-## What will land here, and what will not
+## The first consumer — A64-020.5D
 
-The consumer A64-014.2 brings is a **pairing worker**, and it lives inside
-this module rather than outside it — so it needs nothing published. The
-first genuine outside caller is `game`, and the port it needs is the one
-architecture.md §7 already draws as `matchmaking -> game` in the opposite
-direction: matchmaking *asks* `game` to create a match, and `game` sets that
-contract. So it is entirely possible this package stays empty.
+`app.gateway`, and it needs exactly one thing: the **shape of a pending
+match offer**, so it can project one onto a socket. `PendingMatchOffer` and
+`OpponentPreview` are published for that and nothing else.
 
-What must **not** appear here is a reader of who is currently queueing. Who
-is in a pool right now is the information that would let a player wait for a
-favourable one, and there is no consumer whose need for it outweighs that —
-the same reasoning `GET /matchmaking/queue/me` applies at the HTTP surface.
+Published rather than the gateway importing `matchmaking.domain` — which
+`.importlinter` would in fact permit today, because `app.gateway` is absent
+from the forbidden-source list. That permission is an accident of the
+contract having been written before a gateway existed, not an invitation:
+every other module reaches `game` and `friends` through `.public`, and one
+adapter reaching past that line is how the line stops meaning anything.
+
+**The direction still points the right way.** `matchmaking` does not learn
+that a gateway exists: it holds `PendingMatchSink`, a port in the layer that
+needs it (AD-06), and the composition root supplies an implementation. What
+crosses is a value, not a capability.
+
+## What will not land here
+
+A reader of who is currently queueing. Who is in a pool right now is the
+information that would let a player wait for a favourable one, and there is
+no consumer whose need for it outweighs that — the same reasoning
+`GET /matchmaking/queue/me` applies at the HTTP surface.
+
+`QueueTicket`, `QueuePool` and the pairing services stay private for the
+same reason they always have: a consumer that could name them could pair.
 """
 
-__all__: list[str] = []
+from app.modules.matchmaking.domain.pending_match import OpponentPreview, PendingMatchOffer
+
+__all__ = ["OpponentPreview", "PendingMatchOffer"]

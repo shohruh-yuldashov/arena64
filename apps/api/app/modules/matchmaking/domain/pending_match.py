@@ -42,7 +42,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from app.modules.game.public import MatchRecordStatus, PlayerSide, ProductVariant
+from app.modules.game.public import (
+    MatchRecordStatus,
+    MatchTimeControl,
+    PlayerSide,
+    ProductVariant,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +91,20 @@ class PendingMatchOffer:
 
     variant: ProductVariant
     rated: bool
+    """Whether finishing this match moves a rating. The **queue mode** a
+    client renders as ranked or casual."""
+
+    time_control: MatchTimeControl | None
+    speed_class: str | None
+    """How much time each side gets, and which rating a result would move.
+    `None` for an untimed match — A64-020.5D §2.
+
+    Carried so a pushed offer renders the same card the polled one does. A
+    client that had to fetch the control separately would show a match card
+    with a blank clock for one round trip, which is the flicker §16 asks to
+    remove.
+    """
+
     acceptance_deadline: datetime
     """When the offer stops being honoured. An instant rather than a
     countdown, so a slow socket cannot make a client's timer wrong — the

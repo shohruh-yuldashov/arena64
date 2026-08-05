@@ -2197,6 +2197,24 @@ class GatewaySettings(BaseSettings):
     unbounded in history rather than in size.
     """
 
+    match_offer_push_enabled: bool = Field(default=True)
+    """Whether a pairing is pushed to the paired players' sockets —
+    A64-020.5D §2, §10.
+
+    **On by default**, because the alternative is a lobby that polls while
+    a socket sits open beside it. Off falls back to
+    `LoggingPendingMatchSink`, which is a *diagnostic* mode rather than a
+    fallback: nothing degrades silently, and the composition root logs a
+    `WARNING` naming the switch.
+
+    A switch rather than an assumption for the same reason
+    `forwarding_enabled` is one — an operator investigating a delivery
+    problem needs to be able to take the transport out of the picture
+    without taking the platform out with it. Correctness does not depend on
+    it either way: `GET /matchmaking/matches/pending` is the durable answer
+    (§3).
+    """
+
     forwarding_enabled: bool = Field(default=True)
     """Whether this node drains its cross-node bus stream — A64-016.8.
 

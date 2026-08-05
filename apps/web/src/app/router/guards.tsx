@@ -1,5 +1,5 @@
-import { Navigate, useRouterState } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
+import { type ReactNode, useEffect } from "react";
 
 import { isResolved } from "@/entities/session";
 import { DEFAULT_REDIRECT, safeRedirect } from "@/features/auth/model/safe-redirect";
@@ -26,6 +26,20 @@ import { Button, Spinner } from "@/shared/ui";
  * send every returning player to `/login` on every reload, for real — the
  * refresh has not answered yet. So both guards render a pending state until
  * `isResolved`, and only then decide.
+ *
+ * ## Why the redirect is an effect and not `<Navigate>`
+ *
+ * `<Navigate to="/login" search={{ next }} />` navigates from an effect
+ * whose dependency is the options object — and `{ next }` is a **new
+ * object on every render**. So the effect re-runs, navigates again,
+ * re-renders, and the tab locks up. That is not hypothetical: the first
+ * draft did exactly this, and the profile test exhausted the worker's heap
+ * before a single assertion ran.
+ *
+ * An effect with primitive dependencies fires once per decision. The guard
+ * renders `null` while it is in flight, because rendering the protected
+ * page for one frame is how a signed-out user sees a flash of somebody
+ * else's screen.
  */
 function Pending() {
   const { t } = useTranslation();
@@ -46,7 +60,19 @@ function Pending() {
  */
 export function RequireAuth({ children }: { children: ReactNode }) {
   const { state } = useSession();
+  const navigate = useNavigate();
   const location = useRouterState({ select: (router) => router.location });
+  // The **current** path, so signing in returns them where they were going.
+  // A string, not an object, so the effect below has a stable dependency.
+  const next = `${location.pathname}${location.searchStr}`;
+  const shouldRedirect = isResolved(state) && state.status === "anonymous";
+
+  useEffect(() => {
+    if (!shouldRedirect) return;
+    // `safeRedirect` on the way back out, so a path that arrived here by
+    // some other route cannot become an open redirect.
+    void navigate({ to: "/login", search: { next }, replace: true });
+  }, [navigate, next, shouldRedirect]);
 
   if (!isResolved(state)) return <Pending />;
 
@@ -57,13 +83,9 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     return <SessionUnavailable />;
   }
 
-  if (state.status === "anonymous") {
-    // The **current** path, so signing in returns them where they were
-    // going. Passed through `safeRedirect` on the way back out, so a path
-    // that arrived here by some other route cannot become an open redirect.
-    const next = `${location.pathname}${location.searchStr}`;
-    return <Navigate to="/login" search={{ next }} replace />;
-  }
+  // `null` rather than the page: rendering it for the frame before the
+  // navigation lands is a flash of somebody else's screen.
+  if (state.status === "anonymous") return null;
 
   return <>{children}</>;
 }
@@ -82,14 +104,19 @@ export function RequireAnonymous({
   next?: string | undefined;
 }) {
   const { state } = useSession();
+  const navigate = useNavigate();
+  // Where they were originally going, if that survived the round trip;
+  // otherwise home. Validated, because `next` came from a query string.
+  const destination = safeRedirect(next);
+  const shouldRedirect = isResolved(state) && state.status === "authenticated";
+
+  useEffect(() => {
+    if (!shouldRedirect) return;
+    void navigate({ to: destination as typeof DEFAULT_REDIRECT, replace: true });
+  }, [destination, navigate, shouldRedirect]);
 
   if (!isResolved(state)) return <Pending />;
-
-  if (state.status === "authenticated") {
-    // Where they were originally going, if that survived the round trip;
-    // otherwise home. Validated, because `next` came from a query string.
-    return <Navigate to={safeRedirect(next) as typeof DEFAULT_REDIRECT} replace />;
-  }
+  if (state.status === "authenticated") return null;
 
   return <>{children}</>;
 }

@@ -55,11 +55,23 @@ export function SessionMenu() {
 
   return (
     <div className="flex items-center gap-2">
-      <Avatar>
-        <AvatarFallback aria-hidden="true">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
-      </Avatar>
-      <span className="hidden text-sm font-medium sm:inline">{name}</span>
-      <Button size="sm" variant="ghost" disabled={signingOut} onClick={() => void onSignOut()}>
+      {/* The avatar and the name are one link to the profile — the way a
+          signed-in player reaches their own page from anywhere. */}
+      <Button asChild size="sm" variant="ghost" className="min-h-11 gap-2 px-2">
+        <Link to="/profile">
+          <Avatar className="size-6">
+            <AvatarFallback aria-hidden="true">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
+          </Avatar>
+          <span className="hidden text-sm font-medium sm:inline">{name}</span>
+        </Link>
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="min-h-11"
+        disabled={signingOut}
+        onClick={() => void onSignOut()}
+      >
         {signingOut ? (
           <Spinner label={t("auth.common.submitting")} />
         ) : (

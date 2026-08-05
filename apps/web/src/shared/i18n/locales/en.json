@@ -126,5 +126,151 @@
       "signOut": "Sign out",
       "signOutFailed": "Signing out on the server failed, but the session was cleared on this device."
     }
+  },
+  "profile": {
+    "nav": {
+      "profile": "Profile",
+      "settings": "Settings",
+      "editProfile": "Edit profile",
+      "preferences": "Preferences",
+      "privacy": "Privacy",
+      "sessions": "Sessions"
+    },
+    "header": {
+      "joined": "Joined {date}",
+      "online": "Online",
+      "offline": "Offline",
+      "lastSeen": "Last seen {when}",
+      "noBio": "No bio yet",
+      "country": "Country",
+      "viewPublic": "View public profile"
+    },
+    "stats": {
+      "title": "Statistics",
+      "gamesPlayed": "Games",
+      "wins": "Wins",
+      "losses": "Losses",
+      "draws": "Draws",
+      "winRate": "Win rate",
+      "noGames": "No games yet",
+      "bestWinStreak": "Best win streak",
+      "highestRating": "Highest rating",
+      "hidden": "Statistics are hidden"
+    },
+    "ratings": {
+      "title": "Ratings",
+      "provisional": "Provisional",
+      "games": "{count} games",
+      "deviation": "Confidence range",
+      "unrated": "Not rated yet",
+      "classic": "Classical",
+      "rapid": "Rapid",
+      "blitz": "Blitz"
+    },
+    "tournaments": {
+      "title": "Tournament history",
+      "empty": "No tournaments yet",
+      "loadMore": "Load more",
+      "inProgress": "In progress",
+      "rank": "Rank {rank}",
+      "seed": "Seed {seed}",
+      "loading": "Loading…"
+    },
+    "edit": {
+      "title": "Edit profile",
+      "subtitle": "This is what other players see on your public profile.",
+      "displayName": "Display name",
+      "bio": "About you",
+      "country": "Country code",
+      "countryHint": "Two letters, for example UZ",
+      "bioHint": "At most {max} characters",
+      "save": "Save",
+      "saved": "Saved",
+      "noChanges": "Nothing changed",
+      "displayNameTooLong": "At most {max} characters",
+      "bioTooLong": "At most {max} characters",
+      "countryInvalid": "Enter a two-letter country code"
+    },
+    "avatar": {
+      "title": "Photo",
+      "upload": "Upload a photo",
+      "replace": "Replace photo",
+      "remove": "Remove photo",
+      "removeTitle": "Remove your photo?",
+      "removeBody": "Your profile photo will be deleted and your initials shown instead.",
+      "removeConfirm": "Remove",
+      "cancel": "Cancel",
+      "uploading": "Uploading…",
+      "hint": "JPEG, PNG or WebP. At most {max} MB.",
+      "tooLarge": "That file is larger than {max} MB.",
+      "wrongType": "Only JPEG, PNG and WebP are accepted.",
+      "removed": "Photo removed",
+      "uploaded": "Photo updated"
+    },
+    "preferences": {
+      "title": "Preferences",
+      "subtitle": "Interface and gameplay settings.",
+      "language": "Language",
+      "timezone": "Time zone",
+      "boardTheme": "Board theme",
+      "pieceSet": "Piece set",
+      "confirmMove": "Confirm each move",
+      "showCoordinates": "Show coordinates",
+      "animationSpeed": "Animation speed",
+      "save": "Save",
+      "saved": "Saved",
+      "themeNote": "Light and dark are stored in this browser and never sent to the server."
+    },
+    "privacy": {
+      "title": "Privacy",
+      "subtitle": "Choose what appears on your public profile.",
+      "showCountry": "Show my country",
+      "showCountryHint": "Your country code appears on your public profile.",
+      "showStatistics": "Show my statistics",
+      "showStatisticsHint": "Does not affect ratings — those are always public.",
+      "onlineStatus": "Online status",
+      "onlineStatusHint": "Who can see that you are online.",
+      "lastSeen": "Last seen",
+      "lastSeenHint": "Who can see when you were last online.",
+      "everyone": "Everyone",
+      "friends": "Friends",
+      "nobody": "Nobody",
+      "save": "Save",
+      "saved": "Saved"
+    },
+    "sessions": {
+      "title": "Sessions",
+      "subtitle": "Devices signed in to your account.",
+      "signOutAll": "Sign out everywhere",
+      "signOutAllHint": "Ends every session on every device, including this one.",
+      "confirmTitle": "Sign out on all devices?",
+      "confirmBody": "You will have to sign in again on each device.",
+      "confirm": "Sign out",
+      "cancel": "Cancel",
+      "listDeferred": "A device list is not available yet — the server does not publish one."
+    },
+    "public": {
+      "notFoundTitle": "Player not found",
+      "notFoundBody": "There is no such username, or it has changed.",
+      "backHome": "Back home"
+    },
+    "errors": {
+      "not_found": "Not found.",
+      "permission_denied": "That is not allowed.",
+      "conflict": "That value is already taken.",
+      "username_already_exists": "That username is taken.",
+      "invalid_username": "That username is not valid.",
+      "avatar_too_large": "That image is over the size limit.",
+      "validation_error": "Check what you entered.",
+      "rate_limited": "Too many attempts. Try again shortly.",
+      "network": "We could not reach the server.",
+      "unexpected": "Something went wrong. Try again."
+    },
+    "state": {
+      "loading": "Loading…",
+      "retry": "Try again",
+      "failedTitle": "We could not load this",
+      "hiddenByPrivacy": "Hidden by the owner"
+    }
   }
 }

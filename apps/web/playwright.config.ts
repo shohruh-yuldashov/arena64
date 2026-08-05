@@ -30,7 +30,45 @@ export default defineConfig({
     // here exactly as it is in `npm run dev`.
     trace: "on-first-retry",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  // **Three projects, because two specs share three accounts.**
+  //
+  // `play.spec.ts` and `game.spec.ts` both drive the lobby with
+  // `e2e_lobby_one|two|three`, and running them at once does not merely
+  // race: refresh tokens rotate, so two contexts refreshing one session
+  // means the loser presents a superseded token and the server revokes the
+  // **whole chain** — by design (A64-020.2). The next run then has no
+  // session, falls through to the login path, and five logins per IP per
+  // fifteen minutes runs out three specs later. That is what a shared
+  // account looks like from the outside: a suite that fails on
+  // authentication for reasons no spec mentions.
+  //
+  // Project dependencies are the only cross-file ordering Playwright has —
+  // `fullyParallel: false` still spreads *files* across workers, and
+  // `mode: "serial"` does not reach past one file. `live-game` starts only
+  // once `lobby` has finished, so the accounts are used by one spec at a
+  // time while everything else still runs in parallel.
+  //
+  // Separate accounts were the other option and cost more than they save:
+  // three registrations is the entire hourly cap for this IP, which would
+  // make the first run after seeding fail on `auth.spec.ts`.
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+      testIgnore: ["**/play.spec.ts", "**/game.spec.ts"],
+    },
+    {
+      name: "lobby",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: "**/play.spec.ts",
+    },
+    {
+      name: "live-game",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: "**/game.spec.ts",
+      dependencies: ["lobby"],
+    },
+  ],
   webServer: {
     command: "npm run build && npm run preview -- --port 4173 --strictPort",
     // `localhost`, not `127.0.0.1`: Vite's preview server binds the

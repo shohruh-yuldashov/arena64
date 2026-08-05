@@ -547,7 +547,11 @@ class MatchRecord:
         accepted = self._with(light=seat) if side is PlayerSide.LIGHT else self._with(dark=seat)
         if not (accepted.light.has_accepted and accepted.dark.has_accepted):
             return accepted
-        return accepted._with(status=MatchRecordStatus.ACTIVE, settled_at=at)
+        return accepted._with(
+            status=MatchRecordStatus.ACTIVE,
+            settled_at=at,
+            clock=_started(accepted.time_control, at=at),
+        )
 
     def system_activated(self, at: datetime) -> "MatchRecord":
         """This match, active without either player having been asked.
@@ -576,6 +580,7 @@ class MatchRecord:
             dark=self.dark.accepting(at),
             status=MatchRecordStatus.ACTIVE,
             settled_at=at,
+            clock=_started(self.time_control, at=at),
         )
 
     def declined(self, side: PlayerSide, *, at: datetime) -> "MatchRecord":
@@ -619,14 +624,18 @@ class MatchRecord:
         status: MatchRecordStatus | None = None,
         declined_by: PlayerSide | None = None,
         settled_at: datetime | None = None,
+        clock: ClockState | None = None,
     ) -> "MatchRecord":
         """This match with some fields changed and the rest carried across.
 
         `None` means "unchanged" rather than "cleared", which is safe here
-        because none of the five fields is ever *un*-set: a seat only gains
-        an `accepted_at`, and `status`, `declined_by` and `settled_at` are
-        written once when the handshake ends. A transition that had to
-        clear one would be a transition this state machine does not have.
+        because none of the six fields is ever *un*-set: a seat only gains
+        an `accepted_at`, `status`, `declined_by` and `settled_at` are
+        written once when the handshake ends, and a clock is replaced but
+        never removed — an untimed match passes `None` because it has none
+        to replace, which is "unchanged" and is the right answer. A
+        transition that had to clear one would be a transition this state
+        machine does not have.
 
         Every other field is carried verbatim, which is what makes the
         creation-time facts immutable without a guard.
@@ -641,11 +650,8 @@ class MatchRecord:
         empty at every point this is reached today, which is exactly why
         nothing noticed. Same defect as `MatchSeat.accepting`, same fix.
         """
-        # `None` means "unchanged" rather than "cleared", which is safe
-        # because none of the five is ever *un*-set: a seat only gains an
-        # `accepted_at`, and the other three are written once when the
-        # handshake ends. A transition that had to clear one would be a
-        # transition this state machine does not have.
+        # `None` means "unchanged" rather than "cleared" — see the docstring
+        # above on why that is safe for every one of the six.
         return replace(
             self,
             light=light if light is not None else self.light,
@@ -653,7 +659,24 @@ class MatchRecord:
             status=status if status is not None else self.status,
             declined_by=declined_by if declined_by is not None else self.declined_by,
             settled_at=settled_at if settled_at is not None else self.settled_at,
+            clock=clock if clock is not None else self.clock,
         )
+
+
+def _started(control: TimeControl | None, *, at: datetime) -> ClockState | None:
+    """Both clocks at their full budget from `at`, or `None` if untimed —
+    A64-020.5A-pre §14.
+
+    Called by the two transitions that make a match playable, and by nothing
+    else: **activation is when a clock starts**, because that is the first
+    instant either player could legally move. A clock started at creation
+    would charge LIGHT for however long DARK took to accept.
+
+    A free function rather than a method because it answers a question about
+    a control, not about this record, and both callers already hold the
+    control they mean.
+    """
+    return None if control is None else ClockState.start(control, at=at)
 
 
 __all__ = ["MatchRecord", "MatchRecordStatus", "MatchSeat"]

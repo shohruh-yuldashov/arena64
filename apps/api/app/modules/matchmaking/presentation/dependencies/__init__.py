@@ -99,6 +99,7 @@ from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.friends.application.services import PairingExclusionService
 from app.modules.friends.infrastructure.repositories import SqlAlchemyBlockedPlayerRepository
 from app.modules.friends.public import PairingExclusions
+from app.modules.game.application.ports import ClockDeadlineStore
 from app.modules.game.application.services import (
     GameAbandonedMatchRetention,
     GamePairingSettlements,
@@ -106,6 +107,7 @@ from app.modules.game.application.services import (
     MatchAcceptanceService,
     PersistentMatchCreation,
 )
+from app.modules.game.infrastructure.clock_deadline_store import RedisClockDeadlineStore
 from app.modules.game.infrastructure.repositories import (
     SqlAlchemyMatchRecordRepository,
     SqlAlchemyMatchRetentionStore,
@@ -153,6 +155,7 @@ from app.modules.matchmaking.infrastructure import (
 from app.modules.rating.infrastructure.repositories.player_rating_repository import (
     SqlAlchemyRatingReader,
 )
+from app.modules.reference.infrastructure.repositories import SqlAlchemyTimeControlCatalogue
 from app.modules.users.application.services.public_profile_service import PublicProfileService
 from app.modules.users.application.services.user_service import UserService
 from app.modules.users.infrastructure.presence import NoPresenceProvider, RedisPresenceProvider
@@ -270,6 +273,16 @@ def build_queue_service(
         # used to be is gone. See `PublishedRatingProvider` on why the
         # translation lives in an adapter rather than in the service.
         ratings=PublishedRatingProvider(SqlAlchemyRatingReader(session)),
+        # `reference.public`'s catalogue — A64-020.5A-pre. Constructed here
+        # rather than declared as a local port, for the reason presence is:
+        # `reference` already publishes the contract, and a second one would
+        # be two definitions of what a time control is.
+        #
+        # Over the **same** session as the repository. That is not required
+        # for correctness — the read happens before the ticket's transaction
+        # opens (BE-05) — and it is what stops a join holding two
+        # connections for one request.
+        time_controls=SqlAlchemyTimeControlCatalogue(session),
         eligibility=eligibility,
         # Built over the **same** session as the repository, which is what
         # puts the outbox row in the ticket's transaction rather than beside
@@ -380,6 +393,7 @@ def build_match_acceptance(
     events: EventPublisher,
     clock: Clock,
     metrics: MetricsRecorder,
+    deadlines: ClockDeadlineStore,
 ) -> MatchAcceptanceService:
     """`game`'s acceptance handshake, over one session — A64-015.4 §6,
     A64-015.5 §10.
@@ -413,6 +427,18 @@ def build_match_acceptance(
 
     The one genuinely shared object is the metrics recorder, which is
     stateless and process-wide (`get_metrics`).
+
+    ## The deadline store, and why it is a required argument
+
+    A64-020.5A-pre §14 makes activation the instant a timed game's first
+    flag deadline is written, and only this service activates a match. The
+    store is therefore not optional: a defaulted no-op would mean any caller
+    that forgot it silently produced games that never flag — the same
+    silent-absence failure `tests/unit/test_reachability.py` exists for.
+
+    Passed in rather than built here because it is **Redis**, not the
+    session: AD-21 puts deadlines in a sorted set owned by no node, and this
+    function's whole contract is "over one session".
     """
     return MatchAcceptanceService(
         matches=SqlAlchemyMatchRecordRepository(session),
@@ -420,6 +446,7 @@ def build_match_acceptance(
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
         metrics=metrics,
+        deadlines=deadlines,
     )
 
 
@@ -502,17 +529,21 @@ def build_pending_match_notifier(
     sink: PendingMatchSink,
     clock: Clock,
     metrics: MetricsRecorder,
+    deadlines: ClockDeadlineStore,
 ) -> PendingMatchNotifier:
     """The realtime pending-match consumer, over one relay tick's session —
     A64-015.5 §4.
 
-    Three published reads and a sink. It takes an `EventPublisher` only to
-    build the acceptance service, which needs one — the notifier itself
-    publishes nothing, and a consumer that could would be a consumer that
-    can cause the events it reacts to.
+    Three published reads and a sink. It takes an `EventPublisher` and a
+    `ClockDeadlineStore` only to build the acceptance service, which needs
+    both — the notifier itself publishes nothing and schedules nothing, and
+    a consumer that could would be a consumer that can cause the events it
+    reacts to.
     """
     return PendingMatchNotifier(
-        acceptance=build_match_acceptance(session, events=events, clock=clock, metrics=metrics),
+        acceptance=build_match_acceptance(
+            session, events=events, clock=clock, metrics=metrics, deadlines=deadlines
+        ),
         exclusions=build_pairing_exclusions(session),
         players=build_opponent_directory(session, clock=clock),
         sink=sink,
@@ -679,11 +710,36 @@ def get_metrics() -> MetricsRecorder:
 MetricsDep = Annotated[MetricsRecorder, Depends(get_metrics)]
 
 
+def get_clock_deadlines(pools: RedisPoolsDep) -> ClockDeadlineStore:
+    """Where a newly activated match's first flag deadline is written —
+    A64-020.5A-pre §14.
+
+    The **`live` Redis role**, because that is where AD-21's deadlines live:
+    the same sorted set `game`'s own move path writes to, which is what
+    makes the deadline an acceptance schedules and the one the first move
+    replaces the *same* entry.
+
+    A dependency of its own rather than a line inside
+    `get_match_acceptance`, for the reason `get_presence_reader` is one: it
+    reads `app.state`, and the contract suite's application has no
+    `lifespan` and therefore no Redis. A named dependency is something
+    `build_contract_app` can redirect; an inline constructor is not.
+
+    Returned as the **port**, so a route holding this cannot reach
+    `claim_expired` — adjudication is the clock worker's job.
+    """
+    return RedisClockDeadlineStore(pools.live)
+
+
+ClockDeadlineDep = Annotated[ClockDeadlineStore, Depends(get_clock_deadlines)]
+
+
 def get_match_acceptance(
     session: DbSessionDep,
     clock: ClockDep,
     events: EventPublisherDep,
     metrics: MetricsDep,
+    deadlines: ClockDeadlineDep,
 ) -> MatchAcceptanceUseCase:
     """The per-request acceptance use case.
 
@@ -692,7 +748,9 @@ def get_match_acceptance(
     `expire_overdue` even by accident, though the object in its hand has
     it.
     """
-    return build_match_acceptance(session, events=events, clock=clock, metrics=metrics)
+    return build_match_acceptance(
+        session, events=events, clock=clock, metrics=metrics, deadlines=deadlines
+    )
 
 
 MatchAcceptanceDep = Annotated[MatchAcceptanceUseCase, Depends(get_match_acceptance)]
@@ -710,6 +768,7 @@ __all__ = [
     "EligibilityPolicyDep",
     "EngineServicesDep",
     "MatchAcceptanceDep",
+    "ClockDeadlineDep",
     "MetricsDep",
     "OpponentDirectoryDep",
     "PresenceReaderDep",
@@ -735,6 +794,7 @@ __all__ = [
     "get_eligibility_policy",
     "get_engine_services",
     "get_match_acceptance",
+    "get_clock_deadlines",
     "get_metrics",
     "get_opponent_directory",
     "get_presence_reader",

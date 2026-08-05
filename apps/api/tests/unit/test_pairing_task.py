@@ -29,9 +29,14 @@ from app.modules.matchmaking.infrastructure import (
     PairingTask,
     pairing_request,
 )
+from app.modules.reference.public import TimeControlId
+from tests.fakes.time_controls import BLITZ
 
 POOL = QueuePool(
-    variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.CASUAL, region=Region.ASIA
+    variant=ProductVariant.RUSSIAN_8X8,
+    queue_type=QueueType.CASUAL,
+    region=Region.ASIA,
+    time_control_id=BLITZ.id,
 )
 
 
@@ -51,21 +56,27 @@ class TestThePoolWireFormat:
         bad one is a bug in the dispatcher. Failing loudly beats scanning
         some default pool quietly."""
         with pytest.raises(ValueError):
-            QueuePool.from_identifier("russian_8x8:ranked")
+            QueuePool.from_identifier("russian_8x8:ranked:global")
 
     def test_an_unknown_region_is_refused(self) -> None:
         with pytest.raises(ValueError):
-            QueuePool.from_identifier("russian_8x8:ranked:mars")
+            QueuePool.from_identifier("russian_8x8:ranked:blitz_3_2:mars")
+
+    def test_an_unknown_time_control_is_refused(self) -> None:
+        """A retired control still parses — the pool has to keep draining —
+        so the refusal is for one that was never a control at all."""
+        with pytest.raises(ValueError):
+            QueuePool.from_identifier("russian_8x8:ranked:hyperbullet:global")
 
     def test_an_unknown_mode_is_refused(self) -> None:
         with pytest.raises(ValueError):
-            QueuePool.from_identifier("russian_8x8:tournament:global")
+            QueuePool.from_identifier("russian_8x8:tournament:blitz_3_2:global")
 
     def test_a_variant_that_is_not_offered_is_refused(self) -> None:
         """The engine plays English 8x8; no player may queue for it, and no
         scheduler may scan for it either."""
         with pytest.raises(VariantNotOffered):
-            QueuePool.from_identifier("english_8x8:ranked:global")
+            QueuePool.from_identifier("english_8x8:ranked:blitz_3_2:global")
 
 
 class TestTheRequest:
@@ -82,13 +93,15 @@ class TestTheRequest:
         pool identifier is a string, and that is the whole payload."""
         payload = pairing_request(POOL).payload
 
-        assert payload == {PAIRING_POOL_KEY: "russian_8x8:casual:asia"}
+        assert payload == {PAIRING_POOL_KEY: "russian_8x8:casual:blitz_3_2:asia"}
         assert all(isinstance(value, str) for value in payload.values())
 
     def test_two_pools_produce_two_different_requests(self) -> None:
         """One request per pool is what makes a scan pool-scoped at the
         scheduling layer rather than only inside the service."""
-        other = QueuePool(variant=POOL.variant, queue_type=QueueType.RANKED)
+        other = QueuePool(
+            variant=POOL.variant, queue_type=QueueType.RANKED, time_control_id=BLITZ.id
+        )
 
         assert pairing_request(POOL).payload != pairing_request(other).payload
 
@@ -167,13 +180,21 @@ class TestThePoolCatalogue:
     def test_it_covers_every_combination(self) -> None:
         """One scheduler per pool, so a pool missing from here is a queue
         nothing ever scans."""
-        assert len(every_pool()) == len(ProductVariant) * len(QueueType) * len(Region)
+        assert len(every_pool()) == (
+            len(ProductVariant) * len(QueueType) * len(TimeControlId) * len(Region)
+        )
 
     def test_every_pool_is_distinct(self) -> None:
         assert len({pool.identifier() for pool in every_pool()}) == len(every_pool())
 
     def test_the_order_is_stable(self) -> None:
         assert every_pool() == every_pool()
+
+    def test_it_offers_every_time_control_the_catalogue_names(self) -> None:
+        """A control missing from here is a pool a player can join and
+        nothing ever scans — see `every_pool` on why the list is built from
+        the enum rather than from the catalogue table."""
+        assert {pool.time_control_id for pool in every_pool()} == set(TimeControlId)
 
     def test_it_offers_no_variant_a_player_cannot_choose(self) -> None:
         assert {pool.variant for pool in every_pool()} == set(ProductVariant)

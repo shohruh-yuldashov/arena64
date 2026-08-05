@@ -53,12 +53,15 @@ from tests.fakes.pairing import (
 )
 from tests.fakes.presence_redis import MovableClock
 from tests.fakes.queue_repository import InMemoryQueueRepository, RecordingPublisher
+from tests.fakes.time_controls import BLITZ
 
 NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 TTL = timedelta(minutes=10)
 RESERVATION_TTL = 30.0
 
-POOL = QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED)
+POOL = QueuePool(
+    variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED, time_control_id=BLITZ.id
+)
 
 #: Wide enough that nothing is excluded by rating, so a test about exclusions
 #: is not accidentally a test about the window.
@@ -118,6 +121,7 @@ def _queued(store: InMemoryQueueRepository, *, player_id: UUID | None = None) ->
     ticket = QueueTicket(
         player_id=player_id or generate_uuid7(),
         pool=POOL,
+        time_control=BLITZ,
         rating_snapshot=1500,
         entered_at=NOW,
         expires_at=NOW + TTL,

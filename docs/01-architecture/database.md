@@ -560,16 +560,31 @@ is invisible to review.
 
 ### 6.2 `reference.time_control`
 
-`id smallint` PK, `code` (unique, e.g. `blitz_3_2`), `base_time_ms`, `increment_ms`, `delay_ms`,
-`speed_class` (`bullet`, `blitz`, `rapid`, `classical`, `correspondence`), `is_rated_eligible`,
-`is_active`.
+**Shipped in A64-020.5A-pre**, and the first relation in the `reference` schema. It differs from
+this section as originally written in three ways, each recorded rather than silently applied.
 
-**Why `speed_class` is stored rather than derived at query time:** it is derived — from base time
-and increment — but it is the grouping key for rating categories and leaderboards, and recomputing
-it in every query means the definition of "blitz" lives in several places. It is stored once,
-computed once at seed time, and the derivation rule lives in the seed migration. `domain-model.md`
-§15.3 warns that an independently *editable* class can disagree with the numbers; making it
-seed-derived and immutable removes that risk.
+| Specified | Shipped | Why |
+| --- | --- | --- |
+| `id smallint` PK plus a unique `code` | `id` **is** the code — a native `reference.time_control_id` enum (`bullet_1_0`, `blitz_3_2`, `rapid_10_0`, `classical_30_0`) | A surrogate key would be a second name for one thing, and the code is what appears in a queue pool identifier and on every ticket. A pool identifier carrying a `smallint` is unreadable in a log line; carrying the code makes the `smallint` decoration |
+| `delay_ms` | Absent | `game.domain.clock.TimeControl` implements Fischer increment only. A column the adjudicator would ignore is a promise the platform cannot keep — it lands with simple or Bronstein delay |
+| `is_rated_eligible` | Absent | Whether a *result* counts is `rated` on the match, decided by the pool's mode (`ranked`/`casual`). A second, per-control switch would be a way for the two to disagree |
+
+`label` was added: free text a menu renders (`"3+2"`), editable, and copied by nothing durable.
+`display_order` is unique, so a picker's order cannot be ambiguous.
+
+**Why `speed_class` is stored rather than derived at query time** — unchanged, and A64-020.5A-pre
+strengthened it. It is *not* derived from base time and increment anywhere in code: SPEC-RATING §19
+leaves the boundaries between bullet, blitz and rapid an open product decision, so each row simply
+carries its class and the choice travels as data from the picker to the rating key. That removes
+the risk `domain-model.md` §15.3 warns about by construction rather than by immutability — there is
+no derivation for an edited row to disagree with.
+
+**What copies from here, and what references it.** Nothing holds a foreign key. A queue ticket and
+a match take a **snapshot** of the durable fields (`base_time_ms`, `increment_ms`, `speed_class`)
+at the moment a player chooses, because both are permanent records of a decision and re-reading a
+catalogue somebody may edit would let a correction change what a waiting player asked for. Retiring
+a control (`is_active = false`) removes it from the menu and refuses new tickets; it changes nothing
+already recorded, and the tickets already waiting still pair.
 
 ### 6.3 `reference.rating_category`
 
@@ -982,7 +997,7 @@ lets the index refuse the loser, and re-reads by `pairing_id`.
 | §8.2 | Shipped | Why |
 | --- | --- | --- |
 | Partitioned monthly, composite PK | One relation, `uuid` PK | Partitioning is for archival at volume (architecture.md §16 axis 4). There are no matches yet, and DB-13's denormalised `match_created_at` only earns its sharpness once `game.move` exists |
-| `variant_id`, `time_control_id`, `rating_category_id` → `reference` | A native `variant` enum; no time control, no rating category | The `reference` schema does not exist in code. `QueuePool` records why inventing a speed class in `matchmaking` would put the definition of "blitz" in the module least entitled to own it |
+| `variant_id`, `time_control_id`, `rating_category_id` → `reference` | A native `variant` enum; `time_control_initial_ms` / `time_control_increment_ms` as a snapshot; no rating category | A64-020.5A-pre shipped `reference.time_control` (§6.2) and a match records what was chosen rather than pointing at it — a permanent record must not change meaning when a catalogue row is corrected. `reference.rating_category` (§6.3) is still absent: SPEC-RATING §7.1 keys a rating by `(variant, speed_class)` directly and says a third concept between them would be a mapping that can disagree with itself |
 | `origin`, `origin_ref`, `previous_match_id` | Absent | Every match comes from the queue today. `pairing_id` is `origin_ref` under the one origin that exists |
 | `engine_version text` | `integer` | `EngineVersion` is a single ordered integer, so "played under a version older than the fix" is an indexable comparison rather than a parse |
 | `status` with seven members | Four | The four a match reaches *before* it is played. `paused`, `flagged` and `abandoned` all need a clock |

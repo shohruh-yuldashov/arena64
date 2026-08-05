@@ -28,12 +28,15 @@ from tests.fakes.outbox import NullUnitOfWork
 from tests.fakes.pairing import RecordingMatchCreation, StubExclusions, StubRatings
 from tests.fakes.presence_redis import MovableClock
 from tests.fakes.queue_repository import InMemoryQueueRepository, RecordingPublisher
+from tests.fakes.time_controls import BLITZ
 
 NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 TTL = timedelta(minutes=10)
 WINDOW = timedelta(seconds=30)
 
-POOL = QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED)
+POOL = QueuePool(
+    variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED, time_control_id=BLITZ.id
+)
 
 #: Wide, so nothing in this file fails for a rating reason — the rule under
 #: test is the exclusion.
@@ -235,6 +238,7 @@ def _queued(store: InMemoryQueueRepository) -> QueueTicket:
     ticket = QueueTicket(
         player_id=generate_uuid7(),
         pool=POOL,
+        time_control=BLITZ,
         rating_snapshot=1500,
         entered_at=NOW,
         expires_at=NOW + TTL,

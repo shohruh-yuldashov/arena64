@@ -27,6 +27,7 @@ from app.modules.matchmaking.application.metrics import (
 )
 from app.modules.matchmaking.application.services import PendingMatchNotifier
 from app.platform.outbox import OutboxEntry
+from tests.fakes.clock_deadlines import RecordingClockDeadlines
 from tests.fakes.matches import InMemoryMatchRecordRepository
 from tests.fakes.metrics import RecordingMetrics
 from tests.fakes.outbox import NullUnitOfWork
@@ -56,6 +57,7 @@ def acceptance(
     """The **real** acceptance service, so "still pending" is answered by
     the same read a route would use rather than by a stub that agrees."""
     return MatchAcceptanceService(
+        deadlines=RecordingClockDeadlines(),
         matches=matches,
         events=RecordingPublisher(),
         unit_of_work=NullUnitOfWork(),

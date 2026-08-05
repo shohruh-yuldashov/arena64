@@ -20,6 +20,17 @@ one read what the first wrote and activate.
 other claim on this platform — see `MatchRecordRepository.lock` for why a
 player has nowhere else to go.
 
+## Activation is where the clock starts — A64-020.5A-pre §14
+
+The second acceptance both activates the match and opens its clock, and the
+two happen in one value (`MatchRecord.accepted_by`). What this service adds
+is the *deadline*: one write to AD-21's sorted set, after the commit, so the
+flag worker can adjudicate a game nobody has moved in yet.
+
+Before this the clock machinery was complete and unreachable — `ClockState`,
+the adjudicator and the Redis index all existed, and no match ever carried a
+time control for them to act on. The missing edge was this one.
+
 ## Absence and refusal answer the same way
 
 `MatchNotFound` is raised for a match that does not exist **and** for one
@@ -37,7 +48,7 @@ from uuid import UUID
 from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork
 from app.modules.engine import PlayerSide
-from app.modules.game.application.ports import MatchRecordRepository
+from app.modules.game.application.ports import ClockDeadlineStore, MatchRecordRepository
 from app.modules.game.domain.events import (
     MatchAcceptanceExpired,
     MatchAcceptedByPlayer,
@@ -47,6 +58,7 @@ from app.modules.game.domain.events import (
 from app.modules.game.domain.exceptions import MatchNotFound, NotAMatchParticipant
 from app.modules.game.domain.match_record import MatchRecord, MatchRecordStatus
 from app.modules.game.public.acceptance import PendingMatchView
+from app.modules.game.public.matches import MatchTimeControl
 from app.modules.game.public.metrics import (
     MATCH_ANSWER_LATENCY,
     MATCH_OUTCOMES,
@@ -71,12 +83,14 @@ class MatchAcceptanceService:
         unit_of_work: UnitOfWork,
         clock: Clock,
         metrics: MetricsRecorder,
+        deadlines: ClockDeadlineStore,
     ) -> None:
         self._matches = matches
         self._events = events
         self._unit_of_work = unit_of_work
         self._clock = clock
         self._metrics = metrics
+        self._deadlines = deadlines
 
     async def pending_match(self, player_id: UUID) -> PendingMatchView | None:
         """The match this player must answer, or `None`.
@@ -167,6 +181,7 @@ class MatchAcceptanceService:
                 await self._events.publish(event)
             await self._unit_of_work.commit()
 
+        await self._open_the_clock(answered)
         self._record_answer(record, answered, at=at, accepting=accepting)
         logger.info(
             "match_answered",
@@ -179,6 +194,52 @@ class MatchAcceptanceService:
             },
         )
         return view_of(answered, player_id)
+
+    async def _open_the_clock(self, record: MatchRecord) -> None:
+        """Schedules the first flag deadline — A64-020.5A-pre §14.
+
+        Activation is when a timed game starts, so it is when the first
+        deadline exists: `MatchRecord.accepted_by` has already put a
+        `ClockState` on the record with LIGHT to move, and this writes the
+        instant that state flags at into AD-21's sorted set. From here the
+        existing machinery carries it — `LiveMoveService._reschedule` moves
+        the deadline on every move and `ClockAdjudicationService` claims it
+        when it passes.
+
+        **After the commit**, so a rolled-back activation never schedules a
+        deadline for a match that is still pending. The reverse ordering is
+        harmless in the other direction: a deadline written for a match that
+        then fails to commit would be claimed by the worker and correctly
+        refused, which is work nobody needs done.
+
+        **Never raises**, exactly as `LiveMoveService._reschedule` does not.
+        The two players have been told their game is on and the transaction
+        is committed; a deadline that could not be written is a game that
+        will not flag, which is bad and strictly better than a `500` on an
+        acceptance that succeeded. A rising `clock_deadline_write_failed` is
+        what makes it visible.
+
+        Called on every answer and a no-op for all but one: a decline, an
+        expiry and a first acceptance all leave `clock` untouched or the
+        status short of `ACTIVE`. There is deliberately no `cancel` branch —
+        a match that never activated never had a deadline, so there is
+        nothing to remove.
+        """
+        if record.status is not MatchRecordStatus.ACTIVE or record.clock is None:
+            return
+        try:
+            await self._deadlines.schedule(
+                record.id,
+                ply_number=record.ply_number,
+                side=record.clock.active_side,
+                deadline=record.clock.deadline(),
+            )
+        except Exception as exc:  # noqa: BLE001 — a deadline must not fail an acceptance
+            logger.error(
+                "clock_deadline_write_failed",
+                extra={"match_id": str(record.id), "error": type(exc).__name__},
+                exc_info=exc,
+            )
 
     def _record_answer(
         self, before: MatchRecord, after: MatchRecord, *, at: datetime, accepting: bool
@@ -389,6 +450,18 @@ def view_of(record: MatchRecord, player_id: UUID) -> PendingMatchView:
         opponent_player_id=opponent.player_id,
         variant=record.variant,
         rated=record.rated,
+        # The **stored** control, translated back to the published shape.
+        # `game`'s domain type does not cross the boundary, for the reason
+        # `SeatRating` does not — see `game.public.matches`.
+        time_control=(
+            None
+            if record.time_control is None
+            else MatchTimeControl(
+                initial_ms=record.time_control.initial_ms,
+                increment_ms=record.time_control.increment_ms,
+            )
+        ),
+        speed_class=None if you.rating is None else you.rating.speed_class,
         acceptance_deadline=record.acceptance_deadline,
         you_accepted=you.has_accepted,
         opponent_accepted=opponent.has_accepted,

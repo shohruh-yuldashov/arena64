@@ -272,8 +272,11 @@ threefold repetition is live on the only variant. The v0.x policy:
 | 2 | **draw** | The **higher seed** advances, reason `ADJUDICATION`. No third match |
 
 **Bounded at two, and the bound is the point.** An unbounded rematch chain is a
-tournament that can never finish, and nothing would force one — every match is untimed
-today (`specs/rating.md` §8).
+tournament that can never finish, and nothing would force one — a **tournament** match is
+still untimed, even though a queue match is not since A64-020.5A-pre. `reference.time_control`
+now exists; what does not is a time control on a `TournamentFormat`, and
+`game.public.CreateMatchRequest` refuses a system-activated match that carries one until
+activation schedules its clock deadline (`specs/matchmaking.md` §8.1).
 
 **Why the higher seed rather than a third game or a coin.** A third game repeats the
 question that twice failed to answer it. A random winner is a permanent competitive record
@@ -281,9 +284,10 @@ decided by chance. Manual adjudication needs an `admin` module that does not exi
 until it did the tournament would be frozen. The seed is the one answer already earned —
 the rating the field was seeded on, recorded before anyone played.
 
-**This is a v0.x policy and is expected to be revisited** once `reference.time_control`
-exists: a faster rematch under a real time control is the better tie-break, and it is
-unavailable only because the catalogue is not built (`specs/rating.md` OQ-1, OQ-2).
+**This is a v0.x policy and is expected to be revisited** once a tournament can name a time
+control: a faster rematch under a real one is the better tie-break. The catalogue it was
+waiting for is built (`docs/01-architecture/database.md` §6.2); what remains is giving a
+`TournamentFormat` a control and scheduling the deadline a system-activated match needs.
 
 ### Rating behaviour
 

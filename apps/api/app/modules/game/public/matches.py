@@ -49,20 +49,27 @@ window, and a `game` setting for "how long may a player take to accept"
 would be a second number that has to be kept below the queue's own — a
 constraint nothing could enforce across two settings classes.
 
-## What is deliberately absent: time control
+## The time control arrives on the request — A64-020.5A-pre §12
 
-A64-015.3 §9 lists time control among the request's fields, and this
-request does not carry one. The reason is recorded rather than skipped:
-`reference.time_control` (database.md §6.2) does not exist in code, and
-`QueuePool` deliberately does not invent one — putting the definition of
-"blitz" in `matchmaking` would hand the module least entitled to own it a
-grouping key that every rating category (DM-10) and every leaderboard
-would inherit.
+A64-015.3 §9 listed it and A64-015.4 could not supply it, because
+`reference.time_control` did not exist. It does now, and the change this
+file predicted is the one that happened: `QueuePool` gained a component and
+this request gained a field.
 
-A nullable placeholder field would be worse than the gap: it would be a
-contract that says a time control is optional, when in fact every real
-match has one. When `reference.time_control` ships, `QueuePool` gains a
-component and this request gains a field, in one change.
+`MatchTimeControl` is **primitive-only and `game`-agnostic**, like
+`SeatRating` beside it and for the identical reason: `game` must not import
+`reference` any more than it imports `rating`, so the two integers are
+spelled twice and `PersistentMatchCreation` is the one place they meet.
+
+It is **optional**, and that is a gap rather than a policy — the second one
+this file has recorded, stated in the same spirit as the first. Every queue
+pairing supplies a control since A64-020.5A-pre. A tournament does not:
+`specs/tournament.md` has no time control on a `TournamentFormat`, and
+inventing one here would put the choice in the module that creates the match
+rather than the one that runs the competition. So a tournament match is
+untimed today, exactly as every match was before this task, and `None`
+continues to mean what `game.domain.clock` says it means: the clock
+machinery does not run at all.
 """
 
 from dataclasses import dataclass
@@ -157,6 +164,45 @@ class SeatRating:
     class restates rather than imports. The variant is on the match itself
     and is not repeated per seat.
     """
+
+
+@dataclass(frozen=True, slots=True)
+class MatchTimeControl:
+    """How much time each side gets in the match being created.
+
+    `game.domain.clock.TimeControl`'s two fields restated rather than that
+    type imported, for the reason `SeatRating` restates
+    `rating.public.RatingSnapshot`: a port is a contract the *caller* shapes
+    its request against, and a caller building one should not have to import
+    a domain to do it.
+
+    **Immutable and never refreshed**, like `SeatRating`. It is a fact about
+    the past — what these two players agreed to play — and `matchmaking`
+    supplies it from the snapshot on their tickets, never from a catalogue
+    read at creation time. See `reference.domain.time_control` on why those
+    are different numbers.
+
+    No delay, no multi-stage control: this carries exactly what
+    `game.domain.clock` can populate, which is the same list
+    `reference.time_control` seeds.
+    """
+
+    initial_ms: int
+    """Each side's budget at the start. Both sides get the same."""
+
+    increment_ms: int = 0
+    """What a side gets back after each of its own moves — Fischer."""
+
+    def __post_init__(self) -> None:
+        # The same two checks `TimeControl` makes, applied at the boundary
+        # rather than only after conversion. A zero budget is not a fast
+        # game — it is a match every player loses on their first move — and
+        # catching it here names the *request* as malformed rather than
+        # failing somewhere inside `game`.
+        if self.initial_ms <= 0:
+            raise ValueError("a time control gives each side a positive budget")
+        if self.increment_ms < 0:
+            raise ValueError("an increment cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +321,21 @@ class CreateMatchRequest:
     mechanism `services.md` §11.3 assumed already existed.
     """
 
+    time_control: MatchTimeControl | None = None
+    """The clock this match is played under, or `None` for an untimed one —
+    A64-020.5A-pre §12.
+
+    Supplied by `matchmaking` from the two tickets' snapshot, which is the
+    same value both players were shown when they queued. `game` stores it,
+    starts the clock from it when the match activates, and adjudicates
+    against it; it never resolves it, never reads a catalogue and could not
+    — `reference` is not a dependency of this module.
+
+    Defaulted, like `origin` and `acceptance` above, so a caller that has no
+    clock to offer is unchanged. See this module's docstring on why that
+    caller is a tournament and why its matches are untimed.
+    """
+
     acceptance: AcceptancePolicy = AcceptancePolicy.BILATERAL
     """Whether this match waits to be accepted — A64-019.5H.
 
@@ -312,6 +373,24 @@ class CreateMatchRequest:
             self.dark.queue_ticket_id,
         ):
             raise ValueError("a queue match records the ticket each player arrived on")
+
+        # A64-020.5A-pre §14: the first flag deadline is written when a
+        # match **activates**, and the one place that happens is
+        # `MatchAcceptanceService`. A `SYSTEM` match activates at creation
+        # instead, so a timed one would start a clock nothing had scheduled
+        # a deadline for — a game that can never flag.
+        #
+        # Unreachable today: the only `SYSTEM` caller is `tournament`, and a
+        # tournament format carries no time control (`specs/tournament.md`).
+        # Refusing here rather than trusting that is what turns "we happen
+        # not to do this" into "this cannot be done", so the task that gives
+        # tournaments a clock is made to schedule the deadline rather than
+        # discovering months later that nobody flags.
+        if self.acceptance is AcceptancePolicy.SYSTEM and self.time_control is not None:
+            raise ValueError(
+                "a system-activated match cannot carry a time control until its "
+                "activation schedules a clock deadline"
+            )
 
     def player_ids(self) -> tuple[UUID, UUID]:
         """Both players, light first. For logging and for the caller that
@@ -384,5 +463,6 @@ __all__ = [
     "MatchCreationRefused",
     "MatchCreationUseCase",
     "MatchParticipant",
+    "MatchTimeControl",
     "PlayerSide",
 ]

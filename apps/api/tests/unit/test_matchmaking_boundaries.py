@@ -278,7 +278,25 @@ class TestTheDomainStaysFrameworkFree:
 
         assert offenders == {}
 
-    def test_the_domain_s_only_cross_module_dependency_is_game_public(self) -> None:
+    #: The published surfaces `matchmaking.domain` is allowed to name.
+    #:
+    #: Three, and each is a vocabulary the queue *borrows* rather than one it
+    #: could define. `game.public` says which rule sets exist, `reference.public`
+    #: says which clocks are offered, and `rating.public` says what a speed
+    #: class is — and A64-020.5A-pre is when the last two arrived, because a
+    #: pool is `(variant, mode, time control, region)` and a ticket records
+    #: which ladder it will move.
+    #:
+    #: The list is exact rather than a prefix test, so a fourth entry is a
+    #: decision somebody writes down here instead of an import somebody
+    #: happens to add.
+    PERMITTED_SURFACES = (
+        "app.modules.game.public",
+        "app.modules.rating.public",
+        "app.modules.reference.public",
+    )
+
+    def test_the_domain_reaches_other_modules_only_through_published_surfaces(self) -> None:
         cross_module = {
             name
             for module in _modules_under(_MATCHMAKING / "domain")
@@ -286,7 +304,7 @@ class TestTheDomainStaysFrameworkFree:
             if name.startswith("app.modules.") and not name.startswith("app.modules.matchmaking")
         }
 
-        assert all(name.startswith("app.modules.game.public") for name in cross_module)
+        assert all(name.startswith(self.PERMITTED_SURFACES) for name in cross_module)
 
 
 class TestOneSharedAcceptanceFactory:

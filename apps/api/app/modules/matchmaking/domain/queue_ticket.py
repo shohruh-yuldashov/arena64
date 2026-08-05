@@ -93,6 +93,8 @@ from uuid import UUID
 from app.core.identifiers import generate_uuid7
 from app.modules.matchmaking.domain.exceptions import TicketNotWaiting
 from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType, Region
+from app.modules.rating.public import SpeedClass
+from app.modules.reference.public import TimeControlSnapshot
 
 #: The rating a ticket records when nothing has measured the player.
 #:
@@ -178,6 +180,25 @@ class QueueTicket:
     the columns, the indexes and the pool scan all name them individually
     and a repository should not have to reach through two dots to build a
     `WHERE`.
+    """
+
+    time_control: TimeControlSnapshot
+    """The clock this player chose, **as it was when they chose it** —
+    A64-020.5A-pre §7.
+
+    A copy rather than a reference, for the reason `rating_snapshot` below
+    is one: a ticket is a record of a decision, and re-reading the catalogue
+    to interpret it would let an operator's edit change what a waiting
+    player asked for. A ticket entered for 3+2 is paired into a 3+2 match
+    even if `blitz_3_2` is corrected to 3+3 while it waits.
+
+    It also makes the pairing path free of the catalogue entirely: the two
+    tickets carry everything `CreateMatchRequest` needs, so a scan neither
+    reads `reference` nor can disagree with what the players were told.
+
+    `time_control.id` necessarily equals `pool.time_control_id` — the
+    constructor checks it, because the two arrive from different places and
+    a mismatch would be a ticket in one pool describing another one's game.
     """
 
     rating_snapshot: int
@@ -267,6 +288,8 @@ class QueueTicket:
             raise ValueError("resolved_at is set exactly when the ticket is no longer live")
         if (self.status is QueueStatus.RESERVED) != (self.reserved_until is not None):
             raise ValueError("reserved_until is set exactly when the ticket is reserved")
+        if self.time_control.id is not self.pool.time_control_id:
+            raise ValueError("a ticket's time control is the one its pool is for")
 
     @property
     def queue_type(self) -> QueueType:
@@ -279,12 +302,24 @@ class QueueTicket:
         """This ticket's pool region."""
         return self.pool.region
 
+    @property
+    def speed_class(self) -> SpeedClass:
+        """Which rating a match from this ticket would move.
+
+        Read through the snapshot, never stored twice — the same rule
+        `queue_type` and `region` follow. It is a property rather than a
+        column because the snapshot already carries it and two copies of one
+        fact is two things to keep in step.
+        """
+        return self.time_control.speed_class
+
     @classmethod
     def enter(
         cls,
         *,
         player_id: UUID,
         pool: QueuePool,
+        time_control: TimeControlSnapshot,
         rating_snapshot: int,
         at: datetime,
         ttl: float,
@@ -306,6 +341,7 @@ class QueueTicket:
         return cls(
             player_id=player_id,
             pool=pool,
+            time_control=time_control,
             rating_snapshot=rating_snapshot,
             entered_at=at,
             expires_at=at + timedelta(seconds=ttl),
@@ -359,6 +395,10 @@ class QueueTicket:
         because what makes a requeue fair is exactly which fields survive
         it, and that is a rule about a ticket:
 
+            time_control     preserved. They asked for that clock, and the
+                             snapshot they asked with — not whatever the
+                             catalogue says now, for the reason the field
+                             is a snapshot at all.
             entered_at       **preserved.** The whole policy. A player who
                              accepted promptly and lost the match to
                              somebody else's refusal keeps the priority
@@ -401,6 +441,7 @@ class QueueTicket:
         return QueueTicket(
             player_id=self.player_id,
             pool=self.pool,
+            time_control=self.time_control,
             rating_snapshot=self.rating_snapshot,
             entered_at=self.entered_at,
             expires_at=at + timedelta(seconds=ttl),
@@ -521,6 +562,7 @@ class QueueTicket:
             id=self.id,
             player_id=self.player_id,
             pool=self.pool,
+            time_control=self.time_control,
             rating_snapshot=self.rating_snapshot,
             entered_at=self.entered_at,
             expires_at=self.expires_at,

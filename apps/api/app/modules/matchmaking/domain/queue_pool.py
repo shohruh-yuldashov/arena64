@@ -17,19 +17,28 @@ reasons that are not stylistic:
    is free to add now, with no ticket in production, and it is a migration
    over live rows later.
 
-## What is deliberately absent: time control
+## The fourth component, and why it is only an identifier
 
-`reference.time_control` is specified — database.md §6.2 gives it
-`base_time_ms`, `increment_ms`, `delay_ms` and a speed class — and does not
-exist in code. A pool is genuinely `(variant, mode, time control, region)`,
-and this one carries three of the four.
+A64-020.5A-pre closed the gap this file recorded for five tasks: a pool is
+`(variant, mode, time control, region)` and now carries all four.
 
-A placeholder type would be worse than the gap. Speed class is the grouping
-key for rating categories (DM-10) and leaderboards, so inventing one here
-would put the definition of "blitz" in `matchmaking` — the module least
-entitled to own it — and every rating category would inherit the guess.
-When `reference.time_control` ships, this record gains a field and
-`QueuePool` remains the one place that changes.
+What it carries is `TimeControlId` and **not** the control's durations or
+its speed class. That is not an omission — it is what keeps this type pure.
+`identifier()` is a wire format a pairing task is dispatched with, so
+`from_identifier` has to reconstruct a pool from a string with no database
+in reach; and `every_pool()` has to enumerate pools at composition time
+without a query. An identifier round-trips through both. A resolved control
+would round-trip through neither.
+
+The durations and the speed class live on the **ticket**, as a snapshot —
+see `QueueTicket.time_control` and `reference.domain.time_control` on why a
+permanent record must not be re-read from a catalogue somebody may edit. A
+pool reconstructed from an identifier is used to *select* tickets; the
+tickets are what a match is built from.
+
+The prediction this file made held exactly: the definition of "blitz" is
+`reference`'s, `matchmaking` never guesses one, and every rating category
+inherits the catalogue's answer rather than this module's.
 
 ## Deterministic equality, and why it is not incidental
 
@@ -43,6 +52,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from app.modules.game.public import ProductVariant, require_offered
+from app.modules.reference.public import TimeControlId
 
 
 class QueueType(StrEnum):
@@ -116,6 +126,21 @@ class QueuePool:
     """
 
     queue_type: QueueType
+
+    time_control_id: TimeControlId
+    """Which clock a game from this pool would be played under.
+
+    An identifier, never the resolved control — see this module's docstring.
+    Two players who chose different controls are not opponents even at the
+    same speed class, which is why the pool key is this and not
+    `SpeedClass`: 3+2 and 5+0 are both blitz and are not the same game.
+
+    Not defaulted, unlike `region`. A64-020.5A-pre §16 forbids a
+    production-facing ambiguous default, and the reason is that the honest
+    default does not exist: every value here is a real, different game, so a
+    caller who omitted it would silently enter a pool they did not pick.
+    """
+
     region: Region = Region.GLOBAL
 
     def __post_init__(self) -> None:
@@ -137,16 +162,29 @@ class QueuePool:
     def identifier(self) -> str:
         """A stable, primitive name for this pool.
 
-        `"russian_8x8:ranked:global"` — ordered widest to narrowest, so a
-        sorted list of pools groups by variant and then by mode, which is
-        the order a scan and a dashboard both want.
+        `"russian_8x8:ranked:blitz_3_2:global"` — ordered widest to
+        narrowest, so a sorted list of pools groups by variant, then by
+        mode, then by clock, which is the order a scan and a dashboard both
+        want.
+
+        The time control sits **before** the region deliberately: it is the
+        coarser split. Two players in different regions may still be paired
+        once regional pools are merged; two players on different clocks
+        never are.
 
         Used for log context and metric labels today. It is also the shape
         a Redis pool index would be keyed by, which is why it is defined
         here rather than assembled at each call site — A64-015.3 should not
         have to invent one.
         """
-        return f"{self.variant.value}:{self.queue_type.value}:{self.region.value}"
+        return ":".join(
+            (
+                self.variant.value,
+                self.queue_type.value,
+                self.time_control_id.value,
+                self.region.value,
+            )
+        )
 
     @classmethod
     def from_identifier(cls, identifier: str) -> "QueuePool":
@@ -159,19 +197,28 @@ class QueuePool:
         is why the two are defined next to each other.
 
         Raises `ValueError` on anything that is not one — a wrong field
-        count, an unknown mode or region — and `VariantNotOffered` on a
-        variant that is no longer on the menu. A malformed payload is a bug
-        in the dispatcher rather than user input, so it fails loudly at the
-        boundary instead of scanning some default pool.
+        count, an unknown mode, region or time control — and
+        `VariantNotOffered` on a variant that is no longer on the menu. A
+        malformed payload is a bug in the dispatcher rather than user input,
+        so it fails loudly at the boundary instead of scanning some default
+        pool.
+
+        A **retired** time control still parses, unlike a withdrawn variant.
+        That asymmetry is deliberate: retiring a control stops new tickets
+        being written for it (`TimeControlCatalogue.require`) and must not
+        stop the ones already waiting from being paired or swept. A variant
+        withdrawn mid-flight is a game the platform no longer runs at all,
+        which is why `require_offered` refuses it here.
         """
         parts = identifier.split(":")
-        if len(parts) != 3:
+        if len(parts) != 4:
             raise ValueError(f"{identifier!r} is not a queue pool identifier")
 
-        variant, queue_type, region = parts
+        variant, queue_type, time_control_id, region = parts
         return cls(
             variant=require_offered(variant),
             queue_type=QueueType(queue_type),
+            time_control_id=TimeControlId(time_control_id),
             region=Region(region),
         )
 
@@ -182,26 +229,48 @@ class QueuePool:
 def every_pool() -> tuple[QueuePool, ...]:
     """Every pool the platform currently offers, in a stable order.
 
-    The product of the three axes — one variant, two modes, seven regions —
-    which is fourteen today. Ordered variant, then mode, then region, so
-    the list reads the way `identifier()` sorts.
+    The product of the four axes — one variant, two modes, four time
+    controls, seven regions — which is **fifty-six** today. Ordered variant,
+    then mode, then control, then region, so the list reads the way
+    `identifier()` sorts.
+
+    Enumerated from the enums rather than from the catalogue, which is what
+    keeps this function pure and its one caller synchronous. The cost is
+    that a *retired* control still gets a scheduler; that scanner finds an
+    empty pool once its last ticket drains, which is the same cost every
+    other empty pool already pays and is strictly better than making the
+    composition root query a database to build a task list.
 
     Its one caller is the composition root, which needs a scheduler per
     pool (`app_factory.build_task_schedulers`). It lives here rather than
     there because the axes are this module's and a second place that
     enumerated them would drift the day a variant ships.
 
-    **It will not scale, and the replacement is known.** Fourteen pools is
-    fourteen cheap indexed reads a second; four variants and three time
-    controls would be a few hundred, most of them empty. The fix is to scan
-    only pools that have waiting tickets — one `DISTINCT` over
-    `ix_queue_ticket__pool` — and it is not built now because a query to
-    avoid work costs more than the work at this size.
+    **It has stopped scaling, and the replacement is known.** A64-015.2
+    wrote "fourteen pools is fourteen cheap indexed reads a second; four
+    variants and three time controls would be a few hundred, most of them
+    empty", and A64-020.5A-pre is the multiplication it predicted: fifty-six
+    partial-index probes a second per process, of which at most a handful
+    are ever non-empty.
+
+    That is affordable today and is the last release where it obviously is —
+    a second variant makes it a hundred and twelve. The fix is unchanged and
+    still deliberately not built here: scan only pools that have waiting
+    tickets, with one `DISTINCT` over `ix_queue_ticket__pool` feeding the
+    dispatcher, which is a change to the *scheduling* of pairing and belongs
+    with the work that measures it rather than with the work that widened
+    the key.
     """
     return tuple(
-        QueuePool(variant=variant, queue_type=queue_type, region=region)
+        QueuePool(
+            variant=variant,
+            queue_type=queue_type,
+            time_control_id=time_control_id,
+            region=region,
+        )
         for variant in ProductVariant
         for queue_type in QueueType
+        for time_control_id in TimeControlId
         for region in Region
     )
 

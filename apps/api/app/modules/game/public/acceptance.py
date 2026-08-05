@@ -45,6 +45,7 @@ from app.modules.game.domain.exceptions import (
 )
 from app.modules.game.domain.match_record import MatchRecordStatus
 from app.modules.game.domain.variants import ProductVariant
+from app.modules.game.public.matches import MatchTimeControl
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +74,32 @@ class PendingMatchView:
 
     variant: ProductVariant
     rated: bool
+
+    time_control: MatchTimeControl | None
+    """The clock this match is played under, or `None` if it is untimed —
+    A64-020.5A-pre §10.
+
+    Read off the **stored match**, never resolved from the catalogue: the
+    acceptance dialog must show what these two players were actually paired
+    into, and a catalogue lookup would show what that identifier means now.
+
+    `None` for a tournament fixture, which is untimed today — see
+    `game.public.matches` on why that is a gap rather than a policy.
+    """
+
+    speed_class: str | None
+    """Which ladder this match moves, from **your own seat's** snapshot.
+
+    A `str` rather than `rating`'s enum, for the reason `SeatRating.speed_class`
+    is one: `game` must not import `rating` (R-4's one-way chain), so the
+    vocabulary crosses as a primitive and the reader re-types it.
+
+    Read from the seat rather than derived from `time_control`, because the
+    seat is where it was *recorded* — deriving it would be `game` owning a
+    duration-to-speed rule, which is precisely what `reference` exists to
+    stop. `None` for a match created without seat snapshots.
+    """
+
     acceptance_deadline: datetime
     """When an unanswered match stops being offered. An instant rather
     than a countdown, exactly as `QueueTicketResponse.expires_at` is: a

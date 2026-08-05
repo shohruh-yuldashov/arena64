@@ -85,7 +85,9 @@ async def bob(client: AsyncClient) -> Player:
 class TestJoin:
     async def test_joining_returns_the_ticket(self, client: AsyncClient, alice: Player) -> None:
         response = await client.post(
-            QUEUE_URL, headers=alice.auth, json={"queue_type": "ranked", "region": "europe"}
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "ranked", "region": "europe"},
         )
 
         assert response.status_code == 201, response.text
@@ -99,7 +101,11 @@ class TestJoin:
         """`global` is not a place — it is the answer for a player who has
         not been located, and it is the default so an unlocated player is
         pairable with everybody rather than with nobody."""
-        response = await client.post(QUEUE_URL, headers=alice.auth, json={"queue_type": "casual"})
+        response = await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "casual"},
+        )
 
         assert response.status_code == 201, response.text
         assert response.json()["data"]["region"] == "global"
@@ -113,24 +119,32 @@ class TestJoin:
         rejected = await client.post(
             QUEUE_URL,
             headers=alice.auth,
-            json={"queue_type": "ranked", "rating_snapshot": 3000},
+            json={"time_control_id": "blitz_3_2", "queue_type": "ranked", "rating_snapshot": 3000},
         )
         assert rejected.status_code == 422, rejected.text
 
-        accepted = await client.post(QUEUE_URL, headers=alice.auth, json={"queue_type": "ranked"})
+        accepted = await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "ranked"},
+        )
         assert accepted.json()["data"]["rating_snapshot"] == PROVISIONAL_RATING
 
     async def test_an_unknown_queue_type_is_refused(
         self, client: AsyncClient, alice: Player
     ) -> None:
         response = await client.post(
-            QUEUE_URL, headers=alice.auth, json={"queue_type": "tournament"}
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "tournament"},
         )
 
         assert response.status_code == 422, response.text
 
     async def test_joining_requires_a_token(self, client: AsyncClient) -> None:
-        response = await client.post(QUEUE_URL, json={"queue_type": "ranked"})
+        response = await client.post(
+            QUEUE_URL, json={"time_control_id": "blitz_3_2", "queue_type": "ranked"}
+        )
 
         assert response.status_code == 401, response.text
 
@@ -141,7 +155,11 @@ class TestJoin:
         assertion that says so without a worker: the row is visible inside
         the test's own transaction, which it could only be if the publisher
         shared the request's session."""
-        await client.post(QUEUE_URL, headers=alice.auth, json={"queue_type": "ranked"})
+        await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "ranked"},
+        )
 
         rows = await contract_session.scalars(
             select(OutboxModel).where(OutboxModel.event_type == "matchmaking.queue_ticket_enqueued")
@@ -166,7 +184,7 @@ class TestVariantSelection:
         response = await client.post(
             QUEUE_URL,
             headers=alice.auth,
-            json={"variant": "russian_8x8", "queue_type": "ranked"},
+            json={"variant": "russian_8x8", "time_control_id": "blitz_3_2", "queue_type": "ranked"},
         )
 
         assert response.status_code == 201, response.text
@@ -180,7 +198,7 @@ class TestVariantSelection:
         response = await client.post(
             QUEUE_URL,
             headers=alice.auth,
-            json={"variant": "english_8x8", "queue_type": "ranked"},
+            json={"variant": "english_8x8", "time_control_id": "blitz_3_2", "queue_type": "ranked"},
         )
 
         assert response.status_code == 422, response.text
@@ -191,7 +209,7 @@ class TestVariantSelection:
         await client.post(
             QUEUE_URL,
             headers=alice.auth,
-            json={"variant": "english_8x8", "queue_type": "ranked"},
+            json={"variant": "english_8x8", "time_control_id": "blitz_3_2", "queue_type": "ranked"},
         )
 
         response = await client.get(MY_TICKET_URL, headers=alice.auth)
@@ -206,7 +224,11 @@ class TestVariantSelection:
         response = await client.post(
             QUEUE_URL,
             headers=alice.auth,
-            json={"variant": "international_10x10", "queue_type": "ranked"},
+            json={
+                "variant": "international_10x10",
+                "time_control_id": "blitz_3_2",
+                "queue_type": "ranked",
+            },
         )
 
         assert response.status_code == 422, response.text
@@ -217,7 +239,11 @@ class TestVariantSelection:
         """So a client written against A64-015.1's two-field body keeps
         working, and so the default is a decision rather than an accident
         of whichever member is first."""
-        response = await client.post(QUEUE_URL, headers=alice.auth, json={"queue_type": "casual"})
+        response = await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "casual"},
+        )
 
         assert response.status_code == 201, response.text
         assert response.json()["data"]["variant"] == "russian_8x8"
@@ -230,7 +256,12 @@ class TestVariantSelection:
         await client.post(
             QUEUE_URL,
             headers=alice.auth,
-            json={"variant": "russian_8x8", "queue_type": "casual", "region": "asia"},
+            json={
+                "variant": "russian_8x8",
+                "time_control_id": "blitz_3_2",
+                "queue_type": "casual",
+                "region": "asia",
+            },
         )
 
         response = await client.get(MY_TICKET_URL, headers=alice.auth)
@@ -249,7 +280,7 @@ class TestVariantSelection:
         response = await client.post(
             QUEUE_URL,
             headers=alice.auth,
-            json={"variant": "english_8x8", "queue_type": "ranked"},
+            json={"variant": "english_8x8", "time_control_id": "blitz_3_2", "queue_type": "ranked"},
         )
 
         body = response.text
@@ -260,9 +291,17 @@ class TestVariantSelection:
 
 class TestDuplicateJoin:
     async def test_a_second_join_conflicts(self, client: AsyncClient, alice: Player) -> None:
-        await client.post(QUEUE_URL, headers=alice.auth, json={"queue_type": "ranked"})
+        await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "ranked"},
+        )
 
-        response = await client.post(QUEUE_URL, headers=alice.auth, json={"queue_type": "ranked"})
+        response = await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "ranked"},
+        )
 
         assert response.status_code == 409, response.text
         assert response.json()["code"] == "conflict"
@@ -273,10 +312,16 @@ class TestDuplicateJoin:
         """QT-1 is across all pools. This is the assertion an index keyed on
         `(player_id, queue_type)` would fail and every other one here would
         pass."""
-        await client.post(QUEUE_URL, headers=alice.auth, json={"queue_type": "ranked"})
+        await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "ranked"},
+        )
 
         response = await client.post(
-            QUEUE_URL, headers=alice.auth, json={"queue_type": "casual", "region": "asia"}
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "casual", "region": "asia"},
         )
 
         assert response.status_code == 409, response.text
@@ -284,9 +329,17 @@ class TestDuplicateJoin:
     async def test_another_player_may_join_the_same_pool(
         self, client: AsyncClient, alice: Player, bob: Player
     ) -> None:
-        await client.post(QUEUE_URL, headers=alice.auth, json={"queue_type": "ranked"})
+        await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "ranked"},
+        )
 
-        response = await client.post(QUEUE_URL, headers=bob.auth, json={"queue_type": "ranked"})
+        response = await client.post(
+            QUEUE_URL,
+            headers=bob.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "ranked"},
+        )
 
         assert response.status_code == 201, response.text
         assert response.json()["data"]["waiting"] == 2
@@ -294,7 +347,11 @@ class TestDuplicateJoin:
 
 class TestLeave:
     async def test_leaving_returns_no_content(self, client: AsyncClient, alice: Player) -> None:
-        await client.post(QUEUE_URL, headers=alice.auth, json={"queue_type": "ranked"})
+        await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "ranked"},
+        )
 
         response = await client.delete(QUEUE_URL, headers=alice.auth)
 
@@ -312,10 +369,18 @@ class TestLeave:
     async def test_a_player_may_re_queue_after_leaving(
         self, client: AsyncClient, alice: Player
     ) -> None:
-        await client.post(QUEUE_URL, headers=alice.auth, json={"queue_type": "ranked"})
+        await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "ranked"},
+        )
         await client.delete(QUEUE_URL, headers=alice.auth)
 
-        response = await client.post(QUEUE_URL, headers=alice.auth, json={"queue_type": "casual"})
+        response = await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "casual"},
+        )
 
         assert response.status_code == 201, response.text
 
@@ -325,7 +390,11 @@ class TestLeave:
 
 class TestReadMyTicket:
     async def test_a_live_ticket_is_returned(self, client: AsyncClient, alice: Player) -> None:
-        joined = await client.post(QUEUE_URL, headers=alice.auth, json={"queue_type": "ranked"})
+        joined = await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "ranked"},
+        )
 
         response = await client.get(MY_TICKET_URL, headers=alice.auth)
 
@@ -341,7 +410,11 @@ class TestReadMyTicket:
     async def test_a_left_queue_reads_as_a_404(self, client: AsyncClient, alice: Player) -> None:
         """Indistinguishable from "never joined" — which of the two applies
         is not something this endpoint should answer."""
-        await client.post(QUEUE_URL, headers=alice.auth, json={"queue_type": "ranked"})
+        await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "ranked"},
+        )
         await client.delete(QUEUE_URL, headers=alice.auth)
 
         assert (await client.get(MY_TICKET_URL, headers=alice.auth)).status_code == 404
@@ -352,7 +425,11 @@ class TestReadMyTicket:
         """There is no parameter that could name another player, so this
         asserts the *absence* of a surface rather than a rejection: bob's
         token on the same URL reports bob's queue state, which is none."""
-        await client.post(QUEUE_URL, headers=alice.auth, json={"queue_type": "ranked"})
+        await client.post(
+            QUEUE_URL,
+            headers=alice.auth,
+            json={"time_control_id": "blitz_3_2", "queue_type": "ranked"},
+        )
 
         assert (await client.get(MY_TICKET_URL, headers=bob.auth)).status_code == 404
 

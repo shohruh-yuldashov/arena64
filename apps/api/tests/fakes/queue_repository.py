@@ -24,8 +24,9 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
+from app.modules.game.public import ProductVariant
 from app.modules.matchmaking.domain.exceptions import AlreadyQueued
-from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType
+from app.modules.matchmaking.domain.queue_pool import QueuePool
 from app.modules.matchmaking.domain.queue_ticket import (
     PROVISIONAL_RATING,
     QueueSnapshot,
@@ -33,7 +34,7 @@ from app.modules.matchmaking.domain.queue_ticket import (
     QueueTicket,
 )
 from app.modules.rating.domain.glicko2 import INITIAL_DEVIATION, INITIAL_VOLATILITY
-from app.modules.rating.public import RatingSnapshot
+from app.modules.rating.public import RatingSnapshot, SpeedClass
 from app.modules.users.domain.presence import DeviceType, Presence
 from app.platform.events import DomainEvent
 from app.platform.outbox import OutboxEntry
@@ -238,9 +239,11 @@ class FixedRatingProvider:
 
     def __init__(self, rating: int = PROVISIONAL_RATING) -> None:
         self.rating = rating
-        self.calls: list[tuple[UUID, QueueType]] = []
+        self.calls: list[tuple[UUID, ProductVariant, SpeedClass]] = []
 
-    async def rating_for(self, player_id: UUID, *, queue_type: QueueType) -> RatingSnapshot:
+    async def rating_for(
+        self, player_id: UUID, *, variant: ProductVariant, speed_class: SpeedClass
+    ) -> RatingSnapshot:
         """The chosen number as a Glicko-2 triple — A64-017.2.
 
         The port returns the whole triple since `rating` shipped, because
@@ -248,7 +251,7 @@ class FixedRatingProvider:
         tests are about the *ticket*, which records only the value, so the
         other two are the starting figures and are not what is asserted.
         """
-        self.calls.append((player_id, queue_type))
+        self.calls.append((player_id, variant, speed_class))
         return RatingSnapshot(
             value=float(self.rating),
             deviation=INITIAL_DEVIATION,

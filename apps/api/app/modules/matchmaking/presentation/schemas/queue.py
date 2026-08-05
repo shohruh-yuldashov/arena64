@@ -22,15 +22,23 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.modules.game.public import ProductVariant
 from app.modules.matchmaking.domain.queue_pool import QueueType, Region
 from app.modules.matchmaking.domain.queue_ticket import QueueSnapshot, QueueStatus, QueueTicket
+from app.modules.rating.public import SpeedClass
+from app.modules.reference.public import TimeControlId
 
 
 class JoinQueueRequest(BaseModel):
     """What `POST /matchmaking/queue` accepts.
 
-    **Three fields, and none of them is a rating.** QT-2 makes the rating
+    **Four fields, and none of them is a rating.** QT-2 makes the rating
     snapshot the platform's to record, and a client-supplied one would be a
     self-reported skill level on the endpoint that decides who you play —
     the single most valuable field on the platform to lie about.
+
+    Nor is any of them a duration. A64-020.5A-pre §2: a client names a
+    control from the catalogue and never its `base_time_ms` — a submitted
+    duration would be a player-authored pool, which fragments matchmaking
+    into pools of one and lets a client mint a rating category nobody
+    defined.
 
     Nor is there a `player_id`: the account comes from the access token, so
     queueing as somebody else is not something this API can express.
@@ -57,6 +65,18 @@ class JoinQueueRequest(BaseModel):
         description=(
             "Which pool to wait in. `ranked` moves your rating when the match "
             "finishes; `casual` does not."
+        )
+    )
+
+    time_control_id: TimeControlId = Field(
+        description=(
+            "Which clock to play under, by identifier. Read the offered set from "
+            "the catalogue rather than hardcoding it — a control can be retired, "
+            "and asking for a retired one is a `422` with "
+            "`unsupported_time_control`.\n\n"
+            "**Required, with no default.** Every value here is a different game, "
+            "so there is no honest default: a caller who omitted it would silently "
+            "enter a pool they did not choose."
         )
     )
 
@@ -87,6 +107,29 @@ class QueueTicketResponse(BaseModel):
     queue_type: QueueType
     region: Region
     status: QueueStatus
+
+    # --- the clock, as it was when this ticket was written ----------------
+    #
+    # Four fields rather than an identifier, and A64-020.5A-pre §9 says why:
+    # a client restoring its lobby after a refresh must be able to render
+    # "3+2 blitz" from this response alone. Returning only the identifier
+    # would make every recovery two round trips, one of them to a catalogue
+    # that is otherwise not on the path.
+    #
+    # They are the **ticket's** snapshot, not the catalogue's current row,
+    # so what a reconnecting client renders is what it was promised.
+    time_control_id: TimeControlId
+    base_time_ms: int = Field(description="Each side's starting budget, in milliseconds.")
+    increment_ms: int = Field(
+        description="What a side gets back after each of its own moves, in milliseconds."
+    )
+    speed_class: SpeedClass = Field(
+        description=(
+            "Which rating a result under this control would move. Sent so a "
+            "client can label the pool without owning a duration-to-speed rule "
+            "of its own — that mapping is the catalogue's."
+        )
+    )
 
     rating_snapshot: int = Field(
         description=(
@@ -126,6 +169,10 @@ class QueueTicketResponse(BaseModel):
             queue_type=ticket.queue_type,
             region=ticket.region,
             status=ticket.status,
+            time_control_id=ticket.time_control.id,
+            base_time_ms=ticket.time_control.base_time_ms,
+            increment_ms=ticket.time_control.increment_ms,
+            speed_class=ticket.time_control.speed_class,
             rating_snapshot=ticket.rating_snapshot,
             entered_at=ticket.entered_at,
             expires_at=ticket.expires_at,

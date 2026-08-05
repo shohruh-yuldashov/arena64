@@ -20,9 +20,9 @@ from app.modules.game.public import (
     CreateMatchRequest,
     CreateMatchResult,
     MatchCreationRefused,
+    ProductVariant,
 )
-from app.modules.matchmaking.domain.queue_pool import QueueType
-from app.modules.rating.public import RatingSnapshot
+from app.modules.rating.public import RatingSnapshot, SpeedClass
 
 
 class StubExclusions:
@@ -173,7 +173,14 @@ class StubRatings:
     def __init__(self, snapshot: RatingSnapshot | None = None) -> None:
         self.snapshot = snapshot if snapshot is not None else RatingSnapshot.unrated()
         self.asked: list[UUID] = []
+        #: The `(variant, speed class)` each read was keyed by — A64-020.5A-pre
+        #: §15. Recorded rather than ignored because "the seat was rated in
+        #: the ladder the players chose" is a property nothing else can see.
+        self.keys: list[tuple[ProductVariant, SpeedClass]] = []
 
-    async def rating_for(self, player_id: UUID, *, queue_type: QueueType) -> RatingSnapshot:
+    async def rating_for(
+        self, player_id: UUID, *, variant: ProductVariant, speed_class: SpeedClass
+    ) -> RatingSnapshot:
         self.asked.append(player_id)
+        self.keys.append((variant, speed_class))
         return self.snapshot

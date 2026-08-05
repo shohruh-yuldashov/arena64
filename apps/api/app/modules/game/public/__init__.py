@@ -19,9 +19,10 @@ site for consumers.
     each stateless engine collaborator.
 
 `matches.py` — `CreateMatchRequest`, `CreateMatchResult`,
-    `MatchParticipant`, `MatchCreationUseCase`, `MatchCreationRefused`,
-    `PlayerSide`, `MatchOrigin`. The "creates match" edge architecture.md §7
-    draws from `matchmaking`, and — since A64-019.0 — from `tournament`.
+    `MatchParticipant`, `MatchTimeControl`, `MatchCreationUseCase`,
+    `MatchCreationRefused`, `PlayerSide`, `MatchOrigin`. The "creates match"
+    edge architecture.md §7 draws from `matchmaking`, and — since A64-019.0
+    — from `tournament`.
 
 `acceptance.py` — `PendingMatchView`, `MatchAcceptanceUseCase`,
     `MatchAcceptanceExpiryUseCase`, `MatchRecordStatus` and the three
@@ -124,6 +125,7 @@ from app.modules.game.public.matches import (
     MatchCreationRefused,
     MatchCreationUseCase,
     MatchParticipant,
+    MatchTimeControl,
     PlayerSide,
     SeatRating,
 )
@@ -209,6 +211,7 @@ __all__ = [
     "ReplayPly",
     "UnsupportedEngineVersion",
     "MatchParticipant",
+    "MatchTimeControl",
     "SeatRating",
     "MatchRecordStatus",
     "MatchRoster",

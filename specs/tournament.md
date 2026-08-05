@@ -6,7 +6,7 @@
 | **Status** | Approved for v0.x — Single Elimination only. Audited and closed by A64-019.7 |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-05 — A64-019.7, audit and stabilisation |
+| **Last updated** | 2026-08-05 — A64-019.8, tournament write entry points (§6h) |
 | **Related specs** | [`rating.md`](./rating.md), [`replay.md`](./replay.md), [`matchmaking.md`](./matchmaking.md) |
 | **Audit** | [`tournament/audit.md`](./tournament/audit.md) — reachability, concurrency, performance and the limitations this ships with |
 | **Related** | `services.md` §11.3, `database.md` §18.3, `domain-model.md` §16.2 and R-25 |
@@ -579,6 +579,65 @@ visibility rule.
 A player's history uses `(registered_at, tournament_id)` descending — both keys, because a
 single-key order over an unbounded history pages unstably. Never `OFFSET`.
 
+## 6h. Write entry points — A64-019.8
+
+### Participants, over HTTP
+
+| Endpoint | Behaviour |
+| --- | --- |
+| `POST /api/v1/tournaments/{id}/registrations` | Enters **the authenticated player**. `201`, or a bounded conflict |
+| `DELETE /api/v1/tournaments/{id}/registrations/me` | Withdraws their own entry. `200`, or `404` if there is none |
+
+**Neither endpoint has a shape that could name somebody else.** The entry
+route has no request body at all, and the withdrawal route is `/me` where an
+identifier would otherwise go — so acting on another player is not refused,
+it is unrepresentable. `player_id` comes from `CurrentUser` and nowhere else.
+
+A withdrawal keeps the row (`status = withdrawn`, `withdrawn_at` set), so
+"who was in this tournament" stays answerable; §4's no-re-registration rule
+is unchanged, because the key admits no second row whatever its status. There
+is no waitlist, no late registration and no check-in.
+
+`register` now also refuses a **passed deadline**, checked on the locked row.
+Between the deadline and the sweep's next tick a tournament still says
+`REGISTRATION_OPEN`, and without the check a player who arrived in that
+window would enter a field the platform had already promised was closed.
+
+| Refusal | Code | Status |
+| --- | --- | --- |
+| No such tournament | `tournament_not_found` | 404 |
+| Not accepting entries | `registration_not_open` | 409 |
+| Deadline passed | `registration_deadline_passed` | 409 |
+| Field is full | `tournament_full` | 409 |
+| Already entered | `already_registered` | 409 |
+| No live entry to withdraw | `registration_not_found` | 404 |
+
+### Operators, **not** over HTTP
+
+```
+python -m app.operator.tournament create --name … --capacity 8
+python -m app.operator.tournament open|close|seed|start|run <tournament-id>
+```
+
+Creating a tournament, opening and closing registration, seeding and starting
+are administrator actions (T-3), and **this platform has no administrator**:
+no role on `users.User`, no scope on `auth.TokenClaims`, no permission
+primitive and no operator credential anywhere. An `/api/v1/admin/...` route
+would therefore sit behind `CurrentUser` — which is every registered player —
+and would let anybody create tournaments, close somebody else's registration
+and start a tournament early.
+
+So the boundary is the **process**, in the shape `main.py` already names for
+the gateway, worker and clock profiles: whoever can run a command on the host
+is already trusted with the database. Every command reuses the existing
+application service and adds no validation of its own; each is idempotent
+except `create`, which mints an id and has no key to be idempotent on.
+`close` converges with `TournamentDeadlineTask` — both take the row lock and
+the aggregate refuses the second.
+
+When the Administration epic ships a role, these commands become the thing its
+routes call. The use cases do not change; only who may reach them.
+
 ## 7. Privacy
 
 Tournaments and their brackets are **public**. A private tournament is deferred with
@@ -595,4 +654,4 @@ Where a resource is not visible, the answer is the platform's existing rule: **`
 | OQ-2 | ~~Is check-in required, and what is the no-show window?~~ **Answered by A64-019.5H** — §6e: no check-in, and a 300-second attendance deadline enforced by a bounded sweep. What remains open is only the *rating* treatment of a repeat offender, which waits on `fairplay` | — |
 | OQ-3 | Time control per tournament | `specs/rating.md` OQ-1 and OQ-2 — the catalogue does not exist, so every match is the platform default |
 | OQ-4 | Retention for cancelled tournaments | Append-only in v0.x. A completed tournament is permanent history (A-4) and correctly retained; a **cancelled or never-started** one is churn nothing prunes — see [`tournament/audit.md`](./tournament/audit.md) §12 |
-| OQ-5 | **Nothing creates, opens, joins, seeds or starts a tournament in the running application.** Every one of those use cases is implemented and tested, and reachable from no route, task or consumer — T-3 puts creation behind administrators and `specs/admin.md` does not exist | The whole write path. Pinned by `test_tournament_audit.py` so it cannot go stale; see [`tournament/audit.md`](./tournament/audit.md) §4.2 |
+| OQ-5 | ~~Nothing creates, opens, joins, seeds or starts a tournament~~ **Closed by A64-019.8** — §6h. Players enter and withdraw over HTTP; an operator runs the lifecycle from a process entry point. What remains open is narrower: **there is still no administrator in `auth` or `users`**, so operator commands cannot be exposed over HTTP at all | An `/api/v1/admin` surface, and every other administrator action. Waits on the Administration epic |

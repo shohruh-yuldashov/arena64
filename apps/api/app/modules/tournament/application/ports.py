@@ -21,10 +21,11 @@ above it cannot get it wrong by calling two methods in the wrong order.
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Protocol
+from typing import ClassVar, Protocol
 from uuid import UUID
 
-from app.core.exceptions import DomainError
+from app.core.error_codes import ErrorCode
+from app.core.exceptions import ConflictError, DomainError, NotFoundError
 from app.modules.game.public import ProductVariant
 from app.modules.rating.public import RatingSnapshot, SpeedClass
 from app.modules.tournament.domain.attempts import AdvancementReason, PairingAttempt
@@ -40,38 +41,86 @@ from app.modules.tournament.domain.standings import Standing
 from app.modules.tournament.domain.tournament import Tournament
 
 
-class TournamentNotFound(DomainError):
+class TournamentNotFound(NotFoundError):
     """No tournament with that id.
 
-    A `DomainError` rather than a `None` return, because every caller's
-    answer is the same and a use case that had to branch on absence would
-    eventually forget."""
+    A raise rather than a `None` return, because every caller's answer is
+    the same and a use case that had to branch on absence would eventually
+    forget.
+
+    A `NotFoundError` since A64-019.8, so the HTTP boundary answers `404`
+    without a route translating anything — §7's "use 404 for unknown
+    resources", held by the type rather than by each handler.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.TOURNAMENT_NOT_FOUND
 
 
-class AlreadyRegistered(DomainError):
+class AlreadyRegistered(ConflictError):
     """This player is already entered — the unique key refused the insert.
 
     Raised from the constraint rather than from a prior read, so two
     concurrent requests cannot both find nothing and both insert.
+
+    A `409`: the request was well formed and the platform's *state*
+    refused it, which is exactly what a client retrying a dropped response
+    needs to be able to tell from a validation failure.
     """
 
+    default_code: ClassVar[ErrorCode] = ErrorCode.ALREADY_REGISTERED
 
-class TournamentIsFull(DomainError):
+
+class TournamentIsFull(ConflictError):
     """Capacity is reached. Raised inside the lock — see this module's
-    docstring."""
+    docstring.
+
+    Its own code rather than a bare `conflict`, because a client's answer
+    is specific and different from every other refusal here: offer another
+    tournament.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.TOURNAMENT_FULL
 
 
-class RegistrationNotOpen(DomainError):
+class RegistrationNotOpen(ConflictError):
     """The tournament is not accepting entries.
 
     Covers "not yet open" and "already closed" with one type: a client's
-    response to both is the same, and distinguishing them would say more
-    about a tournament's schedule than a refusal needs to.
+    response to both is the same — hide the button — and distinguishing
+    them would say more about a tournament's schedule than a refusal needs
+    to.
     """
 
+    default_code: ClassVar[ErrorCode] = ErrorCode.REGISTRATION_NOT_OPEN
 
-class NotRegistered(DomainError):
-    """This player has no live entry to withdraw."""
+
+class RegistrationDeadlinePassed(ConflictError):
+    """The advertised deadline has passed — A64-019.8.
+
+    Distinct from `RegistrationNotOpen`, and the distinction is the
+    client's: a closed tournament is closed, and this one is still
+    *marked* open only because the sweep has not run yet. Telling a player
+    "registration closed at 14:00" is a different sentence from "this
+    tournament is not accepting entries", and only this code can carry it.
+
+    Checked on the **locked row** by the use case, so a player cannot beat
+    the sweep by a few seconds — the deadline is the promise, not the
+    worker's tick.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.REGISTRATION_DEADLINE_PASSED
+
+
+class NotRegistered(NotFoundError):
+    """This player has no live entry to withdraw.
+
+    A `404` rather than a `409`: from the caller's side the resource
+    `/registrations/me` does not exist, and that is the same answer whether
+    they never entered or already withdrew. It is also what makes a
+    repeated withdrawal safe to send — see the route.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.REGISTRATION_NOT_FOUND
 
 
 class PlayerDirectory(Protocol):
@@ -95,7 +144,7 @@ class PlayerDirectory(Protocol):
         ...
 
 
-class NotSeedable(DomainError):
+class NotSeedable(ConflictError):
     """The tournament cannot be seeded yet — §2.
 
     Registration must be **closed** first: seeding an open tournament would
@@ -103,8 +152,10 @@ class NotSeedable(DomainError):
     immutable once written.
     """
 
+    default_code: ClassVar[ErrorCode] = ErrorCode.INVALID_TOURNAMENT_STATE
 
-class TournamentNotStartable(DomainError):
+
+class TournamentNotStartable(ConflictError):
     """The tournament cannot be started — §5.
 
     Distinct from `NotSeedable`, which is about building a bracket from a
@@ -112,6 +163,8 @@ class TournamentNotStartable(DomainError):
     open registration, a completed tournament and a cancelled one are all
     refusals, and none of them is a seeding problem.
     """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.INVALID_TOURNAMENT_STATE
 
 
 class PairingRepository(Protocol):
@@ -480,6 +533,7 @@ __all__ = [
     "StandingsAlreadyRecorded",
     "PlayerDirectory",
     "NotRegistered",
+    "RegistrationDeadlinePassed",
     "RegistrationNotOpen",
     "RegistrationRepository",
     "TournamentIsFull",

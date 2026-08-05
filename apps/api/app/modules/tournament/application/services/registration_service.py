@@ -35,6 +35,7 @@ from app.modules.rating.public import SpeedClass
 from app.modules.tournament.application.ports import (
     NotRegistered,
     PlayerDirectory,
+    RegistrationDeadlinePassed,
     RegistrationNotOpen,
     RegistrationRepository,
     TournamentNotFound,
@@ -160,6 +161,7 @@ class TournamentRegistrationService:
                 raise TournamentNotFound(f"no tournament {tournament_id}")
             if not tournament.is_open_for_registration:
                 raise RegistrationNotOpen(f"this tournament is {tournament.status.value}")
+            self._require_within_deadline(tournament)
 
             registration = await self._registrations.add(
                 Registration(
@@ -228,6 +230,25 @@ class TournamentRegistrationService:
             tournament_id=tournament.id,
             entrant_count=await self._registrations.count_active(tournament.id),
         )
+
+    def _require_within_deadline(self, tournament: Tournament) -> None:
+        """§2 — the deadline is the promise, not the sweep's tick.
+
+        `TournamentDeadlineTask` closes an overdue tournament on its own
+        schedule, so between the deadline passing and the next sweep the
+        status still says `REGISTRATION_OPEN`. Without this check a player
+        who arrived in that window would be admitted into a field the
+        platform had already promised was closed — and the bracket would be
+        seeded from entrants who beat a worker rather than a clock.
+
+        Checked on the **locked** row, so a close landing concurrently
+        cannot let a late entry through either.
+        """
+        deadline = tournament.registration_deadline
+        if deadline is not None and self._clock.now() >= deadline:
+            raise RegistrationDeadlinePassed(
+                f"registration for this tournament closed at {deadline.isoformat()}"
+            )
 
     async def _require_player(self, player_id: UUID) -> None:
         """§3 — participants are validated through `users.public`.

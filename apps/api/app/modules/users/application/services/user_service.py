@@ -25,6 +25,7 @@ service as an opaque string it never inspects.
 import logging
 from collections.abc import Sequence
 from dataclasses import replace
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.clock import Clock
@@ -53,7 +54,15 @@ from app.modules.users.domain.value_objects import (
     Timezone,
     Username,
 )
-from app.modules.users.public.search import UserSearchQuery
+
+if TYPE_CHECKING:
+    # Deferred for the reason `users.application.ports` records: importing
+    # `users.public.search` runs `users.public.__init__`, which imports this
+    # module's package — a cycle that only resolved because `app_factory`
+    # happened to import `users.public` first. Used in one annotation and
+    # nowhere at runtime.
+    from app.modules.users.public.search import UserSearchQuery
+
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +145,7 @@ class UserService:
         """
         return await self._users.get_active_by_ids(user_ids)
 
-    async def search_users(self, query: UserSearchQuery) -> tuple[Sequence[User], str | None]:
+    async def search_users(self, query: "UserSearchQuery") -> tuple[Sequence[User], str | None]:
         """Ranked search over username and display name — A64-013.1.
 
         Read-only: opens no transaction. Delegates entirely, and the absence

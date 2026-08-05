@@ -15,6 +15,16 @@
 
 **READY WITH DOCUMENTED LIMITATIONS.**
 
+> **Updated by A64-019.8.** The limitation that drove this classification —
+> "the tournament write path has no production entry point" — is **closed**.
+> Players enter and withdraw over the real v1 router; an operator runs the
+> lifecycle through `python -m app.operator.tournament`. §4.2 below is kept
+> as the record of what was found and now states what replaced it.
+>
+> The classification itself is unchanged, and the reason is narrower: there
+> is still no administrator in `auth` or `users`, so operator commands are
+> deliberately unreachable over HTTP. See `specs/tournament.md` §6h.
+
 The subsystem is internally complete and correct: every rule in
 `specs/tournament.md` is implemented, enforced by both code and database
 constraints, and covered by tests against real PostgreSQL. The full suite is
@@ -120,7 +130,7 @@ The platform's structural registry (`tests/unit/test_reachability.py`) holds
 **23** entry points; four are this module's, and all four are named by
 `app_factory`.
 
-### 4.2 **Not** wired — the headline limitation
+### 4.2 Was not wired — **closed by A64-019.8**
 
 | Use case | Factory | Status |
 | --- | --- | --- |
@@ -440,7 +450,11 @@ Carried forward, all still true:
   all — abandoned, or (before A64-019.5H) unaccepted. Detected and reported,
   never guessed (§10).
 - No tournament notifications; every event is published and unconsumed (§11).
-- **No production entry point for the write path** (§4.2).
+- ~~No production entry point for the write path~~ — **closed by A64-019.8**
+  (§4.2). What remains is narrower: there is no administrator in `auth` or
+  `users`, so the operator lifecycle commands are a process entry point
+  rather than an HTTP surface, and an `/api/v1/admin` API waits on the
+  Administration epic.
 
 ---
 
@@ -463,5 +477,14 @@ Carried forward, all still true:
    That is the signal to render "in progress" rather than a placing.
 7. **Page player history with the opaque `next_cursor`** and send it back
    unread. Do not construct one.
-8. Nothing creates or joins a tournament yet (§4.2). Any lobby or entry flow
-   needs the Administration epic first.
+8. **Players can now enter and leave a tournament over HTTP** —
+   `POST /tournaments/{id}/registrations` and
+   `DELETE /tournaments/{id}/registrations/me`, both acting only on the
+   authenticated user. Build the lobby's join and leave against those.
+9. Refusals are bounded codes, not messages: branch on `tournament_full`,
+   `already_registered`, `registration_deadline_passed` and
+   `registration_not_open` rather than on prose.
+10. **Nothing an ordinary user can call creates or starts a tournament**, and
+    that is deliberate — those are operator commands run on the host until
+    the Administration epic ships a role. A frontend admin panel has no API
+    to call yet.

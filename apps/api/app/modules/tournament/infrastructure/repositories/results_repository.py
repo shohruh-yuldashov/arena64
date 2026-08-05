@@ -36,6 +36,7 @@ from app.modules.tournament.application.read_models import (
     HistoryCursor,
     PlayerTournamentEntry,
     PlayerTournamentPage,
+    RegistrationDetail,
     RoundView,
     StandingView,
     TournamentSummary,
@@ -82,6 +83,40 @@ class SqlAlchemyTournamentResults:
             created_at=row.created_at,
             started_at=row.started_at,
             completed_at=row.completed_at,
+        )
+
+    async def registration_of(
+        self, tournament_id: uuid.UUID, player_id: uuid.UUID
+    ) -> RegistrationDetail | None:
+        """One player's own entry — §2. `None` when there is none.
+
+        **One statement.** The seed lives on the registration row and the
+        lifecycle state on the tournament, so a join answers what two
+        primary-key reads would, and the endpoint that calls it has already
+        done its writing.
+        """
+        row = (
+            await self._session.execute(
+                select(RegistrationModel, TournamentModel)
+                .join(TournamentModel, TournamentModel.id == RegistrationModel.tournament_id)
+                .where(
+                    RegistrationModel.tournament_id == tournament_id,
+                    RegistrationModel.player_id == player_id,
+                )
+            )
+        ).first()
+        if row is None:
+            return None
+
+        registration, tournament = row
+        return RegistrationDetail(
+            tournament_id=registration.tournament_id,
+            player_id=registration.player_id,
+            status=registration.status,
+            registered_at=registration.registered_at,
+            withdrawn_at=registration.withdrawn_at,
+            seed_number=registration.seed_number,
+            tournament_status=tournament.status,
         )
 
     async def bracket(self, tournament_id: uuid.UUID) -> BracketView:

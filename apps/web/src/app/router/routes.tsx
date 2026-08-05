@@ -26,9 +26,9 @@ import { AppShell } from "@/widgets/app-shell";
  *      route that works locally because someone's watcher was running.
  *
  * The trade is that adding a route is an edit here rather than a new file.
- * That is still the correct trade at thirteen routes, and it is worth
- * revisiting when this file stops fitting on a screen — `specs/frontend.md`
- * OQ-3.
+ * At seventeen routes this file no longer fits on a screen, which is the
+ * threshold `specs/frontend.md` OQ-3 named — recorded there as due rather
+ * than resolved mid-phase.
  *
  * ## Search parameters are validated, not trusted
  *
@@ -208,6 +208,34 @@ export const settingsSessionsRoute = createRoute({
   component: protectedPage(() => import("@/pages/settings-sessions")),
 });
 
+// --- social — A64-020.4 -----------------------------------------------------
+// All four are protected: every one of them reads or writes the viewer's own
+// social graph, and none has an anonymous form.
+
+export const friendsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/friends",
+  component: protectedPage(() => import("@/pages/friends")),
+});
+
+export const friendRequestsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/friends/requests",
+  component: protectedPage(() => import("@/pages/friend-requests")),
+});
+
+export const blockedRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/friends/blocked",
+  component: protectedPage(() => import("@/pages/blocked")),
+});
+
+export const searchRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/search",
+  component: protectedPage(() => import("@/pages/search")),
+});
+
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
@@ -221,4 +249,8 @@ export const routeTree = rootRoute.addChildren([
   settingsPreferencesRoute,
   settingsPrivacyRoute,
   settingsSessionsRoute,
+  friendsRoute,
+  friendRequestsRoute,
+  blockedRoute,
+  searchRoute,
 ]);

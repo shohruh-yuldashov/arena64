@@ -400,13 +400,19 @@ class TestPrivacyRespected:
         Asserted as an equality between two responses rather than against a
         field list, because the requirement is that they cannot *differ* —
         whatever either grows next.
+
+        **Both reads are made by the same viewer**, which A64-020.4 made
+        load-bearing: `relationship` is viewer-relative, so comparing an
+        authenticated search against an anonymous profile would now differ
+        for a correct reason and say nothing about the shape. Same viewer,
+        same representation, still exactly equal.
         """
         tag = uuid4().hex[:8]
         username = f"same{tag}"
         await make_player(contract_session, username=username, display_name="Same Player")
 
         found = (await search(client, auth, username))["items"][0]
-        profile = (await client.get(f"/api/v1/profiles/{username}")).json()["data"]
+        profile = (await client.get(f"/api/v1/profiles/{username}", headers=auth)).json()["data"]
 
         assert found == profile
 

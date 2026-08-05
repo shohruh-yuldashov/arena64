@@ -21,7 +21,7 @@ from datetime import datetime
 
 from app.modules.profiles.domain.ratings import PlayerRatings
 from app.modules.statistics.public import PlayerStatistics
-from app.modules.users.public import PublicUserProfile
+from app.modules.users.public import PublicUserProfile, RelationshipState
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +66,31 @@ class PublicProfile:
     Nullable rather than absent so the field stays in the contract for
     every player. A client renders "not shown" from a `null`; it cannot
     render anything sensible from a key that sometimes exists.
+    """
+
+    relationship: RelationshipState | None = None
+    """What the **authenticated viewer** may do about this player —
+    A64-020.4.
+
+    `None` in exactly two cases, and neither is `NONE`:
+
+        anonymous viewer    there is no viewer to have a relationship with,
+                            and `NONE` would claim a signed-in stranger
+        own profile         nobody is their own friend; a client must render
+                            no social actions rather than "add friend"
+
+    `NONE` therefore means something specific — *signed in, and no
+    relationship* — which is what a client renders "Add friend" from. A
+    single value covering both absence and emptiness would put the decision
+    of which is which into every consumer.
+
+    **One-directional.** `BLOCKED` means this viewer blocked this player.
+    A block placed *on* the viewer is never expressible here — see
+    `RelationshipState`.
+
+    Not gated by any privacy setting, and it is not a leak: it is a fact
+    about the *viewer's own* actions, which they already know. It says
+    nothing about the player being read that the player could hide.
     """
 
     last_seen: datetime | None = None

@@ -68,7 +68,7 @@ from uuid import UUID
 
 from app.modules.profiles.domain.ratings import PlayerRatings
 from app.modules.statistics.public import PlayerStatistics
-from app.modules.users.public import ViewerRelationship
+from app.modules.users.public import RelationshipState, ViewerRelationship
 
 
 class RatingProvider(Protocol):
@@ -194,6 +194,40 @@ class ViewerRelationshipProvider(Protocol):
 
         An empty `player_ids` returns an empty mapping without touching
         anything.
+        """
+        ...
+
+
+class RelationshipStateProvider(Protocol):
+    """What the viewer may **do** about each of a page of players —
+    A64-020.4.
+
+    A third social port beside `ViewerRelationshipProvider` and
+    `BlockedPlayersProvider`, declared here rather than imported from
+    `friends.public` for the reason the first one gives: **the fallback
+    must not depend on the module it replaces.** `NoRelationshipStates`
+    keeps every profile renderable when `friends` is unreachable, and a
+    port defined in terms of `friends.public` could not.
+
+    Distinct from `ViewerRelationshipProvider` because the two answer
+    different questions. That one feeds **privacy** and its `BLOCKED` is
+    symmetric — either party blocked the other, because the visibility
+    consequence runs both ways. This one feeds **actions** and its
+    `BLOCKED` is one-directional: the viewer blocked this player, and
+    nothing published anywhere says the reverse.
+
+    **Batch only**, for the reason every port on this path is: a singular
+    form would multiply every rendered page.
+    """
+
+    async def relationship_states_for(
+        self, viewer_id: UUID, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, RelationshipState]:
+        """One state per id, defaulting to `RelationshipState.NONE`.
+
+        Never raises. An unavailable social graph reports `NONE`, which
+        removes actions rather than offering ones that would fail — the
+        same safe direction `relationships_for` takes.
         """
         ...
 

@@ -32,8 +32,8 @@ import logging
 from collections.abc import Mapping, Sequence
 from uuid import UUID
 
-from app.modules.friends.public import SocialGraphReader
-from app.modules.users.public import ViewerRelationship
+from app.modules.friends.public import RelationshipStateReader, SocialGraphReader
+from app.modules.users.public import RelationshipState, ViewerRelationship
 
 logger = logging.getLogger(__name__)
 
@@ -179,3 +179,41 @@ def _relationship(
     if player_id in friends:
         return ViewerRelationship.FRIEND
     return ViewerRelationship.STRANGER
+
+
+class SocialRelationshipStateProvider:
+    """Resolves the **published** relationship state from the live graph.
+
+    Holds `friends.public.RelationshipStateReader` for
+    `FriendshipRelationshipProvider`'s reason: the query belongs to
+    `friends`, and this is the seam that lets `profiles` keep a port it
+    owns. Three lines, and that is the point.
+    """
+
+    def __init__(self, graph: RelationshipStateReader) -> None:
+        self._graph = graph
+
+    async def relationship_states_for(
+        self, viewer_id: UUID, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, RelationshipState]:
+        return await self._graph.relationship_states_for(viewer_id, player_ids)
+
+
+class NoRelationshipStates:
+    """The fallback: nobody has any actionable relationship with anybody.
+
+    What renders when `friends` is switched off or unreachable — the
+    counterpart to `NoRelationshipsProvider`, and it fails in the same
+    direction: `NONE` removes every action rather than offering ones that
+    would fail against a graph that is not there.
+
+    It cannot fabricate a `BLOCKED` either, which matters more than it
+    looks: inventing a block from missing data is how a kill switch becomes
+    an outage for the people it silently blocks.
+    """
+
+    async def relationship_states_for(
+        self, viewer_id: UUID, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, RelationshipState]:
+        logger.debug("relationship_states_unavailable", extra={"players": len(player_ids)})
+        return dict.fromkeys(player_ids, RelationshipState.NONE)

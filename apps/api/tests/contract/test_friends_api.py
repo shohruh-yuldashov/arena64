@@ -752,34 +752,51 @@ class TestBatchComposition:
             statements.append(statement)
 
         engine = contract_session.get_bind().engine  # type: ignore[union-attr]
-        event.listen(engine, "before_cursor_execute", record)
-        try:
-            listed = await client.get(FRIENDS_URL, headers=alice.auth)
-            # The contrast: search composes the same profiles and *must*
-            # resolve, because its page mixes friends and strangers.
-            await client.get("/api/v1/users/search", headers=alice.auth, params={"q": "player"})
-        finally:
-            event.remove(engine, "before_cursor_execute", record)
 
+        async def relationship_reads(request: Any) -> list[str]:
+            """The relationship resolutions one request issues.
+
+            Measured **per request** rather than as a running total, so the
+            assertion survives a phase adding a second kind of resolution —
+            which A64-020.4 did. A combined count would have failed here for
+            the right behaviour, and the temptation would have been to
+            raise the number rather than ask which request produced it.
+
+            Every resolution projects both pair columns; the friend *list*
+            selects whole rows, so this counts resolutions and nothing else.
+            """
+            statements.clear()
+            event.listen(engine, "before_cursor_execute", record)
+            try:
+                await request()
+            finally:
+                event.remove(engine, "before_cursor_execute", record)
+            return [
+                statement
+                for statement in statements
+                if "player_low_id" in statement
+                and "player_high_id" in statement
+                and "count" not in statement.lower()
+                and "friendship.id" not in statement
+            ]
+
+        listed_reads = await relationship_reads(lambda: client.get(FRIENDS_URL, headers=alice.auth))
+        # The contrast: search composes the same profiles and *must*
+        # resolve, because its page mixes friends and strangers — and since
+        # A64-020.4 it resolves twice, for privacy and for the published
+        # relationship, which are different questions.
+        search_reads = await relationship_reads(
+            lambda: client.get("/api/v1/users/search", headers=alice.auth, params={"q": "player"})
+        )
+
+        listed = await client.get(FRIENDS_URL, headers=alice.auth)
         assert len(listed.json()["data"]["items"]) == 3
 
-        # `friend_ids_among` is the only read that projects both pair
-        # columns; the friend *list* selects whole rows, so this counts the
-        # relationship resolution and nothing else.
-        resolutions = [
-            statement
-            for statement in statements
-            if "player_low_id" in statement
-            and "player_high_id" in statement
-            and "count" not in statement.lower()
-            and "friendship.id" not in statement
-        ]
-
-        assert resolutions, "search should still resolve relationships"
-        assert len(resolutions) == 1, (
+        assert listed_reads == [], (
             "the friend list re-derived a relationship its own page defines:\n"
-            + "\n".join(resolutions)
+            + "\n".join(listed_reads)
         )
+        assert search_reads, "search should still resolve relationships"
 
 
 class TestAuthentication:

@@ -48,6 +48,80 @@ database.md names outright.
 from enum import StrEnum
 
 
+class RelationshipState(StrEnum):
+    """The **published** viewer-relative social state — A64-020.4.
+
+    A different question from `ViewerRelationship` below, and the two must
+    not be merged. `ViewerRelationship` answers *what may this viewer see*
+    and is the input to every privacy gate; this answers *what may this
+    viewer do*, and is rendered as a button.
+
+    Three differences make them separate types rather than one enum with
+    extra members:
+
+    **Pending requests.** `OUTGOING_REQUEST` and `INCOMING_REQUEST` change
+    the available action and change **nothing** about visibility — somebody
+    who has sent you a request sees exactly what a stranger sees. Adding
+    them to `ViewerRelationship` would put two members into every privacy
+    comparison that no privacy rule has an opinion about.
+
+    **Blocking is asymmetric here and symmetric there.**
+    `ViewerRelationship.BLOCKED` means *either* party blocked the other,
+    because the visibility consequence runs both ways (BL-1). This enum's
+    `BLOCKED` means **the viewer blocked the returned player**, and nothing
+    published anywhere ever says that the returned player blocked the
+    viewer — that invisibility is the whole reason a block is worth placing.
+
+    **`NONE` is not `STRANGER`.** A stranger is what an *anonymous* viewer
+    is, and privacy evaluates it. This enum is `None` — absent — for an
+    anonymous viewer and for a player reading their own profile, because
+    "no relationship" and "no viewer to have one with" are different facts
+    and a client renders different things for them.
+
+    ## Precedence
+
+    Exactly one state per pair, resolved in this order:
+
+        BLOCKED  >  FRIEND  >  INCOMING_REQUEST  >  OUTGOING_REQUEST  >  NONE
+
+    The order is a **tie-break of last resort, not the invariant.** The
+    database already prevents every conflicting pair: blocking voids a
+    friendship and declines a pending request in one transaction
+    (`BlockingService`), one live friendship per pair is a partial unique
+    index, and one pending request per ordered pair is another. So the
+    precedence exists to make the resolution total and deterministic if a
+    repair script ever leaves two rows behind — not because two are
+    expected.
+
+    `BLOCKED` outranks everything for the one case that can legitimately
+    co-occur across a transaction boundary: a block placed while a request
+    is being written. The viewer's own action wins.
+    """
+
+    NONE = "none"
+    """No relationship, and the viewer is signed in. The default."""
+
+    OUTGOING_REQUEST = "outgoing_request"
+    """The **viewer** sent a request that is still pending."""
+
+    INCOMING_REQUEST = "incoming_request"
+    """The **returned player** sent a request that is still pending."""
+
+    FRIEND = "friend"
+    """A live, mutual friendship."""
+
+    BLOCKED = "blocked"
+    """The **viewer** blocked the returned player.
+
+    Never the other direction. `blocked-by-target` is not a member of this
+    enum and must not become one: a player who could tell they had been
+    blocked would have exactly the information BL-1 withholds. A blocked
+    viewer simply does not find the blocker — search excludes them and the
+    profile is not reachable — and cannot distinguish that from any other
+    absence.
+    """
+
+
 class ViewerRelationship(StrEnum):
     """What the person reading a profile is to the person it describes.
 

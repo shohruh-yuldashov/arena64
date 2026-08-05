@@ -458,9 +458,17 @@ class TestCachedReads:
     ) -> None:
         """No N+1, and batched.
 
-        Composing a page asks the social graph once for the whole page, not
-        once per player — the property A64-013.4 established and this task
-        must not regress while adding a cache in front of it.
+        Composing a page asks the social graph a **fixed** number of times
+        for the whole page, not once per player — the property A64-013.4
+        established and neither the cache in front of it nor A64-020.4's
+        published relationship may regress.
+
+        Asserted as "the same for one row as for many" rather than as an
+        absolute count. A64-020.4 changed the absolute from one to two by
+        adding a second, genuinely different question — privacy asks who is
+        a friend, the published field asks what the viewer may do — and a
+        pinned number would have failed for correct behaviour, with the
+        tempting fix being to raise it rather than ask what produced it.
         """
         client, fixtures = stack
         alice = await register(client)
@@ -473,14 +481,36 @@ class TestCachedReads:
             statements.append(statement)
 
         engine = contract_session.get_bind().engine
-        event.listen(engine, "before_cursor_execute", record)
-        try:
-            listed = await client.get(SEARCH_URL, headers=alice.auth, params={"q": "player"})
-        finally:
-            event.remove(engine, "before_cursor_execute", record)
 
-        assert listed.status_code == 200, listed.text
-        assert _friendship_reads(statements) == 1
+        async def graph_reads(limit: int) -> tuple[int, int]:
+            statements.clear()
+            event.listen(engine, "before_cursor_execute", record)
+            try:
+                listed = await client.get(
+                    SEARCH_URL, headers=alice.auth, params={"q": "player", "limit": limit}
+                )
+            finally:
+                event.remove(engine, "before_cursor_execute", record)
+            assert listed.status_code == 200, listed.text
+            return _friendship_reads(statements), len(listed.json()["data"]["items"])
+
+        # Warmed first. `CachedSocialGraphReader` populates the block set on
+        # the first search of a session, so a cold measurement and a warm one
+        # differ by that read and are not comparable — which is exactly the
+        # trap a single-request assertion avoided and a two-request one has
+        # to handle explicitly.
+        await graph_reads(1)
+
+        one_read, one_row = await graph_reads(1)
+        many_reads, many_rows = await graph_reads(20)
+
+        assert one_row == 1
+        assert many_rows > one_row, "the fixture should produce more than one match"
+        assert one_read >= 1, "search must resolve the graph at all"
+        assert one_read == many_reads, (
+            f"the graph was read {one_read} times for one row and {many_reads} for "
+            f"{many_rows} — the resolution is per player"
+        )
 
 
 def _block_reads(statements: list[str]) -> int:

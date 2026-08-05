@@ -4276,6 +4276,13 @@ export interface components {
              */
             joined_at: string;
             /**
+             * @description What **you** may do about this player — A64-020.4. `null` for an anonymous reader and on your own profile: there is no viewer to have a relationship with, and nobody is their own friend. `none` is different and means *signed in, no relationship*, which is what an "Add friend" control renders from.
+             *
+             *     `blocked` means **you blocked them**. Nothing here ever says that they blocked you — a player who could tell would have exactly the information a block withholds.
+             * @example none
+             */
+            relationship?: components["schemas"]["RelationshipState"] | null;
+            /**
              * Is Online
              * @description Whether the player is connected right now.
              *
@@ -4618,6 +4625,58 @@ export interface components {
              */
             tournament_status: string;
         };
+        /**
+         * RelationshipState
+         * @description The **published** viewer-relative social state — A64-020.4.
+         *
+         *     A different question from `ViewerRelationship` below, and the two must
+         *     not be merged. `ViewerRelationship` answers *what may this viewer see*
+         *     and is the input to every privacy gate; this answers *what may this
+         *     viewer do*, and is rendered as a button.
+         *
+         *     Three differences make them separate types rather than one enum with
+         *     extra members:
+         *
+         *     **Pending requests.** `OUTGOING_REQUEST` and `INCOMING_REQUEST` change
+         *     the available action and change **nothing** about visibility — somebody
+         *     who has sent you a request sees exactly what a stranger sees. Adding
+         *     them to `ViewerRelationship` would put two members into every privacy
+         *     comparison that no privacy rule has an opinion about.
+         *
+         *     **Blocking is asymmetric here and symmetric there.**
+         *     `ViewerRelationship.BLOCKED` means *either* party blocked the other,
+         *     because the visibility consequence runs both ways (BL-1). This enum's
+         *     `BLOCKED` means **the viewer blocked the returned player**, and nothing
+         *     published anywhere ever says that the returned player blocked the
+         *     viewer — that invisibility is the whole reason a block is worth placing.
+         *
+         *     **`NONE` is not `STRANGER`.** A stranger is what an *anonymous* viewer
+         *     is, and privacy evaluates it. This enum is `None` — absent — for an
+         *     anonymous viewer and for a player reading their own profile, because
+         *     "no relationship" and "no viewer to have one with" are different facts
+         *     and a client renders different things for them.
+         *
+         *     ## Precedence
+         *
+         *     Exactly one state per pair, resolved in this order:
+         *
+         *         BLOCKED  >  FRIEND  >  INCOMING_REQUEST  >  OUTGOING_REQUEST  >  NONE
+         *
+         *     The order is a **tie-break of last resort, not the invariant.** The
+         *     database already prevents every conflicting pair: blocking voids a
+         *     friendship and declines a pending request in one transaction
+         *     (`BlockingService`), one live friendship per pair is a partial unique
+         *     index, and one pending request per ordered pair is another. So the
+         *     precedence exists to make the resolution total and deterministic if a
+         *     repair script ever leaves two rows behind — not because two are
+         *     expected.
+         *
+         *     `BLOCKED` outranks everything for the one case that can legitimately
+         *     co-occur across a transaction boundary: a block placed while a request
+         *     is being written. The viewer's own action wins.
+         * @enum {string}
+         */
+        RelationshipState: "none" | "outgoing_request" | "incoming_request" | "friend" | "blocked";
         /**
          * ReplayPlyResponse
          * @description One ply, and the board it produced.

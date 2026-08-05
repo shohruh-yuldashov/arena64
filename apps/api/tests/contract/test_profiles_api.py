@@ -111,7 +111,13 @@ class TestSuccessfulLookup:
 
     async def test_returns_every_documented_field(self, client: AsyncClient, player: User) -> None:
         """The field list A64-012.1 specifies, asserted as a set so that a
-        field quietly disappearing fails here rather than in a client."""
+        field quietly disappearing — or quietly appearing — fails here
+        rather than in a client.
+
+        `relationship` joined it in A64-020.4 and is `null` on this call,
+        which is unauthenticated: there is no viewer to have a relationship
+        with. See `TestRelationship` below for the authenticated cases.
+        """
         data: dict[str, Any] = (await client.get(profile_url(player.username.value))).json()["data"]
 
         assert set(data) == {
@@ -124,11 +130,13 @@ class TestSuccessfulLookup:
             "language",
             "bio",
             "joined_at",
+            "relationship",
             "is_online",
             "last_seen",
             "ratings",
             "statistics",
         }
+        assert data["relationship"] is None
 
     async def test_returns_the_stored_values(self, client: AsyncClient, player: User) -> None:
         data = (await client.get(profile_url(player.username.value))).json()["data"]

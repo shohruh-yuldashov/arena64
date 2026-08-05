@@ -41,6 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.api.deps import ClockDep, DbSessionDep, SettingsDep
 from app.core.clock import Clock
 from app.database.session import open_session
+from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.game.application.ports import ClockDeadlineStore, LiveMatchStore
 from app.modules.game.application.services import (
     GameCommandService,
@@ -81,6 +82,10 @@ from app.modules.game.public import (
     SubmitMoveUseCase,
     engine_services,
 )
+from app.modules.users.application.services.public_profile_service import PublicProfileService
+from app.modules.users.application.services.user_service import UserService
+from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
+from app.modules.users.public import PublicProfileReader
 from app.platform.outbox import OutboxEventPublisher, SqlAlchemyOutboxRepository
 
 
@@ -233,6 +238,30 @@ def get_live_moves_ws(
 
 
 WebSocketLiveMovesDep = Annotated[SubmitMoveUseCase, Depends(get_live_moves_ws)]
+
+
+def get_replay_players(session: DbSessionDep, clock: ClockDep) -> PublicProfileReader:
+    """How a replay resolves its two seats to handles — A64-020.5E §13.
+
+    `users`' concrete classes, named here for the reason
+    `matchmaking.presentation` names them in its own root: assembling
+    another module's graph is what a composition root is for, and reaching
+    into *that* root would be one module importing another's private
+    presentation package — the mistake A64-010's `ClockDep` note records.
+
+    The route holds `PublicProfileReader`, which has no way to read an
+    email: the leak is unreachable rather than merely avoided.
+    """
+    return PublicProfileService(
+        UserService(
+            users=SqlAlchemyUserRepository(session),
+            unit_of_work=SessionUnitOfWork(session),
+            clock=clock,
+        )
+    )
+
+
+ReplayPlayersDep = Annotated[PublicProfileReader, Depends(get_replay_players)]
 
 
 class SessionScopedGameCommands:
@@ -427,10 +456,12 @@ __all__ = [
     "get_match_snapshot_ws",
     "SessionScopedLiveMoves",
     "SessionScopedMatchRosters",
+    "ReplayPlayersDep",
     "WebSocketGameCommandsDep",
     "WebSocketLiveMovesDep",
     "WebSocketMatchRosterReaderDep",
     "get_game_commands_ws",
+    "get_replay_players",
     "get_live_moves_ws",
     "get_match_roster_reader",
     "get_match_roster_reader_ws",

@@ -541,5 +541,56 @@
         "unknown": "Buni bajarib bo'lmadi. Qayta urinib ko'ring."
       }
     }
+  },
+  "replay": {
+    "title": "Takrorlash",
+    "loading": "O'yin yuklanmoqda…",
+    "shortcuts": "Strelkalar o'yinni yurish-yurish ko'rsatadi. Home va End birinchi va oxirgi pozitsiyaga o'tadi.",
+    "controls": {
+      "first": "Boshiga",
+      "previous": "Oldingi",
+      "next": "Keyingi",
+      "last": "Oxiriga",
+      "flip": "Taxtani ag'darish"
+    },
+    "position": {
+      "opening": "Boshlang'ich pozitsiya",
+      "at": "{total} dan {ply}-yurish"
+    },
+    "moves": {
+      "label": "Yurishlar",
+      "none": "Bu o'yinda yurish qilinmagan.",
+      "captured": "{count} ta olindi",
+      "promoted": "damkaga aylandi"
+    },
+    "seat": {
+      "unknownPlayer": "Noma'lum o'yinchi",
+      "winner": "yutdi"
+    },
+    "result": {
+      "draw": "Durang",
+      "lightWon": "Oq yutdi",
+      "darkWon": "Qora yutdi",
+      "unfinished": "Natija yo'q"
+    },
+    "meta": {
+      "untimed": "Soatsiz",
+      "played": "O'ynalgan",
+      "moves": "Yurishlar",
+      "engine": "Qoidalar versiyasi"
+    },
+    "notFound": {
+      "title": "Bu o'yin mavjud emas",
+      "body": "U mavjud bo'lmasligi yoki siz o'ynamagan oddiy o'yin bo'lishi mumkin."
+    },
+    "unsupported": {
+      "title": "Bu o'yinni takrorlab bo'lmaydi",
+      "body": "U qoidalarning eski versiyasida o'ynalgan. Uni hozirgi qoidalar bo'yicha takrorlash boshqa o'yinni ko'rsatishi mumkin, shuning uchun urinilmaydi."
+    },
+    "error": {
+      "title": "Takrorlashni yuklab bo'lmadi",
+      "body": "Nimadir xato ketdi. Birozdan keyin qayta urinib ko'ring."
+    },
+    "openReplay": "Takrorlashni ko'rish"
   }
 }

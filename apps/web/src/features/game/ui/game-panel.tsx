@@ -159,9 +159,20 @@ function Result({ state }: { state: GameState }) {
           reason: t(reasons[state.result.termination_reason] ?? "game.reason.unknown"),
         })}
       </p>
-      <Button asChild variant="outline" className="min-h-11 self-start">
-        <Link to="/play">{t("game.result.backToLobby")}</Link>
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        {/* A64-020.5E §22. The one existing surface with a real match id —
+            there is no match-history UI yet, so this is where a replay is
+            reachable from. The board this panel sits beside is already the
+            finished position; the link is for looking at how it got there. */}
+        <Button asChild variant="outline" className="min-h-11">
+          <Link to="/games/$matchId/replay" params={{ matchId: state.matchId }}>
+            {t("replay.openReplay")}
+          </Link>
+        </Button>
+        <Button asChild variant="outline" className="min-h-11">
+          <Link to="/play">{t("game.result.backToLobby")}</Link>
+        </Button>
+      </div>
     </div>
   );
 }

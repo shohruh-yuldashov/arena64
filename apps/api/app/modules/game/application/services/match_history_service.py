@@ -40,12 +40,13 @@ import logging
 from collections.abc import Sequence
 from uuid import UUID
 
-from app.modules.engine import Position
+from app.modules.engine import PlayerSide, Position
 from app.modules.game.application.ports import MatchHistoryStore
 from app.modules.game.application.services.match_replay_service import PersistedMatchReplay
 from app.modules.game.domain.exceptions import (
     UnsupportedEngineVersion as UnsupportedEngineVersionInDomain,
 )
+from app.modules.game.domain.match_record import MatchSeat
 from app.modules.game.domain.replay import ReplayEngine
 from app.modules.game.domain.variants import ProductVariant
 from app.modules.game.public.history import (
@@ -54,8 +55,10 @@ from app.modules.game.public.history import (
     MatchHistoryPage,
     MatchReplay,
     ReplayPly,
+    ReplaySeat,
     UnsupportedEngineVersion,
 )
+from app.modules.game.public.matches import MatchTimeControl
 from app.modules.game.public.snapshots import PlacedPiece
 
 logger = logging.getLogger(__name__)
@@ -93,9 +96,10 @@ class GameMatchReplay:
         One log read and one engine application per ply — linear in the
         game and bounded above by the draw rules, which terminate it.
         """
-        data = await self._replays.replay_data(match_id)
-        if data is None:
+        source = await self._replays.source_for(match_id)
+        if source is None:
             return None
+        data, record = source.data, source.record
 
         try:
             match = self._engine.replay(data)
@@ -118,6 +122,24 @@ class GameMatchReplay:
             outcome=match.result.outcome if match.result else None,
             termination_reason=match.result.reason if match.result else None,
             winner=match.result.winner if match.result else None,
+            # A64-020.5E §5, §14. From the row this replay already read —
+            # there is no other way to reach it, because no endpoint serves
+            # one match's metadata by id.
+            status=record.status,
+            rated=record.rated,
+            speed_class=record.light.rating.speed_class if record.light.rating else None,
+            time_control=(
+                MatchTimeControl(
+                    initial_ms=record.time_control.initial_ms,
+                    increment_ms=record.time_control.increment_ms,
+                )
+                if record.time_control is not None
+                else None
+            ),
+            light=_seat(record.light),
+            dark=_seat(record.dark),
+            created_at=record.created_at,
+            ended_at=record.ended_at,
         )
 
     def _plies(self, data, match_id: UUID) -> Sequence[ReplayPly]:  # type: ignore[no-untyped-def]
@@ -139,11 +161,26 @@ class GameMatchReplay:
             plies.append(
                 ReplayPly(
                     ply_number=record.ply_number,
-                    side=record.seat,
+                    # **Derived from the ply, because `MoveRecord` has no
+                    # seat** — A64-020.5E. `record.seat` was an
+                    # `AttributeError` on every replay carrying a move, and
+                    # it went unseen because `_require_expected_result`
+                    # refused first for every game that ended off the board
+                    # and this path was reached only by the few that did
+                    # not.
+                    #
+                    # `LoggedMove` carries a seat; `MoveRecord` — what
+                    # `for_replay` returns — never did. Parity is the
+                    # authoritative answer anyway: `Match.play` increments
+                    # before appending and LIGHT moves first, so odd plies
+                    # are LIGHT's. The same structural fact
+                    # `game.domain.draw_agreement` computes its re-offer
+                    # rule from.
+                    side=_side_at_ply(record.ply_number),
                     path=tuple(str(square) for square in record.move.path),
                     captured=tuple(str(square) for square in record.move.captured),
                     promoted_to=(
-                        record.move.promoted_to.value if record.move.promoted_to else None
+                        record.move.promotes_to.value if record.move.promotes_to else None
                     ),
                     pieces=_placement(stepping.position),
                     fingerprint=stepping.position.fingerprint,
@@ -183,3 +220,30 @@ def _placement(position: Position) -> Sequence[PlacedPiece]:
 
 
 __all__ = ["GameMatchHistory", "GameMatchReplay"]
+
+
+def _side_at_ply(ply_number: int) -> PlayerSide:
+    """Whose move a ply was. LIGHT plays the odd ones.
+
+    Structural rather than stored: `Match.play` increments `ply_number`
+    before appending the record, and LIGHT moves first, so the parity is
+    the seat. Storing it would be a second copy of a fact the sequence
+    already fixes — and one a replay could find disagreeing with the log.
+    """
+    return PlayerSide.LIGHT if ply_number % 2 == 1 else PlayerSide.DARK
+
+
+def _seat(seat: MatchSeat) -> ReplaySeat:
+    """One seat as an archive shows it — A64-020.5E §13.
+
+    The rating is the **snapshot taken at creation** (PR-3), not a fresh
+    read: a replay shows what the game was played at. `None` throughout for
+    a match created before ratings were captured, which `rating` already
+    treats as "not rateable" rather than as zero.
+    """
+    return ReplaySeat(
+        player_id=seat.player_id,
+        rating_value=seat.rating.value if seat.rating else None,
+        rating_deviation=seat.rating.deviation if seat.rating else None,
+        is_provisional=seat.rating.is_provisional if seat.rating else None,
+    )

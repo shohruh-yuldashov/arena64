@@ -75,7 +75,10 @@ export default defineConfig({
   // suite drives. Both need the proxy, and `preview` does **not** inherit
   // it — a mismatch there presents as an e2e suite that cannot sign in
   // while development works fine.
-  server: { proxy: API_PROXY },
+  server: {
+    proxy: API_PROXY,
+    allowedHosts: ["1320-2a05-45c2-70f1-ad00-f1c6-fefa-7cf4-7d08.ngrok-free.app"],
+  },
   preview: { proxy: API_PROXY },
   resolve: {
     alias: {

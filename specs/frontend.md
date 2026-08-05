@@ -842,7 +842,179 @@ rather than declining it, because a decline earns the queue cooldown that
 would then stop the spec from queueing. Nothing truncates a table, flushes
 Redis, or disables a rate limit.
 
-## 16. Open questions
+## 16. Live game — A64-020.5B
+
+`/games/{match_id}` replaces §15.7's placeholder. The route, its guard and the
+navigation that reaches it are unchanged.
+
+### 16.1 One socket, owned above the route
+
+`RealtimeContextProvider` is mounted in `app/providers`, not in the page, so the
+socket outlives navigation — AD-11's one connection per client, multiplexed by
+channel. The provider is split in two because `shared` may not import
+`features`: `shared/realtime/context.tsx` holds the context and the hooks,
+`app/providers/realtime-provider.tsx` supplies the ticket by calling the
+matchmaking API.
+
+A ticket is minted per connection attempt and **never stored**. It is a
+single-use credential; keeping one would mean holding a redeemable secret for
+as long as the tab is open, to save a request that only happens on reconnect.
+
+### 16.2 Protocol mapping
+
+The contract is hand-maintained in `shared/realtime/protocol.ts` and reviewed
+against `apps/api/app/gateway/protocol.py`. There is no generator: the gateway
+publishes no OpenAPI document, and a hand-written contract that is *known* to
+be hand-written gets read.
+
+| Direction | Frame | What the client does with it |
+| --- | --- | --- |
+| → | `room.join` | First mount. Correlated; the answer proves participation |
+| → | `game.resume` | Every reconnect, and the `resyncing` recovery |
+| → | `game.move.submit` | One in flight at a time (§16.5) |
+| → | `room.leave` | Unmount |
+| ← | `room.joined` | Participants and `both_connected` |
+| ← | `game.snapshot` | **Replaces** the whole state; its sequence is the new baseline |
+| ← | `game.events` | Ordered catch-up frames, applied in sequence |
+| ← | `game.resumed` | Nothing was missed; keep what is held |
+| ← | `game.resync_required` | Ask again from nothing — `resyncing` |
+| ← | `game.move.accepted` | *Our* submission landed; clears `pending` |
+| ← | `game.move.applied` | The fan-out that carries the state change |
+| ← | `game.move.rejected` | Correlated refusal; the board reverts to the server's truth |
+
+`accepted` and `applied` are deliberately not collapsed. The submitter receives
+both, and only the correlation on `accepted` tells a client that the move it is
+watching arrive is its own.
+
+`parseFrame` returns `null` rather than throwing. A malformed frame is a
+gateway defect, and a client that threw inside its socket handler would tear
+down a live game over one bad byte.
+
+### 16.3 The state machine
+
+One owner: the reducer in `features/game/model/state.ts`. TanStack Query holds
+nothing here — a live game is a stream with an authoritative sequence, and
+`staleTime` has no meaning for it.
+
+```
+loading -> joining -> active <-> submitting_move
+                        |  ^
+                        v  |
+                   reconnecting
+                        |
+                        v
+                    resyncing -> active
+                        
+  any -> completed | unavailable | fatal
+```
+
+`sequence` never advances without a server frame. A frame at or below the held
+sequence returns the identical state object — replay is free and re-renders
+nothing. A frame that skips one is a gap, and a gap goes to `resyncing`.
+
+### 16.4 The board
+
+Squares are the server's algebraic strings (`"c3"`), never renumbered. A move is
+submitted as a list of them, so a client with its own numbering would have to
+convert back at exactly one place, and the day it forgot it would send a legal
+move for the wrong squares.
+
+The model is always in the engine's frame — `a1` is LIGHT's near-left corner.
+**Orientation is rendering only**, one boolean in `board.tsx`, so a future
+flip-the-board control touches nothing else. Playable squares are derived
+(`(file + rank)` even), not listed, and asserted against the corpus's opening
+position.
+
+### 16.5 Authority, and what the client is allowed to decide
+
+| Decision | Owner |
+| --- | --- |
+| Legality, capture continuation, promotion, turn, result, ply | Server |
+| Which squares to *light up* before a round trip | Client kernel |
+| Whether a clock has run out | Server |
+
+The TypeScript kernel in `features/game/engine/moves.ts` exists for one reason:
+a player must see legal destinations on click, not after a round trip. It is
+validated against the **same conformance corpus** the Python engine is —
+AD-14's "the corpus is the contract" — and passes 22/22. It is never the
+authority. A disagreement between the kernel and the server is resolved by the
+server, silently, because the server is right by definition.
+
+One move in flight at a time. `submitting_move` makes the board
+non-interactive, and the request registry refuses a second submission rather
+than queueing it.
+
+### 16.6 Reconnect and resume
+
+Backoff is exponential with ±25% jitter, clamped to a ceiling **after** the
+jitter is applied — an uncapped spread put the tail 25% past the ceiling the
+policy documented.
+
+The first mount sends `room.join`; every reconnect after that sends
+`game.resume` with the sequence this client holds. The gateway answers with the
+missed frames if the buffer can prove continuity, a snapshot if it cannot, or
+`game.resync_required` if it can prove a gap — `websocket.md` §20.3.
+
+A resume with **no** sequence means "I am holding nothing", and it is answered
+with a snapshot whatever the server's sequence is. That includes the sequence-0
+resume every game opens with; see the fix in this phase's commits.
+
+### 16.7 Clock
+
+`useClock` interpolates between authoritative frames and **adjudicates
+nothing**. When the visual countdown reaches zero, nothing happens: no winner,
+no state change. The flag arrives as a frame, or it did not happen.
+
+Drift is corrected rather than accumulated. The payload carries absolute
+instants (`deadline`, `server_time`), so the hook computes `offset = server_time
+− received_at` on every authoritative update. A machine whose clock is a minute
+fast shows the right countdown from the first frame.
+
+One 250 ms timer for both sides, not one per clock. The display floors to whole
+seconds; four ticks a second is what makes the seconds change *on time* without
+the display changing four times.
+
+### 16.8 Accessibility
+
+- `role="grid"` / `role="row"` / `role="gridcell"`, arrow keys plus Enter, and
+  a roving tabindex — one stop for the board, not sixty-four.
+- Every cell has a spoken label: `"c3, Light, man"`, `"d4, empty, legal move"`.
+- Light squares are `aria-hidden` — a piece can never stand on one.
+- The status line is `role="status"` (polite: a turn change should not interrupt),
+  a rejection is `role="alert"` (assertive: it needs the player now).
+- Clocks are labelled per side, so "0:49" is never read without whose it is.
+
+### 16.9 Responsive
+
+The board is a square that shrinks with the viewport; the panel moves from
+beside it to below it. No horizontal scroll at any width, and the board never
+depends on a hover to be playable — every interaction is a click or a key.
+
+### 16.10 E2E
+
+`tests/e2e/game.spec.ts` pairs two seeded accounts through the **real lobby**,
+opens both boards, moves on one, asserts the other changed, and reloads to prove
+the position came from `game.resume` rather than from anything the browser kept.
+Nothing is mocked.
+
+Three accounts, not two: QT-3 excludes a player's most recent opponent with no
+time window, so a fixed pair is pairable exactly once. `1+0`, so a game the
+suite leaves active flags in a minute instead of blocking its own accounts for
+ten.
+
+Sessions are written back through `saveState`, which merges the seeded-account
+block Playwright's own `storageState` would drop.
+
+### 16.11 Not in this phase
+
+| Deferred | Why |
+| --- | --- |
+| Spectating | The gateway has the subscription keyspace (`gwspec:v1:`) but no viewer surface is specified; a spectator board is a different product decision about what a non-participant may see |
+| Replay / move list | Needs the move log as a read model, which is a backend surface that does not exist |
+| Draw offers, resignation, takebacks | No gateway frames for them |
+| Orientation toggle, sound, premoves | One boolean, one asset, and a queue respectively — none of them requirements yet |
+
+## 17. Open questions
 
 | # | Question | Blocked work |
 | --- | --- | --- |
@@ -855,7 +1027,8 @@ Redis, or disables a rate limit.
 | ~~OQ-7~~ | **Closed by A64-020.3.** `signOutEverywhere` is reachable from `/settings/sessions`, behind an explicit confirmation | — |
 | OQ-8 | **No session list.** `SessionService.list_user_sessions` has no HTTP endpoint, so there is no device list to show — only "sign out everywhere". Publishing it needs a decision about what a session row may reveal (IP, user agent) | A device-management UI |
 | ~~OQ-9~~ | **Closed by A64-020.4.** The public profile renders a relationship-aware action set through `ProfileHeader`'s seam | — |
-| OQ-10 | **Nothing is live yet.** Friend presence and match offers both arrive on an HTTP read. The frontend still has no WebSocket; `vite.config.ts` proxies `/ws` (§11) and A64-020.5B owns the client. The backend half is also unwired — `LoggingPendingMatchSink` (§15.3) | A64-020.5B, and a gateway-backed `PendingMatchSink` |
+| ~~OQ-10~~ | **Closed by A64-020.5B, in part.** The frontend has a socket: `shared/realtime` owns it, `app/providers` mounts it above the route tree, and a live game runs entirely on frames (§16). What remains is narrower and no longer a frontend gap — **the lobby still polls**, because `LoggingPendingMatchSink` (§15.3) means no match offer is ever published to the gateway. Reopened as OQ-13 | — |
+| OQ-13 | **Match offers are not pushed.** `PendingMatchSink` logs instead of publishing, so the lobby discovers a pairing by polling an HTTP read while a socket sits open beside it. Friend presence is the same shape. The client is ready for both; the sink is not | A gateway-backed `PendingMatchSink`, and a presence channel |
 | OQ-12 | **The offer dialog cannot show an avatar or a rating.** `OpponentPreview` carries three public fields by design (§15.5). Publishing more needs the privacy-gated composition `profiles` owns, which is a backend decision rather than a frontend gap | A richer match card |
 | OQ-11 | **A friend's `relationship` is fetched but structurally known.** The four list endpoints state it server-side and cost nothing, but a client-side `friends` cache could serve the public profile's state too — not done, because a stale action is worse than a request | A measured need |
 

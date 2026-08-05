@@ -52,6 +52,12 @@ export default function ProfilePage() {
                     {t("profile.header.viewPublic")}
                   </Link>
                 </Button>
+                {/* A64-020.5F §20. A link, not an inline preview: the
+                    profile's request count stays where it was, and the
+                    history page owns its own pagination. */}
+                <Button asChild variant="ghost" className="min-h-11">
+                  <Link to="/games/history">{t("history.title")}</Link>
+                </Button>
               </div>
             </ProfileHeader>
 

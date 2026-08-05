@@ -3664,6 +3664,10 @@ export interface components {
             winner: string | null;
             /** Ply Number */
             ply_number: number;
+            /** @description The other player's public identity, when the viewer is a participant. Composed from `users`' privacy-gated read; `null` for a deactivated account or when the viewer did not play. */
+            opponent?: components["schemas"]["ReplaySeatResponse"] | null;
+            /** @description How much time each side had. `null` for an untimed match. */
+            time_control?: components["schemas"]["ReplayTimeControlResponse"] | null;
             /**
              * Started At
              * Format: date-time

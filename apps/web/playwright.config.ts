@@ -62,6 +62,7 @@ export default defineConfig({
         "**/game-controls.spec.ts",
         "**/realtime-push.spec.ts",
         "**/replay.spec.ts",
+        "**/history.spec.ts",
       ],
     },
     {
@@ -74,6 +75,15 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
       testMatch: "**/game.spec.ts",
       dependencies: ["lobby"],
+    },
+    {
+      name: "history",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: "**/history.spec.ts",
+      // After `replay`, for the same reason `replay` is after the game
+      // projects: it reads matches those projects finished. It queues for
+      // nothing, so it contends with nobody — A64-020.5F §28.
+      dependencies: ["replay"],
     },
     {
       name: "replay",

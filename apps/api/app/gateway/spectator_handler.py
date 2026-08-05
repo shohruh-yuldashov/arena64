@@ -44,7 +44,7 @@ from app.gateway.metrics import (
     SPECTATOR_REJECTIONS,
     SpectatorLeaveReason,
 )
-from app.gateway.projections import snapshot_payload
+from app.gateway.projections import spectator_snapshot_payload
 from app.gateway.protocol import (
     GatewayErrorCode,
     GatewayMessage,
@@ -133,7 +133,9 @@ class SpectatorHandler:
             extra={"user_id": str(player_id), "match_id": str(match_id), "audience": audience},
         )
         return spectator_joined(
-            snapshot_payload(snapshot), audience=audience, request_id=message.request_id
+            spectator_snapshot_payload(snapshot),
+            audience=audience,
+            request_id=message.request_id,
         )
 
     async def leave(

@@ -258,10 +258,56 @@ class StaleMatchState(ConflictError):
     """
 
 
+class DrawOfferAlreadyPending(ConflictError):
+    """A draw offer already stands on this match — A64-020.5C-pre §1.
+
+    At most one offer exists at a time, so this covers both a player
+    repeating their own offer and a player offering into the opponent's.
+    **One failure for both**, because the caller's recourse is identical:
+    read the current state, which already says whose offer stands and
+    whether they may answer it.
+    """
+
+
+class DrawOfferNotPending(ConflictError):
+    """There is no offer to accept or decline.
+
+    The ordinary outcome of a race rather than a client defect: an offer
+    the opponent withdrew by moving is one whose accept was already in
+    flight. Refused rather than applied, because accepting an offer that no
+    longer stands would end a game on state neither player could see.
+    """
+
+
+class DrawOfferNotRecipient(ConflictError):
+    """The offering side tried to answer their own offer.
+
+    A `ConflictError` rather than a permission failure: the caller is a
+    participant and may see everything about this match, so nothing is
+    being withheld — they have simply asked for a transition that is not
+    theirs.
+    """
+
+
+class DrawOfferNotAllowedYet(ConflictError):
+    """This side's previous offer was resolved and the opponent has not
+    moved since — A64-020.5C-pre §3.
+
+    The spam rule, and it is a conflict rather than a rate limit on
+    purpose: the answer does not depend on how fast the caller is asking,
+    only on how far the game has progressed. A client is told to wait for a
+    move, not to slow down.
+    """
+
+
 __all__ = [
     "AcceptanceWindowClosed",
     "ClockExpired",
     "CorruptMoveLog",
+    "DrawOfferAlreadyPending",
+    "DrawOfferNotAllowedYet",
+    "DrawOfferNotPending",
+    "DrawOfferNotRecipient",
     "IllegalMoveSubmitted",
     "InvalidMatchTransition",
     "MalformedMoveLog",

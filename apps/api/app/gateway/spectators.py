@@ -74,9 +74,27 @@ logger = logging.getLogger(__name__)
 #: somebody remembered to exclude it. This way the same mistake ships a
 #: spectator missing an event, which is visible and harmless.
 #:
-#: One member today, because `game.move.applied` is the only event that is
-#: fanned out at all, and a move is public the moment it is played.
-SPECTATOR_SAFE_EVENTS: Final = frozenset({MessageType.MOVE_APPLIED})
+#: Two members — A64-020.5C-pre §8, which asks for the decision to be
+#: deliberate rather than incidental. It is, and it splits the four new
+#: frames cleanly:
+#:
+#:     game.move.applied   a move is public the moment it is played
+#:     game.completed      a finished game is a public fact, and an
+#:                         audience left watching a board that stopped
+#:                         moving is the worse failure
+#:
+#:     game.draw.offered   **withheld.** A negotiation two players are
+#:     game.draw.declined  holding is theirs until it produces a result,
+#:                         and a spectator who saw an offer would know
+#:                         something the opponent may not have answered yet
+#:
+#: The withheld pair is exactly the case the paragraph above was written
+#: for, which is the allowlist working as intended: the frames were added
+#: and nothing had to be remembered to keep them private.
+#:
+#: A draw that is *agreed* still reaches the audience — as `game.completed`,
+#: carrying `agreed_draw`. The result is public; the asking is not.
+SPECTATOR_SAFE_EVENTS: Final = frozenset({MessageType.MOVE_APPLIED, MessageType.GAME_COMPLETED})
 
 #: The match states a spectator may watch — §1.
 #:

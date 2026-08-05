@@ -345,11 +345,7 @@ class Match:
         """
         self._require(MatchStatus.ACTIVE, "resign")
         self.status = MatchStatus.COMPLETED
-        self.result = MatchResult(
-            outcome=MatchOutcome.WIN,
-            reason=TerminationReason.RESIGNATION,
-            winner=side.opponent(),
-        )
+        self.result = resignation_result(side)
 
     def abort(self) -> None:
         """End the match with no result — MT-11.
@@ -479,4 +475,37 @@ trusting it.
 """
 
 
-__all__ = ["Match", "MatchStatus"]
+def resignation_result(side: PlayerSide) -> MatchResult:
+    """What it means for `side` to give up: the opponent wins.
+
+    A function beside `Match.resign` rather than only inside it, because
+    A64-020.5C-pre needs the same rule without a board. A resignation
+    changes no position, so the command service settles the **record**
+    directly and rebuilding the aggregate from the move log — O(plies) of
+    replay — would be work done purely to reach a method that ignores what
+    it produced.
+
+    Extracting it keeps one definition of the rule rather than a second
+    copy in the service, which is the thing that would actually go wrong:
+    a platform where half the resignations awarded the win to the wrong
+    side is a platform whose statistics are silently unusable.
+    """
+    return MatchResult(
+        outcome=MatchOutcome.WIN,
+        reason=TerminationReason.RESIGNATION,
+        winner=side.opponent(),
+    )
+
+
+def agreed_draw_result() -> MatchResult:
+    """What it means for both players to agree a draw — A64-020.5C-pre §1.
+
+    Beside `resignation_result` for the same reason and with the same
+    shape. No winner, because `MatchResult` already refuses one for a
+    non-decisive outcome and a draw that named a winner would be a
+    contradiction two layers would have to agree not to write.
+    """
+    return MatchResult(outcome=MatchOutcome.DRAW, reason=TerminationReason.AGREED_DRAW)
+
+
+__all__ = ["Match", "MatchStatus", "agreed_draw_result", "resignation_result"]

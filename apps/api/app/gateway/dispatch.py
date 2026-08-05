@@ -87,6 +87,19 @@ class MessageDispatch:
     def __init__(self, handlers: Mapping[MessageType, MessageHandler]) -> None:
         self._handlers = dict(handlers)
 
+    @property
+    def routes(self) -> frozenset[MessageType]:
+        """Which types this table can route.
+
+        Published so the invariant that matters can be asserted: every
+        `CLIENT_SENDABLE` type must have an entry, or a frame the decoder
+        admits is one nothing handles — and a handler wired into the
+        composition root is one nothing can reach. Neither failure raises
+        anywhere, which is why it is worth a check rather than a comment
+        (A64-020.5C-pre §15).
+        """
+        return frozenset(self._handlers)
+
     async def dispatch(self, message: GatewayMessage, *, player_id: UUID) -> GatewayMessage | None:
         """The answer to one frame, or `None` if there is none.
 
@@ -127,6 +140,10 @@ CLIENT_SENDABLE: frozenset[MessageType] = frozenset(
         MessageType.ROOM_LEAVE,
         MessageType.MOVE_SUBMIT,
         MessageType.RESUME,
+        MessageType.RESIGN,
+        MessageType.DRAW_OFFER,
+        MessageType.DRAW_ACCEPT,
+        MessageType.DRAW_DECLINE,
         MessageType.SPECTATOR_JOIN,
         MessageType.SPECTATOR_LEAVE,
     }
@@ -146,6 +163,10 @@ CLIENT_CHANNELS: Mapping[MessageType, Channel] = {
     MessageType.ROOM_LEAVE: Channel.GAME,
     MessageType.MOVE_SUBMIT: Channel.GAME,
     MessageType.RESUME: Channel.GAME,
+    MessageType.RESIGN: Channel.GAME,
+    MessageType.DRAW_OFFER: Channel.GAME,
+    MessageType.DRAW_ACCEPT: Channel.GAME,
+    MessageType.DRAW_DECLINE: Channel.GAME,
     MessageType.SPECTATOR_JOIN: Channel.GAME,
     MessageType.SPECTATOR_LEAVE: Channel.GAME,
 }

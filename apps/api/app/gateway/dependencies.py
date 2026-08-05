@@ -48,6 +48,7 @@ from app.core.clock import Clock
 from app.core.rate_limiting import RateLimitRule, RateLimitScope
 from app.database.redis import RedisPools
 from app.gateway.bus import BusRemoteNodePublisher, GatewayBus
+from app.gateway.commands import GameCommandHandler
 from app.gateway.connections import GatewayConnectionService, GatewayPolicy
 from app.gateway.delivery import InMemoryLocalSockets, RoomBroadcaster
 from app.gateway.event_buffer import RedisMatchEventBuffer
@@ -75,6 +76,7 @@ from app.gateway.stream_bus import RedisStreamGatewayBus
 from app.modules.auth.presentation.dependencies import WebSocketTicketServiceDep
 from app.modules.friends.presentation.dependencies import WebSocketPairingExclusionsDep
 from app.modules.game.presentation.dependencies import (
+    WebSocketGameCommandsDep,
     WebSocketLiveMovesDep,
     WebSocketMatchRosterReaderDep,
     WebSocketMatchSnapshotDep,
@@ -442,6 +444,43 @@ def get_move_handler(
 MoveHandlerDep = Annotated[MoveSubmissionHandler, Depends(get_move_handler)]
 
 
+def get_game_command_handler(
+    commands: WebSocketGameCommandsDep,
+    rooms: RoomServiceDep,
+    broadcaster: Annotated[RoomBroadcaster, Depends(get_broadcaster)],
+    spectators: SpectatorStoreDep,
+    limiter: Annotated[MoveRateLimiter, Depends(get_move_limiter)],
+    pools: RedisPoolsDep,
+    settings: GatewaySettingsDep,
+) -> GameCommandHandler:
+    """The `game.resign` and `game.draw.*` handler — A64-020.5C-pre §8, §15.
+
+    The **same limiter and the same idempotency keyspace** as the move
+    handler, deliberately. Sharing the limiter means a client cannot dodge
+    the move budget by alternating moves with draw offers; sharing the
+    idempotency store means one `(connection, request_id)` namespace, so a
+    client that reused a request id across two different commands cannot
+    get two independent replays of two different answers.
+
+    The spectator store is the **read** side only, as it is for moves: this
+    handler asks who is watching so the fan-out can consider them, and which
+    frames they actually receive is `SPECTATOR_SAFE_EVENTS`' decision.
+    """
+    return GameCommandHandler(
+        commands=commands,
+        rooms=rooms,
+        broadcaster=broadcaster,
+        spectators=spectators,
+        idempotency=RedisMoveIdempotencyStore(pools.cache),
+        limiter=limiter,
+        metrics=get_gateway_metrics(),
+        idempotency_ttl_seconds=settings.move_idempotency_ttl_seconds,
+    )
+
+
+GameCommandHandlerDep = Annotated[GameCommandHandler, Depends(get_game_command_handler)]
+
+
 def get_gateway_metrics() -> MetricsRecorder:
     """The process-wide recorder — A64-015.6 §10.
 
@@ -459,6 +498,7 @@ def build_gateway_service(
     registry: ConnectionRegistryDep,
     rooms: GameRoomService,
     moves: MoveSubmissionHandler,
+    commands: GameCommandHandler,
     resumes: ResumeHandler,
     spectators: SpectatorHandler,
     sockets: LocalSocketRegistry,
@@ -481,6 +521,7 @@ def build_gateway_service(
         registry=registry,
         rooms=rooms,
         moves=moves,
+        commands=commands,
         resumes=resumes,
         spectators=spectators,
         sockets=sockets,
@@ -501,6 +542,7 @@ def get_gateway_service(
     registry: ConnectionRegistryDep,
     rooms: RoomServiceDep,
     moves: MoveHandlerDep,
+    commands: GameCommandHandlerDep,
     resumes: ResumeHandlerDep,
     spectators: SpectatorHandlerDep,
     sockets: LocalSocketsDep,
@@ -515,6 +557,7 @@ def get_gateway_service(
         registry=registry,
         rooms=rooms,
         moves=moves,
+        commands=commands,
         resumes=resumes,
         spectators=spectators,
         sockets=sockets,

@@ -1187,6 +1187,181 @@ that safe:
 
 ---
 
+## 22. Participant commands — A64-020.5C-pre
+
+Resigning and agreeing a draw. Four client frames, three server frames, one handler, one
+application service, five columns.
+
+### 22.1 Why the socket and not HTTP
+
+AD-11 multiplexes one socket precisely so that cross-stream ordering is defined, and §13's
+opening example is *"a resignation and a chat message sent in that order must arrive in that
+order"*. A resignation on HTTP and a move on the socket would be two transports racing for the
+same match, and the loser's meaning would depend on network timing.
+
+So there is **no HTTP command endpoint**, and adding one later would reintroduce exactly the race
+AD-11 exists to prevent.
+
+### 22.2 The frames
+
+| Direction | Frame | Payload | Notes |
+| --- | --- | --- | --- |
+| → | `game.resign` | `match_id` | |
+| → | `game.draw.offer` | `match_id` | |
+| → | `game.draw.accept` | `match_id` | |
+| → | `game.draw.decline` | `match_id` | |
+| ← | `game.draw.offered` | `match_id`, `offered_by`, `offered_at_ply`, `offered_at` | participants only |
+| ← | `game.draw.declined` | `match_id`, `declined_by`, `ply` | participants only |
+| ← | `game.completed` | `match_id`, `ply`, `result` | spectator-safe |
+| ← | `game.command.rejected` | `code`, `reason` | correlated |
+
+**`match_id` and nothing else.** No `player_id`, no `side`, no `winner`, no `outcome`, no
+termination reason. The acting player is the socket's redeemed ticket resolved against the match's
+seats by `MatchRecord.side_of`, so a frame naming a side is not something the protocol can
+express — the same structural guarantee `game.move.submit` makes.
+
+**The actor receives two frames**, as they do for a move: the authoritative event correlated to
+their `request_id`, and the same event again as one of the room's recipients. That is what lets a
+client advance its state from one code path whoever acted.
+
+### 22.3 Why `game.completed` and not `game.resigned` / `game.draw.accepted`
+
+A client's response to both is identical — render the result, stop accepting input — and
+`termination_reason` already says which happened. Two frames would be two code paths that must not
+diverge.
+
+A move that ends a game does **not** send `game.completed`: the result rides on
+`game.move.applied`, so the frame that shows the winning move is the frame that says it won.
+
+### 22.4 Authorization
+
+Three checks, cheapest first, and the order is the point:
+
+```
+rate limit        the shared move budget — a client cannot dodge it by
+                  alternating moves with draw offers
+room membership   one Redis read. This is what excludes a spectator: a
+                  viewer is in the audience, never in the room
+game.public       the database read and the row lock, reached only by a
+                  participant who has joined
+```
+
+### 22.5 Durability and reconnect
+
+A pending offer is **durable Match state**, on `game.match`:
+
+| Column | Meaning |
+| --- | --- |
+| `draw_offer_by` | whose offer stands, or three nulls for none |
+| `draw_offer_ply` | the ply it was made on |
+| `draw_offer_created_at` | when |
+| `light_draw_offer_from_ply` | the earliest ply LIGHT may open a **new** offer |
+| `dark_draw_offer_from_ply` | the same for DARK |
+
+Not Redis: the only role that could hold it is `cache`, which is configured to evict. Not the move
+log: no move records an offer, so a `Match` replayed from the log would silently drop it.
+
+On reconnect the offer arrives in `game.snapshot`, under a `draw` key carrying `offer`,
+`may_offer`, `may_accept` and `may_decline` — resolved for the requesting viewer. A settled
+resignation or agreed draw arrives as the snapshot's `result`, exactly as any other terminal state
+does. **The client reconstructs nothing.**
+
+### 22.6 Expiration
+
+A pending offer is cleared when the recipient declines, the recipient accepts, the match
+terminates for any reason, or **the recipient submits a move that is authoritatively applied**.
+
+The last one happens inside the move's own transaction (`MatchRecord.after_move_by`, called from
+`LiveMoveService._advance`), so the cleared offer and the ply that cleared it commit together. A
+*rejected* move never reaches that point, so "a rejected move leaves the offer pending" is true by
+construction rather than by a check.
+
+An offer by the player who then moves is **not** cleared — playing on while the opponent thinks is
+the ordinary way a draw is offered.
+
+### 22.7 The re-offer rule
+
+After a player's offer is resolved short of acceptance, they may not offer again until the
+**opponent has completed one further move**. No wall clock, no Redis TTL, no in-process timer:
+none of those survives a restart, and a player who reconnected would find their allowance
+refreshed.
+
+The mechanism is ply arithmetic. LIGHT moves on odd plies and DARK on even ones (`Match.play`
+increments before appending, and LIGHT moves first), so at resolution time the threshold is *the
+earliest ply the recipient could next move on*:
+
+```
+threshold = P + 1  if (P+1) has the recipient's parity, else P + 2
+eligible  ⟺  ply_number >= threshold
+```
+
+Both cases fall out of the one formula:
+
+| Resolution | At ply | Threshold | Effect |
+| --- | --- | --- | --- |
+| Declined | 3 | 4 | the opponent's next move |
+| Cleared by the opponent's move | 4 | 6 | one move **beyond** the one that resolved it |
+
+A player's own move never advances their eligibility, which is the spam this prevents.
+
+### 22.8 Clocks
+
+A resignation or an accepted draw cancels the match's deadline. That is an optimisation, not the
+correctness mechanism: `ClockAdjudicationService._is_current` checks `status is ACTIVE` against
+the authoritative row under its lock, so a settled match makes every outstanding deadline token
+non-current regardless. A stale flag worker loses.
+
+**An offer and a decline do not touch the clock.** A player who offers a draw is still on it — the
+alternative is a free pause available on demand.
+
+### 22.9 Spectator visibility
+
+`SPECTATOR_SAFE_EVENTS` gains `game.completed` and deliberately **not** the two draw frames. A
+negotiation two players are holding is theirs until it produces a result; a finished game is
+public.
+
+The allowlist alone would not be enough, because a viewer could read the same offer from a
+snapshot. So the projection is split in two: `spectator_snapshot_payload` is physically incapable
+of carrying draw state, and `participant_snapshot_payload` is the only one that does. Two
+functions rather than a flag, because a flag defaults to something and the default that leaks is
+the one that ships.
+
+### 22.10 Exactly one terminal result
+
+Guaranteed by the row lock plus the status check, not by a distributed lock:
+
+- `matches.lock` takes `FOR UPDATE` without `SKIP LOCKED`, so two players acting at once queue and
+  the second sees what the first wrote.
+- Every transition refuses a match that is not `ACTIVE`, and a completed match is not active.
+- `advance`'s compare-and-set on `(ply_number, status = active)` holds if a future path reads
+  without locking.
+
+So no match can end both by resignation and by agreed draw, and exactly one `MatchCompleted`
+reaches `rating`, `statistics` and `tournaments` — the same event a move-terminated game
+publishes, with a different `termination_reason`. There is no new rating path.
+
+### 22.11 Error codes
+
+`draw_offer_already_pending`, `draw_offer_not_pending`, `draw_offer_not_recipient`,
+`draw_offer_not_allowed_yet`, plus the existing `match_not_active`, `not_in_room`,
+`not_a_participant`, `stale_state`, `rate_limited` and `internal_error`.
+
+`draw_offer_not_allowed_yet` is distinct from `rate_limited` because it is not about how fast the
+client is asking: the answer changes when the opponent moves, not when a window elapses.
+
+`MatchNotFound` and `NotAMatchParticipant` share `not_a_participant`, so live match identifiers
+cannot be enumerated by sending resignations at them.
+
+### 22.12 Not in this phase
+
+| Deferred | Why |
+| --- | --- |
+| Withdrawing an offer | §1 excludes it from v0.x. The recipient's move already resolves one, so the offerer's escape hatch exists |
+| Takebacks | No frames, no domain concept, no product decision |
+| Adjourn / abort by agreement | `TerminationReason.ABORT` exists but nothing specifies who may ask |
+
+---
+
 ## Related Documents
 
 | Document | Relationship |

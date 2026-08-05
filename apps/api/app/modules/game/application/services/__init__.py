@@ -22,6 +22,7 @@ from app.modules.game.application.services.abandoned_match_retention import (
 from app.modules.game.application.services.clock_adjudication_service import (
     ClockAdjudicationService,
 )
+from app.modules.game.application.services.game_command_service import GameCommandService
 from app.modules.game.application.services.live_move_service import LiveMoveService
 from app.modules.game.application.services.match_acceptance_service import (
     MatchAcceptanceService,
@@ -44,6 +45,7 @@ __all__ = [
     "GameMatchSnapshot",
     "ClockAdjudicationService",
     "PersistedMatchReplay",
+    "GameCommandService",
     "LiveMoveService",
     "GameMatchRoster",
     "GameAbandonedMatchRetention",

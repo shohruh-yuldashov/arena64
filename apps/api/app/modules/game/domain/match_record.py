@@ -64,12 +64,19 @@ from uuid import UUID
 from app.core.identifiers import generate_uuid7
 from app.modules.engine import EngineVersion, PlayerSide
 from app.modules.game.domain.clock import ClockState, TimeControl
+from app.modules.game.domain.draw_agreement import DrawAgreement, DrawOffer
 from app.modules.game.domain.exceptions import (
     AcceptanceWindowClosed,
+    DrawOfferAlreadyPending,
+    DrawOfferNotAllowedYet,
+    DrawOfferNotPending,
+    DrawOfferNotRecipient,
     InvalidMatchTransition,
+    MatchNotActive,
     MatchNotPending,
     NotAMatchParticipant,
 )
+from app.modules.game.domain.match import agreed_draw_result, resignation_result
 from app.modules.game.domain.result import MatchOutcome, MatchResult, TerminationReason
 from app.modules.game.domain.variants import MatchOrigin, ProductVariant
 
@@ -361,6 +368,20 @@ class MatchRecord:
     did this game take" unanswerable.
     """
 
+    draw_agreement: DrawAgreement = field(default_factory=DrawAgreement)
+    """The standing draw offer and the re-offer restrictions —
+    A64-020.5C-pre §2.
+
+    Durable, because §1 requires an offer to survive a process restart, a
+    socket reconnect and a page refresh. Here rather than on `Match`
+    because `Match` is replayed from the move log and no move records an
+    offer — see `game.domain.draw_agreement` for the full argument.
+
+    Defaulted rather than nullable: "no offer, no restriction" is a total
+    state, so every match ever played already has the right value and no
+    backfill has to guess one.
+    """
+
     settled_at: datetime | None = None
     """When the handshake ended, and `None` while it has not.
 
@@ -412,6 +433,12 @@ class MatchRecord:
             raise ValueError("ended_at is set exactly when there is an outcome")
         if (self.winner is not None) != (self.outcome is MatchOutcome.WIN):
             raise ValueError("a winner is recorded exactly for a decisive result")
+        # A64-020.5C-pre §4. An offer only means something on a match that
+        # can still be played, and a terminal row carrying one would be
+        # rendered as answerable by every reconnecting client. The database
+        # keeps the authoritative copy (BE-06).
+        if self.draw_agreement.is_pending and self.status is not MatchRecordStatus.ACTIVE:
+            raise ValueError("a draw offer stands only on an active match")
 
     @property
     def is_pending(self) -> bool:
@@ -461,6 +488,14 @@ class MatchRecord:
             termination_reason=result.reason,
             winner=result.winner,
             ended_at=at,
+            # A64-020.5C-pre §2. **Every** completion clears the agreement,
+            # not only the two this phase adds — here rather than at each
+            # call site because there are four of them (a move, a flag, a
+            # resignation, an accepted draw) and the one that forgot would
+            # leave a finished game showing an answerable offer. The
+            # invariant in `__post_init__` then cannot be violated by any
+            # settlement path, which is what makes it worth stating.
+            draw_agreement=self.draw_agreement.settled(),
         )
 
     def advanced(self, *, ply_number: int, clock: ClockState | None = None) -> "MatchRecord":
@@ -473,6 +508,102 @@ class MatchRecord:
         if self.status is not MatchRecordStatus.ACTIVE:
             raise InvalidMatchTransition(f"A {self.status.value} match cannot be advanced.")
         return replace(self, ply_number=ply_number, clock=clock or self.clock)
+
+    # --- draw agreement and resignation — A64-020.5C-pre §2 ---------------
+    #
+    # Four transitions and one rule each, all of them refusing anything that
+    # is not `active` first. The refusal is here rather than at the call
+    # site because §2 forbids the gateway implementing transition rules,
+    # and "a completed match cannot be offered a draw" is exactly such a
+    # rule — one the transport would otherwise have to remember four times.
+
+    def resigned_by(self, side: PlayerSide, *, at: datetime) -> "MatchRecord":
+        """This match, given up by `side`. The opponent wins — §1.
+
+        Settled through `completed`, so a resignation and a checkmate reach
+        the permanent record by the identical path: one status write, one
+        result, one `ended_at`. The rule that the opponent wins is
+        `resignation_result`'s, which `Match.resign` also uses.
+
+        No board, no ply, no clock change. A resigned game must still
+        replay to the position it was abandoned in (GE-67), which it does
+        because nothing here touches the move log.
+        """
+        self._require_active("resign")
+        return self.completed(resignation_result(side), ply_number=self.ply_number, at=at)
+
+    def offered_draw(self, side: PlayerSide, *, at: datetime) -> "MatchRecord":
+        """This match with `side` offering a draw — §1, §3.
+
+        Not idempotent for a repeat, deliberately. §1 permits "idempotent
+        **or** one stable bounded result", and the refusal is the more
+        useful of the two: a player whose offer already stands has nothing
+        to gain from a silent success, and a client that resent because it
+        never saw the answer learns the offer is live — which is the state
+        it wanted to reach.
+        """
+        self._require_active("offer a draw")
+
+        if self.draw_agreement.is_pending:
+            raise DrawOfferAlreadyPending("A draw offer already stands on this match.")
+        if not self.draw_agreement.may_offer(side, at_ply=self.ply_number):
+            raise DrawOfferNotAllowedYet("Wait for your opponent to move before offering again.")
+
+        offer = DrawOffer(offered_by=side, offered_at_ply=self.ply_number, offered_at=at)
+        return replace(self, draw_agreement=self.draw_agreement.opened(offer))
+
+    def accepted_draw(self, side: PlayerSide, *, at: datetime) -> "MatchRecord":
+        """This match, drawn by agreement — §1.
+
+        Only the recipient may accept, checked here rather than in the
+        service, because "the offering side cannot accept their own offer"
+        is a rule about the state and not about the request.
+        """
+        self._require_active("accept a draw")
+        self._require_recipient(side)
+        return self.completed(agreed_draw_result(), ply_number=self.ply_number, at=at)
+
+    def declined_draw(self, side: PlayerSide, *, at: datetime) -> "MatchRecord":
+        """This match with the standing offer refused — §1.
+
+        Changes **nothing else**: no board, no clock, no turn, no ply. A
+        decline is an answer to a question, and a question being answered
+        is not a move.
+
+        The offerer is put under the re-offer restriction here, which is
+        the whole of the spam rule for this path — see `DrawAgreement`.
+        """
+        self._require_active("decline a draw")
+        self._require_recipient(side)
+        return replace(self, draw_agreement=self.draw_agreement.resolved(at_ply=self.ply_number))
+
+    def after_move_by(self, side: PlayerSide, *, at_ply: int) -> "MatchRecord":
+        """This match with any offer the mover was holding cleared — §10.
+
+        Called on the authoritative move path and **only** for a move that
+        was applied, which is what makes "a rejected move leaves the offer
+        pending" true by construction rather than by a check: a rejected
+        move never reaches this method because it never reaches the write.
+
+        A move by the *offerer* leaves their own offer standing. They asked
+        and are still waiting; playing on while the opponent thinks is the
+        ordinary way a draw offer is made.
+        """
+        offer = self.draw_agreement.offer
+        if offer is None or not offer.is_to(side):
+            return self
+        return replace(self, draw_agreement=self.draw_agreement.resolved(at_ply=at_ply))
+
+    def _require_active(self, action: str) -> None:
+        if self.status is not MatchRecordStatus.ACTIVE:
+            raise MatchNotActive(f"A {self.status.value} match cannot be used to {action}.")
+
+    def _require_recipient(self, side: PlayerSide) -> None:
+        offer = self.draw_agreement.offer
+        if offer is None:
+            raise DrawOfferNotPending("There is no draw offer to answer.")
+        if not offer.is_to(side):
+            raise DrawOfferNotRecipient("You cannot answer your own draw offer.")
 
     def seat(self, side: PlayerSide) -> MatchSeat:
         return self.light if side is PlayerSide.LIGHT else self.dark

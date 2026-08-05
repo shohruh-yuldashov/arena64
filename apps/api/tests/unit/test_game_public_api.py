@@ -264,6 +264,32 @@ class TestTheSurfaceIsDeliberate:
         # as it hands over a `SeatRating` it read from `rating`. `game` runs
         # the clock and does not decide what it should be.
         "MatchTimeControl",
+        # A64-020.5C-pre — resigning and agreeing a draw over the socket.
+        #
+        # Published for the reason `SubmitMoveUseCase` is: the gateway must
+        # be able to *ask*, and must not be able to decide. The command is
+        # an enum the transport routes on, the request carries no side and
+        # no winner, and the result carries the terminal state because the
+        # fan-out has to serialise it and cannot compute it.
+        "GameCommand",
+        "GameCommandRequest",
+        "GameCommandResult",
+        "GameCommandUseCase",
+        # The four refusals a client branches on. Published as types rather
+        # than as strings for the same reason the move refusals are: a
+        # transport matching on a message is a transport that breaks when
+        # the message is reworded.
+        "DrawOfferAlreadyPending",
+        "DrawOfferNotAllowedYet",
+        "DrawOfferNotPending",
+        "DrawOfferNotRecipient",
+        # The two views. `DrawOfferView` is what a command produced;
+        # `DrawOfferState` is what a snapshot carries. Two names rather than
+        # one shared type, because the snapshot's is part of the reconnect
+        # contract and the command's is part of the command contract — and
+        # collapsing them would couple the two to each other's changes.
+        "DrawOfferState",
+        "DrawOfferView",
     }
 
     def test_nothing_is_published_by_accident(self) -> None:

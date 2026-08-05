@@ -366,6 +366,31 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
             "AND clock_light_ms >= 0 AND clock_dark_ms >= 0)",
             name="ck_match__clock_values_sane",
         ),
+        # A64-020.5C-pre §4. The three offer columns describe one fact, so
+        # they are present together or absent together — a row naming an
+        # offerer with no ply would be one nothing could apply the re-offer
+        # rule to. The same shape as `ck_match__clock_iff_time_control`
+        # above and for the same reason (BE-06).
+        CheckConstraint(
+            "(draw_offer_by IS NULL) = (draw_offer_ply IS NULL) "
+            "AND (draw_offer_by IS NULL) = (draw_offer_created_at IS NULL)",
+            name="ck_match__draw_offer_fields_agree",
+        ),
+        # An offer stands only on a match that can still be played. Without
+        # this a completed row could carry one, and every reconnecting
+        # client would render an answerable offer on a finished game.
+        CheckConstraint(
+            f"draw_offer_by IS NULL OR status = '{MatchRecordStatus.ACTIVE.value}'",
+            name="ck_match__draw_offer_iff_active",
+        ),
+        CheckConstraint(
+            "draw_offer_ply IS NULL OR draw_offer_ply >= 0",
+            name="ck_match__draw_offer_ply_non_negative",
+        ),
+        CheckConstraint(
+            "light_draw_offer_from_ply >= 0 AND dark_draw_offer_from_ply >= 0",
+            name="ck_match__draw_offer_thresholds_non_negative",
+        ),
         {"schema": GAME_SCHEMA},
     )
 
@@ -507,6 +532,40 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
     move, which equals `ply_number` parity from the opening. Storing it
     would be a third copy of one fact. `ClockState.active_side` is derived
     on rehydration.
+    """
+
+    # --- A64-020.5C-pre: draw agreement ----------------------------------
+    draw_offer_by: Mapped[PlayerSide | None] = mapped_column(_SIDE_ENUM, nullable=True)
+    draw_offer_ply: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    draw_offer_created_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    """The standing offer, decomposed — three nulls when none stands.
+
+    On the match row rather than in a table of its own, because at most one
+    offer exists at a time (§1) and a one-row-per-match child table is a
+    join on every snapshot to answer a question the parent could hold. No
+    audit requirement asks for the history of withdrawn offers, and §4
+    prefers the smallest coherent schema.
+
+    Durable rather than in Redis, which §1 requires: an offer must survive
+    a process restart, and the one keyspace that could hold it is the same
+    `cache` role that is configured to evict.
+    """
+
+    light_draw_offer_from_ply: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    dark_draw_offer_from_ply: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    """The earliest ply at which each side may open a **new** offer — §3.
+
+    `NOT NULL DEFAULT 0` rather than nullable, because `ply_number` is
+    never negative so zero is a total "no restriction" and every match ever
+    played already has the right value. That is what makes the migration a
+    default rather than a backfill nobody can compute.
+
+    A ply rather than an instant, so the rule survives a restart with no
+    timer to rebuild — see `game.domain.draw_agreement`.
     """
 
     outcome: Mapped[MatchOutcome | None] = mapped_column(_OUTCOME_ENUM, nullable=True)

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { E2E_ACCOUNTS, seededAccount, statePath } from "./accounts";
+import { E2E_ACCOUNTS, saveState, seededAccount, statePath } from "./accounts";
 
 /**
  * One profile journey, across the real boundary — A64-020.3 §20.8.
@@ -110,6 +110,6 @@ test("a player edits their profile and sees it on their public page", async ({
 
   // Written back for the same reason the social spec does: the context
   // rotated the cookie, and the next run reuses this file.
-  await context.storageState({ path: statePath(username) });
+  await saveState(context, username);
   await context.close();
 });

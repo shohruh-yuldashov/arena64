@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import {
   E2E_ACCOUNTS,
   resetRelationship,
+  saveState,
   type SeededAccount,
   seededAccount,
   statePath,
@@ -131,8 +132,8 @@ test("two players find each other, become friends, and unfriend", async ({
     // The contexts refreshed while running, rotating each cookie, so the
     // saved state is written back — otherwise the next run's probe would
     // present a superseded token and revoke the session it was reusing.
-    await aliceContext.storageState({ path: statePath(alice.username) });
-    await bobContext.storageState({ path: statePath(bob.username) });
+    await saveState(aliceContext, alice.username);
+    await saveState(bobContext, bob.username);
     await aliceContext.close();
     await bobContext.close();
   }

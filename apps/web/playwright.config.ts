@@ -20,6 +20,10 @@ export default defineConfig({
   reporter: process.env.CI ? "github" : "list",
   use: {
     baseURL: "http://localhost:4173",
+    // The preview server proxies nothing, so the browser must reach the API
+    // at the same origin it reaches the page. `vite preview` honours the
+    // dev-server proxy config, which is what makes `/api/v1` same-origin
+    // here exactly as it is in `npm run dev`.
     trace: "on-first-retry",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],

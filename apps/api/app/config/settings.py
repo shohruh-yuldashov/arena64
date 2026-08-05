@@ -1914,6 +1914,97 @@ class TournamentSettings(BaseSettings):
         return self
 
 
+class BrowserSessionSettings(BaseSettings):
+    """`browser_session` — the SPA's refresh cookie and its CSRF policy
+    (A64-020.2).
+
+    ## Why a cookie at all, when the API already returns a refresh token
+
+    `POST /auth/login` hands back both credentials in the body, which is
+    right for a native client and wrong for a browser: JavaScript that can
+    read a thirty-day credential is JavaScript that can leak it, and every
+    place a browser can *store* one — `localStorage`, `sessionStorage`, a
+    readable cookie — is readable by any script that reaches the page.
+
+    So the browser surface returns the access token in the body (short,
+    held in memory, never persisted) and puts the refresh token in an
+    `HttpOnly` cookie the page cannot read. The JSON endpoints are
+    unchanged and remain the contract for everything that is not a browser.
+
+    ## Why the path is narrow
+
+    `path` scopes which requests carry the cookie. Scoped to the browser
+    auth prefix, it is absent from every other API call — so an ordinary
+    request cannot be made to act on the session by an attacker who can
+    cause a request but not read a response, and the credential is not
+    sprayed across every log a proxy keeps.
+
+    ## `SameSite=Lax` is necessary and not sufficient
+
+    Lax stops a cross-site `POST` from carrying the cookie in every current
+    browser, which is most of CSRF. It is not sufficient because it is a
+    *browser* guarantee: an old or non-conforming client simply does not
+    apply it. `trusted_origins` is the server-side half — see
+    `presentation/browser_csrf.py`.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="BROWSER_SESSION_", frozen=True, extra="forbid")
+
+    cookie_name: str = Field(default="arena64_refresh", min_length=1, max_length=64)
+
+    cookie_path: str = Field(default="/api/v1/auth/browser", min_length=1)
+    """Every browser-session endpoint lives under this prefix, and nothing
+    else does.
+
+    One explicit path rather than one per endpoint: `logout-all` needs the
+    cookie cleared and `refresh` needs it sent, and a cookie written at one
+    path cannot be deleted at another — a mismatch here leaves an
+    undeletable credential in the jar, which is the worst of both designs.
+    """
+
+    cookie_secure: bool | None = None
+    """`None` means "decide from the environment" — `False` in `local` and
+    `test`, `True` everywhere else.
+
+    Not a plain `True` default, because a developer on `http://localhost`
+    would then never receive the cookie at all and would debug a login that
+    silently does not persist. Not a plain `False`, because that is the
+    setting that must never reach production. Resolved by
+    `secure_for(environment)` below so the decision is one function rather
+    than a value someone has to remember to override.
+    """
+
+    same_site: Literal["lax", "strict", "none"] = "lax"
+    """`lax`, deliberately.
+
+    `strict` would drop the cookie on any cross-site navigation *into* the
+    app — following a verification link from a mail client is exactly that —
+    so a user arriving from their inbox would appear signed out. `none`
+    would carry it on genuine cross-site requests, which is the CSRF
+    exposure this is here to close.
+    """
+
+    trusted_origins: tuple[str, ...] = ()
+    """Origins allowed to make cookie-authenticated browser calls.
+
+    Empty in `local` and `test`, where the app is same-origin through the
+    Vite proxy and there is no cross-origin case to allow. Required in a
+    deployed tier — see the validator on `Settings`.
+    """
+
+    def secure_for(self, environment: Environment) -> bool:
+        """Whether to mark the cookie `Secure`.
+
+        Explicit configuration wins; otherwise it follows the environment.
+        A deployed tier is always `Secure`, and there is deliberately no
+        way to configure it off there: a refresh cookie on plaintext HTTP
+        is a credential handed to anybody on the path.
+        """
+        if self.cookie_secure is not None:
+            return self.cookie_secure
+        return not (environment.is_local or environment.is_test)
+
+
 class GatewaySettings(BaseSettings):
     """`gateway` — the realtime WebSocket transport (A64-016.1, AD-09).
 
@@ -2210,6 +2301,7 @@ class Settings(BaseModel):
     gateway: GatewaySettings
     game: GameSettings
     tournament: TournamentSettings
+    browser_session: BrowserSessionSettings
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":
@@ -2262,6 +2354,18 @@ class Settings(BaseModel):
                 "— refusing the development default, which is published in the "
                 "repository and would let anyone forge tokens for any account"
             )
+
+        # A64-020.2. Last, so it cannot mask the three above — each of those
+        # is a credential or a datastore pointed at the wrong place, and
+        # this one is a defence-in-depth layer whose absence is serious but
+        # less immediate.
+        if not self.browser_session.trusted_origins:
+            raise ValueError(
+                "BROWSER_SESSION_TRUSTED_ORIGINS must list the web origins allowed to "
+                f"use the browser refresh cookie in {self.environment} — an empty list "
+                "in a deployed tier disables the server-side half of the CSRF defence "
+                "(browser_csrf.py), leaving only the browser's SameSite guarantee"
+            )
         return self
 
 
@@ -2299,4 +2403,5 @@ def get_settings() -> Settings:
         gateway=GatewaySettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         game=GameSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         tournament=TournamentSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        browser_session=BrowserSessionSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

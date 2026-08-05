@@ -107,7 +107,16 @@ export default tseslint.config(
     // which exists precisely to export a provider and its hook together.
     // Splitting them to satisfy a dev-server optimisation would make the
     // source worse to read for no runtime benefit.
-    files: ["src/shared/ui/**", "src/shared/theme/**"],
+    // ...and a feature's model module, which exports a provider beside the
+    // hook that reads it — splitting those would put a context and its only
+    // accessor in two files that must be read together.
+    files: [
+      "src/shared/ui/**",
+      "src/shared/theme/**",
+      "src/shared/i18n/**",
+      "src/features/*/model/**",
+      "src/features/*/ui/**",
+    ],
     rules: { "react-refresh/only-export-components": "off" },
   },
   {

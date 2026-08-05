@@ -13,8 +13,41 @@ import { defineConfig } from "vitest/config";
  * against a built app and shares nothing with this pipeline except the
  * dev-server command, which `playwright.config.ts` starts itself.
  */
+/**
+ * Where the API lives during development.
+ *
+ * The browser must see **one origin** — the refresh cookie is `HttpOnly`
+ * and same-site, so a cross-origin call would either not carry it or would
+ * need `SameSite=None`, which is the CSRF exposure the cookie exists to
+ * avoid. So the dev server proxies `/api` to FastAPI and the page only
+ * ever talks to itself.
+ *
+ * Production has the same contract, enforced by a reverse proxy rather
+ * than by this file — see `specs/frontend.md` §12. Nothing in the app
+ * hardcodes a host: the client's base URL is the relative `/api/v1`.
+ */
+const API_TARGET = process.env.ARENA64_API_TARGET ?? "http://localhost:8000";
+
+const API_PROXY = {
+  "/api": {
+    target: API_TARGET,
+    // `changeOrigin: false` on purpose: the backend's CSRF check reads
+    // `Origin`, and rewriting it would make every request claim to come
+    // from the API's own host — exercising a check production applies
+    // differently.
+    changeOrigin: false,
+    ws: false,
+  },
+};
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // `server` is `npm run dev`; `preview` is the built app, which the e2e
+  // suite drives. Both need the proxy, and `preview` does **not** inherit
+  // it — a mismatch there presents as an e2e suite that cannot sign in
+  // while development works fine.
+  server: { proxy: API_PROXY },
+  preview: { proxy: API_PROXY },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

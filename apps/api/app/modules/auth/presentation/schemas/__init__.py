@@ -1,5 +1,6 @@
 """Wire schemas for the `auth` module."""
 
+from app.modules.auth.presentation.schemas.browser import BrowserSession
 from app.modules.auth.presentation.schemas.login import LoginRequest
 from app.modules.auth.presentation.schemas.password_reset import (
     ForgotPasswordRequest,
@@ -15,6 +16,7 @@ from app.modules.auth.presentation.schemas.verification import (
 )
 
 __all__ = [
+    "BrowserSession",
     "ForgotPasswordRequest",
     "LoginRequest",
     "RefreshRequest",

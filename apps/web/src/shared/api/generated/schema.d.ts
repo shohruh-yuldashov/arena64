@@ -694,6 +694,151 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/browser/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create an account and start a browser session
+         * @description Registers, sends the verification mail, and signs the browser in.
+         *
+         *     The registration and the mail are `RegistrationService`'s and
+         *     `EmailVerificationService`'s, unchanged — including the rule that a
+         *     delivery failure never fails the request, because the account exists
+         *     and the person can ask for another link.
+         */
+        post: operations["browser_register_api_v1_auth_browser_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/browser/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign in and start a browser session
+         * @description Verifies credentials, then puts the refresh token in the cookie.
+         *
+         *     Identical to `POST /auth/login` in everything that decides the outcome
+         *     — the same service, the same rate limit, the same
+         *     `401 invalid_credentials` whether the address is unknown or the
+         *     password is wrong, in the same elapsed time. The one difference is that
+         *     the refresh token is written to a cookie instead of the body.
+         */
+        post: operations["browser_login_api_v1_auth_browser_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/browser/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate the browser session
+         * @description Exchanges the cookie for a new access token and a rotated cookie.
+         *
+         *     **No request body.** The credential is the cookie, and an endpoint that
+         *     also accepted one in the body would be an endpoint a page could call
+         *     with a token it had somehow obtained — reintroducing exactly what the
+         *     cookie exists to prevent.
+         *
+         *     Rotation is `SessionService`'s, unchanged: the presented token stops
+         *     working immediately, and presenting an already-rotated one revokes the
+         *     whole chain. That last rule is why the frontend's refresh is
+         *     single-flight — two concurrent refreshes would present the same token
+         *     twice and sign the user out.
+         *
+         *     A missing cookie is `401`, the same answer as an invalid one. The two
+         *     are indistinguishable to a caller whose next step is identical: sign in.
+         */
+        post: operations["browser_refresh_api_v1_auth_browser_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/browser/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign out of this browser
+         * @description Revokes this browser's session and expires the cookie.
+         *
+         *     **Idempotent, and unauthenticated on purpose.** Signing out must
+         *     succeed when the session is already gone, when the cookie is stale, and
+         *     when it was never there — a client that cannot complete a sign-out is a
+         *     client that shows a signed-in user who is not. So a missing or unknown
+         *     cookie is `204`, and the cookie is cleared either way.
+         *
+         *     The revocation is best-effort for the same reason: if the token names
+         *     no live session there is nothing to revoke and nothing has gone wrong.
+         */
+        post: operations["browser_logout_api_v1_auth_browser_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/browser/logout-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign out of every device
+         * @description Revokes every session for the account, and clears this cookie.
+         *
+         *     Authenticated by the **access token**, not the cookie — the same choice
+         *     `POST /auth/logout-all` makes, and for the same reason: this acts on
+         *     the account rather than on one device, so the credential that names an
+         *     account is the right one. A player whose laptop was taken can sign out
+         *     everywhere from their phone.
+         *
+         *     The cookie is still cleared here, because this browser's session is one
+         *     of the ones just revoked and leaving it would mean the next refresh
+         *     presents a revoked token — a `401` where a clean anonymous state was
+         *     the honest outcome.
+         */
+        post: operations["browser_logout_all_api_v1_auth_browser_logout_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/profiles/{username}": {
         parameters: {
             query?: never;
@@ -2300,6 +2445,11 @@ export interface components {
             data: components["schemas"]["BracketResponse"];
             meta: components["schemas"]["ResponseMeta"];
         };
+        /** ApiResponse[BrowserSession] */
+        ApiResponse_BrowserSession_: {
+            data: components["schemas"]["BrowserSession"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
         /** ApiResponse[CursorPage[BlockedPlayerResponse]] */
         ApiResponse_CursorPage_BlockedPlayerResponse__: {
             data: components["schemas"]["CursorPage_BlockedPlayerResponse_"];
@@ -2707,6 +2857,53 @@ export interface components {
             tournament_id: string;
             /** Rounds */
             rounds: components["schemas"]["RoundResponse"][];
+        };
+        /**
+         * BrowserSession
+         * @description The signed-in state, as a page holds it.
+         *
+         *     `expires_in` is the **access** token's remaining seconds, so a client
+         *     can schedule a refresh rather than waiting for a `401`. The refresh
+         *     token's own window is deliberately not published: the page cannot read
+         *     the cookie, cannot act on the number, and telling it would only invite
+         *     a client to build logic on a value it has no way to verify.
+         *
+         *     `user` is `users.public.UserRead` — the same shape `GET /auth/me` and
+         *     `POST /auth/register` already return. Returning it here saves a second
+         *     round trip on every page load, and reusing the type means a browser and
+         *     a native client cannot end up with different ideas of what a user is.
+         * @example {
+         *       "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwMTlmYjllYS0wYTBjLTdjZWMtOWM1Zi00MDI3MjdjMzFhOTYiLCJ0eXBlIjoiYWNjZXNzIn0.signature",
+         *       "expires_in": 900,
+         *       "token_type": "Bearer",
+         *       "user": {
+         *         "email": "player@example.com",
+         *         "id": "019fb9ea-0a0c-7cec-9c5f-402727c31a96",
+         *         "is_active": true,
+         *         "is_verified": false,
+         *         "username": "player_one"
+         *       }
+         *     }
+         */
+        BrowserSession: {
+            /**
+             * Access Token
+             * @description A short-lived JWT. Hold it in memory; never persist it.
+             */
+            access_token: string;
+            /**
+             * Token Type
+             * @description Always `Bearer` — RFC 6750's scheme name.
+             * @default Bearer
+             */
+            token_type: string;
+            /**
+             * Expires In
+             * @description Seconds until the **access** token expires.
+             */
+            expires_in: number;
+            /** @description The signed-in account, so a client needs no second call. */
+            user: components["schemas"]["UserRead"];
         };
         /**
          * CursorPageInfo
@@ -5686,6 +5883,227 @@ export interface operations {
             };
             /** @description A rate limit was exceeded. `Retry-After` gives the number of seconds to wait; `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset` describe the limit that bound. The same three `X-RateLimit-*` headers are returned on successful responses, so a client can pace itself before being refused. */
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    browser_register_api_v1_auth_browser_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_BrowserSession_"];
+                };
+            };
+            /** @description The username or email address is taken. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A field failed validation. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many attempts. Try again later. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    browser_login_api_v1_auth_browser_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_BrowserSession_"];
+                };
+            };
+            /** @description The session cookie was missing, expired or already rotated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The account may not sign in, or the request came from an unrecognised origin. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A field failed validation. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many attempts. Try again later. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    browser_refresh_api_v1_auth_browser_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_BrowserSession_"];
+                };
+            };
+            /** @description The session cookie was missing, expired or already rotated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The account may not sign in, or the request came from an unrecognised origin. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many attempts. Try again later. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    browser_logout_api_v1_auth_browser_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The account may not sign in, or the request came from an unrecognised origin. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    browser_logout_all_api_v1_auth_browser_logout_all_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The session cookie was missing, expired or already rotated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The account may not sign in, or the request came from an unrecognised origin. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

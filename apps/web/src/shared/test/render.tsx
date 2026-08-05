@@ -6,6 +6,7 @@ import type { ReactElement } from "react";
 import { App } from "@/app/App";
 import { AppProviders } from "@/app/providers";
 import { createAppRouter } from "@/app/router";
+import type { AuthChannel } from "@/features/auth/model/auth-channel";
 
 /**
  * Two ways to mount something, and the difference matters.
@@ -32,15 +33,21 @@ export function createTestQueryClient(): QueryClient {
   });
 }
 
-export function renderApp(options: { path?: string } = {}): RenderResult & {
-  queryClient: QueryClient;
-} {
+export function renderApp(
+  options: { path?: string; channel?: AuthChannel } = {},
+): RenderResult & { queryClient: QueryClient } {
   const router = createAppRouter(
     createMemoryHistory({ initialEntries: [options.path ?? "/"] }),
   );
   const queryClient = createTestQueryClient();
   return {
-    ...render(<App router={router} queryClient={queryClient} />),
+    ...render(
+      <App
+        router={router}
+        queryClient={queryClient}
+        {...(options.channel ? { authChannel: options.channel } : {})}
+      />,
+    ),
     queryClient,
   };
 }

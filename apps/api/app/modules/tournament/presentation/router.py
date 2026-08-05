@@ -1,15 +1,16 @@
 """A tournament's public reads — SPEC-TOURNAMENT §7, A64-019.6 §9–§13.
 
-Five read endpoints. Thin, like every other router on this platform: each
+Six read endpoints. Thin, like every other router on this platform: each
 handler resolves a service, converts a parameter and maps a value to a
 response — no SQL, no placement arithmetic and no visibility rule of its
 own.
 
-    GET /tournaments                  the lobby, newest first
-    GET /tournaments/{id}             the detail page
-    GET /tournaments/{id}/bracket     rounds, nodes and attempts
-    GET /tournaments/{id}/standings   the immutable final result
-    GET /players/{id}/tournaments     one player's participation
+    GET /tournaments                       the lobby, newest first
+    GET /tournaments/{id}                  the detail page
+    GET /tournaments/{id}/bracket          rounds, nodes and attempts
+    GET /tournaments/{id}/standings        the immutable final result
+    GET /tournaments/{id}/registrations/me the viewer's own entry
+    GET /players/{id}/tournaments          one player's participation
 
 `/tournaments` and `/tournaments/{id}` differ in segment count, so no path
 a caller can send matches both.
@@ -85,6 +86,7 @@ from app.modules.tournament.presentation.schemas.results import (
     decode_cursor,
     decode_list_cursor,
 )
+from app.modules.users.presentation.dependencies import PublicProfileReaderDep
 
 #: Two prefixes, so each path reads as the resource it is about. A player's
 #: tournaments hang off `/players` — beside their match history, which is
@@ -193,6 +195,7 @@ async def tournament_detail(
 async def tournament_bracket(
     user: CurrentUser,
     results: TournamentResultsDep,
+    players: PublicProfileReaderDep,
     tournament_id: Annotated[UUID, Path(description="Which tournament's bracket to read.")],
 ) -> ApiResponse[BracketResponse]:
     """Every round, node and attempt — §10.
@@ -203,10 +206,19 @@ async def tournament_bracket(
     A tournament whose bracket has not been materialised answers with an
     empty round list rather than a `404` — the tournament exists, and "no
     bracket yet" is a state a client renders rather than an error.
+
+    **One batched identity lookup for the whole bracket** — A64-020.6 §26,
+    and the same arrangement `game`'s history and replay routes already
+    make. Without it a client turns each seat into a name by asking, and a
+    128-player field is 128 requests behind one page.
     """
     if await results.summary(tournament_id) is None:
         raise NotFoundError("That tournament does not exist.")
-    return build_response(BracketResponse.of(await results.bracket(tournament_id)))
+
+    bracket = await results.bracket(tournament_id)
+    entrants = BracketResponse.participant_ids_in(bracket)
+    profiles = await players.find_public_profiles(entrants) if entrants else {}
+    return build_response(BracketResponse.of(bracket, profiles))
 
 
 @tournaments_router.get(
@@ -219,6 +231,7 @@ async def tournament_bracket(
 async def tournament_standings(
     user: CurrentUser,
     results: TournamentResultsDep,
+    players: PublicProfileReaderDep,
     tournament_id: Annotated[UUID, Path(description="Which tournament's results to read.")],
 ) -> ApiResponse[StandingsResponse]:
     """The immutable final placement — §11.
@@ -227,11 +240,59 @@ async def tournament_standings(
     is being played**: standings are materialised once, when it completes
     (§6f), and nothing here derives a partial one — a placement that changed
     between two reads would not be a result.
+
+    Identities are composed in one batched read, for the bracket's reason.
+    An empty placing costs no lookup at all.
     """
     if await results.summary(tournament_id) is None:
         raise NotFoundError("That tournament does not exist.")
+
     standings = await results.standings(tournament_id)
-    return build_response(StandingsResponse.of(tournament_id, standings))
+    entrants = StandingsResponse.participant_ids_in(standings)
+    profiles = await players.find_public_profiles(entrants) if entrants else {}
+    return build_response(StandingsResponse.of(tournament_id, standings, profiles))
+
+
+@tournaments_router.get(
+    "/{tournament_id}/registrations/me",
+    response_model=ApiResponse[RegistrationResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Your own entry in a tournament",
+    responses=error_response(404, "No such tournament, or you never entered it"),
+)
+async def my_registration(
+    user: CurrentUser,
+    results: TournamentResultsDep,
+    tournament_id: Annotated[UUID, Path(description="Which tournament to read your entry in.")],
+) -> ApiResponse[RegistrationResponse]:
+    """**The authenticated player's own** entry — A64-020.6 §8.
+
+    The read half of the two participant writes, and the reason it exists:
+    a detail page has to know whether the viewer is in this tournament
+    before it can offer to enter or leave it, and until now that fact was
+    only observable by *attempting* the write. Deriving it from whether a
+    button appeared inverts the authority — the record is the server's.
+
+    `/me` rather than a player id, so the endpoint has no shape in which it
+    reads somebody else's entry. That makes this narrower than the public
+    history at `/players/{id}/tournaments`, which is deliberate: whether a
+    player entered a tournament is public there, one page at a time, and
+    finding a *particular* tournament in it is an unbounded walk.
+
+    **`404` for "never entered", and it is not an error.** A client asking
+    "am I in this?" is asking a question whose negative answer is normal, so
+    the code is what it reads rather than an exception to log — the same
+    answer `DELETE …/registrations/me` gives for the same absence.
+
+    A **withdrawn** entry answers `200` with `status = "withdrawn"`, not
+    `404`: the row survives withdrawal (§7's append-oriented record), and
+    "you left this one" is a different fact from "you were never here" —
+    one of them means re-entering is possible while registration is open.
+    """
+    detail = await results.registration_of(tournament_id, user.id)
+    if detail is None:
+        raise NotFoundError("You have no entry in that tournament.")
+    return build_response(RegistrationResponse.of(detail))
 
 
 @tournaments_router.post(

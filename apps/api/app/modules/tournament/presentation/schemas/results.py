@@ -18,6 +18,7 @@ page it came from.
 
 import base64
 import binascii
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import ClassVar
 from uuid import UUID
@@ -38,6 +39,7 @@ from app.modules.tournament.application.read_models import (
     TournamentPage,
     TournamentSummary,
 )
+from app.modules.users.public import PublicUserProfile
 
 _CURSOR_SEPARATOR = "|"
 
@@ -240,15 +242,103 @@ class RoundResponse(BaseModel):
         )
 
 
-class BracketResponse(BaseModel):
-    tournament_id: UUID
-    rounds: list[RoundResponse]
+class TournamentParticipantResponse(BaseModel):
+    """Who a player id refers to — A64-020.6 §26.
+
+    Composed from `users`' **public** profile read, gated by the same
+    privacy policy every other surface uses. `username` and `display_name`
+    are `None` for a deactivated account, which is the answer this platform
+    gives everywhere rather than a special case here.
+
+    No rating: a bracket seat carries a **seed**, which is the ordering the
+    tournament was drawn on, and publishing a live rating beside it would
+    invite reading one as the other. A replay seat carries the snapshot the
+    match was played at (PR-3) and is the surface where a rating belongs.
+    """
+
+    player_id: UUID
+    username: str | None = None
+    display_name: str | None = None
+    avatar_thumbnail_url: str | None = None
 
     @classmethod
-    def of(cls, bracket: BracketView) -> "BracketResponse":
+    def of(
+        cls, player_id: UUID, profile: PublicUserProfile | None
+    ) -> "TournamentParticipantResponse":
+        return cls(
+            player_id=player_id,
+            username=profile.username if profile else None,
+            display_name=profile.display_name if profile else None,
+            avatar_thumbnail_url=getattr(profile, "avatar_thumbnail_url", None),
+        )
+
+
+def _participants_of(
+    player_ids: Iterable[UUID], profiles: Mapping[UUID, PublicUserProfile]
+) -> list[TournamentParticipantResponse]:
+    """The identity list both bracket and standings carry.
+
+    Sorted, so two reads of an unchanged tournament produce byte-identical
+    responses — a dictionary's iteration order is stable within a process
+    and says nothing across two.
+    """
+    return [
+        TournamentParticipantResponse.of(player_id, profiles.get(player_id))
+        for player_id in sorted(player_ids, key=str)
+    ]
+
+
+class BracketResponse(BaseModel):
+    """Every round and node, plus who the ids in them are — §10, §26.
+
+    ## Why `participants` is a side list rather than an embedded object
+
+    A player appears in one node per round they survive, so embedding their
+    identity would repeat a champion's name `log2(field)` times and make the
+    response grow with the bracket's *depth* rather than its width. A client
+    joins on `player_id`, which it already holds from `winner_id`,
+    `light_player_id` and `dark_player_id`.
+
+    ## Why it is composed here at all
+
+    Without it a client turns a seat into a name by asking, and a 128-player
+    bracket is 127 nodes and 128 lookups — the N+1 A64-020.6 §26 forbids and
+    the same one A64-020.5F's history prerequisite existed to prevent. One
+    batched read, deduplicated, on the server side of the boundary.
+    """
+
+    tournament_id: UUID
+    rounds: list[RoundResponse]
+    participants: list[TournamentParticipantResponse] = Field(
+        default_factory=list,
+        description="Every player id appearing in the bracket, resolved to a public identity.",
+    )
+
+    @staticmethod
+    def participant_ids_in(bracket: BracketView) -> list[UUID]:
+        """Every distinct player the bracket names, in one pass.
+
+        Winners are included as well as seats: a node whose child advanced
+        by bye has a `winner_id` that is also a seat, and one that does not
+        would otherwise render an unresolved id.
+        """
+        seen = {
+            player_id
+            for round_ in bracket.rounds
+            for node in round_.nodes
+            for player_id in (node.light_player_id, node.dark_player_id, node.winner_id)
+            if player_id is not None
+        }
+        return sorted(seen, key=str)
+
+    @classmethod
+    def of(
+        cls, bracket: BracketView, profiles: Mapping[UUID, PublicUserProfile] | None = None
+    ) -> "BracketResponse":
         return cls(
             tournament_id=bracket.tournament_id,
             rounds=[RoundResponse.of(round_) for round_ in bracket.rounds],
+            participants=_participants_of(cls.participant_ids_in(bracket), profiles or {}),
         )
 
 
@@ -295,16 +385,48 @@ class StandingsResponse(BaseModel):
 
     Empty while the tournament is still being played — standings are
     materialised at completion (§6f), and nothing derives a partial one.
+
+    `participants` carries the same identities the bracket's does and for
+    the same reason (§26): a placing table of raw identifiers is not a
+    result anybody can read, and resolving them client-side is one lookup
+    per entrant.
     """
 
     tournament_id: UUID
     standings: list[StandingResponse]
+    participants: list[TournamentParticipantResponse] = Field(
+        default_factory=list,
+        description="Every player id appearing in the standings, resolved to a public identity.",
+    )
+
+    @staticmethod
+    def participant_ids_in(standings: list[StandingView]) -> list[UUID]:
+        """Every distinct player a placing names — entrants and eliminators.
+
+        `eliminated_by_player_id` is one of the entrants in a
+        single-elimination bracket, so the set is almost always just the
+        field. It is unioned in rather than assumed away, because assuming
+        it makes this mapper depend on a format rule it does not own.
+        """
+        seen = {standing.player_id for standing in standings}
+        seen |= {
+            standing.eliminated_by_player_id
+            for standing in standings
+            if standing.eliminated_by_player_id is not None
+        }
+        return sorted(seen, key=str)
 
     @classmethod
-    def of(cls, tournament_id: UUID, standings: list[StandingView]) -> "StandingsResponse":
+    def of(
+        cls,
+        tournament_id: UUID,
+        standings: list[StandingView],
+        profiles: Mapping[UUID, PublicUserProfile] | None = None,
+    ) -> "StandingsResponse":
         return cls(
             tournament_id=tournament_id,
             standings=[StandingResponse.of(standing) for standing in standings],
+            participants=_participants_of(cls.participant_ids_in(standings), profiles or {}),
         )
 
 
@@ -352,6 +474,7 @@ __all__ = [
     "StandingResponse",
     "StandingsResponse",
     "TournamentListResponse",
+    "TournamentParticipantResponse",
     "TournamentResponse",
     "decode_cursor",
     "decode_list_cursor",

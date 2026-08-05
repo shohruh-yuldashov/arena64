@@ -29,8 +29,9 @@ multiple of the limit.
 """
 
 from typing import Final
+from uuid import UUID
 
-from sqlalchemy import Float, cast, select, tuple_
+from sqlalchemy import Float, cast, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.rating.domain.keys import RatingKey
@@ -39,6 +40,7 @@ from app.modules.rating.infrastructure.models import PlayerRatingModel
 from app.modules.rating.public.leaderboard import (
     LeaderboardCursor,
     LeaderboardEntry,
+    LeaderboardNeighbourhood,
     LeaderboardPage,
 )
 
@@ -48,6 +50,13 @@ from app.modules.rating.public.leaderboard import (
 MAX_PAGE_SIZE: Final = 200
 
 DEFAULT_PAGE_SIZE: Final = 50
+
+#: How many rows either side of a player `around` returns by default, and
+#: the ceiling on it. Bounded like every other read here (§10.5): the result
+#: is at most `2 * span + 1` rows however large the ladder grows.
+DEFAULT_SPAN: Final = 5
+
+MAX_SPAN: Final = 25
 
 
 class SqlAlchemyLeaderboardReader:
@@ -105,6 +114,132 @@ class SqlAlchemyLeaderboardReader:
             next_cursor=_cursor_of(entries[-1]) if has_more and entries else None,
         )
 
+    async def around(
+        self,
+        player_id: UUID,
+        *,
+        key: RatingKey,
+        span: int = DEFAULT_SPAN,
+    ) -> LeaderboardNeighbourhood | None:
+        """This player's rank and the rows either side — A64-020.0A.
+
+        Four statements, and each is one index scan:
+
+            the player's own row     primary key
+            how many sort above      a COUNT over the same predicate the
+                                     page uses, which is the rank
+            the rows below           one bounded scan down
+            the rows above           one bounded scan up
+
+        Four however large the ladder is and however wide the span —
+        measured, not assumed.
+
+        The rank is a `COUNT`, not a stored column: it is a property of the
+        whole relation, so storing it would make every rating update rewrite
+        an unbounded number of rows — and a stale rank is worse than none.
+
+        The two neighbour scans reuse the page's own ordering predicate
+        rather than re-deriving one, so "the row after mine" here and on a
+        page are the same row.
+        """
+        wanted = max(1, min(span, MAX_SPAN))
+
+        own = await self._session.scalar(
+            select(PlayerRatingModel).where(
+                PlayerRatingModel.player_id == player_id,
+                PlayerRatingModel.variant == key.variant,
+                PlayerRatingModel.speed_class == key.speed_class,
+            )
+        )
+        if own is None:
+            # Not on this ladder. A legitimate answer rather than an error —
+            # an unrated player has no position, and `RatingSnapshot.unrated`
+            # is what describes them.
+            return None
+
+        entry = _to_entry(own)
+        better = await self._session.scalar(
+            select(func.count())
+            .select_from(PlayerRatingModel)
+            .where(
+                PlayerRatingModel.variant == key.variant,
+                PlayerRatingModel.speed_class == key.speed_class,
+                _sorts_above(entry),
+            )
+        )
+
+        below = list(
+            await self._session.scalars(
+                select(PlayerRatingModel)
+                .where(
+                    PlayerRatingModel.variant == key.variant,
+                    PlayerRatingModel.speed_class == key.speed_class,
+                    _sorts_below(entry),
+                )
+                .order_by(
+                    PlayerRatingModel.rating_value.desc(),
+                    PlayerRatingModel.rating_deviation.asc(),
+                    PlayerRatingModel.player_id.asc(),
+                )
+                .limit(wanted)
+            )
+        )
+        above = list(
+            await self._session.scalars(
+                select(PlayerRatingModel)
+                .where(
+                    PlayerRatingModel.variant == key.variant,
+                    PlayerRatingModel.speed_class == key.speed_class,
+                    _sorts_above(entry),
+                )
+                # **Ascending**, so `LIMIT` takes the rows *nearest* this
+                # player rather than the top of the ladder. Reversed below,
+                # because a caller renders them best-first.
+                .order_by(
+                    PlayerRatingModel.rating_value.asc(),
+                    PlayerRatingModel.rating_deviation.desc(),
+                    PlayerRatingModel.player_id.desc(),
+                )
+                .limit(wanted)
+            )
+        )
+
+        return LeaderboardNeighbourhood(
+            rank=int(better or 0) + 1,
+            entry=entry,
+            above=[_to_entry(row) for row in reversed(above)],
+            below=[_to_entry(row) for row in below],
+        )
+
+
+def _sorts_above(entry: LeaderboardEntry):  # type: ignore[no-untyped-def]
+    """Rows that come **before** this one in the published order.
+
+    The same three-key comparison `page` continues on, written once here so
+    the rank, the neighbours and a page cannot disagree about which row is
+    next.
+    """
+    return (
+        tuple_(PlayerRatingModel.rating_value, -PlayerRatingModel.rating_deviation)
+        > tuple_(cast(entry.rating, Float), cast(-entry.deviation, Float))
+    ) | (
+        (PlayerRatingModel.rating_value == entry.rating)
+        & (PlayerRatingModel.rating_deviation == entry.deviation)
+        & (PlayerRatingModel.player_id < entry.player_id)
+    )
+
+
+def _sorts_below(entry: LeaderboardEntry):  # type: ignore[no-untyped-def]
+    """Rows that come **after** this one — the mirror of `_sorts_above`."""
+    return (
+        tuple_(PlayerRatingModel.rating_value, -PlayerRatingModel.rating_deviation)
+        < tuple_(cast(entry.rating, Float), cast(-entry.deviation, Float))
+    ) | (
+        (PlayerRatingModel.rating_value == entry.rating)
+        & (PlayerRatingModel.rating_deviation == entry.deviation)
+        & (PlayerRatingModel.player_id > entry.player_id)
+    )
+
 
 def _same_rank_after(after: LeaderboardCursor):  # type: ignore[no-untyped-def]
     """The tie-break half of the keyset predicate.
@@ -139,4 +274,10 @@ def _cursor_of(entry: LeaderboardEntry) -> LeaderboardCursor:
     )
 
 
-__all__ = ["DEFAULT_PAGE_SIZE", "MAX_PAGE_SIZE", "SqlAlchemyLeaderboardReader"]
+__all__ = [
+    "DEFAULT_PAGE_SIZE",
+    "DEFAULT_SPAN",
+    "MAX_PAGE_SIZE",
+    "MAX_SPAN",
+    "SqlAlchemyLeaderboardReader",
+]

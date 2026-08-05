@@ -101,13 +101,53 @@ At step 2 the questions the task asked get answered with a number behind them:
 
 ## 7. Public API
 
-`rating.public.LeaderboardReader`, one method, read-only. No write, no rebuild, no invalidation:
-there is nothing to rebuild, and a surface that offered one would imply a second copy exists.
+`rating.public.LeaderboardReader`, read-only. No write, no rebuild, no invalidation: there is
+nothing to rebuild, and a surface that offered one would imply a second copy exists.
+
+| Method | Answers |
+| --- | --- |
+| `page(key, *, after, limit)` | One page of `key`'s ladder, best first |
+| `around(player_id, *, key, span)` | This player's rank and the rows either side; `None` when they have no row in `key` |
 
 Entries carry the player id and their rating only. No handle, no avatar, no country — those are
 `profiles`' and are composed by whoever renders the page. A leaderboard entry that carried them
 would make `rating` depend on a module it has no business knowing about, and make every ranking
 read a join.
+
+### 7.1 Rank — derived, never stored
+
+`around`'s `rank` is *how many rows sort strictly above this one, plus one*, computed at read
+time. A rank is a property of the whole relation rather than of a row, so storing one would make
+every rating update rewrite an unbounded number of rows — and a stale rank is worse than none.
+
+Ranks are **unique**: §3's ordering is total, so no two players share a position. Deliberately
+unlike a tournament's placement, where a shared tier is the product rule
+([`tournament.md`](./tournament.md) §6g).
+
+### 7.2 HTTP surface — A64-020.0A
+
+Authenticated, like every route outside `/health`. A rating is public to *every player*, which is
+not the same as public to the internet.
+
+| Route | Answers |
+| --- | --- |
+| `GET /api/v1/leaderboard` | One key's ladder, keyset-paged. `variant`, `speed_class`, `after`, `limit` |
+| `GET /api/v1/leaderboard/around/{player_id}` | Rank and neighbours. `span` ≤ 25, default 5 |
+
+`next_cursor` is **opaque** — base64 over the three ordering values, sent back unread. Publishing
+them as fields would make §3's ordering a contract that cannot change without breaking clients.
+Encoded, not encrypted: it carries nothing a caller could not read in the page it came from. Every
+way a cursor can be malformed collapses to one `422 invalid_cursor`, because a caller can do
+nothing differently for any of them and distinguishing them would narrate the encoding to whoever
+is probing it.
+
+`around` answers **`404`** for a player with no row in that key — they are not on this ladder, and
+there is no position to return. That is deliberately different from `GET /players/{id}/ratings`
+([`rating.md`](./rating.md) §14.1), which answers every id: a rating exists for everybody, a
+*ranking* only for a player with a stored row.
+
+**Cost is flat**, measured rather than assumed: one statement per page whatever the limit, four
+per `around` whatever the span.
 
 ## 8. Open questions
 

@@ -29,7 +29,7 @@ window function over every match those players have ever had.
 import logging
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, cast
+from typing import Any, Final, cast
 from uuid import UUID
 
 from sqlalchemy import CursorResult, or_, select, update
@@ -48,6 +48,15 @@ from app.modules.game.domain.variants import MatchOrigin
 from app.modules.game.infrastructure.models import MatchRecordModel
 
 logger = logging.getLogger(__name__)
+
+#: The statuses that mean two players **actually met** — QT-3's rematch
+#: guard, A64-020.5A.
+#:
+#: Derived from the enum rather than typed out, so a sixth status has to be
+#: classified rather than silently falling on one side. `active` is here as
+#: well as `completed`: a game in progress is the strongest possible reason
+#: not to pair the same two again.
+_PLAYED_STATUSES: Final = (MatchRecordStatus.ACTIVE, MatchRecordStatus.COMPLETED)
 
 
 class SqlAlchemyMatchRecordRepository:
@@ -457,32 +466,51 @@ class SqlAlchemyMatchRecordRepository:
         return [self._to_domain(row) for row in rows]
 
     async def latest_opponent_among(self, player_ids: Sequence[UUID]) -> Mapping[UUID, UUID]:
-        """Each player's most recent settled opponent, in one statement.
+        """Each player's most recent opponent **they actually played**, in
+        one statement.
 
         `DISTINCT ON (player_id) ... ORDER BY player_id, created_at DESC`
         over a `UNION ALL` of the two sides — see this module's docstring
         on why that shape rather than a query per player.
 
-        **Settled matches only.** A pending match is an offer nobody has
-        answered, and treating it as a game already played would exclude a
-        pair from re-pairing on the strength of a match that may be about
-        to expire. `game.public.RecentOpponentReader` records why "settled"
-        is currently wider than QT-3's "completed" and what narrows it.
+        **A match that began.** `active` or `completed`, and nothing else.
+        QT-3's rematch guard exists so a player is not handed the same
+        opponent twice in a row, and the question it asks is whether they
+        *played* them — so the three statuses excluded are excluded for
+        three different reasons, each of which is the same answer:
+
+            pending_acceptance  an offer nobody has answered yet. Treating
+                                it as a game played would veto a re-pairing
+                                on the strength of a match that may be
+                                about to expire
+            expired             the window closed and **neither player ever
+                                sat down**. Nothing happened
+            cancelled           somebody declined. Also nothing happened,
+                                and the decliner already paid for it with a
+                                cooldown — barring the pair as well is a
+                                second penalty for one refusal
+
+        This was `!= pending_acceptance` until A64-020.5A, which is the
+        narrowing `specs/matchmaking.md` recorded as owed. The failure it
+        produced is permanent rather than transient: two players whose one
+        offer lapsed became each other's most recent opponent forever, so
+        the guard vetoed every future pairing between them and neither
+        could ever meet the other again.
         """
         if not player_ids:
             return {}
 
-        settled = MatchRecordModel.status != MatchRecordStatus.PENDING_ACCEPTANCE
+        played = MatchRecordModel.status.in_(_PLAYED_STATUSES)
         as_light = select(
             MatchRecordModel.light_player_id.label("player_id"),
             MatchRecordModel.dark_player_id.label("opponent_id"),
             MatchRecordModel.created_at.label("played_at"),
-        ).where(MatchRecordModel.light_player_id.in_(player_ids), settled)
+        ).where(MatchRecordModel.light_player_id.in_(player_ids), played)
         as_dark = select(
             MatchRecordModel.dark_player_id.label("player_id"),
             MatchRecordModel.light_player_id.label("opponent_id"),
             MatchRecordModel.created_at.label("played_at"),
-        ).where(MatchRecordModel.dark_player_id.in_(player_ids), settled)
+        ).where(MatchRecordModel.dark_player_id.in_(player_ids), played)
 
         sides = as_light.union_all(as_dark).subquery("sides")
         latest = (

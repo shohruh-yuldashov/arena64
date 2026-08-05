@@ -18,20 +18,30 @@ published surface belongs to the module that publishes it. Collapsing them
 would mean `matchmaking`'s scan depending on `game` even in the tests that
 have no `game` at all.
 
-## What "recent" means today, and what it will mean
+## What "recent" means
 
-**The most recent match a player was in that is no longer awaiting
-acceptance** — active, cancelled or expired. Not "the previous *completed*
-opponent", which is what QT-3 actually asks for, because no match on this
-platform can complete yet: gameplay, results and termination are later
-tasks, and a match reaches `ACTIVE` and stays there.
+**The most recent match a player actually sat down to** — `active` or
+`completed`. An offer that expired unanswered, one somebody declined, and
+one still awaiting an answer are all excluded, because in none of them did
+the two players play.
 
-That is a real limitation and is recorded rather than hidden. Its effect is
-in the safe direction: it excludes *more* pairs than QT-3 requires — a
-pairing that was declined counts as "recently played" — which costs an
-occasional slightly-wider search and never produces the failure QT-3
-exists to prevent. When `MatchRecord` gains a result, the predicate
-narrows to completed matches and nothing above this port changes.
+This was wider until A64-020.5A, and the reasoning it replaced is worth
+keeping because it was wrong in an instructive way. The old text argued that
+counting declined and expired offers "excludes *more* pairs than QT-3
+requires ... which costs an occasional slightly-wider search and never
+produces the failure QT-3 exists to prevent."
+
+The second half held; the first did not. The exclusion is not a *wider
+search* — it is **permanent**, because this reader returns each player's
+single most recent opponent with no time window. Two players whose one offer
+lapsed became each other's most recent opponent forever, so the guard vetoed
+every future pairing between them and neither could ever meet the other
+again. On a thin pool that is two accounts that can never play, and it was
+found by an end-to-end flow that paired the same two players twice.
+
+Narrowing also makes the port say what QT-3 says. "Who did these players
+just play" has one honest answer, and a match nobody entered is not part of
+it.
 """
 
 from collections.abc import Mapping, Sequence

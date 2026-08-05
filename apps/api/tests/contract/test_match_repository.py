@@ -512,6 +512,37 @@ class TestTheTwoPublishedReads:
 
         assert latest == {}
 
+    async def test_an_offer_nobody_played_is_not_a_game_they_have_played(
+        self, matches: SqlAlchemyMatchRecordRepository
+    ) -> None:
+        """A64-020.5A. `expired` and `cancelled` both mean the two players
+        never sat down — the window closed, or somebody declined — and QT-3
+        asks who they *played*.
+
+        The regression this pins is permanent rather than transient: this
+        read returns each player's single most recent opponent with **no
+        time window**, so counting a lapsed offer made the pair each other's
+        latest opponent forever and the rematch guard vetoed every future
+        pairing between them. Two players who once let an offer expire could
+        never meet again.
+
+        Both statuses in one test because they are one rule; splitting would
+        assert the same sentence twice.
+        """
+        # Built through the aggregate's own transitions rather than by
+        # constructing a status: `cancelled` carries `declined_by` and the
+        # record refuses one without it, so a hand-made row would be a shape
+        # the platform cannot produce.
+        for settle in (
+            lambda record: record.expired(NOW + WINDOW),
+            lambda record: record.declined(PlayerSide.DARK, at=NOW),
+        ):
+            light, dark = generate_uuid7(), generate_uuid7()
+            offered, _ = await matches.create(_record(light=light, dark=dark))
+            assert await matches.settle(settle(offered))
+
+            assert await matches.latest_opponent_among([light, dark]) == {}
+
     async def test_the_read_is_empty_for_players_with_no_history(
         self, matches: SqlAlchemyMatchRecordRepository
     ) -> None:

@@ -199,8 +199,41 @@ class TestAppWiring:
         assert users_clock is platform_clock
 
     def test_the_app_builds(self, spec: dict[str, Any]) -> None:
-        # Eleven since A64-016.1 added `POST /auth/ws-ticket` — AD-09's
-        # credential is minted over HTTP, because a browser cannot set
-        # headers on a WebSocket handshake.
+        """The app assembles and publishes exactly the auth surface it
+        should — no endpoint added without anybody noticing, and none
+        silently dropped.
+
+        A **set**, not a count. This asserted `== 11` and A64-020.2 added
+        five `/auth/browser/*` routes without updating it, so it failed for
+        four phases and was read by nobody: a check that is always red has
+        stopped communicating, which is worse than not existing.
+
+        The same replacement `test_auth_rate_limits.py` received, for the
+        same reason. A count says a number changed; a set names the
+        endpoint, which is the sentence somebody can act on.
+        """
         assert isinstance(create_app(), FastAPI)
-        assert len([p for p in spec["paths"] if "/auth/" in p]) == 11
+
+        published = {path for path in spec["paths"] if "/auth/" in path}
+        assert published == {
+            # Bearer tokens — the original surface, A64-011.
+            "/api/v1/auth/register",
+            "/api/v1/auth/login",
+            "/api/v1/auth/refresh",
+            "/api/v1/auth/logout",
+            "/api/v1/auth/logout-all",
+            "/api/v1/auth/me",
+            "/api/v1/auth/password/forgot",
+            "/api/v1/auth/password/reset",
+            "/api/v1/auth/email/verify",
+            "/api/v1/auth/email/resend",
+            # AD-09's credential, minted over HTTP because a browser cannot
+            # set headers on a WebSocket handshake — A64-016.1.
+            "/api/v1/auth/ws-ticket",
+            # The cookie surface the browser client uses — A64-020.2.
+            "/api/v1/auth/browser/register",
+            "/api/v1/auth/browser/login",
+            "/api/v1/auth/browser/refresh",
+            "/api/v1/auth/browser/logout",
+            "/api/v1/auth/browser/logout-all",
+        }

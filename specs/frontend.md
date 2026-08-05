@@ -1011,8 +1011,57 @@ block Playwright's own `storageState` would drop.
 | --- | --- |
 | Spectating | The gateway has the subscription keyspace (`gwspec:v1:`) but no viewer surface is specified; a spectator board is a different product decision about what a non-participant may see |
 | Replay / move list | Needs the move log as a read model, which is a backend surface that does not exist |
-| Draw offers, resignation, takebacks | No gateway frames for them |
+| ~~Draw offers, resignation~~ | **Unblocked by A64-020.5C-pre.** The frames, the durable state and the snapshot contract now exist — see §16.12 and `websocket.md` §22. A64-020.5C builds the controls |
+| Takebacks | Still no frames, no domain concept and no product decision |
 | Orientation toggle, sound, premoves | One boolean, one asset, and a queue respectively — none of them requirements yet |
+
+### 16.12 Game controls — the backend contract A64-020.5C consumes
+
+Specified in full in [`websocket.md`](../docs/01-architecture/websocket.md) §22. What a frontend
+needs to know, in one place:
+
+| Client sends | Server answers the actor | Server fans out |
+| --- | --- | --- |
+| `game.resign` | `game.completed` (correlated) | `game.completed` |
+| `game.draw.offer` | `game.draw.offered` (correlated) | `game.draw.offered` |
+| `game.draw.accept` | `game.completed` (correlated) | `game.completed` |
+| `game.draw.decline` | `game.draw.declined` (correlated) | `game.draw.declined` |
+| any of them, refused | `game.command.rejected` (correlated) | — |
+
+**Send `match_id` and nothing else.** No side, no player id, no outcome. The server derives the
+acting side from the socket; a payload that named one would be a client resigning for its
+opponent, and the protocol has no field for it.
+
+**The actor receives its event twice** — once correlated to `request_id`, once as the room
+fan-out — exactly as it does for a move. Advance state from the fan-out and use the correlated
+copy only to clear the in-flight request, and one code path handles both players.
+
+**Reconnect is a snapshot read, not a reconstruction.** `game.snapshot` carries a `draw` object:
+
+```
+"draw": {
+  "offer": { "offered_by": "light", "offered_at_ply": 7, "offered_at": "..." } | null,
+  "may_offer": bool, "may_accept": bool, "may_decline": bool
+}
+```
+
+The three booleans are already resolved for the requesting player. Render buttons from them
+rather than deriving "I may accept only if the offer is not mine" client-side — a client that got
+that backwards would show an accept button the server refuses. A resignation or an agreed draw
+that happened while the client was away arrives as the snapshot's ordinary `result`.
+
+**A pending offer disappears on its own** when the recipient moves. Do not treat
+`game.move.applied` as leaving the offer untouched: clear it locally when the applied move is the
+recipient's, and the next snapshot will agree.
+
+**`draw_offer_not_allowed_yet` is not a rate limit.** It means the opponent has not moved since
+this player's last offer was resolved, so the correct message is "wait for your opponent to move",
+not "slow down". `may_offer` in the snapshot is the same answer in advance, which is what a
+disabled button should read from.
+
+**Spectators receive none of it.** `game.draw.offered` and `game.draw.declined` are
+participant-only, and a spectator's snapshot has no `draw` key at all. A spectator UI must not
+assume the field exists.
 
 ## 17. Open questions
 

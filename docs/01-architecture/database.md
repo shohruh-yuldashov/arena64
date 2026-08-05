@@ -985,6 +985,34 @@ subset a *pairing* needs, and the divergence is recorded here rather than discov
 | `ix_match__pending_deadline` | Index, partial on pending | `(acceptance_deadline)` — the expiry sweep | |
 | `ix_match__light_player_recent`, `ix_match__dark_player_recent` | Index | `(player_id, created_at)` — QT-3's rematch guard | |
 | `ix_match__abandoned` | Index, partial on `cancelled, expired` | `(settled_at)` — retention's claim. **An `active` match is not in this index** | A64-015.5 §8 |
+| `ck_match__draw_offer_fields_agree` | Check | The three offer columns are present together or absent together | A64-020.5C-pre §4 |
+| `ck_match__draw_offer_iff_active` | Check | A pending offer only on an `active` match | |
+| `ck_match__draw_offer_ply_non_negative` | Check | | |
+| `ck_match__draw_offer_thresholds_non_negative` | Check | | |
+
+**Draw agreement — A64-020.5C-pre §4.** Five columns, added because a pending offer must survive
+a process restart, a socket reconnect and a page refresh:
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `draw_offer_by` | `game.player_side`, null | Whose offer stands |
+| `draw_offer_ply` | `integer`, null | The ply it was made on |
+| `draw_offer_created_at` | `timestamptz`, null | When |
+| `light_draw_offer_from_ply` | `integer not null default 0` | Earliest ply LIGHT may open a **new** offer |
+| `dark_draw_offer_from_ply` | `integer not null default 0` | The same for DARK |
+
+**On the match row rather than in a child relation.** At most one offer exists per match at a
+time, so a table would be one row per match reached by a join on every snapshot — to answer a
+question the parent already holds. No audit requirement asks for the history of declined offers.
+
+**The thresholds are plies, not instants**, and that is the whole spam rule: a wall clock, a Redis
+TTL and an in-process timer all reset on a restart, so a reconnecting player would find their
+allowance refreshed. A ply is already durable, already monotonic and already under the row's lock.
+See `websocket.md` §22.7 for the arithmetic.
+
+**No backfill.** Zero is a *total* "no restriction" because `ply_number` is never negative, and
+three nulls are exactly "no offer stands" — so every match ever played already carries the correct
+value and the migration asserts nothing about history.
 
 **`uq_match__pairing_id` is the load-bearing object.** A64-015.4 §3 forbids in-memory
 deduplication and check-then-insert, for the reason QT-1 is an index rather than an `if`: two

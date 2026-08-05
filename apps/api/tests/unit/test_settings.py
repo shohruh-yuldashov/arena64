@@ -11,6 +11,7 @@ from app.config.settings import (
     SUPPORTED_JWT_ALGORITHMS,
     AppSettings,
     AuthSettings,
+    BrowserSessionSettings,
     EmailSettings,
     FriendsSettings,
     GameSettings,
@@ -108,6 +109,7 @@ class TestSettings:
             gateway=GatewaySettings(),
             game=GameSettings(),
             tournament=TournamentSettings(),
+            browser_session=BrowserSessionSettings(),
         )
         assert settings.environment is Environment.TEST
 
@@ -141,6 +143,7 @@ class TestSettings:
                 gateway=GatewaySettings(),
                 game=GameSettings(),
                 tournament=TournamentSettings(),
+                browser_session=BrowserSessionSettings(),
             )
 
     def test_production_rejects_a_left_default_redis_role(self) -> None:
@@ -166,6 +169,7 @@ class TestSettings:
                 gateway=GatewaySettings(),
                 game=GameSettings(),
                 tournament=TournamentSettings(),
+                browser_session=BrowserSessionSettings(),
             )
 
     def test_production_accepts_fully_explicit_configuration(self) -> None:
@@ -196,6 +200,7 @@ class TestSettings:
             gateway=GatewaySettings(),
             game=GameSettings(),
             tournament=TournamentSettings(),
+            browser_session=BrowserSessionSettings(trusted_origins=("https://arena64.example",)),
         )
         assert settings.environment is Environment.PRODUCTION
 
@@ -219,6 +224,7 @@ class TestSettings:
             gateway=GatewaySettings(),
             game=GameSettings(),
             tournament=TournamentSettings(),
+            browser_session=BrowserSessionSettings(),
         )
         with pytest.raises(PydanticValidationError):
             settings.environment = Environment.PRODUCTION  # type: ignore[misc]
@@ -332,6 +338,7 @@ class TestJWTProductionGuard:
             gateway=GatewaySettings(),
             game=GameSettings(),
             tournament=TournamentSettings(),
+            browser_session=BrowserSessionSettings(trusted_origins=("https://arena64.example",)),
             jwt=JWTSettings(**jwt_overrides),  # type: ignore[arg-type]
         )
 
@@ -369,6 +376,7 @@ class TestJWTProductionGuard:
             gateway=GatewaySettings(),
             game=GameSettings(),
             tournament=TournamentSettings(),
+            browser_session=BrowserSessionSettings(trusted_origins=("https://arena64.example",)),
             jwt=JWTSettings(),
         )
 

@@ -27,6 +27,7 @@ from fastapi import APIRouter
 
 from app.api.v1.health import health_router
 from app.core.constants import API_V1_PREFIX
+from app.modules.auth.presentation.browser_router import browser_auth_router
 from app.modules.auth.presentation.router import auth_router
 from app.modules.avatars.presentation.router import avatar_router
 from app.modules.friends.presentation.router import blocks_router, friends_router
@@ -57,6 +58,13 @@ v1_router.include_router(health_router)
 v1_router.include_router(user_search_router)
 v1_router.include_router(users_router)
 v1_router.include_router(auth_router)
+
+# A64-020.2. **Before** nothing and after nothing in particular: every path
+# here starts `/auth/browser/`, which no other router claims. Registered as
+# its own router rather than as routes on `auth_router` so that the two
+# surfaces — JSON for native clients, cookies for browsers — are separable
+# in the route table and in the OpenAPI document.
+v1_router.include_router(browser_auth_router)
 v1_router.include_router(profiles_router)
 v1_router.include_router(my_profile_router)
 v1_router.include_router(avatar_router)

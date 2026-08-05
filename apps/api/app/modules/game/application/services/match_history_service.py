@@ -40,7 +40,7 @@ import logging
 from collections.abc import Sequence
 from uuid import UUID
 
-from app.modules.engine import Position
+from app.modules.engine import PlayerSide, Position
 from app.modules.game.application.ports import MatchHistoryStore
 from app.modules.game.application.services.match_replay_service import PersistedMatchReplay
 from app.modules.game.domain.exceptions import (
@@ -161,11 +161,26 @@ class GameMatchReplay:
             plies.append(
                 ReplayPly(
                     ply_number=record.ply_number,
-                    side=record.seat,
+                    # **Derived from the ply, because `MoveRecord` has no
+                    # seat** — A64-020.5E. `record.seat` was an
+                    # `AttributeError` on every replay carrying a move, and
+                    # it went unseen because `_require_expected_result`
+                    # refused first for every game that ended off the board
+                    # and this path was reached only by the few that did
+                    # not.
+                    #
+                    # `LoggedMove` carries a seat; `MoveRecord` — what
+                    # `for_replay` returns — never did. Parity is the
+                    # authoritative answer anyway: `Match.play` increments
+                    # before appending and LIGHT moves first, so odd plies
+                    # are LIGHT's. The same structural fact
+                    # `game.domain.draw_agreement` computes its re-offer
+                    # rule from.
+                    side=_side_at_ply(record.ply_number),
                     path=tuple(str(square) for square in record.move.path),
                     captured=tuple(str(square) for square in record.move.captured),
                     promoted_to=(
-                        record.move.promoted_to.value if record.move.promoted_to else None
+                        record.move.promotes_to.value if record.move.promotes_to else None
                     ),
                     pieces=_placement(stepping.position),
                     fingerprint=stepping.position.fingerprint,
@@ -205,6 +220,17 @@ def _placement(position: Position) -> Sequence[PlacedPiece]:
 
 
 __all__ = ["GameMatchHistory", "GameMatchReplay"]
+
+
+def _side_at_ply(ply_number: int) -> PlayerSide:
+    """Whose move a ply was. LIGHT plays the odd ones.
+
+    Structural rather than stored: `Match.play` increments `ply_number`
+    before appending the record, and LIGHT moves first, so the parity is
+    the seat. Storing it would be a second copy of a fact the sequence
+    already fixes — and one a replay could find disagreeing with the log.
+    """
+    return PlayerSide.LIGHT if ply_number % 2 == 1 else PlayerSide.DARK
 
 
 def _seat(seat: MatchSeat) -> ReplaySeat:

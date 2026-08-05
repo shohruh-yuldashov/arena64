@@ -48,6 +48,7 @@ adding a rules profile beside the current one rather than editing this.
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Final
 
 from app.modules.engine import (
     CURRENT_ENGINE_VERSION,
@@ -69,7 +70,7 @@ from app.modules.game.domain.exceptions import (
 )
 from app.modules.game.domain.match import Match, MatchStatus
 from app.modules.game.domain.move_log import MoveRecord
-from app.modules.game.domain.result import MatchResult
+from app.modules.game.domain.result import MatchResult, TerminationReason
 
 SUPPORTED_ENGINE_VERSIONS: frozenset[EngineVersion] = frozenset({CURRENT_ENGINE_VERSION})
 """The rules builds this one can faithfully reproduce — see the module
@@ -186,13 +187,73 @@ def _require_contiguous(records: Sequence[MoveRecord]) -> None:
             )
 
 
+#: The termination reasons the **board** produces.
+#:
+#: Everything else on `TerminationReason` is a statement about the players,
+#: the clock, the connection or a moderator — none of which a position can
+#: express. A resigned game "must still replay to the position it was
+#: abandoned in" (GE-67), and that position is by definition not terminal:
+#: the player gave up *because* they were losing, not because the rules had
+#: ended it.
+#:
+#: An allowlist rather than a denylist, the direction every closed set on
+#: this platform takes: a reason added later is verified as off-board until
+#: somebody decides it is not, which fails towards accepting a replay rather
+#: than towards refusing one that is correct.
+_BOARD_DERIVED: Final[frozenset[TerminationReason]] = frozenset(
+    {
+        TerminationReason.NO_LEGAL_MOVES,
+        TerminationReason.ALL_PIECES_CAPTURED,
+        TerminationReason.REPETITION,
+        TerminationReason.MOVE_LIMIT,
+    }
+)
+
+
 def _require_expected_result(match: Match, expected: MatchResult | None) -> None:
+    """The replay agrees with the record — as far as the board can say.
+
+    ## Why this is not one comparison
+
+    It was, and it made **every game that ended off the board unreplayable**
+    — a resignation, an agreed draw, a flag, an abandonment, an abort and an
+    adjudication. The record said `light wins (flag)`; the replay correctly
+    reached `active`, because the clock ran out and the position did not;
+    and the mismatch was reported as corruption.
+
+    That was latent while the platform had no way to resign and no clock to
+    flag. A64-016.5 gave it clocks and A64-020.5C gave it resignation and
+    draw agreement, at which point the majority of finished games could not
+    be replayed at all. Found by A64-020.5E's first real replay.
+
+    So the check is split by **who decided the result**:
+
+        the board decided     the replay must reach exactly that result.
+                              A recorded checkmate the rules do not
+                              reproduce is the corruption this exists for
+
+        somebody else decided the replay must reach a position that is
+                              **not** terminal. A record saying a player
+                              resigned, over a board that had already
+                              ended, is a contradiction — and it is the one
+                              thing worth checking here, because it means
+                              the log and the settlement disagree
+    """
     if expected is None:
         return
-    if match.status is not MatchStatus.COMPLETED or match.result != expected:
+
+    if expected.reason in _BOARD_DERIVED:
+        if match.status is not MatchStatus.COMPLETED or match.result != expected:
+            raise ReplayResultMismatch(
+                f"The record says the match ended {expected}, and the replay reached "
+                f"{match.result if match.result is not None else match.status.value}."
+            )
+        return
+
+    if match.status is MatchStatus.COMPLETED:
         raise ReplayResultMismatch(
-            f"The record says the match ended {expected}, and the replay reached "
-            f"{match.result if match.result is not None else match.status.value}."
+            f"The record says the match ended {expected}, which the board does not "
+            f"decide, but the replay reached {match.result}."
         )
 
 

@@ -384,7 +384,16 @@ class TestReplayRefusals:
         with pytest.raises(PositionHashMismatch, match="Ply 2"):
             replay_engine.replay(payload)
 
-    def test_a_result_that_does_not_match_is_refused(self) -> None:
+    def test_a_board_that_ended_itself_contradicts_a_record_that_says_otherwise(self) -> None:
+        """A64-020.5E. `SHUFFLE * 2` is a threefold repetition, so the
+        replay ends the game **on the board** — while the record claims a
+        resignation, which the board does not decide.
+
+        That contradiction is worth refusing: it means the move log and the
+        settlement disagree about what happened. It is a different failure
+        from a resignation over an unfinished board, which is ordinary and
+        is now accepted — see the test below.
+        """
         from app.modules.game.domain import MatchResult
 
         live = played(KINGS, SHUFFLE * 2)
@@ -402,6 +411,55 @@ class TestReplayRefusals:
 
         with pytest.raises(ReplayResultMismatch):
             replay_engine.replay(payload)
+
+    def test_a_game_ended_off_the_board_replays_to_where_it_was_abandoned(self) -> None:
+        """The regression for a defect that made most finished games
+        unreplayable — A64-020.5E.
+
+        Five of the eleven termination reasons are not the board's:
+        resignation, an agreed draw, a flag, an abandonment, an abort and an
+        adjudication. For every one of them the position the replay reaches
+        is **not terminal** — GE-67's "a resigned game must still replay to
+        the position it was abandoned in" — and the result check demanded
+        the board reach the recorded result anyway.
+
+        It was latent until the platform grew a clock (A64-016.5) and a way
+        to resign (A64-020.5C), at which point the majority of finished
+        games answered `400` on their replay. Found by opening the first
+        real one.
+
+        Asserted for a flag and a resignation over a **non-terminal** board,
+        which is what those results actually look like.
+        """
+        from app.modules.game.domain import MatchResult
+
+        # Two plies of shuffling: legal, and nowhere near a repetition.
+        live = played(KINGS, SHUFFLE[:2])
+
+        for reason in (
+            TerminationReason.RESIGNATION,
+            TerminationReason.FLAG,
+            TerminationReason.AGREED_DRAW,
+            TerminationReason.ABANDONMENT,
+        ):
+            drawn = reason is TerminationReason.AGREED_DRAW
+            payload = ReplayData(
+                engine_version=CURRENT_ENGINE_VERSION,
+                variant=RUSSIAN,
+                opening_position=KINGS,
+                records=live.move_log,
+                expected_result=MatchResult(
+                    outcome=MatchOutcome.DRAW if drawn else MatchOutcome.WIN,
+                    reason=reason,
+                    winner=None if drawn else PlayerSide.LIGHT,
+                ),
+            )
+
+            match = replay_engine.replay(payload)
+            # The position it was abandoned in — still playable, which is
+            # exactly what a resignation means about a board.
+            assert match.result is None
+            assert len(match.move_log) == 2
 
     def test_every_replay_failure_is_a_replay_error(self) -> None:
         """One family for a caller to catch — and distinct from

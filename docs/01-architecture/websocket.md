@@ -1106,11 +1106,17 @@ disposable.
 ### 20.3 The recovery decision
 
 ```
+last_known_sequence <= 0    ->  snapshot (the client is holding nothing)
 client is current           ->  nothing
-last_known_sequence <= 0    ->  snapshot (the client asked to start over)
 buffer proves continuity    ->  the missed frames, in order
 buffer cannot prove it      ->  game.resync_required
 ```
+
+**The rules are ordered, and the first two overlap.** A match nobody has moved in is at
+sequence 0, and so is a client asking to start over, so `client is current` evaluated first
+answers "you have missed nothing" to a client that has never held a position — the first resume
+of every game. Zero means *holding nothing* regardless of the server's sequence; a client that
+has genuinely seen a ply reports one or more and still takes the fast path.
 
 **Continuity is proven by the oldest buffer entry, not by the count.** A buffer that has trimmed
 past the client can still return frames, and returning them would leave that client missing plies

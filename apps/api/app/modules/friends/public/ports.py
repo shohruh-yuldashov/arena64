@@ -55,6 +55,8 @@ from collections.abc import Mapping, Sequence
 from typing import Protocol
 from uuid import UUID
 
+from app.modules.users.public import RelationshipState
+
 
 class SocialGraphReader(Protocol):
     """Answers what the social graph says about one player's relationships.
@@ -191,5 +193,52 @@ class PairingExclusions(Protocol):
         **Reveals nothing to a player.** The caller uses it to skip a
         candidate, and the skipped pairing is indistinguishable from a pool
         that simply had nobody suitable — which is what BL-1 requires.
+        """
+        ...
+
+
+class RelationshipStateReader(Protocol):
+    """What a viewer may **do** about a page of players — A64-020.4.
+
+    A third question, and a third port, for the reason the module docstring
+    gives about the first two: `SocialGraphReader` answers what privacy
+    needs and this answers what a button needs, and they are not the same
+    answer.
+
+    Concretely: a pending friend request changes the action and changes
+    nothing about visibility, and `blocked` here is **one-directional**
+    where `blocked_ids_for` is deliberately symmetric. A single port serving
+    both would have to publish the symmetric form, which would tell a
+    blocked player they had been blocked — the one thing BL-1 withholds.
+
+    **Read-only, and batch-only.** There is no way here to form a
+    friendship, send a request or place a block, and no per-player form:
+    this runs on the profile composition path, so a singular call would
+    multiply every rendered page (CLAUDE.md §10.4).
+    """
+
+    async def relationship_states_for(
+        self, viewer_id: UUID, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, RelationshipState]:
+        """One state per id, in a **fixed** number of statements.
+
+        **Complete**: every id asked for has an entry, defaulting to
+        `NONE`, so a caller indexes rather than writing a fallback at each
+        site.
+
+        Exactly one state per player, resolved by `RelationshipState`'s
+        documented precedence. The conflicting combinations that precedence
+        would arbitrate are already prevented by the schema — see that enum.
+
+        `BLOCKED` means **the viewer blocked this player** and never the
+        reverse. A block placed *on* the viewer is not expressible through
+        this port and must not become so.
+
+        Never raises: an unavailable social graph returns `NONE` for
+        everything, which is the safe direction — it removes actions rather
+        than offering ones that would fail.
+
+        An empty `player_ids` returns an empty mapping without touching the
+        database.
         """
         ...

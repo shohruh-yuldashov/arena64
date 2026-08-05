@@ -79,6 +79,7 @@ What is published, and why only this much:
                          `ProfileVisibility` and `PrivacySettingsView` are
                          defined in terms of it (BR-2)
   `ViewerRelationship`   what the caller is to the player being read.
+  `RelationshipState`    what the caller may *do* about them — A64-020.4.
                          Computed per request, never stored
   `DeviceType`           the closed set `Presence.device_type` is defined
                          in terms of, published because BR-2 requires a
@@ -145,7 +146,11 @@ from app.modules.users.domain.preferences import (
 )
 from app.modules.users.domain.presence import DeviceType, LapsedPresence, Presence
 from app.modules.users.domain.search import SearchTerm
-from app.modules.users.domain.visibility import ViewerRelationship, VisibilityLevel
+from app.modules.users.domain.visibility import (
+    RelationshipState,
+    ViewerRelationship,
+    VisibilityLevel,
+)
 from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import (
     AvatarReference,
@@ -201,6 +206,7 @@ __all__ = [
     "AvatarReference",
     "AvatarStore",
     "DeviceType",
+    "RelationshipState",
     "ViewerRelationship",
     "VisibilityLevel",
     "OwnUserProfile",

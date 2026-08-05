@@ -56,10 +56,12 @@ from app.modules.friends.domain.events import (
 from app.modules.friends.public.ports import (
     PairingExclusions,
     PresenceAudience,
+    RelationshipStateReader,
     SocialGraphReader,
 )
 
 __all__ = [
+    "RelationshipStateReader",
     "FriendRemoved",
     "FriendRequestAccepted",
     "PairingExclusions",

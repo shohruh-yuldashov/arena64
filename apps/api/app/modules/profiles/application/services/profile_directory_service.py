@@ -36,7 +36,11 @@ from uuid import UUID
 
 from app.modules.profiles.application.services.profile_composer import PublicProfileComposer
 from app.modules.profiles.domain.profile import PublicProfile
-from app.modules.users.public import PublicProfileReader, ViewerRelationship
+from app.modules.users.public import (
+    PublicProfileReader,
+    RelationshipState,
+    ViewerRelationship,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +61,7 @@ class ProfileDirectoryService:
         *,
         viewer_id: UUID | None = None,
         known_relationship: ViewerRelationship | None = None,
+        known_state: RelationshipState | None = None,
     ) -> Mapping[UUID, PublicProfile]:
         """Composed public profiles for a page of ids, keyed by id.
 
@@ -90,6 +95,12 @@ class ProfileDirectoryService:
         a friend by construction. Passing it anywhere the page mixes
         relationships would publish a friends-only field to a stranger, so
         it is an assertion rather than a hint; see `compose_many`.
+
+        `known_state` is the same saving for A64-020.4's published
+        relationship, and is separate because the two assertions differ: a
+        request list is a page of *strangers* for privacy and a page of
+        `incoming_request` or `outgoing_request` for actions. See
+        `_states_to`.
         """
         if not player_ids:
             return {}
@@ -102,7 +113,10 @@ class ProfileDirectoryService:
         ordered = [identities[player_id] for player_id in player_ids if player_id in identities]
 
         composed = await self._composer.compose_many(
-            ordered, viewer_id=viewer_id, known_relationship=known_relationship
+            ordered,
+            viewer_id=viewer_id,
+            known_relationship=known_relationship,
+            known_state=known_state,
         )
 
         # Counts only. Which players a caller looked up is a social-graph

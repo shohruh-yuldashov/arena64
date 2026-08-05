@@ -74,11 +74,15 @@ from app.modules.friends.infrastructure.repositories import (
     SqlAlchemyBlockedPlayerRepository,
     SqlAlchemyFriendshipRepository,
 )
+from app.modules.friends.infrastructure.repositories.relationship_state_repository import (
+    SqlAlchemyRelationshipStateReader,
+)
 from app.modules.friends.presentation.dependencies import SocialGraphCacheDep
 from app.modules.friends.public import SocialGraphReader
 from app.modules.profiles.application.ports import (
     BlockedPlayersProvider,
     RatingProvider,
+    RelationshipStateProvider,
     StatisticsProvider,
     ViewerRelationshipProvider,
 )
@@ -95,7 +99,9 @@ from app.modules.profiles.infrastructure import (
     NoBlockedPlayersProvider,
     NoMatchesStatisticsProvider,
     NoRelationshipsProvider,
+    NoRelationshipStates,
     SocialGraphBlockedPlayersProvider,
+    SocialRelationshipStateProvider,
 )
 from app.modules.profiles.infrastructure.rating_compatibility import PublishedRatingProvider
 from app.modules.rating.infrastructure.repositories.player_rating_repository import (
@@ -423,6 +429,40 @@ def get_relationship_provider(
 RelationshipProviderDep = Annotated[ViewerRelationshipProvider, Depends(get_relationship_provider)]
 
 
+def get_relationship_state_provider(
+    session: DbSessionDep, settings: FriendsSettingsDep
+) -> RelationshipStateProvider:
+    """What a viewer may **do** about the players they are reading —
+    A64-020.4.
+
+    A fourth selection point, chosen by the same `FRIENDS_ENABLED` switch as
+    the other three, because they read the same graph and a deployment
+    cannot sensibly have one without the others.
+
+    **Not cached**, unlike the relationship and exclusion providers. Those
+    answer questions that change only when a friendship or a block changes;
+    this one also changes when a request is *sent*, which is the action a
+    player takes immediately before reloading to see the result. A cache
+    here would show "Add friend" to somebody who just clicked it.
+
+    The fallback is `NoRelationshipStates`, and it degrades in the safe
+    direction: every action disappears rather than being offered against a
+    graph that cannot honour it. It cannot fabricate a block either — see
+    that class.
+    """
+    if not settings.enabled:
+        logger.warning("relationship_state_provider_fallback", extra={"provider": "none"})
+        return NoRelationshipStates()
+
+    logger.debug("relationship_state_provider_selected", extra={"provider": "social_graph"})
+    return SocialRelationshipStateProvider(SqlAlchemyRelationshipStateReader(session))
+
+
+RelationshipStateProviderDep = Annotated[
+    RelationshipStateProvider, Depends(get_relationship_state_provider)
+]
+
+
 def get_blocked_players_provider(
     session: DbSessionDep, settings: FriendsSettingsDep, cache: SocialGraphCacheDep
 ) -> BlockedPlayersProvider:
@@ -459,6 +499,7 @@ def get_profile_composer(
     statistics: StatisticsProviderDep,
     presence: PresenceProviderDep,
     relationships: RelationshipProviderDep,
+    relationship_states: RelationshipStateProviderDep,
 ) -> PublicProfileComposer:
     """The public view, assembled from three sources with privacy applied —
     A64-013.1.
@@ -473,6 +514,7 @@ def get_profile_composer(
         statistics=statistics,
         presence=presence,
         relationships=relationships,
+        relationship_states=relationship_states,
     )
 
 
@@ -512,6 +554,7 @@ def build_profile_renderer(
         statistics=get_statistics_provider(session, settings.statistics),
         presence=get_presence_provider(pools, settings.presence, clock),
         relationships=get_relationship_provider(session, settings.friends, cache),
+        relationship_states=get_relationship_state_provider(session, settings.friends),
     )
     return BatchProfileRenderer(
         players=get_public_profile_reader(session, clock), composer=composer

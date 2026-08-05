@@ -56,6 +56,7 @@ from uuid import UUID
 
 from app.modules.profiles.application.ports import (
     RatingProvider,
+    RelationshipStateProvider,
     StatisticsProvider,
     ViewerRelationshipProvider,
 )
@@ -66,6 +67,7 @@ from app.modules.users.public import (
     Presence,
     PresenceProvider,
     PublicUserProfile,
+    RelationshipState,
     ViewerRelationship,
 )
 
@@ -87,6 +89,7 @@ class PublicProfileComposer:
         statistics: StatisticsProvider,
         presence: PresenceProvider,
         relationships: ViewerRelationshipProvider,
+        relationship_states: RelationshipStateProvider,
     ) -> None:
         self._ratings = ratings
         self._statistics = statistics
@@ -96,6 +99,11 @@ class PublicProfileComposer:
         # table or a repository, and cannot tell the real provider from the
         # fallback.
         self._relationships = relationships
+        # A64-020.4. A **second** social port, not a widening of the first.
+        # That one feeds privacy and its `BLOCKED` is symmetric; this one
+        # feeds the buttons a client renders and its `BLOCKED` is the
+        # viewer's own. See `RelationshipStateProvider`.
+        self._relationship_states = relationship_states
 
     async def compose(
         self,
@@ -131,6 +139,7 @@ class PublicProfileComposer:
         )
 
         viewer = await self._relationship_to(viewer_id, identity.id)
+        relationship = (await self._states_to(viewer_id, [identity.id])).get(identity.id)
 
         presence: Presence | None = None
         if _wants_presence(identity, viewer):
@@ -143,7 +152,12 @@ class PublicProfileComposer:
             logger.debug("presence_lookup_skipped", extra={"user_id": str(identity.id)})
 
         return _assemble(
-            identity, ratings=ratings, statistics=statistics, presence=presence, viewer=viewer
+            identity,
+            ratings=ratings,
+            statistics=statistics,
+            presence=presence,
+            viewer=viewer,
+            relationship=relationship,
         )
 
     async def compose_many(
@@ -152,6 +166,7 @@ class PublicProfileComposer:
         *,
         viewer_id: UUID | None = None,
         known_relationship: ViewerRelationship | None = None,
+        known_state: RelationshipState | None = None,
     ) -> list[PublicProfile]:
         """A page of players, in a fixed number of round trips.
 
@@ -201,6 +216,8 @@ class PublicProfileComposer:
             viewer_id, [one.id for one in identities], known=known_relationship
         )
 
+        states = await self._states_to(viewer_id, [one.id for one in identities], known=known_state)
+
         statistics_ids = [one.id for one in identities if one.visibility.statistics]
         presence_ids = [one.id for one in identities if _wants_presence(one, relationships[one.id])]
 
@@ -239,6 +256,10 @@ class PublicProfileComposer:
                 statistics=statistics.get(identity.id),
                 presence=presence.get(identity.id),
                 viewer=relationships[identity.id],
+                # `.get`, not `[]`: the mapping omits the viewer's own id,
+                # which is exactly the "no relationship with yourself" case
+                # `None` is for.
+                relationship=states.get(identity.id),
             )
             for identity in identities
         ]
@@ -286,6 +307,40 @@ class PublicProfileComposer:
             return dict.fromkeys(player_ids, ViewerRelationship.STRANGER)
         return await self._relationships.relationships_for(viewer_id, player_ids)
 
+    async def _states_to(
+        self,
+        viewer_id: UUID | None,
+        player_ids: Sequence[UUID],
+        *,
+        known: RelationshipState | None = None,
+    ) -> Mapping[UUID, RelationshipState]:
+        """The published state per player, or an empty mapping.
+
+        **Anonymous costs no query and yields no field.** An empty mapping
+        rather than `NONE` for everybody, because `None` and `NONE` mean
+        different things here: absent says there is no viewer, `NONE` says
+        there is one and they are a stranger. Collapsing them would make a
+        signed-out visitor's profile claim a relationship.
+
+        **A page that defines the state costs no query**, and `known` is
+        separate from `known_relationship` because the two are different
+        assertions. A friend list can state both — every player is a friend
+        and every state is `FRIEND`. A *request* list can state only this
+        one: privacy sees a stranger, while the action is `accept` or
+        `cancel` depending on which list it is, and the enum distinguishes
+        them. One parameter serving both would force those callers to lie
+        about one of the two.
+
+        Like `known_relationship`, it is an **assertion**, correct only
+        where the page's membership defines the state. Search must not pass
+        it: those pages mix every state there is.
+        """
+        if known is not None:
+            return dict.fromkeys(player_ids, known)
+        if viewer_id is None:
+            return {}
+        return await self._relationship_states.relationship_states_for(viewer_id, player_ids)
+
 
 def _wants_presence(identity: PublicUserProfile, viewer: ViewerRelationship) -> bool:
     """Whether either presence field is visible to `viewer`.
@@ -312,6 +367,7 @@ def _assemble(
     statistics: PlayerStatistics | None,
     presence: Presence | None,
     viewer: ViewerRelationship,
+    relationship: RelationshipState | None = None,
 ) -> PublicProfile:
     """**The gate.** The one place a privacy flag becomes a `None`.
 
@@ -337,6 +393,11 @@ def _assemble(
         identity=identity,
         ratings=ratings,
         statistics=statistics,
+        # **Not gated.** Every other field here passes through a privacy
+        # check; this one is a fact about the *viewer's own* actions, which
+        # they already know, and says nothing about the player being read.
+        # `None` means there is no viewer — never that one is hidden.
+        relationship=relationship,
         # Each presence field gated by its own flag, from the one record.
         # A player showing an indicator but not a timestamp — which is what
         # the platform defaults produce — gets `is_online` and a `None`

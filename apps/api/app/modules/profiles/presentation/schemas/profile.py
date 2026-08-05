@@ -40,6 +40,7 @@ from app.modules.profiles.domain.profile import PublicProfile
 from app.modules.profiles.domain.ratings import RatingCategory, RatingSnapshot
 from app.modules.statistics.public import PlayerStatistics
 from app.modules.users.domain.validators import BIO_MAX_LENGTH
+from app.modules.users.public import RelationshipState
 
 
 class RatingResponse(BaseResponseDTO):
@@ -296,6 +297,20 @@ class ProfileResponse(BaseResponseDTO):
         description="When the account was created, UTC.",
         examples=["2026-08-01T12:00:00Z"],
     )
+    relationship: RelationshipState | None = Field(
+        default=None,
+        description=(
+            "What **you** may do about this player — A64-020.4. `null` for an "
+            "anonymous reader and on your own profile: there is no viewer to "
+            "have a relationship with, and nobody is their own friend. "
+            "`none` is different and means *signed in, no relationship*, "
+            'which is what an "Add friend" control renders from.\n\n'
+            "`blocked` means **you blocked them**. Nothing here ever says "
+            "that they blocked you — a player who could tell would have "
+            "exactly the information a block withholds."
+        ),
+        examples=["none"],
+    )
     is_online: bool | None = Field(
         default=None,
         description=(
@@ -468,6 +483,11 @@ class ProfileResponse(BaseResponseDTO):
             # skips the read entirely when both are off. This schema holds no
             # flag it could get backwards and no provider it could call —
             # exactly as it holds no `StorageProvider`.
+            # **No privacy check here either**, and none is needed: this is
+            # a fact about the *reader's own* actions, which they already
+            # know. `ProfileService` resolves it — or leaves it `None` for
+            # an anonymous reader and for the player's own profile.
+            relationship=profile.relationship,
             is_online=profile.is_online,
             last_seen=profile.last_seen,
             ratings=RatingsResponse.of(profile.ratings.as_map()),

@@ -96,7 +96,7 @@ from app.modules.friends.presentation.schemas import (
 )
 from app.modules.profiles.presentation.dependencies import ProfileDirectoryDep
 from app.modules.profiles.presentation.schemas import ProfileResponse
-from app.modules.users.public import ViewerRelationship
+from app.modules.users.public import RelationshipState, ViewerRelationship
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +236,7 @@ async def list_incoming(
         await _render_page(
             requests,
             other=lambda request: request.requester_id,
+            state=RelationshipState.INCOMING_REQUEST,
             next_cursor=next_cursor,
             viewer_id=user.id,
             directory=directory,
@@ -277,6 +278,7 @@ async def list_outgoing(
         await _render_page(
             requests,
             other=lambda request: request.addressee_id,
+            state=RelationshipState.OUTGOING_REQUEST,
             next_cursor=next_cursor,
             viewer_id=user.id,
             directory=directory,
@@ -458,6 +460,7 @@ async def _render_page(
     requests: Sequence[FriendRequest],
     *,
     other: Callable[[FriendRequest], UUID],
+    state: RelationshipState,
     next_cursor: str | None,
     viewer_id: UUID,
     directory: ProfileDirectoryDep,
@@ -469,6 +472,14 @@ async def _render_page(
     between the two list endpoints — the incoming list shows senders and the
     outgoing list shows recipients. A parameter rather than two copies of
     this function, because everything else about them is identical.
+
+    `state` is A64-020.4's counterpart: every row on the incoming list is
+    an `incoming_request` and every row on the outgoing list is an
+    `outgoing_request`, **by construction**, so the published relationship
+    is stated rather than resolved and the page costs no extra query.
+    Stating it is also the only way to get it right — the resolver would
+    return the same answer, but a caller who guessed the wrong direction
+    would render "accept" beside a request they sent.
 
     **Rows whose counterpart is missing are dropped**, not rendered with a
     placeholder. A missing counterpart means a deactivated account, and the
@@ -483,7 +494,7 @@ async def _render_page(
     the thing to follow.
     """
     player_ids = [other(request) for request in requests]
-    profiles = await directory.profiles_for(player_ids, viewer_id=viewer_id)
+    profiles = await directory.profiles_for(player_ids, viewer_id=viewer_id, known_state=state)
 
     items = [
         FriendRequestResponse.of(
@@ -601,6 +612,10 @@ async def list_friends(
         player_ids,
         viewer_id=user.id,
         known_relationship=ViewerRelationship.FRIEND,
+        # A64-020.4: the same saving for the published state. Every player
+        # on this page is a friend, so the action is "remove friend" by
+        # construction and the relationship query is skipped entirely.
+        known_state=RelationshipState.FRIEND,
     )
 
     items = [
@@ -667,6 +682,10 @@ async def get_friendship(
         [player_id],
         viewer_id=user.id,
         known_relationship=ViewerRelationship.FRIEND,
+        # A64-020.4: the same saving for the published state. Every player
+        # on this page is a friend, so the action is "remove friend" by
+        # construction and the relationship query is skipped entirely.
+        known_state=RelationshipState.FRIEND,
     )
     profile = profiles[player_id]
 
@@ -803,6 +822,12 @@ async def block_player(
         [block.blocked_id],
         viewer_id=user.id,
         known_relationship=ViewerRelationship.STRANGER,
+        # A64-020.4: `BLOCKED` for the published state, which is the
+        # *opposite* override from the privacy one above and both are right.
+        # Privacy is told `STRANGER` so a block list stays readable; the
+        # action is `blocked` because that is what this page is, and it is
+        # what makes the control "unblock" rather than "add friend".
+        known_state=RelationshipState.BLOCKED,
     )
     profile = profiles[block.blocked_id]
 
@@ -862,6 +887,12 @@ async def list_blocked_players(
         player_ids,
         viewer_id=user.id,
         known_relationship=ViewerRelationship.STRANGER,
+        # A64-020.4: `BLOCKED` for the published state, which is the
+        # *opposite* override from the privacy one above and both are right.
+        # Privacy is told `STRANGER` so a block list stays readable; the
+        # action is `blocked` because that is what this page is, and it is
+        # what makes the control "unblock" rather than "add friend".
+        known_state=RelationshipState.BLOCKED,
     )
 
     items = [

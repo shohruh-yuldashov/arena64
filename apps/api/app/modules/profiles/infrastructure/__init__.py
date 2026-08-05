@@ -30,7 +30,9 @@ from app.modules.profiles.infrastructure.relationship_providers import (
     FriendshipRelationshipProvider,
     NoBlockedPlayersProvider,
     NoRelationshipsProvider,
+    NoRelationshipStates,
     SocialGraphBlockedPlayersProvider,
+    SocialRelationshipStateProvider,
 )
 from app.modules.profiles.infrastructure.statistics_providers import (
     DatabaseStatisticsProvider,
@@ -41,7 +43,9 @@ __all__ = [
     "DatabaseStatisticsProvider",
     "FriendshipRelationshipProvider",
     "NoBlockedPlayersProvider",
+    "NoRelationshipStates",
     "NoRelationshipsProvider",
+    "SocialRelationshipStateProvider",
     "SocialGraphBlockedPlayersProvider",
     "NoMatchesStatisticsProvider",
     "PublishedRatingProvider",

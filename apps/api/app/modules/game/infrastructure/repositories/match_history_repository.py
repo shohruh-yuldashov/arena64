@@ -18,6 +18,8 @@ which is what makes the cursor unable to skip.
 not history: it has no result to show, and it will change.
 """
 
+from collections.abc import Sequence
+from datetime import datetime
 from typing import Final
 from uuid import UUID
 
@@ -27,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.game.domain.match_record import MatchRecordStatus
 from app.modules.game.infrastructure.models import MatchRecordModel
 from app.modules.game.public.history import (
+    CompletedMatchRecord,
     HistoryCursor,
     MatchHistoryEntry,
     MatchHistoryPage,
@@ -93,6 +96,56 @@ class SqlAlchemyMatchHistoryRepository:
         if row is None or row.status != _FINISHED:
             return None
         return _to_entry(row)
+
+    async def scan_completed(
+        self, *, after: tuple[datetime, UUID] | None, limit: int
+    ) -> Sequence[CompletedMatchRecord]:
+        """One page of every finished match, oldest first — A64-020.5F §11.
+
+        **Keyset on `(ended_at, id)`**, which is the same total order the
+        projection compares watermarks with — so a backfill folds matches in
+        the order they happened and produces the streaks the live consumer
+        would have.
+
+        `ended_at` is non-null for a completed match by
+        `ck_match__ended_at_iff_outcome`, so the tuple comparison is total
+        and no row sorts unpredictably.
+        """
+        statement = (
+            select(MatchRecordModel)
+            .where(MatchRecordModel.status == _FINISHED)
+            .order_by(MatchRecordModel.ended_at.asc(), MatchRecordModel.id.asc())
+            .limit(limit)
+        )
+        if after is not None:
+            statement = statement.where(
+                tuple_(MatchRecordModel.ended_at, MatchRecordModel.id)
+                > tuple_(literal(after[0]), literal(after[1]))
+            )
+
+        rows = await self._session.scalars(statement)
+        return [_to_completed(row) for row in rows]
+
+
+def _to_completed(row: MatchRecordModel) -> CompletedMatchRecord:
+    """A finished row as the projection's narrow input.
+
+    `ended_at` and `outcome` are non-null on a completed row by CHECK
+    constraint, so the assertions below are documentation of an invariant
+    the database already holds rather than a guard against data.
+    """
+    if row.ended_at is None or row.outcome is None or row.termination_reason is None:
+        raise ValueError(f"match {row.id} is completed without a result")
+    return CompletedMatchRecord(
+        match_id=row.id,
+        light_player_id=row.light_player_id,
+        dark_player_id=row.dark_player_id,
+        outcome=row.outcome,
+        winner=row.winner,
+        rated=row.rated,
+        termination_reason=row.termination_reason,
+        completed_at=row.ended_at,
+    )
 
 
 def _to_entry(row: MatchRecordModel) -> MatchHistoryEntry:

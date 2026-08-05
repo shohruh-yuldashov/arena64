@@ -306,6 +306,17 @@ class TestTheSurfaceIsDeliberate:
         # `users`' to answer under its own privacy policy, and a type that
         # carried a name would be `game` reproducing that policy.
         "ReplaySeat",
+        # A64-020.5F — every finished match, for the statistics rebuild.
+        #
+        # Published because `statistics` must replay history and cannot
+        # reach `game`'s tables. Its own port rather than a method on
+        # `MatchHistoryReader`: that one is *a player's* history and this is
+        # all of it, and a reader that could do both would let a caller page
+        # through every game on the platform by passing a nullable player
+        # id. The narrow record carries what a counter reads and nothing
+        # else — no variant, no engine version, no ply count.
+        "CompletedMatchRecord",
+        "CompletedMatchScanner",
     }
 
     def test_nothing_is_published_by_accident(self) -> None:

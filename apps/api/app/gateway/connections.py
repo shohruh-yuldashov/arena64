@@ -70,6 +70,7 @@ from typing import Final
 from uuid import UUID, uuid4
 
 from app.core.clock import Clock
+from app.gateway.commands import GameCommandHandler
 from app.gateway.dispatch import MessageDispatch
 from app.gateway.metrics import (
     CONNECTION_DURATION,
@@ -160,6 +161,7 @@ class GatewayConnectionService:
         registry: ConnectionRegistry,
         rooms: GameRoomService,
         moves: MoveSubmissionHandler,
+        commands: GameCommandHandler,
         resumes: ResumeHandler,
         spectators: SpectatorHandler,
         sockets: LocalSocketRegistry,
@@ -172,6 +174,7 @@ class GatewayConnectionService:
         self._registry = registry
         self._rooms = rooms
         self._moves = moves
+        self._commands = commands
         self._resumes = resumes
         self._spectators = spectators
         self._sockets = sockets
@@ -361,8 +364,8 @@ class GatewayConnectionService:
     ) -> MessageDispatch:
         """This connection's table, bound to its identity.
 
-        Built per frame rather than per connection, which is a dict of seven
-        closures and is the cheaper of the two arrangements to reason about:
+        Built per frame rather than per connection, which is a dict of
+        eleven closures and is the cheaper of the two arrangements to reason about:
         the lifecycle holds no per-connection object, so there is nothing to
         tear down and nothing that can outlive the socket it closed over.
 
@@ -385,6 +388,34 @@ class GatewayConnectionService:
                     message, player_id=player_id, connection_id=connection_id
                 ),
                 MessageType.MOVE_SUBMIT: lambda message: self._moves.handle(
+                    message,
+                    player_id=player_id,
+                    connection_id=connection_id,
+                    received_at=received_at,
+                ),
+                # The four participant commands share one handler, which
+                # routes on the frame type — A64-020.5C-pre §8. Four entries
+                # rather than one prefix match, so `CLIENT_SENDABLE` and this
+                # literal remain the whole of the routing decision.
+                MessageType.RESIGN: lambda message: self._commands.handle(
+                    message,
+                    player_id=player_id,
+                    connection_id=connection_id,
+                    received_at=received_at,
+                ),
+                MessageType.DRAW_OFFER: lambda message: self._commands.handle(
+                    message,
+                    player_id=player_id,
+                    connection_id=connection_id,
+                    received_at=received_at,
+                ),
+                MessageType.DRAW_ACCEPT: lambda message: self._commands.handle(
+                    message,
+                    player_id=player_id,
+                    connection_id=connection_id,
+                    received_at=received_at,
+                ),
+                MessageType.DRAW_DECLINE: lambda message: self._commands.handle(
                     message,
                     player_id=player_id,
                     connection_id=connection_id,

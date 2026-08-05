@@ -316,11 +316,52 @@ class CloseReason(StrEnum):
     parsing logs."""
 
 
+#: Participant commands received, labelled by command — A64-020.5C-pre.
+#:
+#: One counter with a `command` label rather than four counters, because
+#: every question anybody asks of these is comparative: how often is a game
+#: resigned versus drawn by agreement, and how many offers are declined.
+#: Four series would make each of those a query joining four names.
+GAME_COMMANDS: Final = "gateway.game_commands_total"
+
+#: Participant commands refused, by bounded reason.
+GAME_COMMANDS_REJECTED: Final = "gateway.game_commands_rejected_total"
+
+
+class GameCommandRejection(StrEnum):
+    """Why a participant command was not applied.
+
+    Closed and small, like `MoveRejection` and for the same reason: a
+    category per *failure mode* rather than per exception type, so a new
+    exception in `game` that means the same thing to a client does not
+    become a new time series.
+    """
+
+    NOT_IN_ROOM = "not_in_room"
+    NOT_A_PARTICIPANT = "not_a_participant"
+    MATCH_NOT_ACTIVE = "match_not_active"
+    DRAW_OFFER_ALREADY_PENDING = "draw_offer_already_pending"
+    DRAW_OFFER_NOT_PENDING = "draw_offer_not_pending"
+    DRAW_OFFER_NOT_RECIPIENT = "draw_offer_not_recipient"
+    DRAW_OFFER_NOT_ALLOWED_YET = "draw_offer_not_allowed_yet"
+    """The spam rule fired — §3. Worth its own series: a rising rate says
+    the rule is stricter than players expect, which is a product signal
+    rather than an incident."""
+
+    STALE_STATE = "stale_state"
+    MALFORMED = "malformed"
+    RATE_LIMITED = "rate_limited"
+    INTERNAL = "internal"
+
+
 __all__ = [
     "CONNECTIONS_ACCEPTED",
     "CONNECTIONS_CLOSED",
     "CONNECTIONS_REJECTED",
     "CONNECTION_DURATION",
+    "GAME_COMMANDS",
+    "GAME_COMMANDS_REJECTED",
     "CloseReason",
+    "GameCommandRejection",
     "RejectionReason",
 ]

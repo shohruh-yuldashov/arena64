@@ -41,6 +41,7 @@ from app.gateway.bus import (
     InProcessGatewayBus,
     connection_ids_of,
 )
+from app.gateway.commands import GameCommandHandler
 from app.gateway.connections import (
     CLOSE_INTERNAL_ERROR,
     CLOSE_POLICY_VIOLATION,
@@ -48,6 +49,7 @@ from app.gateway.connections import (
     GatewayPolicy,
 )
 from app.gateway.delivery import InMemoryLocalSockets, RoomBroadcaster
+from app.gateway.dispatch import CLIENT_SENDABLE
 from app.gateway.forwarding import ForwardingRun, GatewayForwarder
 from app.gateway.metrics import CloseReason
 from app.gateway.moves import MoveSubmissionHandler
@@ -71,6 +73,7 @@ from app.gateway.spectators import BlockAwareSpectatorPolicy, SpectatorSubscript
 from app.modules.engine import PlayerSide
 from app.modules.game.public import (
     ClockView,
+    GameCommand,
     IllegalMoveSubmitted,
     MatchNotActive,
     MatchRecordStatus,
@@ -80,6 +83,7 @@ from app.modules.game.public import (
 from tests.fakes.gateway import (
     CountingMoveLimiter,
     FakeConnectionRegistry,
+    FakeGameCommands,
     FakeGatewaySocket,
     FakeRoomMemberStore,
     FakeSubmitMoves,
@@ -220,6 +224,42 @@ def _moves(
     )
 
 
+def _commands(
+    rooms: GameRoomService,
+    *,
+    use_case: FakeGameCommands | None = None,
+    limiter: CountingMoveLimiter | None = None,
+    sockets: InMemoryLocalSockets | None = None,
+    registry: FakeConnectionRegistry | None = None,
+    spectators: InMemorySpectatorStore | None = None,
+) -> GameCommandHandler:
+    """The real participant-command handler over in-memory collaborators.
+
+    Real for the reason `_moves` is real: what these tests assert is the
+    *handler's* routing, refusal mapping and fan-out. What is substituted
+    is `game` itself (`FakeGameCommands`) and the transport.
+    """
+    return GameCommandHandler(
+        commands=use_case if use_case is not None else FakeGameCommands(),
+        rooms=rooms,
+        broadcaster=RoomBroadcaster(
+            router=FleetConnectionRouter(
+                registry=registry if registry is not None else FakeConnectionRegistry(),
+                node_id=NODE_ID,
+                metrics=RecordingMetrics(),
+            ),
+            sockets=sockets if sockets is not None else InMemoryLocalSockets(),
+            publisher=RecordingRemotePublisher(),
+            metrics=RecordingMetrics(),
+        ),
+        spectators=spectators if spectators is not None else InMemorySpectatorStore(),
+        idempotency=InMemoryMoveIdempotency(),
+        limiter=limiter if limiter is not None else CountingMoveLimiter(allowance=100),
+        metrics=RecordingMetrics(),
+        idempotency_ttl_seconds=60,
+    )
+
+
 def _resumes(
     rooms: GameRoomService,
     *,
@@ -260,6 +300,7 @@ def _service(
     sockets: InMemoryLocalSockets | None = None,
     resumes: ResumeHandler | None = None,
     spectators: SpectatorHandler | None = None,
+    commands: GameCommandHandler | None = None,
 ) -> GatewayConnectionService:
     resolved_rooms = rooms if rooms is not None else _rooms()
     return GatewayConnectionService(
@@ -267,6 +308,7 @@ def _service(
         registry=registry,
         rooms=resolved_rooms,
         moves=moves if moves is not None else _moves(resolved_rooms),
+        commands=commands if commands is not None else _commands(resolved_rooms),
         resumes=resumes if resumes is not None else _resumes(resolved_rooms),
         spectators=spectators if spectators is not None else _spectators(),
         sockets=sockets if sockets is not None else InMemoryLocalSockets(),
@@ -550,6 +592,7 @@ class TestCleanup:
             registry=registry,
             rooms=_rooms(),
             moves=_moves(_rooms()),
+            commands=_commands(_rooms()),
             resumes=_resumes(_rooms()),
             spectators=_spectators(),
             sockets=InMemoryLocalSockets(),
@@ -2183,3 +2226,211 @@ class TestCrossNodeForwarding:
             node_id="node-b",
             batch_size=64,
         ).forward_once() == ForwardingRun(consumed=0, delivered=0, missing=0)
+
+
+class TestParticipantCommands:
+    """A64-020.5C-pre §8, §15 — resign and the three draw frames."""
+
+    @pytest.mark.asyncio
+    async def test_each_command_frame_reaches_game_and_the_room_hears_the_result(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§8 and §16 — the routing, the correlation and the fan-out.
+
+        Four frames through the **real dispatch table**, so this is also the
+        reachability proof §15 asks for: a handler wired into
+        `dependencies.py` but missing from `_dispatch_for` would answer
+        `malformed_message` here rather than reaching `game`.
+
+        Three things are asserted per command, and they are the three a
+        transport can get wrong:
+
+            the command       `game` received the right enum, so
+                              `game.draw.accept` cannot settle a resignation
+            the correlation   the actor's answer carries their `request_id`
+            the fan-out       the **opponent** received the authoritative
+                              frame, uncorrelated
+
+        The side is never sent. `FakeGameCommands` records the whole request,
+        so the absence of a side and a winner in it is checkable rather than
+        asserted by reading the frame constructor.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters, members)
+
+        # The opponent is in the room on another connection, so the fan-out
+        # has somebody to reach who is not the actor.
+        opponent_connection = uuid4()
+        opponent_socket = FakeGatewaySocket(holds_open=True)
+        sockets = InMemoryLocalSockets()
+        sockets.attach(opponent_connection, opponent_socket)
+        await members.join(
+            match_id,
+            RoomMember(player_id=opponent_id, connection_id=opponent_connection),
+            ttl_seconds=3600,
+        )
+        await registry.register(opponent_id, opponent_connection, node_id=NODE_ID, ttl_seconds=90)
+
+        use_case = FakeGameCommands()
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [
+                _frame("room.join", channel="game", payload={"match_id": str(match_id)}),
+                _frame(
+                    "game.draw.offer",
+                    channel="game",
+                    request_id="r-offer",
+                    payload={"match_id": str(match_id)},
+                ),
+                _frame(
+                    "game.draw.decline",
+                    channel="game",
+                    request_id="r-decline",
+                    payload={"match_id": str(match_id)},
+                ),
+                _frame(
+                    "game.resign",
+                    channel="game",
+                    request_id="r-resign",
+                    payload={"match_id": str(match_id)},
+                ),
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            sockets=sockets,
+            commands=_commands(rooms, use_case=use_case, sockets=sockets, registry=registry),
+        ).run(socket, ticket=VALID_TICKET)
+
+        assert [request.command for request in use_case.executed] == [
+            GameCommand.OFFER_DRAW,
+            GameCommand.DECLINE_DRAW,
+            GameCommand.RESIGN,
+        ]
+        # Every request carries the socket's identity and the match, and
+        # nothing else — §7's "the sender must not supply player_id, side,
+        # winner, outcome or termination reason". The frames have no field
+        # for any of them, so this asserts what did arrive.
+        assert {request.player_id for request in use_case.executed} == {player_id}
+        assert {request.match_id for request in use_case.executed} == {match_id}
+
+        answers = {
+            message.request_id: message.type
+            for message in socket.sent
+            if message.request_id is not None
+        }
+        assert answers["r-offer"] is MessageType.DRAW_OFFERED
+        assert answers["r-decline"] is MessageType.DRAW_DECLINED
+        assert answers["r-resign"] is MessageType.GAME_COMPLETED
+
+        # The opponent got the fan-out — the same three frames, correlated
+        # to nothing, because they answered no request of theirs.
+        assert opponent_socket.types() == [
+            MessageType.DRAW_OFFERED,
+            MessageType.DRAW_DECLINED,
+            MessageType.GAME_COMPLETED,
+        ]
+        assert all(message.request_id is None for message in opponent_socket.sent)
+
+    @pytest.mark.asyncio
+    async def test_a_client_outside_the_room_cannot_resign_and_game_is_never_asked(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§16.2 and §8's "spectators cannot resign or participate in draw
+        agreement".
+
+        A spectator is in the *audience*, never in the room — `spectators.py`
+        is explicit that the two sets are separate — so the room-membership
+        check is what excludes them, and it runs **before** `game` is
+        consulted.
+
+        That ordering is the assertion worth having. A handler that asked
+        `game` first would still refuse the command, but it would do so
+        after a database read and a row lock taken on behalf of somebody
+        with no business in the match. `use_case.executed` being empty is
+        what says the cheap check came first.
+        """
+        outsider, match_id = generate_uuid7(), generate_uuid7()
+        rosters = StubMatchRosters()
+        rosters.add(match_id, light=generate_uuid7(), dark=generate_uuid7())
+        rooms = _rooms(rosters)
+
+        use_case = FakeGameCommands()
+        tickets.add(VALID_TICKET, outsider)
+        socket = FakeGatewaySocket(
+            [
+                _frame(
+                    "game.resign",
+                    channel="game",
+                    request_id="r1",
+                    payload={"match_id": str(match_id)},
+                )
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            commands=_commands(rooms, use_case=use_case),
+        ).run(socket, ticket=VALID_TICKET)
+
+        refusal = next(m for m in socket.sent if m.type is MessageType.COMMAND_REJECTED)
+        assert refusal.payload["code"] == GatewayErrorCode.NOT_IN_ROOM.value
+        assert use_case.executed == []
+
+    def test_every_client_sendable_frame_has_a_dispatch_entry(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§15's reachability contract, for the transport tier.
+
+        `tests/unit/test_reachability.py` catches a *background* component
+        with no caller, matching on `handle(entries)`-shaped signatures. A
+        gateway handler has a different shape and a different failure mode:
+        it is constructed in `dependencies.py`, passed to the lifecycle, and
+        then never reached because its `MessageType` is missing from
+        `_dispatch_for` — at which point every frame it serves is answered
+        `unsupported message` and nothing anywhere fails.
+
+        This closes that gap by asserting the two literals against each
+        other. `CLIENT_SENDABLE` is what the decoder admits and the dispatch
+        table is what routes it, so a type in one and not the other is
+        either a frame that is accepted and dropped, or a handler nothing
+        can reach.
+        """
+        service = _service(tickets, registry, presence)
+        # The private table is the subject: this asserts an internal
+        # invariant, and reaching it through a public method would mean
+        # adding one purely so a test could avoid an underscore.
+        dispatch = service._dispatch_for(  # noqa: SLF001
+            FakeGatewaySocket(),
+            player_id=generate_uuid7(),
+            connection_id=uuid4(),
+            received_at=NOW,
+        )
+
+        assert dispatch.routes == CLIENT_SENDABLE
+        # And the four this phase added are genuinely among them, so a
+        # future refactor that emptied both sets equally still fails.
+        assert {
+            MessageType.RESIGN,
+            MessageType.DRAW_OFFER,
+            MessageType.DRAW_ACCEPT,
+            MessageType.DRAW_DECLINE,
+        } <= dispatch.routes

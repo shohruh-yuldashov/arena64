@@ -216,6 +216,65 @@ class MessageType(StrEnum):
     rather than silently sending a snapshot, so a client can count how often
     it falls too far behind."""
 
+    RESIGN = "game.resign"
+    """Client to server, on the `game` channel — A64-020.5C-pre §7.
+
+    Carries `match_id` and nothing else. The resigning side is the socket's
+    authenticated identity resolved against the match's seats; a frame
+    naming a side would be one a client could use to resign for the
+    opponent, so the payload has no field for one."""
+
+    DRAW_OFFER = "game.draw.offer"
+    """Client to server. Offers the opponent a draw. `match_id` only, for
+    the same reason `game.resign` carries only that: the offerer is the
+    connection and the recipient is always the other seat."""
+
+    DRAW_ACCEPT = "game.draw.accept"
+    """Client to server. Accepts the standing offer, which ends the match
+    as an agreed draw. Only the recipient may send it — enforced by
+    `game`, not here."""
+
+    DRAW_DECLINE = "game.draw.decline"
+    """Client to server. Refuses the standing offer. Changes no board, no
+    clock, no turn and no ply."""
+
+    DRAW_OFFERED = "game.draw.offered"
+    """Server to **participants only** — A64-020.5C-pre §8.
+
+    Deliberately absent from `SPECTATOR_SAFE_EVENTS`: a negotiation two
+    players are holding is not the audience's until it produces a result.
+    See `app.gateway.spectators`, whose allowlist names this exact frame as
+    the case it exists for."""
+
+    DRAW_DECLINED = "game.draw.declined"
+    """Server to participants only. The offer is gone; the game continues
+    unchanged."""
+
+    COMMAND_REJECTED = "game.command.rejected"
+    """Server to client. A participant command was refused, with a stable
+    code and a safe sentence — §13.
+
+    Its own type rather than `game.move.rejected`, so a client matching on
+    the frame type knows whether its move or its draw offer was refused
+    without inspecting the payload."""
+
+    GAME_COMPLETED = "game.completed"
+    """Server to client. A match ended **without a move ending it** —
+    A64-020.5C-pre §7.
+
+    One frame for resignation and agreed draw rather than `game.resigned`
+    and `game.draw.accepted`, because a client's response to both is
+    identical (render the result, stop accepting input) and
+    `termination_reason` already says which happened. Two frames would be
+    two code paths that must not diverge.
+
+    A move that ends a game does **not** send this: the result rides on
+    `game.move.applied`, so the frame that shows the winning move is the
+    frame that says it won. Splitting that would let a board update and its
+    result arrive in either order.
+
+    Spectator-safe: a finished game is public — §8."""
+
     SPECTATOR_JOIN = "spectator.join"
     """Client to server — A64-016.7 §2. Carries `match_id`. The viewer is
     the socket's authenticated identity."""
@@ -309,6 +368,27 @@ class GatewayErrorCode(StrEnum):
     A64-016.5 §4. Distinct from `not_your_turn` because it is not a
     synchronisation problem: the move was legal and it was their turn, and
     they were simply too late. The client stops sending moves."""
+
+    DRAW_OFFER_ALREADY_PENDING = "draw_offer_already_pending"
+    """An offer already stands — A64-020.5C-pre §13.
+
+    **One code** for repeating your own offer and for offering into the
+    opponent's, because the client's recourse is the same: read the current
+    state, which already says whose offer stands."""
+
+    DRAW_OFFER_NOT_PENDING = "draw_offer_not_pending"
+    """There is nothing to accept or decline. The ordinary outcome of a
+    race rather than a client defect — an offer the opponent withdrew by
+    moving is one whose accept was already in flight."""
+
+    DRAW_OFFER_NOT_RECIPIENT = "draw_offer_not_recipient"
+    """The offering side tried to answer their own offer."""
+
+    DRAW_OFFER_NOT_ALLOWED_YET = "draw_offer_not_allowed_yet"
+    """The spam rule — §3. Distinct from `rate_limited` because it is not
+    about how fast the client is asking: the answer changes when the
+    opponent moves, not when a window elapses, so a client is told to wait
+    for a move rather than to slow down."""
 
     RATE_LIMITED = "rate_limited"
     """Too many moves from this connection. The connection **stays open**
@@ -514,6 +594,27 @@ def move_rejected(code: GatewayErrorCode, *, request_id: str | None, reason: str
     )
 
 
+def command_rejected(
+    code: GatewayErrorCode, *, request_id: str | None, reason: str
+) -> GatewayMessage:
+    """A participant command's refusal — A64-020.5C-pre §13.
+
+    The same shape as `move_rejected` and drawn from the same kind of fixed
+    table, so a client branches on `code` and may show `reason`. Its own
+    type rather than reusing `game.move.rejected`, because a client
+    matching on the frame type must not have to inspect the payload to
+    learn whether its *move* or its *draw offer* was refused — and reusing
+    `error` would lose the sentence, which is the one thing a player can
+    act on ("wait for your opponent to move").
+    """
+    return GatewayMessage(
+        type=MessageType.COMMAND_REJECTED,
+        payload={"code": code.value, "reason": reason},
+        request_id=request_id,
+        channel=Channel.GAME,
+    )
+
+
 def move_applied(
     *,
     match_id: UUID,
@@ -564,6 +665,77 @@ def _applied_payload(
         "captured": list(captured),
         "promoted_to": promoted_to,
     }
+
+
+def draw_offered(
+    *,
+    match_id: UUID,
+    offered_by: str,
+    offered_at_ply: int,
+    offered_at: str,
+    request_id: str | None = None,
+) -> GatewayMessage:
+    """A standing draw offer — A64-020.5C-pre §7.
+
+    Sent **twice** to the offerer, exactly as a move is: once correlated as
+    the answer to their command, and once as the participant fan-out. That
+    is what lets a client treat the broadcast uniformly — one code path
+    renders the pending offer whoever made it.
+
+    `offered_by` is a side rather than a player id, because a client
+    already knows which seat it holds and a side is the value it renders
+    against. `offered_at` is an ISO instant, for the same reason the clock
+    payload carries absolute instants: a duration would drift.
+    """
+    return GatewayMessage(
+        type=MessageType.DRAW_OFFERED,
+        payload={
+            "match_id": str(match_id),
+            "offered_by": offered_by,
+            "offered_at_ply": offered_at_ply,
+            "offered_at": offered_at,
+        },
+        request_id=request_id,
+        channel=Channel.GAME,
+    )
+
+
+def draw_declined(
+    *, match_id: UUID, declined_by: str, ply: int, request_id: str | None = None
+) -> GatewayMessage:
+    """The standing offer was refused. Nothing else changed.
+
+    Carries the ply so a client can assert exactly that: a decline that
+    appeared to move the board would be a client bug worth catching, and
+    the value it needs to catch it is already here.
+    """
+    return GatewayMessage(
+        type=MessageType.DRAW_DECLINED,
+        payload={"match_id": str(match_id), "declined_by": declined_by, "ply": ply},
+        request_id=request_id,
+        channel=Channel.GAME,
+    )
+
+
+def game_completed(
+    *,
+    match_id: UUID,
+    ply: int,
+    result: Mapping[str, Any],
+    request_id: str | None = None,
+) -> GatewayMessage:
+    """A match ended without a move ending it — §7.
+
+    The `result` mapping is the **same shape** `game.move.applied` and
+    `game.snapshot` both carry, so a client parses one result payload
+    everywhere rather than three that must not diverge.
+    """
+    return GatewayMessage(
+        type=MessageType.GAME_COMPLETED,
+        payload={"match_id": str(match_id), "ply": ply, "result": dict(result)},
+        request_id=request_id,
+        channel=Channel.GAME,
+    )
 
 
 def match_snapshot(payload: dict[str, Any], *, request_id: str | None) -> GatewayMessage:
@@ -775,9 +947,13 @@ __all__ = [
     "GatewayMessage",
     "MalformedFrame",
     "MessageType",
+    "command_rejected",
     "connection_ready",
     "decode",
+    "draw_declined",
+    "draw_offered",
     "error",
+    "game_completed",
     "match_events",
     "match_snapshot",
     "move_accepted",

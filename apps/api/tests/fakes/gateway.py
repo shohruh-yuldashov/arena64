@@ -38,18 +38,33 @@ from app.gateway.protocol import GatewayMessage, MessageType
 from app.gateway.rooms import RoomMember, RoomProgress
 from app.gateway.spectators import SpectatorRefusal, SpectatorSubscription
 from app.modules.engine import PlayerSide
+
+# The **domain** outcome, not `game.public`'s metric-label enum of the same
+# name — `GameCommandResult.outcome` is typed with this one, exactly as
+# `MatchSnapshot.outcome` is.
+from app.modules.game.domain.result import MatchOutcome
 from app.modules.game.domain.variants import ProductVariant
 from app.modules.game.public import (
     AppliedMove,
     ClockView,
+    DrawOfferState,
+    DrawOfferView,
+    GameCommand,
+    GameCommandRequest,
+    GameCommandResult,
     MatchRecordStatus,
     MatchRoster,
     MatchSnapshot,
     PlacedPiece,
     SubmitMoveRequest,
     SubmitMoveResult,
+    TerminationReason,
 )
 from app.modules.users.public import DeviceType
+
+#: The instant the command fake stamps. Fixed, so a test asserting an
+#: offer's timestamp asserts a value rather than "close to now".
+NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
 
 
 class FakeGatewaySocket:
@@ -385,6 +400,59 @@ class FakeSubmitMoves:
         )
 
 
+class FakeGameCommands:
+    """A `GameCommandUseCase` a test dictates the answers of.
+
+    The same line every gateway fake draws: these tests are about the
+    *transport* — which frame maps to which command, who is refused, who
+    receives the fan-out — not about whether resigning settles a match,
+    which is `tests/contract/test_game_commands.py`'s.
+
+    `raises` is what makes the error-mapping assertions possible without
+    constructing a match in each of eight refusable states.
+    """
+
+    def __init__(self) -> None:
+        self.raises: Exception | None = None
+        self.executed: list[GameCommandRequest] = []
+        self.ply = 4
+
+    async def execute(self, request: GameCommandRequest) -> GameCommandResult:
+        self.executed.append(request)
+        if self.raises is not None:
+            raise self.raises
+
+        terminal = request.command in (GameCommand.RESIGN, GameCommand.ACCEPT_DRAW)
+        offering = request.command is GameCommand.OFFER_DRAW
+        return GameCommandResult(
+            match_id=request.match_id,
+            command=request.command,
+            acting_side=PlayerSide.LIGHT,
+            ply=self.ply,
+            offer=(
+                DrawOfferView(offered_by=PlayerSide.LIGHT, offered_at_ply=self.ply, offered_at=NOW)
+                if offering
+                else None
+            ),
+            outcome=(
+                MatchOutcome.WIN
+                if request.command is GameCommand.RESIGN
+                else MatchOutcome.DRAW
+                if request.command is GameCommand.ACCEPT_DRAW
+                else None
+            ),
+            termination_reason=(
+                TerminationReason.RESIGNATION
+                if request.command is GameCommand.RESIGN
+                else TerminationReason.AGREED_DRAW
+                if request.command is GameCommand.ACCEPT_DRAW
+                else None
+            ),
+            winner=PlayerSide.DARK if request.command is GameCommand.RESIGN else None,
+            settled_at=NOW if terminal else None,
+        )
+
+
 class InMemoryMoveIdempotency:
     """`MoveIdempotency` as a dict keyed on `(connection, request_id)`.
 
@@ -512,6 +580,9 @@ class StubMatchSnapshots:
         sequence: int = 0,
         clock: ClockView | None = None,
         status: MatchRecordStatus = MatchRecordStatus.ACTIVE,
+        draw_offer: DrawOfferState | None = None,
+        may_offer_light: bool = True,
+        may_offer_dark: bool = True,
     ) -> MatchSnapshot:
         snapshot = MatchSnapshot(
             match_id=match_id,
@@ -525,6 +596,9 @@ class StubMatchSnapshots:
             light_player_id=light,
             dark_player_id=dark,
             clock=clock,
+            draw_offer=draw_offer,
+            may_offer_light=may_offer_light,
+            may_offer_dark=may_offer_dark,
             outcome=None,
             termination_reason=None,
             winner=None,

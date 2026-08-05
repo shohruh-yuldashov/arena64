@@ -58,7 +58,7 @@ from app.gateway.metrics import (
     RESUMES,
     ResumeOutcome,
 )
-from app.gateway.projections import snapshot_payload
+from app.gateway.projections import participant_snapshot_payload
 from app.gateway.protocol import (
     GatewayErrorCode,
     GatewayMessage,
@@ -140,7 +140,9 @@ class ResumeHandler:
             request.match_id, player_id=player_id, connection_id=connection_id
         )
 
-        recovery = await self._recover(request, snapshot, request_id=message.request_id)
+        recovery = await self._recover(
+            request, snapshot, viewer=player_id, request_id=message.request_id
+        )
         if recovery is not None:
             return recovery
 
@@ -152,9 +154,19 @@ class ResumeHandler:
         )
 
     async def _recover(
-        self, request: _Resumption, snapshot: MatchSnapshot, *, request_id: str | None
+        self,
+        request: _Resumption,
+        snapshot: MatchSnapshot,
+        *,
+        viewer: UUID,
+        request_id: str | None,
     ) -> GatewayMessage | None:
         """The frames or the snapshot, or `None` if the client is current.
+
+        `viewer` is the socket's proven identity and is a participant by
+        construction — the caller checks `snapshot.includes` before getting
+        here — which is what lets the projection carry the draw agreement
+        without re-deriving whose it is (A64-020.5C-pre §9).
 
         `None` is the fast path: a client that dropped and returned within a
         second has missed nothing, and sending it a snapshot it already has
@@ -176,7 +188,10 @@ class ResumeHandler:
         """
         if request.last_known_sequence <= NO_SEQUENCE:
             self._record(ResumeOutcome.SNAPSHOT)
-            return match_snapshot(snapshot_payload(snapshot), request_id=request_id)
+            return match_snapshot(
+                participant_snapshot_payload(snapshot, viewer=viewer),
+                request_id=request_id,
+            )
 
         if request.last_known_sequence >= snapshot.sequence:
             self._record(ResumeOutcome.CURRENT)

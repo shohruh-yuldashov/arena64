@@ -20,11 +20,94 @@ them would make `game` depend on a module it has no business knowing about.
 """
 
 from typing import Any
+from uuid import UUID
 
 from app.modules.game.public import MatchSnapshot
 
 
-def snapshot_payload(snapshot: MatchSnapshot) -> dict[str, Any]:
+def spectator_snapshot_payload(snapshot: MatchSnapshot) -> dict[str, Any]:
+    """The snapshot an **audience** may see — A64-020.5C-pre §8, §9.
+
+    Everything a participant gets except the draw negotiation. A separate
+    function rather than a flag, because a flag defaults to something and
+    the default that leaks is the one that ships: with two functions, a
+    caller has to name which audience it is serving, and the spectator one
+    is physically incapable of carrying an offer.
+
+    That is the same allowlist direction `SPECTATOR_SAFE_EVENTS` takes, and
+    it closes the other half of the hole: withholding
+    `game.draw.offered` from the live fan-out would achieve nothing if a
+    viewer could read the same offer by joining and taking a snapshot.
+    """
+    return _base_payload(snapshot)
+
+
+def participant_snapshot_payload(snapshot: MatchSnapshot, *, viewer: UUID) -> dict[str, Any]:
+    """The snapshot a **participant** may see — §9.
+
+    The base payload plus the draw agreement, resolved to this viewer:
+    whether an offer stands, who made it, and which of the three actions
+    they may take.
+
+    The permissions are computed here rather than sent as raw facts,
+    because the alternative is every client reimplementing "I may accept
+    only if the offer is not mine" — and a client that got it backwards
+    would show an accept button that the server refuses.
+
+    **No thresholds and no bookkeeping.** §9 forbids publishing the
+    cooldown internals; `may_offer` is the answer, and the arithmetic
+    behind it stays in `game`.
+    """
+    payload = _base_payload(snapshot)
+    payload["draw"] = _draw_payload(snapshot, viewer=viewer)
+    return payload
+
+
+def _draw_payload(snapshot: MatchSnapshot, *, viewer: UUID) -> dict[str, Any]:
+    """This viewer's draw-agreement state.
+
+    `viewer` is a participant by construction — the resume path proves it
+    with `MatchSnapshot.includes` before projecting — so the side lookup
+    below cannot fall through to a stranger.
+    """
+    side = (
+        "light"
+        if viewer == snapshot.light_player_id
+        else "dark"
+        if viewer == snapshot.dark_player_id
+        else None
+    )
+    offer = snapshot.draw_offer
+    may_offer = (
+        snapshot.may_offer_light
+        if side == "light"
+        else snapshot.may_offer_dark
+        if side == "dark"
+        else False
+    )
+    is_recipient = offer is not None and side is not None and offer.offered_by.value != side
+
+    return {
+        "offer": (
+            {
+                "offered_by": offer.offered_by.value,
+                "offered_at_ply": offer.offered_at_ply,
+                "offered_at": offer.offered_at.isoformat(),
+            }
+            if offer is not None
+            else None
+        ),
+        # Three booleans rather than one state string, because they are not
+        # mutually exclusive in the way a string would imply: a player with
+        # no offer standing may offer and may do nothing else, and a
+        # recipient may accept and decline but not offer.
+        "may_offer": may_offer,
+        "may_accept": is_recipient,
+        "may_decline": is_recipient,
+    }
+
+
+def _base_payload(snapshot: MatchSnapshot) -> dict[str, Any]:
     """The published snapshot as wire primitives.
 
     Projected here rather than in `protocol`, which knows nothing about
@@ -86,4 +169,4 @@ def _result_payload(snapshot: MatchSnapshot) -> dict[str, Any] | None:
     }
 
 
-__all__ = ["snapshot_payload"]
+__all__ = ["participant_snapshot_payload", "spectator_snapshot_payload"]

@@ -34,6 +34,8 @@ from app.modules.tournament.application.read_models import (
     PlayerTournamentPage,
     RoundView,
     StandingView,
+    TournamentListCursor,
+    TournamentPage,
     TournamentSummary,
 )
 
@@ -70,6 +72,32 @@ def decode_cursor(value: str) -> HistoryCursor:
         raise InvalidCursor("the pagination cursor is not valid") from malformed
 
 
+def encode_list_cursor(cursor: TournamentListCursor) -> str:
+    raw = f"{cursor.created_at.isoformat()}{_CURSOR_SEPARATOR}{cursor.tournament_id}"
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+
+
+def decode_list_cursor(value: str) -> TournamentListCursor:
+    """A lobby cursor string as the read model's value. Raises
+    `InvalidCursor`.
+
+    A separate codec from `decode_cursor` rather than a shared generic one:
+    the two orderings are over different instants, and a cursor issued by
+    one endpoint accepted by the other would page a lobby by a registration
+    time that nothing there stores. Same failure policy — every malformed
+    variant is one `invalid_cursor`.
+    """
+    try:
+        raw = base64.urlsafe_b64decode(value.encode("ascii")).decode("utf-8")
+        instant, _, tournament_id = raw.partition(_CURSOR_SEPARATOR)
+        return TournamentListCursor(
+            created_at=datetime.fromisoformat(instant),
+            tournament_id=UUID(tournament_id),
+        )
+    except (binascii.Error, UnicodeDecodeError, ValueError) as malformed:
+        raise InvalidCursor("the pagination cursor is not valid") from malformed
+
+
 class TournamentResponse(BaseModel):
     """One tournament's public detail — §9.
 
@@ -88,6 +116,9 @@ class TournamentResponse(BaseModel):
     status: str
     entrant_count: int = Field(description="Live registrations.")
     current_round: int | None = Field(default=None, description="The round being played, or null.")
+    registration_deadline: datetime | None = Field(
+        default=None, description="When entries close on their own, or null for operator-closed."
+    )
     created_at: datetime
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -105,9 +136,32 @@ class TournamentResponse(BaseModel):
             status=summary.status.value,
             entrant_count=summary.entrant_count,
             current_round=summary.current_round,
+            registration_deadline=summary.registration_deadline,
             created_at=summary.created_at,
             started_at=summary.started_at,
             completed_at=summary.completed_at,
+        )
+
+
+class TournamentListResponse(BaseModel):
+    """One page of the lobby, newest first — A64-020.0B.
+
+    Entries are `TournamentResponse`, the **same** shape the detail endpoint
+    returns, rather than a slimmer list-only variant. One mapper means a
+    field cannot be published on one surface and withheld on the other, and
+    a client can render a lobby card and a detail page from one type.
+    """
+
+    entries: list[TournamentResponse]
+    next_cursor: str | None = Field(
+        default=None, description="Opaque; send it back unread for the next page."
+    )
+
+    @classmethod
+    def of(cls, page: TournamentPage) -> "TournamentListResponse":
+        return cls(
+            entries=[TournamentResponse.of(summary) for summary in page.entries],
+            next_cursor=encode_list_cursor(page.next_cursor) if page.next_cursor else None,
         )
 
 
@@ -297,7 +351,10 @@ __all__ = [
     "RoundResponse",
     "StandingResponse",
     "StandingsResponse",
+    "TournamentListResponse",
     "TournamentResponse",
     "decode_cursor",
+    "decode_list_cursor",
     "encode_cursor",
+    "encode_list_cursor",
 ]

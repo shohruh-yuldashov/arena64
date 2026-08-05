@@ -28,6 +28,11 @@ from app.core.error_codes import ErrorCode
 from app.core.exceptions import ConflictError, DomainError, NotFoundError
 from app.modules.game.public import ProductVariant
 from app.modules.rating.public import RatingSnapshot, SpeedClass
+from app.modules.tournament.application.read_models import (
+    TournamentFilter,
+    TournamentListCursor,
+    TournamentPage,
+)
 from app.modules.tournament.domain.attempts import AdvancementReason, PairingAttempt
 from app.modules.tournament.domain.bracket_plan import (
     BracketSlot,
@@ -518,6 +523,37 @@ class RegistrationRepository(Protocol):
         ...
 
 
+class TournamentDirectory(Protocol):
+    """The lobby — every public tournament, newest first. A64-020.0B.
+
+    **Read-only, and narrower than the results adapter that satisfies it.**
+    A route holding this can page the lobby and can do nothing else: it
+    cannot read a bracket, cannot reach a registration, and has no method
+    that writes. Declared here so `presentation` names an application port
+    rather than a SQLAlchemy class — the layer rule (§3.1) applied to the
+    one component this phase adds.
+
+    Structural satisfaction, like every other port in this module: nothing
+    inherits from it, so the adapter stays free to serve several ports from
+    one session without any of them widening the others.
+    """
+
+    async def listing(
+        self, *, filters: TournamentFilter, after: TournamentListCursor | None, limit: int
+    ) -> TournamentPage:
+        """One page of the lobby, ordered `created_at DESC, id DESC`.
+
+        Total, so the keyset is stable. `after` continues a previous page;
+        `None` starts at the newest. The limit is bounded by the caller —
+        §10.5 makes every list endpoint paginate.
+
+        Every status is included unless `filters` narrows it, completed and
+        cancelled ones among them: a lobby that hid its finished
+        tournaments would answer "what happened here?" with silence.
+        """
+        ...
+
+
 __all__ = [
     "AlreadyRegistered",
     "AttemptAlreadyExists",
@@ -539,5 +575,6 @@ __all__ = [
     "TournamentIsFull",
     "TournamentNotFound",
     "TournamentNotStartable",
+    "TournamentDirectory",
     "TournamentRepository",
 ]

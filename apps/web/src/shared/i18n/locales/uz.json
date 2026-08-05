@@ -2,7 +2,8 @@
   "common": {
     "loading": "Yuklanmoqda…",
     "retry": "Qayta urinish",
-    "goHome": "Bosh sahifaga"
+    "goHome": "Bosh sahifaga",
+    "cancel": "Bekor qilish"
   },
   "layout": {
     "title": "Arena64",
@@ -485,7 +486,13 @@
       "agreement": "Kelishuv",
       "adjudication": "Hakamlik qarori",
       "abandonment": "O'yinni tashlab ketish",
-      "unknown": "Noma'lum"
+      "unknown": "Noma'lum",
+      "agreed_draw": "Kelishuv bo'yicha durang",
+      "no_legal_moves": "Yurish qolmadi",
+      "all_pieces_captured": "Barcha toshlar olindi",
+      "repetition": "Takrorlanish",
+      "move_limit": "Yurishlar chegarasi",
+      "abort": "Bekor qilindi"
     },
     "errors": {
       "not_your_turn": "Hozir sizning yurishingiz emas.",
@@ -501,6 +508,32 @@
       "fatal": "Ulanishda jiddiy xatolik.",
       "unknown": "Nimadir noto'g'ri ketdi."
     },
-    "loading": "O'yin yuklanmoqda…"
+    "loading": "O'yin yuklanmoqda…",
+    "controls": {
+      "heading": "O'yin boshqaruvi",
+      "resign": "Taslim bo'lish",
+      "offerDraw": "Durang taklif qilish",
+      "accept": "Durangni qabul qilish",
+      "decline": "Durangni rad etish",
+      "offerSent": "Durang taklifi yuborildi. Raqibingiz qabul qilishi, rad etishi yoki shunchaki yurishi mumkin.",
+      "pending": "Server javobi kutilmoqda…",
+      "resignConfirm": {
+        "title": "Taslim bo'lasizmi?",
+        "body": "Taslim bo'lish o'yinni darhol tugatadi va raqibingiz yutadi.",
+        "confirm": "Taslim bo'lish",
+        "rating": "Agar bu o'yin reytingli bo'lsa, natija ikkala o'yinchining reytingini o'zgartiradi."
+      },
+      "incoming": {
+        "title": "Raqibingiz durang taklif qilmoqda",
+        "body": "O'yinni durang bilan tugatish uchun qabul qiling yoki rad etib o'ynashda davom eting."
+      },
+      "errors": {
+        "draw_offer_already_pending": "Durang taklifi allaqachon turibdi.",
+        "draw_offer_not_pending": "Endi javob beriladigan durang taklifi yo'q.",
+        "draw_offer_not_recipient": "O'z taklifingizga javob bera olmaysiz.",
+        "draw_offer_not_allowed_yet": "Yana taklif qilishdan oldin raqibingiz yurishini kuting.",
+        "unknown": "Buni bajarib bo'lmadi. Qayta urinib ko'ring."
+      }
+    }
   }
 }

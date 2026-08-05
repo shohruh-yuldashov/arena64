@@ -130,15 +130,23 @@ function Result({ state }: { state: GameState }) {
         ? "game.result.won"
         : "game.result.lost";
 
+  // The **server's** `TerminationReason` values, verbatim — A64-020.5C
+  // §15. A64-020.5B guessed at three of these (`checkmate`, `no_moves`,
+  // `agreement`) and the gateway sends none of them, so an agreed draw
+  // rendered as "Unknown" and a win by capture did too. Cross-checked
+  // against `app/modules/game/domain/result.py`.
   const reasons: Record<string, TranslationKey> = {
-    checkmate: "game.reason.checkmate",
-    no_moves: "game.reason.checkmate",
+    no_legal_moves: "game.reason.no_legal_moves",
+    all_pieces_captured: "game.reason.all_pieces_captured",
     resignation: "game.reason.resignation",
-    timeout: "game.reason.timeout",
+    abort: "game.reason.abort",
+    agreed_draw: "game.reason.agreed_draw",
+    repetition: "game.reason.repetition",
+    move_limit: "game.reason.move_limit",
     flag: "game.reason.timeout",
-    agreement: "game.reason.agreement",
-    adjudication: "game.reason.adjudication",
+    flag_insufficient_material: "game.reason.timeout",
     abandonment: "game.reason.abandonment",
+    adjudication: "game.reason.adjudication",
   };
 
   return (

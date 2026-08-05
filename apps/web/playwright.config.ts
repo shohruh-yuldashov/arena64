@@ -30,9 +30,10 @@ export default defineConfig({
     // here exactly as it is in `npm run dev`.
     trace: "on-first-retry",
   },
-  // **Three projects, because two specs share three accounts.**
+  // **Four projects, because three specs share three accounts.**
   //
-  // `play.spec.ts` and `game.spec.ts` both drive the lobby with
+  // `play.spec.ts`, `game.spec.ts` and `game-controls.spec.ts` all drive
+  // the lobby with
   // `e2e_lobby_one|two|three`, and running them at once does not merely
   // race: refresh tokens rotate, so two contexts refreshing one session
   // means the loser presents a superseded token and the server revokes the
@@ -55,7 +56,7 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
-      testIgnore: ["**/play.spec.ts", "**/game.spec.ts"],
+      testIgnore: ["**/play.spec.ts", "**/game.spec.ts", "**/game-controls.spec.ts"],
     },
     {
       name: "lobby",
@@ -67,6 +68,15 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
       testMatch: "**/game.spec.ts",
       dependencies: ["lobby"],
+    },
+    {
+      name: "game-controls",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: "**/game-controls.spec.ts",
+      // Third in the chain for the same reason `live-game` is second: it
+      // drives the lobby with the same three accounts, and two specs
+      // refreshing one session revoke it — see the note above.
+      dependencies: ["live-game"],
     },
   ],
   webServer: {

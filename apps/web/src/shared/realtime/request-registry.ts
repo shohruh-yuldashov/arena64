@@ -101,7 +101,15 @@ export class RequestRegistry {
     // An `error` frame carrying our `request_id` is this request failing,
     // not a connection-level problem. Rejecting here is what lets a caller
     // `await` a request and handle its refusal in one place.
-    if (frame.type === "error" || frame.type === "game.move.rejected") {
+    if (
+      frame.type === "error" ||
+      frame.type === "game.move.rejected" ||
+      // A64-020.5C §12. A refused participant command must reject the
+      // promise its caller is awaiting, exactly as a refused move does —
+      // otherwise `game.command.rejected` would resolve as a success and a
+      // resign button would go back to idle looking like it worked.
+      frame.type === "game.command.rejected"
+    ) {
       const code = frame.payload.code;
       entry.reject(
         new RealtimeError(

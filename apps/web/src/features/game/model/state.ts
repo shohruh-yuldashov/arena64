@@ -2,6 +2,10 @@ import { type Board, boardFrom } from "@/entities/board";
 import type { CandidateMove } from "@/features/game/engine/moves";
 import type {
   ClockPayload,
+  DrawDeclinedPayload,
+  DrawOffer,
+  DrawOfferedPayload,
+  GameCompletedPayload,
   MovePayload,
   ResultPayload,
   Side,
@@ -45,6 +49,42 @@ export interface PendingMove {
   requestId: string;
 }
 
+/**
+ * Which participant command is in flight — A64-020.5C §3.
+ *
+ * One at a time, and a single value rather than a set: the four are mutually
+ * exclusive in the UI (a player answering an offer is not simultaneously
+ * resigning), so a set would model a state the buttons cannot produce and
+ * every reader would have to decide what it means.
+ */
+export type ActiveCommand = "resign" | "offer" | "accept" | "decline";
+
+/**
+ * The draw agreement, as this client holds it — §3.
+ *
+ * **Server-owned, without exception.** The three booleans arrive resolved
+ * for this viewer and are never recomputed: §2 forbids inferring permission
+ * from the ply or from local move history, and the spam rule that decides
+ * `mayOffer` lives in `game.domain.draw_agreement` where it can be enforced.
+ *
+ * `null` for `offer` means nothing stands. The booleans still matter then —
+ * `mayOffer` is false for a player whose last offer was resolved and whose
+ * opponent has not moved since.
+ */
+export interface DrawAgreementState {
+  offer: DrawOffer | null;
+  mayOffer: boolean;
+  mayAccept: boolean;
+  mayDecline: boolean;
+}
+
+const NO_DRAW_AGREEMENT: DrawAgreementState = {
+  offer: null,
+  mayOffer: false,
+  mayAccept: false,
+  mayDecline: false,
+};
+
 export type GamePhase =
   /** The route mounted; nothing has been asked for yet. */
   | "loading"
@@ -86,6 +126,25 @@ export interface GameState {
   /** A stable code for the last refusal, for the status line. */
   lastRejection: string | null;
   engineVersion: number | null;
+
+  /**
+   * The draw agreement — §3. Never a second store, and never duplicated into
+   * component state: a control that held its own copy would render the
+   * previous answer for one frame after every authoritative update.
+   */
+  draw: DrawAgreementState;
+
+  /** The command awaiting an authoritative answer, or `null`. */
+  activeCommand: ActiveCommand | null;
+
+  /**
+   * The code of the last refused command.
+   *
+   * Separate from `lastRejection`, which is the *move* path's. Collapsing
+   * them would let a refused draw offer overwrite the reason a move was
+   * rejected, and the two are shown in different places.
+   */
+  commandError: string | null;
 }
 
 export function initialState(matchId: string): GameState {
@@ -105,6 +164,9 @@ export function initialState(matchId: string): GameState {
     pending: null,
     lastRejection: null,
     engineVersion: null,
+    draw: NO_DRAW_AGREEMENT,
+    activeCommand: null,
+    commandError: null,
   };
 }
 
@@ -118,7 +180,13 @@ export type GameAction =
   | { type: "resyncing" }
   | { type: "disconnected" }
   | { type: "unavailable"; code: string }
-  | { type: "fatal"; code: string };
+  | { type: "fatal"; code: string }
+  // --- participant commands — A64-020.5C §3 ---------------------------
+  | { type: "command_sent"; command: ActiveCommand }
+  | { type: "command_rejected"; code: string }
+  | { type: "draw_offered"; payload: DrawOfferedPayload; viewerSide: Side | null }
+  | { type: "draw_declined"; payload: DrawDeclinedPayload }
+  | { type: "completed"; payload: GameCompletedPayload };
 
 /**
  * The transitions, stated once.
@@ -166,6 +234,13 @@ export function reduce(state: GameState, action: GameAction): GameState {
         // evidence (§18).
         pending: null,
         lastRejection: null,
+        // §11: a full snapshot **replaces** the control state too, so a
+        // reload restores an offer the server still holds and drops one it
+        // does not. `draw` is absent from a spectator's snapshot, which
+        // reads as "no agreement" rather than as a parse failure.
+        draw: drawFrom(snapshot),
+        activeCommand: null,
+        commandError: null,
         // History cannot be recovered from a snapshot — it carries a
         // position, not a past. Cleared rather than kept, because keeping a
         // list that no longer connects to the board would be a lie.
@@ -207,6 +282,16 @@ export function reduce(state: GameState, action: GameAction): GameState {
         // the opponent then ours cannot still be outstanding on this ply.
         pending: null,
         lastRejection: null,
+        // §10: the backend clears an offer when its **recipient** applies a
+        // legal move, inside that move's own transaction. Mirrored here so
+        // the indicator disappears with the move rather than one round trip
+        // later — and only for the recipient's move, because the offerer
+        // playing on leaves their own offer standing.
+        //
+        // This is a *reflection* of an authoritative change, not a local
+        // rule: `game.move.applied` only arrives for a move the server
+        // applied, so there is no ply arithmetic here and none is wanted.
+        draw: clearedByMove(state.draw, move.side_to_move),
       };
     }
 
@@ -239,7 +324,114 @@ export function reduce(state: GameState, action: GameAction): GameState {
 
     case "fatal":
       return { ...state, phase: "fatal", lastRejection: action.code, pending: null };
+
+    // --- participant commands — A64-020.5C §3, §5, §6, §8, §9 ----------
+
+    case "command_sent":
+      // The command is in flight and nothing else changes. §2 and §5: the
+      // match is **not** marked completed locally, not even for a
+      // resignation this player just confirmed — the result is whatever
+      // `game.completed` says, and a resignation can race another terminal
+      // event and lose.
+      return { ...state, activeCommand: action.command, commandError: null };
+
+    case "command_rejected":
+      return { ...state, activeCommand: null, commandError: action.code };
+
+    case "draw_offered": {
+      // The authoritative offer, from the event payload rather than from
+      // what this client sent (§6). The offerer and the recipient both
+      // receive this frame, and the permissions follow from who made it —
+      // the offerer may do none of the three until it resolves.
+      const offer: DrawOffer = {
+        offered_by: action.payload.offered_by,
+        offered_at_ply: action.payload.offered_at_ply,
+        offered_at: action.payload.offered_at,
+      };
+      const isRecipient =
+        action.viewerSide !== null && action.payload.offered_by !== action.viewerSide;
+
+      return {
+        ...state,
+        activeCommand: null,
+        commandError: null,
+        draw: {
+          offer,
+          // Nobody may open a new offer while one stands — the server
+          // refuses it as `draw_offer_already_pending`, and showing the
+          // button would be showing one that cannot work.
+          mayOffer: false,
+          mayAccept: isRecipient,
+          mayDecline: isRecipient,
+        },
+      };
+    }
+
+    case "draw_declined":
+      // §9: a decline changes no board, no clock, no turn and no ply.
+      // Nothing here touches any of them.
+      //
+      // `mayOffer` stays **false** for both sides rather than being guessed.
+      // The declining player could offer, and the declined one could not
+      // until their opponent moves — but which of those this client is
+      // depends on a rule the server owns (§2), so the honest answer is to
+      // enable nothing until the next authoritative statement says
+      // otherwise. `game.move.applied` triggers a snapshot-free re-read on
+      // the next resume; until then a disabled button is wrong-but-safe and
+      // an enabled one is a request the server refuses.
+      return {
+        ...state,
+        activeCommand: null,
+        commandError: null,
+        draw: NO_DRAW_AGREEMENT,
+      };
+
+    case "completed":
+      // §5, §8, §15. The authoritative result wins, whatever command this
+      // client happened to send. A resignation racing an accepted draw ends
+      // as whichever the server settled, and this is the only place the
+      // phase becomes `completed` for a command.
+      return {
+        ...state,
+        phase: "completed",
+        result: action.payload.result,
+        activeCommand: null,
+        commandError: null,
+        pending: null,
+        draw: NO_DRAW_AGREEMENT,
+      };
   }
+}
+
+/**
+ * The draw agreement a snapshot carries — §11.
+ *
+ * Absent for a spectator, and absent from every snapshot a server built
+ * before A64-020.5C-pre. Both read as "no agreement", which is correct in
+ * each case and needs no version negotiation.
+ */
+function drawFrom(snapshot: SnapshotPayload): DrawAgreementState {
+  const draw = snapshot.draw;
+  if (draw === undefined) return NO_DRAW_AGREEMENT;
+  return {
+    offer: draw.offer,
+    mayOffer: draw.may_offer,
+    mayAccept: draw.may_accept,
+    mayDecline: draw.may_decline,
+  };
+}
+
+/**
+ * The agreement after a move the server applied — §10.
+ *
+ * `sideToMove` on an applied frame is whose turn it is **now**, so the side
+ * that just moved is its opposite. An offer survives its own offerer's move
+ * and dies on its recipient's.
+ */
+function clearedByMove(draw: DrawAgreementState, sideToMove: Side): DrawAgreementState {
+  if (draw.offer === null) return draw;
+  const moved: Side = sideToMove === "light" ? "dark" : "light";
+  return draw.offer.offered_by === moved ? draw : NO_DRAW_AGREEMENT;
 }
 
 /**

@@ -2,7 +2,8 @@
   "common": {
     "loading": "Loading…",
     "retry": "Try again",
-    "goHome": "Go home"
+    "goHome": "Go home",
+    "cancel": "Cancel"
   },
   "layout": {
     "title": "Arena64",
@@ -485,7 +486,13 @@
       "agreement": "Agreement",
       "adjudication": "Adjudication",
       "abandonment": "Abandoned",
-      "unknown": "Unknown"
+      "unknown": "Unknown",
+      "agreed_draw": "Draw by agreement",
+      "no_legal_moves": "No moves left",
+      "all_pieces_captured": "All pieces captured",
+      "repetition": "Repetition",
+      "move_limit": "Move limit reached",
+      "abort": "Aborted"
     },
     "errors": {
       "not_your_turn": "It is not your turn.",
@@ -501,6 +508,32 @@
       "fatal": "The connection failed in a way we cannot recover from.",
       "unknown": "Something went wrong."
     },
-    "loading": "Loading the game…"
+    "loading": "Loading the game…",
+    "controls": {
+      "heading": "Game controls",
+      "resign": "Resign",
+      "offerDraw": "Offer a draw",
+      "accept": "Accept draw",
+      "decline": "Decline draw",
+      "offerSent": "Draw offer sent. Your opponent can accept, decline, or simply make a move.",
+      "pending": "Waiting for the server…",
+      "resignConfirm": {
+        "title": "Resign this game?",
+        "body": "Resigning ends the game immediately and your opponent wins.",
+        "confirm": "Resign",
+        "rating": "If this game is rated, the result will change both players' ratings."
+      },
+      "incoming": {
+        "title": "Your opponent offers a draw",
+        "body": "Accept to end the game as a draw, or decline and keep playing."
+      },
+      "errors": {
+        "draw_offer_already_pending": "A draw offer already stands.",
+        "draw_offer_not_pending": "There is no draw offer to answer any more.",
+        "draw_offer_not_recipient": "You cannot answer your own draw offer.",
+        "draw_offer_not_allowed_yet": "Wait for your opponent to move before offering again.",
+        "unknown": "That could not be done. Try again."
+      }
+    }
   }
 }

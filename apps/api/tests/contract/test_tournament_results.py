@@ -585,3 +585,92 @@ class TestPublicReads:
 
         missing = await client.get(f"/api/v1/tournaments/{uuid4()}", headers=viewer.auth)
         assert missing.status_code == 404
+
+
+class TestBracketByeReporting:
+    """What `is_bye` means on the wire — the regression A64-020.6 found.
+
+    Both directions, because the fix must not be "always false": a node that
+    is *waiting* is not a bye, and a node that genuinely advanced without an
+    opponent still is.
+    """
+
+    async def test_a_node_waiting_for_an_opponent_is_not_reported_as_a_bye(
+        self, contract_session: AsyncSession, client: AsyncClient
+    ) -> None:
+        """The defect A64-020.6 found in the published read model.
+
+        `BracketSlot.is_bye` counts participants, and `propagated` is
+        correct only because it pairs that count with `_children_settled` —
+        "one player **and nothing beneath can still deliver the other**".
+        `BracketNodeView` copied the count and not the pairing, so a final
+        holding one semi-finalist reported `is_bye: true` for the whole time
+        the other semi-final was being played.
+
+        Four entrants, **one** semi-final decided. The final then has one
+        seat filled, one empty, and no winner — which is the exact state the
+        domain documents as "waiting, not a bye".
+        """
+        clock = MovableClock(NOW)
+        tournament, _ = await _seeded_tournament(contract_session, clock, entrants=4, capacity=4)
+
+        attempts = SqlAlchemyPairingAttemptRepository(contract_session)
+        bracket = SqlAlchemyBracketRepository(contract_session)
+        nodes = await bracket.nodes_for(tournament.id)
+        live = [
+            attempt
+            for node in nodes
+            if node.id is not None
+            for attempt in await attempts.for_pairings([node.id])
+            if attempt.outcome is None
+        ]
+        assert len(live) == 2, "an unperturbed four-player bracket starts two semi-finals"
+
+        await _consumer(contract_session, clock).handle(
+            _completion(
+                match_id=live[0].match_id, pairing_id=live[0].pairing_id, winner=PlayerSide.LIGHT
+            )
+        )
+
+        viewer = await register(client)
+        response = await client.get(
+            f"/api/v1/tournaments/{tournament.id}/bracket", headers=viewer.auth
+        )
+        assert response.status_code == 200, response.text
+
+        final = response.json()["data"]["rounds"][1]["nodes"][0]
+        seated = [final["light_player_id"], final["dark_player_id"]]
+        assert sum(1 for seat in seated if seat is not None) == 1, "one semi-final is still live"
+        assert final["winner_id"] is None
+        assert final["is_bye"] is False
+        assert final["advancement_reason"] is None
+
+        # And the played semi-final is still not a bye either, so the fix is
+        # not "always false".
+        decided = next(n for n in response.json()["data"]["rounds"][0]["nodes"] if n["winner_id"])
+        assert decided["advancement_reason"] == "played"
+        assert decided["is_bye"] is False
+
+    async def test_a_real_bye_is_still_reported_as_one(
+        self, contract_session: AsyncSession, client: AsyncClient
+    ) -> None:
+        """The other half of the same rule — §13's "bye clearly marked".
+
+        Three entrants in a four-slot bracket is one bye, resolved in the
+        transaction that materialised the tree. It carries a winner and
+        `advancement_reason = "bye"`, which is what `is_bye` now reads.
+        """
+        clock = MovableClock(NOW)
+        tournament, _ = await _seeded_tournament(contract_session, clock, entrants=3, capacity=4)
+        viewer = await register(client)
+
+        response = await client.get(
+            f"/api/v1/tournaments/{tournament.id}/bracket", headers=viewer.auth
+        )
+        assert response.status_code == 200, response.text
+
+        first_round = response.json()["data"]["rounds"][0]["nodes"]
+        byes = [node for node in first_round if node["is_bye"]]
+        assert len(byes) == 1
+        assert byes[0]["advancement_reason"] == "bye"
+        assert byes[0]["winner_id"] is not None

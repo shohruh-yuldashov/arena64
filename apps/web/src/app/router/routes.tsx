@@ -268,6 +268,29 @@ export const gameRoute = createRoute({
   component: protectedPage(() => import("@/pages/game")),
 });
 
+/**
+ * `/games/$matchId/replay` — one finished game, played back.
+ *
+ * A64-020.5E. Behind `RequireAuth` because the replay read is
+ * authenticated: `GET /matches/{id}/replay` resolves the viewer from the
+ * access token and answers `404` for a casual match they did not play.
+ *
+ * **The guard is not the authorization.** It stops an anonymous visitor
+ * reaching a page that would only get a `401`, and nothing more — the
+ * backend decides who may see which match, and a hand-typed match id gets
+ * the same `404` here as anywhere else (§3, §24).
+ *
+ * A sibling of `/games/$matchId` rather than a child, deliberately: a
+ * replay is not a mode of the live board. It mounts no socket, no engine
+ * and no clock, and nesting would invite sharing a layout that owns all
+ * three.
+ */
+export const replayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/games/$matchId/replay",
+  component: protectedPage(() => import("@/pages/replay")),
+});
+
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
@@ -287,4 +310,5 @@ export const routeTree = rootRoute.addChildren([
   searchRoute,
   playRoute,
   gameRoute,
+  replayRoute,
 ]);

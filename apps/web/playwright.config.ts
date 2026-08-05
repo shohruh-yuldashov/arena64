@@ -61,6 +61,7 @@ export default defineConfig({
         "**/game.spec.ts",
         "**/game-controls.spec.ts",
         "**/realtime-push.spec.ts",
+        "**/replay.spec.ts",
       ],
     },
     {
@@ -73,6 +74,16 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
       testMatch: "**/game.spec.ts",
       dependencies: ["lobby"],
+    },
+    {
+      name: "replay",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: "**/replay.spec.ts",
+      // **Last, and for a different reason than the others.** It does not
+      // queue, so it does not contend for the accounts — it needs a match
+      // one of the earlier projects *finished*, which
+      // `game-controls.spec.ts` produces by resignation. A64-020.5E §26.
+      dependencies: ["realtime-push"],
     },
     {
       name: "realtime-push",

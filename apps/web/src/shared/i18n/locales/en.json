@@ -541,5 +541,56 @@
         "unknown": "That could not be done. Try again."
       }
     }
+  },
+  "replay": {
+    "title": "Replay",
+    "loading": "Loading the game…",
+    "shortcuts": "Arrow keys step through the game. Home and End jump to the first and last position.",
+    "controls": {
+      "first": "Beginning",
+      "previous": "Previous",
+      "next": "Next",
+      "last": "End",
+      "flip": "Flip board"
+    },
+    "position": {
+      "opening": "Starting position",
+      "at": "Move {ply} of {total}"
+    },
+    "moves": {
+      "label": "Moves",
+      "none": "No moves were played in this game.",
+      "captured": "captured {count}",
+      "promoted": "promoted to king"
+    },
+    "seat": {
+      "unknownPlayer": "Unknown player",
+      "winner": "won"
+    },
+    "result": {
+      "draw": "Draw",
+      "lightWon": "Light won",
+      "darkWon": "Dark won",
+      "unfinished": "No result"
+    },
+    "meta": {
+      "untimed": "No clock",
+      "played": "Played",
+      "moves": "Moves",
+      "engine": "Rules version"
+    },
+    "notFound": {
+      "title": "This game is not available",
+      "body": "It may not exist, or it may be a casual game you did not play."
+    },
+    "unsupported": {
+      "title": "This game cannot be replayed",
+      "body": "It was played under an older version of the rules. Replaying it under the current rules could show a different game, so it is not attempted."
+    },
+    "error": {
+      "title": "The replay could not be loaded",
+      "body": "Something went wrong. Try again in a moment."
+    },
+    "openReplay": "View replay"
   }
 }

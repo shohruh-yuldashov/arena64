@@ -1236,7 +1236,125 @@ disabled button should read from.
 participant-only, and a spectator's snapshot has no `draw` key at all. A spectator UI must not
 assume the field exists.
 
-## 17. Open questions
+## 17. Replay — A64-020.5E
+
+`/games/$matchId/replay`, a lazy route behind `RequireAuth`. One finished
+game, played back.
+
+### 17.1 One request, no socket, no engine
+
+Every ply of the replay response carries the **full board it produced**, in
+the same placement format `game.snapshot` uses. So this client replays
+nothing: stepping through a hundred positions is a hundred reads of an array
+already in memory, and the page opens no WebSocket at all.
+
+Measured: **one** HTTP request for the whole game, zero per ply, zero per
+participant. Both participants arrive composed in the same response — one
+batched lookup on the server — so there is no N+1.
+
+Cached with `staleTime: Infinity` and never refetched on focus: a finished
+match's log is immutable, and so is the engine version that would refuse it.
+
+### 17.2 Board reuse, not a fork
+
+`GameBoard` unchanged, with `interactive={false}` and empty movable and
+destination sets. §7's reason is the one that matters: a second board would
+be a second coordinate mapping, and the day the two disagreed the archive
+would be wrong about a game that was played correctly.
+
+Nothing live comes with it — no legal-move generation, no turn, no clock, no
+pending move. Those live in `useGameRoom`, which this page never mounts.
+
+### 17.3 The index is a position, not a ply
+
+`0` is the opening, before anybody moved; `n` is the board after ply `n`. So
+`positionCount === plies.length + 1`, and **a game nobody moved in has one
+valid position** rather than an empty state.
+
+That distinction is why it is a named concept: "ply 3" and "the position
+after ply 3" are different things, and a move list highlighting one while the
+board shows the other is the bug the arrangement makes unrepresentable.
+
+Two pieces of local state and no more — the index and the orientation.
+
+### 17.4 Move list
+
+The **whole coordinate path**: `f6–d4–b2`, not `f6–b2`. Two capture
+sequences can share endpoints, and which pieces came off is what a reader
+opens a move list to find. No notation is invented — the backend publishes
+none, and claiming a PDN dialect this repository has never chosen would be
+inventing a contract.
+
+Entries are real buttons with `aria-current="step"` on the active one, so
+the current move is stated rather than only highlighted.
+
+### 17.5 Keyboard
+
+`←` `→` step, `Home` and `End` jump. One document listener, and it stands
+down while the caret is in a field or a modifier is held — without that,
+typing in a dialog over this page would step the board, and `Ctrl+←` would
+stop being word navigation.
+
+The buttons remain the primary controls; this is an accelerator over them.
+
+### 17.6 Orientation
+
+The viewer's own side at the bottom, light for anybody else — derived from
+the authoritative seats, so a hand-typed URL cannot pick an orientation that
+claims a seat. A manual flip is presentation state and is not persisted.
+
+### 17.7 Refusals are three distinct states
+
+| Response | State | Behaviour |
+| --- | --- | --- |
+| `404` | not found | One screen for "no such match" **and** "a casual match you did not play" — the backend gives one answer and so does this. Never says "you do not have permission" |
+| `409 unsupported_engine_version` | a first-class state | The match exists and may be seen; this build declines to reconstruct a game played under rules that have since been fixed. **No board is shown** — an empty one pretending to be a position is the failure this refuses |
+| anything else | unexpected | Retryable |
+
+Neither `404` nor `409` is retried: both are stable answers about a
+permanent record.
+
+### 17.8 Where it is reachable from
+
+The completed live-game result panel, which is the only existing surface
+carrying a real match id — **there is no match-history UI yet**. When one
+ships, `MatchHistoryEntryResponse.match_id` is already there and the link is
+one component away.
+
+### 17.9 Deferred
+
+Analysis, evaluation, best-move suggestions, annotations, variations, PDN
+export, autoplay, and sharing. Autoplay was in scope as optional and was not
+built: the core is complete and the test budget was better spent on the
+navigation invariants.
+
+### 17.10 E2E
+
+`tests/e2e/replay.spec.ts` finds a match the lobby chain actually finished —
+`game-controls.spec.ts` ends its game by resignation — through
+`GET /players/{id}/matches`, the supported read a history UI would use. No
+table is truncated, no Redis is flushed, no backdoor is added, and an
+account with no completed match fails loudly rather than skipping.
+
+Last in the project chain, and unlike the others not because it contends for
+the accounts: it needs a match an earlier project *completed*.
+
+### 17.11 Backend prerequisites this phase required
+
+Two, both isolated in their own commits before the UI:
+
+- **`feat(game): expose replay metadata`.** The replay response carried the
+  position and the result and nothing describing the game. There is no
+  `GET /matches/{id}`, so a client would have had to page a player's whole
+  history to learn whether the game it was rendering was rated. Every added
+  field was already on the row the replay already read.
+- **`fix(game): replay games that ended off the board`.** Three defects that
+  between them meant the endpoint had never returned a game with a move in
+  it. See that commit for the root cause; the short version is that five of
+  the eleven termination reasons are not the board's, and the result check
+  demanded the board produce them anyway.
+
+## 18. Open questions
 
 | # | Question | Blocked work |
 | --- | --- | --- |

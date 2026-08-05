@@ -3699,7 +3699,13 @@ export interface components {
         MatchRecordStatus: "pending_acceptance" | "active" | "completed" | "cancelled" | "expired";
         /**
          * MatchReplayResponse
-         * @description A whole finished game, reconstructed.
+         * @description A whole finished game, reconstructed, with the metadata that
+         *     describes it — A64-020.5E §5, §14.
+         *
+         *     The metadata is here because there is nowhere else it could come from:
+         *     no endpoint serves one match's stored facts by id, and a client would
+         *     otherwise have had to page a player's whole history to learn whether
+         *     the game it is replaying was rated.
          */
         MatchReplayResponse: {
             /**
@@ -3711,6 +3717,22 @@ export interface components {
             variant: string;
             /** Engine Version */
             engine_version: number;
+            /** Status */
+            status: string;
+            /** Rated */
+            rated: boolean;
+            /** Speed Class */
+            speed_class: string | null;
+            time_control: components["schemas"]["ReplayTimeControlResponse"] | null;
+            light: components["schemas"]["ReplaySeatResponse"];
+            dark: components["schemas"]["ReplaySeatResponse"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Ended At */
+            ended_at: string | null;
             /** Opening */
             opening: components["schemas"]["PlacedPieceResponse"][];
             /** Plies */
@@ -4782,6 +4804,49 @@ export interface components {
             think_time_ms: number | null;
             /** Remaining Clock Ms */
             remaining_clock_ms: number | null;
+        };
+        /**
+         * ReplaySeatResponse
+         * @description One seat, with as much of its player as the viewer may see —
+         *     A64-020.5E §13.
+         *
+         *     The identity is composed from `users`' **public** profile read, gated
+         *     by the same privacy policy every other surface uses. `username` and
+         *     `display_name` are `None` for a deactivated account, which is the
+         *     answer this platform gives everywhere rather than a special case here.
+         *
+         *     The rating is `game`'s own: the snapshot taken when the match was
+         *     created (PR-3). A replay shows what the game was played at, not what
+         *     the player rates now.
+         */
+        ReplaySeatResponse: {
+            /**
+             * Player Id
+             * Format: uuid
+             */
+            player_id: string;
+            /** Username */
+            username?: string | null;
+            /** Display Name */
+            display_name?: string | null;
+            /** Avatar Thumbnail Url */
+            avatar_thumbnail_url?: string | null;
+            /** Rating Value */
+            rating_value?: number | null;
+            /** Rating Deviation */
+            rating_deviation?: number | null;
+            /** Is Provisional */
+            is_provisional?: boolean | null;
+        };
+        /**
+         * ReplayTimeControlResponse
+         * @description How much time each side had. `null` for an untimed match.
+         */
+        ReplayTimeControlResponse: {
+            /** Initial Ms */
+            initial_ms: number;
+            /** Increment Ms */
+            increment_ms: number;
         };
         /**
          * ResendVerificationRequest

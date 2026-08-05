@@ -81,7 +81,11 @@ test("two players queue into the same pool and both reach the match", async ({
       // option is also the assertion that `GET /time-controls` answered.
       const controls = page.getByRole("group", { name: /time control/i });
       await expect(controls).toBeVisible();
-      await controls.getByRole("radio", { name: /^1\+0$/ }).check();
+      // The accessible name is the clock **and** its speed class — "1+0
+      // Bullet" — because the label wraps both. Anchored at the start only:
+      // "10+0 Rapid" does not begin "1+0", so this stays unambiguous
+      // without pinning the translated class name.
+      await controls.getByRole("radio", { name: /^1\+0/ }).check();
       await page.getByRole("button", { name: /join the queue/i }).click();
       await expect(page.getByText(/searching for an opponent/i)).toBeVisible();
     }
@@ -117,6 +121,14 @@ test("two players queue into the same pool and both reach the match", async ({
     expect(new URL(alicePage.url()).pathname).toBe(new URL(bobPage.url()).pathname);
     await expect(alicePage.getByRole("heading", { name: "Game" })).toBeVisible();
   } finally {
+    // The contexts refreshed while running, rotating each cookie, so the
+    // saved state is written back — otherwise the next run's probe would
+    // present a superseded token, revoke the session it was reusing, and
+    // fall back to a sign-in. Two of those per run exhausts the five-per-IP
+    // login budget in three runs, which is exactly the failure A64-020.4
+    // built the seeded-account strategy to remove.
+    await aliceContext.storageState({ path: statePath(E2E_ACCOUNTS.lobbyOne) });
+    await bobContext.storageState({ path: statePath(E2E_ACCOUNTS.lobbyTwo) });
     await aliceContext.close();
     await bobContext.close();
   }

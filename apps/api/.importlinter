@@ -371,13 +371,22 @@ allow_indirect_imports = True
 # The rule that matters most is the one about `game` and `matchmaking`:
 # reference data must never learn what a *match* or a *queue* is, or the
 # catalogue stops being data and starts being a service.
+#
+# `auth` is narrowed to its three internal layers rather than forbidden
+# outright, exactly as `rating`'s equivalent contract narrows it and for the
+# same reason: `auth.presentation.dependencies.CurrentUser` is the
+# platform-wide way a router names its caller, and every module's router on
+# this platform imports it. Forbidding it would mean either an unauthenticated
+# endpoint or a second identity dependency.
 [importlinter:contract:reference-reaches-modules-through-public]
 name = reference reaches every module only through its published surface
 type = forbidden
 source_modules =
     app.modules.reference
 forbidden_modules =
-    app.modules.auth
+    app.modules.auth.domain
+    app.modules.auth.application
+    app.modules.auth.infrastructure
     app.modules.avatars
     app.modules.engine
     app.modules.friends
@@ -894,5 +903,6 @@ allow_indirect_imports = True
 name = reference layers point inward
 type = layers
 layers =
+    app.modules.reference.presentation
     app.modules.reference.infrastructure
     app.modules.reference.domain

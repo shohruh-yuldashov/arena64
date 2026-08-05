@@ -2,11 +2,13 @@ import type { QueryClient } from "@tanstack/react-query";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 
+import { RealtimeProvider } from "@/app/providers/realtime-provider";
 import type { AuthChannel } from "@/features/auth/model/auth-channel";
 import { SessionProvider } from "@/features/auth/model/session-provider";
 import UnexpectedErrorPage from "@/pages/unexpected-error";
 import { createQueryClient } from "@/shared/api";
 import { I18nProvider } from "@/shared/i18n";
+import type { RealtimeClient } from "@/shared/realtime";
 import { ThemeProvider } from "@/shared/theme/theme-context";
 import { ErrorBoundary } from "@/shared/ui";
 
@@ -18,7 +20,8 @@ import { ErrorBoundary } from "@/shared/ui";
  *            └─ I18nProvider   ...and translated
  *                 └─ QueryClientProvider
  *                      └─ SessionProvider
- *                           └─ children (router → layout → page)
+ *                           └─ RealtimeProvider
+ *                                └─ children (router → layout → page)
  *
  * ## Why this order and no other
  *
@@ -39,9 +42,18 @@ import { ErrorBoundary } from "@/shared/ui";
  * signs in next on the device. `SessionProvider` calls `useQueryClient`, so
  * it has to be inside.
  *
- * **`SessionProvider` is innermost** because everything below it — the
- * router, the guards, every page — reads the session, and nothing above it
- * does.
+ * **`SessionProvider` is above `RealtimeProvider`** because the socket is
+ * authenticated: it cannot start until there is a session, and signing out
+ * must close it. That dependency is one-directional, which is why the
+ * session provider knows nothing about a socket and publishes
+ * `onSessionEnded` instead — A64-020.5B §3.
+ *
+ * **`RealtimeProvider` is innermost, and above the router** — A64-020.5B.
+ * One socket per tab (AD-11), and it survives navigation: a connection
+ * owned by the game page would be rebuilt every time a player glanced at
+ * their profile mid-game, and each rebuild costs a ticket, a handshake and
+ * a full resume. Its context value is referentially stable forever, so
+ * mounting it here re-renders nothing.
  *
  * ## One client, created once
  *
@@ -50,16 +62,21 @@ import { ErrorBoundary } from "@/shared/ui";
  * a new cache on every render and quietly disable caching altogether; the
  * app would work, slowly, and nothing would say why.
  *
- * `queryClient` is injectable so a test can supply one with retries off.
+ * `queryClient` is injectable so a test can supply one with retries off,
+ * and `realtimeClient` for the same reason: a test that wants to observe
+ * the socket needs the instance the app actually uses, not a second one.
  */
 export function AppProviders({
   children,
   queryClient,
   authChannel,
+  realtimeClient,
 }: {
   children: ReactNode;
   queryClient?: QueryClient;
   authChannel?: AuthChannel;
+  /** Injectable for the same reason `queryClient` is — see below. */
+  realtimeClient?: RealtimeClient;
 }) {
   const [fallbackClient] = useState(createQueryClient);
   const client = queryClient ?? fallbackClient;
@@ -79,7 +96,9 @@ export function AppProviders({
         <I18nProvider>
           <QueryClientProvider client={client}>
             <SessionProvider {...(authChannel ? { channel: authChannel } : {})}>
-              {children}
+              <RealtimeProvider {...(realtimeClient ? { client: realtimeClient } : {})}>
+                {children}
+              </RealtimeProvider>
             </SessionProvider>
           </QueryClientProvider>
         </I18nProvider>

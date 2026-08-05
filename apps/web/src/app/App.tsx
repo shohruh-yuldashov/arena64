@@ -5,6 +5,7 @@ import { useState } from "react";
 import { AppProviders } from "@/app/providers";
 import { type AppRouter, createAppRouter } from "@/app/router";
 import type { AuthChannel } from "@/features/auth/model/auth-channel";
+import type { RealtimeClient } from "@/shared/realtime";
 
 /**
  * The composition root.
@@ -29,10 +30,12 @@ export function App({
   router,
   queryClient,
   authChannel,
+  realtimeClient,
 }: {
   router?: AppRouter;
   queryClient?: QueryClient;
   authChannel?: AuthChannel;
+  realtimeClient?: RealtimeClient;
 } = {}) {
   // The initialiser form, so the default router is built once rather than
   // on every render — a fresh history per render would reset navigation.
@@ -42,6 +45,7 @@ export function App({
     <AppProviders
       {...(queryClient ? { queryClient } : {})}
       {...(authChannel ? { authChannel } : {})}
+      {...(realtimeClient ? { realtimeClient } : {})}
     >
       <RouterProvider router={router ?? fallbackRouter} />
     </AppProviders>

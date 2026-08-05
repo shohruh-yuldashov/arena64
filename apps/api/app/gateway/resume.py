@@ -156,18 +156,31 @@ class ResumeHandler:
     ) -> GatewayMessage | None:
         """The frames or the snapshot, or `None` if the client is current.
 
-        `None` is the fast path and the common one: a client that dropped
-        and returned within a second has missed nothing, and sending it a
-        snapshot it already has would make every flaky network a full
-        replay.
-        """
-        if request.last_known_sequence >= snapshot.sequence:
-            self._record(ResumeOutcome.CURRENT)
-            return None
+        `None` is the fast path: a client that dropped and returned within a
+        second has missed nothing, and sending it a snapshot it already has
+        would make every flaky network a full replay.
 
+        **"Start me over" is checked first**, and the order is the whole
+        rule rather than a style choice — A64-020.5B. `NO_SEQUENCE` is zero,
+        and so is the sequence of a match nobody has moved in, so the two
+        conditions overlap on exactly the case that matters most: a player
+        opening a freshly accepted game. Testing `>= snapshot.sequence`
+        first answers `0 >= 0` with `CURRENT` and sends that player nothing
+        at all — no position, no clocks, no side to move — leaving a board
+        that never renders on the one path every game begins with.
+
+        Zero means *the client is holding nothing*, whatever the server's
+        sequence happens to be, and the only correct answer to it is the
+        truth. A client that has genuinely seen a ply reports one or more
+        and still takes the fast path below.
+        """
         if request.last_known_sequence <= NO_SEQUENCE:
             self._record(ResumeOutcome.SNAPSHOT)
             return match_snapshot(snapshot_payload(snapshot), request_id=request_id)
+
+        if request.last_known_sequence >= snapshot.sequence:
+            self._record(ResumeOutcome.CURRENT)
+            return None
 
         buffered = await self._events.since(request.match_id, sequence=request.last_known_sequence)
         if not buffered.is_contiguous:

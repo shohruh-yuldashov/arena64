@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import type { APIRequestContext } from "@playwright/test";
@@ -43,6 +43,32 @@ export const AUTH_DIR = resolve(process.cwd(), ".auth");
 
 export function statePath(username: string): string {
   return resolve(AUTH_DIR, `${username}.json`);
+}
+
+/**
+ * Writes a context's rotated cookies back **without losing the account**.
+ *
+ * `context.storageState({ path })` writes Playwright's own shape —
+ * `{ cookies, origins }` — and nothing else. The seeded account block this
+ * harness adds beside it is silently dropped, so a spec that saved directly
+ * left a file `seededAccount` would then reject as unseeded, and
+ * `global-setup` would rebuild only the fragment it could infer.
+ *
+ * It went unnoticed because the next run's `sessionIsLive` rewrites the
+ * file from a *read* of the same file, so a partially-restored `arena64`
+ * kept working for the one field `resetRelationship` happened to use.
+ *
+ * Every spec that loads a seeded session must save through this.
+ */
+export async function saveState(
+  context: { storageState: (options: { path: string }) => Promise<unknown> },
+  username: string,
+): Promise<void> {
+  const path = statePath(username);
+  const account = JSON.parse(readFileSync(path, "utf8")) as { arena64?: SeededAccount };
+  await context.storageState({ path });
+  const rotated = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+  writeFileSync(path, JSON.stringify({ ...rotated, arena64: account.arena64 }, null, 2));
 }
 
 /** Stable, and namespaced so they cannot collide with a real player. */

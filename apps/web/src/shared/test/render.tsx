@@ -7,6 +7,7 @@ import { App } from "@/app/App";
 import { AppProviders } from "@/app/providers";
 import { createAppRouter } from "@/app/router";
 import type { AuthChannel } from "@/features/auth/model/auth-channel";
+import type { RealtimeClient } from "@/shared/realtime";
 
 /**
  * Two ways to mount something, and the difference matters.
@@ -34,7 +35,7 @@ export function createTestQueryClient(): QueryClient {
 }
 
 export function renderApp(
-  options: { path?: string; channel?: AuthChannel } = {},
+  options: { path?: string; channel?: AuthChannel; realtimeClient?: RealtimeClient } = {},
 ): RenderResult & { queryClient: QueryClient } {
   const router = createAppRouter(
     createMemoryHistory({ initialEntries: [options.path ?? "/"] }),
@@ -46,6 +47,7 @@ export function renderApp(
         router={router}
         queryClient={queryClient}
         {...(options.channel ? { authChannel: options.channel } : {})}
+        {...(options.realtimeClient ? { realtimeClient: options.realtimeClient } : {})}
       />,
     ),
     queryClient,

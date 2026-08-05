@@ -431,5 +431,76 @@
       "unavailable": "Navbat holatini o'qib bo'lmadi.",
       "catalogue_unavailable": "Hozircha o'yin boshlab bo'lmaydi. Keyinroq urinib ko'ring."
     }
+  },
+  "game": {
+    "title": "O'yin",
+    "board": {
+      "label": "Shashka taxtasi",
+      "empty": "bo'sh",
+      "selected": "tanlangan",
+      "destination": "yurish mumkin",
+      "willBeCaptured": "olinadi",
+      "lastMove": "oxirgi yurish"
+    },
+    "side": {
+      "light": "Oq",
+      "dark": "Qora"
+    },
+    "piece": {
+      "man": "shashka",
+      "king": "damka"
+    },
+    "turn": {
+      "yours": "Sizning yurishingiz",
+      "opponent": "Raqib o'ylamoqda",
+      "pending": "Yurish yuborilmoqda…"
+    },
+    "connection": {
+      "connecting": "Ulanmoqda…",
+      "reconnecting": "Qayta ulanmoqda…",
+      "offline": "Internet yo'q",
+      "resyncing": "Holat yangilanmoqda…",
+      "lost": "Aloqa uzildi"
+    },
+    "clock": {
+      "label": "{side} vaqti",
+      "awaitingServer": "Vaqt tugadi — server javobi kutilmoqda"
+    },
+    "players": {
+      "you": "Siz",
+      "opponent": "Raqib"
+    },
+    "result": {
+      "title": "O'yin tugadi",
+      "won": "Siz yutdingiz",
+      "lost": "Siz yutqazdingiz",
+      "draw": "Durrang",
+      "reason": "Sabab: {reason}",
+      "backToLobby": "Lobbiga qaytish"
+    },
+    "reason": {
+      "checkmate": "Yurish qolmadi",
+      "resignation": "Taslim bo'lish",
+      "timeout": "Vaqt tugadi",
+      "agreement": "Kelishuv",
+      "adjudication": "Hakamlik qarori",
+      "abandonment": "O'yinni tashlab ketish",
+      "unknown": "Noma'lum"
+    },
+    "errors": {
+      "not_your_turn": "Hozir sizning yurishingiz emas.",
+      "illegal_move": "Bu yurish mumkin emas.",
+      "stale_state": "Holat eskirgan — yangilanmoqda.",
+      "clock_expired": "Vaqtingiz tugadi.",
+      "match_not_active": "Bu o'yin faol emas.",
+      "not_a_participant": "Siz bu o'yin ishtirokchisi emassiz.",
+      "room_unavailable": "O'yinga ulanib bo'lmadi.",
+      "not_in_room": "O'yin xonasida emassiz.",
+      "rate_limited": "Juda tez — biroz sekinroq.",
+      "unavailable": "Bu o'yinni ochib bo'lmadi.",
+      "fatal": "Ulanishda jiddiy xatolik.",
+      "unknown": "Nimadir noto'g'ri ketdi."
+    },
+    "loading": "O'yin yuklanmoqda…"
   }
 }

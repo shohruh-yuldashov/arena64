@@ -1456,6 +1456,51 @@ class TestReconnection:
         assert "rating" not in json.dumps(snapshot.payload)
 
     @pytest.mark.asyncio
+    async def test_a_player_opening_a_game_nobody_has_moved_in_gets_the_board(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """A64-020.5B — the resume every game begins with.
+
+        A match at sequence 0 and a client reporting nothing are numerically
+        the same value, and the handler used to answer "you are current" to
+        it, because `0 >= 0`. That is true and useless: the client is
+        holding no position, no clocks and no side to move, so the very
+        first resume of every game returned `game.resumed` and left a board
+        that never rendered. Found in a two-browser run against the real
+        gateway, where both players reached `/games/{id}` and saw nothing.
+
+        `<= NO_SEQUENCE` means *I am holding nothing* whatever the server's
+        sequence is, so it is answered before the fast path. Asserted with
+        the opening position present in the payload rather than only the
+        frame type, because a snapshot of an empty board would satisfy the
+        type and reproduce the bug.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters = StubMatchRosters()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters)
+
+        snapshots = StubMatchSnapshots()
+        snapshots.add(match_id, light=player_id, dark=opponent_id, sequence=0)
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [_frame("game.resume", channel="game", payload={"match_id": str(match_id)})]
+        )
+
+        await _service(
+            tickets, registry, presence, rooms, resumes=_resumes(rooms, snapshots=snapshots)
+        ).run(socket, ticket=VALID_TICKET)
+
+        snapshot = next(m for m in socket.sent if m.type is MessageType.SNAPSHOT)
+        assert snapshot.payload["sequence"] == 0
+        assert snapshot.payload["pieces"] != []
+        assert snapshot.payload["side_to_move"] == "light"
+
+    @pytest.mark.asyncio
     async def test_a_non_participant_cannot_resume_and_learns_nothing(
         self,
         tickets: FakeTicketRedeemer,

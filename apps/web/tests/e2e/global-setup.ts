@@ -140,9 +140,7 @@ async function seed(
 async function sessionIsLive(path: string): Promise<boolean> {
   const probe = await request.newContext({ baseURL: API, storageState: path });
   try {
-    const refreshed = await probe.post("/api/v1/auth/browser/refresh", {
-      failOnStatusCode: false,
-    });
+    const refreshed = await refreshOnce(probe);
     if (!refreshed.ok()) return false;
 
     // Rotated, so the stored cookie must be replaced or the *next* run
@@ -169,10 +167,53 @@ async function sessionIsLive(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * One refresh, waiting out the rate limit rather than reading it as a
+ * failure — A64-020.5B.
+ *
+ * Refresh is capped at 30 per IP per 60 seconds, and seeding spends one per
+ * account, so a single run is comfortably inside it and two runs a minute
+ * apart are not. A `429` is *"ask again in `Retry-After` seconds"* and
+ * nothing else — the session behind the cookie is fine.
+ *
+ * Reading it as a dead session was the bug this replaces: `sessionIsLive`
+ * returned `false`, seeding fell through to the login path and spent one of
+ * five logins on a session that already worked, and `identify` then made an
+ * unchecked refresh of its own that `429`d too — surfacing as
+ * `Cannot read properties of undefined (reading 'user')` rather than as a
+ * rate limit.
+ *
+ * One retry, bounded by the header's own answer. Not a loop: if the window
+ * has passed and the second attempt still fails, the cause is not the limit
+ * and pretending otherwise would hide it.
+ */
+async function refreshOnce(
+  context: Awaited<ReturnType<typeof request.newContext>>,
+): Promise<Awaited<ReturnType<typeof context.post>>> {
+  const first = await context.post("/api/v1/auth/browser/refresh", {
+    failOnStatusCode: false,
+  });
+  if (first.status() !== 429) return first;
+
+  const retryAfter = Number(first.headers()["retry-after"] ?? "60");
+  const waitMs = (Number.isFinite(retryAfter) ? Math.min(retryAfter, 60) : 60) * 1000 + 1_000;
+  console.warn(`[e2e] refresh is rate limited — waiting ${Math.round(waitMs / 1000)}s`);
+  await new Promise((resolve) => setTimeout(resolve, waitMs));
+
+  return context.post("/api/v1/auth/browser/refresh", { failOnStatusCode: false });
+}
+
 async function identify(
   context: Awaited<ReturnType<typeof request.newContext>>,
 ): Promise<SeededAccount> {
-  const refreshed = await context.post("/api/v1/auth/browser/refresh");
+  const refreshed = await refreshOnce(context);
+  if (!refreshed.ok()) {
+    throw new Error(
+      `[e2e] could not identify a freshly signed-in session: refresh returned ` +
+        `${refreshed.status()} — ${await refreshed.text()}`,
+    );
+  }
+
   const body = (await refreshed.json()) as {
     data: { access_token: string; user: { id: string; username: string } };
   };

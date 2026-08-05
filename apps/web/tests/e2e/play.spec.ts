@@ -3,6 +3,7 @@ import { expect, type Page, test } from "@playwright/test";
 import {
   E2E_ACCOUNTS,
   resetLobby,
+  saveState,
   type SeededAccount,
   seededAccount,
   statePath,
@@ -153,7 +154,7 @@ test("players queue into one pool, and the two who are paired both reach the mat
     for (const [index, context] of contexts.entries()) {
       const username = LOBBY[index];
       if (username !== undefined) {
-        await context.storageState({ path: statePath(username) });
+        await saveState(context, username);
       }
       await context.close();
     }

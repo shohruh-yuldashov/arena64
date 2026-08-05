@@ -15,6 +15,7 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import HTTPConnection
 
 from app.config.settings import (
     FriendsSettings,
@@ -73,11 +74,26 @@ async def get_db_session(request: Request) -> AsyncIterator[AsyncSession]:
 DbSessionDep = Annotated[AsyncSession, Depends(get_db_session)]
 
 
-def get_redis_pools(request: Request) -> RedisPools:
+def get_redis_pools(connection: HTTPConnection) -> RedisPools:
     """Redis clients are themselves connection pools; unlike the database
     session there is no per-request scope to open here — the pools are
-    process singletons (dependency-injection.md §1.3)."""
-    pools: RedisPools = request.app.state.redis_pools
+    process singletons (dependency-injection.md §1.3).
+
+    **`HTTPConnection`, not `Request`** — A64-020.5B. It is Starlette's
+    common base of `Request` and `WebSocket`, and taking it is what lets
+    one dependency serve both transports.
+
+    This was `Request` until a browser first opened `GET /ws`, and the
+    consequence was total: FastAPI injects a `WebSocket` on a WebSocket
+    route, could not solve a `Request` parameter, and answered **every**
+    handshake with `500` before the ticket was even read. The gateway had
+    never accepted a connection.
+
+    Nothing about the pools is request-scoped, so widening the parameter
+    changes no behaviour on the HTTP path — `Request` *is* an
+    `HTTPConnection`, and `.app` is on the base.
+    """
+    pools: RedisPools = connection.app.state.redis_pools
     return pools
 
 
@@ -110,7 +126,7 @@ def get_storage_provider(request: Request) -> StorageProvider:
 StorageProviderDep = Annotated[StorageProvider, Depends(get_storage_provider)]
 
 
-def get_rate_limiter(request: Request) -> RateLimiter:
+def get_rate_limiter(connection: HTTPConnection) -> RateLimiter:
     """The process-lifetime limiter, built in `lifespan` (A64-011.8).
 
     A singleton rather than per-request, and for once the reason is not
@@ -123,8 +139,12 @@ def get_rate_limiter(request: Request) -> RateLimiter:
     Safe as a singleton because it holds no session and no per-request
     state: the Redis client it wraps *is* a pool, exactly as
     `get_redis_pools` above describes (dependency-injection.md §1.3).
+
+    `HTTPConnection` for the reason `get_redis_pools` takes one: the
+    gateway rate-limits move frames, so this is resolved on a WebSocket
+    route as well as an HTTP one.
     """
-    limiter: RateLimiter = request.app.state.rate_limiter
+    limiter: RateLimiter = connection.app.state.rate_limiter
     return limiter
 
 

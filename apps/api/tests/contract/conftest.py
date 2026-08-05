@@ -27,12 +27,19 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from redis.asyncio import Redis
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
+from sqlalchemy import insert, text
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncEngine,
+    AsyncSession,
+    create_async_engine,
+)
 
 import app.database.models  # noqa: F401 — registers every module's tables on Base.metadata
 from app.database.base import Base
+from app.modules.reference.infrastructure.models import TimeControlModel
 from tests.contract._models import ContractWidget  # noqa: F401 — registers the table on import
+from tests.fakes.time_controls import SEEDED_TIME_CONTROLS
 
 _TEST_DSN = os.environ.get(
     "CONTRACT_TEST_POSTGRES_DSN",
@@ -134,6 +141,7 @@ async def contract_engine() -> AsyncIterator[AsyncEngine]:
         for schema in schemas:
             await connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
         await connection.run_sync(Base.metadata.create_all)
+        await _seed_reference_data(connection)
 
     yield engine
 
@@ -147,6 +155,46 @@ async def contract_engine() -> AsyncIterator[AsyncEngine]:
         for schema in schemas:
             await connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
     await engine.dispose()
+
+
+async def _seed_reference_data(connection: AsyncConnection) -> None:
+    """The `reference` catalogue, which `create_all` cannot supply —
+    A64-020.5A-pre.
+
+    `Base.metadata.create_all` builds tables and nothing else, so the four
+    rows `a3f91c7d5e42` seeds are absent from a schema built this way. That
+    is not a cosmetic gap: `POST /matchmaking/queue` resolves the chosen
+    control through the catalogue, so an empty table makes every join a
+    `422` and every queue suite fail for a reason that has nothing to do
+    with what it is testing.
+
+    Seeded from `TimeControlModel` — the mapped class, over this session's
+    own connection — rather than by restating the migration's literals. The
+    literals belong in the migration, where a revision must describe the
+    schema as it was; a *fixture* wants whatever the platform currently
+    offers, and duplicating four rows here would be a second catalogue to
+    keep in step.
+
+    `tests/fakes/time_controls.py` holds the same four as value objects for
+    the unit suites, and `tests/contract/test_time_control_catalogue.py`
+    asserts that the seeded rows and the enum agree — which is what makes
+    all three copies provably one catalogue rather than three.
+    """
+    await connection.execute(
+        insert(TimeControlModel),
+        [
+            {
+                "id": snapshot.id,
+                "label": label,
+                "base_time_ms": snapshot.base_time_ms,
+                "increment_ms": snapshot.increment_ms,
+                "speed_class": snapshot.speed_class,
+                "display_order": order,
+                "is_active": True,
+            }
+            for order, (snapshot, label) in enumerate(SEEDED_TIME_CONTROLS)
+        ],
+    )
 
 
 @pytest_asyncio.fixture

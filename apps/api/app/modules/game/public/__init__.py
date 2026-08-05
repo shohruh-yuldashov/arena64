@@ -133,6 +133,7 @@ from app.modules.game.public.history import (
     MatchReplay,
     MatchReplayReader,
     ReplayPly,
+    ReplaySeat,
     UnsupportedEngineVersion,
 )
 from app.modules.game.public.matches import (
@@ -238,6 +239,7 @@ __all__ = [
     "MatchReplay",
     "MatchReplayReader",
     "ReplayPly",
+    "ReplaySeat",
     "UnsupportedEngineVersion",
     "MatchParticipant",
     "MatchTimeControl",

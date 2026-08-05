@@ -39,8 +39,10 @@ from uuid import UUID
 from app.core.error_codes import ErrorCode
 from app.core.exceptions import ConflictError
 from app.modules.engine import PlayerSide
+from app.modules.game.domain.match_record import MatchRecordStatus
 from app.modules.game.domain.result import MatchOutcome, TerminationReason
 from app.modules.game.domain.variants import ProductVariant
+from app.modules.game.public.matches import MatchTimeControl
 from app.modules.game.public.snapshots import PlacedPiece
 
 
@@ -143,12 +145,43 @@ class ReplayPly:
 
 
 @dataclass(frozen=True, slots=True)
+class ReplaySeat:
+    """One seat of a finished match, as an archive renders it —
+    A64-020.5E §5, §13.
+
+    **The identifier and the rating, never a name.** Who a player id
+    belongs to is `users`' to answer and is gated by a privacy policy this
+    module has no business reproducing; what `game` owns is which seat they
+    held and what they rated when the game began. The presentation layer
+    composes the two — see `matchmaking`'s pending-match router, which
+    makes the identical join for the identical reason.
+    """
+
+    player_id: UUID
+    rating_value: float | None
+    rating_deviation: float | None
+    is_provisional: bool | None
+    """The snapshot taken when the match was created (PR-3), or `None` for
+    a match created before ratings were captured. Not recomputed: a replay
+    shows what the game was played at, not what the player rates now."""
+
+
+@dataclass(frozen=True, slots=True)
 class MatchReplay:
     """A whole finished game, reconstructed.
 
     Produced only by replaying the durable log through the real rules, so
     the result it reports is the result the rules produce — never a stored
     copy that a rules fix could leave stale.
+
+    ## Why the metadata is here and not fetched separately
+
+    A64-020.5E. Everything below the plies is on the **match row**, which
+    `PersistedMatchReplay` already reads to find the variant and the engine
+    version — so carrying it costs nothing and its absence cost a great
+    deal: there is no `GET /matches/{id}`, and a client wanting to know
+    whether a replayed game was rated would have had to page through a
+    player's whole history to find one row.
     """
 
     match_id: UUID
@@ -161,6 +194,15 @@ class MatchReplay:
     outcome: MatchOutcome | None
     termination_reason: TerminationReason | None
     winner: PlayerSide | None
+
+    status: MatchRecordStatus
+    rated: bool
+    speed_class: str | None
+    time_control: MatchTimeControl | None
+    light: ReplaySeat
+    dark: ReplaySeat
+    created_at: datetime
+    ended_at: datetime | None
 
 
 class MatchHistoryReader(Protocol):
@@ -210,5 +252,6 @@ __all__ = [
     "MatchReplay",
     "MatchReplayReader",
     "ReplayPly",
+    "ReplaySeat",
     "UnsupportedEngineVersion",
 ]

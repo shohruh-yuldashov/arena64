@@ -37,6 +37,7 @@ from app.core.exceptions import NotFoundError
 from app.core.responses import ApiResponse
 from app.modules.auth.presentation.dependencies import CurrentUser
 from app.modules.game.presentation.dependencies import (
+    ReplayPlayersDep,
     VisibleMatchHistoryDep,
     VisibleMatchReplayDep,
 )
@@ -106,6 +107,7 @@ async def player_match_history(
 async def match_replay(
     user: CurrentUser,
     replays: VisibleMatchReplayDep,
+    players: ReplayPlayersDep,
     match_id: Annotated[UUID, Path(description="Which match to replay.")],
 ) -> ApiResponse[MatchReplayResponse]:
     """One finished match, played back ply by ply.
@@ -123,7 +125,18 @@ async def match_replay(
     if replay is None:
         raise NotFoundError("No such match.")
 
-    return build_response(MatchReplayResponse.of(replay))
+    # **One batched lookup of two ids** — A64-020.5E §13, and the same
+    # arrangement `matchmaking`'s pending-match router makes for the same
+    # reason: a match has exactly two seats, so there is no list to loop
+    # over and no per-participant read to accumulate. A client compositing
+    # this itself would issue one profile request per player on every
+    # replay page.
+    #
+    # A missing entry means the account was deactivated, and the seat
+    # renders with its rating and no name — the answer every other surface
+    # on this platform gives for a withdrawn account.
+    profiles = await players.find_public_profiles([replay.light.player_id, replay.dark.player_id])
+    return build_response(MatchReplayResponse.of(replay, profiles))
 
 
 __all__ = ["history_router", "replay_router"]

@@ -17,6 +17,7 @@ keys, and a `400 invalid_cursor` for anything hand-made.
 
 import base64
 import binascii
+from collections.abc import Mapping
 from datetime import datetime
 from typing import ClassVar
 from uuid import UUID
@@ -31,7 +32,9 @@ from app.modules.game.public import (
     MatchHistoryPage,
     MatchReplay,
     ReplayPly,
+    ReplaySeat,
 )
+from app.modules.users.public import PublicUserProfile
 
 _CURSOR_SEPARATOR = "|"
 
@@ -171,12 +174,69 @@ class ReplayPlyResponse(BaseModel):
         )
 
 
+class ReplayTimeControlResponse(BaseModel):
+    """How much time each side had. `null` for an untimed match."""
+
+    initial_ms: int
+    increment_ms: int
+
+
+class ReplaySeatResponse(BaseModel):
+    """One seat, with as much of its player as the viewer may see —
+    A64-020.5E §13.
+
+    The identity is composed from `users`' **public** profile read, gated
+    by the same privacy policy every other surface uses. `username` and
+    `display_name` are `None` for a deactivated account, which is the
+    answer this platform gives everywhere rather than a special case here.
+
+    The rating is `game`'s own: the snapshot taken when the match was
+    created (PR-3). A replay shows what the game was played at, not what
+    the player rates now.
+    """
+
+    player_id: UUID
+    username: str | None = None
+    display_name: str | None = None
+    avatar_thumbnail_url: str | None = None
+    rating_value: float | None = None
+    rating_deviation: float | None = None
+    is_provisional: bool | None = None
+
+    @classmethod
+    def of(cls, seat: ReplaySeat, profile: PublicUserProfile | None) -> "ReplaySeatResponse":
+        return cls(
+            player_id=seat.player_id,
+            username=profile.username if profile else None,
+            display_name=profile.display_name if profile else None,
+            avatar_thumbnail_url=getattr(profile, "avatar_thumbnail_url", None),
+            rating_value=seat.rating_value,
+            rating_deviation=seat.rating_deviation,
+            is_provisional=seat.is_provisional,
+        )
+
+
 class MatchReplayResponse(BaseModel):
-    """A whole finished game, reconstructed."""
+    """A whole finished game, reconstructed, with the metadata that
+    describes it — A64-020.5E §5, §14.
+
+    The metadata is here because there is nowhere else it could come from:
+    no endpoint serves one match's stored facts by id, and a client would
+    otherwise have had to page a player's whole history to learn whether
+    the game it is replaying was rated.
+    """
 
     match_id: UUID
     variant: str
     engine_version: int
+    status: str
+    rated: bool
+    speed_class: str | None
+    time_control: ReplayTimeControlResponse | None
+    light: ReplaySeatResponse
+    dark: ReplaySeatResponse
+    created_at: datetime
+    ended_at: datetime | None
     opening: list[PlacedPieceResponse]
     plies: list[ReplayPlyResponse]
     outcome: str | None
@@ -184,11 +244,31 @@ class MatchReplayResponse(BaseModel):
     winner: str | None
 
     @classmethod
-    def of(cls, replay: MatchReplay) -> "MatchReplayResponse":
+    def of(
+        cls,
+        replay: MatchReplay,
+        profiles: Mapping[UUID, PublicUserProfile] | None = None,
+    ) -> "MatchReplayResponse":
+        seen = profiles or {}
         return cls(
             match_id=replay.match_id,
             variant=replay.variant.value,
             engine_version=replay.engine_version,
+            status=replay.status.value,
+            rated=replay.rated,
+            speed_class=replay.speed_class,
+            time_control=(
+                ReplayTimeControlResponse(
+                    initial_ms=replay.time_control.initial_ms,
+                    increment_ms=replay.time_control.increment_ms,
+                )
+                if replay.time_control is not None
+                else None
+            ),
+            light=ReplaySeatResponse.of(replay.light, seen.get(replay.light.player_id)),
+            dark=ReplaySeatResponse.of(replay.dark, seen.get(replay.dark.player_id)),
+            created_at=replay.created_at,
+            ended_at=replay.ended_at,
             opening=[
                 PlacedPieceResponse(square=p.square, side=p.side, rank=p.rank)
                 for p in replay.opening
@@ -215,6 +295,8 @@ __all__ = [
     "MatchHistoryEntryResponse",
     "MatchHistoryResponse",
     "MatchReplayResponse",
+    "ReplaySeatResponse",
+    "ReplayTimeControlResponse",
     "decode_cursor",
     "encode_cursor",
 ]

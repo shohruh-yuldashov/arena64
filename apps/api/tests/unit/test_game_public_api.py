@@ -297,6 +297,15 @@ class TestTheSurfaceIsDeliberate:
         # happens once and the resolution happens twice, so what crosses is
         # both sides' facts and the transport does the resolving.
         "DrawAgreementView",
+        # A64-020.5E — one seat of a finished match, for the replay archive.
+        #
+        # Published because the replay response composes it with `users`'
+        # public profile read at the presentation layer, and the composer
+        # needs to name what it is joining. The identifier and the
+        # creation-time rating snapshot only: who a player id belongs to is
+        # `users`' to answer under its own privacy policy, and a type that
+        # carried a name would be `game` reproducing that policy.
+        "ReplaySeat",
     }
 
     def test_nothing_is_published_by_accident(self) -> None:

@@ -126,5 +126,151 @@
       "signOut": "Chiqish",
       "signOutFailed": "Serverdan chiqishda xatolik bo'ldi, lekin bu qurilmada sessiya tozalandi."
     }
+  },
+  "profile": {
+    "nav": {
+      "profile": "Profil",
+      "settings": "Sozlamalar",
+      "editProfile": "Profilni tahrirlash",
+      "preferences": "Afzalliklar",
+      "privacy": "Maxfiylik",
+      "sessions": "Sessiyalar"
+    },
+    "header": {
+      "joined": "Qo'shilgan: {date}",
+      "online": "Onlayn",
+      "offline": "Oflayn",
+      "lastSeen": "Oxirgi faollik: {when}",
+      "noBio": "Ma'lumot kiritilmagan",
+      "country": "Mamlakat",
+      "viewPublic": "Ommaviy profilni ko'rish"
+    },
+    "stats": {
+      "title": "Statistika",
+      "gamesPlayed": "O'yinlar",
+      "wins": "G'alabalar",
+      "losses": "Mag'lubiyatlar",
+      "draws": "Duranglar",
+      "winRate": "G'alaba ulushi",
+      "noGames": "Hali o'yin yo'q",
+      "bestWinStreak": "Eng uzun g'alaba seriyasi",
+      "highestRating": "Eng yuqori reyting",
+      "hidden": "Statistika yashirilgan"
+    },
+    "ratings": {
+      "title": "Reytinglar",
+      "provisional": "Dastlabki",
+      "games": "{count} o'yin",
+      "deviation": "Aniqlik oralig'i",
+      "unrated": "Hali reyting yo'q",
+      "classic": "Klassik",
+      "rapid": "Tezkor",
+      "blitz": "Blits"
+    },
+    "tournaments": {
+      "title": "Turnirlar tarixi",
+      "empty": "Hali turnirlarda qatnashmagan",
+      "loadMore": "Yana yuklash",
+      "inProgress": "Davom etmoqda",
+      "rank": "{rank}-o'rin",
+      "seed": "{seed}-seed",
+      "loading": "Yuklanmoqda…"
+    },
+    "edit": {
+      "title": "Profilni tahrirlash",
+      "subtitle": "Bu ma'lumotlar ommaviy profilingizda ko'rinadi.",
+      "displayName": "Ko'rsatiladigan ism",
+      "bio": "O'zingiz haqingizda",
+      "country": "Mamlakat kodi",
+      "countryHint": "Ikki harfli kod, masalan UZ",
+      "bioHint": "Ko'pi bilan {max} ta belgi",
+      "save": "Saqlash",
+      "saved": "Saqlandi",
+      "noChanges": "O'zgarish yo'q",
+      "displayNameTooLong": "Ko'pi bilan {max} ta belgi",
+      "bioTooLong": "Ko'pi bilan {max} ta belgi",
+      "countryInvalid": "Ikki harfli mamlakat kodi kiriting"
+    },
+    "avatar": {
+      "title": "Rasm",
+      "upload": "Rasm yuklash",
+      "replace": "Rasmni almashtirish",
+      "remove": "Rasmni o'chirish",
+      "removeTitle": "Rasmni o'chirilsinmi?",
+      "removeBody": "Profil rasmingiz o'chiriladi va o'rniga bosh harflaringiz ko'rsatiladi.",
+      "removeConfirm": "O'chirish",
+      "cancel": "Bekor qilish",
+      "uploading": "Yuklanmoqda…",
+      "hint": "JPEG, PNG yoki WebP. Ko'pi bilan {max} MB.",
+      "tooLarge": "Fayl {max} MB dan katta.",
+      "wrongType": "Faqat JPEG, PNG yoki WebP qabul qilinadi.",
+      "removed": "Rasm o'chirildi",
+      "uploaded": "Rasm yangilandi"
+    },
+    "preferences": {
+      "title": "Afzalliklar",
+      "subtitle": "Interfeys va o'yin sozlamalari.",
+      "language": "Til",
+      "timezone": "Vaqt mintaqasi",
+      "boardTheme": "Doska mavzusi",
+      "pieceSet": "Toshlar to'plami",
+      "confirmMove": "Yurishni tasdiqlash",
+      "showCoordinates": "Koordinatalarni ko'rsatish",
+      "animationSpeed": "Animatsiya tezligi",
+      "save": "Saqlash",
+      "saved": "Saqlandi",
+      "themeNote": "Yorug'/qorong'i mavzu shu brauzerda saqlanadi va serverga yuborilmaydi."
+    },
+    "privacy": {
+      "title": "Maxfiylik",
+      "subtitle": "Ommaviy profilingizda nima ko'rinishini tanlang.",
+      "showCountry": "Mamlakatni ko'rsatish",
+      "showCountryHint": "Ommaviy profilingizda mamlakat kodi ko'rinadi.",
+      "showStatistics": "Statistikani ko'rsatish",
+      "showStatisticsHint": "Reytinglarga ta'sir qilmaydi — ular doim ochiq.",
+      "onlineStatus": "Onlayn holati",
+      "onlineStatusHint": "Kim sizning onlayn ekaningizni ko'radi.",
+      "lastSeen": "Oxirgi faollik",
+      "lastSeenHint": "Kim oxirgi faollik vaqtini ko'radi.",
+      "everyone": "Hamma",
+      "friends": "Do'stlar",
+      "nobody": "Hech kim",
+      "save": "Saqlash",
+      "saved": "Saqlandi"
+    },
+    "sessions": {
+      "title": "Sessiyalar",
+      "subtitle": "Hisobingizga kirgan qurilmalar.",
+      "signOutAll": "Hamma joydan chiqish",
+      "signOutAllHint": "Barcha qurilmalardagi sessiyalar tugatiladi, shu jumladan bu qurilma.",
+      "confirmTitle": "Hamma joydan chiqilsinmi?",
+      "confirmBody": "Har bir qurilmada qaytadan kirishingiz kerak bo'ladi.",
+      "confirm": "Chiqish",
+      "cancel": "Bekor qilish",
+      "listDeferred": "Qurilmalar ro'yxati hali mavjud emas — server uni chiqarmaydi."
+    },
+    "public": {
+      "notFoundTitle": "O'yinchi topilmadi",
+      "notFoundBody": "Bunday foydalanuvchi nomi mavjud emas yoki o'zgartirilgan.",
+      "backHome": "Bosh sahifaga"
+    },
+    "errors": {
+      "not_found": "Topilmadi.",
+      "permission_denied": "Bu amalga ruxsat yo'q.",
+      "conflict": "Bu qiymat allaqachon band.",
+      "username_already_exists": "Bu foydalanuvchi nomi band.",
+      "invalid_username": "Foydalanuvchi nomi yaroqsiz.",
+      "avatar_too_large": "Rasm hajmi chegaradan katta.",
+      "validation_error": "Kiritilgan ma'lumotni tekshiring.",
+      "rate_limited": "Juda ko'p urinish. Birozdan so'ng qayta urining.",
+      "network": "Serverga ulanib bo'lmadi.",
+      "unexpected": "Kutilmagan xatolik. Qayta urinib ko'ring."
+    },
+    "state": {
+      "loading": "Yuklanmoqda…",
+      "retry": "Qayta urinish",
+      "failedTitle": "Ma'lumotni yuklab bo'lmadi",
+      "hiddenByPrivacy": "Egasi yashirgan"
+    }
   }
 }

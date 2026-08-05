@@ -5,7 +5,7 @@ import {
   Outlet,
 } from "@tanstack/react-router";
 
-import { RequireAnonymous } from "@/app/router/guards";
+import { RequireAnonymous, RequireAuth } from "@/app/router/guards";
 import NotFoundPage from "@/pages/not-found";
 import { Spinner } from "@/shared/ui";
 import { AppShell } from "@/widgets/app-shell";
@@ -26,8 +26,9 @@ import { AppShell } from "@/widgets/app-shell";
  *      route that works locally because someone's watcher was running.
  *
  * The trade is that adding a route is an edit here rather than a new file.
- * That is the correct trade at seven routes, and it is worth revisiting if
- * this file ever stops fitting on a screen — `specs/frontend.md` OQ-3.
+ * That is still the correct trade at thirteen routes, and it is worth
+ * revisiting when this file stops fitting on a screen — `specs/frontend.md`
+ * OQ-3.
  *
  * ## Search parameters are validated, not trusted
  *
@@ -143,6 +144,70 @@ export const resetPasswordRoute = createRoute({
   component: lazyRouteComponent(() => import("@/pages/reset-password")),
 });
 
+// --- profile — A64-020.3 ----------------------------------------------------
+
+/**
+ * Wraps a lazily-imported page in `RequireAuth`.
+ *
+ * Written once because four routes need it identically, and because the
+ * mistake it prevents is silent: a settings route added later without the
+ * guard renders a page that calls `/profile/me` unauthenticated, gets a
+ * `401`, and looks like a loading failure rather than a missing guard.
+ */
+function protectedPage(load: () => Promise<{ default: () => React.JSX.Element }>) {
+  const Page = lazyRouteComponent(load);
+  return function Protected() {
+    return (
+      <RequireAuth>
+        <Page />
+      </RequireAuth>
+    );
+  };
+}
+
+/** `/profile` — **the first real production use of `RequireAuth`.** */
+export const profileRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/profile",
+  component: protectedPage(() => import("@/pages/profile")),
+});
+
+/**
+ * `/players/$username` — public, and deliberately unguarded.
+ *
+ * Anyone may look at a player. The server filters what they see; there is
+ * no viewer this route turns away.
+ */
+export const publicProfileRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/players/$username",
+  component: lazyRouteComponent(() => import("@/pages/public-profile")),
+});
+
+export const settingsProfileRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings/profile",
+  component: protectedPage(() => import("@/pages/settings-profile")),
+});
+
+export const settingsPreferencesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings/preferences",
+  component: protectedPage(() => import("@/pages/settings-preferences")),
+});
+
+export const settingsPrivacyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings/privacy",
+  component: protectedPage(() => import("@/pages/settings-privacy")),
+});
+
+export const settingsSessionsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings/sessions",
+  component: protectedPage(() => import("@/pages/settings-sessions")),
+});
+
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
@@ -150,4 +215,10 @@ export const routeTree = rootRoute.addChildren([
   verifyEmailRoute,
   forgotPasswordRoute,
   resetPasswordRoute,
+  profileRoute,
+  publicProfileRoute,
+  settingsProfileRoute,
+  settingsPreferencesRoute,
+  settingsPrivacyRoute,
+  settingsSessionsRoute,
 ]);

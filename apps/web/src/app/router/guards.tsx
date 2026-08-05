@@ -1,5 +1,5 @@
 import { useNavigate, useRouterState } from "@tanstack/react-router";
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 
 import { isResolved } from "@/entities/session";
 import { DEFAULT_REDIRECT, safeRedirect } from "@/features/auth/model/safe-redirect";
@@ -40,6 +40,28 @@ import { Button, Spinner } from "@/shared/ui";
  * renders `null` while it is in flight, because rendering the protected
  * page for one frame is how a signed-out user sees a flash of somebody
  * else's screen.
+ *
+ * ## And why `next` is captured once — A64-020.5A
+ *
+ * A stable dependency is not enough on its own. `useRouterState` tracks the
+ * **live** router location, which updates the instant a navigation starts —
+ * and the outgoing route's component is still mounted at that moment. So a
+ * `next` recomputed from it feeds the destination back into itself:
+ *
+ *     /play
+ *     /login?next=/play
+ *     /login?next=%2Flogin%3Fnext%3D%252Fplay
+ *     ...
+ *
+ * a URL that grows on every render and a redirect that never settles, which
+ * React reports as "Maximum update depth exceeded". It was latent from
+ * A64-020.2 and reachable from every protected route; the lobby's E2E flow
+ * is what finally ran into it, because it is the first spec to load a
+ * **dead** session against a guarded page.
+ *
+ * Capturing at mount is the fix and is also the honest value: where the
+ * player was going is a fact about when they arrived, not something that
+ * changes while they are being sent away.
  */
 function Pending() {
   const { t } = useTranslation();
@@ -62,9 +84,10 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   const { state } = useSession();
   const navigate = useNavigate();
   const location = useRouterState({ select: (router) => router.location });
-  // The **current** path, so signing in returns them where they were going.
-  // A string, not an object, so the effect below has a stable dependency.
-  const next = `${location.pathname}${location.searchStr}`;
+  // Where they were going, captured **at mount** — see this module's
+  // docstring. A string, not an object, so the effect below has a stable
+  // dependency; and frozen, so it cannot become its own destination.
+  const [next] = useState(() => `${location.pathname}${location.searchStr}`);
   const shouldRedirect = isResolved(state) && state.status === "anonymous";
 
   useEffect(() => {

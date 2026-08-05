@@ -42,6 +42,13 @@ import {
  *     cd apps/api && uv run uvicorn main:app --port 8000
  *     cd apps/web && npm run test:e2e
  */
+// Two browser contexts, two joins, a real pairing scan and two polls at
+// two seconds each. The 30s default leaves no headroom for the scan itself,
+// and a flow that fails on a busy machine rather than on a defect is worse
+// than no flow — this is the one place a longer budget is honest rather
+// than a way of hiding slowness.
+test.setTimeout(90_000);
+
 test("two players queue into the same pool and both reach the match", async ({
   browser,
   request,
@@ -81,11 +88,17 @@ test("two players queue into the same pool and both reach the match", async ({
       // option is also the assertion that `GET /time-controls` answered.
       const controls = page.getByRole("group", { name: /time control/i });
       await expect(controls).toBeVisible();
-      // The accessible name is the clock **and** its speed class — "1+0
-      // Bullet" — because the label wraps both. Anchored at the start only:
-      // "10+0 Rapid" does not begin "1+0", so this stays unambiguous
-      // without pinning the translated class name.
-      await controls.getByRole("radio", { name: /^1\+0/ }).check();
+      // **Click the label, not the input.** The radio is `sr-only` — a
+      // styled card is the visible control and the input is there for
+      // assistive technology and form semantics. Playwright refuses to
+      // `check()` an element it considers hidden, so driving the input
+      // directly waits forever on something no user clicks either.
+      //
+      // `exact` on the clock alone: the label's accessible name is "1+0
+      // Bullet", and pinning the translated speed class here would make a
+      // locale change break the flow.
+      await controls.getByText("1+0", { exact: true }).click();
+      await expect(controls.getByRole("radio", { name: /^1\+0/ })).toBeChecked();
       await page.getByRole("button", { name: /join the queue/i }).click();
       await expect(page.getByText(/searching for an opponent/i)).toBeVisible();
     }

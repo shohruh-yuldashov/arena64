@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Arena64</title>
+    <!--
+      The theme is applied before the first paint, not in an effect. A
+      `useEffect` that reads localStorage runs after React has already
+      painted, so every reload of a dark-mode session visibly flashes
+      light first. This is the one place a blocking inline script earns
+      its cost, and it is why `shared/theme` can be a plain context with
+      no hydration dance of its own.
+
+      Kept in sync with `shared/theme/theme-helpers.ts` by the test in
+      `src/shared/theme/theme.test.tsx`, which asserts the storage key
+      and the class this writes are the ones the provider uses.
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("theme");
+          var mode = stored === "light" || stored === "dark" ? stored : "system";
+          var dark =
+            mode === "dark" ||
+            (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+          document.documentElement.style.colorScheme = dark ? "dark" : "light";
+        } catch (error) {
+          /* A browser with storage disabled gets the light theme and a
+             working app, which is the correct degradation. */
+        }
+      })();
+    </script>
+  </head>
+  <body class="h-full">
+    <div id="root" class="h-full"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

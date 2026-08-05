@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import type { LobbyState, PendingMatch, QueueTicket } from "@/entities/queue";
 import { isResolved } from "@/entities/session";
@@ -24,6 +24,25 @@ import { useMyTicket, usePendingMatch } from "@/features/matchmaking/model/queri
  * why; this is where it is applied, and it is applied **once** — a second
  * component that checked `ticket` before `match` would render "searching…"
  * over a live offer with a thirty-second deadline.
+ *
+ * ## The disappearing ticket
+ *
+ * A ticket that stops existing is the **only** signal a client gets that a
+ * pairing may have happened, and it is the one moment the two polls can
+ * miss each other. Their schedules are independent, so this ordering is
+ * ordinary rather than unlucky:
+ *
+ *     t+0.0  the scan pairs; the ticket becomes `matched`
+ *     t+0.4  the queue poll returns 404 -> no ticket
+ *            the offer query stops polling, because nothing is queued
+ *     ...    the offer is never read, and expires unanswered
+ *
+ * So the transition from *had a ticket* to *has none* refetches the offer
+ * immediately. It costs one request per queue exit — including the ordinary
+ * cancel, where it is exactly the reconciliation §13 asks for — and without
+ * it a player is paired, told nothing, and loses the game to a deadline
+ * they never saw. Observed against a real backend: the match was created
+ * with the right clock and expired thirty seconds later.
  *
  * ## What is deliberately not derived here
  *
@@ -53,6 +72,17 @@ export function useLobbyState(): LobbyView {
   // supplies that without a store and without a render's lag.
   const ticket = useMyTicket();
   const pending = usePendingMatch(ticket.data != null);
+
+  // See this module's docstring. `undefined` is "not answered yet" and is
+  // not a disappearance, so only a real `ticket -> null` transition fires.
+  const hadTicket = useRef(false);
+  const pendingRefetch = pending.refetch;
+  useEffect(() => {
+    if (ticket.data === undefined) return;
+    const has = ticket.data !== null;
+    if (hadTicket.current && !has) void pendingRefetch();
+    hadTicket.current = has;
+  }, [ticket.data, pendingRefetch]);
 
   const derived = useMemo(
     () => derive({ session: isResolved(session), ticket: ticket.data, match: pending.data }),

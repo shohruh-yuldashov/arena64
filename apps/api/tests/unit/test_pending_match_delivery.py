@@ -255,6 +255,32 @@ class TestStaleEventsAreNotDelivered:
 
         assert sink.delivered == []
 
+    async def test_a_match_both_players_already_accepted_is_not_delivered(
+        self,
+        notifier: PendingMatchNotifier,
+        acceptance: MatchAcceptanceService,
+        matches: InMemoryMatchRecordRepository,
+        players: StubPublicProfiles,
+        sink: RecordingPendingMatchSink,
+    ) -> None:
+        """A64-020.5A. `pending_match` now reports a match that has already
+        **started**, which is what a lobby needs and is exactly what must
+        not be pushed as an offer.
+
+        The window is real: both players can agree before the relay reaches
+        the `match_created` entry that announced the offer. Delivering it
+        then would open an acceptance dialog over a game already in
+        progress — worse than delivering nothing, because the game is the
+        thing the player is now trying to look at.
+        """
+        record, entry = await _created(matches, players)
+        for player_id in record.player_ids():
+            await acceptance.accept(player_id=player_id, match_id=record.id)
+
+        await notifier.handle([entry])
+
+        assert sink.delivered == []
+
     async def test_a_match_past_its_deadline_is_not_delivered(
         self,
         notifier: PendingMatchNotifier,

@@ -4,3 +4,7 @@ playwright-report
 test-results
 src/shared/api/generated
 package-lock.json
+
+# A64-020.5A. Saved E2E browser sessions — generated, and they carry a
+# credential. Never formatted, never committed (see .gitignore).
+.auth/

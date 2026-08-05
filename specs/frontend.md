@@ -767,6 +767,8 @@ function with its own test.
 | `["matchmaking", "queue", "me"]` | `staleTime: 0`; polls every 2 s **while a ticket exists** |
 | `["matchmaking", "matches", "pending"]` | `staleTime: 0`; polls every 2 s while an offer is open **or** a ticket is live |
 
+The pending read reports the player's **current** match — `pending_acceptance` **or** `active` (`specs/matchmaking.md` §10.8). The lobby branches on `status`: an open offer opens the dialog, an active one hands off to `/games/:matchId`. That is what lets the *first* of the two acceptors learn their game started, since the match activates on the other player's request and their own response still says `pending_acceptance`.
+
 Each query decides its own interval from its own data; the offer query is
 additionally told whether a ticket exists, because a queued player who
 stopped asking would learn they had been paired only on refocus.

@@ -58,6 +58,14 @@ logger = logging.getLogger(__name__)
 #: not to pair the same two again.
 _PLAYED_STATUSES: Final = (MatchRecordStatus.ACTIVE, MatchRecordStatus.COMPLETED)
 
+#: The statuses that mean "this player's match, right now" — A64-020.5A.
+#:
+#: Mirrors `_CURRENT_PREDICATE` in `models.py`, which is the partial index
+#: this read is served by. The two must agree or the query silently stops
+#: using the index; they are kept apart because one is SQL text for DDL and
+#: the other is an enum tuple for a `WHERE`.
+_CURRENT_STATUSES: Final = (MatchRecordStatus.PENDING_ACCEPTANCE, MatchRecordStatus.ACTIVE)
+
 
 class SqlAlchemyMatchRecordRepository:
     """Constructed per use case with the active unit of work's session
@@ -244,12 +252,47 @@ class SqlAlchemyMatchRecordRepository:
         return self._to_domain(row) if row is not None else None
 
     async def pending_for(self, player_id: UUID) -> MatchRecord | None:
-        """The match this player must answer, or `None`.
+        """The match this player is in **right now** — one they must answer,
+        or one that has started — or `None`.
 
-        Served by the two partial indexes on `(player_id) WHERE status =
-        'pending_acceptance'`, so the read is bounded by how many people
-        are currently being matched rather than by how many games have been
+        Served by the two partial indexes on
+        `(player_id, created_at) WHERE status IN ('pending_acceptance',
+        'active')`, so the read is bounded by how many people are currently
+        being matched or playing rather than by how many games have been
         played.
+
+        ## Why `active` and not `pending_acceptance` alone — A64-020.5A
+
+        Acceptance is bilateral, so one of the two players answers **first**
+        and the match activates on the *other* player's request. The first
+        acceptor's own response therefore says `pending_acceptance`, and
+        with a pending-only read their next poll returned `404`: the one
+        player who could not learn their game had begun was the one who had
+        agreed to it soonest.
+
+        `PendingMatchResponse.status` already published the wider contract —
+        "a client that polls after answering sees the outcome rather than a
+        `404`" — so this is the implementation catching up with a documented
+        promise rather than a new capability.
+
+        **No time window and no retention rule.** A match leaves this read
+        by being played to an end, declined or expired, which are
+        transitions the domain already makes; adding a horizon would be a
+        second, softer definition of "current" that nothing else on the
+        platform shares.
+
+        ## At most one row, and why the order is still stated
+
+        A player has at most one pending match (QT-1 gives them one live
+        ticket, and a ticket produces one match) and at most one active
+        game. Holding both at once would mean being offered a match while
+        already playing, which nothing today produces.
+
+        `created_at DESC` anyway, because "at most one" is an invariant of
+        other components rather than of this query: if it were ever broken,
+        an unordered `LIMIT 1` would return an arbitrary row on each call
+        and the lobby would flicker between two matches. The newest is the
+        one a player means.
         """
         row = await self._session.scalar(
             select(MatchRecordModel)
@@ -258,8 +301,9 @@ class SqlAlchemyMatchRecordRepository:
                     MatchRecordModel.light_player_id == player_id,
                     MatchRecordModel.dark_player_id == player_id,
                 ),
-                MatchRecordModel.status == MatchRecordStatus.PENDING_ACCEPTANCE,
+                MatchRecordModel.status.in_(_CURRENT_STATUSES),
             )
+            .order_by(MatchRecordModel.created_at.desc())
             .limit(1)
         )
         return self._to_domain(row) if row is not None else None

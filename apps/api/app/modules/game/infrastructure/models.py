@@ -163,6 +163,22 @@ def _enum(python_type: type, name: str) -> PgEnum:
 #: a match is still awaiting an answer.
 _PENDING_PREDICATE = f"status = '{MatchRecordStatus.PENDING_ACCEPTANCE.value}'"
 
+#: The SQL spelling of "this player's match right now" — A64-020.5A.
+#:
+#: Wider than `_PENDING_PREDICATE` by exactly one status, and only the two
+#: **player-scoped** indexes use it. A player's lobby has to be able to see
+#: an offer it must answer *and* a game it has already been handed off to,
+#: and a read that stopped at `pending_acceptance` left the first of the two
+#: acceptors unable to learn their match had started.
+#:
+#: The expiry sweep's index and `ck_match__settled_at_iff_not_pending`
+#: deliberately keep the narrow one: an `active` match can never become
+#: overdue, and it is settled.
+_CURRENT_PREDICATE = (
+    f"status IN ('{MatchRecordStatus.PENDING_ACCEPTANCE.value}', "
+    f"'{MatchRecordStatus.ACTIVE.value}')"
+)
+
 #: The SQL spelling of "this match never became a game" — A64-015.5 §8.
 #:
 #: Derived from the enum like the predicate above, so a fifth status cannot
@@ -217,20 +233,26 @@ class MatchRecordModel(UUIDPrimaryKeyMixin, Base):
         # have been chosen for anyway.
         Index("uq_match__light_ticket", "light_ticket_id", unique=True),
         Index("uq_match__dark_ticket", "dark_ticket_id", unique=True),
-        # "Which match must this player answer" — one per side, both
-        # partial on `pending_acceptance` so their size is bounded by
-        # *concurrency* rather than by history. A player has at most one
-        # pending match, so each is a single-row lookup however many games
-        # they have played.
+        # "Which match is this player in right now" — one per side, both
+        # partial on `pending_acceptance, active` so their size is bounded
+        # by *concurrency* rather than by history. A player has at most one
+        # of each, so each is a single-row lookup however many games they
+        # have played.
+        #
+        # A64-020.5A widened them from `pending_acceptance` alone and
+        # renamed them to say so: an index called "pending" that carries
+        # active matches is the stale name a reader trusts.
         Index(
-            "ix_match__pending_light",
+            "ix_match__current_light",
             "light_player_id",
-            postgresql_where=text(_PENDING_PREDICATE),
+            "created_at",
+            postgresql_where=text(_CURRENT_PREDICATE),
         ),
         Index(
-            "ix_match__pending_dark",
+            "ix_match__current_dark",
             "dark_player_id",
-            postgresql_where=text(_PENDING_PREDICATE),
+            "created_at",
+            postgresql_where=text(_CURRENT_PREDICATE),
         ),
         # The acceptance-expiry sweep's claim: "pending matches whose
         # window has closed, oldest deadline first". Partial for the same

@@ -121,16 +121,36 @@ class MatchAcceptanceUseCase(Protocol):
     """
 
     async def pending_match(self, player_id: UUID) -> PendingMatchView | None:
-        """The match this player has been offered and not yet answered.
+        """The match this player is in **right now** — one they have been
+        offered and not answered, or one that has started.
 
         `None` rather than raising when there is none — a player who is
-        not being offered a match is the ordinary case, and every caller
-        branches on it.
+        neither being offered a match nor playing one is the ordinary case,
+        and every caller branches on it.
 
-        **At most one, by construction.** QT-1 gives a player one live
-        queue ticket, a ticket produces at most one match, and a pending
-        match holds its player until it settles — so "your pending match"
-        is singular without needing a rule of its own.
+        ## `active` is included, and why — A64-020.5A
+
+        Acceptance is bilateral, so one player answers **first** and the
+        match activates on the *other* one's request. The first acceptor's
+        own response therefore reads `pending_acceptance`, and while this
+        returned pending matches alone their next poll answered `None` —
+        leaving the player who agreed soonest as the only one unable to
+        learn their game had begun.
+
+        Callers must therefore **branch on `status`** rather than treating
+        a value as an offer. A lobby shows an acceptance dialog for
+        `pending_acceptance` and hands off to the game for `active`; the
+        realtime notifier pushes the first and skips the second, because an
+        offer delivered over a game already in progress is worse than one
+        delivered late.
+
+        **No time window.** A match leaves this read by being played to an
+        end, declined or expired — transitions the domain already makes.
+
+        **At most one, by construction.** QT-1 gives a player one live queue
+        ticket, a ticket produces at most one match, and a match holds its
+        player from the offer until it ends — so "your current match" is
+        singular without needing a rule of its own.
         """
         ...
 

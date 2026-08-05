@@ -503,6 +503,49 @@ class TestTheTwoPublishedReads:
 
         assert latest[player] == recent
 
+    async def test_an_active_match_is_still_this_player_s_match(
+        self, matches: SqlAlchemyMatchRecordRepository
+    ) -> None:
+        """A64-020.5A. Acceptance is bilateral, so one player answers first
+        and the match activates on the **other** one's request — which
+        leaves the first acceptor's own response reading
+        `pending_acceptance`.
+
+        While this read stopped at pending, their next poll answered
+        `None`: the one player who could not learn their game had begun was
+        the one who had agreed to it soonest. `PendingMatchResponse.status`
+        already published the wider promise, so this is the implementation
+        catching up rather than a new capability.
+        """
+        record, _ = await matches.create(_record())
+        accepted = record.accepted_by(PlayerSide.LIGHT, at=NOW)
+        assert await matches.settle(accepted.accepted_by(PlayerSide.DARK, at=NOW))
+
+        for player_id in record.player_ids():
+            found = await matches.pending_for(player_id)
+
+            assert found is not None
+            assert found.id == record.id
+            assert found.status is MatchRecordStatus.ACTIVE
+
+    async def test_a_settled_match_is_not_current(
+        self, matches: SqlAlchemyMatchRecordRepository
+    ) -> None:
+        """The other side of the widening, and the reason it needs no time
+        window: a match leaves this read by being declined or expiring,
+        which are transitions the domain already makes. A horizon would be a
+        second, softer definition of "current" that nothing else shares.
+        """
+        for settle in (
+            lambda record: record.expired(NOW + WINDOW),
+            lambda record: record.declined(PlayerSide.DARK, at=NOW),
+        ):
+            record, _ = await matches.create(_record())
+            assert await matches.settle(settle(record))
+
+            for player_id in record.player_ids():
+                assert await matches.pending_for(player_id) is None
+
     async def test_a_pending_match_is_not_a_game_they_have_played(
         self, matches: SqlAlchemyMatchRecordRepository
     ) -> None:

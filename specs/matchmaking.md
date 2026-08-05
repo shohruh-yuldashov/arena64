@@ -334,7 +334,7 @@ all (R-1, R-2) — enforced by two import-linter contracts and asserted by
 | `MatchCreationUseCase`, `MatchCreationRefused` | The port that accepts it, and its one expected refusal |
 | `PendingMatchView`, `MatchRecordStatus`, `MatchAcceptanceUseCase` | The acceptance handshake — accept, decline, read your own (A64-015.4) |
 | `MatchAcceptanceExpiryUseCase` | The sweep that expires unanswered pairings |
-| `RecentOpponentReader` | QT-3's rematch guard, as a batch read |
+| `RecentOpponentReader` | QT-3's rematch guard, as a batch read. **Matches a player actually sat down to** — `active` or `completed` — since A64-020.5A; an offer that expired or was declined is not a game they played, and counting one barred the pair *permanently*, because the reader has no time window |
 | `PairingReconciliationReader`, `PairingSettlement` | Did this reserved queue ticket produce a match |
 | `AbandonedMatchRetention` | Deleting the pairings that never became games (A64-015.5) |
 | `MatchCreated`, `MatchAcceptedByPlayer`, `MatchActivated`, `MatchDeclined`, `MatchAcceptanceExpired` | The five durable match events (A64-015.5) |
@@ -744,7 +744,7 @@ not answered is, as far as the product is concerned, still being matched.
 
 | Method | Path | Success | Failures |
 | --- | --- | --- | --- |
-| `GET` | `/matchmaking/matches/pending` | `200` — the offer, with an opponent preview | `401`, `404` none |
+| `GET` | `/matchmaking/matches/pending` | `200` — the player's **current** match, with an opponent preview | `401`, `404` none |
 | `POST` | `/matchmaking/matches/{match_id}/accept` | `200`, **idempotent** | `401`, `404`, `409`, `429` |
 | `POST` | `/matchmaking/matches/{match_id}/decline` | `200` — the cancelled match | `401`, `404`, `409`, `429` |
 
@@ -752,8 +752,42 @@ not answered is, as far as the product is concerned, still being matched.
 
 The response is named from the reader's seat — `your_side`, `you_accepted`,
 `opponent_accepted` — and carries no `pairing_id`, no queue ticket id, no
-`reserved_until` and no `settled_at`. **No `time_control`**: that is §2.1's
-recorded gap, not a policy.
+`reserved_until` and no `settled_at`. It carries the match's **time
+control** since A64-020.5A-pre.
+
+### 10.8 "Pending" means *current*, and includes an active match
+
+**`pending_acceptance` or `active`** — A64-020.5A. Nothing else, and no time
+window.
+
+Acceptance is bilateral, so one player answers **first** and the match
+activates on the *other* one's request. The first acceptor's own response
+therefore reads `pending_acceptance`, and while this endpoint returned
+pending matches alone their next poll answered `404`: the one player who
+could not learn their game had begun was the one who had agreed to it
+soonest. The realtime seam is unwired (§11.4), so polling is their only
+channel.
+
+`PendingMatchResponse.status` had published the wider contract from the
+start — *"a client that polls after answering sees the outcome rather than a
+`404`"* — so this is the implementation catching up with a documented
+promise rather than a new capability. A contract test asserted the narrow
+behaviour and is corrected; it encoded an outdated requirement.
+
+**A caller branches on `status`.** A lobby shows an acceptance dialog for
+`pending_acceptance` and hands off to the game for `active`. The realtime
+notifier pushes the first and **skips** the second: both players can agree
+before the relay reaches the `match_created` entry, and an offer delivered
+over a game already in progress is worse than one delivered late.
+
+**No retention rule.** A match leaves this read by being played to an end,
+declined or expiring — transitions the domain already makes. A horizon would
+be a second, softer definition of "current" that nothing else shares.
+
+Served by `ix_match__current_{light,dark}`, partial on the same two
+statuses. `ix_match__pending_deadline` and
+`ck_match__settled_at_iff_not_pending` deliberately keep the narrow
+predicate: an `active` match can never become overdue, and it is settled.
 
 ---
 
@@ -856,8 +890,9 @@ only polls still works; a client that only listens is correct until the first
 dropped connection.
 
 **Nothing is trusted from the payload except identity** (§6). Every question
-is asked at delivery: still a participant, still pending, deadline not passed,
-block state now. A block that appeared inside the window withholds the
+is asked at delivery: still a participant, **still awaiting an answer**,
+deadline not passed, block state now. "Still pending" became an explicit
+status check in A64-020.5A rather than a property of the read — see §10.8. A block that appeared inside the window withholds the
 opponent's **name** and never the match — withholding the offer would leave a
 player holding a match they cannot see, which the deadline would then expire
 against them.
@@ -1137,7 +1172,6 @@ Resolving any threshold above is a rules change and must bump it.
 - [ ] **Tune `MATCHMAKING_RESERVATION_TTL_SECONDS` from the histogram** (§11.5), once it has run over a weekend. Thirty seconds is still an assumption; it is now a measurable one
 - [ ] Replace `LoggingPendingMatchSink` with AD-09's gateway (§11.4). Everything upstream is real; only the socket is missing
 - [ ] Give **tournament** fixtures a time control (§8.1). Queue matches are timed since A64-020.5A-pre; a tournament pairing is still untimed, and `CreateMatchRequest` refuses a system-activated match that carries a clock until activation schedules its deadline
-- [ ] Narrow `RecentOpponentReader` to *completed* matches once a match can carry a result (§10.6)
 - [ ] Replace `every_pool()` with a scan of pools that actually have waiting tickets (§9.1). **Now warranted**: A64-020.5A-pre took the count from fourteen to fifty-six, of which at most a handful are ever non-empty, and a second variant makes it a hundred and twelve
 - [ ] Specify **challenges** — `matchmaking.challenge` (database.md §8.1), direct and open
 - [ ] Revisit the decline cooldown once there is a fair-play signal to feed (§11.3). It is deliberately not a sanction, and `admin` is where escalation belongs

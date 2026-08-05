@@ -358,5 +358,78 @@
       "retry": "Qayta urinish",
       "failed": "Ma'lumotni yuklab bo'lmadi"
     }
+  },
+  "play": {
+    "nav": {
+      "play": "O'ynash"
+    },
+    "title": "O'yin boshlash",
+    "form": {
+      "mode": "Rejim",
+      "modeHint": "Reytingli o'yin doimiy raqamingizni o'zgartiradi.",
+      "timeControl": "Vaqt nazorati",
+      "timeControlHint": "Har bir tomonga beriladigan vaqt va har yurishdan keyin qo'shiladigan vaqt.",
+      "submit": "Navbatga qo'shilish",
+      "joining": "Qo'shilmoqda…"
+    },
+    "mode": {
+      "casual": "Oddiy",
+      "casualHint": "Natija reytingga ta'sir qilmaydi.",
+      "ranked": "Reytingli",
+      "rankedHint": "Natija reytingingizni o'zgartiradi."
+    },
+    "speed": {
+      "bullet": "Bullet",
+      "blitz": "Blits",
+      "rapid": "Rapid",
+      "classical": "Klassik",
+      "correspondence": "Yozishma",
+      "unknown": "Noma'lum"
+    },
+    "waiting": {
+      "searching": "Raqib qidirilmoqda…",
+      "speed": "Toifa",
+      "since": "Boshlandi",
+      "elapsed": "Kutish vaqti: {duration}",
+      "cancel": "Bekor qilish",
+      "cancelling": "Bekor qilinmoqda…"
+    },
+    "offer": {
+      "title": "Sizga raqib topildi",
+      "description": "Javob bering — vaqt tugasa taklif bekor bo'ladi.",
+      "unknownOpponent": "Noma'lum o'yinchi",
+      "secondsLeft": "soniya qoldi",
+      "announce": "{seconds} soniya qoldi",
+      "accept": "Qabul qilish",
+      "acceptLabel": "Qabul qilish — {name}",
+      "accepting": "Qabul qilinmoqda…",
+      "decline": "Rad etish",
+      "declineLabel": "Rad etish — {name}",
+      "declining": "Rad etilmoqda…",
+      "awaitingOpponent": "Siz qabul qildingiz. Raqibning javobi kutilmoqda."
+    },
+    "game": {
+      "title": "O'yin",
+      "ready": "O'yin tayyor. Ikkalangiz ham qabul qildingiz.",
+      "matchId": "O'yin identifikatori",
+      "boardPending": "O'yin taxtasi keyingi bosqichda shu yerda ochiladi.",
+      "backToLobby": "Lobbiga qaytish"
+    },
+    "errors": {
+      "already_queued": "Siz allaqachon navbatdasiz. Avval undan chiqing.",
+      "queue_not_found": "Siz navbatda emassiz.",
+      "match_resolved": "Bu taklif endi ochiq emas.",
+      "match_not_found": "Bunday o'yin topilmadi.",
+      "unsupported_time_control": "Bu vaqt nazorati endi taklif qilinmaydi. Sahifani yangilang.",
+      "queue_cooldown_active": "Yaqinda taklifni rad etdingiz. Biroz kuting.",
+      "cooldownSeconds": "{seconds} soniyadan keyin qayta urinib ko'ring.",
+      "validation_error": "So'rov noto'g'ri. Tanlovingizni tekshiring.",
+      "rate_limited": "Juda ko'p urinish. Biroz kuting.",
+      "permission_denied": "Bunga ruxsatingiz yo'q.",
+      "network": "Serverga ulanib bo'lmadi.",
+      "unexpected": "Nimadir noto'g'ri ketdi.",
+      "unavailable": "Navbat holatini o'qib bo'lmadi.",
+      "catalogue_unavailable": "Hozircha o'yin boshlab bo'lmaydi. Keyinroq urinib ko'ring."
+    }
   }
 }

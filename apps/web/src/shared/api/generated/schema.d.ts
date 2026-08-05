@@ -2414,6 +2414,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/time-controls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the time controls on offer
+         * @description The clocks Arena64 offers.
+         *
+         *     **Read this rather than hardcoding it.** A control can be retired, and a
+         *     client holding a stale list will send an identifier that is refused with
+         *     `422 unsupported_time_control` — the honest failure, and one a fresh
+         *     read fixes.
+         *
+         *     **Order is part of the contract.** Deterministic, from the catalogue's
+         *     own `display_order`, so a picker renders the same list in the same
+         *     sequence on every device. A player who learned that the second entry is
+         *     3+2 should not find something else there tomorrow.
+         *
+         *     Only **active** controls appear. There is no field saying so and no way
+         *     to ask for the retired ones: a menu of things that cannot be chosen is
+         *     not a menu, and the games already played under a withdrawn control keep
+         *     their own recorded settings regardless of what this returns.
+         *
+         *     Never empty in a correctly migrated environment — the four controls are
+         *     seeded by the migration that creates the table, so an empty list means
+         *     the deployment is not migrated rather than that Arena64 offers no games.
+         */
+        get: operations["list_time_controls_api_v1_time_controls_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2603,6 +2642,12 @@ export interface components {
         /** ApiResponse[WebSocketTicketRead] */
         ApiResponse_WebSocketTicketRead_: {
             data: components["schemas"]["WebSocketTicketRead"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        /** ApiResponse[list[TimeControlResponse]] */
+        ApiResponse_list_TimeControlResponse__: {
+            /** Data */
+            data: components["schemas"]["TimeControlResponse"][];
             meta: components["schemas"]["ResponseMeta"];
         };
         /**
@@ -2967,7 +3012,7 @@ export interface components {
          *     per module and stops being a useful thing to exhaustively switch over.
          * @enum {string}
          */
-        ErrorCode: "internal_error" | "validation_error" | "domain_error" | "authentication_failed" | "not_found" | "conflict" | "permission_denied" | "precondition_failed" | "rule_violation" | "rate_limited" | "unsupported_engine_version" | "invalid_cursor" | "tournament_not_found" | "registration_not_open" | "registration_deadline_passed" | "tournament_full" | "already_registered" | "registration_not_found" | "invalid_tournament_state" | "infrastructure_error" | "transient_infrastructure_error" | "permanent_infrastructure_error" | "username_already_exists" | "email_already_exists" | "duplicate_friend_request" | "opposite_friend_request_pending" | "invalid_username" | "invalid_email" | "weak_password" | "invalid_credentials" | "inactive_account" | "account_locked" | "authentication_required" | "invalid_token" | "expired_token" | "invalid_session" | "session_expired" | "invalid_verification_token" | "invalid_reset_token" | "avatar_too_large" | "queue_cooldown_active";
+        ErrorCode: "internal_error" | "validation_error" | "domain_error" | "authentication_failed" | "not_found" | "conflict" | "permission_denied" | "precondition_failed" | "rule_violation" | "rate_limited" | "unsupported_engine_version" | "invalid_cursor" | "tournament_not_found" | "registration_not_open" | "registration_deadline_passed" | "tournament_full" | "already_registered" | "registration_not_found" | "invalid_tournament_state" | "infrastructure_error" | "transient_infrastructure_error" | "permanent_infrastructure_error" | "username_already_exists" | "email_already_exists" | "duplicate_friend_request" | "opposite_friend_request_pending" | "invalid_username" | "invalid_email" | "weak_password" | "invalid_credentials" | "inactive_account" | "account_locked" | "authentication_required" | "invalid_token" | "expired_token" | "invalid_session" | "session_expired" | "invalid_verification_token" | "invalid_reset_token" | "avatar_too_large" | "queue_cooldown_active" | "unsupported_time_control";
         /**
          * ErrorResponse
          * @description The only shape an Arena64 error takes on the wire: a safe message and
@@ -3367,10 +3412,16 @@ export interface components {
          * JoinQueueRequest
          * @description What `POST /matchmaking/queue` accepts.
          *
-         *     **Three fields, and none of them is a rating.** QT-2 makes the rating
+         *     **Four fields, and none of them is a rating.** QT-2 makes the rating
          *     snapshot the platform's to record, and a client-supplied one would be a
          *     self-reported skill level on the endpoint that decides who you play —
          *     the single most valuable field on the platform to lie about.
+         *
+         *     Nor is any of them a duration. A64-020.5A-pre §2: a client names a
+         *     control from the catalogue and never its `base_time_ms` — a submitted
+         *     duration would be a player-authored pool, which fragments matchmaking
+         *     into pools of one and lets a client mint a rating category nobody
+         *     defined.
          *
          *     Nor is there a `player_id`: the account comes from the access token, so
          *     queueing as somebody else is not something this API can express.
@@ -3390,6 +3441,12 @@ export interface components {
             variant: components["schemas"]["ProductVariant"];
             /** @description Which pool to wait in. `ranked` moves your rating when the match finishes; `casual` does not. */
             queue_type: components["schemas"]["QueueType"];
+            /**
+             * @description Which clock to play under, by identifier. Read the offered set from the catalogue rather than hardcoding it — a control can be retired, and asking for a retired one is a `422` with `unsupported_time_control`.
+             *
+             *     **Required, with no default.** Every value here is a different game, so there is no honest default: a caller who omitted it would silently enter a pool they did not choose.
+             */
+            time_control_id: components["schemas"]["TimeControlId"];
             /**
              * @description Where to look for an opponent. `global` — the default — means anywhere, and is the right answer unless you would rather wait longer for a shorter round trip.
              * @default global
@@ -3820,6 +3877,18 @@ export interface components {
              * @description Whether finishing this match will move your rating.
              */
             rated: boolean;
+            /**
+             * Base Time Ms
+             * @description Each side's starting budget, in milliseconds. `null` for an untimed match — a tournament fixture today, never a queue pairing.
+             */
+            base_time_ms: number | null;
+            /**
+             * Increment Ms
+             * @description What a side gets back after each of its own moves, in milliseconds. `null` exactly when `base_time_ms` is.
+             */
+            increment_ms: number | null;
+            /** @description Which rating this match would move. `null` for a match created without a rating snapshot. */
+            speed_class: components["schemas"]["SpeedClass"] | null;
             /**
              * Acceptance Deadline
              * Format: date-time
@@ -4424,6 +4493,19 @@ export interface components {
             queue_type: components["schemas"]["QueueType"];
             region: components["schemas"]["Region"];
             status: components["schemas"]["QueueStatus"];
+            time_control_id: components["schemas"]["TimeControlId"];
+            /**
+             * Base Time Ms
+             * @description Each side's starting budget, in milliseconds.
+             */
+            base_time_ms: number;
+            /**
+             * Increment Ms
+             * @description What a side gets back after each of its own moves, in milliseconds.
+             */
+            increment_ms: number;
+            /** @description Which rating a result under this control would move. Sent so a client can label the pool without owning a duration-to-speed rule of its own — that mapping is the catalogue's. */
+            speed_class: components["schemas"]["SpeedClass"];
             /**
              * Rating Snapshot
              * @description The rating this ticket was entered with. Fixed at entry — a rating that changes while you wait does not move your place in the pool.
@@ -4950,6 +5032,59 @@ export interface components {
              * @example 0
              */
             best_win_streak: number;
+        };
+        /**
+         * TimeControlId
+         * @description Which time controls the platform offers, by stable code.
+         *
+         *     The value is the wire format, the pool identifier's fourth component and
+         *     the database enum's member, so it is chosen to survive a change of
+         *     label: `blitz_3_2` says what the control *is* rather than what a menu
+         *     currently calls it.
+         *
+         *     Ordered here as they are offered — fastest first — which is the order
+         *     `display_order` seeds and the order a client renders. The enum's own
+         *     order is not authoritative (`display_order` is, and it is a column
+         *     precisely so it can change without a deploy); it is kept in step so the
+         *     two do not read as disagreeing.
+         * @enum {string}
+         */
+        TimeControlId: "bullet_1_0" | "blitz_3_2" | "rapid_10_0" | "classical_30_0";
+        /**
+         * TimeControlResponse
+         * @description One control a player may choose.
+         *
+         *     **Flat, not nested.** `TimeControl` composes a `TimeControlSnapshot`
+         *     because the platform needs to talk about "the durable subset a record
+         *     copies" — a distinction that means nothing to a client, which renders
+         *     every field at once. Publishing the nesting would export an internal
+         *     reason for a split into a contract that has no use for it.
+         *
+         *     `is_active` is **absent**, and its absence is the contract: this
+         *     endpoint returns only active controls, so a field that is `true` on
+         *     every row would invite a client to filter on something already filtered
+         *     and to render a retired control the day the invariant changed.
+         */
+        TimeControlResponse: {
+            /** @description The stable code to send as `time_control_id` when joining a queue. Never assemble one from a duration — the catalogue is authoritative and a control can be retired. */
+            id: components["schemas"]["TimeControlId"];
+            /**
+             * Label
+             * @description What to show, as the platform spells it — "3+2". A convenience for a client with no formatter; `base_time_ms` and `increment_ms` are the values to format from if you have one.
+             */
+            label: string;
+            /**
+             * Base Time Ms
+             * @description Each side's starting budget, in milliseconds.
+             */
+            base_time_ms: number;
+            /**
+             * Increment Ms
+             * @description What a side gets back after each of its own moves, in milliseconds.
+             */
+            increment_ms: number;
+            /** @description Which rating a result under this control moves. Sent so a client can group or label the menu without owning a duration-to-speed rule of its own — that mapping is this catalogue's, and the boundaries between the classes are a product decision rather than arithmetic. */
+            speed_class: components["schemas"]["SpeedClass"];
         };
         /**
          * TokenPair
@@ -7367,7 +7502,11 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description The body failed validation, or you are recorded as signed out. `message` says which. */
+            /**
+             * @description The body failed validation, or you are recorded as signed out. `message` says which.
+             *
+             *     `unsupported_time_control` is its own `code`: the clock you named is not one Arena64 currently offers — read the catalogue again and re-render the picker. Returned identically whether the identifier is unknown or the control has been retired.
+             */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -8174,6 +8313,35 @@ export interface operations {
             };
             /** @description The pagination cursor is not valid */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_time_controls_api_v1_time_controls_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every control a player may currently choose, in display order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_list_TimeControlResponse__"];
+                };
+            };
+            /** @description No access token was presented, or it was invalid or expired. */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

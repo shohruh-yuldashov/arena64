@@ -358,5 +358,78 @@
       "retry": "Try again",
       "failed": "We could not load this"
     }
+  },
+  "play": {
+    "nav": {
+      "play": "Play"
+    },
+    "title": "Start a game",
+    "form": {
+      "mode": "Mode",
+      "modeHint": "A rated game moves a permanent number.",
+      "timeControl": "Time control",
+      "timeControlHint": "How long each side gets, and what a move gives back.",
+      "submit": "Join the queue",
+      "joining": "Joining…"
+    },
+    "mode": {
+      "casual": "Casual",
+      "casualHint": "The result does not move your rating.",
+      "ranked": "Rated",
+      "rankedHint": "The result moves your rating."
+    },
+    "speed": {
+      "bullet": "Bullet",
+      "blitz": "Blitz",
+      "rapid": "Rapid",
+      "classical": "Classical",
+      "correspondence": "Correspondence",
+      "unknown": "Unknown"
+    },
+    "waiting": {
+      "searching": "Searching for an opponent…",
+      "speed": "Category",
+      "since": "Started",
+      "elapsed": "Waiting for {duration}",
+      "cancel": "Cancel",
+      "cancelling": "Cancelling…"
+    },
+    "offer": {
+      "title": "You have an opponent",
+      "description": "Answer before the window closes — an unanswered offer expires.",
+      "unknownOpponent": "Unknown player",
+      "secondsLeft": "seconds left",
+      "announce": "{seconds} seconds left",
+      "accept": "Accept",
+      "acceptLabel": "Accept — {name}",
+      "accepting": "Accepting…",
+      "decline": "Decline",
+      "declineLabel": "Decline — {name}",
+      "declining": "Declining…",
+      "awaitingOpponent": "You accepted. Waiting for your opponent."
+    },
+    "game": {
+      "title": "Game",
+      "ready": "The game is ready. Both of you accepted.",
+      "matchId": "Match ID",
+      "boardPending": "The board will load here in the next phase.",
+      "backToLobby": "Back to the lobby"
+    },
+    "errors": {
+      "already_queued": "You are already in a queue. Leave it first.",
+      "queue_not_found": "You are not in a queue.",
+      "match_resolved": "That offer is no longer open.",
+      "match_not_found": "No such game.",
+      "unsupported_time_control": "That time control is no longer offered. Reload the page.",
+      "queue_cooldown_active": "You declined a match recently. Please wait a moment.",
+      "cooldownSeconds": "Try again in {seconds}s.",
+      "validation_error": "That request was not valid. Check your selection.",
+      "rate_limited": "Too many attempts. Please wait.",
+      "permission_denied": "You do not have access to that.",
+      "network": "The server could not be reached.",
+      "unexpected": "Something went wrong.",
+      "unavailable": "The queue state could not be read.",
+      "catalogue_unavailable": "Games cannot be started right now. Try again later."
+    }
   }
 }

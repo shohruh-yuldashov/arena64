@@ -38,7 +38,70 @@ export const E2E_ACCOUNTS = {
   bob: "e2e_social_bob",
   /** The profile suite's own, so it stops registering per run too. */
   profile: "e2e_profile_owner",
+  /**
+   * The lobby suite's own pair — A64-020.5A §26.
+   *
+   * **Not** `alice` and `bob`. Playwright runs spec files in parallel, and
+   * a lobby run cancels its accounts' queue tickets and settles their
+   * pending offers; doing that to the accounts the social suite is
+   * simultaneously friending would make both suites flaky for reasons
+   * neither could see from its own file.
+   *
+   * Two accounts is the minimum: a pairing needs two players, and one
+   * account cannot be matched with itself.
+   */
+  lobbyOne: "e2e_lobby_one",
+  lobbyTwo: "e2e_lobby_two",
 } as const;
+
+/**
+ * Everything the lobby suite needs cleared before it runs — A64-020.5A §26.
+ *
+ * Two accounts are about to queue into the same pool, and the state that
+ * would break that is state a **previous run** left behind: a live ticket
+ * (QT-1 refuses a second, so the join would `409`), or an unanswered match
+ * offer (which the lobby would show instead of the form).
+ *
+ * Both are cleared through the endpoints a player uses. Nothing here
+ * truncates a table, flushes Redis or disables a rate limit — §26 forbids
+ * all three, and each would make the suite pass by removing the production
+ * behaviour it is supposed to run against.
+ *
+ * Declining is deliberately **not** how a stale offer is cleared: a decline
+ * earns a queue cooldown, which is precisely the state that would then stop
+ * the spec from queueing. Accepting settles it just as well and costs
+ * nothing, because this phase never plays the game.
+ *
+ * Every call tolerates "already absent". The point is the end state, not
+ * the transition — the same contract `resetRelationship` keeps.
+ */
+export async function resetLobby(
+  request: APIRequestContext,
+  account: SeededAccount,
+): Promise<void> {
+  const headers = { Authorization: `Bearer ${account.accessToken}` };
+
+  // The offer first. A pending match holds its tickets, so cancelling a
+  // queue that a pairing already consumed would leave the offer standing.
+  const pending = await request.get(`${API}/api/v1/matchmaking/matches/pending`, {
+    headers,
+    failOnStatusCode: false,
+  });
+  if (pending.ok()) {
+    const body = (await pending.json()) as { data: { match_id: string; status: string } };
+    if (body.data.status === "pending_acceptance") {
+      await request.post(`${API}/api/v1/matchmaking/matches/${body.data.match_id}/accept`, {
+        headers,
+        failOnStatusCode: false,
+      });
+    }
+  }
+
+  await request.delete(`${API}/api/v1/matchmaking/queue`, {
+    headers,
+    failOnStatusCode: false,
+  });
+}
 
 export interface SeededAccount {
   username: string;

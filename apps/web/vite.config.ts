@@ -38,6 +38,35 @@ const API_PROXY = {
     changeOrigin: false,
     ws: false,
   },
+  /**
+   * The gateway — A64-020.5A §20.
+   *
+   * `/ws` is mounted at the **application root**, not under `/api/v1`
+   * (`app/app_factory.py`), so the `/api` rule above does not reach it and
+   * a second entry is required rather than optional. Configured now, ahead
+   * of the client that uses it, because the alternative is discovering it
+   * in the phase that also has a socket to debug.
+   *
+   * `ws: true` is the whole point: without it Vite proxies the HTTP
+   * request and drops the `Upgrade` handshake, which presents as a socket
+   * that connects and immediately closes with no error anybody can act on.
+   *
+   * **Same origin, like `/api`.** The page talks only to itself, so the
+   * socket carries the same cookies and the same `Origin` the API already
+   * checks. Production must route `/ws` with WebSocket upgrade through its
+   * reverse proxy — the contract this file expresses for development and
+   * `specs/frontend.md` §12 states for deployment.
+   *
+   * Authentication is **not** a proxy concern: the gateway takes a one-time
+   * ticket from `POST /auth/ws-ticket` as a query parameter, which
+   * A64-020.5B wires. Nothing here needs to know that, and nothing here
+   * forwards a token.
+   */
+  "/ws": {
+    target: API_TARGET,
+    changeOrigin: false,
+    ws: true,
+  },
 };
 
 export default defineConfig({

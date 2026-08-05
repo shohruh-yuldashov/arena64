@@ -79,6 +79,10 @@ export type ErrorCode =
   | "avatar_too_large"
   // Matchmaking.
   | "queue_cooldown_active"
+  // Reference data. A64-020.5A-pre: the chosen clock is not one the
+  // platform offers — unknown or retired, deliberately indistinguishable —
+  // and the client's move is the same for both: read the catalogue again.
+  | "unsupported_time_control"
   // Tournaments.
   | "tournament_not_found"
   | "registration_not_open"

@@ -30,12 +30,13 @@ from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.users.application.ports import UserRepository
 from app.modules.users.application.services import UserService
 from app.modules.users.application.services.presence_service import PresenceService
+from app.modules.users.application.services.public_profile_service import PublicProfileService
 from app.modules.users.infrastructure.presence import (
     NoPresenceProvider,
     RedisPresenceProvider,
 )
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
-from app.modules.users.public import PresenceProvider, PresenceRecorder
+from app.modules.users.public import PresenceProvider, PresenceRecorder, PublicProfileReader
 
 # `get_clock` and `ClockDep` moved to `app.api.deps` in A64-011.9 — "now"
 # is a platform concern, not this module's, and `auth` was importing them
@@ -43,7 +44,14 @@ from app.modules.users.public import PresenceProvider, PresenceRecorder
 # presentation package (R-1). Re-exported under the original names so this
 # module's own routes and every test that overrides `get_clock` are
 # unaffected by where it lives.
-__all__ = ["ClockDep", "UserRepositoryDep", "UserServiceDep", "get_clock"]
+__all__ = [
+    "ClockDep",
+    "PublicProfileReaderDep",
+    "UserRepositoryDep",
+    "UserServiceDep",
+    "get_clock",
+    "get_public_profile_reader",
+]
 
 
 def get_user_repository(session: DbSessionDep) -> UserRepository:
@@ -70,6 +78,28 @@ def get_user_service(
 
 
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
+
+
+def get_public_profile_reader(users: UserServiceDep) -> PublicProfileReader:
+    """The **stranger's** view of a player, request-scoped — A64-020.6 §26.
+
+    Published from this module's own root rather than assembled by each
+    consumer, because `tournament` cannot assemble it: its
+    `tournament-reaches-modules-through-public` contract forbids
+    `app.modules.users.application`, which is where `PublicProfileService`
+    lives. `game`, `matchmaking` and `profiles` each construct their own
+    copy today and are left alone — this adds the door rather than
+    rearranging the rooms behind it.
+
+    Typed as the port, so a holder can read the public view and can do
+    nothing else. There is no method here that reaches an email address,
+    which is what makes A64-020.6 §27's "no self-only profile fields" true
+    by construction rather than by review.
+    """
+    return PublicProfileService(users)
+
+
+PublicProfileReaderDep = Annotated[PublicProfileReader, Depends(get_public_profile_reader)]
 
 
 def get_presence_service(

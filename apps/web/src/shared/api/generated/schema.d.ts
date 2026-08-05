@@ -2277,6 +2277,11 @@ export interface paths {
          *     A tournament whose bracket has not been materialised answers with an
          *     empty round list rather than a `404` — the tournament exists, and "no
          *     bracket yet" is a state a client renders rather than an error.
+         *
+         *     **One batched identity lookup for the whole bracket** — A64-020.6 §26,
+         *     and the same arrangement `game`'s history and replay routes already
+         *     make. Without it a client turns each seat into a name by asking, and a
+         *     128-player field is 128 requests behind one page.
          */
         get: operations["tournament_bracket_api_v1_tournaments__tournament_id__bracket_get"];
         put?: never;
@@ -2302,11 +2307,76 @@ export interface paths {
          *     is being played**: standings are materialised once, when it completes
          *     (§6f), and nothing here derives a partial one — a placement that changed
          *     between two reads would not be a result.
+         *
+         *     Identities are composed in one batched read, for the bracket's reason.
+         *     An empty placing costs no lookup at all.
          */
         get: operations["tournament_standings_api_v1_tournaments__tournament_id__standings_get"];
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tournaments/{tournament_id}/registrations/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your own entry in a tournament
+         * @description **The authenticated player's own** entry — A64-020.6 §8.
+         *
+         *     The read half of the two participant writes, and the reason it exists:
+         *     a detail page has to know whether the viewer is in this tournament
+         *     before it can offer to enter or leave it, and until now that fact was
+         *     only observable by *attempting* the write. Deriving it from whether a
+         *     button appeared inverts the authority — the record is the server's.
+         *
+         *     `/me` rather than a player id, so the endpoint has no shape in which it
+         *     reads somebody else's entry. That makes this narrower than the public
+         *     history at `/players/{id}/tournaments`, which is deliberate: whether a
+         *     player entered a tournament is public there, one page at a time, and
+         *     finding a *particular* tournament in it is an unbounded walk.
+         *
+         *     **`404` for "never entered", and it is not an error.** A client asking
+         *     "am I in this?" is asking a question whose negative answer is normal, so
+         *     the code is what it reads rather than an exception to log — the same
+         *     answer `DELETE …/registrations/me` gives for the same absence.
+         *
+         *     A **withdrawn** entry answers `200` with `status = "withdrawn"`, not
+         *     `404`: the row survives withdrawal (§7's append-oriented record), and
+         *     "you left this one" is a different fact from "you were never here" —
+         *     one of them means re-entering is possible while registration is open.
+         */
+        get: operations["my_registration_api_v1_tournaments__tournament_id__registrations_me_get"];
+        put?: never;
+        post?: never;
+        /**
+         * Withdraw from a tournament
+         * @description Withdraws **the authenticated player's own** entry — §1.
+         *
+         *     `/me` rather than a player id in the path, so there is no shape in
+         *     which this endpoint acts on somebody else — the same reason the entry
+         *     route has no body.
+         *
+         *     Allowed **only before registration closes**. After that the field is
+         *     fixed and the bracket is built from exactly those players, so a
+         *     withdrawal would leave a seat nothing fills; it is refused rather than
+         *     converted to a forfeit, because a forfeit is a *match* outcome and
+         *     there is no match yet.
+         *
+         *     The row survives with `status = withdrawn` — §7's append-oriented
+         *     record. A repeated withdrawal answers `404 registration_not_found`,
+         *     which is the same answer as never having entered and is what makes the
+         *     call safe to send twice: the resource `/registrations/me` is gone
+         *     either way, and `withdrawn_at` cannot move.
+         */
+        delete: operations["withdraw_from_tournament_api_v1_tournaments__tournament_id__registrations_me_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2344,42 +2414,6 @@ export interface paths {
          */
         post: operations["enter_tournament_api_v1_tournaments__tournament_id__registrations_post"];
         delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/tournaments/{tournament_id}/registrations/me": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Withdraw from a tournament
-         * @description Withdraws **the authenticated player's own** entry — §1.
-         *
-         *     `/me` rather than a player id in the path, so there is no shape in
-         *     which this endpoint acts on somebody else — the same reason the entry
-         *     route has no body.
-         *
-         *     Allowed **only before registration closes**. After that the field is
-         *     fixed and the bracket is built from exactly those players, so a
-         *     withdrawal would leave a seat nothing fills; it is refused rather than
-         *     converted to a forfeit, because a forfeit is a *match* outcome and
-         *     there is no match yet.
-         *
-         *     The row survives with `status = withdrawn` — §7's append-oriented
-         *     record. A repeated withdrawal answers `404 registration_not_found`,
-         *     which is the same answer as never having entered and is what makes the
-         *     call safe to send twice: the resource `/registrations/me` is gone
-         *     either way, and `withdrawn_at` cannot move.
-         */
-        delete: operations["withdraw_from_tournament_api_v1_tournaments__tournament_id__registrations_me_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2893,7 +2927,25 @@ export interface components {
             /** Attempts */
             attempts: components["schemas"]["AttemptResponse"][];
         };
-        /** BracketResponse */
+        /**
+         * BracketResponse
+         * @description Every round and node, plus who the ids in them are — §10, §26.
+         *
+         *     ## Why `participants` is a side list rather than an embedded object
+         *
+         *     A player appears in one node per round they survive, so embedding their
+         *     identity would repeat a champion's name `log2(field)` times and make the
+         *     response grow with the bracket's *depth* rather than its width. A client
+         *     joins on `player_id`, which it already holds from `winner_id`,
+         *     `light_player_id` and `dark_player_id`.
+         *
+         *     ## Why it is composed here at all
+         *
+         *     Without it a client turns a seat into a name by asking, and a 128-player
+         *     bracket is 127 nodes and 128 lookups — the N+1 A64-020.6 §26 forbids and
+         *     the same one A64-020.5F's history prerequisite existed to prevent. One
+         *     batched read, deduplicated, on the server side of the boundary.
+         */
         BracketResponse: {
             /**
              * Tournament Id
@@ -2902,6 +2954,11 @@ export interface components {
             tournament_id: string;
             /** Rounds */
             rounds: components["schemas"]["RoundResponse"][];
+            /**
+             * Participants
+             * @description Every player id appearing in the bracket, resolved to a public identity.
+             */
+            participants?: components["schemas"]["TournamentParticipantResponse"][];
         };
         /**
          * BrowserSession
@@ -5019,6 +5076,11 @@ export interface components {
          *
          *     Empty while the tournament is still being played — standings are
          *     materialised at completion (§6f), and nothing derives a partial one.
+         *
+         *     `participants` carries the same identities the bracket's does and for
+         *     the same reason (§26): a placing table of raw identifiers is not a
+         *     result anybody can read, and resolving them client-side is one lookup
+         *     per entrant.
          */
         StandingsResponse: {
             /**
@@ -5028,6 +5090,11 @@ export interface components {
             tournament_id: string;
             /** Standings */
             standings: components["schemas"]["StandingResponse"][];
+            /**
+             * Participants
+             * @description Every player id appearing in the standings, resolved to a public identity.
+             */
+            participants?: components["schemas"]["TournamentParticipantResponse"][];
         };
         /**
          * StatisticsResponse
@@ -5228,6 +5295,33 @@ export interface components {
              * @description Opaque; send it back unread for the next page.
              */
             next_cursor?: string | null;
+        };
+        /**
+         * TournamentParticipantResponse
+         * @description Who a player id refers to — A64-020.6 §26.
+         *
+         *     Composed from `users`' **public** profile read, gated by the same
+         *     privacy policy every other surface uses. `username` and `display_name`
+         *     are `None` for a deactivated account, which is the answer this platform
+         *     gives everywhere rather than a special case here.
+         *
+         *     No rating: a bracket seat carries a **seed**, which is the ordering the
+         *     tournament was drawn on, and publishing a live rating beside it would
+         *     invite reading one as the other. A replay seat carries the snapshot the
+         *     match was played at (PR-3) and is the surface where a rating belongs.
+         */
+        TournamentParticipantResponse: {
+            /**
+             * Player Id
+             * Format: uuid
+             */
+            player_id: string;
+            /** Username */
+            username?: string | null;
+            /** Display Name */
+            display_name?: string | null;
+            /** Avatar Thumbnail Url */
+            avatar_thumbnail_url?: string | null;
         };
         /**
          * TournamentResponse
@@ -8255,12 +8349,12 @@ export interface operations {
             };
         };
     };
-    enter_tournament_api_v1_tournaments__tournament_id__registrations_post: {
+    my_registration_api_v1_tournaments__tournament_id__registrations_me_get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Which tournament to enter. */
+                /** @description Which tournament to read your entry in. */
                 tournament_id: string;
             };
             cookie?: never;
@@ -8268,7 +8362,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            201: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8276,17 +8370,8 @@ export interface operations {
                     "application/json": components["schemas"]["ApiResponse_RegistrationResponse_"];
                 };
             };
-            /** @description No such tournament, or no such player */
+            /** @description No such tournament, or you never entered it */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Registration is closed, the deadline passed, the field is full, or you already entered */
-            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8336,6 +8421,56 @@ export interface operations {
                 };
             };
             /** @description Registration has closed and the field is fixed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enter_tournament_api_v1_tournaments__tournament_id__registrations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Which tournament to enter. */
+                tournament_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_RegistrationResponse_"];
+                };
+            };
+            /** @description No such tournament, or no such player */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Registration is closed, the deadline passed, the field is full, or you already entered */
             409: {
                 headers: {
                     [name: string]: unknown;

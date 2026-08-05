@@ -29,15 +29,23 @@ from app.config.settings import RateLimitSettings
 from app.core.rate_limiting import RateLimitScope
 from app.modules.auth.presentation.rate_limits import build_rules
 
-#: Every endpoint A64-011.8 lists, with the limits it specifies. Written
-#: out as data rather than derived from `build_rules`, which would make the
-#: test agree with the implementation by construction and assert nothing.
+#: Every endpoint A64-011.8 lists, with the limits in force. Written out as
+#: data rather than derived from `build_rules`, which would make the test
+#: agree with the implementation by construction and assert nothing.
+#:
+#: Two figures are **not** A64-011.8's, and both were raised by A64-020.6:
+#: `login_ip` 5 -> 20 and `register_ip` 3 -> 10. An IP is not a user, so the
+#: old numbers locked out the sixth person on a shared connection and the
+#: fourth person signing up together. The rules that bound an *attack* —
+#: `login_email`, Argon2id, `users.locked_until`, email verification — are
+#: unchanged, which is the property this table exists to keep visible: a
+#: future loosening of `login_email` should look wrong here.
 #:
 #: `(path, rule name, scope, limit, window seconds)`
 EXPECTED: list[tuple[str, str, RateLimitScope, int, int]] = [
-    ("/api/v1/auth/login", "login_ip", RateLimitScope.IP, 5, 15 * 60),
+    ("/api/v1/auth/login", "login_ip", RateLimitScope.IP, 20, 15 * 60),
     ("/api/v1/auth/login", "login_email", RateLimitScope.EMAIL, 10, 60 * 60),
-    ("/api/v1/auth/register", "register_ip", RateLimitScope.IP, 3, 60 * 60),
+    ("/api/v1/auth/register", "register_ip", RateLimitScope.IP, 10, 60 * 60),
     (
         "/api/v1/auth/password/forgot",
         "forgot_password_email",
@@ -56,6 +64,18 @@ EXPECTED: list[tuple[str, str, RateLimitScope, int, int]] = [
     # Listed under "Endpoints" with no limit given — this figure is chosen,
     # and `RateLimitSettings` says so at length.
     ("/api/v1/auth/password/reset", "reset_password_ip", RateLimitScope.IP, 10, 60 * 60),
+    # --- the cookie surface, A64-020.2 --------------------------------------
+    # The **same three rules** as the bearer-token routes above, deliberately
+    # sharing a bucket with them: `/auth/register` and
+    # `/auth/browser/register` are two doors into one action, and separate
+    # counters would double every allowance for anybody willing to alternate.
+    #
+    # Absent from this table before A64-020.6, which is how five guarded
+    # endpoints went untested for four phases — see the count below.
+    ("/api/v1/auth/browser/login", "login_ip", RateLimitScope.IP, 20, 15 * 60),
+    ("/api/v1/auth/browser/login", "login_email", RateLimitScope.EMAIL, 10, 60 * 60),
+    ("/api/v1/auth/browser/register", "register_ip", RateLimitScope.IP, 10, 60 * 60),
+    ("/api/v1/auth/browser/refresh", "refresh_ip", RateLimitScope.IP, 30, 60),
 ]
 
 LIMITED_PATHS = sorted({path for path, *_ in EXPECTED})
@@ -127,18 +147,46 @@ class TestTheWalkerItself:
         assert paths >= set(LIMITED_PATHS)
         assert "/api/v1/auth/me" in paths
 
-    def test_the_walker_finds_every_one_of_the_eleven_auth_endpoints(self, app: FastAPI) -> None:
-        """Eleven since A64-016.1's `POST /auth/ws-ticket`.
+    def test_every_auth_endpoint_has_had_a_limiting_decision(self, app: FastAPI) -> None:
+        """Every auth route is either limited or listed here as deliberately
+        not — the check that notices an endpoint added with neither.
 
-        It is deliberately **not** in `LIMITED_PATHS`: a client legitimately
-        mints one ticket per socket and reconnects on a flaky network, so a
-        rule tuned for sign-in attempts would refuse ordinary reconnection.
-        The platform-wide limit is what bounds it, and this count is what
-        notices if an endpoint is added and nobody decides either way.
+        A **set** rather than a count, and A64-020.6 is why. This asserted
+        `len(...) == 11` and A64-020.2 added five `/auth/browser/*` routes
+        without updating it, so it went red and stayed red for four phases
+        — which is worse than useless: a permanently failing check is one
+        nobody reads, and this one had genuinely noticed something.
+
+        A count says "a number changed". A set says *which* endpoint nobody
+        decided about, which is the sentence somebody can act on.
+
+        The unguarded four, each with its reason:
+
+            /auth/me           a read of the caller's own claims. Bounded by
+                               the platform-wide limit; a per-endpoint rule
+                               would throttle ordinary page loads
+            /auth/logout       ending a session must not be refusable. A
+            /auth/logout-all   locked-out user signing out everywhere is
+                               exactly who needs it to work
+            /auth/email/verify a one-time token, single-use by construction,
+                               and the sender is already limited
+            /auth/ws-ticket    one ticket per socket, and a client reconnects
+                               on a flaky network — a rule tuned for sign-in
+                               attempts would refuse ordinary reconnection
         """
+        deliberately_unlimited = {
+            "/api/v1/auth/me",
+            "/api/v1/auth/logout",
+            "/api/v1/auth/logout-all",
+            "/api/v1/auth/browser/logout",
+            "/api/v1/auth/browser/logout-all",
+            "/api/v1/auth/email/verify",
+            "/api/v1/auth/ws-ticket",
+        }
         auth_paths = {path for path, _ in api_routes(app) if path.startswith("/api/v1/auth/")}
 
-        assert len(auth_paths) == 11
+        undecided = auth_paths - set(LIMITED_PATHS) - deliberately_unlimited
+        assert not undecided, f"these auth endpoints are neither limited nor listed: {undecided}"
 
 
 class TestEveryListedEndpointIsGuarded:

@@ -67,6 +67,14 @@ export function SessionMenu() {
         <Link to="/play">{t("play.nav.play")}</Link>
       </Button>
 
+      {/* A64-020.6. The one entry point to the tournament lobby, for the
+          reason below: A64-019 shipped a whole tournament backend that no
+          screen reached, and a bracket nobody can navigate to is a bracket
+          nobody has. */}
+      <Button asChild size="sm" variant="ghost" className="min-h-11">
+        <Link to="/tournaments">{t("tournament.nav")}</Link>
+      </Button>
+
       {/* A64-020.4. The one entry point to the social pages — without it
           `/friends` and `/search` are reachable only by typing a URL, which
           is the "implemented and reachable from nothing" failure this

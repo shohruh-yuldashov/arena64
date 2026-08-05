@@ -135,9 +135,9 @@ is **abuse prevention on the authentication surface** (A64-011.8).
 
 | Endpoint | Limit | Counted per |
 | --- | --- | --- |
-| `POST /auth/login` | 5 / 15 min | IP |
+| `POST /auth/login` | 20 / 15 min | IP |
 | `POST /auth/login` | 10 / hour | email |
-| `POST /auth/register` | 3 / hour | IP |
+| `POST /auth/register` | 10 / hour | IP |
 | `POST /auth/password/forgot` | 3 / hour | email |
 | `POST /auth/email/resend` | 3 / hour | email |
 | `POST /auth/refresh` | 30 / min | IP |
@@ -147,6 +147,33 @@ Every figure is configurable (`RATE_LIMIT_*`), so tightening one during an
 incident is a restart rather than a release. The reset-password limit is
 the one figure A64-011.8 did not specify; it is chosen against what that
 endpoint actually risks, which is Argon2id CPU rather than token guessing.
+
+**The two per-IP figures were raised in A64-020.6** — login from 5 to 20
+per quarter hour, registration from 3 to 10 per hour — and the reasoning
+belongs beside the table because the change is a security one.
+
+An **IP is not a user**. A household, an office, a school and every mobile
+carrier behind CGNAT share one egress address, so five login attempts per
+quarter hour is five *people*: the sixth is locked out of a platform that
+is working perfectly, and the failure scales with how successful the
+product is. Registration is harsher still, because it is the first thing a
+new user does — a classroom signing up together stopped at the fourth
+person, and nobody reported it because nobody got an account to report it
+from.
+
+Neither per-IP rule was ever the control that bounds an attack. Guessing
+one account's password is bounded by the **per-email** rule (ten an hour,
+unchanged, and unevadable by adding hosts), by Argon2id at ~20ms, and by
+`users.locked_until`. Mass account creation is bounded by email
+verification, not by a per-IP counter a botnet ignores by definition. So
+the change loosens the rules that were punishing shared egress and leaves
+the rules that do the work.
+
+Buckets can be cleared without waiting out a window —
+`python -m app.operator.rate_limits clear`, which deletes only
+`rl:v1:<rule>:*` keys and never flushes a database. That is the answer to
+a limit configured too low that has already locked people out: lower the
+number, restart, clear the buckets it filled.
 
 **Why login carries two rules.** Per-IP and per-email answer different
 attacks and neither is sufficient. Per-IP bounds one host guessing many

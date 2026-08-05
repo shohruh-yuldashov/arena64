@@ -134,8 +134,24 @@ class BracketNodeView:
 
     @property
     def is_bye(self) -> bool:
-        participants = [p for p in (self.light_player_id, self.dark_player_id) if p is not None]
-        return len(participants) == 1
+        """Whether this node advanced **without an opponent** — §6.
+
+        Read off `advancement_reason`, which is the durable record of *why*
+        somebody advanced, rather than counted from the seats.
+
+        Counting seats is what `BracketSlot.is_bye` does, and it is correct
+        there only because `propagated` pairs it with `_children_settled`:
+        one participant means a bye **when nothing beneath can still deliver
+        the other**. A read model has no such pairing, so counting alone
+        reported a semi-final holding one player as a bye for the whole time
+        the other semi-final was being played — the exact case
+        `_children_settled` exists to exclude, published as a fact.
+
+        Nothing else sets `BYE`, and both writers resolve byes in the same
+        transaction that creates or advances the node, so no reader observes
+        a genuine bye before its reason is recorded.
+        """
+        return self.advancement_reason is AdvancementReason.BYE
 
 
 @dataclass(frozen=True, slots=True)

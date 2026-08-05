@@ -105,6 +105,10 @@ TanStack Router, **code-based** (`src/app/router/routes.tsx`), not file-based.
 | `/search` | `pages/search` | `RequireAuth` |
 | `/play` | `pages/play` | `RequireAuth` |
 | `/games/$matchId` | `pages/game-ready` | `RequireAuth` |
+| `/games/$matchId/replay` | `pages/replay` | `RequireAuth` |
+| `/games/history` | `pages/history` | `RequireAuth` |
+| `/tournaments` | `pages/tournaments` | `RequireAuth` — §19.1 |
+| `/tournaments/$tournamentId` | `pages/tournament` | `RequireAuth` — §19.1 |
 | *anything unmatched* | `pages/not-found` | The root route's `notFoundComponent` |
 
 The three link-landing pages are **deliberately unguarded**. A signed-in
@@ -289,8 +293,8 @@ failures, not rendering ones. Each phase adds at most eight.
 
 Two limits bound the suite, and both are production behaviour that must stay on:
 
-    register   3 per IP per hour
-    login      5 per IP per 15 minutes
+    register   10 per IP per hour
+    login      20 per IP per 15 minutes
 
 A64-020.3 registered a fresh account per run and became unrunnable on the fourth. A social
 suite needs two accounts and would have hit the register cap on its second run and the
@@ -1434,7 +1438,220 @@ consistent, and `win_rate` is derived server-side — §2 forbids recomputing
 it here, and the reason is that a second answer can disagree with the four
 counts printed beside it.
 
-## 19. Open questions
+## 19. Tournaments — A64-020.6
+
+`/tournaments` and `/tournaments/$tournamentId`, both lazy and both behind
+`RequireAuth`. The lobby, one tournament's detail, its bracket, its
+standings, and the viewer's own entry.
+
+### 19.1 Guarded, because the backend is
+
+`specs/tournament` §7 makes tournaments "public" in the sense that *no
+viewer is narrower than another* — no owner check, no friends-only variant,
+no private tournaments in v0.x. It does **not** mean anonymous: every
+handler on the tournament router takes `CurrentUser`, like every route on
+this platform outside `/health`.
+
+So both routes are protected. The guard is not the authorization — a
+hand-typed tournament id gets the same `404` here as anywhere else, because
+a tournament is there for everybody or absent for everybody.
+
+### 19.2 Route map
+
+| Path | Guard | What it reads |
+| --- | --- | --- |
+| `/tournaments` | `RequireAuth` | `GET /tournaments` (keyset) |
+| `/tournaments/$tournamentId` | `RequireAuth` | detail, bracket, standings, own entry |
+
+Reached from `SessionMenu` — the same place `/play` and `/friends` are —
+and from every row of the profile's tournament history.
+
+### 19.3 Query keys
+
+`tournamentKeys.{list(filters), detail, bracket, standings, myRegistration}`.
+
+Four surfaces, four keys, because they have four lifetimes: a completed
+tournament's standings never change, its bracket changes only while it is
+being played, and a registration changes the moment a button is pressed.
+Merged into one object they would share the shortest of those, so entering
+a tournament would re-fetch a 127-node bracket that cannot have moved.
+
+Filters **are** in the key, serialised through a stable field order; the
+cursor is **not** — `useInfiniteQuery` owns the page chain under one entry.
+
+A player's tournament history keeps its existing key,
+`profileKeys.tournaments(playerId)`. A second key over one endpoint is two
+caches that disagree after a registration.
+
+### 19.4 Filters
+
+Status only, as four mutually exclusive views: all, registration open, in
+progress, completed. Each is a real `status` value sent to the server.
+
+Format, variant and speed class are supported by the endpoint and **not**
+surfaced: the platform runs one format and one variant today, so three
+controls whose every option returns the same list is furniture. There is no
+search, because the endpoint has no free-text contract.
+
+Nothing is filtered or sorted client-side. A "registration open" filter
+applied to one loaded page would hide open tournaments that sat on page two
+and would look, from outside, exactly like a lobby with nothing in it.
+
+### 19.5 Participant state
+
+Read from `GET /tournaments/{id}/registrations/me`, which A64-020.6 added:
+`404` means never entered, `200 registered` and `200 withdrawn` are two
+different facts, and the row survives withdrawal.
+
+Nothing infers registration from which controls rendered. That inversion is
+not hypothetical — a page that decided locally would let a player press
+Enter on a tournament that filled two seconds ago and would then have to
+explain the `409` it caused.
+
+### 19.6 Registration and withdrawal
+
+Neither is optimistic. The server decides capacity under a row lock, so an
+optimistic entry would show a player as registered in the one case that
+matters: the race it lost. The response *is* the written entry and is
+seeded straight into the cache; the detail and the lobby are invalidated
+because the entrant count moved.
+
+Buttons are disabled **while in flight only**, never on a rule this client
+believes.
+
+On failure the entry is re-read. When the failure was *ambiguous* — a
+network fault, a `5xx` — the tournament is re-read too: the write may have
+landed, and refetching half the state is how a player ends up registered on
+a page that says fourteen of sixteen.
+
+Withdrawal is confirmed in a dialog that promises only what the backend
+does — the seat is released, and re-entry is possible while registration is
+open. No rating penalty, no reseed, no refund: the contract states none.
+
+### 19.7 The deadline is displayed, never enforced
+
+Rendered through `Intl.DateTimeFormat` from the server's timestamp. There is
+no countdown and no local expiry: a client that disabled the button at zero
+would be deciding registration had closed using a clock that is not the
+server's. If the deadline has genuinely passed, the server answers
+`registration_deadline_passed` and that is what the player is told.
+
+### 19.8 Bracket
+
+Rounds are columns in one horizontally scrolling container — the only
+sideways scroller on the page. It is labelled and focusable, so a keyboard
+user reaches later rounds without a pointer.
+
+Five node states, derived from durable published fields and nothing else:
+
+| State | Derived from | Renders |
+| --- | --- | --- |
+| `bye` | `advancement_reason === "bye"` | who advanced, in a sentence |
+| `completed` | `winner_id` set | the winner, marked in words |
+| `live` | an attempt with `status === "created"` | a link to `/games/{id}` |
+| `ready` | both seats filled, no winner | no link — no match exists yet |
+| `pending` | a seat empty, no winner | "waiting for an opponent" |
+
+`bye` and `pending` both show one name and one blank and mean opposite
+things — one is decided, the other is waiting. Keeping them apart is the
+point: the backend's own `is_bye` conflated them until A64-020.6 fixed it
+(`fix(tournament): stop a waiting bracket node claiming to be a bye`), and
+this client reads `advancement_reason` rather than that field.
+
+No connector lines, no canvas, no zoom. Connectors need absolute
+positioning and fixed row heights, and fixed heights are what stop a bracket
+reflowing at 360px — the relationship is carried by round headings and
+seat labels instead, which is also what makes it available to a screen
+reader.
+
+### 19.9 Match and replay links
+
+A live node links to `/games/{match_id}`; a finished one links to
+`/games/{match_id}/replay`, one link per attempt, because a drawn pairing is
+replayed and each attempt is a real game. A pending node is not clickable.
+
+`match_id` comes from the bracket's own `attempts[]`. It is never derived
+from `origin_ref`, a pairing id or slot coordinates.
+
+### 19.10 Standings
+
+Rendered from the materialised result, never computed from the bracket.
+Ranks are **not dense** — two players knocked out in the same round share
+one, so an eight-player bracket has no fourth place — and nothing
+renumbers them: that would publish a comparison the bracket never made. A
+shared rank carries a screen-reader-only "tied for" note, because visually
+it is conveyed by a repeated number and that is not conveyed at all in a
+linear read.
+
+Requested only once the tournament has completed. The endpoint answers with
+an empty list before that, so asking early is a request whose answer is
+known.
+
+### 19.11 Polling, and the honest name for it
+
+**There is no tournament realtime protocol.** `app/gateway/protocol.py`
+publishes three channels — `system`, `matchmaking`, `game` — and none
+carries a bracket. This phase does not open a second socket to invent one.
+
+| Surface | Refresh |
+| --- | --- |
+| detail + bracket, tournament moving | every 8 s |
+| detail + bracket, completed or cancelled | never |
+| standings | never — written once, at completion |
+| the lobby | on focus, like every other list |
+
+One interval, shared by the two queries that must agree: the bracket takes
+its status from the detail rather than deciding independently, so they stop
+together. A completed tournament polled forever would be a request every
+eight seconds, for as long as a tab is open, for an answer that cannot
+change.
+
+This is the limitation A64-021 Notifications or a later realtime phase
+removes.
+
+### 19.12 Identities arrive composed
+
+The bracket and the standings each carry a `participants` list — one
+batched, deduplicated `find_public_profiles` on the server, added by
+A64-020.6. A client resolving seats itself would issue 128 requests behind
+one page of a full field.
+
+A side list rather than an embedded object per node: a player appears in one
+node per round they survive, so embedding would repeat a champion's name
+`log2(field)` times.
+
+### 19.13 What is deliberately absent
+
+Creating a tournament, opening and closing registration, seeding and
+starting. These are **not HTTP at all**: the platform has no administrator
+role, so an endpoint behind `CurrentUser` would let every registered player
+close somebody else's registration. They live in
+`app/operator/tournament.py`. There is therefore no "Create tournament"
+button — a control that could only ever fail is worse than none.
+
+Player-facing administration is A64-023's.
+
+### 19.14 E2E
+
+`tests/e2e/tournament.spec.ts`: lobby → server-side filter → detail →
+enter → participant state → withdraw, against the real API. Its fixture is
+created through `python -m app.operator.tournament`, the repository's
+existing operator entry point — §28's "supported admin/operator setup only
+if the repository already has one", and the only path that exists.
+
+It drives `e2e_lobby_three` at the end of the project chain. Borrowing
+`e2e_profile_owner` was tried and failed exactly as `playwright.config.ts`
+predicts: two contexts refreshed one session and the server revoked the
+whole chain.
+
+**Documented gap:** a *completed* tournament's standings are not covered
+end to end. Reaching one means playing a whole bracket to its final — four
+accounts, three matches and a wait on the clock worker — for a table
+already asserted by `tests/contract/test_tournament_results.py` against a
+real played-out bracket and by `tournament.test.tsx` against the real
+router.
+
+## 20. Open questions
 
 | # | Question | Blocked work |
 | --- | --- | --- |

@@ -30,7 +30,8 @@ export default defineConfig({
     // here exactly as it is in `npm run dev`.
     trace: "on-first-retry",
   },
-  // **Five projects, because four specs share three accounts.**
+  // **Seven projects, because four specs share three accounts.**
+
   //
   // `play.spec.ts`, `game.spec.ts`, `game-controls.spec.ts` and
   // `realtime-push.spec.ts` all drive the lobby with
@@ -63,6 +64,7 @@ export default defineConfig({
         "**/realtime-push.spec.ts",
         "**/replay.spec.ts",
         "**/history.spec.ts",
+        "**/tournament.spec.ts",
       ],
     },
     {
@@ -84,6 +86,22 @@ export default defineConfig({
       // projects: it reads matches those projects finished. It queues for
       // nothing, so it contends with nobody — A64-020.5F §28.
       dependencies: ["replay"],
+    },
+    {
+      name: "tournament",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: "**/tournament.spec.ts",
+      // **Last in the chain** — A64-020.6 §28. It waits on nothing any
+      // earlier project *produces*: it creates its own tournament through
+      // the operator command and never queues. What it waits for is the
+      // account — it drives `e2e_lobby_three`, and two specs refreshing one
+      // session revoke it, which is the note above.
+      //
+      // Borrowing `e2e_profile_owner` instead was tried, ran beside
+      // `profile.spec.ts`, and failed in exactly that way. A seventh seeded
+      // account was the other option and costs a registration, which is
+      // three per IP per hour and already spent by `auth.spec.ts`.
+      dependencies: ["history"],
     },
     {
       name: "replay",

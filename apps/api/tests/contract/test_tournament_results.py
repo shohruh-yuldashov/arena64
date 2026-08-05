@@ -585,3 +585,203 @@ class TestPublicReads:
 
         missing = await client.get(f"/api/v1/tournaments/{uuid4()}", headers=viewer.auth)
         assert missing.status_code == 404
+
+
+class TestBracketByeReporting:
+    """What `is_bye` means on the wire — the regression A64-020.6 found.
+
+    Both directions, because the fix must not be "always false": a node that
+    is *waiting* is not a bye, and a node that genuinely advanced without an
+    opponent still is.
+    """
+
+    async def test_a_node_waiting_for_an_opponent_is_not_reported_as_a_bye(
+        self, contract_session: AsyncSession, client: AsyncClient
+    ) -> None:
+        """The defect A64-020.6 found in the published read model.
+
+        `BracketSlot.is_bye` counts participants, and `propagated` is
+        correct only because it pairs that count with `_children_settled` —
+        "one player **and nothing beneath can still deliver the other**".
+        `BracketNodeView` copied the count and not the pairing, so a final
+        holding one semi-finalist reported `is_bye: true` for the whole time
+        the other semi-final was being played.
+
+        Four entrants, **one** semi-final decided. The final then has one
+        seat filled, one empty, and no winner — which is the exact state the
+        domain documents as "waiting, not a bye".
+        """
+        clock = MovableClock(NOW)
+        tournament, _ = await _seeded_tournament(contract_session, clock, entrants=4, capacity=4)
+
+        attempts = SqlAlchemyPairingAttemptRepository(contract_session)
+        bracket = SqlAlchemyBracketRepository(contract_session)
+        nodes = await bracket.nodes_for(tournament.id)
+        live = [
+            attempt
+            for node in nodes
+            if node.id is not None
+            for attempt in await attempts.for_pairings([node.id])
+            if attempt.outcome is None
+        ]
+        assert len(live) == 2, "an unperturbed four-player bracket starts two semi-finals"
+
+        await _consumer(contract_session, clock).handle(
+            _completion(
+                match_id=live[0].match_id, pairing_id=live[0].pairing_id, winner=PlayerSide.LIGHT
+            )
+        )
+
+        viewer = await register(client)
+        response = await client.get(
+            f"/api/v1/tournaments/{tournament.id}/bracket", headers=viewer.auth
+        )
+        assert response.status_code == 200, response.text
+
+        final = response.json()["data"]["rounds"][1]["nodes"][0]
+        seated = [final["light_player_id"], final["dark_player_id"]]
+        assert sum(1 for seat in seated if seat is not None) == 1, "one semi-final is still live"
+        assert final["winner_id"] is None
+        assert final["is_bye"] is False
+        assert final["advancement_reason"] is None
+
+        # And the played semi-final is still not a bye either, so the fix is
+        # not "always false".
+        decided = next(n for n in response.json()["data"]["rounds"][0]["nodes"] if n["winner_id"])
+        assert decided["advancement_reason"] == "played"
+        assert decided["is_bye"] is False
+
+    async def test_a_real_bye_is_still_reported_as_one(
+        self, contract_session: AsyncSession, client: AsyncClient
+    ) -> None:
+        """The other half of the same rule — §13's "bye clearly marked".
+
+        Three entrants in a four-slot bracket is one bye, resolved in the
+        transaction that materialised the tree. It carries a winner and
+        `advancement_reason = "bye"`, which is what `is_bye` now reads.
+        """
+        clock = MovableClock(NOW)
+        tournament, _ = await _seeded_tournament(contract_session, clock, entrants=3, capacity=4)
+        viewer = await register(client)
+
+        response = await client.get(
+            f"/api/v1/tournaments/{tournament.id}/bracket", headers=viewer.auth
+        )
+        assert response.status_code == 200, response.text
+
+        first_round = response.json()["data"]["rounds"][0]["nodes"]
+        byes = [node for node in first_round if node["is_bye"]]
+        assert len(byes) == 1
+        assert byes[0]["advancement_reason"] == "bye"
+        assert byes[0]["winner_id"] is not None
+
+
+class TestParticipantFacingReads:
+    """The two prerequisites a Tournament UI could not previously get.
+
+    A64-020.6 §26 and §8: a bracket must resolve its own seats to names in
+    one lookup, and a viewer must be able to read their own entry without
+    attempting a write to discover it.
+    """
+
+    async def test_the_bracket_and_standings_name_their_players_in_one_lookup(
+        self, contract_session: AsyncSession, client: AsyncClient
+    ) -> None:
+        """§26 — the N+1 this prerequisite exists to prevent.
+
+        A bracket published only identifiers, so a client rendering it would
+        turn every seat into a name by asking: 128 requests behind one page.
+        `participants` is composed server-side from `users`' privacy-gated
+        public read, deduplicated, in one batched call.
+
+        The assertion that matters is **not** that names appear — it is that
+        each player appears in the list exactly once while appearing in
+        several nodes, which is what says the list is a join table rather
+        than an embedding.
+        """
+        clock = MovableClock(NOW)
+        entrants = [await register(client) for _ in range(4)]
+        field = [player.id for player in entrants]
+        tournament, _ = await _seeded_tournament(
+            contract_session, clock, entrants=4, capacity=4, players=field
+        )
+        await _play_out(contract_session, clock, tournament.id)
+        viewer = entrants[0]
+
+        bracket = await client.get(
+            f"/api/v1/tournaments/{tournament.id}/bracket", headers=viewer.auth
+        )
+        assert bracket.status_code == 200, bracket.text
+        participants = bracket.json()["data"]["participants"]
+
+        assert [p["player_id"] for p in participants] == sorted(str(p) for p in field)
+        assert all(p["username"] for p in participants), "every entrant is a live account"
+        # The champion is seated in both rounds and named once.
+        champion = bracket.json()["data"]["rounds"][1]["nodes"][0]["winner_id"]
+        assert sum(1 for p in participants if p["player_id"] == champion) == 1
+
+        # Nothing self-only crosses: a public identity has no email and no
+        # private profile field — §27.
+        assert not set(participants[0]) - {
+            "player_id",
+            "username",
+            "display_name",
+            "avatar_thumbnail_url",
+        }
+
+        standings = await client.get(
+            f"/api/v1/tournaments/{tournament.id}/standings", headers=viewer.auth
+        )
+        assert standings.status_code == 200, standings.text
+        placed = standings.json()["data"]
+        assert len(placed["standings"]) == 4
+        assert [p["player_id"] for p in placed["participants"]] == sorted(str(p) for p in field)
+
+    async def test_a_player_can_read_their_own_entry_without_attempting_a_write(
+        self, contract_session: AsyncSession, client: AsyncClient
+    ) -> None:
+        """§8 — the participant state a detail page branches on.
+
+        Three answers, and the difference between the last two is the point:
+        `404` means "you were never here", while a withdrawn entry answers
+        `200` with its status, because the row survives withdrawal and
+        "you left" is a different fact from "you never entered".
+        """
+        clock = MovableClock(NOW)
+        entrant = await register(client)
+        registration = _registration(contract_session, _KnownPlayers(entrant.id), clock)
+        tournament = await registration.create(
+            name="Open Entry",
+            variant=ProductVariant.RUSSIAN_8X8,
+            speed_class=SpeedClass.CLASSICAL,
+            capacity=4,
+        )
+        await registration.open_registration(tournament.id)
+        url = f"/api/v1/tournaments/{tournament.id}/registrations/me"
+
+        before = await client.get(url, headers=entrant.auth)
+        assert before.status_code == 404
+
+        entered = await client.post(
+            f"/api/v1/tournaments/{tournament.id}/registrations", headers=entrant.auth
+        )
+        assert entered.status_code == 201, entered.text
+
+        during = await client.get(url, headers=entrant.auth)
+        assert during.status_code == 200, during.text
+        assert during.json()["data"]["status"] == "registered"
+        assert during.json()["data"]["player_id"] == str(entrant.id)
+        assert during.json()["data"]["tournament_status"] == "registration_open"
+
+        left = await client.delete(url, headers=entrant.auth)
+        assert left.status_code == 200, left.text
+
+        after = await client.get(url, headers=entrant.auth)
+        assert after.status_code == 200, after.text
+        assert after.json()["data"]["status"] == "withdrawn"
+        assert after.json()["data"]["withdrawn_at"] is not None
+
+        # Somebody else's session reads their own absence, never this
+        # player's entry — the endpoint has no shape that could name one.
+        stranger = await register(client)
+        assert (await client.get(url, headers=stranger.auth)).status_code == 404

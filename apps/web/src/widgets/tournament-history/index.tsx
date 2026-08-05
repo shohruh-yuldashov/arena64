@@ -1,3 +1,5 @@
+import { Link } from "@tanstack/react-router";
+
 import { useTournamentHistory } from "@/features/profile/model/queries";
 import { useTranslation } from "@/shared/i18n";
 import { formatDate } from "@/shared/lib/format";
@@ -57,7 +59,17 @@ export function TournamentHistory({ playerId }: { playerId: string | undefined }
               key={entry.tournament.id}
               className="border-border flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-md border px-3 py-2"
             >
-              <span className="text-sm font-medium">{entry.tournament.name}</span>
+              {/* A64-020.6 §20. The row already holds the whole summary, so
+                  linking costs **no** request — nothing is prefetched and no
+                  detail is read per row. Without it the bracket a player
+                  competed in is reachable only from the lobby. */}
+              <Link
+                to="/tournaments/$tournamentId"
+                params={{ tournamentId: entry.tournament.id }}
+                className="text-sm font-medium underline-offset-4 hover:underline focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none"
+              >
+                {entry.tournament.name}
+              </Link>
               <span className="text-muted-foreground text-xs">
                 {formatDate(entry.tournament.created_at, locale)}
               </span>

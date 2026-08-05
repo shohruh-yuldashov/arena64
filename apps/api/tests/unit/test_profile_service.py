@@ -45,6 +45,7 @@ from app.modules.profiles.domain.ratings import STARTING_RATING, PlayerRatings, 
 from app.modules.profiles.infrastructure import (
     NoMatchesStatisticsProvider,
     NoRelationshipsProvider,
+    NoRelationshipStates,
     UnratedRatingProvider,
 )
 from app.modules.statistics.public import PlayerStatistics
@@ -171,6 +172,13 @@ def build_service(accounts: list[User], presence: PresenceProvider) -> ProfileSe
             # anonymous read and for a deployment with the graph switched
             # off. `test_friendship.py` covers the friend-aware provider.
             relationships=NoRelationshipsProvider(),
+            # A64-020.4's **second** social port, and the production
+            # fallback for it — the counterpart to the line above, for a
+            # deployment with the graph switched off. It was added to the
+            # composer and not to this construction, which is why this
+            # file raised `TypeError` at collection time rather than
+            # failing an assertion.
+            relationship_states=NoRelationshipStates(),
         ),
         statistics=statistics,
         presence=presence,

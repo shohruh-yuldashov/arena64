@@ -45,6 +45,7 @@ from app.modules.users.public import (
     AvatarReference,
     ProfileVisibility,
     PublicUserProfile,
+    RelationshipState,
     ViewerRelationship,
     VisibilityLevel,
 )
@@ -241,6 +242,12 @@ class TestPermissions:
                 statistics=cast(Any, _StubStatistics()),
                 presence=cast(Any, _StubPresence()),
                 relationships=cast(Any, _StubRelationships()),
+                # A64-020.4's **second** social port. It was added to the
+                # composer and not to this construction, which is why this
+                # file raised `TypeError` at collection rather than failing
+                # an assertion — nothing here reads a relationship state, so
+                # the stub answers `NONE` for everyone.
+                relationship_states=cast(Any, _StubRelationshipStates()),
             ),
         )
 
@@ -486,6 +493,22 @@ class _StubRelationships:
         self, viewer_id: UUID | None, player_ids: Sequence[UUID]
     ) -> Mapping[UUID, Any]:
         return dict.fromkeys(player_ids, ViewerRelationship.STRANGER)
+
+
+class _StubRelationshipStates:
+    """The composer's second social port — A64-020.4.
+
+    Separate from `_StubRelationships` because the two ports answer
+    different questions: that one feeds the privacy gate and its `BLOCKED`
+    is symmetric, this one feeds the buttons a client renders and its
+    `BLOCKED` is the viewer's own. Nothing in this suite reads the result;
+    it exists so the composer can be constructed.
+    """
+
+    async def relationship_states_for(
+        self, viewer_id: UUID, player_ids: Sequence[UUID]
+    ) -> Mapping[UUID, Any]:
+        return dict.fromkeys(player_ids, RelationshipState.NONE)
 
 
 def _online_presence() -> Presence:

@@ -431,5 +431,76 @@
       "unavailable": "The queue state could not be read.",
       "catalogue_unavailable": "Games cannot be started right now. Try again later."
     }
+  },
+  "game": {
+    "title": "Game",
+    "board": {
+      "label": "Draughts board",
+      "empty": "empty",
+      "selected": "selected",
+      "destination": "legal move",
+      "willBeCaptured": "will be captured",
+      "lastMove": "last move"
+    },
+    "side": {
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "piece": {
+      "man": "man",
+      "king": "king"
+    },
+    "turn": {
+      "yours": "Your turn",
+      "opponent": "Your opponent is thinking",
+      "pending": "Sending your move…"
+    },
+    "connection": {
+      "connecting": "Connecting…",
+      "reconnecting": "Reconnecting…",
+      "offline": "You are offline",
+      "resyncing": "Resynchronising…",
+      "lost": "Connection lost"
+    },
+    "clock": {
+      "label": "{side} clock",
+      "awaitingServer": "Time is up — waiting for the server"
+    },
+    "players": {
+      "you": "You",
+      "opponent": "Opponent"
+    },
+    "result": {
+      "title": "Game over",
+      "won": "You won",
+      "lost": "You lost",
+      "draw": "Draw",
+      "reason": "Reason: {reason}",
+      "backToLobby": "Back to the lobby"
+    },
+    "reason": {
+      "checkmate": "No moves left",
+      "resignation": "Resignation",
+      "timeout": "Time ran out",
+      "agreement": "Agreement",
+      "adjudication": "Adjudication",
+      "abandonment": "Abandoned",
+      "unknown": "Unknown"
+    },
+    "errors": {
+      "not_your_turn": "It is not your turn.",
+      "illegal_move": "That move is not legal.",
+      "stale_state": "Your view was out of date — refreshing it.",
+      "clock_expired": "Your time ran out.",
+      "match_not_active": "That game is not active.",
+      "not_a_participant": "You are not a player in that game.",
+      "room_unavailable": "The game could not be joined.",
+      "not_in_room": "You are not in the game room.",
+      "rate_limited": "Too fast — please slow down.",
+      "unavailable": "That game could not be opened.",
+      "fatal": "The connection failed in a way we cannot recover from.",
+      "unknown": "Something went wrong."
+    },
+    "loading": "Loading the game…"
   }
 }

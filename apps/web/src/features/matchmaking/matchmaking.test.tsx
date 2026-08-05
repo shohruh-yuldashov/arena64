@@ -419,6 +419,16 @@ describe("the offer", () => {
     expect(
       await screen.findByRole("heading", { name: "Game" }, { timeout: 5000 }),
     ).toBeVisible();
-    expect(screen.getByText("019fd0bb-2222-7000-8000-000000000002")).toBeVisible();
+
+    // A64-020.5B replaced the handoff placeholder with the live board, so
+    // the destination is no longer identified by a rendered match id — the
+    // board renders a position, not an identifier. What is asserted instead
+    // is that the *game* page mounted and the lobby is gone.
+    //
+    // "the two players reached the **same** match" is not lost: it is
+    // asserted where it can actually be observed, by comparing the two
+    // browsers' URLs in `tests/e2e/play.spec.ts`.
+    expect(await screen.findByLabelText(/loading the game/i)).toBeVisible();
+    expect(screen.queryByRole("group", { name: /time control/i })).not.toBeInTheDocument();
   });
 });

@@ -8,6 +8,7 @@ import { SessionProvider } from "@/features/auth/model/session-provider";
 import UnexpectedErrorPage from "@/pages/unexpected-error";
 import { createQueryClient } from "@/shared/api";
 import { I18nProvider } from "@/shared/i18n";
+import type { RealtimeClient } from "@/shared/realtime";
 import { ThemeProvider } from "@/shared/theme/theme-context";
 import { ErrorBoundary } from "@/shared/ui";
 
@@ -61,16 +62,21 @@ import { ErrorBoundary } from "@/shared/ui";
  * a new cache on every render and quietly disable caching altogether; the
  * app would work, slowly, and nothing would say why.
  *
- * `queryClient` is injectable so a test can supply one with retries off.
+ * `queryClient` is injectable so a test can supply one with retries off,
+ * and `realtimeClient` for the same reason: a test that wants to observe
+ * the socket needs the instance the app actually uses, not a second one.
  */
 export function AppProviders({
   children,
   queryClient,
   authChannel,
+  realtimeClient,
 }: {
   children: ReactNode;
   queryClient?: QueryClient;
   authChannel?: AuthChannel;
+  /** Injectable for the same reason `queryClient` is — see below. */
+  realtimeClient?: RealtimeClient;
 }) {
   const [fallbackClient] = useState(createQueryClient);
   const client = queryClient ?? fallbackClient;
@@ -90,7 +96,9 @@ export function AppProviders({
         <I18nProvider>
           <QueryClientProvider client={client}>
             <SessionProvider {...(authChannel ? { channel: authChannel } : {})}>
-              <RealtimeProvider>{children}</RealtimeProvider>
+              <RealtimeProvider {...(realtimeClient ? { client: realtimeClient } : {})}>
+                {children}
+              </RealtimeProvider>
             </SessionProvider>
           </QueryClientProvider>
         </I18nProvider>

@@ -257,16 +257,15 @@ export const playRoute = createRoute({
 /**
  * `/games/$matchId` — where acceptance hands off.
  *
- * A64-020.5A ships the route and a page that only names the match; the
- * board is A64-020.5B's and replaces the component without touching this
- * declaration, the guard, or the navigation in `PlayPage`. Registering it
- * now is what makes a successful pairing land somewhere rather than on the
- * not-found component.
+ * A64-020.5A shipped the route and a placeholder; A64-020.5B replaced the
+ * component with the live board and touched nothing else here — not the
+ * path, not the guard, not the navigation in `PlayPage`. That the swap was
+ * one line is what registering the route early bought.
  */
 export const gameRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/games/$matchId",
-  component: protectedPage(() => import("@/pages/game-ready")),
+  component: protectedPage(() => import("@/pages/game")),
 });
 
 export const routeTree = rootRoute.addChildren([

@@ -45,8 +45,11 @@ export const STABLE_AFTER_MS = 10_000;
 export function reconnectDelay(attempt: number, random: () => number = Math.random): number {
   const uncapped = RECONNECT_BASE_MS * RECONNECT_FACTOR ** Math.max(0, attempt - 1);
   const capped = Math.min(uncapped, RECONNECT_CEILING_MS);
-  // Full jitter around the delay rather than added to it, so the ceiling is
-  // genuinely a ceiling — `capped + jitter` would exceed it by design.
+  // Jitter spreads **around** the delay and is then clamped, so the ceiling
+  // is genuinely a ceiling. Spreading without the clamp would put the
+  // longest waits 25 % above it — which the first version did, and which
+  // the test caught by asserting the invariant the docstring claimed.
   const spread = capped * RECONNECT_JITTER;
-  return Math.round(capped - spread + random() * spread * 2);
+  const jittered = capped - spread + random() * spread * 2;
+  return Math.round(Math.min(jittered, RECONNECT_CEILING_MS));
 }

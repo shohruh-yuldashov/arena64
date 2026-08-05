@@ -29,6 +29,11 @@ site for consumers.
     refusals. The second half of that same edge: a pairing is finished when
     both players have answered.
 
+`commands.py` — `GameCommand`, `GameCommandRequest`, `GameCommandResult`,
+    `GameCommandUseCase`, `DrawOfferView` and the four draw refusals.
+    Resigning and agreeing a draw over the socket — A64-020.5C-pre. The same
+    boundary `moves.py` draws: the gateway asks, `game` decides.
+
 `opponents.py` — `RecentOpponentReader`. QT-3's rematch guard, which
     A64-015.3 declared and could not implement.
 
@@ -92,6 +97,17 @@ from app.modules.game.public.acceptance import (
     MatchRecordStatus,
     NotAMatchParticipant,
     PendingMatchView,
+)
+from app.modules.game.public.commands import (
+    DrawOfferAlreadyPending,
+    DrawOfferNotAllowedYet,
+    DrawOfferNotPending,
+    DrawOfferNotRecipient,
+    DrawOfferView,
+    GameCommand,
+    GameCommandRequest,
+    GameCommandResult,
+    GameCommandUseCase,
 )
 from app.modules.game.public.engine_services import (
     GameEngineServices,
@@ -158,6 +174,7 @@ from app.modules.game.public.reconciliation import (
 from app.modules.game.public.retention import AbandonedMatchRetention
 from app.modules.game.public.rooms import MatchRoster, MatchRosterReader
 from app.modules.game.public.snapshots import (
+    DrawOfferState,
     MatchSnapshot,
     MatchSnapshotReader,
     PlacedPiece,
@@ -166,12 +183,22 @@ from app.modules.game.public.snapshots import (
 __all__ = [
     "PlacedPiece",
     "MatchSnapshotReader",
+    "DrawOfferState",
     "MatchSnapshot",
     "ClockView",
     "ClockExpired",
     "MoveApplied",
     "MatchCompleted",
     "SubmitMoveUseCase",
+    "DrawOfferAlreadyPending",
+    "DrawOfferNotAllowedYet",
+    "DrawOfferNotPending",
+    "DrawOfferNotRecipient",
+    "DrawOfferView",
+    "GameCommand",
+    "GameCommandRequest",
+    "GameCommandResult",
+    "GameCommandUseCase",
     "SubmitMoveResult",
     "SubmitMoveRequest",
     "StaleMatchState",

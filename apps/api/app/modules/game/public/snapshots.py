@@ -66,6 +66,20 @@ class PlacedPiece:
 
 
 @dataclass(frozen=True, slots=True)
+class DrawOfferState:
+    """A standing offer, as a reconnecting client needs to see it.
+
+    Three primitives. Not a `DrawOffer`, because that is a `game` domain
+    type and the gateway may not hold one — the same rule that makes the
+    position cross as `PlacedPiece` rather than as a `Position`.
+    """
+
+    offered_by: PlayerSide
+    offered_at_ply: int
+    offered_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class MatchSnapshot:
     """A live match, complete enough to resume from.
 
@@ -98,6 +112,35 @@ class MatchSnapshot:
     Carried so a reconnecting client renders the server's numbers rather
     than extrapolating from its own countdown, which drifted for the whole
     time it was disconnected.
+    """
+
+    draw_offer: DrawOfferState | None
+    """The standing draw offer and who may act on it — A64-020.5C-pre §9.
+
+    **The facts, not a viewer's permissions.** A snapshot is built by
+    `snapshot_of(match_id)` and has no viewer, so making it viewer-relative
+    would mean a second read per participant and a reader that could be
+    asked for somebody else's view. The projection decides what a given
+    client sees — see `gateway.projections`, which has two functions
+    precisely so a spectator's cannot accidentally carry this.
+
+    `None` when nothing stands, which is also every match played before
+    this phase.
+    """
+
+    may_offer_light: bool
+    may_offer_dark: bool
+    """Whether each side could open a new offer right now — §3, §9.
+
+    Derived here rather than left to the client, because the rule is a ply
+    comparison against durable thresholds and a client recomputing it would
+    be a second implementation of the spam rule that can disagree with the
+    authoritative one.
+
+    The **thresholds themselves are deliberately absent**: they are internal
+    bookkeeping, and §9 says not to publish cooldown internals. A client
+    needs to know whether the button is enabled, not the arithmetic behind
+    it.
     """
 
     outcome: MatchOutcome | None
@@ -144,4 +187,4 @@ class MatchSnapshotReader(Protocol):
         ...
 
 
-__all__ = ["MatchSnapshot", "MatchSnapshotReader", "PlacedPiece"]
+__all__ = ["DrawOfferState", "MatchSnapshot", "MatchSnapshotReader", "PlacedPiece"]

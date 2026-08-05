@@ -43,6 +43,7 @@ from app.core.clock import Clock
 from app.database.session import open_session
 from app.modules.game.application.ports import ClockDeadlineStore, LiveMatchStore
 from app.modules.game.application.services import (
+    GameCommandService,
     GameMatchRoster,
     GameMatchSnapshot,
     LiveMoveService,
@@ -65,6 +66,9 @@ from app.modules.game.infrastructure.repositories.match_history_repository impor
     SqlAlchemyMatchHistoryRepository,
 )
 from app.modules.game.public import (
+    GameCommandRequest,
+    GameCommandResult,
+    GameCommandUseCase,
     GameEngineServices,
     MatchHistoryReader,
     MatchReplayReader,
@@ -231,6 +235,70 @@ def get_live_moves_ws(
 WebSocketLiveMovesDep = Annotated[SubmitMoveUseCase, Depends(get_live_moves_ws)]
 
 
+class SessionScopedGameCommands:
+    """`GameCommandUseCase` that opens a session per command —
+    A64-020.5C-pre §5, §15.
+
+    The same arrangement `SessionScopedLiveMoves` makes, for the identical
+    reason: a WebSocket's request scope is the whole connection, so a
+    service resolved through `DbSessionDep` would hold one PostgreSQL
+    session per open socket for the length of a game.
+
+    **The commit is here**, at the boundary, not inside
+    `GameCommandService`. `open_session` rolls back on any path that does
+    not reach the explicit `commit`, so a failed resignation propagates as
+    an exception the gateway maps to a refusal — and a result can only be
+    returned once the match write and the outbox event are both durable.
+    That is §5's atomicity, held by the transaction rather than by ordering.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        deadlines: ClockDeadlineStore,
+        clock: Clock,
+    ) -> None:
+        self._session_factory = session_factory
+        self._deadlines = deadlines
+        self._clock = clock
+
+    async def execute(self, request: GameCommandRequest) -> GameCommandResult:
+        async with open_session(self._session_factory) as session:
+            service = GameCommandService(
+                matches=SqlAlchemyMatchRecordRepository(session),
+                deadlines=self._deadlines,
+                events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
+                clock=self._clock,
+            )
+            result = await service.execute(request)
+            await session.commit()
+            return result
+
+
+def get_game_commands_ws(websocket: WebSocket, clock: ClockDep) -> GameCommandUseCase:
+    """`game`'s participant commands, for a WebSocket route — §15.
+
+    The **`live` Redis role** for the same reason the move path uses it:
+    the deadline store is the one keyspace whose loss costs a game rather
+    than a rebuild, so it must not sit on an instance configured to evict.
+
+    No engine and no live-position cache: none of these commands touches a
+    board — see `GameCommandService`.
+
+    Typed as the port, so the gateway holds one method. It can run a
+    participant command and cannot read a position or enumerate matches.
+    """
+    return SessionScopedGameCommands(
+        session_factory=websocket.app.state.db.session_factory,
+        deadlines=RedisClockDeadlineStore(websocket.app.state.redis_pools.live),
+        clock=clock,
+    )
+
+
+WebSocketGameCommandsDep = Annotated[GameCommandUseCase, Depends(get_game_commands_ws)]
+
+
 class SessionScopedSnapshots:
     """`MatchSnapshotReader` that opens a session per read — A64-016.6 §1.
 
@@ -359,8 +427,10 @@ __all__ = [
     "get_match_snapshot_ws",
     "SessionScopedLiveMoves",
     "SessionScopedMatchRosters",
+    "WebSocketGameCommandsDep",
     "WebSocketLiveMovesDep",
     "WebSocketMatchRosterReaderDep",
+    "get_game_commands_ws",
     "get_live_moves_ws",
     "get_match_roster_reader",
     "get_match_roster_reader_ws",

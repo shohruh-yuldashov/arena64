@@ -29,14 +29,16 @@ from datetime import datetime
 from uuid import UUID
 
 from app.core.clock import Clock
+from app.modules.engine import PlayerSide
 from app.modules.game.application.ports import MatchRecordRepository
 from app.modules.game.application.services.match_replay_service import (
     PersistedMatchReplay,
 )
 from app.modules.game.domain.clock import ClockState
+from app.modules.game.domain.match_record import MatchRecord
 from app.modules.game.domain.replay import ReplayEngine
 from app.modules.game.public.moves import ClockView
-from app.modules.game.public.snapshots import MatchSnapshot, PlacedPiece
+from app.modules.game.public.snapshots import DrawOfferState, MatchSnapshot, PlacedPiece
 
 logger = logging.getLogger(__name__)
 
@@ -89,11 +91,40 @@ class GameMatchSnapshot:
             light_player_id=record.light.player_id,
             dark_player_id=record.dark.player_id,
             clock=_clock_view(record.clock, at=observed_at),
+            draw_offer=_draw_offer_state(record),
+            # Both sides, because a snapshot has no viewer — see
+            # `MatchSnapshot.may_offer_light`. Computed from the same
+            # `DrawAgreement` the command path checks, so the button a
+            # client renders and the rule that would refuse it cannot
+            # disagree.
+            may_offer_light=record.draw_agreement.may_offer(
+                PlayerSide.LIGHT, at_ply=record.ply_number
+            ),
+            may_offer_dark=record.draw_agreement.may_offer(
+                PlayerSide.DARK, at_ply=record.ply_number
+            ),
             outcome=result.outcome if result is not None else None,
             termination_reason=result.reason if result is not None else None,
             winner=result.winner if result is not None else None,
             observed_at=observed_at,
         )
+
+
+def _draw_offer_state(record: MatchRecord) -> DrawOfferState | None:
+    """The standing offer, or `None` — A64-020.5C-pre §9.
+
+    Straight from the durable record, which is what makes reconnect
+    recovery work without the client reconstructing anything: an offer made
+    before a refresh is in the row, so it is in the snapshot.
+    """
+    offer = record.draw_agreement.offer
+    if offer is None:
+        return None
+    return DrawOfferState(
+        offered_by=offer.offered_by,
+        offered_at_ply=offer.offered_at_ply,
+        offered_at=offer.offered_at,
+    )
 
 
 def _clock_view(clock: ClockState | None, *, at: datetime) -> ClockView | None:

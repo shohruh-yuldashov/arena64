@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { allSquares, boardFrom, isPlayable, toCoordinate, toSquare } from "@/entities/board";
 import { legalMoves } from "@/features/game/engine/moves";
 import { initialState, reduce } from "@/features/game/model/state";
-import type { MovePayload, SnapshotPayload } from "@/shared/realtime";
+import type { DrawOfferedPayload, MovePayload, SnapshotPayload } from "@/shared/realtime";
 import { parseFrame } from "@/shared/realtime/protocol";
 import { reconnectDelay } from "@/shared/realtime/reconnect-policy";
 import { RealtimeError, RequestRegistry } from "@/shared/realtime/request-registry";
@@ -346,5 +346,219 @@ describe("the game state machine", () => {
     expect(jumped.board.has("d4")).toBe(false);
     expect(jumped.board.get("e5")).toEqual({ square: "e5", side: "light", rank: "king" });
     expect(jumped.history).toHaveLength(1);
+  });
+});
+
+/**
+ * The participant controls — A64-020.5C §21.
+ *
+ * Every property below is one a broken implementation would pass a
+ * rendering test on. What is asserted is *who may do what*, *when state
+ * clears*, and *what wins a race* — the three things that decide whether a
+ * player ends a game they did not mean to.
+ */
+
+function offered(overrides: Partial<DrawOfferedPayload> = {}): DrawOfferedPayload {
+  return {
+    match_id: "m1",
+    offered_by: "dark",
+    offered_at_ply: 4,
+    offered_at: "2026-08-05T10:00:00Z",
+    ...overrides,
+  };
+}
+
+/** A viewer playing LIGHT, with a snapshot applied. */
+function playing(draw?: SnapshotPayload["draw"]) {
+  return reduce(initialState("m1"), {
+    type: "snapshot",
+    payload: draw === undefined ? snapshot() : snapshot({ draw }),
+    viewerId: VIEWER,
+  });
+}
+
+describe("participant commands", () => {
+  it("never completes a match locally, and the server's result wins the race", () => {
+    // §2, §5, §15. The single most dangerous thing this feature could do is
+    // trust the command it sent. A resignation that raced an opponent's
+    // accepted draw must render *their* result, not the one implied by the
+    // button this player pressed.
+    const sent = reduce(playing(), { type: "command_sent", command: "resign" });
+    expect(sent.activeCommand).toBe("resign");
+    // Still playing. No result, no completed phase, nothing decided.
+    expect(sent.phase).toBe("active");
+    expect(sent.result).toBeNull();
+
+    // The server settled it as an agreed draw — the opponent accepted an
+    // offer while this resignation was in flight.
+    const done = reduce(sent, {
+      type: "completed",
+      payload: {
+        match_id: "m1",
+        ply: 4,
+        result: { outcome: "draw", termination_reason: "agreed_draw", winner: null },
+      },
+    });
+
+    expect(done.phase).toBe("completed");
+    expect(done.result).toEqual({
+      outcome: "draw",
+      termination_reason: "agreed_draw",
+      winner: null,
+    });
+    // The in-flight command is cleared and the agreement is gone with the
+    // game, so a completed board cannot render an answerable offer.
+    expect(done.activeCommand).toBeNull();
+    expect(done.draw.offer).toBeNull();
+    expect(done.draw.mayAccept).toBe(false);
+  });
+
+  it("gives the answer to the recipient and a durable sent state to the offerer", () => {
+    // §6 and §7 are one rule seen from two sides, and the asymmetry is the
+    // whole feature: exactly one of the two players may answer.
+    const incoming = reduce(playing(), {
+      type: "draw_offered",
+      payload: offered({ offered_by: "dark" }),
+      viewerSide: "light",
+    });
+    expect(incoming.draw.offer?.offered_by).toBe("dark");
+    expect(incoming.draw.mayAccept).toBe(true);
+    expect(incoming.draw.mayDecline).toBe(true);
+    // Nobody may open a second offer while one stands — the server refuses
+    // it, so showing the button would show one that cannot work.
+    expect(incoming.draw.mayOffer).toBe(false);
+
+    // The same frame reaches the offerer, who may do none of the three.
+    const outgoing = reduce(playing(), {
+      type: "draw_offered",
+      payload: offered({ offered_by: "light" }),
+      viewerSide: "light",
+    });
+    expect(outgoing.draw.offer?.offered_by).toBe("light");
+    expect(outgoing.draw.mayAccept).toBe(false);
+    expect(outgoing.draw.mayDecline).toBe(false);
+    expect(outgoing.draw.mayOffer).toBe(false);
+    // Durable, not a toast — §16. It survives every subsequent render
+    // because it is reducer state.
+    expect(outgoing.activeCommand).toBeNull();
+  });
+
+  it("clears only on the authoritative decline, and surfaces a refusal by code", () => {
+    // §9 and §13.
+    const pending = reduce(playing(), {
+      type: "draw_offered",
+      payload: offered({ offered_by: "light" }),
+      viewerSide: "light",
+    });
+    const sending = reduce(pending, { type: "command_sent", command: "decline" });
+    // Sending is not deciding: the offer is still on screen.
+    expect(sending.draw.offer).not.toBeNull();
+
+    const declined = reduce(sending, {
+      type: "draw_declined",
+      payload: { match_id: "m1", declined_by: "dark", ply: 4 },
+    });
+    expect(declined.draw.offer).toBeNull();
+    expect(declined.activeCommand).toBeNull();
+    // §9: no board, no clock, no turn, no ply, no result.
+    expect(declined.sequence).toBe(pending.sequence);
+    expect(declined.sideToMove).toBe(pending.sideToMove);
+    expect(declined.board).toBe(pending.board);
+    expect(declined.result).toBeNull();
+    // §2: re-offer timing is the server's. Nothing is enabled on a guess.
+    expect(declined.draw.mayOffer).toBe(false);
+
+    // A refusal carries a stable code, never prose.
+    const refused = reduce(sending, {
+      type: "command_rejected",
+      code: "draw_offer_not_allowed_yet",
+    });
+    expect(refused.commandError).toBe("draw_offer_not_allowed_yet");
+    expect(refused.activeCommand).toBeNull();
+  });
+
+  it("clears an offer on the recipient's applied move and on nothing else", () => {
+    // §10, and the three negatives are what the test is for. A client that
+    // cleared on submission, on `accepted`, or on a rejection would lose a
+    // standing offer to a move the server never applied.
+    const outgoing = reduce(playing(), {
+      type: "draw_offered",
+      payload: offered({ offered_by: "light" }),
+      viewerSide: "light",
+    });
+
+    // LIGHT offered. LIGHT's own move (ply 5, so DARK is now to move)
+    // leaves it standing — playing on while the opponent thinks is the
+    // ordinary way a draw is offered.
+    const ourMove = reduce(outgoing, {
+      type: "applied",
+      payload: applied(5, { side_to_move: "dark" }),
+    });
+    expect(ourMove.draw.offer).not.toBeNull();
+
+    // A refused move changes nothing about the agreement.
+    expect(
+      reduce(outgoing, { type: "rejected", code: "illegal_move" }).draw.offer,
+    ).not.toBeNull();
+    // Nor does putting one in flight.
+    expect(
+      reduce(outgoing, { type: "submitting", move: { path: ["c3", "d4"], requestId: "r1" } })
+        .draw.offer,
+    ).not.toBeNull();
+
+    // DARK — the recipient — moves. Ply 5 with LIGHT to move next means
+    // DARK just played, and the offer is gone.
+    const theirMove = reduce(outgoing, {
+      type: "applied",
+      payload: applied(5, { side_to_move: "light" }),
+    });
+    expect(theirMove.draw.offer).toBeNull();
+    expect(theirMove.draw.mayAccept).toBe(false);
+  });
+
+  it("restores the agreement from a snapshot and reads a missing block as none", () => {
+    // §11. A reload must recover an offer the server still holds, and must
+    // not invent one it does not. Nothing is read from storage.
+    const restored = playing({
+      offer: { offered_by: "dark", offered_at_ply: 3, offered_at: "2026-08-05T09:59:00Z" },
+      may_offer: false,
+      may_accept: true,
+      may_decline: true,
+    });
+    expect(restored.draw.offer?.offered_by).toBe("dark");
+    expect(restored.draw.mayAccept).toBe(true);
+
+    // A snapshot with no offer but a restriction still standing — the case
+    // a client would get wrong by treating "no offer" as "may offer".
+    const restricted = playing({
+      offer: null,
+      may_offer: false,
+      may_accept: false,
+      may_decline: false,
+    });
+    expect(restricted.draw.offer).toBeNull();
+    expect(restricted.draw.mayOffer).toBe(false);
+
+    // A spectator's snapshot omits the block entirely. That reads as "no
+    // agreement", not as a parse failure — and so does every snapshot built
+    // before A64-020.5C-pre.
+    const spectating = playing();
+    expect(spectating.draw.offer).toBeNull();
+    expect(spectating.draw.mayOffer).toBe(false);
+
+    // A snapshot **replaces**: an offer held locally is dropped when the
+    // server's answer no longer has one.
+    const held = reduce(playing(), {
+      type: "draw_offered",
+      payload: offered(),
+      viewerSide: "light",
+    });
+    expect(held.draw.offer).not.toBeNull();
+    const replaced = reduce(held, {
+      type: "snapshot",
+      payload: snapshot(),
+      viewerId: VIEWER,
+    });
+    expect(replaced.draw.offer).toBeNull();
   });
 });

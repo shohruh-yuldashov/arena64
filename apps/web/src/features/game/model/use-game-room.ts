@@ -2,9 +2,18 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 
 import { isAuthenticated } from "@/entities/session";
 import { useSession } from "@/features/auth/model/session-provider";
-import { type GameState, initialState, reduce } from "@/features/game/model/state";
+import {
+  type ActiveCommand,
+  type GameState,
+  initialState,
+  reduce,
+} from "@/features/game/model/state";
 import { reportError } from "@/shared/lib/report-error";
 import {
+  type DrawDeclinedPayload,
+  type DrawOfferedPayload,
+  type GameCommandType,
+  type GameCompletedPayload,
   type GatewayErrorCode,
   type InboundFrame,
   isReady,
@@ -52,7 +61,25 @@ export interface GameRoom {
   submit: (path: string[]) => Promise<void>;
   /** Re-asks for a full snapshot. The recovery `resyncing` offers. */
   resync: () => void;
+  /**
+   * Sends one participant command and waits for its authoritative answer —
+   * A64-020.5C §12. Never throws.
+   *
+   * On the same hook rather than a hook of its own, because a command and a
+   * move contend for the same room, the same socket and the same reducer.
+   * A second hook would need its own copy of `matchId`, the realtime client
+   * and the dispatch, and §3 forbids a second controls store.
+   */
+  command: (command: ActiveCommand) => Promise<void>;
 }
+
+/** Which frame each control sends. One table, so the mapping is readable. */
+const COMMAND_FRAMES: Record<ActiveCommand, GameCommandType> = {
+  resign: "game.resign",
+  offer: "game.draw.offer",
+  accept: "game.draw.accept",
+  decline: "game.draw.decline",
+};
 
 export function useGameRoom(matchId: string): GameRoom {
   const realtime = useRealtime();
@@ -69,6 +96,11 @@ export function useGameRoom(matchId: string): GameRoom {
   sequence.current = state.sequence;
 
   const joined = useRef(false);
+
+  // Which seat this client holds, for the frame handler — see the
+  // `game.draw.offered` case on why this is a ref.
+  const sideRef = useRef(state.side);
+  sideRef.current = state.side;
 
   // --- inbound ------------------------------------------------------------
 
@@ -117,6 +149,43 @@ export function useGameRoom(matchId: string): GameRoom {
           case "game.resync_required":
             dispatch({ type: "resyncing" });
             return;
+
+          case "game.draw.offered": {
+            const offered = asDrawOffered(payload);
+            if (offered === null || offered.match_id !== matchId) return;
+            // `sideRef` rather than `state.side`: this callback is installed
+            // once and must see the current seat, and putting `side` in the
+            // dependency list would tear the subscription down and rebuild
+            // it the first time a snapshot named us.
+            dispatch({ type: "draw_offered", payload: offered, viewerSide: sideRef.current });
+            return;
+          }
+
+          case "game.draw.declined": {
+            const declined = asDrawDeclined(payload);
+            if (declined === null || declined.match_id !== matchId) return;
+            dispatch({ type: "draw_declined", payload: declined });
+            return;
+          }
+
+          case "game.completed": {
+            const completed = asCompleted(payload);
+            if (completed === null || completed.match_id !== matchId) return;
+            // §15: the authoritative payload wins over whatever this client
+            // asked for. A resignation that raced an accepted draw ends as
+            // the server settled it.
+            dispatch({ type: "completed", payload: completed });
+            return;
+          }
+
+          case "game.command.rejected": {
+            const code = payload.code;
+            dispatch({
+              type: "command_rejected",
+              code: typeof code === "string" ? code : "internal_error",
+            });
+            return;
+          }
 
           case "error": {
             const code = payload.code;
@@ -243,7 +312,78 @@ export function useGameRoom(matchId: string): GameRoom {
     [matchId, realtime],
   );
 
-  return { state, submit, resync };
+  // --- refreshing a restricted player's eligibility — §2, §10 -------------
+  //
+  // `game.move.applied` is a fan-out to both participants **and** the
+  // audience, so it cannot carry viewer-resolved draw permissions —
+  // `may_offer` is per-seat and the negotiation is participant-only. That
+  // leaves a real gap, found by running the two-browser flow: a player
+  // whose offer was declined sees the button correctly disabled, the
+  // opponent moves, the server now says they may ask again, and nothing
+  // tells them.
+  //
+  // §2 forbids recomputing eligibility here — the spam rule is the
+  // server's, and a client reimplementing "one opponent move" would be a
+  // second copy of `game.domain.draw_agreement`. So the client re-reads the
+  // authoritative answer instead.
+  //
+  // **Once per ply, and only while restricted.** Eligibility can only
+  // change when the ply does, so that is the minimum correct frequency; and
+  // the condition excludes everybody who is not actually blocked — a player
+  // who may already offer, one with an offer standing, a spectator, and a
+  // finished game. In an ordinary game this never fires at all.
+  //
+  // Deliberately **not** `resync()`: that announces "Resynchronising…" and
+  // freezes the board, which would be a visible stutter for a routine
+  // refresh. This asks for the same snapshot and lets the frame handler
+  // apply it.
+  const refreshedAt = useRef(-1);
+  const restricted =
+    state.phase === "active" &&
+    state.side !== null &&
+    state.draw.offer === null &&
+    !state.draw.mayOffer;
+
+  useEffect(() => {
+    if (!restricted || refreshedAt.current === state.sequence) return;
+    refreshedAt.current = state.sequence;
+    void realtime
+      .request("game.resume", { match_id: matchId }, "game")
+      .catch((error: unknown) => reportError(error, { scope: "game-draw-refresh", matchId }));
+  }, [restricted, state.sequence, matchId, realtime]);
+
+  // --- participant commands — §5, §6, §8, §9, §12 -------------------------
+
+  const command = useCallback(
+    async (kind: ActiveCommand) => {
+      dispatch({ type: "command_sent", command: kind });
+      try {
+        // The answer is the authoritative event correlated to our
+        // `request_id` — `game.draw.offered`, `game.draw.declined` or
+        // `game.completed`. The frame handler above applies it, so awaiting
+        // here exists to surface a *refusal*, which arrives as
+        // `game.command.rejected` and rejects this promise.
+        //
+        // `match_id` and nothing else (§19). The socket's redeemed ticket is
+        // the identity, and the frame has no field for a side.
+        await realtime.request(COMMAND_FRAMES[kind], { match_id: matchId }, "game");
+      } catch (error) {
+        const code = error instanceof RealtimeError ? error.code : "internal_error";
+        // §12: never resubmit after an ambiguous timeout. A resignation the
+        // server may or may not have applied must not be sent twice — the
+        // only safe answer is to ask what the truth is, which `resyncing`
+        // does by requesting a fresh snapshot.
+        if (code === "timeout" || code === "disconnected") {
+          dispatch({ type: "resyncing" });
+          return;
+        }
+        dispatch({ type: "command_rejected", code });
+      }
+    },
+    [matchId, realtime],
+  );
+
+  return { state, submit, resync, command };
 }
 
 /**
@@ -273,6 +413,29 @@ function asSnapshot(payload: Record<string, unknown>): SnapshotPayload | null {
   const participants = payload.participants;
   if (typeof participants !== "object" || participants === null) return null;
   return payload as unknown as SnapshotPayload;
+}
+
+function asDrawOffered(payload: Record<string, unknown>): DrawOfferedPayload | null {
+  if (typeof payload.match_id !== "string") return null;
+  if (payload.offered_by !== "light" && payload.offered_by !== "dark") return null;
+  if (typeof payload.offered_at_ply !== "number") return null;
+  if (typeof payload.offered_at !== "string") return null;
+  return payload as unknown as DrawOfferedPayload;
+}
+
+function asDrawDeclined(payload: Record<string, unknown>): DrawDeclinedPayload | null {
+  if (typeof payload.match_id !== "string") return null;
+  if (payload.declined_by !== "light" && payload.declined_by !== "dark") return null;
+  if (typeof payload.ply !== "number") return null;
+  return payload as unknown as DrawDeclinedPayload;
+}
+
+function asCompleted(payload: Record<string, unknown>): GameCompletedPayload | null {
+  if (typeof payload.match_id !== "string") return null;
+  const result = payload.result;
+  if (typeof result !== "object" || result === null) return null;
+  if (typeof (result as Record<string, unknown>).outcome !== "string") return null;
+  return payload as unknown as GameCompletedPayload;
 }
 
 function asMove(payload: Record<string, unknown>): MovePayload | null {

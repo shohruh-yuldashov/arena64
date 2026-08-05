@@ -47,11 +47,43 @@ export type InboundType =
   | "game.events"
   | "game.resumed"
   | "game.resync_required"
+  | "game.draw.offered"
+  | "game.draw.declined"
+  | "game.completed"
+  | "game.command.rejected"
   | "error";
 
 /** Everything this client sends. Spectator frames are deferred. */
 export type OutboundType =
-  "ping" | "room.join" | "room.leave" | "game.move.submit" | "game.resume";
+  | "ping"
+  | "room.join"
+  | "room.leave"
+  | "game.move.submit"
+  | "game.resume"
+  | "game.resign"
+  | "game.draw.offer"
+  | "game.draw.accept"
+  | "game.draw.decline";
+
+/**
+ * The four participant commands — A64-020.5C §4.
+ *
+ * A union of `OutboundType` rather than a separate enum, because they go
+ * through the same `request` method as every other frame and a second
+ * vocabulary would be a second thing to keep in step with the gateway.
+ *
+ * **Every one carries `match_id` and nothing else.** No side, no player id,
+ * no outcome: the server derives the acting side from the socket's redeemed
+ * ticket, and `app/gateway/protocol.py` gives the frames no field for one.
+ * Typing the payload here is what makes that checkable rather than
+ * conventional.
+ */
+export type GameCommandType =
+  "game.resign" | "game.draw.offer" | "game.draw.accept" | "game.draw.decline";
+
+export interface GameCommandPayload {
+  match_id: string;
+}
 
 /**
  * The stable refusal codes — `GatewayErrorCode`.
@@ -76,7 +108,11 @@ export type GatewayErrorCode =
   | "spectating_forbidden"
   | "clock_expired"
   | "rate_limited"
-  | "internal_error";
+  | "internal_error"
+  | "draw_offer_already_pending"
+  | "draw_offer_not_pending"
+  | "draw_offer_not_recipient"
+  | "draw_offer_not_allowed_yet";
 
 /** `light` moves first. The engine's `PlayerSide`. */
 export type Side = "light" | "dark";
@@ -117,6 +153,77 @@ export interface ResultPayload {
 }
 
 /**
+ * A standing draw offer, as the server describes it — A64-020.5C §4.
+ *
+ * `offered_by` is a **side**, not a player id: the client already knows
+ * which seat it holds, and a side is what it renders against.
+ */
+export interface DrawOffer {
+  offered_by: Side;
+  offered_at_ply: number;
+  /** ISO-8601. */
+  offered_at: string;
+}
+
+/**
+ * The draw-agreement block a **participant's** snapshot carries.
+ *
+ * The three booleans are already resolved for the requesting viewer — see
+ * `gateway/projections.participant_snapshot_payload`. §2 forbids deriving
+ * them here: a client computing "I may accept only if the offer is not
+ * mine" would be a second implementation of a rule the server owns, and the
+ * one that got it backwards would show a button the server refuses.
+ *
+ * **Absent entirely from a spectator's snapshot.** The field is optional on
+ * `SnapshotPayload` for exactly that reason, not because a participant might
+ * not have one.
+ */
+export interface DrawState {
+  offer: DrawOffer | null;
+  may_offer: boolean;
+  may_accept: boolean;
+  may_decline: boolean;
+}
+
+/** `game.draw.offered` — the fan-out and the offerer's acknowledgement. */
+export interface DrawOfferedPayload {
+  match_id: string;
+  offered_by: Side;
+  offered_at_ply: number;
+  offered_at: string;
+}
+
+/** `game.draw.declined`. Carries the ply so a client can assert the board
+ * did not move — a decline that appeared to advance it is a bug worth
+ * catching, and the value needed to catch it is already here. */
+export interface DrawDeclinedPayload {
+  match_id: string;
+  declined_by: Side;
+  ply: number;
+}
+
+/**
+ * `game.completed` — a match that ended **without a move ending it**.
+ *
+ * One frame for resignation and agreed draw: the client's response to both
+ * is identical and `result.termination_reason` says which happened. A move
+ * that ends a game does not send this; its result rides on
+ * `game.move.applied`.
+ */
+export interface GameCompletedPayload {
+  match_id: string;
+  ply: number;
+  result: ResultPayload;
+}
+
+/** `game.command.rejected` — about the *command*, not the frame. */
+export interface CommandRejectedPayload {
+  code: GatewayErrorCode;
+  /** Server prose. Logged, never rendered — §13 forbids branching on it. */
+  reason: string;
+}
+
+/**
  * The synchronisation baseline — `game.snapshot`.
  *
  * A client that applies this and then every later frame in order is exactly
@@ -140,6 +247,11 @@ export interface SnapshotPayload {
   participants: { light: string; dark: string };
   clock: ClockPayload | null;
   result: ResultPayload | null;
+  /**
+   * The draw agreement, for a participant. **Optional**, because a
+   * spectator's snapshot omits it — see `DrawState`.
+   */
+  draw?: DrawState;
   /** ISO-8601. When the server built this. */
   server_time: string;
 }
@@ -241,6 +353,10 @@ const INBOUND_TYPES = new Set<string>([
   "game.events",
   "game.resumed",
   "game.resync_required",
+  "game.draw.offered",
+  "game.draw.declined",
+  "game.completed",
+  "game.command.rejected",
   "error",
 ]);
 

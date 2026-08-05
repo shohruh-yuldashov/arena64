@@ -143,7 +143,11 @@ test("players queue into one pool, and the two who are paired both reach the mat
     // different games would be the pairing bug this whole flow exists to
     // rule out, and comparing the URLs is the only place it is visible.
     expect(new URL(first.url()).pathname).toBe(new URL(second.url()).pathname);
-    await expect(first.getByRole("heading", { name: "Game" })).toBeVisible();
+    // `level: 1`, matching every other heading assertion in this suite.
+    // Without it the match is a substring one, and A64-020.5C's
+    // "Game controls" panel heading made it ambiguous — the page rendered
+    // correctly and the assertion failed on strict mode.
+    await expect(first.getByRole("heading", { level: 1, name: "Game" })).toBeVisible();
   } finally {
     // The contexts refreshed while running, rotating each cookie, so the
     // saved state is written back — otherwise the next run's probe would

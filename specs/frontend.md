@@ -1011,11 +1011,93 @@ block Playwright's own `storageState` would drop.
 | --- | --- |
 | Spectating | The gateway has the subscription keyspace (`gwspec:v1:`) but no viewer surface is specified; a spectator board is a different product decision about what a non-participant may see |
 | Replay / move list | Needs the move log as a read model, which is a backend surface that does not exist |
-| ~~Draw offers, resignation~~ | **Unblocked by A64-020.5C-pre.** The frames, the durable state and the snapshot contract now exist — see §16.12 and `websocket.md` §22. A64-020.5C builds the controls |
+| ~~Draw offers, resignation~~ | **Shipped by A64-020.5C** — §16.12 |
 | Takebacks | Still no frames, no domain concept and no product decision |
 | Orientation toggle, sound, premoves | One boolean, one asset, and a queue respectively — none of them requirements yet |
 
-### 16.12 Game controls — the backend contract A64-020.5C consumes
+### 16.12 Game controls — A64-020.5C
+
+Resign, offer a draw, accept and decline. `GameControls` is mounted in
+`pages/game` beside `GamePanel` and sends through `useGameRoom.command`, so
+every participant command goes through the one socket, the one request
+registry and the one reducer.
+
+**Nothing here decides anything.** The panel renders `GameState.draw`, which
+is the server's answer resolved for this viewer. There is no ply arithmetic,
+no eligibility rule and no result derivation in the feature — a client
+recomputing the spam rule would be a second copy of
+`game.domain.draw_agreement`, and the copy that disagreed would show a
+button the server refuses.
+
+#### Protocol to UI
+
+| Frame | What the UI does |
+| --- | --- |
+| `game.draw.offered` | Recipient: the answer panel. Offerer: a durable "sent" line |
+| `game.draw.declined` | Both: the offer disappears; board, clock, turn and ply unchanged |
+| `game.completed` | Both: the terminal result, from the payload |
+| `game.command.rejected` | The actor only: a mapped sentence beside the controls |
+
+The actor receives its event **twice** — correlated to `request_id` and
+again as the room fan-out — exactly as it does for a move. The reducer
+applies the fan-out; the awaited promise exists to surface a *refusal*.
+
+#### Reconnect
+
+`game.snapshot` carries a `draw` object and it **replaces**: an offer the
+server still holds reappears, one it does not is dropped, and the three
+booleans are restored exactly. Nothing is read from `localStorage` or from
+component memory. A spectator's snapshot omits the block entirely, which
+reads as "no agreement" rather than as a parse failure.
+
+#### One refresh the client does have to ask for
+
+`game.move.applied` is a fan-out to participants **and** spectators, so it
+cannot carry viewer-resolved draw permissions. That leaves a real gap, found
+by running the two-browser flow: a player whose offer was declined sees the
+button correctly disabled, the opponent moves, the server now says they may
+ask again — and nothing tells them.
+
+So a **restricted** client re-reads the snapshot once per ply. The condition
+excludes everybody who is not blocked, and in an ordinary game it never
+fires. It is deliberately not `resync()`, which would announce
+"Resynchronising…" and freeze the board for a routine refresh.
+
+#### Move-triggered expiration
+
+The backend clears an offer when its **recipient** applies a legal move,
+inside that move's transaction. The client mirrors it on
+`game.move.applied` so the indicator disappears with the move rather than a
+round trip later. It does **not** clear on submission, on
+`game.move.accepted`, or on `game.move.rejected` — a refused move must leave
+the offer standing.
+
+#### Error mapping
+
+Only codes `GatewayErrorCode` publishes, matched on the code and never on
+the server's prose. `draw_offer_not_allowed_yet` reads "wait for your
+opponent to move", not "slow down" — it is not a rate limit.
+
+#### Visibility and limitations
+
+- **Participant-only.** A spectator has no `draw` block and no side, so the
+  whole panel is absent — not disabled, absent.
+- **No withdrawal.** v0.x has no command for it. The offerer is told the
+  opponent may answer *or move*, because a move is what ends it.
+- Takebacks, rematch and chat remain out of scope.
+
+#### E2E
+
+`tests/e2e/game-controls.spec.ts` runs the whole negotiation across two real
+browsers: offer, decline, a refused re-offer proven by a **reload** (so the
+disabled state came from the snapshot, not memory), one opponent move, the
+control returning, then a resignation both browsers read identically.
+
+It is third in the Playwright project chain — `lobby` → `live-game` →
+`game-controls` — because all three drive the lobby with the same three
+accounts and refresh-token rotation makes concurrent use destructive.
+
+### 16.13 The backend contract these controls consume
 
 Specified in full in [`websocket.md`](../docs/01-architecture/websocket.md) §22. What a frontend
 needs to know, in one place:

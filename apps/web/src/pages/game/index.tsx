@@ -5,6 +5,7 @@ import { useClock } from "@/features/game/model/use-clock";
 import { useGameRoom } from "@/features/game/model/use-game-room";
 import { useMoveSelection } from "@/features/game/model/use-move-selection";
 import { GameBoard } from "@/features/game/ui/board";
+import { GameControls } from "@/features/game/ui/game-controls";
 import { GamePanel } from "@/features/game/ui/game-panel";
 import { useTranslation } from "@/shared/i18n";
 import { useConnectionStatus } from "@/shared/realtime";
@@ -32,12 +33,19 @@ import { Button, Skeleton } from "@/shared/ui";
  * `room.leave` and the socket's survival are `useGameRoom`'s cleanup (§30).
  * This page does nothing on unmount, which is what makes it impossible for
  * it to resign, decline or end a match by navigating away.
+ *
+ * ## Controls — A64-020.5C
+ *
+ * `GameControls` is mounted here, beside the panel, and given the same
+ * `state` everything else renders from. It sends nothing itself: `command`
+ * is `useGameRoom`'s, so every participant command goes through the one
+ * socket, the one request registry and the one reducer.
  */
 export default function GamePage() {
   const { t } = useTranslation();
   const { matchId } = useParams({ from: "/games/$matchId" });
   const connection = useConnectionStatus();
-  const { state, submit } = useGameRoom(matchId);
+  const { state, submit, command } = useGameRoom(matchId);
   const selection = useMoveSelection(state);
 
   // The countdown runs only while a game is genuinely in progress. A
@@ -91,8 +99,13 @@ export default function GamePage() {
         )}
       </div>
 
-      <div className="w-full lg:w-80 lg:shrink-0">
+      {/* The panel and the controls stack in one column: beside the board
+          on a wide screen, below it on a phone — one `lg:` breakpoint, as
+          the board already uses (A64-020.5C §14). The controls come second
+          so the clocks are never pushed off screen by an incoming offer. */}
+      <div className="flex w-full flex-col gap-4 lg:w-80 lg:shrink-0">
         <GamePanel state={state} clock={clock} connection={connection} />
+        <GameControls state={state} onCommand={(kind) => void command(kind)} />
       </div>
     </section>
   );

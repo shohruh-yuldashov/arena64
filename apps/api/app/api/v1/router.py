@@ -37,6 +37,7 @@ from app.modules.profiles.presentation.router import profiles_router
 from app.modules.profiles.presentation.search_router import user_search_router
 from app.modules.profiles.presentation.self_router import my_profile_router
 from app.modules.rating.presentation.router import leaderboard_router, ratings_router
+from app.modules.reference.presentation.router import time_controls_router
 from app.modules.tournament.presentation.router import (
     player_tournaments_router,
     tournaments_router,
@@ -97,3 +98,8 @@ v1_router.include_router(leaderboard_router)
 # last segment. No path a caller can send matches two of them.
 v1_router.include_router(tournaments_router)
 v1_router.include_router(player_tournaments_router)
+
+# A64-020.5A. `/time-controls` collides with nothing — it is a single
+# unparameterised segment that no other router claims — so its position here
+# is alphabetical rather than load-bearing.
+v1_router.include_router(time_controls_router)

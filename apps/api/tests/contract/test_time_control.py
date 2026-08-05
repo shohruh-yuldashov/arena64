@@ -49,6 +49,7 @@ from tests.fakes.clock_deadlines import RecordingClockDeadlines
 from tests.fakes.metrics import RecordingMetrics
 from tests.fakes.time_controls import SEEDED_TIME_CONTROLS
 
+CATALOGUE_URL = "/api/v1/time-controls"
 QUEUE_URL = "/api/v1/matchmaking/queue"
 MY_QUEUE_URL = "/api/v1/matchmaking/queue/me"
 PENDING_URL = "/api/v1/matchmaking/matches/pending"
@@ -139,6 +140,75 @@ class TestTheCatalogue:
             (snapshot.base_time_ms, snapshot.increment_ms, snapshot.speed_class)
             for snapshot, _ in SEEDED_TIME_CONTROLS
         ]
+
+
+class TestTheCatalogueOverHttp:
+    async def test_it_publishes_what_a_picker_needs_and_nothing_else(
+        self, client: AsyncClient
+    ) -> None:
+        """A64-020.5A §3 and §4. The endpoint exists so a lobby never has to
+        hardcode the four controls or parse a duration out of an identifier
+        — either would make the frontend a second definition of what "3+2"
+        means, and the first one to drift would win silently.
+
+        Three properties, and each is one a client depends on:
+
+          - the **order** is the catalogue's, so a picker renders the same
+            list in the same sequence on every device
+          - every entry carries what a label needs, so rendering costs no
+            second request
+          - `is_active` is **absent**, which is the contract: only active
+            controls are returned, and a field that is `true` on every row
+            would invite a client to filter on something already filtered
+
+        Authenticated, like every route outside `/health` — asserted here
+        because "visible to every player" is not "reachable without a
+        token", and an exception would be the first one on the platform.
+        """
+        anonymous = await client.get(CATALOGUE_URL)
+        assert anonymous.status_code == 401, anonymous.text
+
+        alice = await register(client)
+        response = await client.get(CATALOGUE_URL, headers=alice.auth)
+
+        assert response.status_code == 200, response.text
+        offered = response.json()["data"]
+        assert [entry["id"] for entry in offered] == [
+            snapshot.id.value for snapshot, _ in SEEDED_TIME_CONTROLS
+        ]
+        assert offered[1] == {
+            "id": "blitz_3_2",
+            "label": "3+2",
+            "base_time_ms": 180_000,
+            "increment_ms": 2_000,
+            "speed_class": "blitz",
+        }
+
+    async def test_an_identifier_it_publishes_is_one_the_queue_accepts(
+        self, client: AsyncClient
+    ) -> None:
+        """The property that makes the catalogue *usable* rather than merely
+        readable, and the one no single-endpoint test can see: every `id`
+        this route publishes is accepted verbatim by `POST /queue`.
+
+        A catalogue whose identifiers the queue refused would be worse than
+        no catalogue — a client would render four options and every one of
+        them would fail. Asserted by joining and leaving with each in turn,
+        because QT-1 allows one live ticket at a time.
+        """
+        alice = await register(client)
+        offered = (await client.get(CATALOGUE_URL, headers=alice.auth)).json()["data"]
+
+        for entry in offered:
+            joined = await client.post(
+                QUEUE_URL,
+                headers=alice.auth,
+                json={"queue_type": "casual", "time_control_id": entry["id"]},
+            )
+            assert joined.status_code == 201, joined.text
+            assert joined.json()["data"]["time_control_id"] == entry["id"]
+            left = await client.delete(QUEUE_URL, headers=alice.auth)
+            assert left.status_code == 204, left.text
 
 
 class TestJoiningNamesAControl:

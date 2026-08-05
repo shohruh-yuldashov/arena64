@@ -55,6 +55,18 @@ export function SessionMenu() {
 
   return (
     <div className="flex items-center gap-1 sm:gap-2">
+      {/* A64-020.5A. The one entry point to the lobby — without it
+          `/play` is reachable only by typing a URL, and a "start a game"
+          action that no screen exposes is the failure this codebase has now
+          found four times on the backend.
+
+          First in the row, and deliberately the only `default` variant
+          here: starting a game is what a player came to do, and the rest of
+          this menu is navigation around it. */}
+      <Button asChild size="sm" className="min-h-11">
+        <Link to="/play">{t("play.nav.play")}</Link>
+      </Button>
+
       {/* A64-020.4. The one entry point to the social pages — without it
           `/friends` and `/search` are reachable only by typing a URL, which
           is the "implemented and reachable from nothing" failure this

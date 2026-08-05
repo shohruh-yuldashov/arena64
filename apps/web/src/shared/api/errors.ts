@@ -37,12 +37,28 @@ export class ApiError extends Error {
   readonly requestId: string | null;
   readonly correlationId: string | null;
 
+  /**
+   * `Retry-After`, in seconds, or `null`.
+   *
+   * The one **header** this type carries, and it earns the exception:
+   * `429` and `409 queue_cooldown_active` both state how long to wait, and
+   * a client that could not read it would have to invent a duration — which
+   * is exactly what A64-020.5A §17 forbids, and what would show a countdown
+   * that ends before the bar actually lifts.
+   *
+   * Delta-seconds only. The backend emits the numeric form deliberately
+   * (`app/api/exception_handlers.py`); an HTTP-date is reported as absent
+   * rather than as a wrong number.
+   */
+  readonly retryAfterSeconds: number | null;
+
   constructor(
     message: string,
     options: {
       kind: ApiErrorKind;
       status?: number | null;
       body?: ApiErrorBody | null;
+      retryAfterSeconds?: number | null;
       cause?: unknown;
     },
   ) {
@@ -56,6 +72,7 @@ export class ApiError extends Error {
     this.code = options.body?.code ?? null;
     this.requestId = options.body?.request_id ?? null;
     this.correlationId = options.body?.correlation_id ?? null;
+    this.retryAfterSeconds = options.retryAfterSeconds ?? null;
   }
 
   /** Whether retrying the identical request could plausibly succeed. */
@@ -92,6 +109,7 @@ export function normalizeError(error: unknown): ApiError {
       kind: "http",
       status: response.status,
       body,
+      retryAfterSeconds: retryAfter(response.headers),
       cause: error,
     });
   }
@@ -100,6 +118,22 @@ export function normalizeError(error: unknown): ApiError {
     kind: "unknown",
     cause: error,
   });
+}
+
+/**
+ * `Retry-After` as a non-negative number of seconds, or `null`.
+ *
+ * Anything that is not a plain number — absent, an HTTP-date, a value a
+ * proxy mangled — is `null`. Rendering "wait NaN seconds", or guessing a
+ * duration from a date format this app does not parse, are both worse than
+ * saying nothing and letting the caller show the message without a number.
+ */
+function retryAfter(headers: unknown): number | null {
+  if (typeof headers !== "object" || headers === null) return null;
+  const raw = (headers as Record<string, unknown>)["retry-after"];
+  if (typeof raw !== "string" && typeof raw !== "number") return null;
+  const seconds = Number(raw);
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds) : null;
 }
 
 /**

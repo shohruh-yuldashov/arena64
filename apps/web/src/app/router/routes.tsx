@@ -236,6 +236,39 @@ export const searchRoute = createRoute({
   component: protectedPage(() => import("@/pages/search")),
 });
 
+// --- play — A64-020.5A ------------------------------------------------------
+// Both protected, and both for the same reason: a lobby reads and writes the
+// viewer's own queue ticket, and a match belongs to its two participants.
+// Neither has an anonymous form to fall back to.
+
+/**
+ * `/play` — the lobby.
+ *
+ * The one place a queue ticket is created, and therefore the one place the
+ * lobby's polling runs. Lazy like every other route, so the matchmaking
+ * feature's chunk is not paid for by a player who only reads profiles.
+ */
+export const playRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/play",
+  component: protectedPage(() => import("@/pages/play")),
+});
+
+/**
+ * `/games/$matchId` — where acceptance hands off.
+ *
+ * A64-020.5A ships the route and a page that only names the match; the
+ * board is A64-020.5B's and replaces the component without touching this
+ * declaration, the guard, or the navigation in `PlayPage`. Registering it
+ * now is what makes a successful pairing land somewhere rather than on the
+ * not-found component.
+ */
+export const gameRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/games/$matchId",
+  component: protectedPage(() => import("@/pages/game-ready")),
+});
+
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
@@ -253,4 +286,6 @@ export const routeTree = rootRoute.addChildren([
   friendRequestsRoute,
   blockedRoute,
   searchRoute,
+  playRoute,
+  gameRoute,
 ]);

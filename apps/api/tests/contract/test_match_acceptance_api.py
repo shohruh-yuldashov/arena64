@@ -278,16 +278,49 @@ class TestAccepting:
         assert second.status_code == 200
         assert second.json()["data"] == first.json()["data"]
 
-    async def test_an_activated_match_is_no_longer_pending(
+    async def test_the_first_acceptor_learns_the_match_activated(
         self,
         client: AsyncClient,
         contract_session: AsyncSession,
         alice: Player,
         bob: Player,
     ) -> None:
+        """A64-020.5A, and this test previously asserted the opposite.
+
+        It required `404` once both players accepted — which contradicted
+        this endpoint's own published schema ("a client that polls after
+        answering sees the outcome rather than a `404`") and made the flow
+        unfinishable for one of the two players. Acceptance is bilateral,
+        so the match activates on the **second** request: Alice's own
+        response says `pending_acceptance`, and polling was her only way to
+        find out it had started.
+
+        The requirement was outdated, not the code. What replaced it is the
+        sentence the schema already promised.
+        """
         record = await _pair(contract_session, alice, bob)
         await client.post(_accept_url(record.id), headers=alice.auth)
         await client.post(_accept_url(record.id), headers=bob.auth)
+
+        polled = await client.get(PENDING_URL, headers=alice.auth)
+
+        assert polled.status_code == 200, polled.text
+        assert polled.json()["data"]["match_id"] == str(record.id)
+        assert polled.json()["data"]["status"] == "active"
+        assert polled.json()["data"]["you_accepted"] is True
+
+    async def test_a_declined_match_stops_being_current(
+        self,
+        client: AsyncClient,
+        contract_session: AsyncSession,
+        alice: Player,
+        bob: Player,
+    ) -> None:
+        """The bound on the widening, and the reason it needs no horizon: a
+        match leaves this read by settling into something that is not a
+        game. Without this, "current" would quietly mean "ever"."""
+        record = await _pair(contract_session, alice, bob)
+        await client.post(_decline_url(record.id), headers=bob.auth)
 
         assert (await client.get(PENDING_URL, headers=alice.auth)).status_code == 404
 

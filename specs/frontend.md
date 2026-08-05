@@ -103,6 +103,8 @@ TanStack Router, **code-based** (`src/app/router/routes.tsx`), not file-based.
 | `/friends/requests` | `pages/friend-requests` | `RequireAuth` |
 | `/friends/blocked` | `pages/blocked` | `RequireAuth` |
 | `/search` | `pages/search` | `RequireAuth` |
+| `/play` | `pages/play` | `RequireAuth` |
+| `/games/$matchId` | `pages/game-ready` | `RequireAuth` |
 | *anything unmatched* | `pages/not-found` | The root route's `notFoundComponent` |
 
 The three link-landing pages are **deliberately unguarded**. A signed-in
@@ -342,9 +344,24 @@ browser  ──/api/*──>  reverse proxy  ──>  FastAPI
 
 | Environment | How the origin is shared |
 | --- | --- |
-| Development | The Vite dev server proxies `/api` to `ARENA64_API_TARGET` (default `http://localhost:8000`) — `vite.config.ts` |
+| Development | The Vite dev server proxies `/api` **and** `/ws` to `ARENA64_API_TARGET` (default `http://localhost:8000`) — `vite.config.ts` |
 | E2E | `vite preview` uses the **same** proxy config; `preview.proxy` does not inherit `server.proxy`, so both are declared |
-| Production | A reverse proxy (nginx, Caddy, a CDN rule) must route `/api` to FastAPI. **This is a deployment requirement, not a default** |
+| Production | A reverse proxy (nginx, Caddy, a CDN rule) must route `/api` to FastAPI **and `/ws` with WebSocket upgrade**. **This is a deployment requirement, not a default** |
+
+**`/ws` is a second rule, not a sub-path of `/api`** — A64-020.5A §20. The
+gateway is mounted at the application root and is unversioned
+(`app/app_factory.py`), so an `/api` rule does not reach it. Two properties
+must hold and neither is a default:
+
+  - `ws: true`, or the proxy forwards the HTTP request and drops the
+    `Upgrade` handshake — which presents as a socket that connects and
+    closes immediately with nothing in any log to act on
+  - **same origin**, for the reason `/api` is: the socket carries the same
+    cookies and the same `Origin` the API already checks
+
+The proxy is configured ahead of the client that uses it. Authentication is
+not a proxy concern: the gateway takes a one-time ticket from
+`POST /auth/ws-ticket` as a query parameter, which A64-020.5B wires.
 
 `VITE_API_URL` defaults to the relative `/api/v1` and **no code names a
 host**. An absolute URL is accepted for the one case that needs it —
@@ -699,7 +716,133 @@ No chat, no notifications UI, no game invitations, no activity feed, no recommen
 moderation tools. Nothing here claims a block deletes messages or cancels games, because
 the backend contract guarantees neither.
 
-## 15. Open questions
+## 15. Game lobby — A64-020.5A
+
+Two routes, one derived state, and a polling loop that is written down as
+temporary. The lobby is where a player chooses a game and where a pairing is
+answered; the board is A64-020.5B's.
+
+### 15.1 Backend surface
+
+| Endpoint | Used for |
+| --- | --- |
+| `GET /time-controls` | the catalogue — **added by this phase** (`feat(reference): expose active time controls`) |
+| `POST /matchmaking/queue` | join, with `variant`, `queue_type`, `time_control_id`, `region` |
+| `DELETE /matchmaking/queue` | cancel — `204` whether or not a ticket existed |
+| `GET /matchmaking/queue/me` | the live ticket, or `404` |
+| `GET /matchmaking/matches/pending` | the open offer, or `404`. Deliberately **not rate limited** |
+| `POST /matchmaking/matches/{id}/accept` | accept |
+| `POST /matchmaking/matches/{id}/decline` | decline — earns a cooldown |
+
+Both `404`s are translated to `null` at the API boundary
+(`features/matchmaking/api`). "You are not queued" is an ordinary answer,
+not a failure, and treating it as one would make an idle lobby render a
+retry screen.
+
+### 15.2 The state model
+
+One discriminated union, **derived** on every render from the two reads and
+never stored (`entities/queue`, `features/matchmaking/model/lobby-state`).
+
+    bootstrapping · idle · joining · queued · match_offer
+    awaiting_opponent · accepting · declining · transitioning · unavailable
+
+**A pending match always outranks a queue ticket.** This is the single most
+important rule in the feature. Pairing consumes a ticket and creates a match
+in two transactions — a cross-context call may not sit inside an open one
+(`PairingService`) — so a client polling across the gap legitimately sees a
+live ticket beside a real offer, or a `404` beside one. Ordering the union
+so the offer wins means the second reading can never overwrite the first.
+The offer is the state with a deadline attached; losing it costs a game.
+
+Storing this would reintroduce exactly that race in the one place nothing
+could observe it, which is why §8 forbids it and why `derive` is a pure
+function with its own test.
+
+### 15.3 Query keys and polling
+
+| Key | Policy |
+| --- | --- |
+| `["reference", "time-controls"]` | `staleTime: Infinity` — a catalogue changes when an operator edits a row, not when a player acts |
+| `["matchmaking", "queue", "me"]` | `staleTime: 0`; polls every 2 s **while a ticket exists** |
+| `["matchmaking", "matches", "pending"]` | `staleTime: 0`; polls every 2 s while an offer is open **or** a ticket is live |
+
+The pending read reports the player's **current** match — `pending_acceptance` **or** `active` (`specs/matchmaking.md` §10.8). The lobby branches on `status`: an open offer opens the dialog, an active one hands off to `/games/:matchId`. That is what lets the *first* of the two acceptors learn their game started, since the match activates on the other player's request and their own response still says `pending_acceptance`.
+
+Each query decides its own interval from its own data; the offer query is
+additionally told whether a ticket exists, because a queued player who
+stopped asking would learn they had been paired only on refocus.
+
+**Polling is temporary and is not pretending to be anything else.** The
+backend's realtime seam is real and unwired: `PendingMatchSink` is satisfied
+by `LoggingPendingMatchSink`, so a pairing reaches a log line and no socket,
+and `Channel.MATCHMAKING` has no producer. The pending endpoint is
+deliberately not rate limited for exactly this reason. When the gateway is
+connected, `refetchInterval` becomes `false` and the socket invalidates
+these two keys — the queries, the components and the state model do not
+change.
+
+Every mutation invalidates **both** reads, including on failure. Any write
+here can be overtaken by the pairing scan, so the honest response to
+finishing one is to stop believing the cache.
+
+### 15.4 Recovery
+
+There is no restore branch. A reload runs the same two queries a first visit
+does, so a refreshed page reconstructs the chosen mode, the chosen clock,
+the instant the player queued and any open offer without a line of code that
+knows it is a reload. **No lobby state is in `localStorage`** and none is
+broadcast between tabs: the backend allows one live ticket per player, so a
+second tab's action is reconciled by the next poll rather than by a client
+protocol.
+
+### 15.5 What the lobby does not offer, and why
+
+| Absent | Reason |
+| --- | --- |
+| Variant picker | `ProductVariant` has one member. A radio group with one option is a control that can only be left where it was |
+| Region picker | AD-25 defers multi-region infrastructure. Every non-`global` value shrinks the pool and buys no latency back |
+| Estimated wait | The backend supplies none. One computed here would be invented |
+| Queue depth | `QueueTicketResponse.waiting` is a reading of one pool at one instant and is **not** a position in a line |
+| Opponent avatar | `OpponentPreview` is three public fields. Rendering an avatar needs the privacy-gated composition `profiles` owns |
+| Opponent rating | Not on the pending response |
+| Custom clocks | The catalogue is authoritative; a submitted duration would be a player-authored pool |
+
+### 15.6 The acceptance countdown
+
+Computed from the deadline the server sent, against the local clock, and it
+**decides nothing**: reaching zero refetches rather than concluding. A client
+whose clock runs fast would otherwise lose a match it still had time to
+accept.
+
+Ticks are scheduled for the instant the displayed number next changes rather
+than every 1000 ms, so error does not accumulate and a backgrounded tab
+resumes on the right number. Announcements are made at 30, 20, 10 and 5
+seconds only — an `aria-live` region containing a per-second counter is a
+screen reader saying a number thirty times.
+
+### 15.7 The handoff
+
+Acceptance navigates to `/games/{match_id}`. This phase ships the route and
+a page that names the match and nothing else: **no requests, no socket, no
+board**. A64-020.5B replaces the component without touching the route, the
+guard or the navigation that reaches it.
+
+### 15.8 E2E state
+
+The lobby suite has **its own two accounts** (`e2e_lobby_one`,
+`e2e_lobby_two`), not the social suite's. Spec files run in parallel and
+this one settles its accounts' matchmaking state; doing that to accounts
+another suite is simultaneously friending would make both flaky for reasons
+neither could see.
+
+`resetLobby` clears what a previous run left — an open offer first, then the
+ticket — through the endpoints a player uses. It **accepts** a stale offer
+rather than declining it, because a decline earns the queue cooldown that
+would then stop the spec from queueing. Nothing truncates a table, flushes
+Redis, or disables a rate limit.
+
+## 16. Open questions
 
 | # | Question | Blocked work |
 | --- | --- | --- |
@@ -712,7 +855,8 @@ the backend contract guarantees neither.
 | ~~OQ-7~~ | **Closed by A64-020.3.** `signOutEverywhere` is reachable from `/settings/sessions`, behind an explicit confirmation | — |
 | OQ-8 | **No session list.** `SessionService.list_user_sessions` has no HTTP endpoint, so there is no device list to show — only "sign out everywhere". Publishing it needs a decision about what a session row may reveal (IP, user agent) | A device-management UI |
 | ~~OQ-9~~ | **Closed by A64-020.4.** The public profile renders a relationship-aware action set through `ProfileHeader`'s seam | — |
-| OQ-10 | **Presence is not live.** Friend online status updates on an HTTP read, not over a socket. The frontend has no WebSocket yet and building one here would pre-empt the Game phase's | A64-020.5 Game UI |
+| OQ-10 | **Nothing is live yet.** Friend presence and match offers both arrive on an HTTP read. The frontend still has no WebSocket; `vite.config.ts` proxies `/ws` (§11) and A64-020.5B owns the client. The backend half is also unwired — `LoggingPendingMatchSink` (§15.3) | A64-020.5B, and a gateway-backed `PendingMatchSink` |
+| OQ-12 | **The offer dialog cannot show an avatar or a rating.** `OpponentPreview` carries three public fields by design (§15.5). Publishing more needs the privacy-gated composition `profiles` owns, which is a backend decision rather than a frontend gap | A richer match card |
 | OQ-11 | **A friend's `relationship` is fetched but structurally known.** The four list endpoints state it server-side and cost nothing, but a client-side `friends` cache could serve the public profile's state too — not done, because a stale action is worse than a request | A measured need |
 
 ## Related documents

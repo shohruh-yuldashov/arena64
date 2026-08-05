@@ -72,7 +72,12 @@ from uuid import UUID
 
 from app.core.clock import Clock
 from app.modules.friends.public import PairingExclusions
-from app.modules.game.public import MatchAcceptanceUseCase, MatchCreated, PendingMatchView
+from app.modules.game.public import (
+    MatchAcceptanceUseCase,
+    MatchCreated,
+    MatchRecordStatus,
+    PendingMatchView,
+)
 from app.modules.matchmaking.application.metrics import (
     PENDING_MATCH_DELIVERIES,
     DeliveryOutcome,
@@ -222,6 +227,17 @@ class PendingMatchNotifier:
         deliverable: list[tuple[OutboxEntry, PendingMatchView, UUID]] = []
         for player_id in recipients:
             view = await self._acceptance.pending_match(player_id)
+            # **Still awaiting an answer**, not merely still current.
+            # A64-020.5A widened `pending_match` to report a match that has
+            # already started, which is what a lobby needs and is exactly
+            # what must not be pushed as an offer: both players agreed
+            # before the relay reached this entry, and delivering it would
+            # open an acceptance dialog over a game already in progress.
+            if view is not None and view.status is not MatchRecordStatus.PENDING_ACCEPTANCE:
+                self._metrics.increment(
+                    PENDING_MATCH_DELIVERIES, labels={"outcome": DeliveryOutcome.STALE}
+                )
+                continue
             if view is None or view.match_id != match_id:
                 self._metrics.increment(
                     PENDING_MATCH_DELIVERIES, labels={"outcome": DeliveryOutcome.STALE}

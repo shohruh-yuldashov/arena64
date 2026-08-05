@@ -62,9 +62,11 @@ from app.gateway.metrics import (
     MoveRejection,
 )
 from app.gateway.ports import MoveIdempotency, MoveRateLimiter
+from app.gateway.projections import draw_payload_for
 from app.gateway.protocol import (
     GatewayErrorCode,
     GatewayMessage,
+    draw_state,
     move_accepted,
     move_applied,
     move_rejected,
@@ -292,6 +294,20 @@ class MoveSubmissionHandler:
             spectators=await self._watching(result.match_id),
         )
 
+        # **After** the move fan-out, deliberately — A64-020.5D §12.
+        #
+        # The order is: the board changes, then the permissions that changed
+        # with it. A client that applied them the other way would briefly
+        # show an offer cleared by a move it had not yet seen, which reads
+        # as the offer vanishing for no reason.
+        #
+        # The frontend must still tolerate either arrival order, because
+        # these are two frames on one socket and nothing makes them atomic —
+        # and it does: `game.draw.state` replaces the agreement and touches
+        # neither board nor sequence, so applying it early is harmless and
+        # the next snapshot reconciles regardless.
+        await self._push_draw_state(result, room.participants)
+
         # One line per move rather than per recipient (§15), and no board,
         # no path and no fingerprint in it: the payload is the game.
         logger.info(
@@ -305,6 +321,64 @@ class MoveSubmissionHandler:
                 "spectator_failures": report.spectator_failures,
             },
         )
+
+    async def _push_draw_state(
+        self, result: SubmitMoveResult, participants: Sequence[UUID]
+    ) -> None:
+        """Tells each participant their own draw permissions after a move —
+        §10, §11.
+
+        A move can end an offer (its recipient played past it) and can
+        restore a player's eligibility (the opponent finally moved), and
+        neither can ride on `game.move.applied` — that frame reaches
+        spectators and these permissions are per-seat.
+
+        **Zero frames for the ordinary game.** `is_untouched` is true until
+        somebody offers a draw, so §22's "additional frames per move" is
+        zero for the overwhelming majority — and once somebody has, the
+        frames continue for the rest of the game, which is what carries the
+        eligibility that returns when the opponent moves.
+
+        Never raises: the move is committed, and a client that missed this
+        recovers on its next snapshot.
+        """
+        draw = result.draw
+        if draw is None or draw.is_untouched:
+            return
+
+        # `side_to_move` is whose turn it is **now**, so the player who just
+        # moved is its opposite — and that player is the request's, which
+        # the caller passes through `result.match_id`'s room. Deriving the
+        # pairing from one known seat rather than from tuple order, for the
+        # reason `GameCommandHandler._push_draw_state` records.
+        moved = "dark" if result.side_to_move.value == "light" else "light"
+        mover = result.moved_by
+
+        other = "dark" if moved == "light" else "light"
+        for player_id in participants:
+            side = moved if player_id == mover else other
+            payload = draw_payload_for(
+                offer=draw.offer,
+                may_offer_light=draw.may_offer_light,
+                may_offer_dark=draw.may_offer_dark,
+                side=side,
+            )
+            try:
+                await self._broadcaster.deliver(
+                    draw_state(
+                        match_id=result.match_id,
+                        offer=payload["offer"],
+                        may_offer=payload["may_offer"],
+                        may_accept=payload["may_accept"],
+                        may_decline=payload["may_decline"],
+                    ),
+                    recipients=[player_id],
+                )
+            except Exception as exc:  # noqa: BLE001 — a hint must not fail a move
+                logger.warning(
+                    "gateway_draw_state_failed",
+                    extra={"match_id": str(result.match_id), "error": type(exc).__name__},
+                )
 
     async def _watching(self, match_id: UUID) -> Sequence[SpectatorSubscription]:
         """Who is spectating this match — A64-016.7 §5.

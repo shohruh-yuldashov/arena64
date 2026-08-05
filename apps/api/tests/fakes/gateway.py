@@ -47,6 +47,7 @@ from app.modules.game.domain.variants import ProductVariant
 from app.modules.game.public import (
     AppliedMove,
     ClockView,
+    DrawAgreementView,
     DrawOfferState,
     DrawOfferView,
     GameCommand,
@@ -428,6 +429,7 @@ class FakeGameCommands:
             match_id=request.match_id,
             command=request.command,
             acting_side=PlayerSide.LIGHT,
+            acting_player_id=request.player_id,
             ply=self.ply,
             offer=(
                 DrawOfferView(offered_by=PlayerSide.LIGHT, offered_at_ply=self.ply, offered_at=NOW)
@@ -450,6 +452,22 @@ class FakeGameCommands:
             ),
             winner=PlayerSide.DARK if request.command is GameCommand.RESIGN else None,
             settled_at=NOW if terminal else None,
+            # A64-020.5D. `is_settled` is false while an offer stands, so a
+            # test asserting the participant frame gets one — and true
+            # otherwise, so the frames are absent exactly where production
+            # would omit them.
+            draw=DrawAgreementView(
+                offer=(
+                    DrawOfferView(
+                        offered_by=PlayerSide.LIGHT, offered_at_ply=self.ply, offered_at=NOW
+                    )
+                    if offering
+                    else None
+                ),
+                may_offer_light=not offering,
+                may_offer_dark=not offering,
+                is_untouched=not offering,
+            ),
         )
 
 
@@ -580,6 +598,7 @@ class StubMatchSnapshots:
         sequence: int = 0,
         clock: ClockView | None = None,
         status: MatchRecordStatus = MatchRecordStatus.ACTIVE,
+        rated: bool = True,
         draw_offer: DrawOfferState | None = None,
         may_offer_light: bool = True,
         may_offer_dark: bool = True,
@@ -589,6 +608,7 @@ class StubMatchSnapshots:
             engine_version=2,
             variant=ProductVariant.RUSSIAN_8X8,
             status=status,
+            rated=rated,
             sequence=sequence,
             side_to_move=PlayerSide.LIGHT if sequence % 2 == 0 else PlayerSide.DARK,
             fingerprint=f"fingerprint-{sequence}",

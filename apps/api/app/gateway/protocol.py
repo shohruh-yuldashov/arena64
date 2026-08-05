@@ -275,6 +275,44 @@ class MessageType(StrEnum):
 
     Spectator-safe: a finished game is public — §8."""
 
+    MATCH_OFFERED = "matchmaking.match.offered"
+    """Server to **one participant**, on the `matchmaking` channel —
+    A64-020.5D §2.
+
+    A pairing was made and this player has not answered it. Addressed
+    rather than broadcast: the payload names their side and their opponent,
+    and the two participants receive different frames.
+
+    **An optimisation, never the source of truth** (§3). The durable answer
+    is `GET /matchmaking/matches/pending`, and a client that never received
+    this still learns — it simply learns later. So this may be duplicated,
+    may arrive late, and may be missed entirely while a socket is down;
+    every one of those is recovered by the read.
+
+    Carries no ticket internals, no Redis key and no rating: what a lobby
+    card renders, and nothing a client could not already ask for."""
+
+    DRAW_STATE = "game.draw.state"
+    """Server to **one participant**, on the `game` channel —
+    A64-020.5D §11.
+
+    This viewer's draw agreement: whether an offer stands, whose it is, and
+    which of the three actions they may take right now.
+
+    **Participant-targeted, and that is the whole reason it exists.**
+    Permissions are per-seat — the offerer may not accept their own offer,
+    and a player under the re-offer restriction may not open a new one — so
+    they cannot ride on `game.move.applied`, which fans out to both players
+    *and* the audience. A64-020.5C worked around the gap by re-reading a
+    snapshot once per ply; this replaces that.
+
+    Never sent to a spectator, and absent from `SPECTATOR_SAFE_EVENTS` for
+    the same reason `game.draw.offered` is.
+
+    **Carries no ply and no sequence.** It is not a state change of the
+    game, so it is never buffered into the ply-sequenced replay buffer —
+    doing so would break the contiguity check a resume depends on (§12)."""
+
     SPECTATOR_JOIN = "spectator.join"
     """Client to server — A64-016.7 §2. Carries `match_id`. The viewer is
     the socket's authenticated identity."""
@@ -738,6 +776,52 @@ def game_completed(
     )
 
 
+def match_offered(payload: dict[str, Any]) -> GatewayMessage:
+    """A pairing this player has not answered — §2.
+
+    Takes an already-projected payload rather than a `PendingMatchOffer`,
+    for the reason `match_snapshot` does: this module knows nothing about
+    `matchmaking` and must not. The projection is the caller's, and keeping
+    it there is what lets the protocol stay a codec.
+
+    **No `request_id`**: nobody asked for this.
+    """
+    return GatewayMessage(
+        type=MessageType.MATCH_OFFERED, payload=payload, channel=Channel.MATCHMAKING
+    )
+
+
+def draw_state(
+    *,
+    match_id: UUID,
+    offer: Mapping[str, Any] | None,
+    may_offer: bool,
+    may_accept: bool,
+    may_decline: bool,
+) -> GatewayMessage:
+    """One participant's draw agreement — §11.
+
+    The **same shape** the snapshot's `draw` block carries, so a client
+    applies one projection everywhere rather than two that must not
+    diverge.
+
+    No `request_id`: this is a consequence of something, not an answer to
+    it. The actor's correlated acknowledgement is still
+    `game.draw.offered`, `game.draw.declined` or `game.completed`.
+    """
+    return GatewayMessage(
+        type=MessageType.DRAW_STATE,
+        payload={
+            "match_id": str(match_id),
+            "offer": dict(offer) if offer is not None else None,
+            "may_offer": may_offer,
+            "may_accept": may_accept,
+            "may_decline": may_decline,
+        },
+        channel=Channel.GAME,
+    )
+
+
 def match_snapshot(payload: dict[str, Any], *, request_id: str | None) -> GatewayMessage:
     """The authoritative state, as the new synchronisation baseline — §6.
 
@@ -950,11 +1034,13 @@ __all__ = [
     "command_rejected",
     "connection_ready",
     "decode",
+    "draw_state",
     "draw_declined",
     "draw_offered",
     "error",
     "game_completed",
     "match_events",
+    "match_offered",
     "match_snapshot",
     "move_accepted",
     "move_applied",

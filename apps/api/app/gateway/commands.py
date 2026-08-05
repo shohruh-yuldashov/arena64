@@ -58,6 +58,7 @@ from app.gateway.metrics import (
     GameCommandRejection,
 )
 from app.gateway.ports import MoveIdempotency, MoveRateLimiter
+from app.gateway.projections import draw_payload_for
 from app.gateway.protocol import (
     GatewayErrorCode,
     GatewayMessage,
@@ -65,11 +66,13 @@ from app.gateway.protocol import (
     command_rejected,
     draw_declined,
     draw_offered,
+    draw_state,
     game_completed,
 )
 from app.gateway.room_service import GameRoomService
 from app.gateway.spectators import SpectatorStore, SpectatorSubscription
 from app.modules.game.public import (
+    DrawAgreementView,
     DrawOfferAlreadyPending,
     DrawOfferNotAllowedYet,
     DrawOfferNotPending,
@@ -299,6 +302,14 @@ class GameCommandHandler:
             spectators=await self._watching(result.match_id),
         )
 
+        await self._push_draw_state(
+            match_id=result.match_id,
+            draw=result.draw,
+            participants=room.participants,
+            known_player=result.acting_player_id,
+            known_side=result.acting_side.value,
+        )
+
         logger.info(
             "gateway_command_delivered",
             extra={
@@ -310,6 +321,70 @@ class GameCommandHandler:
                 "spectator_failures": report.spectator_failures,
             },
         )
+
+    async def _push_draw_state(
+        self,
+        *,
+        match_id: UUID,
+        draw: DrawAgreementView,
+        participants: Sequence[UUID],
+        known_player: UUID,
+        known_side: str,
+    ) -> None:
+        """Tells each participant their **own** draw permissions —
+        A64-020.5D §11, §13.
+
+        One frame per player, each carrying a different payload, because
+        the permissions are per-seat: the offerer may not accept their own
+        offer and the recipient may not open a competing one. That is
+        exactly why they cannot ride on `game.draw.offered`, which is one
+        identical frame to both — the gap A64-020.5C worked around by
+        re-reading a snapshot once per ply.
+
+        **Spectators are never in `recipients`**, and this passes no
+        `spectators` argument at all, so `SPECTATOR_SAFE_EVENTS` never even
+        has to withhold it. Two independent reasons it cannot leak.
+
+        Skipped entirely until somebody offers a draw in this match, so a
+        game nobody negotiates in costs nothing (§22).
+
+        Never raises: the command is already committed, and a client that
+        missed this recovers on its next snapshot.
+        """
+        if draw.is_untouched:
+            return
+
+        # The side is derived from **one known pair** rather than from the
+        # participant tuple's order: the caller knows which seat one player
+        # holds, and with exactly two seats the other follows. An index into
+        # `participants` would be correct today and silently wrong the day a
+        # room is built from a different roster read.
+        other = "dark" if known_side == "light" else "light"
+
+        for player_id in participants:
+            side = known_side if player_id == known_player else other
+            payload = draw_payload_for(
+                offer=draw.offer,
+                may_offer_light=draw.may_offer_light,
+                may_offer_dark=draw.may_offer_dark,
+                side=side,
+            )
+            try:
+                await self._broadcaster.deliver(
+                    draw_state(
+                        match_id=match_id,
+                        offer=payload["offer"],
+                        may_offer=payload["may_offer"],
+                        may_accept=payload["may_accept"],
+                        may_decline=payload["may_decline"],
+                    ),
+                    recipients=[player_id],
+                )
+            except Exception as exc:  # noqa: BLE001 — a hint must not fail a command
+                logger.warning(
+                    "gateway_draw_state_failed",
+                    extra={"match_id": str(match_id), "error": type(exc).__name__},
+                )
 
     async def _watching(self, match_id: UUID) -> Sequence[SpectatorSubscription]:
         """Who is spectating this match.

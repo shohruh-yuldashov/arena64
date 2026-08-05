@@ -88,6 +88,7 @@ class GameMatchSnapshot:
                     key=lambda entry: entry[0],
                 )
             ),
+            rated=record.rated,
             light_player_id=record.light.player_id,
             dark_player_id=record.dark.player_id,
             clock=_clock_view(record.clock, at=observed_at),

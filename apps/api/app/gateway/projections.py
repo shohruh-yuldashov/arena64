@@ -22,7 +22,7 @@ them would make `game` depend on a module it has no business knowing about.
 from typing import Any
 from uuid import UUID
 
-from app.modules.game.public import MatchSnapshot
+from app.modules.game.public import DrawOfferState, DrawOfferView, MatchSnapshot
 
 
 def spectator_snapshot_payload(snapshot: MatchSnapshot) -> dict[str, Any]:
@@ -63,28 +63,32 @@ def participant_snapshot_payload(snapshot: MatchSnapshot, *, viewer: UUID) -> di
     return payload
 
 
-def _draw_payload(snapshot: MatchSnapshot, *, viewer: UUID) -> dict[str, Any]:
-    """This viewer's draw-agreement state.
+def draw_payload_for(
+    *,
+    offer: DrawOfferState | DrawOfferView | None,
+    may_offer_light: bool,
+    may_offer_dark: bool,
+    side: str | None,
+) -> dict[str, Any]:
+    """One participant's draw agreement, from both sides' facts —
+    A64-020.5D §11.
 
-    `viewer` is a participant by construction — the resume path proves it
-    with `MatchSnapshot.includes` before projecting — so the side lookup
-    below cannot fall through to a stranger.
+    **One resolver, three call sites**: the resume snapshot, the live
+    `game.draw.state` frame after a command, and the one after a move. A
+    second copy is how the button a client renders comes to disagree with
+    the rule that would refuse it.
+
+    `side` is `None` for a viewer who is neither seat, and everything then
+    resolves to `False` — which is what makes a spectator projection safe
+    by construction rather than by remembering. `spectator_snapshot_payload`
+    does not call this at all, so that is belt and braces.
+
+    Three booleans rather than one state string, because they are not
+    mutually exclusive in the way a string would imply: a player with no
+    offer standing may offer and may do nothing else, and a recipient may
+    accept and decline but not offer.
     """
-    side = (
-        "light"
-        if viewer == snapshot.light_player_id
-        else "dark"
-        if viewer == snapshot.dark_player_id
-        else None
-    )
-    offer = snapshot.draw_offer
-    may_offer = (
-        snapshot.may_offer_light
-        if side == "light"
-        else snapshot.may_offer_dark
-        if side == "dark"
-        else False
-    )
+    may_offer = may_offer_light if side == "light" else may_offer_dark if side == "dark" else False
     is_recipient = offer is not None and side is not None and offer.offered_by.value != side
 
     return {
@@ -97,14 +101,34 @@ def _draw_payload(snapshot: MatchSnapshot, *, viewer: UUID) -> dict[str, Any]:
             if offer is not None
             else None
         ),
-        # Three booleans rather than one state string, because they are not
-        # mutually exclusive in the way a string would imply: a player with
-        # no offer standing may offer and may do nothing else, and a
-        # recipient may accept and decline but not offer.
         "may_offer": may_offer,
         "may_accept": is_recipient,
         "may_decline": is_recipient,
     }
+
+
+def side_of(snapshot: MatchSnapshot, viewer: UUID) -> str | None:
+    """Which seat this viewer holds, or `None` for anybody else."""
+    if viewer == snapshot.light_player_id:
+        return "light"
+    if viewer == snapshot.dark_player_id:
+        return "dark"
+    return None
+
+
+def _draw_payload(snapshot: MatchSnapshot, *, viewer: UUID) -> dict[str, Any]:
+    """This viewer's draw-agreement state, from a snapshot.
+
+    `viewer` is a participant by construction — the resume path proves it
+    with `MatchSnapshot.includes` before projecting — so `side_of` cannot
+    fall through to a stranger here.
+    """
+    return draw_payload_for(
+        offer=snapshot.draw_offer,
+        may_offer_light=snapshot.may_offer_light,
+        may_offer_dark=snapshot.may_offer_dark,
+        side=side_of(snapshot, viewer),
+    )
 
 
 def _base_payload(snapshot: MatchSnapshot) -> dict[str, Any]:
@@ -123,6 +147,7 @@ def _base_payload(snapshot: MatchSnapshot) -> dict[str, Any]:
         "engine_version": snapshot.engine_version,
         "variant": snapshot.variant.value,
         "status": snapshot.status.value,
+        "rated": snapshot.rated,
         "sequence": snapshot.sequence,
         "side_to_move": snapshot.side_to_move.value,
         "fingerprint": snapshot.fingerprint,
@@ -169,4 +194,9 @@ def _result_payload(snapshot: MatchSnapshot) -> dict[str, Any] | None:
     }
 
 
-__all__ = ["participant_snapshot_payload", "spectator_snapshot_payload"]
+__all__ = [
+    "draw_payload_for",
+    "participant_snapshot_payload",
+    "side_of",
+    "spectator_snapshot_payload",
+]

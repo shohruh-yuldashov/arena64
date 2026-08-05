@@ -79,10 +79,12 @@ from datetime import datetime
 from app.core.clock import Clock
 from app.modules.engine import PlayerSide
 from app.modules.game.application.ports import ClockDeadlineStore, MatchRecordRepository
+from app.modules.game.domain.draw_agreement import UNRESTRICTED
 from app.modules.game.domain.events import MatchCompleted, SeatSummary
 from app.modules.game.domain.exceptions import MatchNotFound, StaleMatchState
 from app.modules.game.domain.match_record import MatchRecord, MatchRecordStatus, MatchSeat
 from app.modules.game.public.commands import (
+    DrawAgreementView,
     DrawOfferView,
     GameCommand,
     GameCommandRequest,
@@ -258,6 +260,7 @@ def _result_for(
         match_id=record.id,
         command=request.command,
         acting_side=side,
+        acting_player_id=request.player_id,
         ply=record.ply_number,
         offer=(
             DrawOfferView(
@@ -272,6 +275,40 @@ def _result_for(
         termination_reason=record.termination_reason,
         winner=record.winner,
         settled_at=record.ended_at,
+        draw=_agreement_of(record),
+    )
+
+
+def _agreement_of(record: MatchRecord) -> DrawAgreementView:
+    """The match's agreement, both sides' facts — A64-020.5D §11.
+
+    Read from the **written** record rather than recomputed, so what the
+    fan-out carries is what the row says. `may_offer` uses the same
+    `DrawAgreement.may_offer` the next command would check, which is what
+    makes the button a client renders and the rule that would refuse it one
+    answer rather than two.
+    """
+    offer = record.draw_agreement.offer
+    return DrawAgreementView(
+        offer=(
+            DrawOfferView(
+                offered_by=offer.offered_by,
+                offered_at_ply=offer.offered_at_ply,
+                offered_at=offer.offered_at,
+            )
+            if offer is not None
+            else None
+        ),
+        may_offer_light=record.draw_agreement.may_offer(PlayerSide.LIGHT, at_ply=record.ply_number),
+        may_offer_dark=record.draw_agreement.may_offer(PlayerSide.DARK, at_ply=record.ply_number),
+        # Read from the thresholds rather than from `may_offer`: a match
+        # where somebody offered once and the restriction has since lapsed
+        # still needs its frames, because the *lapsing* is the news.
+        is_untouched=(
+            record.draw_agreement.offer is None
+            and record.draw_agreement.light_may_offer_from_ply == UNRESTRICTED
+            and record.draw_agreement.dark_may_offer_from_ply == UNRESTRICTED
+        ),
     )
 
 

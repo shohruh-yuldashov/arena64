@@ -2334,12 +2334,32 @@ class TestParticipantCommands:
 
         # The opponent got the fan-out — the same three frames, correlated
         # to nothing, because they answered no request of theirs.
-        assert opponent_socket.types() == [
+        assert [
+            frame for frame in opponent_socket.types() if frame is not MessageType.DRAW_STATE
+        ] == [
             MessageType.DRAW_OFFERED,
             MessageType.DRAW_DECLINED,
             MessageType.GAME_COMPLETED,
         ]
         assert all(message.request_id is None for message in opponent_socket.sent)
+
+        # And a **per-seat** `game.draw.state` beside the offer —
+        # A64-020.5D §11, §13. The opponent is the recipient of a LIGHT
+        # offer, so they may answer it and may not open a competing one.
+        # This is the frame that replaces A64-020.5C's snapshot-per-ply
+        # workaround, and asserting the *permissions* rather than the type
+        # is what makes it a replacement rather than an extra frame.
+        state = next(
+            message for message in opponent_socket.sent if message.type is MessageType.DRAW_STATE
+        )
+        assert state.payload["may_accept"] is True
+        assert state.payload["may_decline"] is True
+        assert state.payload["may_offer"] is False
+
+        # The offerer's own copy says the opposite, from the same write.
+        own = next(message for message in socket.sent if message.type is MessageType.DRAW_STATE)
+        assert own.payload["may_accept"] is False
+        assert own.payload["may_decline"] is False
 
     @pytest.mark.asyncio
     async def test_a_client_outside_the_room_cannot_resign_and_game_is_never_asked(

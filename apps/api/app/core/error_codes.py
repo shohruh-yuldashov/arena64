@@ -238,3 +238,20 @@ class ErrorCode(StrEnum):
     # player earned by their own action may be explained while one that
     # depends on the block graph may not.
     QUEUE_COOLDOWN_ACTIVE = "queue_cooldown_active"
+
+    # `reference` (A64-020.5A-pre). **One** code, covering both ways a time
+    # control can fail to be one this platform offers: no catalogue entry
+    # matches the identifier, or the entry exists and has been retired.
+    #
+    # Earned rather than bent. `POST /matchmaking/queue` already answers
+    # `422` for a malformed body, and a client's action there is "fix the
+    # request". Here it is specifically *"the menu you are holding is stale
+    # — read the catalogue again and re-render the picker"*, which is a
+    # different behaviour and one a client cannot derive from the status
+    # and the path.
+    #
+    # Unknown and retired share it for the reason `INVALID_VERIFICATION_TOKEN`
+    # collapses three causes: the client's move is identical, and telling a
+    # caller that an identifier names a *withdrawn* control rather than no
+    # control announces a product decision through an error code.
+    UNSUPPORTED_TIME_CONTROL = "unsupported_time_control"

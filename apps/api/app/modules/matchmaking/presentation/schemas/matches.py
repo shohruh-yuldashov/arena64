@@ -22,16 +22,22 @@ receives is the same information in the shapes JSON has.
     private player data     the opponent preview is `UserSummary`'s three
                             public fields and nothing else
 
-`time_control` is absent too, and that one is a **gap rather than a
-policy**. `reference.time_control` (database.md §6.2) does not exist in
-code, so a pool is `(variant, mode, region)` and a match created from one
-has no time control to report — see `QueuePool` on why inventing a speed
-class in `matchmaking` would hand the module least entitled to own it a
-grouping key every rating category would inherit. A nullable field that is
-always `null` would be a contract claiming time control is optional when in
-fact every real match will have one, so there is no field: when
-`reference.time_control` ships, `QueuePool`, `CreateMatchRequest`, the match
-row and this schema all gain one in a single change.
+`time_control` used to be absent, and this file recorded that as "a gap
+rather than a policy" — predicting that "when `reference.time_control`
+ships, `QueuePool`, `CreateMatchRequest`, the match row and this schema all
+gain one in a single change". A64-020.5A-pre is that change, and the
+prediction held to the file.
+
+The three fields it landed as are the **stored match's**, never a catalogue
+read: a client is shown what these two players were actually paired into,
+not what that identifier means at the moment they opened the dialog. See
+`reference.domain.time_control` on why those can differ.
+
+They are nullable because an untimed match exists — a tournament fixture,
+which carries no control today (`game.public.matches`). That is a narrower
+claim than the one this file refused to make before: it says *some* matches
+are untimed, which is true, rather than *time control is optional*, which
+was not.
 
 ## The opponent is one lookup, not an N+1
 
@@ -54,6 +60,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.game.public import MatchRecordStatus, PendingMatchView, PlayerSide, ProductVariant
+from app.modules.rating.public import SpeedClass
 from app.modules.users.public import PublicUserProfile
 
 
@@ -110,6 +117,25 @@ class PendingMatchResponse(BaseModel):
     variant: ProductVariant
     rated: bool = Field(description="Whether finishing this match will move your rating.")
 
+    base_time_ms: int | None = Field(
+        description=(
+            "Each side's starting budget, in milliseconds. `null` for an untimed "
+            "match — a tournament fixture today, never a queue pairing."
+        )
+    )
+    increment_ms: int | None = Field(
+        description=(
+            "What a side gets back after each of its own moves, in milliseconds. "
+            "`null` exactly when `base_time_ms` is."
+        )
+    )
+    speed_class: SpeedClass | None = Field(
+        description=(
+            "Which rating this match would move. `null` for a match created "
+            "without a rating snapshot."
+        )
+    )
+
     acceptance_deadline: datetime = Field(
         description=(
             "When this offer stops being honoured. An instant rather than a "
@@ -155,6 +181,12 @@ class PendingMatchResponse(BaseModel):
             ),
             variant=view.variant,
             rated=view.rated,
+            base_time_ms=None if view.time_control is None else view.time_control.initial_ms,
+            increment_ms=None if view.time_control is None else view.time_control.increment_ms,
+            # Re-typed from the primitive the port carries — `game` speaks
+            # `str` here because it must not import `rating`, and
+            # `matchmaking` may, so the wire contract gets the enum.
+            speed_class=None if view.speed_class is None else SpeedClass(view.speed_class),
             acceptance_deadline=view.acceptance_deadline,
             you_accepted=view.you_accepted,
             opponent_accepted=view.opponent_accepted,

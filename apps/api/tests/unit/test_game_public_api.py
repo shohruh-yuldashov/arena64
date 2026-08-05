@@ -257,6 +257,13 @@ class TestTheSurfaceIsDeliberate:
         # people who have not seen each other. `game` cannot tell those
         # apart and should not try.
         "AcceptancePolicy",
+        # A64-020.5A-pre — how much time each side gets.
+        #
+        # Published because the *caller* chooses it: `matchmaking` resolves
+        # a control from `reference` and hands `game` two integers, exactly
+        # as it hands over a `SeatRating` it read from `rating`. `game` runs
+        # the clock and does not decide what it should be.
+        "MatchTimeControl",
     }
 
     def test_nothing_is_published_by_accident(self) -> None:

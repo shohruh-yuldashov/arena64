@@ -39,6 +39,7 @@ Every failure is a typed exception on the platform hierarchy, and
     AlreadyQueued          -> 409  conflict
     QueueCooldownActive    -> 409  queue_cooldown_active, + Retry-After
     QueueNotPermitted      -> 422  validation_error
+    UnsupportedTimeControl -> 422  unsupported_time_control
     NotQueued              -> 404  not_found
     MatchNotFound          -> 404  not_found
     MatchNotPending        -> 409  conflict
@@ -116,7 +117,14 @@ _NOT_QUEUED: Responses = error_response(
 )
 _UNPROCESSABLE: Responses = error_response(
     422,
-    ("The body failed validation, or you are recorded as signed out. `message` says which."),
+    (
+        "The body failed validation, or you are recorded as signed out. `message` "
+        "says which.\n\n"
+        "`unsupported_time_control` is its own `code`: the clock you named is not "
+        "one Arena64 currently offers — read the catalogue again and re-render the "
+        "picker. Returned identically whether the identifier is unknown or the "
+        "control has been retired."
+    ),
 )
 _TOO_MANY_REQUESTS: Responses = error_response(
     429,
@@ -224,7 +232,12 @@ async def join_queue(
     platform and no rating system exists yet — so every ticket records the
     same starting value.
     """
-    pool = QueuePool(variant=payload.variant, queue_type=payload.queue_type, region=payload.region)
+    pool = QueuePool(
+        variant=payload.variant,
+        queue_type=payload.queue_type,
+        time_control_id=payload.time_control_id,
+        region=payload.region,
+    )
     ticket = await service.join(player_id=user.id, pool=pool)
     snapshot = await service.snapshot(pool=ticket.pool)
     return build_response(QueueTicketResponse.of(ticket, snapshot))

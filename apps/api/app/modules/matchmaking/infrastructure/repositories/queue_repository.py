@@ -54,6 +54,7 @@ from app.modules.matchmaking.domain.exceptions import AlreadyQueued
 from app.modules.matchmaking.domain.queue_pool import QueuePool
 from app.modules.matchmaking.domain.queue_ticket import QueueSnapshot, QueueStatus, QueueTicket
 from app.modules.matchmaking.infrastructure.models import QueueTicketModel
+from app.modules.reference.public import TimeControlSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,23 @@ class SqlAlchemyQueueRepository:
         return QueueTicket(
             id=row.id,
             player_id=row.player_id,
-            pool=QueuePool(variant=row.variant, queue_type=row.queue_type, region=row.region),
+            pool=QueuePool(
+                variant=row.variant,
+                queue_type=row.queue_type,
+                time_control_id=row.time_control_id,
+                region=row.region,
+            ),
+            # Rehydrated from the ticket's own columns, never from the
+            # catalogue — A64-020.5A-pre §7. A read that resolved
+            # `time_control_id` here would reintroduce exactly the
+            # reinterpretation the snapshot exists to prevent, and would put
+            # a second query on the pairing scan's hot path.
+            time_control=TimeControlSnapshot(
+                id=row.time_control_id,
+                base_time_ms=row.time_control_base_ms,
+                increment_ms=row.time_control_increment_ms,
+                speed_class=row.speed_class,
+            ),
             rating_snapshot=row.rating_snapshot,
             entered_at=row.entered_at,
             expires_at=row.expires_at,
@@ -121,6 +138,10 @@ class SqlAlchemyQueueRepository:
             player_id=ticket.player_id,
             variant=ticket.pool.variant,
             queue_type=ticket.queue_type,
+            time_control_id=ticket.time_control.id,
+            time_control_base_ms=ticket.time_control.base_time_ms,
+            time_control_increment_ms=ticket.time_control.increment_ms,
+            speed_class=ticket.time_control.speed_class,
             region=ticket.region,
             rating_snapshot=ticket.rating_snapshot,
             entered_at=ticket.entered_at,
@@ -220,6 +241,7 @@ class SqlAlchemyQueueRepository:
         live = (
             QueueTicketModel.variant == pool.variant,
             QueueTicketModel.queue_type == pool.queue_type,
+            QueueTicketModel.time_control_id == pool.time_control_id,
             QueueTicketModel.region == pool.region,
             QueueTicketModel.status == QueueStatus.WAITING,
             QueueTicketModel.expires_at > now,

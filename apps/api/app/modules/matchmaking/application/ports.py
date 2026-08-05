@@ -37,13 +37,14 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from app.modules.game.public import ProductVariant
 from app.modules.matchmaking.domain.cooldown import QueueCooldown
 from app.modules.matchmaking.domain.cooldown_audit import CooldownRecord
 from app.modules.matchmaking.domain.pending_match import PendingMatchOffer
-from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType
+from app.modules.matchmaking.domain.queue_pool import QueuePool
 from app.modules.matchmaking.domain.queue_ticket import QueueSnapshot, QueueTicket
 from app.modules.matchmaking.domain.reconciliation_timeline import ReconciliationEntry
-from app.modules.rating.public import RatingSnapshot
+from app.modules.rating.public import RatingSnapshot, SpeedClass
 
 
 class QueueRepository(Protocol):
@@ -315,13 +316,27 @@ class RatingSnapshotProvider(Protocol):
     §7.6's seat snapshot needs all three.
     """
 
-    async def rating_for(self, player_id: UUID, *, queue_type: QueueType) -> RatingSnapshot:
-        """The player's rating in the pool they are joining.
+    async def rating_for(
+        self, player_id: UUID, *, variant: ProductVariant, speed_class: SpeedClass
+    ) -> RatingSnapshot:
+        """The player's rating in the key they are queueing under.
 
-        Per pool rather than per player, because that is what a rating is:
+        Per key rather than per player, because that is what a rating is:
         `RatingKey` splits `(variant, speed class)`, and a single number
-        would have to pick one. `QueueType` is the axis this task has; when
-        time controls arrive the argument widens and callers do not.
+        would have to pick one.
+
+        A64-020.5A-pre widened this from `queue_type`, which is exactly the
+        change the previous signature predicted — "`QueueType` is the axis
+        this task has; when time controls arrive the argument widens and
+        callers do not". It widened to the *key's own two components* rather
+        than to a pool, so this port states what a rating is keyed by and not
+        how a queue happens to be shaped.
+
+        `queue_type` is gone rather than kept, and its absence is the point:
+        ranked and casual rate against the same key, so an argument that was
+        accepted and deliberately ignored was an invitation to start using
+        it. Whether a *result* counts is `rated` on the match (SPEC-RATING
+        §9), and it always was.
 
         **The whole triple**, not just the value. The ticket records only
         the value (QT-2 — pairing sorts on one number), but the same read

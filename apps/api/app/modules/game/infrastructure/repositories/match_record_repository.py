@@ -267,6 +267,19 @@ class SqlAlchemyMatchRecordRepository:
         `accepted_at` and leave a match that says active with one seat
         blank. The row lock in `lock` is what actually serialises them; this
         is what makes the write safe if the two are ever separated.
+
+        **The clock is written too** — A64-020.5A-pre §14. The second
+        acceptance is when a timed game starts, so it is when
+        `MatchRecord.accepted_by` replaces the record's clock with one
+        running from that instant. Omitting the three columns here left the
+        stored clock at its creation-time value, which is a `turn_started_at`
+        earlier than `settled_at`: LIGHT charged for however long DARK took
+        to answer. Found by `tests/contract/test_time_control.py`.
+
+        The time control itself is deliberately **not** in the `SET`. It is
+        creation-time configuration and an answer does not change it; a
+        `settle` that could rewrite it would be a path by which accepting a
+        match changed the game being played.
         """
         result = cast(
             "CursorResult[Any]",
@@ -311,6 +324,9 @@ class SqlAlchemyMatchRecordRepository:
                     rating_speed_class=record.light.rating.speed_class
                     if record.light.rating
                     else None,
+                    clock_light_ms=record.clock.light_ms if record.clock else None,
+                    clock_dark_ms=record.clock.dark_ms if record.clock else None,
+                    clock_turn_started_at=record.clock.turn_started_at if record.clock else None,
                 )
             ),
         )

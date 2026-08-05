@@ -440,7 +440,9 @@ Carried forward, all still true:
   team formats are deferred.
 - Maximum **128** entrants, rounded up to a power of two.
 - `SpeedClass.CLASSICAL` for every seeding read; per-tournament time control
-  waits on `reference.time_control` (`specs/rating.md` OQ-1, OQ-2).
+  waits on a time control for a `TournamentFormat`. The catalogue it was
+  originally blocked on shipped in A64-020.5A-pre; a tournament fixture is
+  still untimed (`specs/tournament.md` §6f).
 - No check-in, no waitlist, no late registration.
 - No prizes, rewards, trophies, achievements or season points.
 - No admin corrections, no manual result overrides, no cancellation driver.

@@ -33,6 +33,7 @@ from tests.fakes.queue_repository import (
     RecordingPublisher,
     StubPresence,
 )
+from tests.fakes.time_controls import BLITZ, FakeTimeControlCatalogue
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 TTL_SECONDS = 600
@@ -51,7 +52,12 @@ def tickets() -> InMemoryQueueRepository:
 
 def pool(queue_type: QueueType, region: Region = Region.GLOBAL) -> QueuePool:
     """A pool for the one variant Arena64 offers."""
-    return QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=queue_type, region=region)
+    return QueuePool(
+        variant=ProductVariant.RUSSIAN_8X8,
+        queue_type=queue_type,
+        region=region,
+        time_control_id=BLITZ.id,
+    )
 
 
 @pytest.fixture
@@ -78,6 +84,7 @@ def service(
     clock: MovableClock,
 ) -> QueueService:
     return QueueService(
+        time_controls=FakeTimeControlCatalogue(),
         tickets=tickets,
         ratings=FixedRatingProvider(1500),
         eligibility=PresenceEligibilityPolicy(presence),
@@ -117,6 +124,7 @@ class TestJoin:
         domain's fallback — otherwise the test would pass with the rating
         hardcoded in two places."""
         service = QueueService(
+            time_controls=FakeTimeControlCatalogue(),
             tickets=tickets,
             ratings=FixedRatingProvider(2140),
             eligibility=PresenceEligibilityPolicy(presence),
@@ -348,6 +356,7 @@ class TestSnapshot:
         must not turn into a wrong number, and `len(tickets)` is exactly the
         mistake that would."""
         service = QueueService(
+            time_controls=FakeTimeControlCatalogue(),
             tickets=tickets,
             ratings=FixedRatingProvider(),
             eligibility=PresenceEligibilityPolicy(presence),

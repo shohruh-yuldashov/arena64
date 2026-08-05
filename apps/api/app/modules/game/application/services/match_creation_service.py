@@ -36,6 +36,7 @@ from typing import Any
 from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork
 from app.modules.game.application.ports import MatchRecordRepository
+from app.modules.game.domain.clock import ClockState, TimeControl
 from app.modules.game.domain.events import MatchActivated, MatchCreated
 from app.modules.game.domain.match_record import (
     MatchRecord,
@@ -47,6 +48,7 @@ from app.modules.game.public.matches import (
     AcceptancePolicy,
     CreateMatchRequest,
     CreateMatchResult,
+    MatchTimeControl,
 )
 from app.modules.game.public.matches import SeatRating as PublishedSeatRating
 from app.platform.events import DomainEvent
@@ -85,6 +87,7 @@ class PersistentMatchCreation:
         exists.
         """
         at = self._clock.now()
+        control = _time_control(request.time_control)
         record = MatchRecord(
             pairing_id=request.pairing_id,
             variant=request.variant,
@@ -109,6 +112,19 @@ class PersistentMatchCreation:
             ),
             created_at=at,
             acceptance_deadline=request.acceptance_deadline,
+            time_control=control,
+            # Both clocks at their full budget from `at`. A record carries a
+            # clock exactly when it carries a control (`MatchRecord`'s
+            # invariant and `ck_match__clock_iff_time_control`), so a timed
+            # match has one from the moment it exists.
+            #
+            # Its `turn_started_at` is **provisional and superseded**: the
+            # game has not begun, nothing schedules a deadline for a pending
+            # match, and `accepted_by` restarts the clock from the instant
+            # both players actually agreed. Carrying the creation instant
+            # here rather than the activation one is what stops a player
+            # being charged for the seconds their opponent spent deciding.
+            clock=None if control is None else ClockState.start(control, at=at),
         )
         if request.acceptance is AcceptancePolicy.SYSTEM:
             record = record.system_activated(at)
@@ -181,6 +197,21 @@ def _announcements(record: MatchRecord) -> tuple[DomainEvent, ...]:
 
 
 __all__ = ["PersistentMatchCreation"]
+
+
+def _time_control(published: MatchTimeControl | None) -> TimeControl | None:
+    """The port's time control as the domain's own.
+
+    Two identical shapes and one conversion, for the reason `_seat_rating`
+    below makes it: the port is a contract `matchmaking` shapes its request
+    against, and the aggregate must not hold a type another module decides.
+    """
+    if published is None:
+        return None
+    return TimeControl(
+        initial_ms=published.initial_ms,
+        increment_ms=published.increment_ms,
+    )
 
 
 def _seat_rating(published: PublishedSeatRating | None) -> SeatRating | None:

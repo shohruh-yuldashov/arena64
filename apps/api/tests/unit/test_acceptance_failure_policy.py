@@ -46,13 +46,16 @@ from tests.fakes.queue_repository import (
     InMemoryQueueRepository,
     RecordingPublisher,
 )
+from tests.fakes.time_controls import BLITZ, FakeTimeControlCatalogue
 
 NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 TTL = timedelta(minutes=10)
 WINDOW = timedelta(seconds=30)
 COOLDOWN_SECONDS = 60.0
 
-POOL = QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED)
+POOL = QueuePool(
+    variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED, time_control_id=BLITZ.id
+)
 
 
 class _Eligible:
@@ -107,6 +110,7 @@ def queue(
     together and would be untested against a permissive stub.
     """
     return QueueService(
+        time_controls=FakeTimeControlCatalogue(),
         tickets=tickets,
         ratings=FixedRatingProvider(),
         eligibility=AllEligibilityChecks(
@@ -149,6 +153,7 @@ def _matched(store: InMemoryQueueRepository, *, waited: float = 0.0) -> QueueTic
     ticket = QueueTicket(
         player_id=generate_uuid7(),
         pool=POOL,
+        time_control=BLITZ,
         rating_snapshot=1500,
         entered_at=entered,
         expires_at=entered + TTL,

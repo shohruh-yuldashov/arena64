@@ -26,12 +26,16 @@ from app.modules.matchmaking.application.eligibility import (
 from app.modules.matchmaking.domain.exceptions import QueueNotPermitted
 from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType, Region
 from tests.fakes.queue_repository import StubPresence
+from tests.fakes.time_controls import BLITZ
 
 NOW = datetime(2026, 8, 2, 9, 0, tzinfo=UTC)
 PLAYER = generate_uuid7()
 
 POOL = QueuePool(
-    variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED, region=Region.EUROPE
+    variant=ProductVariant.RUSSIAN_8X8,
+    queue_type=QueueType.RANKED,
+    region=Region.EUROPE,
+    time_control_id=BLITZ.id,
 )
 
 
@@ -94,7 +98,9 @@ class TestPresenceEligibility:
         regional lockout, a variant withdrawn mid-season. Presence is not
         one, and this pins that the argument is not being read."""
         presence.offline(PLAYER, at=NOW)
-        casual = QueuePool(variant=POOL.variant, queue_type=QueueType.CASUAL)
+        casual = QueuePool(
+            variant=POOL.variant, queue_type=QueueType.CASUAL, time_control_id=BLITZ.id
+        )
 
         with pytest.raises(QueueNotPermitted):
             await policy.require_eligible(PLAYER, pool=casual)

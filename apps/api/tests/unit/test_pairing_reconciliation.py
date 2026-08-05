@@ -27,6 +27,7 @@ from tests.fakes.metrics import RecordingMetrics
 from tests.fakes.outbox import NullUnitOfWork
 from tests.fakes.presence_redis import MovableClock
 from tests.fakes.queue_repository import InMemoryQueueRepository, RecordingPublisher
+from tests.fakes.time_controls import BLITZ
 
 NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 TTL = timedelta(minutes=10)
@@ -37,7 +38,9 @@ TTL = timedelta(minutes=10)
 #: A64-015.3 left it to.
 RESERVATION = timedelta(seconds=30)
 
-POOL = QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED)
+POOL = QueuePool(
+    variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED, time_control_id=BLITZ.id
+)
 
 
 @pytest.fixture
@@ -101,6 +104,7 @@ def _reserved(
     ticket = QueueTicket(
         player_id=generate_uuid7(),
         pool=POOL,
+        time_control=BLITZ,
         rating_snapshot=1500,
         entered_at=entered,
         expires_at=entered + ttl,

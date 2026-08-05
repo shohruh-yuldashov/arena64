@@ -45,12 +45,15 @@ from app.modules.matchmaking.infrastructure import (
     SqlAlchemyQueueRepository,
     SqlAlchemyQueueRetentionStore,
 )
+from tests.fakes.time_controls import BLITZ
 
 NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 TTL = 600.0
 WINDOW = timedelta(seconds=30)
 
-POOL = QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED)
+POOL = QueuePool(
+    variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED, time_control_id=BLITZ.id
+)
 
 
 @pytest_asyncio.fixture
@@ -77,6 +80,7 @@ def _ticket(*, player_id: UUID | None = None) -> QueueTicket:
     return QueueTicket.enter(
         player_id=player_id or generate_uuid7(),
         pool=POOL,
+        time_control=BLITZ,
         rating_snapshot=1500,
         at=NOW,
         ttl=TTL,

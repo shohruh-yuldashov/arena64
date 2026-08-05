@@ -324,6 +324,75 @@ layers =
     app.modules.rating.application
     app.modules.rating.domain
 
+# ---------------------------------------------------------------------------
+# `reference` — A64-020.5A-pre
+# ---------------------------------------------------------------------------
+# The platform's shared catalogue (DB-08), and the newest context. Two
+# contracts, the same pair every other module has, and they carry more weight
+# here than usual because *everybody* will eventually want to read reference
+# data — which is exactly how a `reference.infrastructure` import ends up in
+# four modules and the catalogue becomes an ORM model with a public API.
+#
+# `matchmaking.presentation.dependencies` is outside the source list for the
+# reason every composition root is: constructing another module's concrete
+# class is what a root is for. It is the only place
+# `SqlAlchemyTimeControlCatalogue` is named.
+[importlinter:contract:reference-internals-are-private]
+name = reference internals are reachable only through reference.public
+type = forbidden
+source_modules =
+    app.gateway
+    app.modules.auth
+    app.modules.avatars
+    app.modules.friends
+    app.modules.game
+    app.modules.matchmaking.domain
+    app.modules.matchmaking.application
+    app.modules.matchmaking.infrastructure
+    app.modules.matchmaking.presentation.router
+    app.modules.matchmaking.presentation.schemas
+    app.modules.notifications
+    app.modules.profiles
+    app.modules.rating
+    app.modules.statistics
+    app.modules.tournament
+    app.modules.users
+forbidden_modules =
+    app.modules.reference.domain
+    app.modules.reference.infrastructure
+allow_indirect_imports = True
+
+# `reference` reaches other contexts only through their published surfaces. It
+# needs exactly one thing from outside — `rating.public.SpeedClass`, the key
+# component a time control classifies into — and `reference.public` records
+# why that arrow points the way it does rather than the way database.md §6.2
+# draws it.
+#
+# The rule that matters most is the one about `game` and `matchmaking`:
+# reference data must never learn what a *match* or a *queue* is, or the
+# catalogue stops being data and starts being a service.
+[importlinter:contract:reference-reaches-modules-through-public]
+name = reference reaches every module only through its published surface
+type = forbidden
+source_modules =
+    app.modules.reference
+forbidden_modules =
+    app.modules.auth
+    app.modules.avatars
+    app.modules.engine
+    app.modules.friends
+    app.modules.game
+    app.modules.matchmaking
+    app.modules.notifications
+    app.modules.profiles
+    app.modules.rating.domain
+    app.modules.rating.application
+    app.modules.rating.infrastructure
+    app.modules.statistics
+    app.modules.tournament
+    app.modules.users
+allow_indirect_imports = True
+
 [importlinter:contract:statistics-internals-are-private]
 name = statistics internals are reachable only through statistics.public
 type = forbidden
@@ -808,6 +877,7 @@ source_modules =
     app.modules.matchmaking.domain
     app.modules.notifications.domain
     app.modules.profiles.domain
+    app.modules.reference.domain
     app.modules.statistics.domain
     app.modules.users.domain
     app.platform.events
@@ -818,3 +888,11 @@ forbidden_modules =
     starlette
     redis
 allow_indirect_imports = True
+
+
+[importlinter:contract:layers-reference]
+name = reference layers point inward
+type = layers
+layers =
+    app.modules.reference.infrastructure
+    app.modules.reference.domain

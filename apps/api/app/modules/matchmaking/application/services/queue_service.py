@@ -59,6 +59,7 @@ from app.modules.matchmaking.domain.exceptions import (
 )
 from app.modules.matchmaking.domain.queue_pool import QueuePool
 from app.modules.matchmaking.domain.queue_ticket import QueueSnapshot, QueueTicket
+from app.modules.reference.public import TimeControlCatalogue
 from app.platform.outbox import EventPublisher
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,7 @@ class QueueService:
         *,
         tickets: QueueRepository,
         ratings: RatingSnapshotProvider,
+        time_controls: TimeControlCatalogue,
         eligibility: QueueEligibilityPolicy,
         events: EventPublisher,
         unit_of_work: UnitOfWork,
@@ -106,6 +108,7 @@ class QueueService:
     ) -> None:
         self._tickets = tickets
         self._ratings = ratings
+        self._time_controls = time_controls
         self._eligibility = eligibility
         self._events = events
         self._unit_of_work = unit_of_work
@@ -117,8 +120,9 @@ class QueueService:
         """Enters `player_id` into a pool and returns their ticket.
 
         Raises `AlreadyQueued` (409) when they already hold a live one —
-        **in any pool**, per QT-1 — and `QueueNotPermitted` (422) when the
-        eligibility policy refuses.
+        **in any pool**, per QT-1 — `QueueNotPermitted` (422) when the
+        eligibility policy refuses, and `UnsupportedTimeControl` (422) when
+        the chosen clock is not one the platform offers.
 
         The pool is validated by `QueuePool` itself: a variant that is not
         offered cannot be constructed into one, so an unsupported pool never
@@ -131,12 +135,27 @@ class QueueService:
         because the answer changes with timing rather than with anything the
         caller did.
 
-        The rating is read *before* the transaction opens. It is a
-        cross-context read (QT-2's snapshot), and services.md BE-05 forbids
+        The **time control is resolved here**, not at the route —
+        A64-020.5A-pre §8. The pool the caller hands over carries an
+        identifier; the catalogue is what turns it into a control, and a
+        `UnsupportedTimeControl` (422) is raised for one that is unknown or
+        retired. Resolving it in the service rather than the boundary means
+        every entry point gets the same refusal for free, and there is only
+        one place a ticket's snapshot can come from.
+
+        It is resolved **before** the eligibility check, so a player asking
+        for a control that does not exist is told that rather than being
+        refused for a cooldown they would also have to fix. A malformed
+        request is a `ValidationError` and outranks a rule (CLAUDE.md §9.1).
+
+        The rating and the catalogue are both read *before* the transaction
+        opens. Both are cross-context reads, and services.md BE-05 forbids
         one inside an open transaction: the lock-acquisition order becomes
         something nobody can reason about, and a partial failure would leave
         one side committed with no record that reconciliation is owed.
         """
+        control = (await self._time_controls.require(pool.time_control_id)).snapshot
+
         await self._eligibility.require_eligible(player_id, pool=pool)
 
         if await self._tickets.active_ticket(player_id, now=self._clock.now()) is not None:
@@ -146,13 +165,23 @@ class QueueService:
         # sorts on one deterministic number. The deviation and volatility from
         # the same read reach the seat snapshot at match creation instead
         # (SPEC-RATING §7.6).
+        #
+        # Keyed by the pool's variant and the *chosen control's* speed class
+        # — A64-020.5A-pre §15. A player's blitz rating is what decides who
+        # they meet in a blitz pool, and reading their classical one would
+        # pair them by a skill they are not about to demonstrate.
         rating = round(
-            (await self._ratings.rating_for(player_id, queue_type=pool.queue_type)).value
+            (
+                await self._ratings.rating_for(
+                    player_id, variant=pool.variant, speed_class=control.speed_class
+                )
+            ).value
         )
         at = self._clock.now()
         ticket = QueueTicket.enter(
             player_id=player_id,
             pool=pool,
+            time_control=control,
             rating_snapshot=rating,
             at=at,
             ttl=self._ticket_ttl_seconds,

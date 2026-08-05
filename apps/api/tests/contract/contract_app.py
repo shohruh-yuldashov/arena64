@@ -15,6 +15,7 @@ hand in every suite that touched it:
     get_presence_provider  `app.state.redis_pools`  -> `NoPresenceProvider`
     get_presence_service   `app.state.redis_pools`  -> `NoPresenceProvider`
     get_social_graph_cache `app.state.redis_pools`  -> `NoSocialGraphCache`
+    get_clock_deadlines    `app.state.redis_pools`  -> `RecordingClockDeadlines`
 
 `get_event_publisher` (A64-013.7) needs no override: it reads the request's
 session, which is already the test's, so a contract suite writes real outbox
@@ -78,13 +79,18 @@ from app.core.rate_limiting import RateLimiter
 from app.modules.friends.application.ports import SocialGraphCache
 from app.modules.friends.infrastructure.cache import NoSocialGraphCache
 from app.modules.friends.presentation.dependencies import get_social_graph_cache
-from app.modules.matchmaking.presentation.dependencies import get_presence_reader
+from app.modules.game.application.ports import ClockDeadlineStore
+from app.modules.matchmaking.presentation.dependencies import (
+    get_clock_deadlines,
+    get_presence_reader,
+)
 from app.modules.profiles.presentation.dependencies import get_presence_provider
 from app.modules.users.application.services.presence_service import PresenceService
 from app.modules.users.infrastructure.presence import NoPresenceProvider
 from app.modules.users.presentation.dependencies import get_presence_service
 from app.modules.users.public import PresenceProvider, PresenceRecorder
 from app.platform.outbox import NoEventPublisher
+from tests.fakes.clock_deadlines import RecordingClockDeadlines
 from tests.fakes.rate_limiter import AllowAllRateLimiter
 
 #: The base URL every contract client uses. A constant so that a test
@@ -102,6 +108,7 @@ def build_contract_app(
     presence: PresenceProvider | None = None,
     presence_recorder: PresenceRecorder | None = None,
     social_graph_cache: SocialGraphCache | None = None,
+    deadlines: ClockDeadlineStore | None = None,
     outbox_enabled: bool = True,
     statistics_settings: StatisticsSettings | None = None,
 ) -> FastAPI:
@@ -132,6 +139,13 @@ def build_contract_app(
                               the two capabilities are separate ports, and a
                               suite asserting that signing in records
                               presence passes one object as both
+        deadlines             `RecordingClockDeadlines`, because AD-21's
+                              deadlines are in Redis and there is none here.
+                              Unlike `NoPresenceProvider` this **is** a true
+                              double: there is no production configuration
+                              that runs without a deadline store, so a suite
+                              asserting "activating a timed match schedules
+                              a flag" passes its own and reads `.scheduled`
         social_graph_cache    `NoSocialGraphCache`, which is what
                               `FRIENDS_CACHE_ENABLED=false` wires in
                               production. Off by default for the reason
@@ -154,6 +168,7 @@ def build_contract_app(
     presence_provider = presence if presence is not None else NoPresenceProvider()
     recorder = presence_recorder if presence_recorder is not None else NoPresenceProvider()
     cache = social_graph_cache if social_graph_cache is not None else NoSocialGraphCache()
+    deadline_store = deadlines if deadlines is not None else RecordingClockDeadlines()
     presence_service = PresenceService(recorder=recorder, provider=presence_provider)
 
     async def _session() -> AsyncIterator[AsyncSession]:
@@ -169,6 +184,10 @@ def build_contract_app(
     # `users`' own adapter, so a suite that supplies a working presence store
     # must see the same answers on the queue endpoints as on a profile.
     application.dependency_overrides[get_presence_reader] = lambda: presence_provider
+    # A64-020.5A-pre. The seventh `app.state` reader — activation writes the
+    # match's first flag deadline to AD-21's sorted set, and there is no
+    # Redis behind `ASGITransport`.
+    application.dependency_overrides[get_clock_deadlines] = lambda: deadline_store
 
     # A64-013.7. Overridden only to turn the outbox *off*: the enabled path
     # is the real factory over the test's session, which is exactly what a

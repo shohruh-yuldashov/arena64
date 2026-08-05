@@ -24,6 +24,7 @@ from app.modules.matchmaking.domain.pairing import (
 )
 from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType, Region
 from app.modules.matchmaking.domain.queue_ticket import QueueTicket
+from tests.fakes.time_controls import BLITZ
 
 NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 TTL = timedelta(minutes=10)
@@ -33,7 +34,9 @@ TTL = timedelta(minutes=10)
 #: window — a reservation is a crash-recovery grace, not a wait.
 RESERVED_UNTIL = NOW + timedelta(seconds=30)
 
-POOL = QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED)
+POOL = QueuePool(
+    variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED, time_control_id=BLITZ.id
+)
 
 #: Narrow, so a rating rule fails on its own rather than being masked by a
 #: window wide enough to admit everybody.
@@ -56,6 +59,7 @@ def _ticket(
         id=ticket_id or generate_uuid7(),
         player_id=player_id or generate_uuid7(),
         pool=pool,
+        time_control=BLITZ,
         rating_snapshot=rating,
         entered_at=entered,
         expires_at=entered + TTL,
@@ -406,17 +410,31 @@ class TestPoolsDoNotMix:
     """
 
     def test_a_pool_is_the_whole_of_what_makes_two_players_candidates(self) -> None:
-        ranked = QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED)
-        casual = QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.CASUAL)
+        ranked = QueuePool(
+            variant=ProductVariant.RUSSIAN_8X8,
+            queue_type=QueueType.RANKED,
+            time_control_id=BLITZ.id,
+        )
+        casual = QueuePool(
+            variant=ProductVariant.RUSSIAN_8X8,
+            queue_type=QueueType.CASUAL,
+            time_control_id=BLITZ.id,
+        )
 
         assert ranked != casual
 
     def test_a_region_makes_a_different_pool(self) -> None:
         europe = QueuePool(
-            variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED, region=Region.EUROPE
+            variant=ProductVariant.RUSSIAN_8X8,
+            queue_type=QueueType.RANKED,
+            region=Region.EUROPE,
+            time_control_id=BLITZ.id,
         )
         asia = QueuePool(
-            variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED, region=Region.ASIA
+            variant=ProductVariant.RUSSIAN_8X8,
+            queue_type=QueueType.RANKED,
+            region=Region.ASIA,
+            time_control_id=BLITZ.id,
         )
 
         assert europe != asia

@@ -46,6 +46,7 @@ from tests.fakes.metrics import RecordingMetrics
 from tests.fakes.outbox import NullUnitOfWork
 from tests.fakes.presence_redis import MovableClock
 from tests.fakes.retention import InMemoryAbandonedMatches, InMemoryQueueRetentionStore
+from tests.fakes.time_controls import BLITZ
 
 NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 TTL = timedelta(minutes=10)
@@ -59,7 +60,9 @@ MATCH_HORIZON = timedelta(hours=168)
 AUDIT_HORIZON = timedelta(hours=2160)
 TIMELINE_HORIZON = timedelta(hours=336)
 
-POOL = QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED)
+POOL = QueuePool(
+    variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED, time_control_id=BLITZ.id
+)
 
 
 @pytest.fixture
@@ -134,6 +137,7 @@ def _resolved(store: InMemoryQueueRetentionStore, *, age: timedelta) -> QueueTic
     ticket = QueueTicket(
         player_id=generate_uuid7(),
         pool=POOL,
+        time_control=BLITZ,
         rating_snapshot=1500,
         entered_at=resolved_at - TTL,
         expires_at=resolved_at + TTL,
@@ -155,6 +159,7 @@ def _live(
     ticket = QueueTicket(
         player_id=generate_uuid7(),
         pool=POOL,
+        time_control=BLITZ,
         rating_snapshot=1500,
         entered_at=entered,
         expires_at=entered + TTL,

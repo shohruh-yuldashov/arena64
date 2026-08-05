@@ -24,6 +24,7 @@ from app.modules.matchmaking.application.services import PairingService
 from app.modules.matchmaking.domain.pairing import PairingEngine, RatingWindowPolicy
 from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType, Region
 from app.modules.matchmaking.domain.queue_ticket import QueueStatus, QueueTicket
+from app.modules.rating.public import SpeedClass
 from tests.fakes.metrics import RecordingMetrics
 from tests.fakes.outbox import NullUnitOfWork
 from tests.fakes.pairing import (
@@ -36,6 +37,7 @@ from tests.fakes.pairing import (
 )
 from tests.fakes.presence_redis import MovableClock
 from tests.fakes.queue_repository import InMemoryQueueRepository, RecordingPublisher
+from tests.fakes.time_controls import BLITZ
 
 NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 TTL = timedelta(minutes=10)
@@ -46,11 +48,18 @@ TTL = timedelta(minutes=10)
 #: expired ticket.
 RESERVATION_TTL = 30.0
 
-POOL = QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED)
-OTHER_POOL = QueuePool(
-    variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED, region=Region.ASIA
+POOL = QueuePool(
+    variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.RANKED, time_control_id=BLITZ.id
 )
-CASUAL_POOL = QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.CASUAL)
+OTHER_POOL = QueuePool(
+    variant=ProductVariant.RUSSIAN_8X8,
+    queue_type=QueueType.RANKED,
+    region=Region.ASIA,
+    time_control_id=BLITZ.id,
+)
+CASUAL_POOL = QueuePool(
+    variant=ProductVariant.RUSSIAN_8X8, queue_type=QueueType.CASUAL, time_control_id=BLITZ.id
+)
 
 #: Wide, because this file is not about the rating rule. A window that
 #: refused a pair here would make every failure look like a compatibility
@@ -95,6 +104,14 @@ def unit_of_work() -> NullUnitOfWork:
     return NullUnitOfWork()
 
 
+@pytest.fixture
+def ratings() -> StubRatings:
+    """A64-020.5A-pre §15. A fixture rather than an inline stub, because the
+    *key* each read was made under is now something a test asserts on — see
+    `StubRatings.keys`."""
+    return StubRatings()
+
+
 def _service(
     *,
     tickets: InMemoryQueueRepository,
@@ -104,6 +121,7 @@ def _service(
     events: RecordingPublisher,
     unit_of_work: NullUnitOfWork,
     clock: MovableClock,
+    ratings: StubRatings | None = None,
     metrics: RecordingMetrics | None = None,
 ) -> PairingService:
     return PairingService(
@@ -114,7 +132,7 @@ def _service(
         # A64-017.2: the seat snapshot's source. Its contents are
         # `test_rating_persistence.py`'s; these tests only need one to
         # reach the creation request.
-        ratings=StubRatings(),
+        ratings=ratings if ratings is not None else StubRatings(),
         matches=matches,  # type: ignore[arg-type]
         events=events,
         unit_of_work=unit_of_work,
@@ -134,6 +152,7 @@ def service(
     events: RecordingPublisher,
     unit_of_work: NullUnitOfWork,
     clock: MovableClock,
+    ratings: StubRatings,
 ) -> PairingService:
     return _service(
         tickets=tickets,
@@ -143,6 +162,7 @@ def service(
         events=events,
         unit_of_work=unit_of_work,
         clock=clock,
+        ratings=ratings,
     )
 
 
@@ -159,6 +179,7 @@ def _queued(
     ticket = QueueTicket(
         player_id=player_id or generate_uuid7(),
         pool=pool,
+        time_control=BLITZ,
         rating_snapshot=rating,
         entered_at=entered,
         expires_at=entered + TTL,
@@ -210,6 +231,62 @@ class TestAScanThatPairs:
             other.player_id,
         }
         assert {request.light.queue_ticket_id, request.dark.queue_ticket_id} == {one.id, other.id}
+
+    async def test_the_request_carries_the_tickets_own_time_control(
+        self,
+        service: PairingService,
+        tickets: InMemoryQueueRepository,
+        matches: RecordingMatchCreation,
+    ) -> None:
+        """A64-020.5A-pre §11 and §12. The control on the request comes off
+        a **ticket**, not from the catalogue, so an operator editing a row
+        while two players wait cannot change the game they were promised.
+
+        The scan holds no catalogue at all, which is what makes that true
+        structurally rather than by discipline — a reader would be a query
+        on the hot path and a second answer to a question the tickets have
+        already recorded.
+        """
+        _queued(tickets)
+        _queued(tickets)
+
+        await service.pair_once(pool=POOL)
+
+        control = matches.requests[0].time_control
+        assert control is not None
+        assert (control.initial_ms, control.increment_ms) == (
+            BLITZ.base_time_ms,
+            BLITZ.increment_ms,
+        )
+
+    async def test_the_seat_is_rated_in_the_ladder_the_control_belongs_to(
+        self,
+        service: PairingService,
+        tickets: InMemoryQueueRepository,
+        matches: RecordingMatchCreation,
+        ratings: StubRatings,
+    ) -> None:
+        """A64-020.5A-pre §15 — the end of `DEFAULT_SPEED_CLASS`.
+
+        Two assertions about one fact, and both are needed. The seat must be
+        *stamped* blitz, because `match_completed` hands that string back to
+        `rating` as half the key it writes to; and the snapshot must have
+        been *read* under blitz, because a seat stamped with one ladder and
+        holding another's numbers is a record that cannot be reconciled with
+        the row it came from.
+
+        Before this the answer was `classical` for every match on the
+        platform, whatever the players chose.
+        """
+        _queued(tickets)
+        _queued(tickets)
+
+        await service.pair_once(pool=POOL)
+
+        request = matches.requests[0]
+        assert request.light.rating.speed_class == SpeedClass.BLITZ.value
+        assert request.dark.rating.speed_class == SpeedClass.BLITZ.value
+        assert set(ratings.keys) == {(ProductVariant.RUSSIAN_8X8, SpeedClass.BLITZ)}
 
     async def test_a_ranked_pool_asks_for_a_rated_match(
         self,
@@ -821,6 +898,7 @@ def _reserved_again(store: InMemoryQueueRepository, ticket_id: UUID) -> QueueTic
         id=matched.id,
         player_id=matched.player_id,
         pool=matched.pool,
+        time_control=BLITZ,
         rating_snapshot=matched.rating_snapshot,
         entered_at=matched.entered_at,
         expires_at=matched.expires_at,

@@ -72,6 +72,7 @@ from app.modules.game.public import (
     MatchCreationRefused,
     MatchCreationUseCase,
     MatchParticipant,
+    MatchTimeControl,
     SeatRating,
     game_engine_version,
 )
@@ -91,7 +92,7 @@ from app.modules.matchmaking.domain.events import PlayersPaired
 from app.modules.matchmaking.domain.pairing import PairExclusions, PairingEngine, TicketPair
 from app.modules.matchmaking.domain.queue_pool import QueuePool, QueueType
 from app.modules.matchmaking.domain.queue_ticket import QueueTicket
-from app.modules.rating.public import DEFAULT_SPEED_CLASS, RatingSnapshot
+from app.modules.rating.public import RatingSnapshot, SpeedClass
 from app.platform.metrics import MetricsRecorder
 from app.platform.outbox import EventPublisher
 
@@ -383,28 +384,55 @@ class PairingService:
         recomputed, so the match's acceptance window and the reservation's
         are the same value by construction rather than by two calls to the
         same clock a few milliseconds apart.
+
+        The **time control comes off a ticket**, never from the catalogue —
+        A64-020.5A-pre §11. Both tickets carry the same snapshot by
+        construction: they are in one pool, and `QueueTicket` refuses a
+        snapshot whose id is not its pool's. Reading the catalogue here
+        would be a query on the scan's hot path *and* would let an operator
+        editing a row change what two waiting players were promised.
         """
+        control = pair.light.time_control
         return CreateMatchRequest(
             pairing_id=pair.pairing_id,
             variant=pool.variant,
             rated=pool.queue_type is QueueType.RANKED,
             engine_version=game_engine_version(),
             acceptance_deadline=acceptance_deadline,
+            time_control=MatchTimeControl(
+                initial_ms=control.base_time_ms,
+                increment_ms=control.increment_ms,
+            ),
             # The seat snapshots — SPEC-RATING §7.6, MT-4. Read here, at
             # creation, because PR-3 requires the rating calculation to run
             # on the values captured before the game was played.
+            #
+            # Keyed by the **pool's** variant and the **ticket's** speed
+            # class, which is A64-020.5A-pre §15: a rating is `(variant,
+            # speed class)` and both halves now come from what the players
+            # actually chose rather than from `DEFAULT_SPEED_CLASS`.
             light=MatchParticipant(
                 player_id=pair.light.player_id,
                 queue_ticket_id=pair.light.id,
                 rating=_seat_rating(
-                    await self._ratings.rating_for(pair.light.player_id, queue_type=pool.queue_type)
+                    await self._ratings.rating_for(
+                        pair.light.player_id,
+                        variant=pool.variant,
+                        speed_class=control.speed_class,
+                    ),
+                    speed_class=control.speed_class,
                 ),
             ),
             dark=MatchParticipant(
                 player_id=pair.dark.player_id,
                 queue_ticket_id=pair.dark.id,
                 rating=_seat_rating(
-                    await self._ratings.rating_for(pair.dark.player_id, queue_type=pool.queue_type)
+                    await self._ratings.rating_for(
+                        pair.dark.player_id,
+                        variant=pool.variant,
+                        speed_class=control.speed_class,
+                    ),
+                    speed_class=control.speed_class,
                 ),
             ),
         )
@@ -512,12 +540,19 @@ def _longest_wait(pair: TicketPair, until: datetime) -> float:
     return (until - entered).total_seconds()
 
 
-def _seat_rating(snapshot: RatingSnapshot) -> SeatRating:
+def _seat_rating(snapshot: RatingSnapshot, *, speed_class: SpeedClass) -> SeatRating:
     """`rating`'s published reading as `game`'s seat snapshot.
 
     A translation rather than a shared type, because `game` must not import
     `rating` (R-4's one-way chain) — so the same six numbers are spelled
     twice and this is the one place they meet.
+
+    `speed_class` is passed in rather than taken from `DEFAULT_SPEED_CLASS`
+    — A64-020.5A-pre §15. It is the class the players' time control belongs
+    to, and it must be the same one the snapshot was *read* under: the seat
+    records what a player rated in the ladder this match will move, and a
+    seat stamped `classical` beside a blitz rating would make
+    `match_completed` unreconcilable with the row it came from.
     """
     return SeatRating(
         value=snapshot.value,
@@ -525,5 +560,5 @@ def _seat_rating(snapshot: RatingSnapshot) -> SeatRating:
         volatility=snapshot.volatility,
         games_played=snapshot.games_played,
         is_provisional=snapshot.is_provisional,
-        speed_class=DEFAULT_SPEED_CLASS.value,
+        speed_class=speed_class.value,
     )

@@ -32,6 +32,7 @@ from app.modules.game.public import (
     MatchNotPending,
     ProductVariant,
 )
+from tests.fakes.clock_deadlines import RecordingClockDeadlines
 from tests.fakes.matches import InMemoryMatchRecordRepository
 from tests.fakes.metrics import RecordingMetrics
 from tests.fakes.outbox import NullUnitOfWork
@@ -112,6 +113,7 @@ def service(
     metrics: RecordingMetrics,
 ) -> MatchAcceptanceService:
     return MatchAcceptanceService(
+        deadlines=RecordingClockDeadlines(),
         matches=matches,
         events=events,
         unit_of_work=NullUnitOfWork(),

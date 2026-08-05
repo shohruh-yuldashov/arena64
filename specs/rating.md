@@ -57,7 +57,7 @@ to every visitor. The seam was built and documented; this fills it.
 | N-1 | Rating periods | Updates are incremental — §7.3 |
 | N-2 | Season behaviour, resets, rewards | §12; only the nullable column exists |
 | N-3 | Fair-play integration | §13; only `is_frozen` exists |
-| N-4 | Time-control selection and speed-class derivation | §8; every rated match is `CLASSICAL` |
+| N-4 | Speed-class *derivation* from a duration | §8; a control **carries** its class, and A64-020.5A-pre made time-control selection real without ever inventing a boundary |
 | N-5 | Rating decay of the **value** | Only *deviation* inflates — §7.4 |
 | N-6 | Changing the public profile response shape | §14 |
 
@@ -215,19 +215,36 @@ denormalised write path that eventually disagrees.
 
 ---
 
-## 8. Speed class in v0.5.0
+## 8. Speed class
 
-**Every rated match belongs to `CLASSICAL`.** An explicit product decision, not a placeholder.
+**A rated match belongs to the class its time control names** — A64-020.5A-pre. Four of the five
+members of `SpeedClass` are reachable, one per seeded control (`reference.time_control`), and
+`CORRESPONDENCE` remains storable and unreachable pending a clock model the flag worker does not
+have.
 
-Matchmaking is unchanged, no time control is selected, and match creation is not redesigned. The
-platform offers one variant and no time-control choice, so there is exactly one reachable key —
-`(RUSSIAN_8X8, CLASSICAL)` — and every other member of `SpeedClass` exists, is storable, and is
-unreachable.
+This section previously read "every rated match belongs to `CLASSICAL`", and the extension point
+it described is what shipped — with one correction worth recording, because it is the whole reason
+`reference` exists as a module.
 
-**Extension point.** When time controls ship, `SpeedClass` is derived from `(base_time,
-increment)` at match creation and nothing else changes: the key, the storage, the leaderboard and
-the profile mapping are already per-class. The derivation rule and its boundaries are a future
-product decision — §19 — and this spec deliberately invents neither.
+**The class is not derived; it is looked up.** The old text said `SpeedClass` would be "derived
+from `(base_time, increment)` at match creation". It is not, and must not be: §19 leaves the
+boundaries between bullet, blitz and rapid an open product decision, so a derivation would be
+whichever module ran it guessing them for every rating on the platform. Instead each catalogue row
+*carries* its class, the player picks a row, and the choice travels as data:
+
+    reference.time_control    the mapping, one row per offered control
+    QueuePool                 carries the identifier — pool identity
+    QueueTicket               carries a snapshot: base, increment, class
+    CreateMatchRequest        carries base and increment
+    SeatRating.speed_class    the class the seat was rated in
+
+`DEFAULT_SPEED_CLASS` survives as `RatingKey.of`'s answer for a caller with no control in hand —
+the leaderboard's unqualified default — and is no longer on the pairing path. Before this change
+it was, and every rated match on the platform would have been recorded as `classical` whatever the
+players chose.
+
+**What did not change**, exactly as this section predicted: the key, the storage, the leaderboard
+and the profile mapping were already per-class, and none of them was touched.
 
 ---
 

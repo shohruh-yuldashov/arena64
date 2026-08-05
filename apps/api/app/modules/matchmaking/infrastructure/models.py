@@ -151,6 +151,8 @@ from app.modules.matchmaking.domain.cooldown import CooldownReason
 from app.modules.matchmaking.domain.events import ReconciliationAction
 from app.modules.matchmaking.domain.queue_pool import QueueType, Region
 from app.modules.matchmaking.domain.queue_ticket import QueueStatus
+from app.modules.rating.public import SpeedClass
+from app.modules.reference.public import TimeControlId
 
 #: database.md §222 — one schema per bounded context. `challenge` (§8.1)
 #: joins it when direct invitations are built.
@@ -158,7 +160,7 @@ MATCHMAKING_SCHEMA = "matchmaking"
 
 
 def _enum(python_type: type, name: str) -> PgEnum:
-    """A native PostgreSQL enum for one of the three closed sets below.
+    """A native PostgreSQL enum for one of the closed sets below.
 
     DB-15: closed, stable, and on columns every pool query filters, so four
     bytes beats a string and a typo cannot become a value no read path knows
@@ -169,9 +171,16 @@ def _enum(python_type: type, name: str) -> PgEnum:
     is invisible until somebody queries the table by hand and finds
     `NORTH_AMERICA` where the API said `north_america`.
 
-    A helper rather than three near-identical literals because the three
+    A helper rather than a set of near-identical literals because they
     differ only in two arguments, and the argument that must not vary — the
     `values_callable` — is the one that would be forgotten.
+
+    Two of them mirror a type another module also declares —
+    `queue_time_control` beside `reference.time_control_id`,
+    `queue_speed_class` beside `rating.speed_class`. Each schema declaring
+    its own is the platform's convention (see `rating.infrastructure.models`
+    on why), and the Python enum being the single source of truth is what
+    stops the copies listing different members.
     """
     return PgEnum(
         python_type,
@@ -196,6 +205,8 @@ _VARIANT_ENUM = _enum(ProductVariant, "queue_variant")
 _QUEUE_TYPE_ENUM = _enum(QueueType, "queue_type")
 _REGION_ENUM = _enum(Region, "queue_region")
 _STATUS_ENUM = _enum(QueueStatus, "queue_ticket_status")
+_TIME_CONTROL_ENUM = _enum(TimeControlId, "queue_time_control")
+_SPEED_CLASS_ENUM = _enum(SpeedClass, "queue_speed_class")
 
 
 class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
@@ -252,10 +263,16 @@ class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
         # `ix_outbox__unpublished` a direct measure of relay health. A pool
         # index carrying every ticket ever queued would answer a question
         # about the few hundred people currently waiting by scanning a year.
+        # A64-020.5A-pre adds `time_control_id` as the fourth component of
+        # pool identity, in the same position `QueuePool.identifier()` puts
+        # it — before `region`, because it is the coarser split. The two
+        # orders are kept identical so that reading either one tells you how
+        # the other sorts.
         Index(
             "ix_queue_ticket__pool",
             "variant",
             "queue_type",
+            "time_control_id",
             "region",
             "entered_at",
             "id",
@@ -361,6 +378,13 @@ class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
         # rather than a player is bad — and a negative snapshot would sort
         # to the front of every widening scan.
         CheckConstraint("rating_snapshot >= 0", name="ck_queue_ticket__rating_non_negative"),
+        # `TimeControlSnapshot`'s own invariants, restated where a backfill
+        # can also be caught by them (BE-06). A zero budget is not a fast
+        # game — it is a match every player loses on their first move.
+        CheckConstraint(
+            "time_control_base_ms > 0 AND time_control_increment_ms >= 0",
+            name="ck_queue_ticket__time_control_sane",
+        ),
         {"schema": MATCHMAKING_SCHEMA},
     )
 
@@ -386,6 +410,33 @@ class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
 
     queue_type: Mapped[QueueType] = mapped_column(_QUEUE_TYPE_ENUM, nullable=False)
     region: Mapped[Region] = mapped_column(_REGION_ENUM, nullable=False)
+
+    # --- A64-020.5A-pre: the chosen clock, and its snapshot ---------------
+    #
+    # Four columns for one choice, and the split is the one
+    # `QueueTicket.time_control` argues: `time_control_id` is *pool
+    # identity* — it is in `ix_queue_ticket__pool` and decides who this
+    # player can be paired with — while the other three are a **snapshot**
+    # of what that identifier meant at entry.
+    #
+    # No foreign key to `reference.time_control`, for DM-06's reason and one
+    # more: the point of the snapshot is that this row does not depend on
+    # that one, and a constraint asserting it does would be a contradiction
+    # written in DDL. A retired control keeps its tickets pairable, which a
+    # foreign key would also permit and which the absence of one makes
+    # obviously true.
+    time_control_id: Mapped[TimeControlId] = mapped_column(_TIME_CONTROL_ENUM, nullable=False)
+    time_control_base_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    time_control_increment_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    speed_class: Mapped[SpeedClass] = mapped_column(_SPEED_CLASS_ENUM, nullable=False)
+    """Which rating a match from this ticket moves — SPEC-RATING §7.1.
+
+    Snapshotted rather than resolved from `time_control_id` at pairing time,
+    for the reason the durations are: it is half of the rating key, and a
+    rating key that changed because somebody reclassified a control would
+    move a result into a ladder the players never entered.
+    """
 
     rating_snapshot: Mapped[int] = mapped_column(Integer, nullable=False)
     """QT-2's rating **at entry**. `Integer` rather than a numeric type

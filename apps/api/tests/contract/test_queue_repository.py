@@ -35,6 +35,7 @@ from app.modules.matchmaking.domain.queue_ticket import (
     QueueTicket,
 )
 from app.modules.matchmaking.infrastructure import QueueTicketModel, SqlAlchemyQueueRepository
+from tests.fakes.time_controls import BLITZ
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 TTL = 600.0
@@ -47,7 +48,12 @@ RESERVED_UNTIL = NOW + timedelta(seconds=30)
 
 def _pool(queue_type: QueueType = QueueType.RANKED, region: Region = Region.EUROPE) -> QueuePool:
     """A pool for the one variant Arena64 offers."""
-    return QueuePool(variant=ProductVariant.RUSSIAN_8X8, queue_type=queue_type, region=region)
+    return QueuePool(
+        variant=ProductVariant.RUSSIAN_8X8,
+        queue_type=queue_type,
+        time_control_id=BLITZ.id,
+        region=region,
+    )
 
 
 def _ticket(
@@ -61,6 +67,7 @@ def _ticket(
     return QueueTicket.enter(
         player_id=player_id or generate_uuid7(),
         pool=_pool(queue_type, region),
+        time_control=BLITZ,
         rating_snapshot=1500,
         at=at,
         ttl=ttl,
@@ -250,6 +257,7 @@ class TestQueueSnapshot:
             pool=QueuePool(
                 variant=ProductVariant.RUSSIAN_8X8,
                 queue_type=QueueType.RANKED,
+                time_control_id=BLITZ.id,
                 region=Region.EUROPE,
             ),
             now=ticket.expires_at,
@@ -611,6 +619,7 @@ def _matched_without_reserving(ticket: QueueTicket, at: datetime) -> QueueTicket
         id=ticket.id,
         player_id=ticket.player_id,
         pool=ticket.pool,
+        time_control=BLITZ,
         rating_snapshot=ticket.rating_snapshot,
         entered_at=ticket.entered_at,
         expires_at=ticket.expires_at,

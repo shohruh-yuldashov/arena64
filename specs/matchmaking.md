@@ -80,13 +80,27 @@ is still on the menu, so a row written for a withdrawn variant fails loudly at
 rehydration rather than being scanned into a pairing for a game the platform no
 longer runs.
 
-**Time control is deliberately absent.** A pool is really `(variant, mode, time
-control, region)` and this one carries three of the four. `reference.time_control`
-(database.md §6.2) does not exist in code, and inventing a speed class here
-would put the definition of "blitz" in the module least entitled to own it —
-rating categories (DM-10) and leaderboards would inherit the guess. When
-`reference.time_control` ships, `QueuePool` gains a field and remains the one
-place that changes.
+**Time control is the fourth component** — A64-020.5A-pre. A pool is
+`(variant, mode, time control, region)` and this one now carries all four;
+`identifier()` reads `russian_8x8:ranked:blitz_3_2:global`, widest to
+narrowest, with the clock before the region because it is the coarser split.
+
+What the pool carries is a **`TimeControlId` and nothing else**. The
+durations and the speed class live on the ticket as a snapshot (§2.2), which
+is what keeps this type pure: `identifier()` is a wire format a pairing task
+is dispatched with, so `from_identifier` reconstructs a pool from a string
+with no database in reach, and `every_pool()` enumerates pools at
+composition time without a query. A resolved control would round-trip
+through neither.
+
+A **retired** control still parses, unlike a withdrawn variant. Retiring one
+stops new tickets being written for it and must not stop the ones already
+waiting from being paired or swept; a withdrawn variant is a game the
+platform no longer runs at all.
+
+The prediction this section used to make held exactly: the definition of
+"blitz" is `reference`'s, `matchmaking` never guesses one, and every rating
+category inherits the catalogue's answer.
 
 ### States
 
@@ -337,14 +351,26 @@ about matches on the event bus; `matchmaking`'s edge points the other way, and
 it is answered with a **command `game` accepts** rather than a type it hands
 out. A caller can ask for a match to exist; it cannot advance one.
 
-**The request carries no time control**, and §9's own list names one. The
-reason is the one `QueuePool` already records: `reference.time_control`
-(database.md §6.2) does not exist in code, and inventing a speed class in
-`matchmaking` would put the definition of "blitz" in the module least entitled
-to own it. A nullable placeholder would be worse than the gap — it would be a
-contract saying a time control is optional when every real match has one. When
-`reference.time_control` ships, `QueuePool` gains a component and this request
-gains a field, in one change.
+**The request carries a time control** — A64-020.5A-pre, and the change §9
+predicted. `MatchTimeControl` is primitive-only and `game`-agnostic, like
+`SeatRating` beside it and for the same reason: `game` must not import
+`reference` any more than it imports `rating`.
+
+It comes off a **ticket**, never from the catalogue. Both tickets in a pair
+carry the same snapshot by construction — they are in one pool, and a ticket
+refuses a snapshot whose id is not its pool's — so the scan neither reads
+`reference` nor can disagree with what the players were told, and an
+operator editing a row while two people wait cannot change the game they
+were promised.
+
+It is **optional on the port**, which is a gap rather than a policy. Every
+queue pairing supplies one. A tournament does not: `specs/tournament.md` has
+no time control on a `TournamentFormat`, and inventing one in the module
+that creates the match rather than the one that runs the competition would
+be the same mistake this section used to warn about. A system-activated
+match carrying a control is refused outright by `CreateMatchRequest`, so the
+task that gives tournaments a clock is made to schedule its deadline rather
+than discovering months later that nobody flags.
 
 ### 8.2 Product variants
 
@@ -1110,9 +1136,9 @@ Resolving any threshold above is a rules change and must bump it.
 - [ ] Resolve §13's two research items and one product decision **before any game is played**
 - [ ] **Tune `MATCHMAKING_RESERVATION_TTL_SECONDS` from the histogram** (§11.5), once it has run over a weekend. Thirty seconds is still an assumption; it is now a measurable one
 - [ ] Replace `LoggingPendingMatchSink` with AD-09's gateway (§11.4). Everything upstream is real; only the socket is missing
-- [ ] Add `time_control` to `QueuePool`, `CreateMatchRequest`, `game.match` and the acceptance response when `reference.time_control` ships (§2.1, §8.1, §10.7)
+- [ ] Give **tournament** fixtures a time control (§8.1). Queue matches are timed since A64-020.5A-pre; a tournament pairing is still untimed, and `CreateMatchRequest` refuses a system-activated match that carries a clock until activation schedules its deadline
 - [ ] Narrow `RecentOpponentReader` to *completed* matches once a match can carry a result (§10.6)
-- [ ] Replace `every_pool()` with a scan of pools that actually have waiting tickets, when the pool count makes it worth a query (§9.1)
+- [ ] Replace `every_pool()` with a scan of pools that actually have waiting tickets (§9.1). **Now warranted**: A64-020.5A-pre took the count from fourteen to fifty-six, of which at most a handful are ever non-empty, and a second variant makes it a hundred and twelve
 - [ ] Specify **challenges** — `matchmaking.challenge` (database.md §8.1), direct and open
 - [ ] Revisit the decline cooldown once there is a fair-play signal to feed (§11.3). It is deliberately not a sanction, and `admin` is where escalation belongs
 - [ ] Make the outbox's attempt budget per-consumer rather than per-entry (§12.3). It needs a second relation, so it is a task rather than a fix

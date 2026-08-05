@@ -542,7 +542,7 @@ def build_outbox_worker(
             SessionScopedNotificationHandler(
                 session_factory=db.session_factory,
                 dispatcher_factory=lambda session: _pending_match_notifier_for(
-                    session, settings, clock, sink=pending_match_sink
+                    session, redis_pools, settings, clock, sink=pending_match_sink
                 ),
                 consumer=PENDING_MATCH_CONSUMER,
                 event_types=PENDING_MATCH_EVENTS,
@@ -840,7 +840,7 @@ def build_task_schedulers(
             PairingReconciliationTask(
                 session_factory=db.session_factory,
                 service_factory=lambda session: _reconciliation_service_for(
-                    session, settings, clock
+                    session, redis_pools, settings, clock
                 ),
             )
         )
@@ -1152,7 +1152,7 @@ def _pairing_service_for(
 
 
 def _reconciliation_service_for(
-    session: AsyncSession, settings: Settings, clock: SystemClock
+    session: AsyncSession, redis_pools: RedisPools, settings: Settings, clock: SystemClock
 ) -> PairingReconciliationService:
     """A `PairingReconciliationService` over one pass's session —
     A64-015.4 §9.
@@ -1176,6 +1176,7 @@ def _reconciliation_service_for(
             events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
             clock=clock,
             metrics=_metrics(),
+            deadlines=RedisClockDeadlineStore(redis_pools.live),
         ),
         events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
         settings=settings.matchmaking,
@@ -1209,6 +1210,7 @@ def _match_outcome_for(
 
 def _pending_match_notifier_for(
     session: AsyncSession,
+    redis_pools: RedisPools,
     settings: Settings,
     clock: SystemClock,
     *,
@@ -1228,6 +1230,7 @@ def _pending_match_notifier_for(
         sink=sink,
         clock=clock,
         metrics=_metrics(),
+        deadlines=RedisClockDeadlineStore(redis_pools.live),
     )
 
 

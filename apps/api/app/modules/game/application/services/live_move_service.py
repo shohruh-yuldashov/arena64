@@ -192,7 +192,7 @@ class LiveMoveService:
             record, aggregate, move=move, side=side, at=at, received_at=received_at, clock=clock
         )
         settled = await self._advance(
-            record, aggregate, expected_ply=record.ply_number, at=at, clock=clock
+            record, aggregate, side=side, expected_ply=record.ply_number, at=at, clock=clock
         )
         await self._publish(settled, aggregate, move=move, side=side, at=at)
         await self._reschedule(settled, clock=clock)
@@ -312,6 +312,7 @@ class LiveMoveService:
         record: MatchRecord,
         aggregate: Match,
         *,
+        side: PlayerSide,
         expected_ply: int,
         at: datetime,
         clock: ClockState | None = None,
@@ -327,12 +328,27 @@ class LiveMoveService:
         the guarantee rather than for the lock: a future path that reads
         without locking gets a refusal instead of a silent overwrite.
         """
+        # A64-020.5C-pre §10. The mover's own move clears an offer they
+        # were holding — applied **here**, inside the transaction that
+        # writes the ply, so the cleared offer and the ply that cleared it
+        # commit together. Two writes would be a window in which the board
+        # had moved and the offer was still answerable.
+        #
+        # `after_move_by` is a no-op unless this side was the *recipient*,
+        # so a player who offers and then plays on keeps their offer
+        # standing — which is the ordinary way a draw is offered.
+        #
+        # Only an applied move reaches this point: a rejected one raised
+        # before `_append`, so "a rejected move leaves the offer pending" is
+        # true by construction rather than by a check somebody could forget.
+        resolved = record.after_move_by(side, at_ply=aggregate.ply_number)
+
         advanced = (
-            record.completed(
+            resolved.completed(
                 _result_of(aggregate), ply_number=aggregate.ply_number, at=at, clock=clock
             )
             if aggregate.status is MatchStatus.COMPLETED
-            else record.advanced(ply_number=aggregate.ply_number, clock=clock)
+            else resolved.advanced(ply_number=aggregate.ply_number, clock=clock)
         )
 
         if not await self._matches.advance(advanced, expected_ply=expected_ply):

@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.engine import EngineVersion, PlayerSide
 from app.modules.game.domain.clock import ClockState, TimeControl
+from app.modules.game.domain.draw_agreement import DrawAgreement, DrawOffer
 from app.modules.game.domain.match_record import (
     MatchRecord,
     MatchRecordStatus,
@@ -117,6 +118,7 @@ class SqlAlchemyMatchRecordRepository:
             ply_number=row.ply_number,
             time_control=_time_control_of(row),
             clock=_clock_of(row),
+            draw_agreement=_draw_agreement_of(row),
             outcome=row.outcome,
             termination_reason=row.termination_reason,
             winner=row.winner,
@@ -423,6 +425,18 @@ class SqlAlchemyMatchRecordRepository:
                     termination_reason=record.termination_reason,
                     winner=record.winner,
                     ended_at=record.ended_at,
+                    # A64-020.5C-pre §4, §10. Written **here** rather than by
+                    # a writer of their own, so a move that clears an offer
+                    # and the ply it cleared it on land in one statement —
+                    # two would be a window in which the board moved and the
+                    # offer was still answerable. It also means the flag
+                    # worker and every other settlement clears the agreement
+                    # without knowing it exists.
+                    draw_offer_by=_offer_side(record),
+                    draw_offer_ply=_offer_ply(record),
+                    draw_offer_created_at=_offer_instant(record),
+                    light_draw_offer_from_ply=record.draw_agreement.light_may_offer_from_ply,
+                    dark_draw_offer_from_ply=record.draw_agreement.dark_may_offer_from_ply,
                 )
             ),
         )
@@ -596,6 +610,45 @@ def _clock_of(row: MatchRecordModel) -> ClockState | None:
         dark_ms=row.clock_dark_ms or 0,
         active_side=PlayerSide.LIGHT if row.ply_number % 2 == 0 else PlayerSide.DARK,
         turn_started_at=row.clock_turn_started_at,
+    )
+
+
+def _offer_side(record: MatchRecord) -> PlayerSide | None:
+    offer = record.draw_agreement.offer
+    return offer.offered_by if offer else None
+
+
+def _offer_ply(record: MatchRecord) -> int | None:
+    offer = record.draw_agreement.offer
+    return offer.offered_at_ply if offer else None
+
+
+def _offer_instant(record: MatchRecord) -> datetime | None:
+    offer = record.draw_agreement.offer
+    return offer.offered_at if offer else None
+
+
+def _draw_agreement_of(row: MatchRecordModel) -> DrawAgreement:
+    """The row's draw-agreement state — A64-020.5C-pre §4.
+
+    The offer is present exactly when `draw_offer_by` is, which
+    `ck_match__draw_offer_fields_agree` guarantees; the two thresholds are
+    `NOT NULL` and so need no fallback. A row written before this phase
+    reads back as `DrawAgreement()` — no offer, no restriction — which is
+    the correct history rather than a guess.
+    """
+    if row.draw_offer_by is None or row.draw_offer_created_at is None:
+        offer = None
+    else:
+        offer = DrawOffer(
+            offered_by=row.draw_offer_by,
+            offered_at_ply=row.draw_offer_ply or 0,
+            offered_at=row.draw_offer_created_at,
+        )
+    return DrawAgreement(
+        offer=offer,
+        light_may_offer_from_ply=row.light_draw_offer_from_ply,
+        dark_may_offer_from_ply=row.dark_draw_offer_from_ply,
     )
 
 

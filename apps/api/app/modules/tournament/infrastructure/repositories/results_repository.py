@@ -17,10 +17,24 @@ is looking at it.
 ## Bounded, and keyset where it matters
 
 A bracket and a standings list are bounded by the field size (≤ 128, T-2),
-so both are read whole. A player's tournament history is **not** bounded,
-so it pages by `(registered_at, tournament_id)` descending — never `OFFSET`,
-whose cost grows with the page number and whose results shift when a row is
-inserted mid-scan.
+so both are read whole. A player's tournament history and the lobby are
+**not** bounded, so both page by a descending two-key order — never
+`OFFSET`, whose cost grows with the page number and whose results shift when
+a row is inserted mid-scan.
+
+## Both pages cost one statement — A64-020.0C
+
+`entrant_count` and `current_round` are the two numbers a tournament summary
+carries that are not columns on its row, and the obvious implementation
+reads each of them per tournament. The history did exactly that until
+A64-020.0C: 201 statements for a page of a hundred, correct in every test
+written against a page of one.
+
+They are correlated scalar subqueries now (`_entrant_count_of`,
+`_current_round_of`), shared by both paginated reads, so neither can regress
+without the other and the two surfaces cannot disagree about a number.
+`summary` still reads them separately, and that is not an oversight: it
+returns one tournament, so there is no N to multiply.
 """
 
 import uuid
@@ -236,9 +250,21 @@ class SqlAlchemyTournamentResults:
 
         `limit + 1` rows are read so the presence of a next page is a fact
         rather than a second `COUNT`.
+
+        **One statement**, whatever the page size — A64-020.0C. It was three
+        for a page of one and 201 for a page of a hundred, because
+        `entrant_count` and `current_round` were read per tournament. Both
+        are now the same correlated subqueries `listing` uses, so the two
+        paginated reads on this surface cost the same and cannot drift.
         """
         statement = (
-            select(RegistrationModel, TournamentModel, StandingModel)
+            select(
+                RegistrationModel,
+                TournamentModel,
+                StandingModel,
+                _entrant_count_of(),
+                _current_round_of(),
+            )
             .join(TournamentModel, TournamentModel.id == RegistrationModel.tournament_id)
             .outerjoin(
                 StandingModel,
@@ -258,16 +284,12 @@ class SqlAlchemyTournamentResults:
 
         entries = [
             PlayerTournamentEntry(
-                tournament=_summary_of(
-                    tournament,
-                    entrant_count=await self._entrant_count(tournament.id),
-                    current_round=await self._current_round(tournament.id),
-                ),
+                tournament=_summary_of(tournament, entrant_count=entrants, current_round=current),
                 seed_number=registration.seed_number,
                 final_rank=standing.final_rank if standing else None,
                 final_status=standing.final_status if standing else None,
             )
-            for registration, tournament, standing in rows[:limit]
+            for registration, tournament, standing, entrants, current in rows[:limit]
         ]
 
         cursor = (

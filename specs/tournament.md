@@ -6,7 +6,7 @@
 | **Status** | Approved for v0.x — Single Elimination only. Audited and closed by A64-019.7 |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-05 — A64-020.0B, the tournament lobby (§6i) |
+| **Last updated** | 2026-08-05 — A64-020.0C, the history read costs one statement (§6g) |
 | **Related specs** | [`rating.md`](./rating.md), [`replay.md`](./replay.md), [`matchmaking.md`](./matchmaking.md) |
 | **Audit** | [`tournament/audit.md`](./tournament/audit.md) — reachability, concurrency, performance and the limitations this ships with |
 | **Related** | `services.md` §11.3, `database.md` §18.3, `domain-model.md` §16.2 and R-25 |
@@ -579,6 +579,12 @@ visibility rule.
 
 A player's history uses `(registered_at, tournament_id)` descending — both keys, because a
 single-key order over an unbounded history pages unstably. Never `OFFSET`.
+
+**One statement per page, whatever the limit — A64-020.0C.** `entrant_count` and `current_round`
+were read per tournament, so a page of a hundred issued 201 statements while every test written
+against a page of one passed. They are the same correlated subqueries §6i's lobby uses, so the
+two paginated reads on this surface cost the same and cannot disagree about a number. The
+response is byte-for-byte what it was; only the SQL changed.
 
 ## 6h. Write entry points — A64-019.8
 

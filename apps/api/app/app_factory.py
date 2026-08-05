@@ -132,6 +132,18 @@ from app.modules.rating.application.services.match_rating_service import MatchRa
 from app.modules.rating.infrastructure.repositories.player_rating_repository import (
     SqlAlchemyPlayerRatingRepository,
 )
+from app.modules.statistics.application.services.match_completion_consumer import (
+    CONSUMER_NAME as STATISTICS_CONSUMER,
+)
+from app.modules.statistics.application.services.match_completion_consumer import (
+    StatisticsMatchCompletionConsumer,
+)
+from app.modules.statistics.application.services.match_projection_service import (
+    MatchProjectionService,
+)
+from app.modules.statistics.infrastructure.repositories.statistics_repository import (
+    SqlAlchemyStatisticsRepository,
+)
 from app.modules.tournament.application.services.match_completion_consumer import (
     CONSUMER_NAME as TOURNAMENT_CONSUMER,
 )
@@ -569,6 +581,25 @@ def build_outbox_worker(
             event_types=frozenset({MATCH_COMPLETED}),
         )
     )
+    # A64-020.5F. `statistics` shipped as the *reading* half of a
+    # projection, because "the writing half is a consumer of
+    # `match.completed` and there is no `game` module to emit one". There is
+    # now — and until this line existed, `player_statistics` was empty in
+    # every environment while `rating` consumed the same event 74 times. A
+    # player finished a game, saw their rating move, and saw their match
+    # count stay at zero.
+    #
+    # Its **own** `processed_event` partition, like every consumer here.
+    # Three modules now subscribe to `game.match_completed`, and none may
+    # mark another's work done.
+    handlers.append(
+        SessionScopedNotificationHandler(
+            session_factory=db.session_factory,
+            dispatcher_factory=lambda session: _statistics_consumer_for(session, clock),
+            consumer=STATISTICS_CONSUMER,
+            event_types=frozenset({MATCH_COMPLETED}),
+        )
+    )
     if settings.matchmaking.realtime_delivery_enabled:
         handlers.append(
             SessionScopedNotificationHandler(
@@ -699,6 +730,26 @@ def _rating_consumer_for(session: AsyncSession, clock: SystemClock) -> MatchComp
             unit_of_work=SessionUnitOfWork(session),
             clock=clock,
         )
+    )
+
+
+def _statistics_consumer_for(
+    session: AsyncSession, clock: SystemClock
+) -> StatisticsMatchCompletionConsumer:
+    """The statistics consumer over one session — A64-020.5F §8, §13.
+
+    Named concretely here, which is what a composition root is for: the
+    consumer holds `MatchProjectionService`, which holds the repository and
+    a unit of work over the **same** session — so both players' claims and
+    both counter updates are one transaction per match (§5).
+    """
+    return StatisticsMatchCompletionConsumer(
+        projections=MatchProjectionService(
+            statistics=SqlAlchemyStatisticsRepository(session),
+            unit_of_work=SessionUnitOfWork(session),
+            clock=clock,
+        ),
+        metrics=_metrics(),
     )
 
 

@@ -91,6 +91,19 @@ class MatchHistoryEntry:
     termination_reason: TerminationReason | None
     winner: PlayerSide | None
 
+    time_control: MatchTimeControl | None
+    speed_class: str | None
+    """How much time each side had, and which rating a result moved —
+    A64-020.5F §14.
+
+    Both were absent, and `speed_class` was worse than absent: the response
+    schema declared it and the mapper hardcoded `None`, so every history row
+    ever served claimed the match had no speed class. Read from the row now,
+    where both have always been.
+
+    `None` for an untimed match, which is a real state rather than a gap.
+    """
+
     ply_number: int
     ended_at: datetime | None
     created_at: datetime

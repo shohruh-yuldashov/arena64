@@ -31,6 +31,7 @@ from app.modules.game.public.history import (
     MatchHistoryEntry,
     MatchHistoryPage,
 )
+from app.modules.game.public.matches import MatchTimeControl
 
 #: The most matches one page may return — §10.5's "every list endpoint
 #: paginates".
@@ -105,6 +106,19 @@ def _to_entry(row: MatchRecordModel) -> MatchHistoryEntry:
         outcome=row.outcome,
         termination_reason=row.termination_reason,
         winner=row.winner,
+        time_control=(
+            MatchTimeControl(
+                initial_ms=row.time_control_initial_ms,
+                increment_ms=row.time_control_increment_ms or 0,
+            )
+            if row.time_control_initial_ms is not None
+            else None
+        ),
+        # Read from the row rather than left as `None` — A64-020.5F. The
+        # schema has declared this field since A64-014.9 and the mapper
+        # hardcoded a null under it, so every history row served claimed the
+        # match had no speed class.
+        speed_class=row.rating_speed_class,
         ply_number=row.ply_number,
         ended_at=row.ended_at,
         created_at=row.created_at,

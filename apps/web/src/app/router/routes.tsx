@@ -309,6 +309,43 @@ export const historyRoute = createRoute({
   component: protectedPage(() => import("@/pages/history")),
 });
 
+// --- tournaments — A64-020.6 ------------------------------------------------
+
+/**
+ * `/tournaments` — the lobby.
+ *
+ * **Protected**, and the reason is the backend's actual policy rather than
+ * a preference. `specs/tournament` §7 makes tournaments "public" in the
+ * sense that *no viewer is narrower than another* — there is no owner
+ * check and no friends-only variant — but every route on this platform
+ * outside `/health` still sits behind a session, and the tournament router
+ * is no exception: each of its handlers takes `CurrentUser`.
+ *
+ * So an anonymous visitor here would render a page whose every request
+ * takes a `401`, which looks like an outage rather than a sign-in prompt.
+ * §3's rule is to follow the backend's visibility, and this is it.
+ */
+export const tournamentsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tournaments",
+  component: protectedPage(() => import("@/pages/tournaments")),
+});
+
+/**
+ * `/tournaments/$tournamentId` — one tournament, its bracket and its result.
+ *
+ * Guarded for the lobby's reason. **The guard is not the authorization**:
+ * it stops an anonymous visitor reaching a page that would only get a
+ * `401`, and nothing more — a hand-typed tournament id gets the same `404`
+ * here as anywhere else, because a tournament is there for everybody or
+ * absent for everybody.
+ */
+export const tournamentRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tournaments/$tournamentId",
+  component: protectedPage(() => import("@/pages/tournament")),
+});
+
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
@@ -333,4 +370,6 @@ export const routeTree = rootRoute.addChildren([
   // the gateway to join a room called `history`.
   historyRoute,
   replayRoute,
+  tournamentsRoute,
+  tournamentRoute,
 ]);

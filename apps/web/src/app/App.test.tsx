@@ -47,7 +47,11 @@ describe("the application shell", () => {
   });
 
   it("renders the not-found page for a path the router does not know", async () => {
-    renderApp({ path: "/tournaments/does-not-exist-yet" });
+    // A path no route claims. It used to be `/tournaments/…`, which
+    // A64-020.6 turned into a real route — so the fixture is chosen to be
+    // one nothing will plausibly implement rather than one that merely has
+    // not been implemented yet.
+    renderApp({ path: "/no-such-page-anywhere" });
 
     expect(
       await screen.findByRole("heading", { level: 1, name: "This page does not exist" }),

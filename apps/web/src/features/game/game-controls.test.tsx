@@ -34,6 +34,7 @@ function snapshot(draw?: SnapshotPayload["draw"]): SnapshotPayload {
     engine_version: 2,
     variant: "russian_8x8",
     status: "active",
+    rated: true,
     sequence: 4,
     side_to_move: "light",
     fingerprint: "fp4",

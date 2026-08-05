@@ -6,8 +6,8 @@
  * hand-maintained (`protocol.ts`) and confining it here is what makes it
  * reviewable against `app/gateway/protocol.py`.
  */
-export type { ConnectionStatus } from "./connection-state";
-export { isPursuing, isReady, isTerminal } from "./connection-state";
+export type { ConnectionStatus, DeliveryMode } from "./connection-state";
+export { deliveryMode, isPursuing, isReady, isTerminal } from "./connection-state";
 export {
   RealtimeContextProvider,
   useConnectionStatus,
@@ -22,11 +22,13 @@ export type {
   DrawOffer,
   DrawOfferedPayload,
   DrawState,
+  DrawStatePayload,
   GameCommandPayload,
   GameCommandType,
   GameCompletedPayload,
   GatewayErrorCode,
   InboundFrame,
+  MatchOfferedPayload,
   MovePayload,
   PlacedPiece,
   Rank,

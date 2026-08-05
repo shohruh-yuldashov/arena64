@@ -12,6 +12,7 @@ import { reportError } from "@/shared/lib/report-error";
 import {
   type DrawDeclinedPayload,
   type DrawOfferedPayload,
+  type DrawStatePayload,
   type GameCommandType,
   type GameCompletedPayload,
   type GatewayErrorCode,
@@ -178,6 +179,22 @@ export function useGameRoom(matchId: string): GameRoom {
             return;
           }
 
+          case "game.draw.state": {
+            // A64-020.5D §11, §13. The authoritative per-seat agreement,
+            // which **replaces** A64-020.5C's snapshot-per-ply workaround:
+            // that re-read a whole snapshot once per ply for a restricted
+            // player, because permissions could not ride on
+            // `game.move.applied`. They now arrive addressed.
+            //
+            // Order-independent by construction (§12): this touches the
+            // agreement and nothing else, so it is harmless whether it
+            // arrives before or after the move that caused it.
+            const draw = asDrawState(payload);
+            if (draw === null || draw.match_id !== matchId) return;
+            dispatch({ type: "draw_state", payload: draw });
+            return;
+          }
+
           case "game.command.rejected": {
             const code = payload.code;
             dispatch({
@@ -312,46 +329,6 @@ export function useGameRoom(matchId: string): GameRoom {
     [matchId, realtime],
   );
 
-  // --- refreshing a restricted player's eligibility — §2, §10 -------------
-  //
-  // `game.move.applied` is a fan-out to both participants **and** the
-  // audience, so it cannot carry viewer-resolved draw permissions —
-  // `may_offer` is per-seat and the negotiation is participant-only. That
-  // leaves a real gap, found by running the two-browser flow: a player
-  // whose offer was declined sees the button correctly disabled, the
-  // opponent moves, the server now says they may ask again, and nothing
-  // tells them.
-  //
-  // §2 forbids recomputing eligibility here — the spam rule is the
-  // server's, and a client reimplementing "one opponent move" would be a
-  // second copy of `game.domain.draw_agreement`. So the client re-reads the
-  // authoritative answer instead.
-  //
-  // **Once per ply, and only while restricted.** Eligibility can only
-  // change when the ply does, so that is the minimum correct frequency; and
-  // the condition excludes everybody who is not actually blocked — a player
-  // who may already offer, one with an offer standing, a spectator, and a
-  // finished game. In an ordinary game this never fires at all.
-  //
-  // Deliberately **not** `resync()`: that announces "Resynchronising…" and
-  // freezes the board, which would be a visible stutter for a routine
-  // refresh. This asks for the same snapshot and lets the frame handler
-  // apply it.
-  const refreshedAt = useRef(-1);
-  const restricted =
-    state.phase === "active" &&
-    state.side !== null &&
-    state.draw.offer === null &&
-    !state.draw.mayOffer;
-
-  useEffect(() => {
-    if (!restricted || refreshedAt.current === state.sequence) return;
-    refreshedAt.current = state.sequence;
-    void realtime
-      .request("game.resume", { match_id: matchId }, "game")
-      .catch((error: unknown) => reportError(error, { scope: "game-draw-refresh", matchId }));
-  }, [restricted, state.sequence, matchId, realtime]);
-
   // --- participant commands — §5, §6, §8, §9, §12 -------------------------
 
   const command = useCallback(
@@ -413,6 +390,17 @@ function asSnapshot(payload: Record<string, unknown>): SnapshotPayload | null {
   const participants = payload.participants;
   if (typeof participants !== "object" || participants === null) return null;
   return payload as unknown as SnapshotPayload;
+}
+
+function asDrawState(payload: Record<string, unknown>): DrawStatePayload | null {
+  if (typeof payload.match_id !== "string") return null;
+  if (typeof payload.may_offer !== "boolean") return null;
+  if (typeof payload.may_accept !== "boolean") return null;
+  if (typeof payload.may_decline !== "boolean") return null;
+  // `offer` is `null` or an object; anything else is not this frame.
+  const offer = payload.offer;
+  if (offer !== null && (typeof offer !== "object" || offer === undefined)) return null;
+  return payload as unknown as DrawStatePayload;
 }
 
 function asDrawOffered(payload: Record<string, unknown>): DrawOfferedPayload | null {

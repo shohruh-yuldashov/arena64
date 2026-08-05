@@ -5,6 +5,7 @@ import type {
   DrawDeclinedPayload,
   DrawOffer,
   DrawOfferedPayload,
+  DrawStatePayload,
   GameCompletedPayload,
   MovePayload,
   ResultPayload,
@@ -186,7 +187,8 @@ export type GameAction =
   | { type: "command_rejected"; code: string }
   | { type: "draw_offered"; payload: DrawOfferedPayload; viewerSide: Side | null }
   | { type: "draw_declined"; payload: DrawDeclinedPayload }
-  | { type: "completed"; payload: GameCompletedPayload };
+  | { type: "completed"; payload: GameCompletedPayload }
+  | { type: "draw_state"; payload: DrawStatePayload };
 
 /**
  * The transitions, stated once.
@@ -384,6 +386,24 @@ export function reduce(state: GameState, action: GameAction): GameState {
         activeCommand: null,
         commandError: null,
         draw: NO_DRAW_AGREEMENT,
+      };
+
+    case "draw_state":
+      // A64-020.5D §15. **Replaces** the agreement authoritatively and
+      // recomputes nothing: the three booleans arrive resolved for this
+      // viewer, and §2 forbids deriving them.
+      //
+      // Touches neither the board, the clock, the turn, the sequence nor
+      // the move in flight — which is what makes it safe to apply whenever
+      // it arrives relative to the move that caused it (§12).
+      return {
+        ...state,
+        draw: {
+          offer: action.payload.offer,
+          mayOffer: action.payload.may_offer,
+          mayAccept: action.payload.may_accept,
+          mayDecline: action.payload.may_decline,
+        },
       };
 
     case "completed":

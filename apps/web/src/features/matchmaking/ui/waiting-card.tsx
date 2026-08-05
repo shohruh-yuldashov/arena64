@@ -6,6 +6,7 @@ import { FormError } from "@/features/auth/ui/form-status";
 import { queueErrorKey } from "@/features/matchmaking/model/error-messages";
 import { useLeaveQueue } from "@/features/matchmaking/model/queries";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
+import { type DeliveryMode, deliveryMode, useConnectionStatus } from "@/shared/realtime";
 import { Button, Card, CardContent, Spinner } from "@/shared/ui";
 
 /**
@@ -33,6 +34,14 @@ import { Button, Card, CardContent, Spinner } from "@/shared/ui";
  * changes every second is a screen reader saying a number every second.
  * What is announced is the *status*, which changes when the state does.
  */
+/** What each degraded mode means for a queued player — §17. */
+const DELIVERY_LABELS: Record<DeliveryMode, TranslationKey> = {
+  realtime: "play.waiting.delivery.realtime",
+  reconnecting: "play.waiting.delivery.reconnecting",
+  fallback_polling: "play.waiting.delivery.fallback",
+  offline: "play.waiting.delivery.offline",
+};
+
 export function WaitingCard({
   ticket,
   disabled = false,
@@ -43,6 +52,7 @@ export function WaitingCard({
   const { t, locale } = useTranslation();
   const leave = useLeaveQueue();
   const [failure, setFailure] = useState<TranslationKey | null>(null);
+  const mode = deliveryMode(useConnectionStatus());
   const elapsed = useElapsedSeconds(ticket.entered_at);
 
   const clock = formatMillis(ticket.base_time_ms, ticket.increment_ms, locale);
@@ -92,6 +102,16 @@ export function WaitingCard({
         <p className="text-muted-foreground text-sm">
           {t("play.waiting.elapsed", { duration: formatElapsed(elapsed, locale) })}
         </p>
+
+        {/* A64-020.5D §17. Shown **only when degraded** — a "connected"
+            banner during normal operation is noise, and this line exists to
+            explain why a pairing might take a moment longer than usual, not
+            to report that the socket is fine. */}
+        {mode !== "realtime" && (
+          <p role="status" className="text-muted-foreground text-sm">
+            {t(DELIVERY_LABELS[mode])}
+          </p>
+        )}
 
         {failure !== null && <FormError messageKey={failure} />}
 

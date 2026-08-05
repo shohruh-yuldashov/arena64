@@ -51,6 +51,8 @@ export type InboundType =
   | "game.draw.declined"
   | "game.completed"
   | "game.command.rejected"
+  | "game.draw.state"
+  | "matchmaking.match.offered"
   | "error";
 
 /** Everything this client sends. Spectator frames are deferred. */
@@ -216,6 +218,53 @@ export interface GameCompletedPayload {
   result: ResultPayload;
 }
 
+/**
+ * `game.draw.state` — **this viewer's** draw agreement — A64-020.5D §11.
+ *
+ * The same shape the snapshot's `draw` block carries, deliberately, so one
+ * projection applies to both rather than two that must not diverge.
+ *
+ * Participant-targeted: the two players receive different payloads from one
+ * write, and a spectator receives none. That is exactly why these
+ * permissions cannot ride on `game.move.applied`, which fans out to
+ * everybody — and it is what replaces A64-020.5C's snapshot-per-ply
+ * workaround.
+ *
+ * Carries **no ply and no sequence**: it is not a state change of the game,
+ * so applying it never touches the board, the clock or the turn.
+ */
+export interface DrawStatePayload extends DrawState {
+  match_id: string;
+}
+
+/**
+ * `matchmaking.match.offered` — a pairing this player has not answered.
+ *
+ * **A wake-up signal with safe preview data, never the source of truth**
+ * (§3). The durable answer is `GET /matchmaking/matches/pending`, so this
+ * may be duplicated, may arrive late and may be missed entirely while the
+ * socket is down — each recovered by the read.
+ *
+ * The field names match `PendingMatchResponse` exactly, so a client parses
+ * one shape whether the offer was pushed or polled.
+ */
+export interface MatchOfferedPayload {
+  match_id: string;
+  status: string;
+  your_side: Side;
+  opponent: { player_id: string; username: string; display_name: string | null } | null;
+  variant: string;
+  rated: boolean;
+  time_control: { initial_ms: number; increment_ms: number } | null;
+  speed_class: string | null;
+  /** ISO-8601. */
+  acceptance_deadline: string;
+  you_accepted: boolean;
+  opponent_accepted: boolean;
+  /** ISO-8601. */
+  created_at: string;
+}
+
 /** `game.command.rejected` — about the *command*, not the frame. */
 export interface CommandRejectedPayload {
   code: GatewayErrorCode;
@@ -245,6 +294,8 @@ export interface SnapshotPayload {
   fingerprint: string;
   pieces: PlacedPiece[];
   participants: { light: string; dark: string };
+  /** Whether finishing this match moves a rating — A64-020.5D §14. */
+  rated: boolean;
   clock: ClockPayload | null;
   result: ResultPayload | null;
   /**
@@ -357,6 +408,8 @@ const INBOUND_TYPES = new Set<string>([
   "game.draw.declined",
   "game.completed",
   "game.command.rejected",
+  "game.draw.state",
+  "matchmaking.match.offered",
   "error",
 ]);
 

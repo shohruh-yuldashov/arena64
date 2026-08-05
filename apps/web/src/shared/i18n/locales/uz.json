@@ -393,7 +393,13 @@
       "since": "Boshlandi",
       "elapsed": "Kutish vaqti: {duration}",
       "cancel": "Bekor qilish",
-      "cancelling": "Bekor qilinmoqda…"
+      "cancelling": "Bekor qilinmoqda…",
+      "delivery": {
+        "realtime": "",
+        "reconnecting": "Qayta ulanmoqda — juftlashtirish davom etadi.",
+        "fallback": "Jonli yangilanish mavjud emas, shuning uchun vaqti-vaqti bilan tekshirilmoqda.",
+        "offline": "Siz oflaynsiz. Qayta ulangach juftlashtirish davom etadi."
+      }
     },
     "offer": {
       "title": "Sizga raqib topildi",

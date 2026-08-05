@@ -393,7 +393,13 @@
       "since": "Started",
       "elapsed": "Waiting for {duration}",
       "cancel": "Cancel",
-      "cancelling": "Cancelling…"
+      "cancelling": "Cancelling…",
+      "delivery": {
+        "realtime": "",
+        "reconnecting": "Reconnecting — you will still be matched.",
+        "fallback": "Live updates are unavailable, so this is checking periodically.",
+        "offline": "You are offline. Matching continues once you reconnect."
+      }
     },
     "offer": {
       "title": "You have an opponent",

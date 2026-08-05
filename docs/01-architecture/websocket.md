@@ -1362,6 +1362,125 @@ cannot be enumerated by sending resignations at them.
 
 ---
 
+## 23. Matchmaking push and participant draw state — A64-020.5D
+
+### 23.1 `matchmaking.match.offered`
+
+A pairing, addressed to one participant, on the `matchmaking` channel.
+
+**An optimisation, never the source of truth.** The durable answer is
+`GET /matchmaking/matches/pending`, and every failure mode is tolerable by
+construction:
+
+| Failure | Recovered by |
+| --- | --- |
+| Nobody connected | The read, when they come back |
+| Duplicated | Client dedupes by `match_id`; a duplicate costs nothing |
+| Arrives late | The read has already told them, or is about to |
+| Missed while disconnected | The read on reconnect |
+| Publish raised | Counted; the relay tick is not failed |
+
+So `GatewayPendingMatchSink.deliver` **never raises**, which is a deliberate
+departure from `PendingMatchSink`'s "a sink may raise". That contract exists
+so a real transport failure is retried; here a retry would re-deliver an
+offer the client can already read, and failing the tick would hold up every
+other offer in the batch. A match pairing must never be undone because a
+socket was busy.
+
+**Addressed, not broadcast.** Each participant's offer names *their* side and
+*their* view of the opponent, so `recipients=[offer.recipient_id]` — a
+fan-out to both would hand each player the other's card.
+
+The payload carries exactly the fields `PendingMatchResponse` does, so a
+client parses one shape whether it was pushed or polled. No ticket, no
+pairing id, no Redis key, no ORM row, no rating, no email.
+
+### 23.2 Cross-node delivery
+
+Through the existing `RoomBroadcaster` → `FleetConnectionRouter` →
+`gwbus:v1:<node>` → `GatewayForwarder` path, unchanged. An offer created on
+node A for a player connected to node B is written to B's `MAXLEN`-capped
+stream and drained by B's forwarder.
+
+`build_broadcaster_for` assembles that graph without a request, because the
+relay consumer has none. It uses the **process-wide** `get_local_sockets()`,
+the same map the connection lifecycle writes into — a second instance would
+be a fan-out that silently reaches nobody on this node.
+
+### 23.3 Metrics
+
+`gateway.match_offer_pushes_total`, labelled `outcome` ∈ {`local`, `remote`,
+`no_connection`, `failed`}. Bounded by construction: no player, match,
+connection or pool label.
+
+`no_connection` is **not** a failure — it is the ordinary state of a player
+who queued and closed the tab. A rising share of it is the number that says
+whether push is worth having, and it is meaningless without the total.
+
+### 23.4 `game.draw.state`
+
+One participant's draw agreement: whether an offer stands, whose it is, and
+which of the three actions they may take.
+
+**Participant-targeted, and that is the whole reason it exists.**
+Permissions are per-seat, so they cannot ride on `game.move.applied`, which
+fans out to both players *and* the audience. A64-020.5C worked around the
+gap by re-reading a whole snapshot once per ply for a restricted player;
+this replaces that.
+
+Published after a draw command and after an applied move — the two things
+that can change an agreement. Skipped entirely while `is_untouched`, so a
+game nobody negotiates in costs zero extra frames.
+
+> `is_untouched` rather than "the agreement is currently quiet". The earlier
+> predicate was wrong in the one case that mattered: after a decline, the
+> opponent's move restores the offerer's eligibility, and at that moment the
+> agreement *is* quiet — so a skip-when-quiet rule suppressed exactly the
+> frame carrying the good news. Found by the two-browser flow.
+
+Carries **no ply and no sequence**. It is not a state change of the game, so
+it is never buffered into the ply-sequenced replay buffer — that would break
+the contiguity check a resume depends on.
+
+### 23.5 Ordering
+
+A move that clears an offer produces two frames, in this order:
+
+```
+game.move.applied     the board, to participants and spectators
+game.draw.state       the permissions, to each participant separately
+```
+
+The board first, so a client never briefly shows an offer cleared by a move
+it has not yet seen. **The client must still tolerate either order**, and
+does: `game.draw.state` replaces the agreement and touches neither board,
+clock, turn nor sequence, so applying it early is harmless and the next
+snapshot reconciles regardless.
+
+### 23.6 Spectator exclusion
+
+Two independent mechanisms, and both are needed:
+
+- `game.draw.state` is sent with `recipients=[one participant]` and **no**
+  `spectators` argument at all, so the allowlist never has to withhold it.
+- `spectator_snapshot_payload` is physically incapable of carrying a `draw`
+  block, so a viewer cannot read the same state by joining and taking a
+  snapshot.
+
+### 23.7 Known limitation: activation is not pushed
+
+`matchmaking.match.offered` fires on `match_created`. **Nothing pushes
+activation** — when the opponent accepts and the match becomes `active`, the
+first acceptor learns by reading.
+
+So an open offer keeps the two-second interval whatever the socket is doing,
+which is `websocket.md`-visible because it is a protocol gap rather than a
+client choice. It is narrow: it applies only while an offer is open, which
+lasts at most the acceptance window. Closing it means a
+`matchmaking.match.activated` frame, and it is the obvious next increment.
+
+---
+
 ## Related Documents
 
 | Document | Relationship |

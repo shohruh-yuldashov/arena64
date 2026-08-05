@@ -106,6 +106,44 @@ class DrawOfferView:
 
 
 @dataclass(frozen=True, slots=True)
+class DrawAgreementView:
+    """A match's whole draw agreement, as a transport may see it —
+    A64-020.5D §11.
+
+    The **facts**, not a viewer's permissions: which offer stands and which
+    side may open a new one. Resolving that to "may *I* accept" is the
+    transport's, because a resolution needs a viewer and this value is
+    produced once per write rather than once per recipient.
+
+    The same three facts `MatchSnapshot` carries, deliberately, so one
+    projection serves the snapshot and the live frame — see
+    `gateway.projections.draw_payload_for`.
+    """
+
+    offer: DrawOfferView | None
+    may_offer_light: bool
+    may_offer_dark: bool
+
+    is_untouched: bool
+    """Whether nobody has ever offered a draw in this match.
+
+    The gateway skips the participant frame when this is true, so the
+    overwhelmingly common game costs nothing (§22).
+
+    **Not** "the agreement is currently quiet", which is the predicate this
+    replaces and which was wrong in the one case that mattered: after a
+    decline, the opponent's move is what restores the offerer's
+    eligibility, and at that moment the agreement *is* quiet — so a
+    "skip when quiet" rule suppressed exactly the frame that carried the
+    good news. Found by the two-browser flow.
+
+    A boolean rather than the thresholds themselves: §9 forbids publishing
+    the cooldown bookkeeping, and a transport needs to know whether to send
+    a frame, not the arithmetic behind it.
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class GameCommandResult:
     """What the command did, in terms a transport can serialise.
 
@@ -119,6 +157,11 @@ class GameCommandResult:
     acting_side: PlayerSide
     """Which side the authenticated player turned out to be. Derived by
     `game`, never supplied."""
+
+    acting_player_id: UUID
+    """Who acted. Echoed back so a transport addressing a per-seat frame
+    can pair one player with one side without indexing a participant tuple
+    — A64-020.5D §11."""
 
     ply: int
     """The match's ply, unchanged by every command here. Returned so a
@@ -135,6 +178,10 @@ class GameCommandResult:
     and a decline, which end nothing."""
 
     settled_at: datetime | None
+
+    draw: DrawAgreementView
+    """The agreement **after** this command, for the participant fan-out —
+    §11. Both sides' facts, because both participants are told."""
 
     @property
     def is_terminal(self) -> bool:
@@ -172,6 +219,7 @@ class GameCommandUseCase(Protocol):
 
 
 __all__ = [
+    "DrawAgreementView",
     "DrawOfferAlreadyPending",
     "DrawOfferNotAllowedYet",
     "DrawOfferNotPending",

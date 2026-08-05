@@ -354,8 +354,45 @@ class GameCommandRejection(StrEnum):
     INTERNAL = "internal"
 
 
+#: Match offers this node attempted to put on a socket — A64-020.5D §4.
+#:
+#: One counter with a bounded `outcome` label rather than four names,
+#: because every question asked of these is comparative: how many offers
+#: reached somebody, and what share found nobody connected. A rising
+#: `no_connection` share is the number that says whether push is worth
+#: having at all, and it is meaningless without the total beside it.
+#:
+#: **No player, match, connection or pool label** — §4. Each of those is
+#: unbounded, and an unbounded label is a metric that takes the process
+#: down rather than one that answers a question.
+MATCH_OFFER_PUSHES: Final = "gateway.match_offer_pushes_total"
+
+
+class MatchOfferOutcome(StrEnum):
+    """What happened to one pushed match offer."""
+
+    LOCAL = "local"
+    """Delivered to a socket on this node."""
+
+    REMOTE = "remote"
+    """Forwarded to another node's bus stream. Delivery there is that
+    node's forwarder's, and its own failures are already counted by
+    `REMOTE_PUBLISH_FAILURES`."""
+
+    NO_CONNECTION = "no_connection"
+    """Nobody was connected. **Not a failure** — it is the ordinary state
+    of a player who queued and closed the tab, and the durable read is what
+    tells them when they come back (§3)."""
+
+    FAILED = "failed"
+    """The publish raised. Counted rather than propagated: a delivery
+    failure must not fail the relay tick that carried it."""
+
+
 __all__ = [
     "CONNECTIONS_ACCEPTED",
+    "MATCH_OFFER_PUSHES",
+    "MatchOfferOutcome",
     "CONNECTIONS_CLOSED",
     "CONNECTIONS_REJECTED",
     "CONNECTION_DURATION",

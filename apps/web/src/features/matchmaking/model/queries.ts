@@ -4,6 +4,7 @@ import { isResolved } from "@/entities/session";
 import { useSession } from "@/features/auth/model/session-provider";
 import * as matchmakingApi from "@/features/matchmaking/api";
 import { matchmakingKeys, referenceKeys } from "@/features/matchmaking/api/keys";
+import { isReady, useConnectionStatus } from "@/shared/realtime";
 
 /**
  * The lobby's reads and writes — A64-020.5A §9, §10, §11.
@@ -18,24 +19,45 @@ import { matchmakingKeys, referenceKeys } from "@/features/matchmaking/api/keys"
  * visitors away, so by the time these run the only two outcomes are
  * "authenticated" and "the server could not be reached".
  *
- * ## Polling is temporary and is written down as such
+ * ## Polling is layered, and the layer depends on the socket — §7
  *
- * The backend's realtime seam is real but unwired: `PendingMatchSink` is
- * satisfied by `LoggingPendingMatchSink`, so a pairing reaches a log line
- * and no socket. `GET /matchmaking/matches/pending` is deliberately **not
- * rate limited** for exactly this reason — the backend's own docstring
- * says a client that only polls "still works correctly; it simply learns
- * later".
+ * A64-020.5D wired `GatewayPendingMatchSink`, so a pairing now reaches a
+ * socket. The reads stay authoritative — a push is a wake-up signal and
+ * never the source of truth (§3) — but how often they are re-asked
+ * unprompted now depends on whether that signal can arrive:
  *
- * So this phase polls, at two seconds, and only while the lobby is
- * genuinely waiting for something it cannot cause. When the gateway is
- * connected, `refetchInterval` goes to `false` and the socket invalidates
- * these keys instead — the queries, the components and the state model do
- * not change. See `specs/frontend.md` §16.
+ *     realtime ready      SAFETY_INTERVAL_MS. Not zero, and the reason is
+ *                         below
+ *     anything else       POLL_INTERVAL_MS, the pre-push behaviour, because
+ *                         a socket that is connecting, reconnecting,
+ *                         offline or refused delivers nothing
+ *     idle                nothing at all, in either mode
+ *
+ * **Why a safety interval rather than none.** A push can be lost in ways
+ * the client cannot detect: the sink found no connection because the
+ * socket was mid-reconnect, the bus stream trimmed, or the frame was
+ * written to a node whose forwarder was restarting. None of those closes
+ * the socket, so `ConnectionStatus` still reads `ready` and a client
+ * relying only on push would wait forever with no symptom.
+ *
+ * Twenty-five seconds is chosen against the **acceptance window**, not
+ * against a latency target: an offer is honoured for
+ * `MATCHMAKING_RESERVATION_TTL_SECONDS` (thirty by default), so a missed
+ * push is still recovered inside the window it matters in. It is a tenth
+ * of the previous request rate.
  */
 
-/** How often the two authoritative reads are re-asked while waiting. */
+/** How often the reads are re-asked while realtime cannot deliver. */
 export const POLL_INTERVAL_MS = 2_000;
+
+/**
+ * How often they are re-asked while realtime is healthy — §7.
+ *
+ * A backstop against a push lost without closing the socket, sized against
+ * the acceptance window rather than against responsiveness. See this
+ * module's docstring.
+ */
+export const SAFETY_INTERVAL_MS = 25_000;
 
 /**
  * The catalogue.
@@ -70,6 +92,7 @@ export function useTimeControls() {
  */
 export function useMyTicket() {
   const { state } = useSession();
+  const waiting = useWaitingInterval();
   return useQuery({
     queryKey: matchmakingKeys.queue(),
     queryFn: matchmakingApi.readMyTicket,
@@ -79,8 +102,32 @@ export function useMyTicket() {
     // consumed by a pairing scan at any instant, so it is watched; nothing
     // is watched when there is no ticket, because a lobby showing the join
     // form is not waiting for anything the server can do on its own.
-    refetchInterval: (query) => (query.state.data == null ? false : POLL_INTERVAL_MS),
+    //
+    // *How often* it is watched is the socket's answer — see
+    // `useWaitingInterval`.
+    refetchInterval: (query) => (query.state.data == null ? false : waiting),
   });
+}
+
+/**
+ * How often to re-ask while genuinely waiting — §7, §17.
+ *
+ * A hook, because it reads one — named as such rather than disabling the
+ * rule, which would be claiming it is not.
+ *
+ * Read through the shared connection status rather than through a prop, so
+ * both queries reach the same answer without the lobby threading it down
+ * and without two intervals that could disagree.
+ *
+ * `isReady` is the **only** status that earns the slow interval. Every
+ * other one — connecting, reconnecting, offline, fatal — means a push
+ * cannot arrive, and a lobby that kept the slow interval through a
+ * reconnect would be a player waiting twenty-five seconds to learn they
+ * had been paired.
+ */
+function useWaitingInterval(): number {
+  const status = useConnectionStatus();
+  return isReady(status) ? SAFETY_INTERVAL_MS : POLL_INTERVAL_MS;
 }
 
 /**
@@ -101,6 +148,7 @@ export function useMyTicket() {
  */
 export function usePendingMatch(hasTicket: boolean) {
   const { state } = useSession();
+  const waiting = useWaitingInterval();
   return useQuery({
     queryKey: matchmakingKeys.pending(),
     queryFn: matchmakingApi.readPendingMatch,
@@ -109,7 +157,24 @@ export function usePendingMatch(hasTicket: boolean) {
     refetchInterval: (query) => {
       const match = query.state.data;
       const open = match != null && match.status === "pending_acceptance";
-      return open || hasTicket ? POLL_INTERVAL_MS : false;
+      // **An open offer keeps the fast interval, whatever the socket is
+      // doing** — §7's "poll only if needed for acceptance/state
+      // reconciliation", and this is that case.
+      //
+      // The push covers *pairing* and nothing else. When the opponent
+      // accepts, the match becomes `active` and there is no frame for it:
+      // `matchmaking.match.offered` fires on `match_created`, not on
+      // activation. So the player who accepted first would sit on the
+      // safety interval waiting up to twenty-five seconds to be taken into
+      // a game that had already started — which is what this caught when
+      // the interval first went slow.
+      //
+      // Narrow on purpose: it applies only while an offer is genuinely
+      // open, which lasts at most the acceptance window. A queued player
+      // with no offer stays on the slow interval, which is where the
+      // request saving actually is.
+      if (open) return POLL_INTERVAL_MS;
+      return hasTicket ? waiting : false;
     },
   });
 }

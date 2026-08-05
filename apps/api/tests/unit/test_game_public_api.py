@@ -290,6 +290,13 @@ class TestTheSurfaceIsDeliberate:
         # collapsing them would couple the two to each other's changes.
         "DrawOfferState",
         "DrawOfferView",
+        # A64-020.5D — the agreement as a whole, for the participant frame.
+        #
+        # Published because the gateway sends `game.draw.state` per seat and
+        # cannot resolve "may I accept" from a per-viewer type: the write
+        # happens once and the resolution happens twice, so what crosses is
+        # both sides' facts and the transport does the resolving.
+        "DrawAgreementView",
     }
 
     def test_nothing_is_published_by_accident(self) -> None:

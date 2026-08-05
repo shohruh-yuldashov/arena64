@@ -1097,7 +1097,98 @@ It is third in the Playwright project chain — `lobby` → `live-game` →
 `game-controls` — because all three drive the lobby with the same three
 accounts and refresh-token rotation makes concurrent use destructive.
 
-### 16.13 The backend contract these controls consume
+### 16.13 Realtime matchmaking push — A64-020.5D
+
+The lobby polled every two seconds because `LoggingPendingMatchSink` never
+put a pairing on a socket. It does now.
+
+#### The push is a wake-up signal
+
+`matchmaking.match.offered` arrives on the shared socket and
+`useMatchOfferPush` invalidates the two authoritative reads. **Nothing
+trusts the payload**: the frame may be duplicated, late, or missed entirely,
+so what it triggers is a read that decides whether the offer still exists,
+whether the deadline is valid, whether this player may answer, and whether
+the match has already started.
+
+A client that rendered the payload would show an acceptance dialog for an
+offer the opponent declined a second earlier — asserted in
+`realtime-push.test.tsx`.
+
+Duplicates are dropped by `match_id` against a bounded ring, and concurrent
+distinct offers collapse into one refetch (single-flight). Three pushes are
+one read.
+
+#### Polling policy
+
+| Situation | Interval | Why |
+| --- | --- | --- |
+| Queued, socket `ready` | 25 s | Backstop only — the push carries it |
+| Queued, socket anything else | 2 s | No push can arrive |
+| **Offer open**, any socket state | 2 s | Nothing pushes *activation* — see below |
+| Idle | none | Nothing to wait for |
+
+**Measured**: 0 matchmaking `GET`s in 20 seconds while queued with realtime
+healthy, against ~20 before. Asserted in `realtime-push.spec.ts` rather than
+described.
+
+The 25-second backstop is sized against the **acceptance window** (30 s), not
+against responsiveness: a push lost without closing the socket — the sink
+found no connection mid-reconnect, a stream trimmed, a forwarder restarting
+— is still recovered inside the window it matters in.
+
+The open-offer exception is a real protocol gap, not a client choice:
+`matchmaking.match.offered` fires on pairing and nothing fires on
+activation, so the first acceptor would otherwise wait up to 25 seconds to
+be taken into a game that had already started. Found by the E2E when the
+interval first went slow.
+
+#### Delivery mode
+
+`deliveryMode(status)` derives four states from the connection status —
+`realtime`, `reconnecting`, `fallback_polling`, `offline`. The waiting card
+shows a line **only when degraded**; a "connected" banner during normal
+operation is noise.
+
+#### Scope limitation
+
+The subscription is mounted by the lobby, not by the app. A player on
+`/profile` when they are paired learns on their next visit to `/play` —
+exactly as before, because the durable read is unchanged. Closing that needs
+an app-level offer surface, which is notifications and is out of scope.
+
+#### Participant draw state
+
+`game.draw.state` replaces A64-020.5C's snapshot-per-ply workaround. The
+frame is addressed per seat, carries the same shape the snapshot's `draw`
+block does, and the reducer **replaces** the agreement without touching the
+board, the clock, the turn or the move in flight — which is what makes it
+safe whichever order it arrives in relative to the move that caused it.
+
+The workaround is gone: `realtime-push.spec.ts` asserts that eligibility
+returns after an opponent's move with **zero** HTTP requests in between.
+
+#### `rated` on the snapshot
+
+Added. The fact is already on `game.match.rated`, already published on
+`PendingMatchView` and in every history row, and is the same value both
+players agreed to when they queued — so nothing private crosses and no new
+coupling appears. Spectator-safe, so it is in the base projection. The
+resignation dialog now says which rather than "if this game is rated".
+
+#### E2E server freshness
+
+`reuseExistingServer: false`. A `vite preview` left running from an earlier
+invocation served a two-hour-old bundle through several runs of A64-020.5C,
+so specs asserted against a frontend that no longer existed and nothing
+failed loudly. Option A of the two available, chosen because it has no
+moving parts — a build-hash handshake needs three things to agree in order
+to detect a problem that not reusing cannot have. The cost is one rebuild
+per run (~250 ms). `strictPort` makes an occupied 4173 a clear bind error,
+and nothing is killed automatically: a process this config did not start is
+not its to stop.
+
+### 16.14 The backend contract these controls consume
 
 Specified in full in [`websocket.md`](../docs/01-architecture/websocket.md) §22. What a frontend
 needs to know, in one place:
@@ -1159,7 +1250,9 @@ assume the field exists.
 | OQ-8 | **No session list.** `SessionService.list_user_sessions` has no HTTP endpoint, so there is no device list to show — only "sign out everywhere". Publishing it needs a decision about what a session row may reveal (IP, user agent) | A device-management UI |
 | ~~OQ-9~~ | **Closed by A64-020.4.** The public profile renders a relationship-aware action set through `ProfileHeader`'s seam | — |
 | ~~OQ-10~~ | **Closed by A64-020.5B, in part.** The frontend has a socket: `shared/realtime` owns it, `app/providers` mounts it above the route tree, and a live game runs entirely on frames (§16). What remains is narrower and no longer a frontend gap — **the lobby still polls**, because `LoggingPendingMatchSink` (§15.3) means no match offer is ever published to the gateway. Reopened as OQ-13 | — |
-| OQ-13 | **Match offers are not pushed.** `PendingMatchSink` logs instead of publishing, so the lobby discovers a pairing by polling an HTTP read while a socket sits open beside it. Friend presence is the same shape. The client is ready for both; the sink is not | A gateway-backed `PendingMatchSink`, and a presence channel |
+| ~~OQ-13~~ | **Closed by A64-020.5D.** `GatewayPendingMatchSink` publishes a pairing to the paired players' sockets through the existing fleet fan-out, and the lobby reconciles against the durable read. Friend presence is still polled — reopened as OQ-14, which is the narrower half | — |
+| OQ-14 | **Friend presence is still an HTTP read.** The socket and the channel exist; what is missing is a presence event and a decision about who may be told what, which is `friends`' privacy question rather than a transport one | A presence channel |
+| OQ-15 | **Match activation is not pushed.** `matchmaking.match.offered` fires on pairing; nothing fires when the opponent accepts, so an open offer keeps the two-second interval. Narrow — it lasts at most the acceptance window — and closed by a `matchmaking.match.activated` frame | A second matchmaking frame |
 | OQ-12 | **The offer dialog cannot show an avatar or a rating.** `OpponentPreview` carries three public fields by design (§15.5). Publishing more needs the privacy-gated composition `profiles` owns, which is a backend decision rather than a frontend gap | A richer match card |
 | OQ-11 | **A friend's `relationship` is fetched but structurally known.** The four list endpoints state it server-side and cost nothing, but a client-side `friends` cache could serve the public profile's state too — not done, because a stale action is worse than a request | A measured need |
 

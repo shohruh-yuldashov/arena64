@@ -363,6 +363,8 @@ def _offer(
         opponent=opponent,
         variant=view.variant,
         rated=view.rated,
+        time_control=view.time_control,
+        speed_class=view.speed_class,
         acceptance_deadline=view.acceptance_deadline,
         you_accepted=view.you_accepted,
         opponent_accepted=view.opponent_accepted,

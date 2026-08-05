@@ -30,10 +30,10 @@ export default defineConfig({
     // here exactly as it is in `npm run dev`.
     trace: "on-first-retry",
   },
-  // **Four projects, because three specs share three accounts.**
+  // **Five projects, because four specs share three accounts.**
   //
-  // `play.spec.ts`, `game.spec.ts` and `game-controls.spec.ts` all drive
-  // the lobby with
+  // `play.spec.ts`, `game.spec.ts`, `game-controls.spec.ts` and
+  // `realtime-push.spec.ts` all drive the lobby with
   // `e2e_lobby_one|two|three`, and running them at once does not merely
   // race: refresh tokens rotate, so two contexts refreshing one session
   // means the loser presents a superseded token and the server revokes the
@@ -56,7 +56,12 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
-      testIgnore: ["**/play.spec.ts", "**/game.spec.ts", "**/game-controls.spec.ts"],
+      testIgnore: [
+        "**/play.spec.ts",
+        "**/game.spec.ts",
+        "**/game-controls.spec.ts",
+        "**/realtime-push.spec.ts",
+      ],
     },
     {
       name: "lobby",
@@ -70,6 +75,13 @@ export default defineConfig({
       dependencies: ["lobby"],
     },
     {
+      name: "realtime-push",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: "**/realtime-push.spec.ts",
+      // Fourth in the chain. Same three accounts, same reason.
+      dependencies: ["game-controls"],
+    },
+    {
       name: "game-controls",
       use: { ...devices["Desktop Chrome"] },
       testMatch: "**/game-controls.spec.ts",
@@ -81,12 +93,32 @@ export default defineConfig({
   ],
   webServer: {
     command: "npm run build && npm run preview -- --port 4173 --strictPort",
+    // **Never reuse** — A64-020.5D §18.
+    //
+    // `reuseExistingServer: !process.env.CI` cost this project a debugging
+    // session: a `vite preview` left running from an earlier invocation
+    // kept serving a bundle built two hours before, so several runs
+    // exercised old code while reporting on new specs. Nothing failed
+    // loudly; the tests simply asserted against a frontend that no longer
+    // existed.
+    //
+    // Option A of the two §18 offers, chosen because it is the one with no
+    // moving parts: a build-hash handshake needs the server to publish a
+    // hash, the config to read it, and both to agree on where — three
+    // places to get wrong in order to detect a problem that not reusing
+    // simply cannot have.
+    //
+    // The cost is one rebuild per run, which is ~250ms here. `strictPort`
+    // means an occupied 4173 fails with a clear bind error rather than
+    // silently attaching to whatever is there — and it fails **without**
+    // killing anything, because a process this config did not start is not
+    // this config's to kill (§18).
+    reuseExistingServer: false,
     // `localhost`, not `127.0.0.1`: Vite's preview server binds the
     // hostname it was given, and on a machine where `localhost` resolves
     // to `::1` first the loopback IPv4 address never answers — which
     // presents as a 120-second webServer timeout with no other symptom.
     url: "http://localhost:4173",
-    reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },
 });

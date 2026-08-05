@@ -4,6 +4,7 @@ import type { LobbyState, PendingMatch, QueueTicket } from "@/entities/queue";
 import { isResolved } from "@/entities/session";
 import { useSession } from "@/features/auth/model/session-provider";
 import { useMyTicket, usePendingMatch } from "@/features/matchmaking/model/queries";
+import { useMatchOfferPush } from "@/features/matchmaking/model/use-match-offers";
 
 /**
  * The lobby's whole state, derived from the two authoritative reads —
@@ -64,6 +65,12 @@ export interface LobbyView {
 
 export function useLobbyState(): LobbyView {
   const { state: session } = useSession();
+
+  // A64-020.5D §5. The push subscription, mounted where the reads it
+  // invalidates are read — so "a pairing woke us up" and "here is what the
+  // server says" are one hook's concern rather than two that could
+  // disagree about which keys matter.
+  useMatchOfferPush();
 
   // Read in this order on purpose. Each query decides its own polling
   // interval (§10), and the offer's decision needs to know whether a

@@ -29,9 +29,14 @@ from app.database.rate_limiter import RedisRateLimiter
 from app.database.redis import RedisPools, create_redis_pools
 from app.database.session_manager import DatabaseSessionManager
 from app.database.unit_of_work import SessionUnitOfWork
-from app.gateway.dependencies import get_gateway_bus_for, get_local_sockets
+from app.gateway.dependencies import (
+    build_broadcaster_for,
+    get_gateway_bus_for,
+    get_local_sockets,
+)
 from app.gateway.forwarding import GatewayForwarder
 from app.gateway.forwarding_tasks import GatewayForwardingTask, forwarding_request
+from app.gateway.matchmaking_offers import GatewayPendingMatchSink
 from app.gateway.node import resolve_node_id
 from app.gateway.router import gateway_router
 from app.modules.friends.application.ports import SocialGraphCache
@@ -430,10 +435,37 @@ def build_outbox_worker(
     # why it is a seam rather than a stub.
     sink = LoggingNotificationSink()
 
-    # A64-015.5's equivalent seam, for a different payload shape. One
-    # instance per process: it is stateless, and the day AD-09's gateway
-    # exists this line is where the real transport is wired.
-    pending_match_sink: PendingMatchSink = LoggingPendingMatchSink()
+    # A64-015.5's equivalent seam, for a different payload shape — and
+    # A64-020.5D is the day AD-09's gateway exists, so this is where the
+    # real transport is wired.
+    #
+    # One instance per process. It holds the fleet fan-out, which holds the
+    # process-wide socket registry and the bus, and rebuilding it per relay
+    # tick would be rebuilding the transport.
+    #
+    # **`LoggingPendingMatchSink` is no longer the production default**
+    # (§10). It survives behind an explicit switch for local diagnostics
+    # and for the tests whose subject is the resolution rather than the
+    # delivery — never as a silent fallback, which is the failure mode §10
+    # names: a deployment that believes it pushes and only logs.
+    pending_match_sink: PendingMatchSink = (
+        GatewayPendingMatchSink(
+            broadcaster=build_broadcaster_for(
+                pools=redis_pools,
+                settings=settings.gateway,
+                clock=clock,
+                node_id=resolve_node_id(settings.gateway),
+            ),
+            metrics=_metrics(),
+        )
+        if settings.gateway.match_offer_push_enabled
+        else LoggingPendingMatchSink()
+    )
+    if not settings.gateway.match_offer_push_enabled:
+        # `WARNING`, not `INFO`: with it off a paired player learns they
+        # were matched only when their lobby next polls, which is a
+        # degraded product rather than a configuration detail.
+        logger.warning("match_offer_push_disabled", extra={"reason": "configuration"})
 
     def dispatcher_for(session: AsyncSession) -> SocialNotificationDispatcher:
         """The consumer, over one relay tick's session.

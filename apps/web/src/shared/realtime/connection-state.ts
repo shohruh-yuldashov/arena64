@@ -68,3 +68,25 @@ export function isPursuing(status: ConnectionStatus): boolean {
 export function isTerminal(status: ConnectionStatus): boolean {
   return status === "closed" || status === "fatal";
 }
+
+/**
+ * How the app is currently learning about things — A64-020.5D §17.
+ *
+ * A **derived** four-state answer over `ConnectionStatus`, published so a
+ * feature can say "we are polling because the socket is down" without
+ * reading transport internals. §17 forbids exposing those, and the
+ * distinction that matters to a product surface is narrower than the
+ * transport's seven states: a lobby cares whether a push can arrive, not
+ * whether a ticket is being minted.
+ */
+export type DeliveryMode = "realtime" | "reconnecting" | "fallback_polling" | "offline";
+
+export function deliveryMode(status: ConnectionStatus): DeliveryMode {
+  if (isReady(status)) return "realtime";
+  if (status === "offline") return "offline";
+  if (isPursuing(status)) return "reconnecting";
+  // `idle`, `closed` and `fatal`. None of them will deliver a push, and
+  // none of them is going to fix itself — so the honest label is the one
+  // that says the reads are carrying the feature.
+  return "fallback_polling";
+}

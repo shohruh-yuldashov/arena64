@@ -99,6 +99,7 @@ from app.modules.game.public.acceptance import (
     PendingMatchView,
 )
 from app.modules.game.public.commands import (
+    DrawAgreementView,
     DrawOfferAlreadyPending,
     DrawOfferNotAllowedYet,
     DrawOfferNotPending,
@@ -190,6 +191,7 @@ __all__ = [
     "MoveApplied",
     "MatchCompleted",
     "SubmitMoveUseCase",
+    "DrawAgreementView",
     "DrawOfferAlreadyPending",
     "DrawOfferNotAllowedYet",
     "DrawOfferNotPending",

@@ -292,6 +292,41 @@ def get_broadcaster(
     )
 
 
+def build_broadcaster_for(
+    *,
+    pools: RedisPools,
+    settings: GatewaySettings,
+    clock: Clock,
+    node_id: str,
+) -> RoomBroadcaster:
+    """The fleet fan-out, assembled without a request — A64-020.5D §4, §10.
+
+    Takes plain arguments rather than resolving `Depends`, for the reason
+    `build_gateway_service` does: the **relay consumer** needs the identical
+    graph and has no request to resolve one from. A factory reachable only
+    through `Depends` is one the background path assembles its own copy of,
+    and the two drift on the first collaborator either gains.
+
+    The **process-wide** socket registry, shared with the request path.
+    `get_local_sockets` is cached, so this is the same map the connection
+    lifecycle writes into — a second instance would be a fan-out that
+    silently reaches nobody on this node while reporting success, which is
+    exactly the defect `GatewayForwardingTask` was built to close on the
+    other side.
+    """
+    bus = get_gateway_bus_for(pools, settings)
+    return RoomBroadcaster(
+        router=FleetConnectionRouter(
+            registry=RedisConnectionRegistry(pools.cache, clock=clock),
+            node_id=node_id,
+            metrics=get_gateway_metrics(),
+        ),
+        sockets=get_local_sockets(),
+        publisher=BusRemoteNodePublisher(bus),
+        metrics=get_gateway_metrics(),
+    )
+
+
 def get_move_limiter(
     request_limiter: RateLimiterDep, settings: GatewaySettingsDep
 ) -> MoveRateLimiter:

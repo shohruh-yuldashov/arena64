@@ -103,6 +103,24 @@ class MatchSnapshot:
     """The position: a comparison key and the placement it describes. A
     client that has both can render the board and check that it agrees."""
 
+    rated: bool
+    """Whether finishing this match moves a rating — A64-020.5D §14.
+
+    Additive, and it passes the audit that section asks for: the fact is
+    already on `game.match.rated`, it is already published on
+    `PendingMatchView` and in every match-history row, and it is the same
+    value both players agreed to when they queued. Nothing private crosses
+    and no new coupling appears — `game` already owns it.
+
+    **Spectator-safe**, so it is in the base projection rather than the
+    participant one: whether a game is rated is part of what a game *is*,
+    and an audience that could not tell a ranked game from a casual one
+    would be missing the thing that makes one worth watching.
+
+    Its consumer is the resignation dialog, which said "if this game is
+    rated…" because it could not tell.
+    """
+
     light_player_id: UUID
     dark_player_id: UUID
 

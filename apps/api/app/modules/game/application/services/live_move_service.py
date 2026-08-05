@@ -101,6 +101,7 @@ from app.modules.game.application.ports import (
     MoveLogRepository,
 )
 from app.modules.game.domain.clock import ClockState
+from app.modules.game.domain.draw_agreement import UNRESTRICTED
 from app.modules.game.domain.draws import DrawRuleSet
 from app.modules.game.domain.events import MatchCompleted, MoveApplied, SeatSummary
 from app.modules.game.domain.exceptions import (
@@ -116,6 +117,7 @@ from app.modules.game.domain.match_record import MatchRecord, MatchRecordStatus,
 from app.modules.game.domain.move_log import MoveRecord
 from app.modules.game.domain.result import MatchResult
 from app.modules.game.domain.variants import board_variant_of
+from app.modules.game.public.commands import DrawAgreementView, DrawOfferView
 from app.modules.game.public.moves import (
     AppliedMove,
     ClockView,
@@ -587,10 +589,46 @@ def _result_for(
         outcome=result.outcome if result is not None else None,
         termination_reason=result.reason if result is not None else None,
         winner=result.winner if result is not None else None,
+        # A64-020.5D §10. Both sides' facts, from the record this move just
+        # wrote — so the participant frame the gateway sends afterwards is
+        # the state the row holds rather than one derived from the move.
+        moved_by=request.player_id,
+        draw=_agreement_of(settled),
     )
 
 
 __all__ = ["LiveMoveService"]
+
+
+def _agreement_of(record: MatchRecord) -> DrawAgreementView:
+    """The match's draw agreement after this move — §10, §11.
+
+    A move can end an offer (its recipient played past it) and can restore
+    a player's eligibility (the opponent finally moved), and neither change
+    can ride on `game.move.applied`, which reaches spectators.
+    """
+    offer = record.draw_agreement.offer
+    return DrawAgreementView(
+        offer=(
+            DrawOfferView(
+                offered_by=offer.offered_by,
+                offered_at_ply=offer.offered_at_ply,
+                offered_at=offer.offered_at,
+            )
+            if offer is not None
+            else None
+        ),
+        may_offer_light=record.draw_agreement.may_offer(PlayerSide.LIGHT, at_ply=record.ply_number),
+        may_offer_dark=record.draw_agreement.may_offer(PlayerSide.DARK, at_ply=record.ply_number),
+        # Read from the thresholds rather than from `may_offer`: a match
+        # where somebody offered once and the restriction has since lapsed
+        # still needs its frames, because the *lapsing* is the news.
+        is_untouched=(
+            record.draw_agreement.offer is None
+            and record.draw_agreement.light_may_offer_from_ply == UNRESTRICTED
+            and record.draw_agreement.dark_may_offer_from_ply == UNRESTRICTED
+        ),
+    )
 
 
 def _seat_summary(seat: MatchSeat) -> SeatSummary | None:

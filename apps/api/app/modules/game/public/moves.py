@@ -60,6 +60,7 @@ from app.modules.game.domain.exceptions import (
     StaleMatchState,
 )
 from app.modules.game.domain.result import MatchOutcome, TerminationReason
+from app.modules.game.public.commands import DrawAgreementView
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +185,20 @@ class SubmitMoveResult:
     """
 
     winner: PlayerSide | None = None
+
+    moved_by: UUID | None = None
+    """Who played this move. Echoed back so a transport addressing a
+    per-seat frame can pair one player with one side — A64-020.5D §11."""
+
+    draw: "DrawAgreementView | None" = None
+    """The draw agreement after this move — A64-020.5D §10, §11.
+
+    `None` only for a caller that predates the field. A move can **end** an
+    offer (the recipient played past it) and can restore a player's
+    eligibility (the opponent finally moved), and neither change can ride
+    on `game.move.applied` — that frame reaches spectators, and these
+    permissions are per-seat.
+    """
     """The result, when this move ended the game — A64-016.4 §7.
 
     `None` while the match continues, which is the overwhelmingly common

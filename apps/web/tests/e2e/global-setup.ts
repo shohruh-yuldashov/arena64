@@ -1,0 +1,186 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+
+import { request } from "@playwright/test";
+
+import {
+  API,
+  AUTH_DIR,
+  E2E_ACCOUNTS,
+  PASSWORD,
+  type SeededAccount,
+  statePath,
+} from "./accounts";
+
+/**
+ * Seeds the E2E accounts **once**, before any worker starts — A64-020.4 §21.
+ *
+ * ## Why this exists rather than a fixture per spec
+ *
+ * Two rate limits, and between them they make per-spec authentication
+ * impossible:
+ *
+ *     register   3 per IP per hour
+ *     login      5 per IP per 15 minutes
+ *
+ * A64-020.3's suite registered one account per run and became unrunnable on
+ * the fourth. A social suite needs two accounts, so it would have hit the
+ * register cap on its second run and the login cap on its first — three
+ * specs signing in through the form is already three of the five.
+ *
+ * So authentication happens here, serially, and the resulting **browser
+ * session** is written to disk. Specs load it as `storageState` and never
+ * sign in at all.
+ *
+ * ## What a repeat run actually costs
+ *
+ * The saved state carries the `HttpOnly` refresh cookie, which lasts thirty
+ * days, and each run probes it before re-authenticating.
+ *
+ *     e2e_social_alice / _bob   0 — their sessions survive every run
+ *     e2e_profile_owner         1 login — that spec asserts "sign out
+ *                               everywhere", which revokes its own session
+ *                               by design, so the next run must sign in
+ *     auth.spec                 1 registration — registration is its subject
+ *
+ * So a run costs one login and one registration, and the binding limit is
+ * **three registrations per hour**: roughly three full runs an hour from
+ * one IP. Down from A64-020.3's every-run-registers, and not zero — stated
+ * in `specs/frontend.md` §10.1 rather than discovered.
+ *
+ * ## What was deliberately not done
+ *
+ * - **Turning the rate limit off.** It is production behaviour, and a suite
+ *   that only passes without it never exercises it.
+ * - **Clearing Redis from the test suite.** Reaching into the backend's
+ *   infrastructure from a frontend spec is not a fixture, it is a hole.
+ * - **Failing silently.** Every path here throws with the API's own status,
+ *   so a broken fixture fails the run rather than skipping it.
+ */
+export default async function globalSetup(): Promise<void> {
+  const context = await request.newContext({ baseURL: API });
+
+  try {
+    const reachable = await context
+      .get("/health")
+      .then((response) => response.ok())
+      .catch(() => false);
+    if (!reachable) {
+      // Not an error: the specs themselves skip when the API is absent, and
+      // this must not turn "no backend running" into a red suite.
+      console.warn("[e2e] apps/api is not reachable — social specs will skip");
+      return;
+    }
+
+    mkdirSync(AUTH_DIR, { recursive: true });
+    for (const username of Object.values(E2E_ACCOUNTS)) {
+      await seed(context, username);
+    }
+  } finally {
+    await context.dispose();
+  }
+}
+
+async function seed(
+  context: Awaited<ReturnType<typeof request.newContext>>,
+  username: string,
+): Promise<void> {
+  const path = statePath(username);
+
+  // A saved session that still works costs nothing to reuse. This is the
+  // whole reason repeat runs do not touch either rate limit.
+  if (existsSync(path) && (await sessionIsLive(path))) {
+    return;
+  }
+
+  const email = `${username}@example.com`;
+  const session = await context.post("/api/v1/auth/browser/login", {
+    data: { email, password: PASSWORD },
+    failOnStatusCode: false,
+  });
+
+  if (session.status() === 401) {
+    const created = await context.post("/api/v1/auth/browser/register", {
+      data: { username, email, password: PASSWORD },
+      failOnStatusCode: false,
+    });
+    if (!created.ok()) {
+      throw new Error(
+        `[e2e] could not seed ${username}: register returned ${created.status()} — ` +
+          `${await created.text()}`,
+      );
+    }
+  } else if (!session.ok()) {
+    throw new Error(`[e2e] could not sign in as ${username}: ${session.status()}`);
+  }
+
+  // **`identify` first, then the state.** It refreshes, and refreshing
+  // *rotates* the cookie — capturing the jar before it would save a token
+  // the server has already superseded, and presenting a superseded token
+  // revokes the whole chain. That is precisely how the first version of
+  // this file failed: every spec got a `401` from a session it had just
+  // been handed.
+  const account = await identify(context);
+  const state = await context.storageState();
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({ ...state, arena64: account }, null, 2));
+
+  // Cleared so the next account starts from an empty jar rather than
+  // inheriting this one's session.
+  await context.storageState({ path: undefined });
+}
+
+/**
+ * Whether a saved session still works, leaving the file holding the
+ * **rotated** cookie.
+ *
+ * The rewrite is not optional: the probe consumes the stored token, so a
+ * file left unchanged would be stale from the moment it was checked.
+ */
+async function sessionIsLive(path: string): Promise<boolean> {
+  const probe = await request.newContext({ baseURL: API, storageState: path });
+  try {
+    const refreshed = await probe.post("/api/v1/auth/browser/refresh", {
+      failOnStatusCode: false,
+    });
+    if (!refreshed.ok()) return false;
+
+    // Rotated, so the stored cookie must be replaced or the *next* run
+    // would present a superseded token and revoke the whole chain.
+    //
+    // The **access token is refreshed too**: the stored one is fifteen
+    // minutes old at best and expired at worst, and `resetRelationship`
+    // uses it directly. A live cookie beside a dead bearer token is the
+    // subtle version of the same staleness.
+    const saved = JSON.parse(readFileSync(path, "utf8")) as { arena64: SeededAccount };
+    const body = (await refreshed.json()) as { data: { access_token: string } };
+    const state = await probe.storageState();
+    writeFileSync(
+      path,
+      JSON.stringify(
+        { ...state, arena64: { ...saved.arena64, accessToken: body.data.access_token } },
+        null,
+        2,
+      ),
+    );
+    return true;
+  } finally {
+    await probe.dispose();
+  }
+}
+
+async function identify(
+  context: Awaited<ReturnType<typeof request.newContext>>,
+): Promise<SeededAccount> {
+  const refreshed = await context.post("/api/v1/auth/browser/refresh");
+  const body = (await refreshed.json()) as {
+    data: { access_token: string; user: { id: string; username: string } };
+  };
+  return {
+    username: body.data.user.username,
+    email: `${body.data.user.username}@example.com`,
+    password: PASSWORD,
+    id: body.data.user.id,
+    accessToken: body.data.access_token,
+  };
+}

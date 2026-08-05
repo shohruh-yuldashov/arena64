@@ -3,10 +3,10 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-FRONTEND` |
-| **Status** | Approved through A64-020.3 — foundation, authentication and profile |
+| **Status** | Approved through A64-020.4 — foundation, authentication, profile and social |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-05 — A64-020.3, profile UI |
+| **Last updated** | 2026-08-05 — A64-020.4, social UI |
 | **Related ADRs** | [`ADR-002`](../docs/07-decisions/ADR-002-frontend-spa.md) |
 | **Related specs** | [`rating.md`](./rating.md), [`leaderboard.md`](./leaderboard.md), [`tournament.md`](./tournament.md) |
 | **Related** | `docs/01-architecture/architecture.md` §5, `docs/04-frontend/` |
@@ -71,10 +71,10 @@ is only written down is a dependency direction that drifts.
 | Layer | Holds | Today |
 | --- | --- | --- |
 | `shared/` | Framework-level building blocks with no business meaning: `api/`, `config/`, `lib/`, `theme/`, `ui/`, `test/` | Full |
-| `entities/` | Business nouns — a player, a tournament — with their shapes and queries | `session/`, `user/`, `profile/` — aliases over generated types |
-| `features/` | One user-facing capability, self-contained | `auth/`, `profile/`, `avatar/`, `preferences/`, `privacy/`, `form-demo/` |
-| `widgets/` | Composite blocks a page arranges | `app-shell/`, `auth-shell/`, `settings-shell/`, `session-menu/`, `profile-header/`, `rating-cards/`, `statistics-panel/`, `tournament-history/`, `theme-toggle/` |
-| `pages/` | One route's screen | `home/`, five auth pages, `profile/`, `public-profile/`, four `settings-*`, `not-found/`, `unexpected-error/` |
+| `entities/` | Business nouns — a player, a tournament — with their shapes and queries | `session/`, `user/`, `profile/`, `relationship/` — aliases over generated types |
+| `features/` | One user-facing capability, self-contained | `auth/`, `profile/`, `social/`, `avatar/`, `preferences/`, `privacy/`, `form-demo/` |
+| `widgets/` | Composite blocks a page arranges | `app-shell/`, `auth-shell/`, `settings-shell/`, `session-menu/`, `profile-header/`, `rating-cards/`, `statistics-panel/`, `tournament-history/`, `player-row/`, `social-nav/`, `theme-toggle/` |
+| `pages/` | One route's screen | `home/`, five auth pages, `profile/`, `public-profile/`, four `settings-*`, four social pages, `not-found/`, `unexpected-error/` |
 | `app/` | Composition: providers, router, entry, global styles | Full |
 
 **This is FSD-shaped, not FSD.** There are no slice/segment conventions, no public-API
@@ -99,6 +99,10 @@ TanStack Router, **code-based** (`src/app/router/routes.tsx`), not file-based.
 | `/settings/preferences` | `pages/settings-preferences` | `RequireAuth` |
 | `/settings/privacy` | `pages/settings-privacy` | `RequireAuth` |
 | `/settings/sessions` | `pages/settings-sessions` | `RequireAuth` |
+| `/friends` | `pages/friends` | `RequireAuth` |
+| `/friends/requests` | `pages/friend-requests` | `RequireAuth` |
+| `/friends/blocked` | `pages/blocked` | `RequireAuth` |
+| `/search` | `pages/search` | `RequireAuth` |
 | *anything unmatched* | `pages/not-found` | The root route's `notFoundComponent` |
 
 The three link-landing pages are **deliberately unguarded**. A signed-in
@@ -279,17 +283,39 @@ failures, not rendering ones. Each phase adds at most eight.
 | `features/profile/profile.test.tsx` ×7 | A64-020.3 — `RequireAuth` on a real route, the self profile's three fixed requests, privacy omission and not-found, dirty-state editing with accessibility assertions, avatar size refusal, a privacy round trip, and cursor paging with no per-row fetch |
 | `tests/e2e/profile.spec.ts` | A64-020.3 — an edit reaches the database and appears on the **public** page, which is a different endpoint with no shared cache |
 
-### 10.1 The e2e suite registers, so it is rate-limited
+### 10.1 E2E accounts are seeded, because authentication is rate-limited
 
-Two of the three Playwright specs register an account, and `POST /auth/register` allows
-**three per IP per hour** (`RATE_LIMIT_REGISTER_IP_LIMIT`). So the suite can be run twice
-in an hour from one machine and the third run fails with a translated
-`Too many attempts` on the sign-up form — which is the rate limit working, not a defect.
+Two limits bound the suite, and both are production behaviour that must stay on:
 
-It surfaced exactly that way during A64-020.3. Clearing `rl:v1:register_ip:*` from the
-local limits Redis (database 4) resets it. Making the suite immune would mean either
-seeding accounts out of band or exempting the test IP, and both trade a real behaviour for
-a convenience; recorded rather than papered over.
+    register   3 per IP per hour
+    login      5 per IP per 15 minutes
+
+A64-020.3 registered a fresh account per run and became unrunnable on the fourth. A social
+suite needs two accounts and would have hit the register cap on its second run and the
+login cap on its first.
+
+So `tests/e2e/global-setup.ts` seeds three fixed accounts **once**, before any worker
+starts, and saves each one's **browser session** (`test-results/.auth/*.json`, git-ignored
+— they carry a refresh cookie). Specs load them as `storageState` and never sign in.
+
+| Account | Cost per run |
+| --- | --- |
+| `e2e_social_alice`, `e2e_social_bob` | **0** — their sessions survive, probed and rotated in setup |
+| `e2e_profile_owner` | **1 login** — that spec asserts "sign out everywhere", which revokes its own session by design |
+| `auth.spec.ts` | **1 registration** — registration is its subject |
+
+So a run costs one login and one registration, and the binding limit is three registrations
+per hour: roughly **three full runs an hour** from one IP. Not zero, and stated rather than
+discovered.
+
+**The accounts accumulate state.** A friendship from one run is still there on the next, so
+`resetRelationship` returns the pair to strangers through the same endpoints a player uses
+— never a truncation — and the profile spec edits a value that is unique per run rather
+than a fixed one that would leave the form clean.
+
+What was deliberately not done: disabling the rate limit (a suite that only passes without
+it never exercises it), clearing Redis from a spec (a frontend test reaching into backend
+infrastructure is a hole, not a fixture), and skipping silently when seeding fails.
 
 **MSW intercepts the network, never a mocked module** — stubbing `shared/api` would prove
 a component calls a function; intercepting the request proves the whole graph.
@@ -557,19 +583,137 @@ vertical sidebar at 360 px would take a third of the width for four links. Profi
 stack in one column and become a grid from `sm`. Interactive controls are `min-h-11` (44 px).
 Long display names and bios use `break-words`, so nothing forces a horizontal scroll.
 
-## 14. Open questions
+## 14. Social — A64-020.4
+
+### 14.1 The relationship is the server's, and it is one value
+
+`ProfileResponse.relationship` (SPEC-SOCIAL / A64-020.4 backend) carries one of
+`none | outgoing_request | incoming_request | friend | blocked`, viewer-relative, on
+**every** surface that returns a profile. Nothing is inferred client-side from several
+booleans.
+
+`entities/relationship` maps that one value to a list of actions, and that mapping is the
+whole reason the impossible combinations §6 forbids cannot occur: with one closed input
+there is no arrangement of props that yields "Add friend" beside "Accept".
+
+| State | Actions |
+| --- | --- |
+| `none` | Add friend, Block |
+| `outgoing_request` | Cancel request, Block |
+| `incoming_request` | Accept, Decline, Block |
+| `friend` | Remove friend, Block |
+| `blocked` | Unblock — **and nothing else** |
+
+`null`/`undefined` yields **no** actions. The API omits the field for an anonymous reader
+and on the reader's own profile, and `none` is different: signed in, no relationship.
+
+`features/social/ui/relationship-actions.tsx` is the single component that renders this and
+performs every transition. Search rows, the friends list, both request lists and the public
+profile all use it, so a transition is written once.
+
+**`blocked` is one-directional.** It means the viewer blocked this player. Nothing published
+anywhere says the reverse, and the enum has no member that could.
+
+### 14.2 Routes
+
+`/friends`, `/friends/requests`, `/friends/blocked`, `/search` — all four behind
+`RequireAuth`, all four reachable from the header's "Friends" link. The two request
+directions share one page: they are two views of one resource, and a person checking
+requests wants both.
+
+### 14.3 Query keys and the invalidation matrix
+
+`features/social/api/keys.ts`.
+
+| Mutation | Invalidates |
+| --- | --- |
+| send request | `search`, `outgoing`, `friends/count`, public profiles |
+| cancel request | `search`, `outgoing`, `friends/count`, public profiles |
+| accept | + `incoming`, `friends` |
+| decline | + `incoming` |
+| remove friend | + `friends` |
+| **block** | `social` (everything) + public profiles |
+| unblock | `blocked`, `search`, public profiles |
+
+Blocking is the one mutation that earns a broad scope, because the write genuinely is
+broad: it ends a friendship, cancels pending requests in both directions and removes the
+target from search and every list. Naming five keys would be a list that goes stale the
+first time the backend adds a consequence. It is still scoped — ratings, tournaments and
+the session are untouched.
+
+`search` is invalidated by prefix, because the client does not know which term produced the
+cached page. Public profiles use `profileKeys.publicAll()` — the profile feature's own key,
+imported rather than respelled.
+
+### 14.4 Search
+
+Debounced at 300 ms, so typing a term issues one request rather than one per keystroke, and
+**no request at all** below the API's two-character floor. The query key is the *normalised*
+term, so `" Ali "` and `"ali"` are one cache entry rather than three fetches of one page.
+`gcTime` is two minutes: a cache keyed by arbitrary user input is unbounded by construction.
+
+Superseded requests are genuinely **cancelled** — TanStack's `AbortSignal` is threaded into
+Axios — rather than merely ignored.
+
+The client filters nothing. Search already excludes the caller and everyone in either
+direction of a block, server-side; a second implementation here is the copy that goes stale.
+
+The result count is an `aria-live` region.
+
+### 14.5 Presence in lists
+
+`is_online` and `last_seen` only. The deprecated `show_online_status` and `show_last_seen`
+booleans are **not consumed anywhere**: each is `true` only when its audience-valued
+counterpart is `everyone`, so reading them would collapse a friends-only setting to "off".
+
+An omitted field renders nothing — no "Offline" default, in either direction. Online state
+is never computed from a timestamp, and there is no invented "recently online" category.
+The dot is decoration; the word beside it carries the meaning.
+
+**Presence updates only on an HTTP read.** There is no WebSocket in the frontend yet, so a
+friend going offline is seen on the next refetch rather than live. Deferred deliberately —
+building a second socket for this would pre-empt the Game phase's — and recorded as OQ-10.
+
+### 14.6 Dense lists use `thumbnail_url`
+
+Every row in search, friends, requests and blocked renders `thumbnail_url`; `avatar_url` is
+left to the profile header. Asserted in the Playwright flow rather than in jsdom: Radix
+mounts the `<img>` only once the image has *loaded*, and jsdom never loads one.
+
+### 14.7 The public profile's action seam
+
+`ProfileHeader`'s `children`, fed from the `relationship` field the **same response**
+carries — no second request. Nothing renders on the viewer's own profile or for an
+anonymous reader.
+
+`requestId` is deliberately not available there, so accept and decline are offered on
+`/friends/requests` where the id exists rather than guessed by a lookup.
+
+The public-profile query **waits for the session to resolve**. Without that it races the
+bootstrap, gets composed for an anonymous viewer, and caches a profile with no social
+actions — a defect the social e2e caught.
+
+### 14.8 Not in this phase
+
+No chat, no notifications UI, no game invitations, no activity feed, no recommendations, no
+moderation tools. Nothing here claims a block deletes messages or cancels games, because
+the backend contract guarantees neither.
+
+## 15. Open questions
 
 | # | Question | Blocked work |
 | --- | --- | --- |
 | ~~OQ-1~~ | **Closed by A64-020.2.** `apps/api` sets the `HttpOnly` cookie on a browser-specific surface and the app is same-origin behind a proxy (§11, §12.1) — so F-1's guarantee holds without a Route Handler | — |
 | OQ-2 | **i18n, partially closed.** `shared/i18n` (§12.7) wires uz/ru/en with compile-checked keys. Still open: an ICU library for plurals and per-locale date/number formatting, lazy namespace loading, and whether the locale belongs in the URL | Plurals, formatted dates, a locale-scoped route |
-| OQ-3 | **Route tree scale.** Code-based routing is still right at seven routes. If the tree outgrows one screen, file-based routing plus its generated tree may be the better trade | A large route surface |
+| OQ-3 | **Route tree scale.** At seventeen routes `routes.tsx` no longer fits on a screen, which is the threshold this question named. If the tree outgrows one screen, file-based routing plus its generated tree may be the better trade | A large route surface |
 | OQ-4 | **Bundle budget.** No `manualChunks` and no size assertion in CI. The numbers to enforce are a measurement nobody has taken yet (CLAUDE.md §10.10) | A budget gate |
 | OQ-5 | **Automated a11y checks.** `@axe-core/playwright` is not wired; today's accessibility guarantees are hand-asserted | An a11y gate |
 | OQ-6 | **Access-token expiry is not anticipated.** The client waits for a `401` and refreshes reactively rather than scheduling against `expires_in`, so the first request after ~15 minutes idle always costs a round trip | A latency budget on the first interaction |
 | ~~OQ-7~~ | **Closed by A64-020.3.** `signOutEverywhere` is reachable from `/settings/sessions`, behind an explicit confirmation | — |
 | OQ-8 | **No session list.** `SessionService.list_user_sessions` has no HTTP endpoint, so there is no device list to show — only "sign out everywhere". Publishing it needs a decision about what a session row may reveal (IP, user agent) | A device-management UI |
-| OQ-9 | **The public profile has no friend or block actions.** Deliberate — those are A64-020.4's, and half of one would be worse than none | A64-020.4 Social UI |
+| ~~OQ-9~~ | **Closed by A64-020.4.** The public profile renders a relationship-aware action set through `ProfileHeader`'s seam | — |
+| OQ-10 | **Presence is not live.** Friend online status updates on an HTTP read, not over a socket. The frontend has no WebSocket yet and building one here would pre-empt the Game phase's | A64-020.5 Game UI |
+| OQ-11 | **A friend's `relationship` is fetched but structurally known.** The four list endpoints state it server-side and cost nothing, but a client-side `friends` cache could serve the public profile's state too — not done, because a stale action is worse than a request | A measured need |
 
 ## Related documents
 

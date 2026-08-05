@@ -272,5 +272,91 @@
       "failedTitle": "We could not load this",
       "hiddenByPrivacy": "Hidden by the owner"
     }
+  },
+  "social": {
+    "nav": {
+      "title": "Social",
+      "friends": "Friends",
+      "requests": "Requests",
+      "blocked": "Blocked",
+      "search": "Search",
+      "incomingBadge": "Incoming: {count}",
+      "outgoingBadge": "Outgoing: {count}"
+    },
+    "search": {
+      "title": "Find players",
+      "label": "Username or name",
+      "placeholder": "At least {min} characters",
+      "hint": "Search by name or username.",
+      "tooShort": "Type at least {min} characters to search.",
+      "searching": "Searching…",
+      "resultCount": "{count} results",
+      "noResults": "Nobody found",
+      "loadMore": "Show more"
+    },
+    "friends": {
+      "title": "Friends",
+      "empty": "No friends yet",
+      "emptyHint": "Find players and send them a request.",
+      "count": "{count} in total",
+      "since": "Friends since {date}",
+      "loadMore": "Load more"
+    },
+    "requests": {
+      "title": "Friend requests",
+      "incoming": "Incoming",
+      "outgoing": "Outgoing",
+      "incomingEmpty": "No incoming requests",
+      "outgoingEmpty": "No outgoing requests",
+      "sent": "Sent {date}",
+      "loadMore": "Load more"
+    },
+    "blocked": {
+      "title": "Blocked players",
+      "empty": "You have not blocked anybody",
+      "emptyHint": "Blocked players do not appear in search or in your lists.",
+      "since": "Blocked {date}",
+      "loadMore": "Load more"
+    },
+    "presence": {
+      "online": "Online",
+      "offline": "Offline",
+      "lastSeen": "Last seen {when}"
+    },
+    "actions": {
+      "sendRequest": "Add friend",
+      "cancelRequest": "Cancel request",
+      "accept": "Accept",
+      "decline": "Decline",
+      "removeFriend": "Remove friend",
+      "block": "Block",
+      "unblock": "Unblock",
+      "viewProfile": "View profile",
+      "working": "Working…",
+      "confirm": "Confirm",
+      "cancelDialog": "Cancel"
+    },
+    "confirm": {
+      "removeTitle": "Remove this friend?",
+      "removeBody": "{name} will be removed from your friends. They are not blocked, and you can send a request again later.",
+      "blockTitle": "Block this player?",
+      "blockBody": "{name} will not find you in search and cannot send you a request. An existing friendship ends and pending requests are cancelled."
+    },
+    "errors": {
+      "duplicate_friend_request": "You have already sent this player a request.",
+      "opposite_friend_request_pending": "This player has sent you a request — check your incoming list.",
+      "not_found": "Not found.",
+      "conflict": "That is not possible right now.",
+      "permission_denied": "That is not allowed.",
+      "validation_error": "Check what you entered.",
+      "rate_limited": "Too many attempts. Try again shortly.",
+      "network": "We could not reach the server.",
+      "unexpected": "Something went wrong. Try again."
+    },
+    "state": {
+      "loading": "Loading…",
+      "retry": "Try again",
+      "failed": "We could not load this"
+    }
   }
 }

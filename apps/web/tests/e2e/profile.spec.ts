@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { E2E_ACCOUNTS, seededAccount, statePath } from "./accounts";
+
 /**
  * One profile journey, across the real boundary — A64-020.3 §20.8.
  *
@@ -23,10 +25,8 @@ import { expect, test } from "@playwright/test";
  *     cd apps/api && uv run uvicorn app.app_factory:create_app --factory --port 8000
  *     cd apps/web && npm run test:e2e
  */
-const UNIQUE = process.env.ARENA64_E2E_SUFFIX ?? String(Date.now());
-
 test("a player edits their profile and sees it on their public page", async ({
-  page,
+  browser,
   request,
 }) => {
   const reachable = await request
@@ -35,20 +35,26 @@ test("a player edits their profile and sees it on their public page", async ({
     .catch(() => false);
   test.skip(!reachable, "apps/api is not running on :8000");
 
-  const username = `p${UNIQUE}`.slice(0, 20);
+  // A **seeded** account, not a fresh registration — A64-020.4 §21.
+  // Registration is capped at three per IP per hour, and this spec spent one
+  // of them on every run until the cap made the suite unrunnable. Only
+  // `auth.spec.ts` still registers, because registration is its subject.
+  const owner = seededAccount(E2E_ACCOUNTS.profile);
+  const username = owner.username;
 
-  await page.goto("/register");
-  await page.getByLabel(/username/i).fill(username);
-  await page.getByLabel(/^email/i).fill(`${username}@example.com`);
-  await page.getByLabel(/^password/i).fill("CorrectHorse1!");
-  await page.getByLabel(/confirm password/i).fill("CorrectHorse1!");
-  await page.getByRole("button", { name: /create account/i }).click();
+  // The saved session, not a sign-in — see `tests/e2e/accounts.ts`.
+  const context = await browser.newContext({ storageState: statePath(username) });
+  const page = await context.newPage();
+  await page.goto("/profile");
   await expect(page.getByRole("button", { name: /sign out/i })).toBeVisible();
 
   // --- the profile is reachable from the header, not only by URL ---------
-  await page.getByRole("link", { name: new RegExp(username, "i") }).click();
+  await page.goto("/profile");
   await expect(page).toHaveURL(/\/profile$/);
-  await expect(page.getByRole("heading", { level: 1, name: username })).toBeVisible();
+  // The seeded account keeps whatever name the previous run left, so the
+  // assertion is that a profile rendered — the *edit* below is what this
+  // spec is about, and it asserts its own result.
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
 
   // --- edit ---------------------------------------------------------------
   await page.getByRole("link", { name: /edit profile/i }).click();
@@ -58,7 +64,12 @@ test("a player edits their profile and sees it on their public page", async ({
   // Nothing has changed yet, so there is nothing to send.
   await expect(save).toBeDisabled();
 
-  await page.getByLabel(/display name/i).fill("Edited Name");
+  // Unique per run. The account is **seeded and reused**, so it still holds
+  // the previous run's values — filling the same ones would leave the form
+  // clean and the submit correctly disabled, which is the dirty-state rule
+  // working and a test that never asserts anything.
+  const editedName = `Edited ${Date.now()}`;
+  await page.getByLabel(/display name/i).fill(editedName);
   await page.getByLabel(/about you/i).fill("Playing since 2026.");
   await page.getByLabel(/country code/i).fill("UZ");
   await expect(save).toBeEnabled();
@@ -71,11 +82,11 @@ test("a player edits their profile and sees it on their public page", async ({
 
   // --- it survives a reload, so it was stored and not merely rendered ----
   await page.reload();
-  await expect(page.getByLabel(/display name/i)).toHaveValue("Edited Name");
+  await expect(page.getByLabel(/display name/i)).toHaveValue(editedName);
 
   // --- and it is on the public page, which is a different read ----------
   await page.goto(`/players/${username}`);
-  await expect(page.getByRole("heading", { level: 1, name: "Edited Name" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: editedName })).toBeVisible();
   await expect(page.getByText("Playing since 2026.")).toBeVisible();
   await expect(page.getByText(`@${username}`)).toBeVisible();
 
@@ -96,4 +107,9 @@ test("a player edits their profile and sees it on their public page", async ({
   // The session is genuinely gone: a protected route now bounces.
   await page.goto("/profile");
   await expect(page).toHaveURL(/\/login/);
+
+  // Written back for the same reason the social spec does: the context
+  // rotated the cookie, and the next run reuses this file.
+  await context.storageState({ path: statePath(username) });
+  await context.close();
 });

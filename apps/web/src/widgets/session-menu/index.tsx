@@ -54,7 +54,15 @@ export function SessionMenu() {
   };
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-1 sm:gap-2">
+      {/* A64-020.4. The one entry point to the social pages — without it
+          `/friends` and `/search` are reachable only by typing a URL, which
+          is the "implemented and reachable from nothing" failure this
+          codebase has now found three times on the backend. */}
+      <Button asChild size="sm" variant="ghost" className="min-h-11">
+        <Link to="/friends">{t("social.nav.friends")}</Link>
+      </Button>
+
       {/* The avatar and the name are one link to the profile — the way a
           signed-in player reaches their own page from anywhere. */}
       <Button asChild size="sm" variant="ghost" className="min-h-11 gap-2 px-2">

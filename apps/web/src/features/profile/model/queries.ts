@@ -50,10 +50,25 @@ export function useMyRatings() {
   });
 }
 
-export function usePublicProfile(username: string) {
+/**
+ * Anybody's public profile.
+ *
+ * `enabled` is **not optional**, and the reason is a defect the social e2e
+ * caught: this query fires on mount, the session bootstraps in an effect,
+ * and on a direct navigation the fetch wins the race. The response is then
+ * composed for an *anonymous* viewer — `relationship` is `null` — and that
+ * answer is cached, so a signed-in player sees a profile with no social
+ * actions until something evicts it.
+ *
+ * So the caller passes `isResolved(session)` and the query waits. The cost
+ * is one render of the pending state on a cold load; the alternative is a
+ * page that silently disagrees with the session about who is looking.
+ */
+export function usePublicProfile(username: string, enabled: boolean) {
   return useQuery({
     queryKey: profileKeys.byUsername(username),
     queryFn: () => profileApi.getPublicProfile(username),
+    enabled,
     // A wrong username is a `404` and will stay one. Retrying it three
     // times delays the not-found page for no possible gain.
     retry: false,

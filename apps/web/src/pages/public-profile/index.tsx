@@ -1,8 +1,11 @@
 import { Link, useParams } from "@tanstack/react-router";
 
+import { isResolved } from "@/entities/session";
+import { useSession } from "@/features/auth/model/session-provider";
 import { isNotFound } from "@/features/profile/model/error-messages";
 import { usePlayerRatings, usePublicProfile } from "@/features/profile/model/queries";
 import { QueryState } from "@/features/profile/ui/query-state";
+import { RelationshipActions } from "@/features/social/ui/relationship-actions";
 import { useTranslation } from "@/shared/i18n";
 import { Button } from "@/shared/ui";
 import { ProfileHeader } from "@/widgets/profile-header";
@@ -35,12 +38,30 @@ import { TournamentHistory } from "@/widgets/tournament-history";
  * Under `profileKeys.byUsername`, never `me` — see `api/keys.ts` on why
  * sharing a key would let a privacy-filtered page read unfiltered data.
  *
- * No friend or block actions: those are A64-020.4's.
+ * ## Social actions — A64-020.4
+ *
+ * Rendered through `ProfileHeader`'s `children` seam, from the
+ * `relationship` field the **same response** carries. No second request:
+ * the composer resolves it in the batch that built this profile, so a
+ * relationship-aware page costs exactly what an unaware one did.
+ *
+ * Nothing is rendered on the viewer's own profile, and nothing for an
+ * anonymous reader — the API sends `null` for both, and `actionsFor(null)`
+ * is an empty list. That is one rule in one place rather than a check here
+ * and another in every list.
+ *
+ * `requestId` is deliberately not passed: a profile response names a
+ * relationship, not the request row that produced it, so accept and decline
+ * are offered on `/friends/requests` where the id exists. Guessing one
+ * would mean a lookup this page does not need.
  */
 export default function PublicProfilePage() {
   const { t } = useTranslation();
   const { username } = useParams({ from: "/players/$username" });
-  const profile = usePublicProfile(username);
+  const { state: session } = useSession();
+  // Waits for the session, so the profile is never composed for an
+  // anonymous viewer and cached that way — see `usePublicProfile`.
+  const profile = usePublicProfile(username, isResolved(session));
   const ratings = usePlayerRatings(profile.data?.id);
 
   if (profile.isError && isNotFound(profile.error)) {
@@ -58,13 +79,28 @@ export default function PublicProfilePage() {
   return (
     <div className="flex flex-col gap-8">
       <QueryState
-        isPending={profile.isPending}
+        isPending={profile.isPending || !isResolved(session)}
         isError={profile.isError}
         onRetry={() => void profile.refetch()}
       >
         {profile.data !== undefined && (
           <>
-            <ProfileHeader profile={profile.data} />
+            <ProfileHeader profile={profile.data}>
+              {/* Belt and braces: the API already omits `relationship` on
+                  the viewer's own profile, and this makes the "never on
+                  your own page" rule visible where somebody reading the
+                  page would look for it. */}
+              {session.status === "authenticated" && session.user.id !== profile.data.id && (
+                <div className="mt-3">
+                  <RelationshipActions
+                    playerId={profile.data.id}
+                    playerName={profile.data.display_name ?? profile.data.username}
+                    state={profile.data.relationship}
+                    size="default"
+                  />
+                </div>
+              )}
+            </ProfileHeader>
 
             {/* Absent means hidden. Rendering a placeholder here would be
                 the client inventing a fact from a missing key. */}

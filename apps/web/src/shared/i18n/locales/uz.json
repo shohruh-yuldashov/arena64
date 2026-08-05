@@ -272,5 +272,91 @@
       "failedTitle": "Ma'lumotni yuklab bo'lmadi",
       "hiddenByPrivacy": "Egasi yashirgan"
     }
+  },
+  "social": {
+    "nav": {
+      "title": "Ijtimoiy",
+      "friends": "Do'stlar",
+      "requests": "So'rovlar",
+      "blocked": "Bloklanganlar",
+      "search": "Qidiruv",
+      "incomingBadge": "Kiruvchi: {count}",
+      "outgoingBadge": "Chiquvchi: {count}"
+    },
+    "search": {
+      "title": "O'yinchilarni qidirish",
+      "label": "Foydalanuvchi nomi yoki ism",
+      "placeholder": "Kamida {min} ta belgi",
+      "hint": "Ism yoki foydalanuvchi nomi bo'yicha qidiring.",
+      "tooShort": "Qidirish uchun kamida {min} ta belgi kiriting.",
+      "searching": "Qidirilmoqda…",
+      "resultCount": "{count} ta natija topildi",
+      "noResults": "Hech kim topilmadi",
+      "loadMore": "Yana ko'rsatish"
+    },
+    "friends": {
+      "title": "Do'stlar",
+      "empty": "Hali do'stlaringiz yo'q",
+      "emptyHint": "O'yinchilarni qidirib, so'rov yuboring.",
+      "count": "Jami: {count}",
+      "since": "Do'st bo'lgan: {date}",
+      "loadMore": "Yana yuklash"
+    },
+    "requests": {
+      "title": "Do'stlik so'rovlari",
+      "incoming": "Kiruvchi",
+      "outgoing": "Chiquvchi",
+      "incomingEmpty": "Kiruvchi so'rovlar yo'q",
+      "outgoingEmpty": "Chiquvchi so'rovlar yo'q",
+      "sent": "Yuborilgan: {date}",
+      "loadMore": "Yana yuklash"
+    },
+    "blocked": {
+      "title": "Bloklangan o'yinchilar",
+      "empty": "Hech kimni bloklamagansiz",
+      "emptyHint": "Bloklangan o'yinchilar qidiruvda va ro'yxatlarda ko'rinmaydi.",
+      "since": "Bloklangan: {date}",
+      "loadMore": "Yana yuklash"
+    },
+    "presence": {
+      "online": "Onlayn",
+      "offline": "Oflayn",
+      "lastSeen": "Oxirgi faollik: {when}"
+    },
+    "actions": {
+      "sendRequest": "Do'stlikka qo'shish",
+      "cancelRequest": "So'rovni bekor qilish",
+      "accept": "Qabul qilish",
+      "decline": "Rad etish",
+      "removeFriend": "Do'stlikdan chiqarish",
+      "block": "Bloklash",
+      "unblock": "Blokdan chiqarish",
+      "viewProfile": "Profilni ochish",
+      "working": "Bajarilmoqda…",
+      "confirm": "Tasdiqlash",
+      "cancelDialog": "Bekor qilish"
+    },
+    "confirm": {
+      "removeTitle": "Do'stlikdan chiqarilsinmi?",
+      "removeBody": "{name} do'stlaringiz ro'yxatidan olib tashlanadi. Uni bloklamaysiz va keyinroq yana so'rov yuborishingiz mumkin.",
+      "blockTitle": "Bloklansinmi?",
+      "blockBody": "{name} sizni qidiruvda topa olmaydi va sizga so'rov yubora olmaydi. Mavjud do'stlik tugatiladi va kutilayotgan so'rovlar bekor qilinadi."
+    },
+    "errors": {
+      "duplicate_friend_request": "Bu o'yinchiga allaqachon so'rov yuborgansiz.",
+      "opposite_friend_request_pending": "Bu o'yinchi sizga so'rov yuborgan — kiruvchi so'rovlarni tekshiring.",
+      "not_found": "Topilmadi.",
+      "conflict": "Bu amalni hozir bajarib bo'lmaydi.",
+      "permission_denied": "Bu amalga ruxsat yo'q.",
+      "validation_error": "Kiritilgan ma'lumotni tekshiring.",
+      "rate_limited": "Juda ko'p urinish. Birozdan so'ng qayta urining.",
+      "network": "Serverga ulanib bo'lmadi.",
+      "unexpected": "Kutilmagan xatolik. Qayta urinib ko'ring."
+    },
+    "state": {
+      "loading": "Yuklanmoqda…",
+      "retry": "Qayta urinish",
+      "failed": "Ma'lumotni yuklab bo'lmadi"
+    }
   }
 }

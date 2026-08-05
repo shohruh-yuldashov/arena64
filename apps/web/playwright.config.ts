@@ -14,6 +14,10 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./tests/e2e",
+  // Seeds the E2E accounts once, before any worker starts — A64-020.4 §21.
+  // Authentication is rate-limited, so it happens here and the resulting
+  // browser sessions are reused; see `tests/e2e/global-setup.ts`.
+  globalSetup: "./tests/e2e/global-setup.ts",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,

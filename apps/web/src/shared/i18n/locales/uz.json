@@ -800,5 +800,27 @@
       "description": "Jonli o'yin va raqib qidirish internetsiz ishlamaydi. Ko'rinayotgan ma'lumot eskirgan bo'lishi mumkin.",
       "retry": "Qayta urinish"
     }
+  },
+  "notifications": {
+    "title": "Bildirishnomalar",
+    "nav": "Bildirishnomalar",
+    "bell": "Bildirishnomalar",
+    "bellWithUnread": "Bildirishnomalar — {count} ta o'qilmagan",
+    "unreadBadge": "{count}",
+    "unread": "O'qilmagan",
+    "markAllRead": "Hammasini o'qilgan deb belgilash",
+    "markingAll": "Belgilanmoqda…",
+    "loadMore": "Yana yuklash",
+    "loading": "Bildirishnomalar yuklanmoqda…",
+    "endOfList": "Boshqa bildirishnoma yo'q",
+    "emptyTitle": "Hammasi ko'rildi",
+    "emptyDescription": "Yangi bildirishnomalar shu yerda ko'rinadi.",
+    "listError": "Bildirishnomalarni yuklab bo'lmadi.",
+    "markReadError": "Belgilab bo'lmadi. Qayta urinib ko'ring.",
+    "types": {
+      "friend_request_received": "{actor} sizga do'stlik so'rovi yubordi",
+      "friend_request_accepted": "{actor} do'stlik so'rovingizni qabul qildi",
+      "unknown": "Yangi bildirishnoma"
+    }
   }
 }

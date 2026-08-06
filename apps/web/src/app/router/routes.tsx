@@ -309,6 +309,25 @@ export const historyRoute = createRoute({
   component: protectedPage(() => import("@/pages/history")),
 });
 
+// --- notifications — A64-021.1 ----------------------------------------------
+
+/**
+ * `/notifications` — what happened while the player was away.
+ *
+ * **Protected**, and the reason is the endpoint rather than a preference:
+ * every notification belongs to exactly one recipient, and the recipient is
+ * the access token. There is no anonymous form of this page — an unsigned
+ * visitor has no notifications, not an empty list of them.
+ *
+ * Lazy like every other route, so a player who never opens it never pays
+ * for the list, the row and the date formatting.
+ */
+export const notificationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/notifications",
+  component: protectedPage(() => import("@/pages/notifications")),
+});
+
 // --- tournaments — A64-020.6 ------------------------------------------------
 
 /**
@@ -372,4 +391,5 @@ export const routeTree = rootRoute.addChildren([
   replayRoute,
   tournamentsRoute,
   tournamentRoute,
+  notificationsRoute,
 ]);

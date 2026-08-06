@@ -1,5 +1,8 @@
 """Wire schemas for the notification endpoints — A64-021.1 §16.
 
+The preference schemas (A64-021.3) live in `preferences.py` and are
+re-exported here, so a route imports one place whichever surface it serves.
+
 ## The backend states facts; the client renders sentences
 
 **No rendered text is stored and none is served.** A notification carries a
@@ -42,6 +45,12 @@ from app.modules.notifications.application.read_models import (
     NotificationPage,
 )
 from app.modules.notifications.domain.record import ActorSummary, NotificationRecord
+from app.modules.notifications.presentation.schemas.preferences import (
+    NotificationPreferencesResponse,
+    PreferenceChangeRequest,
+    PreferenceSettingResponse,
+    UpdateNotificationPreferencesRequest,
+)
 from app.modules.users.public import AvatarReference
 
 #: Separator inside the encoded cursor. A character that cannot appear in an
@@ -234,9 +243,13 @@ __all__ = [
     "MarkAllReadResponse",
     "NotificationActorResponse",
     "NotificationPageResponse",
+    "NotificationPreferencesResponse",
     "NotificationResponse",
     "NotificationTargetResponse",
+    "PreferenceChangeRequest",
+    "PreferenceSettingResponse",
     "UnreadCountResponse",
+    "UpdateNotificationPreferencesRequest",
     "decode_cursor",
     "encode_cursor",
 ]

@@ -925,6 +925,25 @@ class RateLimitSettings(BaseSettings):
     matchmaking_acceptance_user_limit: int = Field(default=20, ge=1)
     matchmaking_acceptance_window_seconds: int = Field(default=5 * 60, ge=1)
 
+    # --- PATCH /notifications/preferences (A64-021.3) -------------------------
+    # **Per authenticated user**, for the reason every settings write on this
+    # platform is: the endpoint sits behind a token, so the platform knows
+    # whose account is being written, and per-IP would make one office or one
+    # mobile carrier a single bucket.
+    #
+    # 30 per 5 minutes matches `preferences_update_user_limit`, and
+    # deliberately so — it is the same behaviour on a different screen, and
+    # two different numbers for "a person toggling settings" would be two
+    # numbers to explain rather than one to tune. A save is one request
+    # however many switches moved, so thirty is a person working through the
+    # whole matrix twice over, with room for a client that retries.
+    #
+    # The read carries none, like `GET /profile/privacy`: it is one indexed
+    # read of at most a dozen of the caller's own rows, and a caller who
+    # repeats it learns their own settings.
+    notification_preferences_update_user_limit: int = Field(default=30, ge=1)
+    notification_preferences_update_window_seconds: int = Field(default=5 * 60, ge=1)
+
 
 class StatisticsSettings(BaseSettings):
     """`statistics` — the competitive-record projection (A64-012.6).

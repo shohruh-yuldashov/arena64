@@ -1,11 +1,19 @@
 """`/notifications` — the in-app read surface. A64-021.1 §15.
 
-Four routes, all authenticated, all scoped to the caller:
+Six routes, all authenticated, all scoped to the caller:
 
-    GET  /notifications                     one page, newest first
-    GET  /notifications/unread-count        the badge
-    POST /notifications/{id}/read           mark one
-    POST /notifications/read-all            mark every unread one
+    GET   /notifications                     one page, newest first
+    GET   /notifications/unread-count        the badge
+    POST  /notifications/{id}/read           mark one
+    POST  /notifications/read-all            mark every unread one
+    GET   /notifications/preferences         the whole matrix — A64-021.3
+    PATCH /notifications/preferences         change what you receive
+
+`/preferences` sits under this prefix rather than under `/profile`, where
+the platform's other settings live, because it is this module's contract:
+its vocabulary is `NotificationCategory` and `DeliveryChannel`, and the
+delivery path that honours it is here. A settings *screen* may show it
+beside the profile ones; that is a frontend arrangement, not an API one.
 
 ## The recipient is `CurrentUser`, and there is no way to say otherwise
 
@@ -21,7 +29,7 @@ somebody has. So an id that was never issued and an id belonging to another
 player produce the **same** answer: same status, same body, same path
 through this file.
 
-## `POST` rather than `PATCH`
+## `POST` rather than `PATCH`, for marking read
 
 Marking read is an action with no request body, not a partial replacement of
 a resource. `PATCH /notifications/{id}` with `{"read": true}` would invite
@@ -38,7 +46,7 @@ event's consumer.
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Path, Query, status
+from fastapi import APIRouter, Depends, Path, Query, status
 
 from app.api.openapi import error_response
 from app.api.responses import build_response
@@ -46,11 +54,19 @@ from app.core.responses import ApiResponse
 from app.modules.auth.presentation.dependencies import CurrentUser
 from app.modules.avatars.presentation.dependencies import AvatarLinkBuilderDep
 from app.modules.notifications.application.services import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
-from app.modules.notifications.presentation.dependencies import NotificationServiceDep
+from app.modules.notifications.presentation.dependencies import (
+    NotificationPreferenceServiceDep,
+    NotificationServiceDep,
+)
+from app.modules.notifications.presentation.rate_limits import (
+    enforce_notification_preferences_update_limit,
+)
 from app.modules.notifications.presentation.schemas import (
     MarkAllReadResponse,
     NotificationPageResponse,
+    NotificationPreferencesResponse,
     UnreadCountResponse,
+    UpdateNotificationPreferencesRequest,
     decode_cursor,
 )
 
@@ -130,6 +146,66 @@ async def mark_all_read(
     """
     marked = await notifications.mark_all_read(user.id)
     return build_response(MarkAllReadResponse(marked_read=marked))
+
+
+@notifications_router.get(
+    "/preferences",
+    response_model=ApiResponse[NotificationPreferencesResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Your notification preferences",
+)
+async def get_preferences(
+    user: CurrentUser, preferences: NotificationPreferenceServiceDep
+) -> ApiResponse[NotificationPreferencesResponse]:
+    """Every category on every channel, defaults already resolved — §7.
+
+    Unlimited, unlike the write beneath it: one indexed read of at most a
+    dozen of the caller's own rows, with no parameter that could name
+    anybody else's. See `presentation.rate_limits`.
+    """
+    return build_response(
+        NotificationPreferencesResponse.of(await preferences.effective_for(user.id))
+    )
+
+
+@notifications_router.patch(
+    "/preferences",
+    response_model=ApiResponse[NotificationPreferencesResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Change your notification preferences",
+    dependencies=[Depends(enforce_notification_preferences_update_limit)],
+    responses={
+        **error_response(422, "A change was refused, or the request was malformed"),
+        **error_response(429, "Too many preference updates"),
+    },
+)
+async def update_preferences(
+    user: CurrentUser,
+    preferences: NotificationPreferenceServiceDep,
+    body: UpdateNotificationPreferencesRequest,
+) -> ApiResponse[NotificationPreferencesResponse]:
+    """Applies every change, or none — §9.
+
+    **`PATCH`, and a list of changes rather than the whole matrix.** A save
+    names only the switches that moved, so a client cannot overwrite a
+    category it never rendered and a second tab cannot silently revert one
+    it did not touch.
+
+    Returns the resulting matrix, exactly what a fresh `GET` would say, so a
+    save costs one request and the screen cannot disagree with the server.
+
+    One illegal change rejects the whole request and writes nothing: a
+    locked or unavailable pair answers `422` with the code that says which
+    (`notification_preference_locked`, `notification_channel_unavailable`),
+    and the table never moved.
+    """
+    return build_response(
+        NotificationPreferencesResponse.of(
+            await preferences.apply(
+                user.id, changes=[change.to_change() for change in body.changes]
+            )
+        )
+    )
 
 
 @notifications_router.post(

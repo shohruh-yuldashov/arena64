@@ -8,6 +8,7 @@ import { GameBoard } from "@/features/game/ui/board";
 import { GameControls } from "@/features/game/ui/game-controls";
 import { GamePanel } from "@/features/game/ui/game-panel";
 import { useTranslation } from "@/shared/i18n";
+import { useHoldAppUpdate } from "@/shared/pwa";
 import { useConnectionStatus } from "@/shared/realtime";
 import { Button, Skeleton } from "@/shared/ui";
 
@@ -57,6 +58,22 @@ export default function GamePage() {
   );
 
   const interactive = canInteract(state);
+
+  // A64-020.9 §14. A service-worker activation reloads the page, and a
+  // reload here is not a refresh — it is a clock still running while the
+  // board is gone, and a resign or draw command whose answer nobody sees.
+  // So this screen holds the update until the game is over.
+  //
+  // `reconnecting` and `resyncing` count: the game is still live, the
+  // socket is merely between frames. `completed`, `unavailable` and
+  // `fatal` do not — there is nothing left to lose.
+  useHoldAppUpdate(
+    state.phase === "active" ||
+      state.phase === "submitting_move" ||
+      state.phase === "reconnecting" ||
+      state.phase === "resyncing" ||
+      state.activeCommand !== null,
+  );
 
   const onSelect = (square: string) => {
     const completed = selection.select(square);

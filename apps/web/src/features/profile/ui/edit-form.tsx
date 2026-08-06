@@ -9,6 +9,7 @@ import { FormError, FormStatus } from "@/features/auth/ui/form-status";
 import { profileErrorKey } from "@/features/profile/model/error-messages";
 import { useUpdateProfile } from "@/features/profile/model/queries";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
+import { useHoldAppUpdate } from "@/shared/pwa";
 import { Button, Spinner } from "@/shared/ui";
 
 /**
@@ -71,6 +72,11 @@ export function ProfileEditForm({ profile }: { profile: MyProfile }) {
       country: profile.country ?? "",
     },
   });
+
+  // A64-020.9 §14. Unsaved edits are the one thing on this screen the
+  // server does not have a copy of, so an update that reloaded the page
+  // would discard work the player did and could not get back.
+  useHoldAppUpdate(isDirty || isSubmitting);
 
   const onSubmit = handleSubmit(async (values) => {
     setFailure(null);

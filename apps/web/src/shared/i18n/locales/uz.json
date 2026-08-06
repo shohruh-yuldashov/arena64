@@ -772,5 +772,33 @@
     },
     "unknownPlayer": "Noma'lum o'yinchi",
     "listError": "Turnirlarni yuklab bo'lmadi."
+  },
+  "pwa": {
+    "region": "Ilova bildirishnomalari",
+    "install": {
+      "title": "Arena64 ni o'rnating",
+      "description": "Ilovani qurilmangizga o'rnating: tezroq ochiladi va alohida oynada ishlaydi.",
+      "action": "O'rnatish",
+      "later": "Keyinroq",
+      "sectionTitle": "Ilova",
+      "sectionDescription": "Arena64 ni qurilmangizga o'rnating.",
+      "installed": "Arena64 bu qurilmaga o'rnatilgan.",
+      "unavailable": "Bu brauzerda o'rnatishni shu yerdan boshlab bo'lmaydi.",
+      "iosTitle": "Bosh ekranga qo'shish",
+      "iosSteps": "Safari'dagi «Ulashish» tugmasini bosing, so'ng «Bosh ekranga qo'shish» ni tanlang."
+    },
+    "update": {
+      "title": "Yangi versiya tayyor",
+      "description": "Yangilash uchun sahifa bir marta qayta yuklanadi.",
+      "action": "Yangilash",
+      "later": "Keyinroq",
+      "activating": "Yangilanmoqda…",
+      "held": "Yangi versiya tayyor. Joriy o'yin yoki amal tugagach yangilashingiz mumkin."
+    },
+    "offline": {
+      "title": "Internetga ulanish yo'q",
+      "description": "Jonli o'yin va raqib qidirish internetsiz ishlamaydi. Ko'rinayotgan ma'lumot eskirgan bo'lishi mumkin.",
+      "retry": "Qayta urinish"
+    }
   }
 }

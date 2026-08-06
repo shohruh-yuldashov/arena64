@@ -8,6 +8,7 @@ import {
   useWithdrawFromTournament,
 } from "@/features/tournament/model/queries";
 import { useTranslation } from "@/shared/i18n";
+import { useHoldAppUpdate } from "@/shared/pwa";
 import {
   Button,
   Dialog,
@@ -68,6 +69,12 @@ export function RegistrationPanel({ tournament }: { tournament: Tournament }) {
 
   const failure = enter.error ?? withdraw.error;
   const pending = enter.isPending || withdraw.isPending;
+
+  // A64-020.9 §14. Entering and withdrawing are not idempotent and are
+  // deliberately not retried (`shared/api/query-client.ts`), so a reload
+  // while one is in flight leaves the player unable to tell whether they
+  // are registered. The update waits until the server has answered.
+  useHoldAppUpdate(pending);
 
   return (
     <section

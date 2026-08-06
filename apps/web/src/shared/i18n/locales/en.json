@@ -772,5 +772,33 @@
     },
     "unknownPlayer": "Unknown player",
     "listError": "Tournaments could not be loaded."
+  },
+  "pwa": {
+    "region": "Application notices",
+    "install": {
+      "title": "Install Arena64",
+      "description": "Install the app on your device: it opens faster and runs in its own window.",
+      "action": "Install",
+      "later": "Later",
+      "sectionTitle": "Application",
+      "sectionDescription": "Install Arena64 on this device.",
+      "installed": "Arena64 is installed on this device.",
+      "unavailable": "This browser cannot start an installation from here.",
+      "iosTitle": "Add to Home Screen",
+      "iosSteps": "Tap Share in Safari, then choose Add to Home Screen."
+    },
+    "update": {
+      "title": "A new version is ready",
+      "description": "Updating reloads the page once.",
+      "action": "Update",
+      "later": "Later",
+      "activating": "Updating…",
+      "held": "A new version is ready. You can update once the current game or action finishes."
+    },
+    "offline": {
+      "title": "No internet connection",
+      "description": "Live games and matchmaking do not work offline. What you see may be out of date.",
+      "retry": "Retry connection"
+    }
   }
 }

@@ -132,8 +132,13 @@ export default tseslint.config(
     },
   },
   {
-    files: ["**/*.config.{ts,mjs}"],
+    // Configuration and build tooling. Neither is in `tsconfig.json`'s
+    // program — `scripts/` is Node that runs before a build rather than
+    // source that goes into one — so the type-aware rules have no type
+    // information to work from and error out rather than reporting.
+    files: ["**/*.config.{ts,mjs}", "scripts/**/*.mjs"],
     extends: [tseslint.configs.disableTypeChecked],
+    languageOptions: { globals: { ...globals.node } },
   },
   prettier,
 );

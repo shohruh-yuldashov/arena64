@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Arena64">
+  <!--
+    The same mark `scripts/generate-icons.mjs` rasterises, as vector.
+
+    A browser tab renders the favicon at 16 CSS pixels, where a downsampled
+    192px PNG loses the circle to the checker. SVG is resolution-independent
+    and every current browser accepts it here, so this is the primary
+    favicon and the 180px PNG is Apple's fallback — not two artworks, one
+    description in two forms.
+
+    A64-025 owns the final brand; this is the placeholder §21 of
+    specs/frontend.md records.
+  -->
+  <defs>
+    <clipPath id="board">
+      <rect width="100" height="100" rx="14" />
+    </clipPath>
+  </defs>
+  <g clip-path="url(#board)">
+    <rect width="100" height="100" fill="#262626" />
+    <rect width="50" height="50" fill="#fafafa" />
+    <rect x="50" y="50" width="50" height="50" fill="#fafafa" />
+    <circle cx="25" cy="75" r="16.5" fill="#fafafa" />
+  </g>
+</svg>

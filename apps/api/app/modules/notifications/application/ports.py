@@ -1,12 +1,15 @@
 """`notifications`' ports — AD-06.
 
-One published-to-us contract per collaborator, and one of our own:
+One published-to-us contract per collaborator, and two of our own:
 
-    PresenceWriter   what the producer needs of `users`' presence: read the
-                     current record, write the new one. Narrower than
-                     `PresenceService`, which is what makes the transition
-                     check the only thing this module can do with presence
-    NotificationSink where a rendered notification goes
+    PresenceWriter         what the producer needs of `users`' presence:
+                           read the current record, write the new one.
+                           Narrower than `PresenceService`, which is what
+                           makes the transition check the only thing this
+                           module can do with presence
+    NotificationSink       where a rendered notification goes
+    NotificationRepository where a durable notification is stored and read
+                           — A64-021.1
 
 Everything else this module consumes is already a published port somewhere
 else — `friends.public.PresenceAudience`, `profiles.public.ProfileRenderer`,
@@ -27,10 +30,17 @@ layer that needs it), and the composition root satisfies it with
 cannot be handed anything wider.
 """
 
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from app.modules.notifications.application.read_models import (
+    MarkReadOutcome,
+    NotificationCursor,
+    NotificationPage,
+)
 from app.modules.notifications.domain.notification import SocialNotification
+from app.modules.notifications.domain.record import NotificationRecord
 from app.modules.users.public import DeviceType, Presence
 
 
@@ -96,4 +106,77 @@ class NotificationSink(Protocol):
 
     async def deliver(self, notifications: list[SocialNotification]) -> None:
         """Delivers a batch. An empty batch is a legal no-op."""
+        ...
+
+
+class NotificationRepository(Protocol):
+    """Storage for the durable `Notification` — A64-021.1 §7, §9, §10.
+
+    Declared here rather than in `infrastructure` because the port belongs
+    to the layer that needs it (AD-06), and because every method below is a
+    *use case's* question rather than a table's: "has this event already
+    produced this notification", "what has this recipient not read".
+
+    **Every method is recipient-scoped, without exception.** There is no
+    `get(notification_id)` and there never should be: a reader that could
+    fetch a row by id alone is one line away from serving somebody else's
+    notification, and the recipient is not a filter applied afterwards — it
+    is half the key (§30).
+    """
+
+    async def append(self, record: NotificationRecord) -> bool:
+        """Stores one notification. `True` if it was written, `False` if an
+        identical one already existed.
+
+        **Not check-then-insert** (§11). The uniqueness of
+        `(recipient_id, source_event_id, type)` is a database constraint and
+        this is an upsert that does nothing on conflict, so two relay
+        processes handling the same redelivered event concurrently produce
+        one row and one `False` — rather than two winners of a race that a
+        prior `SELECT` could not see.
+        """
+        ...
+
+    async def list_for(
+        self,
+        recipient_id: UUID,
+        *,
+        after: NotificationCursor | None,
+        limit: int,
+    ) -> NotificationPage:
+        """One page, newest first, keyset-ordered by `(created_at, id)` DESC."""
+        ...
+
+    async def count_unread(self, recipient_id: UUID) -> int:
+        """How many of this recipient's notifications have no `read_at`.
+
+        One bounded query against the partial index, and **no rows loaded**
+        (§10): the badge must not cost a page of notifications to render.
+        """
+        ...
+
+    async def mark_read(
+        self, notification_id: UUID, *, recipient_id: UUID, at: datetime
+    ) -> MarkReadOutcome:
+        """Marks one notification read, and says what that did.
+
+        Idempotent: an already-read notification keeps its original
+        `read_at` and answers `ALREADY_READ`, because "it is read" is the
+        state the caller asked for and a second click must not rewrite when
+        it happened.
+
+        `NOT_FOUND` covers both "no such notification" and "somebody
+        else's", deliberately — the two are indistinguishable to a caller
+        (§17), so this port cannot be used to tell them apart either.
+        """
+        ...
+
+    async def mark_all_read(self, recipient_id: UUID, *, at: datetime) -> int:
+        """Marks every unread notification of this recipient read. Returns
+        how many changed.
+
+        One statement over the partial index, not a read followed by writes:
+        the set is bounded by what is unread, and a recipient who has ignored
+        their notifications for a month must not cost a page-by-page walk.
+        """
         ...

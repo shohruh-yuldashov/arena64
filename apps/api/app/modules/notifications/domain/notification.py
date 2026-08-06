@@ -42,6 +42,15 @@ class NotificationKind(StrEnum):
     stored value, the wire value and the Python member are one string.
     """
 
+    FRIEND_REQUEST_RECEIVED = "friend_request_received"
+    """Someone sent you a friend request — A64-021.1.
+
+    Added with the durable notification, and it is the reason `friends`
+    publishes `friend_request_sent` at all: the fact existed since A64-013.2
+    and only ever reached a log line, so nobody was ever told they had a
+    request waiting.
+    """
+
     FRIEND_REQUEST_ACCEPTED = "friend_request_accepted"
     """Someone accepted the request you sent them."""
 

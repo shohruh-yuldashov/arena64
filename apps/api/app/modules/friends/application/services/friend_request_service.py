@@ -59,7 +59,7 @@ from app.modules.friends.application.ports import (
     SocialGraphCache,
 )
 from app.modules.friends.application.validators import FriendRequestValidator
-from app.modules.friends.domain.events import FriendRequestAccepted
+from app.modules.friends.domain.events import FriendRequestAccepted, FriendRequestSent
 from app.modules.friends.domain.exceptions import FriendRequestNotFound
 from app.modules.friends.domain.friend_request import FriendRequest, FriendRequestStatus
 from app.modules.friends.domain.friendship import Friendship
@@ -134,6 +134,23 @@ class FriendRequestService:
 
         async with self._unit_of_work:
             stored = await self._requests.add(request)
+            # A64-021.1. The second write in this transaction, and it is
+            # here rather than after the commit for AD-16's reason: a
+            # request that committed without its event would be a request
+            # the addressee is never told about, with nothing recording that
+            # a notification was owed.
+            #
+            # The request's own `created_at` rather than a second
+            # `clock.now()`: the request was sent once, and two readings of
+            # the clock would be two answers to one question.
+            await self._events.publish(
+                FriendRequestSent(
+                    occurred_at=stored.created_at,
+                    request_id=stored.id,
+                    requester_id=stored.requester_id,
+                    addressee_id=stored.addressee_id,
+                )
+            )
             await self._unit_of_work.commit()
 
         # **Ids only.** A64-013.2 asks for creation to be logged and forbids

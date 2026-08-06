@@ -227,7 +227,7 @@ variant were governed by different rules — the exact class of corruption AD-15
 | `achievements` | `achievements` | `achievement_definition`, `achievement_definition_text`, `player_achievement`, `achievement_progress` | |
 | `statistics` | `statistics` | `player_statistics`, `player_statistics_termination`, `head_to_head` | Entirely rebuildable |
 | `chat` | `chat` | `chat_thread`, `chat_thread_participant`, `chat_message` | |
-| `notifications` | `notifications` | `notification`, `notification_delivery`, `device_registration` | |
+| `notifications` | `notifications` | `notification` (built, A64-021.1); `notification_delivery`, `device_registration` (specified, not created — §10.2) | |
 | `fairplay` | `fairplay` | `analysis_run`, `integrity_signal` | |
 | `admin` | `admin` | `role_assignment`, `report`, `moderation_case`, `case_evidence`, `sanction`, `audit_entry` | |
 | `platform` | *(platform)* | `outbox`, `processed_event`, `erasure_request`, `data_export_request` | Plus Alembic's version table. The first two exist since A64-013.7; the code that owns them is `apps/api/app/platform/outbox/`, which is deliberately outside `app/modules/` because no bounded context owns them |
@@ -1369,19 +1369,43 @@ must be able to prove a message existed and was removed.
 
 ### 10.2 `notifications`
 
-**`notification`** — `id uuid` (v7), `recipient_id`, `category`, `template_key text`,
-`params jsonb`, `event_id uuid`, `correlation_id uuid`, `created_at`, `read_at`, `dismissed_at`,
-`expires_at`. Unique `(recipient_id, event_id, category)` — NT-2's idempotency under at-least-once
-delivery.
+**`notification`** — **created by A64-021.1**, and narrower than this section originally
+specified. As built: `id uuid` (v7), `recipient_id`, `type text`, `category`, `payload jsonb`,
+`target_type`, `target_ref`, `source_event_id uuid`, `created_at`, `read_at`. Unique
+`(recipient_id, source_event_id, type)` — NT-2's idempotency under at-least-once delivery,
+enforced as `INSERT ... ON CONFLICT DO NOTHING` rather than by a check.
+
+Three deviations from the original specification, each deliberate:
+
+| Original | As built | Why |
+| --- | --- | --- |
+| `template_key`, `params`, `event_id` | `type`, `payload`, `source_event_id` | Same columns, same meanings. These are the names the API, the frontend and the tests all use, and three spellings of one concept is worse than one deviation |
+| `correlation_id` | **absent** | The outbox row named by `source_event_id` carries one. A second copy would be a column nothing reads and nothing maintains |
+| `dismissed_at`, `expires_at` | **absent** | Dismissal is a second read-state with no product rule and no control to set it; `expires_at` serves NT-3's *delivery* staleness horizon, and there is no delivery channel yet. Both are additive when their consumer arrives |
+
+`target_type` and `target_ref` are new: a **closed** navigation contract, so a notification can be
+followed without any URL ever being stored. See `specs/notifications.md` §4.
+
+The unique key is narrower than `(recipient_id, event_id, category)` on purpose — `category` groups
+several types, so keying on it would let one event produce one social notification and silently
+refuse a genuinely different one from the same event.
 
 **No rendered text is stored.** §15.2 explains why this is an internationalisation decision rather
 than a storage one.
 
-**`notification_delivery`** — `id`, `notification_id` (FK, cascade), `channel`, `status`
+**Retention: none.** The relation is append-only as of A64-021.1 and read state is not coupled to
+deletion. Q-15 and R-24 are the open questions this leaves; `specs/notifications.md` §9 states the
+limitation and the future task rather than shipping a partial mechanism.
+
+**`notification_delivery`** — **not created.** It records a channel failing independently of
+the notification (NT-1), and there is no channel yet; it arrives with the first one. Specified as:
+`id`, `notification_id` (FK, cascade), `channel`, `status`
 (`pending`, `sent`, `delivered`, `failed`, `dropped`), `attempt_count`, `last_attempt_at`,
 `delivered_at`, `failure_code`, `provider_message_id`. Unique `(notification_id, channel)`.
 
-**`device_registration`** — `id`, `player_id`, `platform` (`web`, `ios`, `android`), `token text`,
+**`device_registration`** — **not created.** A push target, and A64-021.1 requests no push
+permission and creates no subscription. Specified as: `id`, `player_id`, `platform`
+(`web`, `ios`, `android`), `token text`,
 `token_fingerprint bytea`, `locale`, `created_at`, `last_seen_at`, `revoked_at`, `revoked_reason`.
 Unique on `token_fingerprint`.
 

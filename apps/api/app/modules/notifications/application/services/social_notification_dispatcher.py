@@ -39,6 +39,10 @@ the renderer omits them.
 
 ## Who receives what, and the three events that notify nobody
 
+    friend_request_sent      the **addressee**. The requester performed the
+                             send; telling them what they just did is not a
+                             notification. Rendered at `STRANGER`, because a
+                             pending request creates no friendship
     friend_request_accepted  the **requester**. The addressee performed the
                              acceptance; telling them what they just did is
                              not a notification
@@ -77,6 +81,7 @@ from uuid import UUID
 from app.modules.friends.public import FriendRemoved as FriendRemovedEvent
 from app.modules.friends.public import (
     FriendRequestAccepted,
+    FriendRequestSent,
     PlayerBlocked,
     PlayerUnblocked,
     PresenceAudience,
@@ -105,6 +110,7 @@ CONSUMER_NAME = "social_notifications"
 #: connection for every event the consumer does not want.
 SUBSCRIBED_EVENT_TYPES: frozenset[str] = frozenset(
     {
+        FriendRequestSent.event_type,
         FriendRequestAccepted.event_type,
         FriendRemovedEvent.event_type,
         PlayerBlocked.event_type,
@@ -117,6 +123,7 @@ SUBSCRIBED_EVENT_TYPES: frozenset[str] = frozenset(
 #: Event type -> what a recipient is told. Absent means "notifies nobody",
 #: which is a rule rather than an omission — see this module's docstring.
 _KINDS: Mapping[str, NotificationKind] = {
+    FriendRequestSent.event_type: NotificationKind.FRIEND_REQUEST_RECEIVED,
     FriendRequestAccepted.event_type: NotificationKind.FRIEND_REQUEST_ACCEPTED,
     PresenceOnline.event_type: NotificationKind.FRIEND_ONLINE,
     PresenceOffline.event_type: NotificationKind.FRIEND_OFFLINE,
@@ -260,10 +267,29 @@ class SocialNotificationDispatcher:
                 relationship=ViewerRelationship.FRIEND,
             )
 
-        # `friends.friend_request_accepted`: the requester is told, about the
-        # addressee who accepted.
         requester_id = UUID(str(entry.payload["requester_id"]))
         addressee_id = UUID(str(entry.payload["addressee_id"]))
+
+        if entry.event_type == FriendRequestSent.event_type:
+            # A64-021.1. The **addressee** is told, about the requester who
+            # sent it. The mirror of the acceptance below in every respect —
+            # including that the actor is never told what they just did.
+            #
+            # `STRANGER`, not `FRIEND`: a pending request creates no
+            # friendship, so the requester is rendered to the addressee
+            # exactly as any stranger would be. Rendering them as a friend
+            # would let anyone see a friends-only profile by sending a
+            # request nobody has to accept.
+            return _Audience(
+                entry=entry,
+                subject_id=requester_id,
+                recipient_ids=await self._still_reachable(requester_id, addressee_id),
+                kind=kind,
+                relationship=ViewerRelationship.STRANGER,
+            )
+
+        # `friends.friend_request_accepted`: the requester is told, about the
+        # addressee who accepted.
         return _Audience(
             entry=entry,
             subject_id=addressee_id,

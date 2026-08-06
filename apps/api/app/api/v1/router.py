@@ -104,6 +104,10 @@ v1_router.include_router(player_tournaments_router)
 # `/notifications/read-all` and `/notifications/{id}/read` differ in segment
 # count or in a literal segment, so no path a client can send matches two of
 # them — registration order is immaterial here.
+#
+# A64-021.3 adds `/notifications/preferences` on GET and PATCH. It is one
+# segment where `/{id}/read` is two, and its methods are ones no other route
+# under this prefix uses, so the same property holds.
 v1_router.include_router(notifications_router)
 
 # A64-020.5A. `/time-controls` collides with nothing — it is a single

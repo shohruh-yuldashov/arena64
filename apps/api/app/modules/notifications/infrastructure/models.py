@@ -63,7 +63,15 @@ import uuid
 from datetime import datetime
 from typing import Any, Final
 
-from sqlalchemy import Index, String, UniqueConstraint, Uuid, text
+from sqlalchemy import (
+    Boolean,
+    Index,
+    PrimaryKeyConstraint,
+    String,
+    UniqueConstraint,
+    Uuid,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -161,4 +169,84 @@ class NotificationModel(UUIDPrimaryKeyMixin, Base):
     second mark-read keeps the original instant."""
 
 
-__all__ = ["NOTIFICATIONS_SCHEMA", "NOTIFICATION_SOURCE_UNIQUE", "NotificationModel"]
+class NotificationPreferenceModel(Base):
+    """The `notifications.notification_preference` row — A64-021.3 §6.
+
+    **One row per override, not per player.** A player who has never opened
+    the settings screen has none, and `domain.preference.effective` resolves
+    their whole matrix from the defaults. Materialising sixteen rows per
+    account would make every future category or channel a data migration
+    over every user, and would lose the distinction between "chose this" and
+    "never looked" — the question a later change of default has to ask.
+
+    ## The key is the whole identity
+
+    `PRIMARY KEY (user_id, category, channel)`, with no surrogate. There is
+    exactly one preference per triple and it has no identity apart from
+    which one it is; a UUID here would be a second key nothing joins on —
+    the same reasoning `statistics.player_statistics` records for
+    `player_id`.
+
+    It is also what makes the write race-safe: `ON CONFLICT DO UPDATE`
+    against this key means two tabs saving at once produce one row rather
+    than a unique violation, without anybody reading first (§8).
+
+    ## No foreign key to `users`
+
+    `user_id` is an opaque player id (DM-06), like every cross-context
+    reference on this platform. `database.md` §4.9 specified `FK, cascade`
+    when it placed this table in the `users` schema; here that would be a
+    cross-schema foreign key of exactly the kind DB-03 forbids, and it would
+    make the two schemas undeployable apart.
+
+    The cascade it bought is worth naming: deleting an account leaves these
+    rows behind. They are preferences about notifications that no longer
+    have a recipient, they are keyed on an id that will never be reissued,
+    and account deletion is `users`' erasure path to clean up — not a
+    foreign key that decides another schema's retention.
+
+    ## Text, not a PostgreSQL enum
+
+    Adding a category or a channel must be a code change and a migration of
+    *rows*, never an `ALTER TYPE` that locks the relation — the same choice
+    `notification.type` made and for the same reason. The vocabulary is
+    enforced by `domain.preference` on the way in and on the way out.
+    """
+
+    __tablename__ = "notification_preference"
+
+    __table_args__ = (
+        PrimaryKeyConstraint("user_id", "category", "channel", name="pk_notification_preference"),
+        # The delivery-time question, exactly: "for these recipients, on this
+        # channel, what did they choose?" `channel` leads because a fan-out
+        # asks about one channel at a time and many recipients at once, so a
+        # `user_id`-first index would be one probe per recipient where this
+        # is one range scan — §11's "future fan-out must not force an N+1".
+        Index("ix_notification_preference__channel_user", "channel", "user_id"),
+        {"schema": NOTIFICATIONS_SCHEMA},
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    """The player's answer. Only ever the *opposite* of the default in
+    practice, but stored as the value rather than as a flag: a default that
+    changes later must not silently flip everybody who had agreed with the
+    old one."""
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    """When this override was last written. `TimestampMixin` is deliberately
+    not composed: it brings a surrogate-key-shaped set of defaults this
+    relation does not want, and both instants here are supplied by the
+    service from one clock read so a create and its update agree."""
+
+
+__all__ = [
+    "NOTIFICATIONS_SCHEMA",
+    "NOTIFICATION_SOURCE_UNIQUE",
+    "NotificationModel",
+    "NotificationPreferenceModel",
+]

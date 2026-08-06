@@ -58,12 +58,15 @@ from app.modules.notifications.application.ports import (
 )
 from app.modules.notifications.application.services import (
     DurableNotificationWriter,
+    NotificationPreferenceService,
     NotificationService,
+    PreferenceDeliveryPolicy,
     PresenceNotificationService,
     SocialNotificationDispatcher,
 )
 from app.modules.notifications.infrastructure import NullNotificationAnnouncer
 from app.modules.notifications.infrastructure.repositories import (
+    SqlAlchemyNotificationPreferenceRepository,
     SqlAlchemyNotificationRepository,
 )
 from app.modules.profiles.application.services.profile_renderer import BatchProfileRenderer
@@ -151,6 +154,29 @@ def get_notification_service(session: DbSessionDep, clock: ClockDep) -> Notifica
 NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
 
 
+def get_notification_preference_service(
+    session: DbSessionDep, clock: ClockDep
+) -> NotificationPreferenceService:
+    """The settings screen's service — A64-021.3 §14.
+
+    Per request, over the request's session. Holds only the preference
+    repository: a service that could also reach notifications would be one
+    that could act on a change it just made, and changing a preference must
+    not touch a single existing row (§10 — it decides what is created next,
+    never what already exists).
+    """
+    return NotificationPreferenceService(
+        preferences=SqlAlchemyNotificationPreferenceRepository(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )
+
+
+NotificationPreferenceServiceDep = Annotated[
+    NotificationPreferenceService, Depends(get_notification_preference_service)
+]
+
+
 def build_durable_notification_writer(
     session: AsyncSession, *, announcer: NotificationAnnouncer | None = None
 ) -> DurableNotificationWriter:
@@ -171,11 +197,21 @@ def build_durable_notification_writer(
     deployment (a relay worker without a gateway) and a contract suite is
     another, and the default makes "there is no realtime here" the explicit
     behaviour rather than a `None` check inside the writer.
+
+    The delivery policy, by contrast, has **no** switch and no default
+    (A64-021.3 §10). A build in which preferences could be bypassed by
+    constructing the writer differently would be one where "I turned this
+    off" depends on which process handled the event, so the only writer this
+    platform can assemble is one that asks. It reads through the same
+    session, so the preference consulted is the one committed.
     """
     return DurableNotificationWriter(
         notifications=SqlAlchemyNotificationRepository(session),
         unit_of_work=SessionUnitOfWork(session),
         announcer=announcer if announcer is not None else NullNotificationAnnouncer(),
+        policy=PreferenceDeliveryPolicy(
+            preferences=SqlAlchemyNotificationPreferenceRepository(session)
+        ),
     )
 
 
@@ -218,10 +254,12 @@ def build_social_notification_dispatcher(
 
 
 __all__ = [
+    "NotificationPreferenceServiceDep",
     "NotificationServiceDep",
     "PresenceNotificationServiceDep",
     "build_durable_notification_writer",
     "build_social_notification_dispatcher",
+    "get_notification_preference_service",
     "get_notification_service",
     "get_presence_notification_service",
 ]

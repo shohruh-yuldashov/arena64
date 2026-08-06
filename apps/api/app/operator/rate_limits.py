@@ -14,8 +14,9 @@ removes the rate limit.
 ## What `clear` deletes, and what it cannot
 
 **Only keys this platform's limiter owns** — `rl:v1:<rule>:*`, one pattern
-per declared rule. `show` prints the current list; today it is thirteen
-rules across `auth`, `profiles` and `matchmaking`.
+per declared rule. `show` prints the current list; today it is seventeen
+rules across `auth`, `profiles`, `matchmaking`, `friends`, `avatars` and
+`notifications`.
 
 The patterns are **derived from the policy registries**, not typed here. A
 `build_rules` module is the one place a rule name exists, so a rule renamed
@@ -76,6 +77,7 @@ from app.modules.auth.presentation.rate_limits import build_rules as auth_rules
 from app.modules.avatars.presentation.rate_limits import build_rules as avatar_rules
 from app.modules.friends.presentation.rate_limits import build_rules as friends_rules
 from app.modules.matchmaking.presentation.rate_limits import build_rules as matchmaking_rules
+from app.modules.notifications.presentation.rate_limits import build_rules as notification_rules
 from app.modules.profiles.presentation.rate_limits import build_rules as profile_rules
 
 logger = logging.getLogger(__name__)
@@ -112,6 +114,7 @@ _POLICY_REGISTRIES = (
     matchmaking_rules,
     friends_rules,
     avatar_rules,
+    notification_rules,
 )
 
 

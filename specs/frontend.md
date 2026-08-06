@@ -3,10 +3,10 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-FRONTEND` |
-| **Status** | Approved through A64-020.4 — foundation, authentication, profile and social |
+| **Status** | Approved through A64-021.3 — foundation, authentication, profile, social, game, tournaments, PWA and notifications |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-05 — A64-020.4, social UI |
+| **Last updated** | 2026-08-07 — A64-021.3, notification preferences |
 | **Related ADRs** | [`ADR-002`](../docs/07-decisions/ADR-002-frontend-spa.md) |
 | **Related specs** | [`rating.md`](./rating.md), [`leaderboard.md`](./leaderboard.md), [`tournament.md`](./tournament.md) |
 | **Related** | `docs/01-architecture/architecture.md` §5, `docs/04-frontend/` |
@@ -1992,18 +1992,111 @@ merely forbidden.
 
 ### 21.8 Not in this phase
 
-No push subscription, no notification permission, no preference switch, no
-grouping, no search, no dismissal. Each is named with its seam in
-`specs/notifications.md` §12. (The realtime frame was deferred here and
-arrived in A64-021.2 — see §21.3.)
+No push subscription, no notification permission, no grouping, no search, no
+dismissal. Each is named with its seam in `specs/notifications.md` §12. (The
+realtime frame was deferred here and arrived in A64-021.2 — see §21.3; the
+preference switch arrived in A64-021.3 — see §22.)
 
-## 22. Open questions
+## 22. Notification preferences — A64-021.3
+
+`/settings/notifications`, lazy and behind `RequireAuth` like every other
+settings page. Fifth entry in `SettingsShell`'s navigation, after Privacy.
+
+Protected for the endpoint's reason rather than a preference: the owner of
+a preference is the access token, so there is no anonymous form of this
+screen.
+
+### 22.1 What it renders
+
+The `(category, channel)` matrix `specs/notifications.md` §10 defines,
+**exactly as the server sends it** — every pair, in the server's order, with
+its default already resolved. Four independent facts per cell (`enabled`,
+`available`, `editable`, `locked_reason`), and the client derives none of
+them.
+
+Grouped by **category**, each in its own `<fieldset>` with a `<legend>`,
+rather than as a table. A 4×3 table reads well at 1200px and badly at 360px,
+where a header cell and its checkbox land on different screens; the fieldset
+also gives a screen reader the grouping for free, so "Email" is never heard
+without knowing email *of what*.
+
+### 22.2 Explicit save, unlike the privacy form
+
+`features/privacy` saves on change, and that is correct there: each control
+is an independent `PATCH` with no cross-field rule. Here **one illegal
+change rejects the whole batch**, so a per-toggle save would leave a player
+unable to tell which change was refused — and the refusal would arrive after
+they had moved on to the next switch.
+
+So changes accumulate locally, the count of unsaved changes is announced
+(`role="status"`), and `Discard` exists because the only other way out of a
+half-made decision would be a page reload. A failed save **keeps** the
+pending changes: a refusal names one pair, and dropping the batch would make
+the player redo the legal changes they made alongside it.
+
+### 22.3 No optimistic update, deliberately
+
+The `PATCH` response *is* the new state, so the mutation writes it into the
+cache instead of invalidating and refetching. One request per save, and the
+screen shows what the server stored rather than what was asked for.
+
+This is the one surface where guessing is least acceptable: a consent
+control that flips and then flips back has told the player something untrue,
+however briefly.
+
+### 22.4 Query key
+
+    notificationPreferenceKeys.all()
+
+A **sibling** of `notificationKeys`, never a child. The two are invalidated
+by different things — a preference changes when this player saves, a list
+changes when somebody else acts — and nesting them would make every arriving
+notification refetch the settings screen.
+
+### 22.5 Errors
+
+Three codes, three sentences (`specs/notifications.md` §8.2):
+
+| Code | Rendered as |
+| --- | --- |
+| `notification_preference_locked` | That notification cannot be switched off |
+| `notification_channel_unavailable` | That channel is not available yet |
+| `duplicate_preference_change` | That change was sent twice |
+
+Collapsing them would tell a player that push notifications are *forbidden*
+when the truth is that they are *not built yet*, which is the failure the
+separate codes exist to prevent. The third is unreachable from this form —
+one control per pair, dirty state keyed on the pair — and is mapped anyway,
+so a client bug is identifiable rather than "something went wrong".
+
+### 22.6 Accessibility
+
+- Native `<input type="checkbox">`, never a styled `div` with
+  `role="switch"`: keyboard-operable and self-announcing.
+- Every disabled control carries its reason through `aria-describedby`, so
+  the explanation is part of the accessible description rather than nearby
+  text a screen reader may skip.
+- `<fieldset>`/`<legend>` per category, so every control is announced in
+  context.
+- The unsaved count is `role="status"`; a failed save is `role="alert"` and
+  does not replace the matrix.
+- Every control is at least 44px tall.
+
+### 22.7 Not in this phase
+
+No email or push **delivery** — the channels appear, are marked unavailable,
+and cannot be switched on. No browser notification permission request, no
+`pushManager.subscribe`, no quiet hours, no per-type granularity below the
+category, no digest. `specs/notifications.md` §10.6 and §12 name each with
+its owner.
+
+## 23. Open questions
 
 | # | Question | Blocked work |
 | --- | --- | --- |
 | ~~OQ-1~~ | **Closed by A64-020.2.** `apps/api` sets the `HttpOnly` cookie on a browser-specific surface and the app is same-origin behind a proxy (§11, §12.1) — so F-1's guarantee holds without a Route Handler | — |
 | OQ-2 | **i18n, partially closed.** `shared/i18n` (§12.7) wires uz/ru/en with compile-checked keys. Still open: an ICU library for plurals and per-locale date/number formatting, lazy namespace loading, and whether the locale belongs in the URL | Plurals, formatted dates, a locale-scoped route |
-| OQ-3 | **Route tree scale.** At seventeen routes `routes.tsx` no longer fits on a screen, which is the threshold this question named. If the tree outgrows one screen, file-based routing plus its generated tree may be the better trade | A large route surface |
+| OQ-3 | **Route tree scale.** At eighteen routes `routes.tsx` no longer fits on a screen, which is the threshold this question named. If the tree outgrows one screen, file-based routing plus its generated tree may be the better trade | A large route surface |
 | OQ-4 | **Bundle budget.** No `manualChunks` and no size assertion in CI. The numbers to enforce are a measurement nobody has taken yet (CLAUDE.md §10.10) | A budget gate |
 | OQ-5 | **Automated a11y checks.** `@axe-core/playwright` is not wired; today's accessibility guarantees are hand-asserted | An a11y gate |
 | OQ-6 | **Access-token expiry is not anticipated.** The client waits for a `401` and refreshes reactively rather than scheduling against `expires_in`, so the first request after ~15 minutes idle always costs a round trip | A latency budget on the first interaction |

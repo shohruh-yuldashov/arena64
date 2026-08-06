@@ -2524,6 +2524,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notifications/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your notification preferences
+         * @description Every category on every channel, defaults already resolved — §7.
+         *
+         *     Unlimited, unlike the write beneath it: one indexed read of at most a
+         *     dozen of the caller's own rows, with no parameter that could name
+         *     anybody else's. See `presentation.rate_limits`.
+         */
+        get: operations["get_preferences_api_v1_notifications_preferences_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change your notification preferences
+         * @description Applies every change, or none — §9.
+         *
+         *     **`PATCH`, and a list of changes rather than the whole matrix.** A save
+         *     names only the switches that moved, so a client cannot overwrite a
+         *     category it never rendered and a second tab cannot silently revert one
+         *     it did not touch.
+         *
+         *     Returns the resulting matrix, exactly what a fresh `GET` would say, so a
+         *     save costs one request and the screen cannot disagree with the server.
+         *
+         *     One illegal change rejects the whole request and writes nothing: a
+         *     locked or unavailable pair answers `422` with the code that says which
+         *     (`notification_preference_locked`, `notification_channel_unavailable`),
+         *     and the table never moved.
+         */
+        patch: operations["update_preferences_api_v1_notifications_preferences_patch"];
+        trace?: never;
+    };
     "/api/v1/notifications/{notification_id}/read": {
         parameters: {
             query?: never;
@@ -2706,6 +2747,11 @@ export interface components {
         /** ApiResponse[NotificationPageResponse] */
         ApiResponse_NotificationPageResponse_: {
             data: components["schemas"]["NotificationPageResponse"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        /** ApiResponse[NotificationPreferencesResponse] */
+        ApiResponse_NotificationPreferencesResponse_: {
+            data: components["schemas"]["NotificationPreferencesResponse"];
             meta: components["schemas"]["ResponseMeta"];
         };
         /** ApiResponse[PendingMatchResponse] */
@@ -3171,6 +3217,21 @@ export interface components {
             page: components["schemas"]["CursorPageInfo"];
         };
         /**
+         * DeliveryChannel
+         * @description Where a notification can reach a player.
+         *
+         *     Three, and `sms` is deliberately absent: this product has no phone
+         *     number for anybody and a channel with no address is a switch that
+         *     cannot do anything.
+         *
+         *     Only `IN_APP` is **implemented**. The other two are here because a
+         *     settings screen that showed one channel would teach players that
+         *     Arena64 has one, and because the preference table's vocabulary should
+         *     not change on the day email ships — see `CHANNEL_AVAILABILITY`.
+         * @enum {string}
+         */
+        DeliveryChannel: "in_app" | "email" | "push";
+        /**
          * ErrorCode
          * @description Every code an `Arena64Error` can carry. Additive only — see
          *     `Arena64Error`'s own note on why: removing or renaming a member breaks
@@ -3189,7 +3250,7 @@ export interface components {
          *     per module and stops being a useful thing to exhaustively switch over.
          * @enum {string}
          */
-        ErrorCode: "internal_error" | "validation_error" | "domain_error" | "authentication_failed" | "not_found" | "conflict" | "permission_denied" | "precondition_failed" | "rule_violation" | "rate_limited" | "unsupported_engine_version" | "invalid_cursor" | "tournament_not_found" | "registration_not_open" | "registration_deadline_passed" | "tournament_full" | "already_registered" | "registration_not_found" | "invalid_tournament_state" | "infrastructure_error" | "transient_infrastructure_error" | "permanent_infrastructure_error" | "username_already_exists" | "email_already_exists" | "duplicate_friend_request" | "opposite_friend_request_pending" | "invalid_username" | "invalid_email" | "weak_password" | "invalid_credentials" | "inactive_account" | "account_locked" | "authentication_required" | "invalid_token" | "expired_token" | "invalid_session" | "session_expired" | "invalid_verification_token" | "invalid_reset_token" | "avatar_too_large" | "queue_cooldown_active" | "unsupported_time_control";
+        ErrorCode: "internal_error" | "validation_error" | "domain_error" | "authentication_failed" | "not_found" | "conflict" | "permission_denied" | "precondition_failed" | "rule_violation" | "rate_limited" | "unsupported_engine_version" | "invalid_cursor" | "tournament_not_found" | "registration_not_open" | "registration_deadline_passed" | "tournament_full" | "already_registered" | "registration_not_found" | "invalid_tournament_state" | "infrastructure_error" | "transient_infrastructure_error" | "permanent_infrastructure_error" | "username_already_exists" | "email_already_exists" | "duplicate_friend_request" | "opposite_friend_request_pending" | "invalid_username" | "invalid_email" | "weak_password" | "invalid_credentials" | "inactive_account" | "account_locked" | "authentication_required" | "invalid_token" | "expired_token" | "invalid_session" | "session_expired" | "invalid_verification_token" | "invalid_reset_token" | "avatar_too_large" | "queue_cooldown_active" | "unsupported_time_control" | "notification_preference_locked" | "notification_channel_unavailable" | "duplicate_preference_change";
         /**
          * ErrorResponse
          * @description The only shape an Arena64 error takes on the wire: a safe message and
@@ -4081,6 +4142,22 @@ export interface components {
             thumbnail_url: string | null;
         };
         /**
+         * NotificationCategory
+         * @description The bounded families a future preference switch will address.
+         *
+         *     Four, and the set is chosen so that a player muting one is muting
+         *     something they can name. `marketing` is deliberately absent: this
+         *     product defines no such notification, and a category nothing produces is
+         *     a preference that silently does nothing.
+         *
+         *     Only `SOCIAL` has a producer today. The other three exist because the
+         *     *category* is the unit `users.notification_preference` will key on
+         *     (database.md §4.9), and adding a category later means migrating rows
+         *     that were written without one.
+         * @enum {string}
+         */
+        NotificationCategory: "social" | "game" | "tournament" | "system";
+        /**
          * NotificationPageResponse
          * @description One page, newest first.
          */
@@ -4092,6 +4169,17 @@ export interface components {
              * @description An opaque cursor for the next page, or `null` on the last page. Send it back unchanged; never construct or decode one.
              */
             next_cursor: string | null;
+        };
+        /**
+         * NotificationPreferencesResponse
+         * @description Every preference this player has, defaults resolved.
+         *
+         *     Returned by both the read and the update, so a save needs no follow-up
+         *     request and the screen cannot disagree with the server (§17).
+         */
+        NotificationPreferencesResponse: {
+            /** Settings */
+            settings: components["schemas"]["PreferenceSettingResponse"][];
         };
         /**
          * NotificationResponse
@@ -4304,6 +4392,60 @@ export interface components {
              * @description Opaque; send it back unread for the next page.
              */
             next_cursor?: string | null;
+        };
+        /**
+         * PreferenceChangeRequest
+         * @description One switch a player moved.
+         *
+         *     The enums are the wire types, so an unknown category is a `422` from
+         *     FastAPI's own validation before any service runs — tier 1 in
+         *     services.md §6, and the reason the domain never sees a string it does
+         *     not know.
+         */
+        PreferenceChangeRequest: {
+            category: components["schemas"]["NotificationCategory"];
+            channel: components["schemas"]["DeliveryChannel"];
+            /** Enabled */
+            enabled: boolean;
+        };
+        /**
+         * PreferenceSettingResponse
+         * @description One category on one channel, as a client renders it.
+         */
+        PreferenceSettingResponse: {
+            /**
+             * Category
+             * @description A `NotificationCategory` value.
+             * @example social
+             */
+            category: string;
+            /**
+             * Channel
+             * @description A `DeliveryChannel` value.
+             * @example in_app
+             */
+            channel: string;
+            /**
+             * Enabled
+             * @description Whether delivery happens on this pair right now.
+             */
+            enabled: boolean;
+            /**
+             * Available
+             * @description Whether this build delivers on this channel at all. A **backend** fact — separate from whether the browser supports it.
+             */
+            available: boolean;
+            /**
+             * Editable
+             * @description Whether this player may change this pair.
+             */
+            editable: boolean;
+            /**
+             * Locked Reason
+             * @description Why it cannot be changed — a `LockedReason` value, or `null` when it can. Clients render a translated explanation from it.
+             * @example essential
+             */
+            locked_reason: string | null;
         };
         /**
          * PreferencesResponse
@@ -5638,6 +5780,22 @@ export interface components {
              * @example 3
              */
             unread_count: number;
+        };
+        /**
+         * UpdateNotificationPreferencesRequest
+         * @description What a save sends: only the switches that moved.
+         *
+         *     Bounded at the size of the whole matrix, so a request cannot
+         *     name a pair more times than there are pairs (§11). The duplicate check
+         *     that rejects the same pair twice is the service's; this only stops an
+         *     unbounded body reaching it.
+         *
+         *     An empty list is legal and is a no-op that returns the current state. A
+         *     form submitted with nothing dirty is not an error.
+         */
+        UpdateNotificationPreferencesRequest: {
+            /** Changes */
+            changes: components["schemas"]["PreferenceChangeRequest"][];
         };
         /**
          * UserRead
@@ -8852,6 +9010,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiResponse_MarkAllReadResponse_"];
+                };
+            };
+        };
+    };
+    get_preferences_api_v1_notifications_preferences_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_NotificationPreferencesResponse_"];
+                };
+            };
+        };
+    };
+    update_preferences_api_v1_notifications_preferences_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateNotificationPreferencesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_NotificationPreferencesResponse_"];
+                };
+            };
+            /** @description A change was refused, or the request was malformed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many preference updates */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

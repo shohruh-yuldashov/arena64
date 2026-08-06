@@ -10,7 +10,7 @@ import { useTranslation } from "@/shared/i18n";
  *
  * Below `sm` the navigation is a horizontal scrolling row above the
  * content — a vertical sidebar at 360px would eat a third of the width for
- * four links. From `md` it becomes a sidebar beside the content. Nothing
+ * five links. From `md` it becomes a sidebar beside the content. Nothing
  * between needs a third arrangement.
  *
  * ## `aria-current`, not just a colour
@@ -24,6 +24,7 @@ const LINKS = [
   { to: "/settings/profile", key: "profile.nav.editProfile" },
   { to: "/settings/preferences", key: "profile.nav.preferences" },
   { to: "/settings/privacy", key: "profile.nav.privacy" },
+  { to: "/settings/notifications", key: "profile.nav.notifications" },
   { to: "/settings/sessions", key: "profile.nav.sessions" },
 ] as const;
 

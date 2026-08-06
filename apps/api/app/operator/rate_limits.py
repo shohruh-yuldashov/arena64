@@ -73,6 +73,8 @@ from app.common.logging import configure_logging
 from app.config.settings import Settings, get_settings
 from app.core.rate_limiting import KEY_PREFIX, KEY_VERSION
 from app.modules.auth.presentation.rate_limits import build_rules as auth_rules
+from app.modules.avatars.presentation.rate_limits import build_rules as avatar_rules
+from app.modules.friends.presentation.rate_limits import build_rules as friends_rules
 from app.modules.matchmaking.presentation.rate_limits import build_rules as matchmaking_rules
 from app.modules.profiles.presentation.rate_limits import build_rules as profile_rules
 
@@ -94,10 +96,22 @@ _SCAN_COUNT = 500
 #: A module that adds a policy module must be added here. The alternative —
 #: discovering them by import scanning — trades a one-line edit for a
 #: mechanism that fails silently when a package is renamed.
+#:
+#: **It failed silently anyway.** A64-021.2H found `friends` and `avatars`
+#: missing: an operator clearing buckets during a notification diagnosis
+#: could not clear `friend_request_send_user`, which is the one bucket the
+#: notification flow actually consumes, and the command reported success
+#: while leaving it untouched. That is the exact failure this comment
+#: predicted, twice over, and a one-line edit is only reliable if something
+#: fails when it is forgotten — so
+#: `tests/unit/test_rate_limit_operator.py` now asserts this tuple covers
+#: every module that declares policy.
 _POLICY_REGISTRIES = (
     auth_rules,
     profile_rules,
     matchmaking_rules,
+    friends_rules,
+    avatar_rules,
 )
 
 

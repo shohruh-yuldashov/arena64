@@ -9,12 +9,18 @@ about the command's behaviour rather than about a database that happened
 to survive.
 """
 
+from pathlib import Path
 from typing import Any
 
 from app.config.settings import RateLimitSettings, Settings, get_settings
 from app.core.rate_limiting import KEY_PREFIX, KEY_VERSION, RateLimitRule, RateLimitSubject
 from app.modules.auth.presentation.rate_limits import build_rules
-from app.operator.rate_limits import _clear_rule, pattern_for, rule_names
+from app.operator.rate_limits import (
+    _POLICY_REGISTRIES,
+    _clear_rule,
+    pattern_for,
+    rule_names,
+)
 
 
 class _FakeRedis:
@@ -83,14 +89,48 @@ class TestThePatterns:
         assert key.startswith(pattern.removesuffix("*"))
 
     def test_the_rule_list_spans_every_module_that_declares_policy(self) -> None:
-        """Policy is per module, so a command reading one registry leaves
-        the others' buckets behind — which is exactly what the first version
-        of this command did."""
-        names = rule_names(_settings())
+        """Policy is per module, so a command reading one registry leaves the
+        others' buckets behind.
 
-        assert "login_ip" in names  # auth
-        assert "privacy_update_user" in names  # profiles
-        assert "matchmaking_queue_user" in names  # matchmaking
+        **Discovered from the filesystem, not listed here** — A64-021.2H.
+        The previous version of this test named three rules, one per module
+        somebody remembered, and so it could not fail for a module nobody
+        had listed. Two were missing: `friends` and `avatars`. An operator
+        clearing buckets mid-incident was told "cleared" while
+        `friend_request_send_user` — the one bucket a notification
+        diagnosis actually consumes — was left untouched.
+
+        So this walks `app/modules/*/presentation/rate_limits.py` and
+        requires every one of them to contribute a rule. Adding a policy
+        module now fails this test until `_POLICY_REGISTRIES` is updated,
+        which is what the registry's own comment has promised since
+        A64-020.6 and could not deliver.
+        """
+        modules = sorted(
+            path.parents[1].name
+            for path in (Path(__file__).resolve().parents[2] / "app" / "modules").glob(
+                "*/presentation/rate_limits.py"
+            )
+        )
+        assert modules, "no module declares rate-limit policy — the glob is wrong"
+
+        covered = {registry.__module__.split(".")[2] for registry in _POLICY_REGISTRIES}
+        assert covered == set(modules), (
+            f"_POLICY_REGISTRIES covers {sorted(covered)}; "
+            f"the modules that declare policy are {modules}"
+        )
+
+        # And the registry actually yields each module's rules, so a
+        # registry entry that imported the wrong `build_rules` still fails.
+        names = rule_names(_settings())
+        for expected in (
+            "login_ip",  # auth
+            "privacy_update_user",  # profiles
+            "matchmaking_queue_user",  # matchmaking
+            "friend_request_send_user",  # friends
+            "avatar_upload_user",  # avatars
+        ):
+            assert expected in names
 
 
 class TestClearing:

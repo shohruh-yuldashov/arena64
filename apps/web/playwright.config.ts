@@ -30,7 +30,7 @@ export default defineConfig({
     // here exactly as it is in `npm run dev`.
     trace: "on-first-retry",
   },
-  // **Eight projects, because four specs share three accounts.**
+  // **Nine projects, because five specs share four accounts.**
 
   //
   // `play.spec.ts`, `game.spec.ts`, `game-controls.spec.ts` and
@@ -66,6 +66,7 @@ export default defineConfig({
         "**/history.spec.ts",
         "**/tournament.spec.ts",
         "**/pwa.spec.ts",
+        "**/notifications.spec.ts",
       ],
     },
     {
@@ -114,6 +115,21 @@ export default defineConfig({
       // account was the other option and costs a registration, which is
       // three per IP per hour and already spent by `auth.spec.ts`.
       dependencies: ["history"],
+    },
+    {
+      // A64-021.1 §32.10. **After `chromium`**, because it drives
+      // `e2e_social_alice` and `e2e_social_bob` — the same pair
+      // `social.spec.ts` friends and unfriends. Running the two at once
+      // would make each flaky for a reason neither file mentions: one
+      // suite's `resetRelationship` would delete the request the other is
+      // waiting to be notified about.
+      //
+      // It queues for nothing and plays nothing, so it contends with no
+      // other project.
+      name: "notifications",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: "**/notifications.spec.ts",
+      dependencies: ["chromium"],
     },
     {
       name: "replay",

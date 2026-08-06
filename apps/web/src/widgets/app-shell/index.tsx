@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+import { useNotificationPush } from "@/features/notifications/model/use-notification-push";
 import { NotificationBell } from "@/widgets/notification-bell";
 import { PwaNotices } from "@/widgets/pwa";
 import { SessionMenu } from "@/widgets/session-menu";
@@ -35,6 +36,17 @@ import { ThemeToggle } from "@/widgets/theme-toggle";
  * kept finding.
  */
 export function AppShell({ children }: { children: ReactNode }) {
+  // A64-021.2 §4. The one notification subscription, mounted here because
+  // the shell is the only thing on every route — a `notification.created`
+  // frame must refresh the badge whether the player is on `/play`, in a
+  // game or reading a profile.
+  //
+  // Here rather than in `NotificationBell` so the subscription does not
+  // depend on that widget continuing to be rendered, and rather than in a
+  // provider because there is nothing to provide: it subscribes to the one
+  // socket `app/providers` already owns and invalidates two query keys.
+  useNotificationPush();
+
   return (
     <div className="bg-background text-foreground flex min-h-full flex-col">
       <a

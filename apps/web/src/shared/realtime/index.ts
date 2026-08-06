@@ -30,6 +30,7 @@ export type {
   InboundFrame,
   MatchOfferedPayload,
   MovePayload,
+  NotificationCreatedPayload,
   PlacedPiece,
   Rank,
   ResultPayload,

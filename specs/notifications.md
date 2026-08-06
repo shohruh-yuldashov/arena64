@@ -1,8 +1,8 @@
 # Notifications
 
-> **Status:** foundation implemented — A64-021.1; realtime in-app delivery — A64-021.2
+> **Status:** foundation implemented — A64-021.1; realtime in-app delivery — A64-021.2; preferences — A64-021.3
 > **Owner:** platform
-> **Related:** `docs/01-architecture/domain-model.md` §9.3, `docs/01-architecture/database.md` §10.2, `specs/friends.md`, `specs/frontend.md` §21
+> **Related:** `docs/01-architecture/domain-model.md` §9.3, `docs/01-architecture/database.md` §10.2 and §10.3, `specs/friends.md`, `specs/frontend.md` §21 and §22
 
 A **notification** is a durable, recipient-owned record that something
 happened which a player should know about — NT-1: *"the notification exists
@@ -16,6 +16,10 @@ the thing NT-1 is actually about: the record, and the screen that reads it.
 A64-021.2 adds the **first delivery channel**: the recipient is told over
 the socket they already have, the moment the row is committed (§11). Push
 and email remain deferred, and §12 states exactly what each must add.
+
+A64-021.3 adds the **preferences** that govern all of it (§10). A muted
+category produces no durable row and no realtime frame — suppression at the
+point of creation, never a filter applied on read.
 
 ---
 
@@ -205,6 +209,8 @@ notifications.
 | `GET /api/v1/notifications/unread-count` | The badge |
 | `POST /api/v1/notifications/{id}/read` | Marks one read |
 | `POST /api/v1/notifications/read-all` | Marks every unread one read |
+| `GET /api/v1/notifications/preferences` | The whole preference matrix — §10 |
+| `PATCH /api/v1/notifications/preferences` | Changes what you receive — §10 |
 
 There is **no route that creates a notification**, and that is structural:
 `NotificationService` has no create method, and the only writer is a source
@@ -227,6 +233,9 @@ every one of them.
 | --- | --- | --- |
 | `invalid_cursor` | 422 | A cursor this API did not issue |
 | `not_found` | 404 | No notification with that id **belongs to this recipient** |
+| `notification_preference_locked` | 422 | A change would mute a notification the platform must be able to deliver |
+| `notification_channel_unavailable` | 422 | A change names a channel this build cannot deliver on |
+| `duplicate_preference_change` | 422 | One request named the same `(category, channel)` twice |
 
 The `404` is deliberately the same for "no such notification" and "somebody
 else's". A `403` for the second would confirm the row exists, which is
@@ -278,24 +287,107 @@ it is started, and there is no partial mechanism pretending to be one.
 
 ---
 
-## 10. Preferences — the gap, stated exactly
+## 10. Preferences — A64-021.3
 
-`database.md` §4.9 specifies `users.notification_preference` keyed by
-`(player_id, category, channel)`. **It does not exist**: no table, no enum,
-no endpoint. `PATCH /profile/preferences` knows `gameplay` and `locale` and
-nothing else.
+**A player decides what reaches them, and the backend enforces it.** The
+unit is a `(category, channel)` pair.
 
-So A64-021.1 adds **no preference switch**, because a switch the backend
-cannot enforce is worse than none — it tells a player they have muted
-something they have not.
+### 10.1 The matrix
 
-What is prepared: every notification carries a `category`, which is the
-column a preference query would filter on, and it is denormalised onto the
-row rather than derived, so that filter can use an index.
+| | `in_app` | `email` | `push` |
+| --- | --- | --- | --- |
+| `social` | on | — | — |
+| `game` | on | — | — |
+| `tournament` | on | — | — |
+| `system` | **locked on** | — | — |
 
-NT-4 — *preferences are read at delivery time, not at creation time* — is
-the rule whoever builds this must honour, and it is why the check belongs in
-a delivery channel rather than in the durable writer.
+`—` means the channel does not deliver in this build. `email` is A64-021.5's
+and `push` is A64-021.6's; the vocabulary exists now so that the day either
+ships is a code change rather than a data migration, and so a settings
+screen that showed one channel does not teach players that Arena64 has one.
+
+**Defaults.** In-app **on**, because a notification list a player has to
+switch on is a list nobody discovers, and the cost of being wrong is a row
+they can mute in two clicks. Email and push **off**, because a stored `true`
+on a channel that does not work would begin delivering to everyone who never
+asked on the day it ships. *A channel arriving is not consent.*
+
+**One lock, and the narrowness is the point.** `(system, in_app)` cannot be
+switched off: `system` is account and security matters, and a player who
+muted them would have no way to be told their account had been acted on.
+Social, game and tournament notifications are **not** locked — nothing about
+a friend request is essential, and a player who does not want them is
+entitled to silence.
+
+### 10.2 Storage — sparse
+
+`notifications.notification_preference`, PK `(user_id, category, channel)`,
+one row **per override**. A player who has never opened the screen has none
+and is served entirely from the defaults above.
+
+`database.md` §4.9 placed this relation in the `users` schema;
+`domain-model.md` §9.3 said `notifications` owns no preference data. Both
+are corrected — the vocabulary is this module's, the alternative is a module
+cycle, and §9.3's actual rule (never a *second copy*) is unaffected by which
+context owns the single one.
+
+### 10.3 The read
+
+`GET /notifications/preferences` returns **every** pair with its default
+already resolved, each as four independent facts:
+
+| Field | Says |
+| --- | --- |
+| `enabled` | What delivery does right now |
+| `available` | Whether this build delivers on this channel at all |
+| `editable` | Whether this player may change it |
+| `locked_reason` | `essential`, `channel_unavailable`, or `null` |
+
+The whole matrix rather than the stored overrides, so a client never
+reimplements the defaults and the two cannot drift. `available` is a
+**backend** fact and is deliberately separate from browser capability: a
+browser with `PushManager` still receives nothing, because nothing is sent.
+
+### 10.4 The write
+
+`PATCH /notifications/preferences` with `{"changes": [...]}` — only the
+switches that moved, so a save cannot overwrite a category the client never
+rendered.
+
+**Validated whole, then written whole.** Every change is checked before any
+is written; one illegal change rejects the request and the table does not
+move. A batch naming the same pair twice is refused rather than resolved by
+last-write-wins, because it has no intent.
+
+The response is the resulting matrix — exactly what a fresh `GET` would say
+— so a save is one request and the screen cannot disagree with the server.
+An empty change list is a legal no-op.
+
+Rate-limited per authenticated user (30 per 5 minutes). The read carries no
+limit: it is one indexed read of the caller's own rows.
+
+### 10.5 Enforcement — creation, not filtering
+
+**NT-4 honoured literally.** `NotificationDeliveryPolicy` is asked at
+*delivery* time, inside `DurableNotificationWriter`, before the unit of work
+opens. So somebody who mutes a category between the friend request and the
+relay tick that carries it has muted it.
+
+A muted category means: **no durable row, no realtime frame, no change to
+the unread count.** Not a row written and hidden — a hidden row is a record
+the player never consented to sitting in a table they cannot see, and the
+first reporting query would find it.
+
+One query per **batch**, not per recipient: the policy takes a sequence and
+answers a set, so a future tournament fan-out is one indexed read rather
+than one per entrant.
+
+### 10.6 What A64-021.3 deliberately does not do
+
+No email sending, no templates, no SMTP. No push subscription, no VAPID key,
+no service-worker push handler, no browser permission request. No delivery
+attempt tracking, no digests, no quiet hours, no per-type granularity below
+the category. Each is named in the phase that owns it.
 
 ---
 
@@ -419,15 +511,15 @@ regained focus, which is unbounded.
 
 Everything below is deliberately absent, with the seam it will use.
 
-A64-021.2's row is gone from this table because it was built: the seam it
-used — a `NotificationAnnouncer` port satisfied at the composition root — is
-the same one each remaining row names, and §11 is what it looks like when
-taken.
+A64-021.2's and A64-021.3's rows are gone from this table because they were
+built. The seam each used — a port satisfied at the composition root, an
+announcer and then a delivery policy — is the same one every remaining row
+names, and §11 and §10 are what it looks like when taken.
 
 | Deferred to | What it adds | Where |
 | --- | --- | --- |
-| **A64-021.3 browser push** | Permission request, `pushManager.subscribe`, a VAPID key as a `VITE_` variable, `push` and `notificationclick` handlers in **the existing** service worker, a device/subscription table | `apps/web/pwa/service-worker.ts` and `apps/api`. `shared/pwa/push-support.ts` already reports capability and asks for nothing |
-| **Email** | A provider, templates, a per-channel delivery record (`notification_delivery`, `database.md` §10.2) | A third sink, plus the delivery table NT-1 needs to record a channel failing independently |
+| **A64-021.6 browser push** | Permission request, `pushManager.subscribe`, a VAPID key as a `VITE_` variable, `push` and `notificationclick` handlers in **the existing** service worker, a device/subscription table | `apps/web/pwa/service-worker.ts` and `apps/api`. `shared/pwa/push-support.ts` already reports capability and asks for nothing. The `push` **preference** already exists and is refused as unavailable — flipping `CHANNEL_AVAILABILITY` is what turns it on (§10.1) |
+| **A64-021.5 email** | A provider, templates, a per-channel delivery record (`notification_delivery`, `database.md` §10.2) | A third sink, plus the delivery table NT-1 needs to record a channel failing independently. Its preference column exists already; it must consult `NotificationDeliveryPolicy` with `channel=email` before sending, exactly as the durable writer does with `in_app` |
 | **Friend challenges** | A `challenges` domain, its events, and one notification type per event | A new member of `NotificationType`, its payload, its target |
 | **Tournament notifications** | A recipient mapping for `round_published` and `completed` — a bracket read, not a payload change | A consumer that resolves participants, feeding the same durable writer |
 
@@ -455,6 +547,8 @@ handler must not widen what a *page* may tell the service worker to do.
 ## Related documents
 
 - `docs/01-architecture/domain-model.md` §9.3 — the `Notification` aggregate and NT-1…NT-4
-- `docs/01-architecture/database.md` §10.2 — the relation
+- `docs/01-architecture/database.md` §10.2 — the notification relation
+- `docs/01-architecture/database.md` §10.3 — the preference relation
 - `docs/07-decisions/ADR-003-pwa-service-worker.md` — the worker a push channel will extend
 - `specs/frontend.md` §21 — the in-app read surface
+- `specs/frontend.md` §22 — the preference screen

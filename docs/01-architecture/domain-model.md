@@ -571,9 +571,25 @@ and independent.
 | NT-3 | A notification past its staleness horizon is dropped, not delivered late | A "your turn" push arriving six hours later is worse than none |
 | NT-4 | Preferences are read at **delivery** time, not at creation time | A player who mutes a category should stop receiving it immediately, including for already-queued items |
 
-**Why `notifications` owns no preference data:** preferences live in `UserProfile` (§7.1) and are
-read through a port. Duplicating them here would create the classic bug where a player mutes a
-category in settings and keeps receiving it because a second copy was never updated.
+**Why `notifications` owns preference data after all — corrected by A64-021.3.** This section
+said preferences live in `UserProfile` (§7.1) and are read through a port. As built, the
+`(category, channel, enabled)` matrix is owned **here**, by `notifications`, and stored in
+`notifications.notification_preference` (`database.md` §10.3 and §4.9).
+
+The rule this paragraph was protecting is unchanged and is still enforced. Its concern is a
+**second copy** — "a player mutes a category in settings and keeps receiving it because a second
+copy was never updated" — and one owning relation cannot produce that. What moved is *which*
+context owns the single copy, and it moved because the vocabulary is this one's: the columns are a
+`NotificationCategory` and a `DeliveryChannel`, both defined here, so placing the table in `users`
+would have made the platform's base module import `notifications.public` to describe it.
+
+`UserProfile` keeps the preferences that are genuinely its own — locale, board theme, sound,
+privacy audiences. Those are not notification routing and were never part of this matrix.
+
+**NT-4 is untouched and is the operative rule.** Preferences are read at *delivery* time by
+`NotificationDeliveryPolicy`, never baked into the event when it is written, so a player who mutes
+a category between an event and the relay tick that carries it has muted it. A muted category
+produces **no durable notification at all** rather than one that is hidden on read.
 
 ### 9.4 `DeviceRegistration` — aggregate root
 

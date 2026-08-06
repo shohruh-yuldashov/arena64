@@ -218,7 +218,7 @@ variant were governed by different rules — the exact class of corruption AD-15
 | --- | --- | --- | --- |
 | `reference` | *(platform, deployed)* | `variant`, `time_control`, `rating_category`, `locale`, `country` | DB-08; seeded by migration |
 | `auth` | `auth` | `account`, `credential`, `email_verification`, `password_reset_token`, `session` | Most sensitive schema on the platform |
-| `users` | `users` | `player_profile`, `handle_assignment`, `player_preference`, `notification_preference` | `player_id` originates here |
+| `users` | `users` | `player_profile`, `handle_assignment`, `player_preference` | `player_id` originates here |
 | `friends` | `friends` | `friend_request`, `friendship`, `block` | |
 | `matchmaking` | `matchmaking` | `queue_ticket`, `queue_cooldown`, `queue_cooldown_audit`, `pairing_timeline`, `challenge` | `queue_ticket` exists since A64-014.1 and **is PostgreSQL-authoritative** — see §8.1, which this reverses. `queue_cooldown` since A64-015.5 (§8.1b); the two append-only audit relations since A64-015.6 (§8.1c, §8.1d). `challenge` is not built yet |
 | `game` | `game` | `match` | `match` exists since A64-015.4 and carries the part a pairing needs — who, which rules, from which pairing, and whether both agreed. §8.2 describes the relation it grows into; §8.2a describes what actually ships |
@@ -227,7 +227,7 @@ variant were governed by different rules — the exact class of corruption AD-15
 | `achievements` | `achievements` | `achievement_definition`, `achievement_definition_text`, `player_achievement`, `achievement_progress` | |
 | `statistics` | `statistics` | `player_statistics`, `player_statistics_termination`, `head_to_head` | Entirely rebuildable |
 | `chat` | `chat` | `chat_thread`, `chat_thread_participant`, `chat_message` | |
-| `notifications` | `notifications` | `notification` (built, A64-021.1); `notification_delivery`, `device_registration` (specified, not created — §10.2) | |
+| `notifications` | `notifications` | `notification` (built, A64-021.1), `notification_preference` (built, A64-021.3 — moved here from `users`, see §4.9); `notification_delivery`, `device_registration` (specified, not created — §10.2) | |
 | `fairplay` | `fairplay` | `analysis_run`, `integrity_signal` | |
 | `admin` | `admin` | `role_assignment`, `report`, `moderation_case`, `case_evidence`, `sanction`, `audit_entry` | |
 | `platform` | *(platform)* | `outbox`, `processed_event`, `erasure_request`, `data_export_request` | Plus Alembic's version table. The first two exist since A64-013.7; the code that owns them is `apps/api/app/platform/outbox/`, which is deliberately outside `app/modules/` because no bounded context owns them |
@@ -500,10 +500,21 @@ read on the platform with fifteen columns nobody reading it wants, and every pre
 would invalidate the cache of a row that other people are reading. One aggregate, two relations,
 one transaction — which is exactly what a repository is for.
 
-### 4.9 `users.notification_preference`
+### 4.9 `notification_preference` — moved to the `notifications` schema
 
-`player_id` (FK, cascade), `category` (`notifications.notification_category`), `channel`
-(`notifications.delivery_channel`), `is_enabled`, `updated_at`. PK `(player_id, category, channel)`.
+**This section is superseded.** It specified `users.notification_preference`; the relation was
+built in A64-021.3 as **`notifications.notification_preference`** and is documented at §10.3.
+`domain-model.md` §9.3 is corrected in the same change.
+
+Three reasons, in the order that decided it:
+
+| | |
+| --- | --- |
+| The vocabulary is `notifications`' | This section's own column types are named `notifications.notification_category` and `notifications.delivery_channel` — it had to reach into that module to describe a table it placed in another one |
+| The alternative is a module cycle | `notifications.application` already imports `users.public` for presence. Placing the table in `users` would make `users` — the base module every context depends on — import `notifications.public` for the enums |
+| The FK could not have been built anyway | `player_id (FK, cascade)` across schemas is what DB-03 forbids. It is an opaque `player_id` (DM-06), like every other cross-context reference |
+
+**What survives unchanged** is the reasoning below, which is about shape rather than location.
 
 **Why a relation rather than a `jsonb` blob on `player_preference`:** the notification dispatcher's
 question is "is this player opted in to this category on this channel", asked once per notification
@@ -1396,6 +1407,33 @@ than a storage one.
 **Retention: none.** The relation is append-only as of A64-021.1 and read state is not coupled to
 deletion. Q-15 and R-24 are the open questions this leaves; `specs/notifications.md` §9 states the
 limitation and the future task rather than shipping a partial mechanism.
+
+**`notification_preference`** — **created by A64-021.3**, and in *this* schema rather than in
+`users`, which is where §4.9 originally placed it. As built: `user_id uuid`, `category text`,
+`channel text`, `enabled boolean`, `created_at`, `updated_at`. PK `(user_id, category, channel)`;
+index `(channel, user_id)`.
+
+| Decision | As built | Why |
+| --- | --- | --- |
+| Schema | `notifications`, not `users` | The vocabulary is this module's, and the alternative is a module cycle — §4.9 |
+| Foreign key | **none** | `user_id` is an opaque `player_id` (DM-06); a cross-schema FK is what DB-03 forbids. Account deletion is `users`' erasure path, not another schema's constraint |
+| Column name | `enabled`, not `is_enabled` | Matches `NotificationPreferenceModel` and the wire field; one spelling per concept |
+| Index order | `(channel, user_id)` | The delivery-time question asks about **one** channel and **many** recipients, so a `user_id`-first index would be a probe per recipient where this is one range scan. The settings read is served by the primary key |
+| Enum storage | `text`, not a PostgreSQL enum | Adding a category must be a code change and a migration of rows, never an `ALTER TYPE` that locks the relation — the same choice `notification.type` made |
+
+**Rows are sparse: one per *override*, never one per player.** A player who has never opened the
+settings screen has none, and the effective matrix is resolved from defaults in
+`notifications/domain/preference.py`. Materialising the matrix would make every future category a
+data migration over every account, and would erase the difference between "chose the default" and
+"never looked" — the question a later change of default has to ask.
+
+**Defaults, stated once:** in-app **on** for every category; email and push **off**, because
+neither channel delivers in this build. `(system, in_app)` is locked on — the platform must be able
+to tell a player about their own account. See `specs/notifications.md` §11.
+
+**Retention: none, and deletion is consent-affecting.** Dropping this relation returns every player
+to the defaults, which for in-app means *on* — anyone who had muted a category would begin
+receiving it again. The migration's `downgrade` says so explicitly.
 
 **`notification_delivery`** — **not created.** It records a channel failing independently of
 the notification (NT-1), and there is no channel yet; it arrives with the first one. Specified as:

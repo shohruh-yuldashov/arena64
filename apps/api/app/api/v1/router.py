@@ -33,6 +33,7 @@ from app.modules.avatars.presentation.router import avatar_router
 from app.modules.friends.presentation.router import blocks_router, friends_router
 from app.modules.game.presentation.router import history_router, replay_router
 from app.modules.matchmaking.presentation.router import matchmaking_router
+from app.modules.notifications.presentation.router import notifications_router
 from app.modules.profiles.presentation.router import profiles_router
 from app.modules.profiles.presentation.search_router import user_search_router
 from app.modules.profiles.presentation.self_router import my_profile_router
@@ -98,6 +99,12 @@ v1_router.include_router(leaderboard_router)
 # last segment. No path a caller can send matches two of them.
 v1_router.include_router(tournaments_router)
 v1_router.include_router(player_tournaments_router)
+
+# A64-021.1. `/notifications`, `/notifications/unread-count`,
+# `/notifications/read-all` and `/notifications/{id}/read` differ in segment
+# count or in a literal segment, so no path a client can send matches two of
+# them — registration order is immaterial here.
+v1_router.include_router(notifications_router)
 
 # A64-020.5A. `/time-controls` collides with nothing — it is a single
 # unparameterised segment that no other router claims — so its position here

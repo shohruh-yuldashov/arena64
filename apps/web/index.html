@@ -1,9 +1,75 @@
 <!doctype html>
-<html lang="en" class="h-full">
+<!--
+  `lang="uz"` matches the locale `shared/i18n` falls back to and the one
+  the manifest declares. `shared/i18n` overwrites it the moment a player
+  chooses another language; this is the value that is correct before any
+  script has run, which is the only value assistive technology has for the
+  first paint.
+-->
+<html lang="uz" class="h-full">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      `viewport-fit=cover` lets the page reach under a notch and a home
+      indicator, which is what makes `env(safe-area-inset-*)` return
+      anything at all. `widgets/pwa` uses it to keep the notice strip off
+      the home indicator in standalone mode — A64-020.9 §24.
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Arena64</title>
+    <meta
+      name="description"
+      content="Onlayn shashka: real vaqt rejimidagi o'yinlar, reyting va musobaqalar."
+    />
+
+    <!--
+      A64-020.9 §7. The installable-application metadata.
+
+      **One manifest, linked from the one real document.** Everything about
+      the installed identity — name, icons, scope, start URL, shortcuts —
+      is in `public/manifest.webmanifest` and is not repeated here, because
+      two descriptions of one identity is two descriptions to keep in step
+      (CLAUDE.md §3.4). What stays in this file is only what a manifest
+      cannot express.
+
+      No host is named anywhere below. Every URL is same-origin and
+      relative, so one build works behind `localhost:4173` and behind
+      arena64.gg without a rebuild — the deployment contract
+      `specs/frontend.md` §11 already states.
+    -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!--
+      Two `theme-color`s, because this application has two themes and the
+      browser chrome should not contradict the page it frames. A single
+      dark value would put a black status bar above a white page for every
+      light-mode player.
+    -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0a0a" />
+    <meta name="color-scheme" content="light dark" />
+
+    <!--
+      SVG first: the tab renders the icon at 16px, where a downsampled
+      192px PNG loses the piece to the checker. The PNG is the fallback for
+      anything that will not take a vector.
+    -->
+    <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
+
+    <!--
+      iOS reads none of the manifest for a home-screen launch: the icon,
+      the title and the status bar all come from these three tags, and
+      without them a saved Arena64 is a screenshot labelled with the URL.
+      `apple-mobile-web-app-capable` is deprecated in favour of
+      `mobile-web-app-capable` and still the only one older iOS honours,
+      so both are here — A64-020.9 §7, §17.
+    -->
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Arena64" />
     <!--
       The theme is applied before the first paint, not in an effect. A
       `useEffect` that reads localStorage runs after React has already

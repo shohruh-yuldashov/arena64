@@ -4,10 +4,18 @@ from app.modules.notifications.application.services.durable_notification_writer 
     DURABLE_TYPES,
     DurableNotificationWriter,
 )
+from app.modules.notifications.application.services.notification_preference_service import (
+    DuplicatePreferenceChange,
+    NotificationPreferenceService,
+    PreferenceChange,
+)
 from app.modules.notifications.application.services.notification_service import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
     NotificationService,
+)
+from app.modules.notifications.application.services.preference_delivery_policy import (
+    PreferenceDeliveryPolicy,
 )
 from app.modules.notifications.application.services.presence_notification_service import (
     PresenceNotificationService,
@@ -28,8 +36,12 @@ __all__ = [
     "DURABLE_TYPES",
     "MAX_PAGE_SIZE",
     "SUBSCRIBED_EVENT_TYPES",
+    "DuplicatePreferenceChange",
     "DurableNotificationWriter",
+    "NotificationPreferenceService",
     "NotificationService",
+    "PreferenceChange",
+    "PreferenceDeliveryPolicy",
     "PresenceNotificationService",
     "PresenceSweeper",
     "SocialNotificationDispatcher",

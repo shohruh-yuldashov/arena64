@@ -255,3 +255,36 @@ class ErrorCode(StrEnum):
     # caller that an identifier names a *withdrawn* control rather than no
     # control announces a product decision through an error code.
     UNSUPPORTED_TIME_CONTROL = "unsupported_time_control"
+
+    # `notifications` (A64-021.3). **Two** codes for two refusals that share
+    # one endpoint, one method and one status — which is precisely when the
+    # rule in this class's docstring grants them. `PATCH
+    # /notifications/preferences` answers `422` for both, and a settings
+    # screen's response differs:
+    #
+    #   NOTIFICATION_PREFERENCE_LOCKED       this switch is not yours to
+    #                                        flip — restore it and explain
+    #                                        that the platform must be able
+    #                                        to reach you about your account
+    #   NOTIFICATION_CHANNEL_UNAVAILABLE     the channel does not deliver in
+    #                                        this build — restore it and say
+    #                                        "coming soon", not "not allowed"
+    #
+    # Two genuinely different sentences to a player, and a client cannot
+    # derive which from the status or the path. Note that neither is a
+    # `403`: nothing about the *caller's* authority is in question, and a
+    # permission error would send a client into its re-authentication path
+    # for a switch that nobody may flip.
+    #
+    # A malformed body — an unknown category, a missing field — stays a
+    # plain `validation_error`, because there the answer is "fix the
+    # request" and no player-facing sentence exists.
+    NOTIFICATION_PREFERENCE_LOCKED = "notification_preference_locked"
+    NOTIFICATION_CHANNEL_UNAVAILABLE = "notification_channel_unavailable"
+
+    DUPLICATE_PREFERENCE_CHANGE = "duplicate_preference_change"
+    """One request named the same category and channel twice, so it has no
+    single intent. Its own code because it is the one `422` on that endpoint
+    a *client bug* produces rather than a player action — nothing on the
+    settings screen can emit it, so a client that receives it should report
+    it rather than render it as advice to the player."""

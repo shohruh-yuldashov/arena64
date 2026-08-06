@@ -12,6 +12,12 @@ One published-to-us contract per collaborator, and two of our own:
                            — A64-021.1
     NotificationAnnouncer  who is told that a durable notification now
                            exists — A64-021.2
+    NotificationPreferenceRepository
+                           where a player's preference overrides are stored
+                           — A64-021.3
+    NotificationDeliveryPolicy
+                           whether a notification may be delivered to this
+                           recipient on this channel, asked at delivery time
 
 Everything else this module consumes is already a published port somewhere
 else — `friends.public.PresenceAudience`, `profiles.public.ProfileRenderer`,
@@ -32,7 +38,8 @@ layer that needs it), and the composition root satisfies it with
 cannot be handed anything wider.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
@@ -43,8 +50,12 @@ from app.modules.notifications.application.read_models import (
     NotificationPage,
 )
 from app.modules.notifications.domain.notification import SocialNotification
+from app.modules.notifications.domain.preference import (
+    DeliveryChannel,
+)
 from app.modules.notifications.domain.record import (
     NotificationAnnouncement,
+    NotificationCategory,
     NotificationRecord,
 )
 from app.modules.users.public import DeviceType, Presence
@@ -223,4 +234,89 @@ class NotificationAnnouncer(Protocol):
 
     async def announce(self, announcements: Sequence[NotificationAnnouncement]) -> None:
         """Announces a batch. An empty batch is a legal no-op."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryRequest:
+    """One prospective delivery: who, and about what kind of thing.
+
+    A pair rather than two parallel sequences, so a batch cannot be
+    assembled with its recipients and categories out of step — the failure
+    mode of a fan-out that silently checks the wrong person's preference.
+    """
+
+    recipient_id: UUID
+    category: NotificationCategory
+
+
+class NotificationPreferenceRepository(Protocol):
+    """Where a player's preference **overrides** are stored — A64-021.3 §6.
+
+    Overrides, not preferences: a row exists only where somebody has
+    departed from the default, so a new account has none and
+    `domain.preference.effective` fills the rest in. See that module on why
+    sparse.
+
+    Every method is scoped to a user id the caller resolved from
+    `CurrentUser`. There is no "read everybody's preferences" method and
+    there should not be one.
+    """
+
+    async def overrides_for(
+        self, user_id: UUID
+    ) -> Mapping[tuple[NotificationCategory, DeliveryChannel], bool]:
+        """This player's stored overrides. Empty for an untouched account."""
+        ...
+
+    async def replace(
+        self,
+        user_id: UUID,
+        *,
+        changes: Sequence[tuple[NotificationCategory, DeliveryChannel, bool]],
+        at: datetime,
+    ) -> None:
+        """Applies every change, or none of them.
+
+        An upsert on `(user_id, category, channel)` — **not** a delete and
+        insert, and not a read followed by a write. Two tabs saving at once
+        must produce one row per pair rather than a unique violation, which
+        is what `ON CONFLICT DO UPDATE` gives and what a check-then-insert
+        cannot (§8's "race-safe upsert").
+        """
+        ...
+
+    async def permitted(
+        self, requests: Sequence[DeliveryRequest], *, channel: DeliveryChannel
+    ) -> frozenset[DeliveryRequest]:
+        """The subset of `requests` this channel may deliver to.
+
+        **One query for the whole batch** — §11. A friend request has one
+        recipient today, but a published tournament round has as many as it
+        has entrants, and a port shaped for a single lookup would make that
+        an N+1 nobody notices until the first large bracket.
+        """
+        ...
+
+
+class NotificationDeliveryPolicy(Protocol):
+    """Whether a notification may be delivered — asked at **delivery** time.
+
+    The rule `SocialNotificationDispatcher` already applies to audience and
+    privacy, applied to preferences: *"re-read current state; do not trust
+    enqueue-time state"*. A player who muted a category between the event
+    and its delivery must not receive it, and the only way that holds is if
+    the question is asked here rather than baked into the event.
+
+    Declared in this layer because this is the layer that needs it (AD-06).
+    Satisfied by `PreferenceDeliveryPolicy` over the repository above, and
+    supplied by the composition root — so the durable writer never learns
+    where a preference is stored, and `notifications` never reaches into
+    another module for one.
+    """
+
+    async def permitted(
+        self, requests: Sequence[DeliveryRequest], *, channel: DeliveryChannel
+    ) -> frozenset[DeliveryRequest]:
+        """The subset that may be delivered. An empty input is a legal no-op."""
         ...

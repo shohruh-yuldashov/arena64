@@ -15,6 +15,13 @@ the social graph again and render the profile again — three reads duplicated
 so that two consumers could disagree about who may be told. Implementing
 `NotificationSink` reuses the one place that already got all three right.
 
+## Preferences decide whether a durable notification exists at all
+
+A64-021.3. Before a row is written, `NotificationDeliveryPolicy` is asked
+whether this recipient still wants this category in the app. A "no" means
+nothing is created — see `deliver` on why suppression belongs before the
+write rather than after it.
+
 ## Not every kind is durable, and that is a rule rather than a filter
 
 `friend_online` and `friend_offline` are **transient**. A friend coming
@@ -55,10 +62,13 @@ from typing import Final
 from app.core.identifiers import generate_uuid7
 from app.core.unit_of_work import UnitOfWork
 from app.modules.notifications.application.ports import (
+    DeliveryRequest,
     NotificationAnnouncer,
+    NotificationDeliveryPolicy,
     NotificationRepository,
 )
 from app.modules.notifications.domain.notification import NotificationKind, SocialNotification
+from app.modules.notifications.domain.preference import DeliveryChannel
 from app.modules.notifications.domain.record import (
     CATEGORY_OF,
     ActorSummary,
@@ -95,10 +105,12 @@ class DurableNotificationWriter:
         notifications: NotificationRepository,
         unit_of_work: UnitOfWork,
         announcer: NotificationAnnouncer,
+        policy: NotificationDeliveryPolicy,
     ) -> None:
         self._notifications = notifications
         self._unit_of_work = unit_of_work
         self._announcer = announcer
+        self._policy = policy
 
     async def deliver(self, notifications: list[SocialNotification]) -> None:
         """Stores a batch. An empty batch, or one that is entirely transient,
@@ -114,6 +126,36 @@ class DurableNotificationWriter:
             record
             for notification in notifications
             if (record := self._record_for(notification)) is not None
+        ]
+        if not durable:
+            return
+
+        # **A64-021.3 §10 — the preference, asked now.**
+        #
+        # Before anything is written, not after: a muted category produces no
+        # row, so there is no unread count to move, no frame to send, and
+        # nothing for a later change of mind to reveal. Writing and then
+        # filtering on read would leave a record the player never consented
+        # to in a table they cannot see, and the first reporting query would
+        # find it.
+        #
+        # Asked **here** rather than when the event was written, for the
+        # reason the audience and the privacy gate are re-read at delivery:
+        # somebody who mutes a category between the friend request and the
+        # relay tick that carries it has muted it.
+        #
+        # One call for the whole batch — the policy takes a sequence
+        # precisely so a tournament fan-out is one query rather than one per
+        # entrant (§11).
+        allowed = await self._policy.permitted(
+            [DeliveryRequest(recipient_id=r.recipient_id, category=r.category) for r in durable],
+            channel=DeliveryChannel.IN_APP,
+        )
+        durable = [
+            record
+            for record in durable
+            if DeliveryRequest(recipient_id=record.recipient_id, category=record.category)
+            in allowed
         ]
         if not durable:
             return

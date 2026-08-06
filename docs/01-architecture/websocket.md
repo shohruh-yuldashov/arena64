@@ -324,12 +324,20 @@ once.
 | `game.move.accepted` | `game` | server → client | The submitter's acknowledgement, correlated by `request_id` |
 | `game.move.rejected` | `game` | server → client | The submitter's refusal, with a stable category |
 | `game.move.applied` | `game` | server → client | The broadcast **both** participants receive. No `request_id` |
+| `notification.created` | `notifications` | server → client | A durable notification now exists for **this recipient** — A64-021.2. Three fields, and no rendered text: `notification_id`, `type`, `created_at`. The frame says something happened; `GET /notifications` says what |
 | `error` | the failing frame's | server → client | A refusal about the *frame*, carrying a code |
 
-Twelve, and every one of them is implemented. Adding a type without the handler behind it is the
-speculative generality CLAUDE.md §1.7 forbids, and the platform has declined it three times —
-`TokenType.ACCESS` alone, `PasswordHasher.hash` alone, and A64-016.1's four-member
-`MessageType`.
+**This table names the frames the connection carried when each phase added them, and
+`app.gateway.protocol.MessageType` is the source of truth** — the game, draw, spectator and
+matchmaking frames added between A64-016.3 and A64-021.2 are enumerated there with a docstring
+each. What has never changed is the rule the original twelve established: every type is
+implemented when it is added. A type without the handler behind it is the speculative generality
+CLAUDE.md §1.7 forbids, and the platform has declined it three times — `TokenType.ACCESS` alone,
+`PasswordHasher.hash` alone, and A64-016.1's four-member `MessageType`.
+
+The `notifications` channel arrived with `notification.created` and is an **addition, not a
+version bump**: a client that does not know a channel treats it as `system`, and one that does not
+know a type ignores the frame, so `PROTOCOL_VERSION` stays at 1.
 
 ### 8.2a The dispatch table — A64-016.3 §1
 

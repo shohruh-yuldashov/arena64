@@ -1,4 +1,4 @@
-import { type APIRequestContext, expect, type Page, test } from "@playwright/test";
+import { type APIRequestContext, expect, test } from "@playwright/test";
 
 import {
   API,
@@ -8,6 +8,7 @@ import {
   seededAccount,
   statePath,
 } from "./accounts";
+import { gotoBooted, reloadBooted } from "./session";
 
 /**
  * One notification, from the fact that caused it to the page it leads to —
@@ -107,8 +108,8 @@ test("a friend request notifies its recipient, who reads it and follows it", asy
   const page = await context.newPage();
 
   try {
-    // Retried the way a player would — see `openNotifications`.
-    await openNotifications(page);
+    // Retried the way a player would — see `gotoBooted`.
+    await gotoBooted(page, "/notifications");
 
     // The message is assembled in the browser from a type and an actor — no
     // sentence was stored, which is what makes it readable in three
@@ -216,7 +217,7 @@ test("a notification reaches an open page with no refresh, and a reload agrees",
     // **Bob is looking at his notifications before anything happens.** That
     // ordering is the test: everything below has to reach a page that is
     // already rendered and is never navigated again until the reload.
-    await openNotifications(page);
+    await gotoBooted(page, "/notifications");
 
     // Caught up: the bell names no count. **Not** the empty state —
     // notifications are append-only (A64-021.1 §14), so this account keeps
@@ -251,7 +252,9 @@ test("a notification reaches an open page with no refresh, and a reload agrees",
     // §5's whole point, asserted the only way it can be: a reload shows the
     // **same** state. If the frame had mutated the UI rather than causing a
     // read, this is where the two would disagree.
-    await page.reload();
+    // Reloaded, not re-navigated: the claim is that this state *survives*
+    // a reload, so recovering by going somewhere else would prove nothing.
+    await reloadBooted(page);
     await expect(page.getByRole("link", { name: "Notifications — 1 unread" })).toBeVisible();
     await expect(page.getByRole("listitem").first()).toContainText(
       `${alice.username} sent you a friend request`,
@@ -269,22 +272,3 @@ test("a notification reaches an open page with no refresh, and a reload agrees",
     await context.close();
   }
 });
-
-/**
- * Opens `/notifications` and waits for it to be genuinely rendered.
- *
- * **Retried, the way a player would.** The preview server is shared with
- * every other project, and a single dropped request during the session
- * bootstrap leaves the app in its `unavailable` state — "we could not check
- * your session", with a Try again button. That is correct behaviour rather
- * than a bug, and a spec that navigated once and asserted would fail on it.
- * Observed once in a full-suite run.
- */
-async function openNotifications(page: Page): Promise<void> {
-  await expect(async () => {
-    await page.goto("/notifications");
-    await expect(page.getByRole("heading", { level: 1, name: "Notifications" })).toBeVisible({
-      timeout: 5_000,
-    });
-  }).toPass({ timeout: 30_000 });
-}

@@ -8,6 +8,20 @@ the standard library's `logging` with a small JSON formatter and a filter
 that injects `app.common.context`'s identifiers, which already satisfies the
 stated requirement with zero added dependencies. Swapping in a chosen
 library later touches this one module and nothing that calls `logging`.
+
+## A64-021.2H: the fields were being thrown away
+
+Both formatters below built their output from a **fixed** set of attributes,
+so every `extra={...}` a call site passed — and this codebase passes them
+everywhere — reached the handler and was discarded. `event_queued` logged no
+event id, `notification_pushed` no outcome, `outbox_tick_completed` no
+counts. CLAUDE.md §8 rule 1 asks for key–value or JSON fields "never
+interpolated prose that must be regex-parsed later", and prose with the
+fields removed is what came out.
+
+It was found while diagnosing a notification that never arrived: every log
+line on the path existed, and not one of them said anything. Both formatters
+now emit the caller's fields.
 """
 
 import json
@@ -18,6 +32,67 @@ from typing import Any
 
 from app.common.context import current_causation_id, current_correlation_id, current_request_id
 from app.config.environment import Environment
+
+#: Everything `logging` puts on a record itself, plus what `_ContextFilter`
+#: adds and what the fixed payload already names.
+#:
+#: Anything on a record that is *not* here came from a caller's `extra=`,
+#: which is how this codebase carries structured detail — `match_id`,
+#: `event_id`, `outcome`, `skipped`. A64-021.2H found that detail was
+#: computed at every call site and **emitted by neither formatter**, so
+#: every line the platform logged was a bare message: CLAUDE.md §8 rule 1
+#: asks for "key–value or JSON fields, never interpolated prose", and prose
+#: is exactly what came out.
+#:
+#: Enumerated rather than discovered from a fresh `LogRecord`, because
+#: `logging` sets some attributes only in some paths (`exc_text`,
+#: `stack_info`) and a probe record would miss them — leaving them to leak
+#: into output the first time an exception is logged.
+_RESERVED: frozenset[str] = frozenset(
+    {
+        "args",
+        "asctime",
+        "created",
+        "exc_info",
+        "exc_text",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "message",
+        "module",
+        "msecs",
+        "msg",
+        "name",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "stack_info",
+        "stacklevel",
+        "taskName",
+        "thread",
+        "threadName",
+        # `_ContextFilter`'s, already named by the fixed payload below.
+        "request_id",
+        "correlation_id",
+        "causation_id",
+    }
+)
+
+
+def _extras(record: logging.LogRecord) -> dict[str, Any]:
+    """The fields a caller passed as `extra=`, and nothing else.
+
+    Sorted, so two lines about the same event read the same way and a diff
+    of two logs is about their content rather than about dictionary order.
+    """
+    return {
+        key: value
+        for key, value in sorted(record.__dict__.items())
+        if key not in _RESERVED and not key.startswith("_")
+    }
 
 
 class _ContextFilter(logging.Filter):
@@ -46,6 +121,11 @@ class _JsonFormatter(logging.Formatter):
             "correlation_id": getattr(record, "correlation_id", None),
             "causation_id": getattr(record, "causation_id", None),
         }
+        # The caller's structured fields. Merged **under** the fixed keys
+        # above, so an `extra={"level": ...}` cannot rewrite the level a
+        # log aggregator filters on.
+        for key, value in _extras(record).items():
+            payload.setdefault(key, value)
         if record.exc_info:
             # The exception and its stack, not just the message
             # (CLAUDE.md §8 rule 6).
@@ -64,9 +144,15 @@ class _HumanFormatter(logging.Formatter):
         )
 
     def format(self, record: logging.LogRecord) -> str:
+        extras = _extras(record)
         record.request_id = getattr(record, "request_id", None) or "-"
         record.correlation_id = getattr(record, "correlation_id", None) or "-"
-        return super().format(record)
+        line = super().format(record)
+        if not extras:
+            return line
+        # `key=value` after the message rather than before it, so the thing
+        # a human scans for stays at a predictable column.
+        return f"{line} " + " ".join(f"{key}={value}" for key, value in extras.items())
 
 
 def configure_logging(

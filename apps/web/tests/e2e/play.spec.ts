@@ -8,6 +8,7 @@ import {
   seededAccount,
   statePath,
 } from "./accounts";
+import { gotoBooted } from "./session";
 
 /**
  * One pairing, end to end, across real browsers — A64-020.5A §27.8.
@@ -93,7 +94,12 @@ test("players queue into one pool, and the two who are paired both reach the mat
 
     // --- everyone joins the same pool -----------------------------------
     for (const page of pages) {
-      await page.goto("/play");
+      // `gotoBooted`, not `goto` — A64-021.2H §16. Under the full suite the
+      // session-bootstrap request is occasionally dropped and the app
+      // correctly renders "we could not check your session"; asserting the
+      // time-control group against that screen reported a missing control
+      // rather than the dropped request that caused it.
+      await gotoBooted(page, "/play");
       // The catalogue is rendered from the server, so waiting for the
       // option is also the assertion that `GET /time-controls` answered.
       const controls = page.getByRole("group", { name: /time control/i });

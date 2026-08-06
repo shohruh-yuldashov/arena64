@@ -159,6 +159,51 @@ it("protects /notifications and reaches it from the real application shell", asy
   expect(await screen.findByRole("heading", { level: 1, name: "Notifications" })).toBeVisible();
 });
 
+it("shows a bounded, retryable error when the API refuses, and keeps the shell", async () => {
+  // A64-021.2H §11, §13 — the state a player actually saw.
+  //
+  // The API serving the app was a build without the notification routes, so
+  // every read came back `404`. What must happen then is *not* an empty
+  // list: "you are all caught up" and "we could not ask" are completely
+  // different situations, and rendering the first for the second is how a
+  // broken deployment looks healthy. It is also not a stack trace, a status
+  // code, or a blank page.
+  signedIn();
+  mswServer.use(
+    http.get(url("/notifications"), () =>
+      HttpResponse.json({ code: "not_found", message: "No." }, { status: 404 }),
+    ),
+    http.get(url("/notifications/unread-count"), () =>
+      HttpResponse.json({ code: "not_found", message: "No." }, { status: 404 }),
+    ),
+  );
+
+  renderApp({ path: "/notifications" });
+
+  // Translated, bounded, and announced.
+  const failure = await screen.findByRole("alert");
+  expect(failure).toHaveTextContent("Notifications could not be loaded.");
+  expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
+
+  // Not the empty state — the two must never be confused.
+  expect(screen.queryByText("You are all caught up")).not.toBeInTheDocument();
+
+  // Nothing internal reached the screen.
+  const rendered = document.body.textContent ?? "";
+  for (const leak of ["404", "not_found", "Error:", "Traceback", "AxiosError"]) {
+    expect(rendered).not.toContain(leak);
+  }
+
+  // §13: a failing unread count must not break the shell. The header still
+  // renders, the bell still links, and it shows **no** badge rather than a
+  // permanent error badge.
+  expect(screen.getByRole("banner")).toBeVisible();
+  expect(screen.getByRole("link", { name: "Notifications" })).toBeVisible();
+  expect(
+    screen.queryByRole("link", { name: /Notifications — \d+ unread/ }),
+  ).not.toBeInTheDocument();
+});
+
 it("reads one page per request and never a profile per row", async () => {
   signedIn();
   serveUnreadCount(2);

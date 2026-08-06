@@ -90,7 +90,14 @@ export type ErrorCode =
   | "tournament_full"
   | "already_registered"
   | "registration_not_found"
-  | "invalid_tournament_state";
+  | "invalid_tournament_state"
+  // Notification preferences — A64-021.3. All three are `422` on one
+  // endpoint, which is why they are separate codes: the sentences differ.
+  // "Not allowed" and "not built yet" are not the same thing to a player,
+  // and the third is a client bug rather than either.
+  | "notification_preference_locked"
+  | "notification_channel_unavailable"
+  | "duplicate_preference_change";
 
 /** Mirrors `app.api.exception_handlers.ErrorResponse`. */
 export interface ApiErrorBody {

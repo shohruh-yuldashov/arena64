@@ -202,6 +202,19 @@ export const settingsPrivacyRoute = createRoute({
   component: protectedPage(() => import("@/pages/settings-privacy")),
 });
 
+/**
+ * `/settings/notifications` — A64-021.3 §21.
+ *
+ * Protected like every other settings page, and for the endpoint's reason
+ * rather than a preference: the recipient of a preference is the access
+ * token, so there is no anonymous form of this screen.
+ */
+export const settingsNotificationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings/notifications",
+  component: protectedPage(() => import("@/pages/settings-notifications")),
+});
+
 export const settingsSessionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings/sessions",
@@ -377,6 +390,7 @@ export const routeTree = rootRoute.addChildren([
   settingsProfileRoute,
   settingsPreferencesRoute,
   settingsPrivacyRoute,
+  settingsNotificationsRoute,
   settingsSessionsRoute,
   friendsRoute,
   friendRequestsRoute,

@@ -135,7 +135,8 @@
       "editProfile": "Profilni tahrirlash",
       "preferences": "Afzalliklar",
       "privacy": "Maxfiylik",
-      "sessions": "Sessiyalar"
+      "sessions": "Sessiyalar",
+      "notifications": "Bildirishnomalar"
     },
     "header": {
       "joined": "Qo'shilgan: {date}",
@@ -821,6 +822,58 @@
       "friend_request_received": "{actor} sizga do'stlik so'rovi yubordi",
       "friend_request_accepted": "{actor} do'stlik so'rovingizni qabul qildi",
       "unknown": "Yangi bildirishnoma"
+    }
+  },
+  "notificationPreferences": {
+    "title": "Bildirishnoma sozlamalari",
+    "subtitle": "Sizga nima va qayerga yetib kelishini tanlang.",
+    "nav": "Bildirishnomalar",
+    "channelColumn": "Kanal",
+    "categoryColumn": "Bildirishnoma",
+    "save": "O'zgarishlarni saqlash",
+    "saving": "Saqlanmoqda…",
+    "saved": "Sozlamalar saqlandi",
+    "discard": "Bekor qilish",
+    "unsaved": "{count} ta saqlanmagan o'zgarish",
+    "loading": "Sozlamalar yuklanmoqda…",
+    "loadError": "Sozlamalarni yuklab bo'lmadi.",
+    "retry": "Qayta urinish",
+    "categories": {
+      "social": "Do'stlar va ijtimoiy",
+      "game": "O'yinlar",
+      "tournament": "Turnirlar",
+      "system": "Hisob va xavfsizlik"
+    },
+    "categoryHints": {
+      "social": "Do'stlik so'rovlari va siz o'ynaydigan odamlar.",
+      "game": "Sizning navbatingiz, natijalar va da'vatlar.",
+      "tournament": "Turlar, juftliklar va turnir jadvali.",
+      "system": "Kirishlar, xavfsizlik va muhim xizmat xabarlari."
+    },
+    "channels": {
+      "in_app": "Ilova ichida",
+      "email": "Email",
+      "push": "Push"
+    },
+    "channelHints": {
+      "in_app": "Qo'ng'iroq va bildirishnomalar ro'yxati.",
+      "email": "Hozircha mavjud emas.",
+      "push": "Hozircha mavjud emas."
+    },
+    "locked": {
+      "essential": "Doim yoqilgan — hisobingiz haqida sizga xabar bera olishimiz kerak.",
+      "channel_unavailable": "Tez orada — bu kanal hali ishlamaydi."
+    },
+    "cellLabel": "{category} — {channel}",
+    "browserPushBlocked": "Brauzeringiz push bildirishnomalarni qo'llab-quvvatlamaydi.",
+    "errors": {
+      "locked": "Bu bildirishnomani o'chirib bo'lmaydi.",
+      "unavailable": "Bu kanal hali mavjud emas.",
+      "duplicate": "Bu o'zgarish ikki marta yuborildi. Qayta urinib ko'ring.",
+      "validation": "Bu sozlamalarni saqlab bo'lmadi.",
+      "rateLimited": "Juda ko'p o'zgarish. Biroz kuting.",
+      "network": "Aloqa yo'q. Qayta urinib ko'ring.",
+      "unexpected": "Xatolik yuz berdi. Qayta urinib ko'ring."
     }
   }
 }

@@ -135,7 +135,8 @@
       "editProfile": "Edit profile",
       "preferences": "Preferences",
       "privacy": "Privacy",
-      "sessions": "Sessions"
+      "sessions": "Sessions",
+      "notifications": "Notifications"
     },
     "header": {
       "joined": "Joined {date}",
@@ -821,6 +822,58 @@
       "friend_request_received": "{actor} sent you a friend request",
       "friend_request_accepted": "{actor} accepted your friend request",
       "unknown": "New notification"
+    }
+  },
+  "notificationPreferences": {
+    "title": "Notification preferences",
+    "subtitle": "Choose what reaches you, and where.",
+    "nav": "Notifications",
+    "channelColumn": "Channel",
+    "categoryColumn": "Notification",
+    "save": "Save changes",
+    "saving": "Saving…",
+    "saved": "Preferences saved",
+    "discard": "Discard",
+    "unsaved": "{count} unsaved change(s)",
+    "loading": "Loading preferences…",
+    "loadError": "Preferences could not be loaded.",
+    "retry": "Try again",
+    "categories": {
+      "social": "Friends and social",
+      "game": "Games",
+      "tournament": "Tournaments",
+      "system": "Account and security"
+    },
+    "categoryHints": {
+      "social": "Friend requests and the people you play with.",
+      "game": "Your turn, results and challenges.",
+      "tournament": "Rounds, pairings and standings.",
+      "system": "Sign-ins, security and essential service notices."
+    },
+    "channels": {
+      "in_app": "In the app",
+      "email": "Email",
+      "push": "Push"
+    },
+    "channelHints": {
+      "in_app": "The bell and the notification list.",
+      "email": "Not available yet.",
+      "push": "Not available yet."
+    },
+    "locked": {
+      "essential": "Always on — we must be able to tell you about your account.",
+      "channel_unavailable": "Coming soon — this build cannot send here yet."
+    },
+    "cellLabel": "{category} — {channel}",
+    "browserPushBlocked": "Your browser does not support push notifications.",
+    "errors": {
+      "locked": "That notification cannot be switched off.",
+      "unavailable": "That channel is not available yet.",
+      "duplicate": "That change was sent twice. Please try again.",
+      "validation": "Those settings could not be saved.",
+      "rateLimited": "Too many changes. Please wait a moment.",
+      "network": "No connection. Please try again.",
+      "unexpected": "Something went wrong. Please try again."
     }
   }
 }

@@ -1,4 +1,6 @@
-"""`LoggingNotificationSink` — the terminal adapter, until there is a
+"""The sinks — where a rendered notification goes.
+
+`LoggingNotificationSink` is the terminal adapter, until there is a
 transport to be terminal *into*.
 
 A64-013.7 excludes every delivery channel: no WebSocket gateway, no push, no
@@ -35,7 +37,9 @@ so a fan-out to a hundred friends is one line and not a hundred (CLAUDE.md
 """
 
 import logging
+from collections.abc import Sequence
 
+from app.modules.notifications.application.ports import NotificationSink
 from app.modules.notifications.domain.notification import SocialNotification
 
 logger = logging.getLogger(__name__)
@@ -79,3 +83,33 @@ class NullNotificationSink:
 
     async def deliver(self, notifications: list[SocialNotification]) -> None:
         return None
+
+
+class CompositeNotificationSink:
+    """Fans one batch out to several sinks, in order — A64-021.1 §12.
+
+    Two exist as of A64-021.1 and both must run: `DurableNotificationWriter`
+    keeps what NT-1 promises will still be there tomorrow, and
+    `LoggingNotificationSink` records that a delivery happened at all —
+    including for the transient kinds the durable writer deliberately does
+    not store. Replacing one with the other would have lost half of that.
+
+    **Order is the contract, not an implementation detail.** Sinks run in the
+    order they are given and the first failure propagates, so a durable sink
+    placed first means a log line saying "delivered" is only ever written
+    after the row exists. The reverse order would log a delivery that a
+    failed write then undid.
+
+    Not a general-purpose fan-out: there is no retry, no per-sink isolation
+    and no partial success. A sink that raises fails the batch, which is
+    exactly `NotificationSink`'s contract — the relay retries the event, and
+    the durable writer's uniqueness makes the retry a no-op for whatever
+    already landed.
+    """
+
+    def __init__(self, sinks: Sequence[NotificationSink]) -> None:
+        self._sinks = tuple(sinks)
+
+    async def deliver(self, notifications: list[SocialNotification]) -> None:
+        for sink in self._sinks:
+            await sink.deliver(notifications)

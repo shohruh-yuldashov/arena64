@@ -800,5 +800,27 @@
       "description": "Live games and matchmaking do not work offline. What you see may be out of date.",
       "retry": "Retry connection"
     }
+  },
+  "notifications": {
+    "title": "Notifications",
+    "nav": "Notifications",
+    "bell": "Notifications",
+    "bellWithUnread": "Notifications — {count} unread",
+    "unreadBadge": "{count}",
+    "unread": "Unread",
+    "markAllRead": "Mark all as read",
+    "markingAll": "Marking…",
+    "loadMore": "Load more",
+    "loading": "Loading notifications…",
+    "endOfList": "No more notifications",
+    "emptyTitle": "You are all caught up",
+    "emptyDescription": "New notifications will appear here.",
+    "listError": "Notifications could not be loaded.",
+    "markReadError": "That could not be marked. Please try again.",
+    "types": {
+      "friend_request_received": "{actor} sent you a friend request",
+      "friend_request_accepted": "{actor} accepted your friend request",
+      "unknown": "New notification"
+    }
   }
 }

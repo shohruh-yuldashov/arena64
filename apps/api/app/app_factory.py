@@ -113,11 +113,13 @@ from app.modules.notifications.application.services import (
 )
 from app.modules.notifications.application.services.presence_sweeper import PresenceSweeper
 from app.modules.notifications.infrastructure import (
+    CompositeNotificationSink,
     LoggingNotificationSink,
     PresenceSweeperWorker,
     SessionScopedNotificationHandler,
 )
 from app.modules.notifications.presentation.dependencies import (
+    build_durable_notification_writer,
     build_social_notification_dispatcher,
 )
 from app.modules.profiles.presentation.dependencies import build_profile_renderer
@@ -442,9 +444,15 @@ def build_outbox_worker(
 
     clock = SystemClock()
 
-    # `LoggingNotificationSink` is the terminal adapter until AD-09's gateway
-    # exists — A64-013.7 excludes every delivery channel. See that class on
-    # why it is a seam rather than a stub.
+    # A64-013.7's seam, and no longer the *only* sink: A64-021.1 puts
+    # `DurableNotificationWriter` in front of it, so a social notification is
+    # now stored as well as recorded. This one stays because it covers the
+    # transient kinds the durable writer deliberately does not keep —
+    # presence, which would flood the table — and because "a delivery
+    # happened" is worth a log line whether or not a row was written.
+    #
+    # Process-wide, unlike the durable writer, because it holds nothing: no
+    # repository, no session, nothing per tick.
     sink = LoggingNotificationSink()
 
     # A64-015.5's equivalent seam, for a different payload shape — and
@@ -508,7 +516,14 @@ def build_outbox_worker(
                 cache=cache,
                 clock=clock,
             ),
-            sink=sink,
+            # A64-021.1. **Durable first, log second**, and the order is the
+            # contract: a line saying a notification was delivered is only
+            # ever written after the row that makes NT-1 true exists.
+            #
+            # The durable writer is built here, per tick, because it holds a
+            # repository over this tick's session — unlike the logging sink
+            # above, which is process-wide because it holds nothing.
+            sink=CompositeNotificationSink([build_durable_notification_writer(session), sink]),
         )
 
     handler = SessionScopedNotificationHandler(

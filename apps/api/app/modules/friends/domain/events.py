@@ -39,6 +39,42 @@ from app.platform.events import DomainEvent
 
 
 @dataclass(frozen=True)
+class FriendRequestSent(DomainEvent):
+    """A pending request was created — FR-1, and A64-021.1's first producer.
+
+    The fact has existed since A64-013.2 and was recorded only in a log
+    line, which meant the addressee was never told: the platform knew about
+    every request and nothing on it could say so. Publishing it changes
+    nothing about the request itself and gives the durable notification a
+    source event whose recipient is unambiguous — the **addressee**, who did
+    not perform the action and is the one who has to answer it.
+
+    Carries the two ids and nothing else, for the reason every event in this
+    file does: a payload rendered at enqueue time is rendered against a
+    relationship, a privacy setting and a block list as they were *then*,
+    and the consumer re-reads all three. See this module's docstring.
+    """
+
+    event_type: ClassVar[str] = "friends.friend_request_sent"
+    aggregate_type: ClassVar[str] = "friend_request"
+
+    request_id: UUID
+    requester_id: UUID
+    addressee_id: UUID
+
+    @property
+    def aggregate_id(self) -> UUID:
+        return self.request_id
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "request_id": str(self.request_id),
+            "requester_id": str(self.requester_id),
+            "addressee_id": str(self.addressee_id),
+        }
+
+
+@dataclass(frozen=True)
 class FriendRequestAccepted(DomainEvent):
     """A pending request became a friendship — FR-4.
 

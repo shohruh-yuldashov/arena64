@@ -1890,7 +1890,99 @@ authentication as authority, share target, file handlers, app-store packaging, a
 native wrapper. Navigation preload and a periodic update check beyond `visibilitychange`
 are also absent, and named here so their absence is a decision rather than an oversight.
 
-## 21. Open questions
+## 21. Notifications — A64-021.1
+
+The in-app read surface for the durable notification `specs/notifications.md`
+defines. The backend states facts; this composes the sentence.
+
+### 21.1 Route and reachability
+
+`/notifications`, lazy and behind `RequireAuth`. Every notification belongs
+to one recipient and the recipient is the access token, so there is no
+anonymous form of this page — an unsigned visitor has no notifications
+rather than an empty list of them.
+
+Reachable from **one** place: `NotificationBell`, in `AppShell`'s header
+beside the session menu. In the header rather than inside the menu, because
+a badge a player has to open a menu to see is a badge that tells them
+nothing. Signed out it renders `null` — absent, not disabled.
+
+### 21.2 Query keys
+
+    notificationKeys.list()          the pages, one `useInfiniteQuery` chain
+    notificationKeys.unreadCount()   the badge, its own query
+
+Siblings rather than one key: the badge is asked far more often and costs a
+fraction as much, and sharing a key would make rendering a number refetch a
+page of notifications.
+
+**No cursor is in any key** — the infinite query owns the chain, and a key
+per cursor would leave earlier pages to be garbage-collected out from under
+the list. **No player id is in any key** either, because the endpoints take
+none; sign-out clearing the cache is what separates two players.
+
+### 21.3 Polling — the temporary policy
+
+Realtime delivery is A64-021.2. Until then the badge is a query that
+refetches **on window focus** (the platform default) with a ten-second
+stale time, and there is **no interval**. A poll would be a request per
+player per tick for a number that changes at social-event frequency, and
+nothing here claims realtime delivery it does not have.
+
+The list refetches on the same terms. Neither opens a socket.
+
+### 21.4 Marking read
+
+| Action | Behaviour |
+| --- | --- |
+| Open a notification | Marks it read **and** navigates. The mutation is not awaited — navigation must not wait on a request, or a notification opened on a bad connection is a tap that appears to do nothing |
+| Open it twice | One mutation. An in-flight set of ids guards it, so the client does not rely on the server's idempotency |
+| Mark all read | Disabled while it runs; the list is patched and the badge invalidated, in that order |
+
+The list is **patched in place** rather than invalidated: invalidating an
+infinite query refetches every page it holds, which is a handful of requests
+to change one boolean. The badge is invalidated instead of decremented, so
+it stays correct if another device read something in the meantime.
+
+### 21.5 States
+
+Loading is three skeleton rows in a `role="status"`; error is a message and
+a retry; empty is "you are all caught up". The empty and error states are
+deliberately different — rendering both as "nothing here" is how a broken
+list looks healthy.
+
+A failed unread count renders **no badge**, not a red one: a permanent
+error badge because one request failed on a train teaches a player to
+ignore the badge.
+
+### 21.6 Navigation
+
+`notificationHref` is a closed mapper from a target type to a route this
+app owns. `null` for anything it does not recognise, and a row with no href
+renders as a non-navigable card rather than a broken link. No branch can
+produce a scheme, so an external destination is unreachable rather than
+merely forbidden.
+
+### 21.7 Accessibility
+
+- The bell's accessible name carries the count **in words** —
+  "Notifications — 3 unread" — so the number is never only a coloured circle.
+- Unread is a dot, a bolder weight **and** an `sr-only` word. Never colour
+  alone.
+- The list is a real `<ul>` with an accessible name, so its length is
+  announced and its items are navigable.
+- Timestamps are `<time datetime>` with `Intl`-formatted text inside.
+- Every control is at least 44px tall.
+- Loading is `role="status"`; a failed mutation is `role="alert"` and does
+  **not** replace the list.
+
+### 21.8 Not in this phase
+
+No realtime frame, no push subscription, no notification permission, no
+preference switch, no grouping, no search, no dismissal. Each is named with
+its seam in `specs/notifications.md` §11.
+
+## 22. Open questions
 
 | # | Question | Blocked work |
 | --- | --- | --- |
@@ -1909,6 +2001,7 @@ are also absent, and named here so their absence is a decision rather than an ov
 | OQ-15 | **Match activation is not pushed.** `matchmaking.match.offered` fires on pairing; nothing fires when the opponent accepts, so an open offer keeps the two-second interval. Narrow — it lasts at most the acceptance window — and closed by a `matchmaking.match.activated` frame | A second matchmaking frame |
 | OQ-12 | **The offer dialog cannot show an avatar or a rating.** `OpponentPreview` carries three public fields by design (§15.5). Publishing more needs the privacy-gated composition `profiles` owns, which is a backend decision rather than a frontend gap | A richer match card |
 | OQ-16 | **The update check is tied to tab visibility.** `shared/pwa` calls `registration.update()` when the tab becomes visible, and nowhere else — a session left open and focused for hours never notices a deploy. Navigation preload and a periodic check are both absent (§20.14). Closed by a periodic check with a stated interval, or by a version signal the socket already carries | A deploy that must reach open sessions |
+| OQ-17 | **Notification delivery is a focus refetch, not a push.** §21.3's policy is temporary and says so: the badge is current when a player returns to the tab and stale while they sit on it. Closed by A64-021.2, which publishes a frame on the socket that already exists | Realtime in-app delivery |
 | OQ-11 | **A friend's `relationship` is fetched but structurally known.** The four list endpoints state it server-side and cost nothing, but a client-side `friends` cache could serve the public profile's state too — not done, because a stale action is worse than a request | A measured need |
 
 ## Related documents

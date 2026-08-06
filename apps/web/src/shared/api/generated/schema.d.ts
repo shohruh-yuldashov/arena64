@@ -2448,6 +2448,111 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your notifications
+         * @description Your notifications, newest first, keyset-paginated.
+         *
+         *     **One request per page and none per row** — §31. The actor's name and
+         *     avatar were stored with the notification, so a page of fifty costs one
+         *     query and no profile lookups.
+         */
+        get: operations["list_notifications_api_v1_notifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notifications/unread-count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How many notifications you have not read
+         * @description The badge. One `COUNT` over a partial index, and no rows loaded — §10.
+         *
+         *     Its own route so that rendering a number never costs a page of
+         *     notifications, and so a client may refetch it on focus without paying
+         *     for the list it is not showing.
+         */
+        get: operations["unread_count_api_v1_notifications_unread_count_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notifications/read-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark every unread notification read
+         * @description Marks everything currently unread as read.
+         *
+         *     **Registered before `/{notification_id}/read`** and it does not have to
+         *     be: `read-all` is one segment and the other is two, so no request a
+         *     client can send matches both. Kept adjacent anyway, because the two are
+         *     read together.
+         *
+         *     Returns how many changed, so a client reconciles its cached count
+         *     without a second request. Zero is a successful no-op.
+         */
+        post: operations["mark_all_read_api_v1_notifications_read_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notifications/{notification_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark one notification read
+         * @description Marks one notification read.
+         *
+         *     Idempotent: marking an already-read notification succeeds and leaves its
+         *     original `read_at` alone, so a double click is one outcome. The response
+         *     is the same shape as `read-all` so a client has one reconciliation path
+         *     — `marked_read` is `1` for a notification this call changed and `0` for
+         *     one that was already read.
+         *
+         *     A notification that does not exist and one belonging to somebody else
+         *     produce the same `404` — see this module's docstring.
+         */
+        post: operations["mark_read_api_v1_notifications__notification_id__read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/time-controls": {
         parameters: {
             query?: never;
@@ -2578,6 +2683,11 @@ export interface components {
             data: components["schemas"]["LivenessResponse"];
             meta: components["schemas"]["ResponseMeta"];
         };
+        /** ApiResponse[MarkAllReadResponse] */
+        ApiResponse_MarkAllReadResponse_: {
+            data: components["schemas"]["MarkAllReadResponse"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
         /** ApiResponse[MatchHistoryResponse] */
         ApiResponse_MatchHistoryResponse_: {
             data: components["schemas"]["MatchHistoryResponse"];
@@ -2591,6 +2701,11 @@ export interface components {
         /** ApiResponse[MyProfileResponse] */
         ApiResponse_MyProfileResponse_: {
             data: components["schemas"]["MyProfileResponse"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        /** ApiResponse[NotificationPageResponse] */
+        ApiResponse_NotificationPageResponse_: {
+            data: components["schemas"]["NotificationPageResponse"];
             meta: components["schemas"]["ResponseMeta"];
         };
         /** ApiResponse[PendingMatchResponse] */
@@ -2661,6 +2776,11 @@ export interface components {
         /** ApiResponse[TournamentResponse] */
         ApiResponse_TournamentResponse_: {
             data: components["schemas"]["TournamentResponse"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        /** ApiResponse[UnreadCountResponse] */
+        ApiResponse_UnreadCountResponse_: {
+            data: components["schemas"]["UnreadCountResponse"];
             meta: components["schemas"]["ResponseMeta"];
         };
         /** ApiResponse[UserRead] */
@@ -3671,6 +3791,21 @@ export interface components {
             password: string;
         };
         /**
+         * MarkAllReadResponse
+         * @description How many notifications the call changed.
+         *
+         *     Returned rather than `204` so a client can reconcile its cached count
+         *     without a second request — and so "nothing was unread" is visibly a
+         *     successful no-op rather than an absent answer.
+         */
+        MarkAllReadResponse: {
+            /**
+             * Marked Read
+             * @example 3
+             */
+            marked_read: number;
+        };
+        /**
          * MatchHistoryEntryResponse
          * @description One finished match, as a list renders it.
          *
@@ -3911,6 +4046,113 @@ export interface components {
             last_seen?: string | null;
             /** @description Your competitive record. **Always present, never `null`** — `show_statistics` governs what *strangers* see on `GET /profiles/{username}`, not what you see of yourself. A privacy control that hid a setting from the person who set it would be one nobody could verify they had applied. */
             statistics: components["schemas"]["StatisticsResponse"];
+        };
+        /**
+         * NotificationActorResponse
+         * @description The player a notification is about, as the recipient may see them.
+         *
+         *     A **snapshot** taken when the notification was written, through the same
+         *     privacy gate every other surface uses. The display name is the one they
+         *     had then; re-resolving it would cost a profile request per row (§31) and
+         *     would rewrite history.
+         *
+         *     Required today because both notification types have an actor. The first
+         *     type without one makes this optional and adds its own key beside it —
+         *     which is one frontend change made at the same time as the renderer that
+         *     type needs anyway.
+         */
+        NotificationActorResponse: {
+            /**
+             * Player Id
+             * Format: uuid
+             */
+            player_id: string;
+            /** Username */
+            username: string;
+            /**
+             * Display Name
+             * @description The player's chosen name, or `null` — clients fall back to `username`.
+             */
+            display_name: string | null;
+            /**
+             * Thumbnail Url
+             * @description URL of the 128px avatar rendition at the time of writing, or `null`.
+             */
+            thumbnail_url: string | null;
+        };
+        /**
+         * NotificationPageResponse
+         * @description One page, newest first.
+         */
+        NotificationPageResponse: {
+            /** Entries */
+            entries: components["schemas"]["NotificationResponse"][];
+            /**
+             * Next Cursor
+             * @description An opaque cursor for the next page, or `null` on the last page. Send it back unchanged; never construct or decode one.
+             */
+            next_cursor: string | null;
+        };
+        /**
+         * NotificationResponse
+         * @description One durable notification.
+         */
+        NotificationResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Type
+             * @description A `NotificationType` value. The client renders a translated sentence from it.
+             * @example friend_request_received
+             */
+            type: string;
+            /**
+             * Category
+             * @description A `NotificationCategory` value.
+             * @example social
+             */
+            category: string;
+            actor: components["schemas"]["NotificationActorResponse"];
+            target: components["schemas"]["NotificationTargetResponse"];
+            /**
+             * Created At
+             * Format: date-time
+             * @description When the notified fact happened — not when the row was inserted.
+             */
+            created_at: string;
+            /** Read At */
+            read_at: string | null;
+            /**
+             * Is Read
+             * @description Derived from `read_at`. Present so a client renders state without comparing against null.
+             */
+            is_read: boolean;
+        };
+        /**
+         * NotificationTargetResponse
+         * @description Where tapping this notification goes — §6.
+         *
+         *     A **type and at most one identifier**, never a URL: the client owns its
+         *     routes and maps the type onto one it already has. A target type a client
+         *     does not recognise must render as a non-navigable notification rather
+         *     than as a broken link.
+         */
+        NotificationTargetResponse: {
+            /**
+             * Type
+             * @description A `NavigationTargetType` value.
+             * @example player_profile
+             */
+            type: string;
+            /**
+             * Ref
+             * @description The one safe identifier the target needs, or `null`.
+             * @example player_one
+             */
+            ref: string | null;
         };
         /**
          * OpponentPreview
@@ -5382,6 +5624,21 @@ export interface components {
          * @enum {string}
          */
         TournamentStatus: "draft" | "registration_open" | "registration_closed" | "in_progress" | "completed" | "cancelled";
+        /**
+         * UnreadCountResponse
+         * @description The badge, and nothing else — §10.
+         *
+         *     Its own endpoint and its own shape so that rendering a count never costs
+         *     a page of notifications, and so a client polling it on focus sends the
+         *     cheapest request this API has.
+         */
+        UnreadCountResponse: {
+            /**
+             * Unread Count
+             * @example 3
+             */
+            unread_count: number;
+        };
         /**
          * UserRead
          * @description The full view of a user's own account.
@@ -8522,6 +8779,120 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_notifications_api_v1_notifications_get: {
+        parameters: {
+            query?: {
+                /** @description An opaque cursor from a previous page. */
+                after?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_NotificationPageResponse_"];
+                };
+            };
+            /** @description The pagination cursor is not valid */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    unread_count_api_v1_notifications_unread_count_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_UnreadCountResponse_"];
+                };
+            };
+        };
+    };
+    mark_all_read_api_v1_notifications_read_all_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_MarkAllReadResponse_"];
+                };
+            };
+        };
+    };
+    mark_read_api_v1_notifications__notification_id__read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Which notification to mark read. */
+                notification_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_MarkAllReadResponse_"];
+                };
+            };
+            /** @description No such notification of yours */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

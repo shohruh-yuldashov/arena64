@@ -26,6 +26,7 @@ from app.modules.auth.infrastructure import models as _auth_models  # noqa: F401
 from app.modules.friends.infrastructure import models as _friends_models  # noqa: F401
 from app.modules.game.infrastructure import models as _game_models  # noqa: F401
 from app.modules.matchmaking.infrastructure import models as _matchmaking_models  # noqa: F401
+from app.modules.notifications.infrastructure import models as _notifications_models  # noqa: F401
 from app.modules.rating.infrastructure import models as _rating_models  # noqa: F401
 from app.modules.reference.infrastructure import models as _reference_models  # noqa: F401
 from app.modules.statistics.infrastructure import models as _statistics_models  # noqa: F401

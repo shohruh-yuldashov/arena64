@@ -291,15 +291,25 @@ class TestWorkerDelivery:
         self, client: AsyncClient, contract_session: AsyncSession, sink: RecordingSink
     ) -> None:
         """Async delivery, end to end: the request queued it, the worker
-        delivered it, and the person told is the one who sent the request."""
+        delivered it, and each participant is told the half they did not do.
+
+        **Two notifications since A64-021.1**, because `befriend` now stages
+        two events: sending a request tells the addressee, accepting it tells
+        the requester. Neither actor is told what they themselves just did.
+        """
         alice, bob = await register(client), await register(client)
         await befriend(client, alice, bob)
 
         await drain(contract_session, sink)
 
-        assert [n.recipient_id for n in sink.delivered] == [alice.id]
-        assert sink.delivered[0].kind is NotificationKind.FRIEND_REQUEST_ACCEPTED
-        assert sink.delivered[0].subject.identity.id == bob.id
+        assert {(n.recipient_id, n.kind) for n in sink.delivered} == {
+            (bob.id, NotificationKind.FRIEND_REQUEST_RECEIVED),
+            (alice.id, NotificationKind.FRIEND_REQUEST_ACCEPTED),
+        }
+        accepted = next(
+            n for n in sink.delivered if n.kind is NotificationKind.FRIEND_REQUEST_ACCEPTED
+        )
+        assert accepted.subject.identity.id == bob.id
 
     async def test_a_drained_event_is_marked_published(
         self, client: AsyncClient, contract_session: AsyncSession, sink: RecordingSink
@@ -320,9 +330,13 @@ class TestWorkerDelivery:
         await befriend(client, alice, bob)
 
         await drain(contract_session, sink)
+        delivered_once = len(sink.delivered)
         await drain(contract_session, sink)
 
-        assert len(sink.delivered) == 1
+        # Two notifications per befriending since A64-021.1 — see the test
+        # above. What this asserts is that the second tick adds none.
+        assert delivered_once == 2
+        assert len(sink.delivered) == delivered_once
 
     async def test_the_three_silent_events_deliver_nothing(
         self, client: AsyncClient, contract_session: AsyncSession, sink: RecordingSink
@@ -337,8 +351,14 @@ class TestWorkerDelivery:
 
         await drain(contract_session, sink)
 
-        # Only the acceptance from `befriend` produced a notification.
-        assert [n.kind for n in sink.delivered] == [NotificationKind.FRIEND_REQUEST_ACCEPTED]
+        # Only `befriend`'s two events produced notifications; the removal,
+        # the block and the unblock produced none.
+        assert sorted(n.kind for n in sink.delivered) == sorted(
+            [
+                NotificationKind.FRIEND_REQUEST_RECEIVED,
+                NotificationKind.FRIEND_REQUEST_ACCEPTED,
+            ]
+        )
         assert await queued_event_types(contract_session) == []
 
 
@@ -372,7 +392,7 @@ class TestBlockedRecipients:
 
         await drain(contract_session, sink)
 
-        assert [n.recipient_id for n in sink.delivered] == [alice.id]
+        assert {n.recipient_id for n in sink.delivered} == {alice.id, bob.id}
 
     async def test_a_blocked_pair_produces_no_notification_in_either_direction(
         self, client: AsyncClient, contract_session: AsyncSession, sink: RecordingSink

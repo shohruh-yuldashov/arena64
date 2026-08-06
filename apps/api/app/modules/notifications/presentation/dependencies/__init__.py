@@ -1,8 +1,10 @@
 """The `Depends` bridge for `notifications` — DI-01.
 
-**One factory with an HTTP caller and one without**, which is the shape a
+**Three factories, and only two are `Depends`**, which is the shape a
 module built around an outbox has:
 
+    get_notification_service             resolved by this module's own routes
+                                         — A64-021.1. The reader
     get_presence_notification_service    resolved by `auth`'s three lifecycle
                                          routes. The producer
     build_social_notification_dispatcher not a dependency at all — the relay
@@ -52,8 +54,13 @@ from app.modules.friends.infrastructure.repositories import (
 )
 from app.modules.notifications.application.ports import NotificationSink
 from app.modules.notifications.application.services import (
+    DurableNotificationWriter,
+    NotificationService,
     PresenceNotificationService,
     SocialNotificationDispatcher,
+)
+from app.modules.notifications.infrastructure.repositories import (
+    SqlAlchemyNotificationRepository,
 )
 from app.modules.profiles.application.services.profile_renderer import BatchProfileRenderer
 from app.modules.users.presentation.dependencies import PresenceServiceDep
@@ -122,6 +129,43 @@ PresenceNotificationServiceDep = Annotated[
 ]
 
 
+def get_notification_service(session: DbSessionDep, clock: ClockDep) -> NotificationService:
+    """The reader behind `/notifications` — A64-021.1 §15.
+
+    Per request, over the request's session, like every other service on
+    this platform. Holds one repository: reading and marking notifications
+    needs nothing else, and a service that could reach a profile or a
+    friendship would be one that could re-resolve a snapshot at read time.
+    """
+    return NotificationService(
+        notifications=SqlAlchemyNotificationRepository(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )
+
+
+NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
+
+
+def build_durable_notification_writer(session: AsyncSession) -> DurableNotificationWriter:
+    """The sink that keeps notifications — A64-021.1 §12.
+
+    Not a `Depends`, for the same reason the dispatcher below is not: it is
+    built per relay tick over the worker's own session, and there is no
+    request to scope it to. A `Depends`-shaped factory that nothing resolves
+    through FastAPI would be a misleading signature.
+
+    Built **per tick** rather than once per process, unlike the gateway sink
+    beside it in `app_factory`: this one holds a repository, a repository
+    holds a session, and a session must not outlive the unit of work it
+    serves.
+    """
+    return DurableNotificationWriter(
+        notifications=SqlAlchemyNotificationRepository(session),
+        unit_of_work=SessionUnitOfWork(session),
+    )
+
+
 def build_social_notification_dispatcher(
     session: AsyncSession,
     *,
@@ -161,7 +205,10 @@ def build_social_notification_dispatcher(
 
 
 __all__ = [
+    "NotificationServiceDep",
     "PresenceNotificationServiceDep",
+    "build_durable_notification_writer",
     "build_social_notification_dispatcher",
+    "get_notification_service",
     "get_presence_notification_service",
 ]

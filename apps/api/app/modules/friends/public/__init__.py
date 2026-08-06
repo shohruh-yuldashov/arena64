@@ -22,8 +22,9 @@ What is published, and why only this much:
                        never be formed" (A64-015.3). BL-2, published for
                        the pairing scan — the only place on the platform
                        that holds two players and has to decide
-  the four social      `FriendRequestAccepted`, `FriendRemoved`,
-  domain events        `PlayerBlocked`, `PlayerUnblocked` — the facts this
+  the five social      `FriendRequestSent`, `FriendRequestAccepted`,
+  domain events        `FriendRemoved`, `PlayerBlocked`, `PlayerUnblocked` —
+                       the facts this
                        context makes durable through the outbox (AD-16).
                        Published because a consumer subscribes by importing
                        the class rather than by retyping its type string,
@@ -50,6 +51,7 @@ The narrowing is the same one `users.public` makes twelve times over.
 from app.modules.friends.domain.events import (
     FriendRemoved,
     FriendRequestAccepted,
+    FriendRequestSent,
     PlayerBlocked,
     PlayerUnblocked,
 )
@@ -64,6 +66,7 @@ __all__ = [
     "RelationshipStateReader",
     "FriendRemoved",
     "FriendRequestAccepted",
+    "FriendRequestSent",
     "PairingExclusions",
     "PlayerBlocked",
     "PlayerUnblocked",

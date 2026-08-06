@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+import { NotificationBell } from "@/widgets/notification-bell";
 import { PwaNotices } from "@/widgets/pwa";
 import { SessionMenu } from "@/widgets/session-menu";
 import { ThemeToggle } from "@/widgets/theme-toggle";
@@ -48,6 +49,11 @@ export function AppShell({ children }: { children: ReactNode }) {
           <span className="text-sm font-semibold tracking-tight">Arena64</span>
           <div className="flex items-center gap-2">
             <SessionMenu />
+            {/* A64-021.1. The one entry point to `/notifications`, and the
+                unread badge. Beside the session menu rather than inside it,
+                because a badge a player has to open a menu to see is a badge
+                that tells them nothing. Renders nothing when signed out. */}
+            <NotificationBell />
             <ThemeToggle />
           </div>
         </div>

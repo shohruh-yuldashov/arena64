@@ -14,6 +14,7 @@ loses `SKIP LOCKED`, which is why that one property is asserted in
 """
 
 import asyncio
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -266,6 +267,42 @@ class TestClaiming:
         assert stored is not None and stored.published_at is not None
         assert tick.skipped == 1
         assert uninterested.batches == []
+
+    async def test_a_skipped_entry_names_its_type_in_the_tick_log(
+        self,
+        outbox: InMemoryOutbox,
+        processed: InMemoryProcessedEvents,
+        clock: MovableClock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A64-021.2H — the regression this phase exists for.
+
+        Publishing an entry nobody wants is correct; doing it **invisibly**
+        is what turned a stale node into silent, unrecoverable loss. A node
+        whose build predates an event type claims it, discards it, leaves no
+        ledger row, and — before this — said nothing at all. A person
+        noticing a missing notification was the only detector.
+
+        The count alone is not the signal: most of this platform's event
+        types have no subscriber, so a non-zero `skipped` is ordinary. What
+        identifies a build skew is **which** types were dropped, compared
+        against what this node subscribes to.
+
+        Asserted on the log record's fields rather than its message, because
+        the fields are what an aggregator queries.
+        """
+        await _enqueue(outbox)
+        uninterested = _Handler(subscribes_to="something.else")
+
+        with caplog.at_level(logging.INFO, logger="app.platform.outbox.relay"):
+            await _relay(outbox, processed, clock, uninterested).run_once()
+
+        tick = next(r for r in caplog.records if r.message == "outbox_tick_completed")
+        assert tick.skipped == 1
+        assert tick.skipped_event_types == [_Thing.event_type]
+        # The two are distinct: this entry was published, and it was not
+        # delivered to anybody. A reader of one number could not tell.
+        assert tick.published == 1
 
 
 class TestMarkingProcessed:

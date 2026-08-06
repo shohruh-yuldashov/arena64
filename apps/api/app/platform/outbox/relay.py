@@ -359,13 +359,17 @@ class OutboxRelay:
     async def _record(self, entries: Sequence[OutboxEntry], failures: dict[UUID, str]) -> RelayTick:
         """Transaction B: publishes what succeeded, schedules what did not.
 
-        **An entry no handler wanted is published, not left pending.** It is
-        counted separately so the distinction stays visible, but leaving it
-        unpublished would make the backlog metric — the one number that says
-        whether the relay is healthy — grow forever on events nobody
-        subscribes to. The row is retained either way (AD-17), so a
+        **An entry no handler wanted is published, not left pending.**
+        Leaving it unpublished would make the backlog metric — the one number
+        that says whether the relay is healthy — grow forever on events
+        nobody subscribes to. The row is retained either way (AD-17), so a
         subscriber added later replays from the table rather than from the
         backlog.
+
+        The cost of that choice is that a node whose build does not know an
+        event type **destroys** it for every node that does, and A64-021.2H
+        found it doing exactly that. The behaviour is still right; what was
+        wrong is that it happened invisibly. See the tick log below.
         """
         at = self._clock.now()
         succeeded = [entry.id for entry in entries if entry.id not in failures]
@@ -374,6 +378,9 @@ class OutboxRelay:
             for entry in entries
             if any(handler.handles(entry.event_type) for handler in self._handlers)
         }
+        skipped_types = sorted(
+            {entry.event_type for entry in entries if entry.id not in subscribed}
+        )
 
         async with self._unit_of_work:
             published = await self._outbox.mark_published(succeeded, at=at)
@@ -392,6 +399,32 @@ class OutboxRelay:
                 "claimed": len(entries),
                 "published": published,
                 "failed": len(failures),
+                # A64-021.2H. **Both fields, and the types are the point.**
+                # This docstring has claimed since A64-013.7 that the skip
+                # "stays visible", and it was visible nowhere: `skipped` was
+                # computed, returned on `RelayTick`, read by nobody, and
+                # absent from the only line this tick emits. An entry no
+                # handler wants is marked published, so a *stale node* —
+                # one whose build predates an event type — claims it,
+                # discards it, and leaves no ledger row, no ledger gap
+                # anybody counts, and no log line. That is silent,
+                # unrecoverable loss, and it is exactly how a missing
+                # notification went undiagnosed until a person noticed.
+                #
+                # The count alone would not have found it: sixteen of the
+                # platform's twenty-eight event types have no subscriber at
+                # all, `game.move_applied` among them, so a non-zero
+                # `skipped` is the *normal* state. What identifies a skew is
+                # **which** types were dropped — compared against the
+                # build's own subscriptions, a type this node has never
+                # heard of is a node running the wrong code.
+                #
+                # A set rather than one line per entry, for the same reason:
+                # the vocabulary is closed and small, and a log line per
+                # skipped move would be the hot-path logging CLAUDE.md §8.8
+                # forbids.
+                "skipped": len(entries) - len(subscribed),
+                "skipped_event_types": skipped_types,
                 "worker_id": self._worker_id,
             },
         )

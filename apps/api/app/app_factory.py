@@ -38,6 +38,7 @@ from app.gateway.forwarding import GatewayForwarder
 from app.gateway.forwarding_tasks import GatewayForwardingTask, forwarding_request
 from app.gateway.matchmaking_offers import GatewayPendingMatchSink
 from app.gateway.node import resolve_node_id
+from app.gateway.notifications import GatewayNotificationSink
 from app.gateway.router import gateway_router
 from app.modules.friends.application.ports import SocialGraphCache
 from app.modules.friends.infrastructure.cache import (
@@ -481,6 +482,29 @@ def build_outbox_worker(
         if settings.gateway.match_offer_push_enabled
         else LoggingPendingMatchSink()
     )
+    # A64-021.2. The notification announcer, and **one instance per
+    # process** for the reason the offer sink is: it holds the fleet fan-out,
+    # which holds the process-wide socket registry and the bus, and
+    # rebuilding it per relay tick would be rebuilding the transport.
+    #
+    # No configuration switch, unlike `match_offer_push_enabled`, and the
+    # asymmetry is deliberate. That flag exists because a match offer push
+    # replaces a poll a lobby depends on, so an operator needs a way back to
+    # the polled path. This one replaces nothing: the notification list and
+    # the unread count still refetch on focus exactly as they did (§6), the
+    # announcer never raises, and the row it announces is already committed.
+    # A switch here would turn off a latency improvement and nothing else,
+    # which is a knob with no incident behind it.
+    notification_announcer = GatewayNotificationSink(
+        broadcaster=build_broadcaster_for(
+            pools=redis_pools,
+            settings=settings.gateway,
+            clock=clock,
+            node_id=resolve_node_id(settings.gateway),
+        ),
+        metrics=_metrics(),
+    )
+
     if not settings.gateway.match_offer_push_enabled:
         # `WARNING`, not `INFO`: with it off a paired player learns they
         # were matched only when their lobby next polls, which is a
@@ -523,7 +547,12 @@ def build_outbox_worker(
             # The durable writer is built here, per tick, because it holds a
             # repository over this tick's session — unlike the logging sink
             # above, which is process-wide because it holds nothing.
-            sink=CompositeNotificationSink([build_durable_notification_writer(session), sink]),
+            sink=CompositeNotificationSink(
+                [
+                    build_durable_notification_writer(session, announcer=notification_announcer),
+                    sink,
+                ]
+            ),
         )
 
     handler = SessionScopedNotificationHandler(

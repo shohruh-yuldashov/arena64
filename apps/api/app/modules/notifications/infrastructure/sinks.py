@@ -41,6 +41,7 @@ from collections.abc import Sequence
 
 from app.modules.notifications.application.ports import NotificationSink
 from app.modules.notifications.domain.notification import SocialNotification
+from app.modules.notifications.domain.record import NotificationAnnouncement
 
 logger = logging.getLogger(__name__)
 
@@ -113,3 +114,21 @@ class CompositeNotificationSink:
     async def deliver(self, notifications: list[SocialNotification]) -> None:
         for sink in self._sinks:
             await sink.deliver(notifications)
+
+
+class NullNotificationAnnouncer:
+    """Announces nothing — `NotificationAnnouncer`.
+
+    Not a test double: it is the honest implementation for a process with
+    **no fleet to announce into**. A contract suite drives the durable
+    writer over a real database and no gateway, and a deployment could
+    legitimately run a relay worker without one.
+
+    Named rather than expressed as "pass no announcer", so that "there is no
+    realtime here" is a visible choice in the wiring rather than an absent
+    argument — the same reason `NullNotificationSink` exists beside
+    `LoggingNotificationSink`.
+    """
+
+    async def announce(self, announcements: Sequence[NotificationAnnouncement]) -> None:
+        return None

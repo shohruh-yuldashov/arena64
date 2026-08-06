@@ -52,13 +52,17 @@ from app.modules.friends.infrastructure.repositories import (
     SqlAlchemyBlockedPlayerRepository,
     SqlAlchemyFriendshipRepository,
 )
-from app.modules.notifications.application.ports import NotificationSink
+from app.modules.notifications.application.ports import (
+    NotificationAnnouncer,
+    NotificationSink,
+)
 from app.modules.notifications.application.services import (
     DurableNotificationWriter,
     NotificationService,
     PresenceNotificationService,
     SocialNotificationDispatcher,
 )
+from app.modules.notifications.infrastructure import NullNotificationAnnouncer
 from app.modules.notifications.infrastructure.repositories import (
     SqlAlchemyNotificationRepository,
 )
@@ -147,22 +151,31 @@ def get_notification_service(session: DbSessionDep, clock: ClockDep) -> Notifica
 NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
 
 
-def build_durable_notification_writer(session: AsyncSession) -> DurableNotificationWriter:
-    """The sink that keeps notifications — A64-021.1 §12.
+def build_durable_notification_writer(
+    session: AsyncSession, *, announcer: NotificationAnnouncer | None = None
+) -> DurableNotificationWriter:
+    """The sink that keeps notifications — A64-021.1 §12, A64-021.2 §1.
 
     Not a `Depends`, for the same reason the dispatcher below is not: it is
     built per relay tick over the worker's own session, and there is no
     request to scope it to. A `Depends`-shaped factory that nothing resolves
     through FastAPI would be a misleading signature.
 
-    Built **per tick** rather than once per process, unlike the gateway sink
-    beside it in `app_factory`: this one holds a repository, a repository
-    holds a session, and a session must not outlive the unit of work it
-    serves.
+    Built **per tick** rather than once per process, unlike the announcer:
+    this one holds a repository, a repository holds a session, and a session
+    must not outlive the unit of work it serves. The announcer holds a
+    socket registry and a bus, so it is process-wide and passed in.
+
+    `announcer` defaults to `NullNotificationAnnouncer` — *not* a testing
+    convenience. A process with no fleet to announce into is a legitimate
+    deployment (a relay worker without a gateway) and a contract suite is
+    another, and the default makes "there is no realtime here" the explicit
+    behaviour rather than a `None` check inside the writer.
     """
     return DurableNotificationWriter(
         notifications=SqlAlchemyNotificationRepository(session),
         unit_of_work=SessionUnitOfWork(session),
+        announcer=announcer if announcer is not None else NullNotificationAnnouncer(),
     )
 
 

@@ -19,6 +19,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "assets:icons": "node scripts/generate-icons.mjs",
     "openapi:generate": "openapi-typescript ${ARENA64_OPENAPI:-http://localhost:8000/openapi.json} --output src/shared/api/generated/schema.d.ts"
   },
   "dependencies": {

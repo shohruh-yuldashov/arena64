@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+import { PwaNotices } from "@/widgets/pwa";
 import { SessionMenu } from "@/widgets/session-menu";
 import { ThemeToggle } from "@/widgets/theme-toggle";
 
@@ -61,6 +62,13 @@ export function AppShell({ children }: { children: ReactNode }) {
           Arena64
         </div>
       </footer>
+
+      {/* A64-020.9. Offline, update and install, on every page — the layout
+          is the only place all three can live, because all three outlive
+          the route the player happens to be on. Last in the DOM and pinned
+          by its own positioning, so it is last in the tab order and covers
+          nothing until it has something to say. */}
+      <PwaNotices />
     </div>
   );
 }

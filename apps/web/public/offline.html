@@ -1,0 +1,125 @@
+<!doctype html>
+<!--
+  The last resort, served by `pwa/service-worker.ts` when a navigation
+  fails **and** the cached application shell is not there to answer it —
+  a first visit made offline, or a shell evicted under storage pressure.
+
+  Deliberately standalone: no bundle, no chunk, no font, no image. Every
+  one of those is a request that would fail in exactly the situation this
+  page exists for, so the whole page is one file with its styles inline.
+
+  It cannot use `shared/i18n` for the same reason — that lives in the
+  bundle this page is the fallback for. Uzbek is the product's primary
+  language and carries the message; a Russian and an English line follow so
+  nobody is stranded. Every other PWA string is translated properly, in
+  `src/shared/i18n/locales/*.json` under `pwa.*`.
+-->
+<html lang="uz">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#0a0a0a" />
+    <title>Arena64 — ulanish yo'q</title>
+    <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #0a0a0a;
+        --muted: #737373;
+        --border: #e5e5e5;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0a0a0a;
+          --fg: #fafafa;
+          --muted: #a3a3a3;
+          --border: #262626;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        background: var(--bg);
+        color: var(--fg);
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          Helvetica,
+          Arial,
+          sans-serif;
+        line-height: 1.6;
+      }
+      main {
+        width: 100%;
+        max-width: 32rem;
+      }
+      h1 {
+        font-size: 1.375rem;
+        margin: 0 0 0.75rem;
+      }
+      p {
+        margin: 0 0 0.75rem;
+      }
+      ul {
+        margin: 0 0 1.25rem;
+        padding-left: 1.25rem;
+        color: var(--muted);
+        font-size: 0.9375rem;
+      }
+      .secondary {
+        color: var(--muted);
+        font-size: 0.875rem;
+        border-top: 1px solid var(--border);
+        padding-top: 1rem;
+        margin-top: 1.5rem;
+      }
+      a.retry {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+        padding: 0 1.25rem;
+        border-radius: 0.625rem;
+        border: 1px solid var(--border);
+        background: var(--fg);
+        color: var(--bg);
+        font-weight: 500;
+        text-decoration: none;
+      }
+      a.retry:focus-visible {
+        outline: 2px solid var(--fg);
+        outline-offset: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Internetga ulanish yo'q</h1>
+      <p role="alert">
+        Arena64 ga hozir ulanib bo'lmadi. Qurilmangiz tarmoqqa ulanmagan yoki server javob
+        bermayapti.
+      </p>
+      <ul>
+        <li>Jonli o'yin va raqib qidirish internetsiz ishlamaydi.</li>
+        <li>Ilova ochilgan bo'lsa, saqlangan sahifalar ko'rinishi mumkin.</li>
+        <li>Ko'rsatilayotgan ma'lumot eskirgan bo'lishi mumkin.</li>
+      </ul>
+      <a class="retry" href="/">Qayta urinish</a>
+      <p class="secondary">
+        Нет соединения с интернетом. Игры и подбор соперника недоступны офлайн.<br />
+        No internet connection. Live games and matchmaking are unavailable offline.
+      </p>
+    </main>
+  </body>
+</html>

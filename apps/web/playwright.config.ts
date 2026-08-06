@@ -30,7 +30,7 @@ export default defineConfig({
     // here exactly as it is in `npm run dev`.
     trace: "on-first-retry",
   },
-  // **Seven projects, because four specs share three accounts.**
+  // **Eight projects, because four specs share three accounts.**
 
   //
   // `play.spec.ts`, `game.spec.ts`, `game-controls.spec.ts` and
@@ -65,7 +65,19 @@ export default defineConfig({
         "**/replay.spec.ts",
         "**/history.spec.ts",
         "**/tournament.spec.ts",
+        "**/pwa.spec.ts",
       ],
+    },
+    {
+      // A64-020.9 §27. Its own project, and deliberately dependency-free:
+      // it signs in to nothing, queues for nothing, and contends with no
+      // other spec for an account. What it does need is a **fresh browser
+      // context**, which every Playwright project gets by default — a
+      // service worker left registered by an earlier spec would answer this
+      // one's navigations from a cache built by a different bundle.
+      name: "pwa",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: "**/pwa.spec.ts",
     },
     {
       name: "lobby",

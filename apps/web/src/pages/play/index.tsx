@@ -7,6 +7,7 @@ import { MatchOfferDialog } from "@/features/matchmaking/ui/match-offer-dialog";
 import { QueueForm } from "@/features/matchmaking/ui/queue-form";
 import { WaitingCard } from "@/features/matchmaking/ui/waiting-card";
 import { useTranslation } from "@/shared/i18n";
+import { useHoldAppUpdate } from "@/shared/pwa";
 import { Button, Skeleton } from "@/shared/ui";
 
 /**
@@ -67,6 +68,17 @@ export default function PlayPage() {
   }, [readyMatchId, goToGame]);
 
   const match = matchOf(lobby.state);
+
+  // A64-020.9 §14. An acceptance window is seconds long and a reload
+  // inside it loses the offer — the countdown expires while the page is
+  // reassembling itself, and the player is told their opponent left.
+  // `transitioning` is held for the same reason: the navigation to the
+  // board has already been decided and is in flight.
+  useHoldAppUpdate(
+    lobby.state.status === "match_offer" ||
+      lobby.state.status === "awaiting_opponent" ||
+      lobby.state.status === "transitioning",
+  );
 
   return (
     // `tabIndex={-1}` so focus has somewhere sensible to land when the

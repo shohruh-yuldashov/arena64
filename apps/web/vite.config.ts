@@ -4,6 +4,8 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
+import { arena64Pwa } from "./pwa/vite-plugin.ts";
+
 /**
  * One config for the app and its unit tests — `vitest/config` re-exports
  * Vite's own `defineConfig`, so a second file would only be a second place
@@ -70,7 +72,11 @@ const API_PROXY = {
 };
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  // `arena64Pwa` is `apply: "build"` — it adds the service-worker entry and
+  // its precache manifest to the production bundle and does nothing at all
+  // in `npm run dev`, which is A64-020.9 §8's rule that a stale worker must
+  // never sit between a developer and Vite's HMR.
+  plugins: [react(), tailwindcss(), arena64Pwa()],
   // `server` is `npm run dev`; `preview` is the built app, which the e2e
   // suite drives. Both need the proxy, and `preview` does **not** inherit
   // it — a mismatch there presents as an e2e suite that cannot sign in
@@ -96,7 +102,10 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/shared/test/setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}"],
+    // `pwa/` is not under `src/` — it builds a script with its own global
+    // scope (A64-020.9 §8) — but its cache policy is the security-relevant
+    // half of the service worker and is tested like any other module.
+    include: ["src/**/*.test.{ts,tsx}", "pwa/**/*.test.ts"],
     // Playwright's specs live in `tests/e2e` and are driven by Playwright.
     // Without this, Vitest would collect them and fail on `test.describe`.
     exclude: ["node_modules/**", "tests/e2e/**"],

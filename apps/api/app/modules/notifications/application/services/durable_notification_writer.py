@@ -33,7 +33,7 @@ the notification was written. Re-resolving it at read time would cost one
 profile lookup per row — the N+1 §31 forbids — and would rewrite history
 every time somebody changed their display name.
 
-## Transaction
+## Transaction, and where the announcement sits relative to it
 
 One unit of work per batch. The notification row and the uniqueness that
 makes it exactly-once are the same row, so they commit atomically by
@@ -42,6 +42,10 @@ construction (§13); there is no second table to keep in step.
 The relay's own ledger commits separately and afterwards, which is the right
 way round: a crash between the two redelivers the event, and the redelivery
 finds the row already there and does nothing.
+
+**A64-021.2 adds one line after the commit**, and its position is the
+contract: the realtime announcement is published once the row is durable,
+carrying only the records this call actually inserted. See `deliver`.
 """
 
 import logging
@@ -50,13 +54,17 @@ from typing import Final
 
 from app.core.identifiers import generate_uuid7
 from app.core.unit_of_work import UnitOfWork
-from app.modules.notifications.application.ports import NotificationRepository
+from app.modules.notifications.application.ports import (
+    NotificationAnnouncer,
+    NotificationRepository,
+)
 from app.modules.notifications.domain.notification import NotificationKind, SocialNotification
 from app.modules.notifications.domain.record import (
     CATEGORY_OF,
     ActorSummary,
     NavigationTarget,
     NavigationTargetType,
+    NotificationAnnouncement,
     NotificationRecord,
     NotificationType,
 )
@@ -81,9 +89,16 @@ class DurableNotificationWriter:
     subject arrives rendered).
     """
 
-    def __init__(self, *, notifications: NotificationRepository, unit_of_work: UnitOfWork) -> None:
+    def __init__(
+        self,
+        *,
+        notifications: NotificationRepository,
+        unit_of_work: UnitOfWork,
+        announcer: NotificationAnnouncer,
+    ) -> None:
         self._notifications = notifications
         self._unit_of_work = unit_of_work
+        self._announcer = announcer
 
     async def deliver(self, notifications: list[SocialNotification]) -> None:
         """Stores a batch. An empty batch, or one that is entirely transient,
@@ -103,11 +118,11 @@ class DurableNotificationWriter:
         if not durable:
             return
 
-        written = 0
+        stored: list[NotificationRecord] = []
         async with self._unit_of_work:
             for record in durable:
                 if await self._notifications.append(record):
-                    written += 1
+                    stored.append(record)
             await self._unit_of_work.commit()
 
         logger.info(
@@ -118,10 +133,28 @@ class DurableNotificationWriter:
                 # `LoggingNotificationSink` documents why.
                 "event_id": str(durable[0].source_event_id),
                 "type": durable[0].type.value,
-                "written": written,
-                "duplicates": len(durable) - written,
+                "written": len(stored),
+                "duplicates": len(durable) - len(stored),
             },
         )
+
+        # **After the commit, and only what was written** — A64-021.2 §1,
+        # §5, and A64-021.1 §13's "do not emit realtime delivery before
+        # durable persistence commits".
+        #
+        # Two properties fall out of those two words:
+        #
+        #   *after*  a client woken by this frame reads `GET /notifications`
+        #            and finds the row. Announcing inside the transaction
+        #            would let a fast client read before the commit landed
+        #            and conclude nothing was there
+        #   *only*   a redelivered event inserts nothing, so it announces
+        #            nothing. The duplicate suppression a client also does
+        #            is a second line rather than the only one
+        #
+        # The announcer never raises (`NotificationAnnouncer`), so nothing
+        # below can undo the write above or fail the relay tick.
+        await self._announcer.announce([NotificationAnnouncement.of(r) for r in stored])
 
     def _record_for(self, notification: SocialNotification) -> NotificationRecord | None:
         """One transient notification as a durable row, or `None` if its kind

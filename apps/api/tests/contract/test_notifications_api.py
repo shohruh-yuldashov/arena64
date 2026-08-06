@@ -35,7 +35,7 @@ which CLAUDE.md §6.4 rules out. `run_once` is public for exactly this.
 Skipped, not failed, when PostgreSQL is unreachable (see `conftest.py`).
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -53,6 +53,7 @@ from app.modules.notifications.domain.record import (
     ActorSummary,
     NavigationTarget,
     NavigationTargetType,
+    NotificationAnnouncement,
     NotificationCategory,
     NotificationRecord,
     NotificationType,
@@ -119,7 +120,33 @@ async def register(client: AsyncClient) -> Player:
     )
 
 
-async def drain(session: AsyncSession) -> Any:
+class RecordingAnnouncer:
+    """A `NotificationAnnouncer` that keeps what it was handed — A64-021.2.
+
+    It also **reads the database back** at announce time, which is the whole
+    point: §5 and A64-021.1 §13 require the row to be durable before the
+    frame is published, and the only way to assert an ordering is to observe
+    it from inside. A writer that announced before committing would find the
+    row absent here.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+        self.announced: list[NotificationAnnouncement] = []
+        self.visible_when_announced: list[bool] = []
+
+    async def announce(self, announcements: Sequence[NotificationAnnouncement]) -> None:
+        for announcement in announcements:
+            page = await SqlAlchemyNotificationRepository(self._session).list_for(
+                announcement.recipient_id, after=None, limit=50
+            )
+            self.visible_when_announced.append(
+                any(record.id == announcement.notification_id for record in page.entries)
+            )
+        self.announced.extend(announcements)
+
+
+async def drain(session: AsyncSession, announcer: Any | None = None) -> Any:
     """One relay tick, with the sink graph `app_factory` builds.
 
     `CompositeNotificationSink([durable, logging])` is not assembled by hand
@@ -145,7 +172,10 @@ async def drain(session: AsyncSession) -> Any:
             clock=SystemClock(),
         ),
         sink=CompositeNotificationSink(
-            [build_durable_notification_writer(session), LoggingNotificationSink()]
+            [
+                build_durable_notification_writer(session, announcer=announcer),
+                LoggingNotificationSink(),
+            ]
         ),
     )
     relay = OutboxRelay(
@@ -299,6 +329,58 @@ class TestNotificationsAreProducedBySourceEvents:
 
         after = (await repository.list_for(bob.id, after=None, limit=50)).entries
         assert [record.id for record in after] == [before[0].id]
+
+
+class TestRealtimeAnnouncement:
+    async def test_it_announces_after_the_commit_and_only_what_it_wrote(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """A64-021.2 §1, §5 — the realtime half of the write, in order.
+
+        Three properties, and each is a rule the frame's harmlessness rests
+        on:
+
+        **After the commit.** The recording announcer reads the row back as
+        it is announced, and finds it. A writer that announced first would
+        wake a client that then read `GET /notifications` and found nothing
+        — the exact race §5's "HTTP is authoritative" would otherwise lose.
+
+        **Only what it wrote.** Two events, two recipients, two
+        announcements — each addressed to the player whose notification it
+        is, never to the actor.
+
+        **A redelivery announces nothing.** The second drain writes no row,
+        so it publishes no frame: a client that reconnects while the relay
+        is catching up is not told the same thing twice by the server. The
+        client's own duplicate guard is a second line, not the only one.
+        """
+        alice, bob = await register(client), await register(client)
+        announcer = RecordingAnnouncer(contract_session)
+
+        sent = await client.post(REQUESTS_URL, headers=alice.auth, json={"player_id": str(bob.id)})
+        await client.post(f"{REQUESTS_URL}/{sent.json()['data']['id']}/accept", headers=bob.auth)
+
+        await drain(contract_session, announcer)
+
+        # Bob was told a request arrived; Alice was told hers was accepted.
+        assert {(a.recipient_id, a.type) for a in announcer.announced} == {
+            (bob.id, NotificationType.FRIEND_REQUEST_RECEIVED),
+            (alice.id, NotificationType.FRIEND_REQUEST_ACCEPTED),
+        }
+        # Durable *before* announced, for every one of them.
+        assert announcer.visible_when_announced == [True] * len(announcer.announced)
+
+        # The announcement names the row that exists, not a fresh id.
+        stored = await SqlAlchemyNotificationRepository(contract_session).list_for(
+            bob.id, after=None, limit=50
+        )
+        announced_to_bob = next(a for a in announcer.announced if a.recipient_id == bob.id)
+        assert announced_to_bob.notification_id == stored.entries[0].id
+        assert announced_to_bob.created_at == stored.entries[0].created_at
+
+        before = len(announcer.announced)
+        await drain(contract_session, announcer)
+        assert len(announcer.announced) == before
 
 
 class TestOwnership:

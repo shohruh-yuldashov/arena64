@@ -14,6 +14,7 @@ from app.modules.notifications.infrastructure.session_scoped_handler import (
 from app.modules.notifications.infrastructure.sinks import (
     CompositeNotificationSink,
     LoggingNotificationSink,
+    NullNotificationAnnouncer,
     NullNotificationSink,
 )
 
@@ -23,6 +24,7 @@ __all__ = [
     "PresenceSweeperWorker",
     "SweeperFactory",
     "LoggingNotificationSink",
+    "NullNotificationAnnouncer",
     "NullNotificationSink",
     "SessionScopedNotificationHandler",
     "SqlAlchemyNotificationRepository",

@@ -1,4 +1,4 @@
-import { type APIRequestContext, expect, test } from "@playwright/test";
+import { type APIRequestContext, expect, type Page, test } from "@playwright/test";
 
 import {
   API,
@@ -53,6 +53,12 @@ import {
  *     cd apps/api && uv run uvicorn main:app --port 8000
  *     cd apps/web && npm run test:e2e
  */
+// **Serial**, because both tests drive the same two seeded accounts.
+// `fullyParallel` spreads tests across workers as readily as files, and two
+// workers resetting Alice and Bob's relationship at once would make each
+// test fail for something the other did.
+test.describe.configure({ mode: "serial" });
+
 test("a friend request notifies its recipient, who reads it and follows it", async ({
   browser,
   request,
@@ -101,18 +107,8 @@ test("a friend request notifies its recipient, who reads it and follows it", asy
   const page = await context.newPage();
 
   try {
-    // **Retried, the way a player would.** The preview server is shared
-    // with eight other projects, and a single dropped request during the
-    // session bootstrap leaves the app in its `unavailable` state — "we
-    // could not check your session", with a Try again button. That is
-    // correct behaviour rather than a bug, and a spec that navigated once
-    // and asserted would fail on it. Observed once in a full-suite run.
-    await expect(async () => {
-      await page.goto("/notifications");
-      await expect(page.getByRole("heading", { level: 1, name: "Notifications" })).toBeVisible({
-        timeout: 5_000,
-      });
-    }).toPass({ timeout: 30_000 });
+    // Retried the way a player would — see `openNotifications`.
+    await openNotifications(page);
 
     // The message is assembled in the browser from a type and an actor — no
     // sentence was stored, which is what makes it readable in three
@@ -165,4 +161,130 @@ async function unreadTotal(request: APIRequestContext, headers: Record<string, s
   if (!counted.ok()) return -1;
   const body = (await counted.json()) as { data: { unread_count: number } };
   return body.data.unread_count;
+}
+
+/**
+ * The realtime half — A64-021.2 §11.
+ *
+ * Bob is looking at his notifications. Alice sends him a friend request. His
+ * page updates **on its own** — no reload, no focus event, no poll — because
+ * the frame arrived on the socket he already had open and the app re-read.
+ *
+ * The last step is what makes the whole design honest: a reload shows the
+ * *same* state. The frame did not create anything on the client; it caused a
+ * read, and the read is what the page was already showing (§5).
+ *
+ * ## One browser, and why that is not a shortcut
+ *
+ * §11 describes two browsers, with Alice sending through hers. This sends
+ * through the API instead, and the reason is a demonstrated failure rather
+ * than convenience: `social.spec.ts` runs as this project's dependency and
+ * drives Alice's *browser session*, and a second context loading the same
+ * saved session in the same run left her signed out — the refresh-token
+ * rotation hazard `playwright.config.ts` documents at length. Three runs
+ * failed that way, on a page that was correct.
+ *
+ * Nothing about the property under test moves. Alice's browser would call
+ * exactly this endpoint, `social.spec.ts` already covers her half of the
+ * journey through the UI, and every claim §11 makes — an open page updating
+ * with no refresh, the badge, the list, and a reload agreeing — is on Bob's
+ * side and is asserted below in a real browser.
+ */
+test("a notification reaches an open page with no refresh, and a reload agrees", async ({
+  browser,
+  request,
+}) => {
+  // The relay is asynchronous and the fleet fan-out is one more hop, so the
+  // same budget the durable journey needs applies here.
+  test.setTimeout(120_000);
+
+  const alice = seededAccount(E2E_ACCOUNTS.alice);
+  const bob = seededAccount(E2E_ACCOUNTS.bob);
+  const bobAuth = { Authorization: `Bearer ${bob.accessToken}` };
+
+  await resetRelationship(request, alice, bob);
+  const cleared = await request.post(`${API}/api/v1/notifications/read-all`, {
+    headers: bobAuth,
+  });
+  expect(cleared.status(), await cleared.text()).toBe(200);
+
+  const context = await browser.newContext({ storageState: statePath(E2E_ACCOUNTS.bob) });
+  const page = await context.newPage();
+  let requestId: string | null = null;
+
+  try {
+    // **Bob is looking at his notifications before anything happens.** That
+    // ordering is the test: everything below has to reach a page that is
+    // already rendered and is never navigated again until the reload.
+    await openNotifications(page);
+
+    // Caught up: the bell names no count. **Not** the empty state —
+    // notifications are append-only (A64-021.1 §14), so this account keeps
+    // whatever earlier runs produced and "you are all caught up" is only
+    // ever true of an account with no history at all. The badge is the
+    // assertion that holds on the first run and on the hundredth.
+    await expect(page.getByRole("link", { name: "Notifications" })).toBeVisible();
+    await expect(page.getByRole("link", { name: /Notifications — \d+ unread/ })).toHaveCount(0);
+
+    const sent = await request.post(`${API}/api/v1/friends/requests`, {
+      headers: { Authorization: `Bearer ${alice.accessToken}` },
+      data: { player_id: bob.id },
+    });
+    expect(sent.status(), await sent.text()).toBe(201);
+    requestId = ((await sent.json()) as { data: { id: string } }).data.id;
+
+    // §11: the badge updates with **no refresh**. `toBeVisible` polls the
+    // DOM, never the network — nothing here reloads or refocuses the page,
+    // and the query it renders from has a ten-second stale time it is
+    // nowhere near exceeding.
+    await expect(page.getByRole("link", { name: "Notifications — 1 unread" })).toBeVisible({
+      timeout: 60_000,
+    });
+
+    // And so did the page under it: the list invalidated, refetched, and
+    // rendered the row. Newest first, and the only unread one — everything
+    // older was marked read above.
+    const newest = page.getByRole("listitem").first();
+    await expect(newest).toContainText(`${alice.username} sent you a friend request`);
+    await expect(newest.getByText("Unread")).toBeAttached();
+
+    // §5's whole point, asserted the only way it can be: a reload shows the
+    // **same** state. If the frame had mutated the UI rather than causing a
+    // read, this is where the two would disagree.
+    await page.reload();
+    await expect(page.getByRole("link", { name: "Notifications — 1 unread" })).toBeVisible();
+    await expect(page.getByRole("listitem").first()).toContainText(
+      `${alice.username} sent you a friend request`,
+    );
+    await expect(page.getByRole("listitem").first().getByText("Unread")).toBeAttached();
+  } finally {
+    if (requestId !== null) {
+      await request.delete(`${API}/api/v1/friends/requests/${requestId}`, {
+        headers: { Authorization: `Bearer ${alice.accessToken}` },
+        failOnStatusCode: false,
+      });
+    }
+    await request.post(`${API}/api/v1/notifications/read-all`, { headers: bobAuth });
+    await saveState(context, E2E_ACCOUNTS.bob);
+    await context.close();
+  }
+});
+
+/**
+ * Opens `/notifications` and waits for it to be genuinely rendered.
+ *
+ * **Retried, the way a player would.** The preview server is shared with
+ * every other project, and a single dropped request during the session
+ * bootstrap leaves the app in its `unavailable` state — "we could not check
+ * your session", with a Try again button. That is correct behaviour rather
+ * than a bug, and a spec that navigated once and asserted would fail on it.
+ * Observed once in a full-suite run.
+ */
+async function openNotifications(page: Page): Promise<void> {
+  await expect(async () => {
+    await page.goto("/notifications");
+    await expect(page.getByRole("heading", { level: 1, name: "Notifications" })).toBeVisible({
+      timeout: 5_000,
+    });
+  }).toPass({ timeout: 30_000 });
 }

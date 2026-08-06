@@ -31,8 +31,12 @@ export const PROTOCOL_VERSION = 1;
  * One socket, multiplexed. Not one socket per match: the channel is a
  * *kind* of traffic and the match is in the payload, which is what keeps
  * the set bounded.
+ *
+ * `notifications` joined in A64-021.2 as an **addition, not a version
+ * bump**: a build that does not know a member ignores frames carrying it,
+ * exactly as it ignores an unknown frame type.
  */
-export type Channel = "system" | "matchmaking" | "game";
+export type Channel = "system" | "matchmaking" | "game" | "notifications";
 
 /** Everything the gateway can send us. */
 export type InboundType =
@@ -53,6 +57,7 @@ export type InboundType =
   | "game.command.rejected"
   | "game.draw.state"
   | "matchmaking.match.offered"
+  | "notification.created"
   | "error";
 
 /** Everything this client sends. Spectator frames are deferred. */
@@ -266,6 +271,32 @@ export interface MatchOfferedPayload {
 }
 
 /** `game.command.rejected` — about the *command*, not the frame. */
+/**
+ * `notification.created` — a durable notification now exists for you.
+ *
+ * **Three fields, and that is the whole design** — A64-021.2 §2. No actor,
+ * no username, no avatar, no rendered sentence. The frame says *something
+ * happened*; what happened is `GET /notifications`, which stays the source
+ * of truth (§5).
+ *
+ * A client that rendered this payload would be rendering a second copy of a
+ * record it is about to fetch — and a second copy is a second thing that can
+ * be stale. So nothing reads these fields except the deduplicator:
+ * `notification_id` decides whether this frame is news, and the other two
+ * exist so a future surface can order or filter without a read.
+ *
+ * May be duplicated, may arrive late, may be missed while the socket is
+ * down. Each is recovered by the read, and none may reopen an unread badge
+ * for a notification already marked read.
+ */
+export interface NotificationCreatedPayload {
+  notification_id: string;
+  /** A `NotificationType` value, from the closed backend set. */
+  type: string;
+  /** ISO-8601, and the *notified fact's* instant — not the push's. */
+  created_at: string;
+}
+
 export interface CommandRejectedPayload {
   code: GatewayErrorCode;
   /** Server prose. Logged, never rendered — §13 forbids branching on it. */
@@ -410,6 +441,7 @@ const INBOUND_TYPES = new Set<string>([
   "game.command.rejected",
   "game.draw.state",
   "matchmaking.match.offered",
+  "notification.created",
   "error",
 ]);
 
@@ -447,7 +479,10 @@ export function parseFrame(raw: string): InboundFrame | null {
     type: frame.type as InboundType,
     request_id: typeof frame.request_id === "string" ? frame.request_id : null,
     // The gateway defaults an absent channel to `system`, and so does this.
-    channel: channel === "game" || channel === "matchmaking" ? channel : "system",
+    channel:
+      channel === "game" || channel === "matchmaking" || channel === "notifications"
+        ? channel
+        : "system",
     payload: frame.payload as Record<string, unknown>,
   };
 }

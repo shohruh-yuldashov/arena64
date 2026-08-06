@@ -10,6 +10,8 @@ One published-to-us contract per collaborator, and two of our own:
     NotificationSink       where a rendered notification goes
     NotificationRepository where a durable notification is stored and read
                            — A64-021.1
+    NotificationAnnouncer  who is told that a durable notification now
+                           exists — A64-021.2
 
 Everything else this module consumes is already a published port somewhere
 else — `friends.public.PresenceAudience`, `profiles.public.ProfileRenderer`,
@@ -30,6 +32,7 @@ layer that needs it), and the composition root satisfies it with
 cannot be handed anything wider.
 """
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
@@ -40,7 +43,10 @@ from app.modules.notifications.application.read_models import (
     NotificationPage,
 )
 from app.modules.notifications.domain.notification import SocialNotification
-from app.modules.notifications.domain.record import NotificationRecord
+from app.modules.notifications.domain.record import (
+    NotificationAnnouncement,
+    NotificationRecord,
+)
 from app.modules.users.public import DeviceType, Presence
 
 
@@ -179,4 +185,42 @@ class NotificationRepository(Protocol):
         the set is bounded by what is unread, and a recipient who has ignored
         their notifications for a month must not cost a page-by-page walk.
         """
+        ...
+
+
+class NotificationAnnouncer(Protocol):
+    """Told that notifications now exist, **after** they are durable —
+    A64-021.2 §1, §5.
+
+    The seam A64-021.1 named and left for this phase. Satisfied by
+    `app.gateway.notifications.GatewayNotificationSink`, and by
+    `NullNotificationAnnouncer` where there is no fleet to announce into.
+
+    ## It is an accelerator, and the contract says so
+
+    **Never raises.** A deliberate departure from `NotificationSink`, whose
+    "a sink may raise" exists so a real delivery failure is retried. Here a
+    retry would re-announce a notification the client can already read, and
+    raising would fail a relay tick — undoing nothing, since the row is
+    already committed, and holding up every other event in the batch.
+
+    So every failure mode is tolerable by construction, because the durable
+    answer is `GET /notifications`:
+
+        nobody connected     the ordinary state of a player who is not
+                             looking at the app
+        a socket dropped     the frame is lost and the next read recovers it
+        another node         forwarded through the existing bus
+        the publish raised   counted, not raised
+
+    ## Called after the commit, never before
+
+    A64-021.1 §13: *"do not emit realtime delivery before durable
+    persistence commits"*. The writer calls this once its unit of work has
+    committed, with the records it **actually inserted** — so a redelivered
+    event, which inserts nothing, announces nothing.
+    """
+
+    async def announce(self, announcements: Sequence[NotificationAnnouncement]) -> None:
+        """Announces a batch. An empty batch is a legal no-op."""
         ...

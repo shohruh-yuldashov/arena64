@@ -1,6 +1,6 @@
 # Notifications
 
-> **Status:** foundation implemented — A64-021.1
+> **Status:** foundation implemented — A64-021.1; realtime in-app delivery — A64-021.2
 > **Owner:** platform
 > **Related:** `docs/01-architecture/domain-model.md` §9.3, `docs/01-architecture/database.md` §10.2, `specs/friends.md`, `specs/frontend.md` §21
 
@@ -13,8 +13,9 @@ outbox, the relay, the audience resolution, the privacy gate — and stopped
 at a log line, because there was no channel to deliver into. A64-021.1 adds
 the thing NT-1 is actually about: the record, and the screen that reads it.
 
-**No delivery channel is implemented.** Not push, not email, not a realtime
-frame. §11 states exactly what each of those must add and where.
+A64-021.2 adds the **first delivery channel**: the recipient is told over
+the socket they already have, the moment the row is committed (§11). Push
+and email remain deferred, and §12 states exactly what each must add.
 
 ---
 
@@ -298,13 +299,133 @@ a delivery channel rather than in the durable writer.
 
 ---
 
-## 11. Extension points
+## 11. Realtime delivery — A64-021.2
+
+HTTP is the source of truth. Realtime is an **accelerator**, and every rule
+below exists to keep that sentence literally true.
+
+    friend request                 an HTTP call, returning before any of this
+      ↓
+    outbox                         durable in the same transaction
+      ↓
+    relay → SocialNotificationDispatcher
+      ↓                            audience re-read, privacy gate
+    CompositeNotificationSink
+      ├─ DurableNotificationWriter → notifications.notification  (commits)
+      │     ↓ after the commit, only what it inserted
+      │  GatewayNotificationSink  → RoomBroadcaster → recipient's socket(s)
+      └─ LoggingNotificationSink
+      ↓
+    client: invalidate the two notification queries
+      ↓
+    HTTP re-read decides everything
+
+### 11.1 The frame
+
+`notification.created`, on the `notifications` channel, addressed to the
+recipient and to nobody else.
+
+| Field | Why it is allowed |
+| --- | --- |
+| `notification_id` | The client's duplicate guard needs an identity |
+| `type` | Lets a future surface filter without a read |
+| `created_at` | Lets a future surface order without a read |
+
+**Nothing else.** No actor, no username, no display name, no avatar, no
+rendered sentence, no target, no token, no email, no internal identifier and
+no URL. A pushed payload is a second copy of a record the client is about to
+fetch, and a second copy is a second thing that can be stale, be wrong, or
+leak. `recipient_id` is the *address* and never reaches the wire — a client
+already knows who it is.
+
+The channel is new and the protocol version is not: an unknown channel reads
+as `system` and an unknown type is ignored, so both halves of the fleet can
+be mid-deploy without a client breaking.
+
+### 11.2 Ordering — after the commit, and only what was written
+
+`DurableNotificationWriter` announces **after** its unit of work commits, and
+only for the rows `append` actually inserted.
+
+*After*, because a client woken by the frame reads `GET /notifications`
+immediately; announcing inside the transaction would let a fast client read
+before the commit landed and conclude nothing was there — the one race that
+would make "HTTP is authoritative" a liability rather than a guarantee.
+
+*Only what was written*, because a redelivered event inserts nothing and
+therefore announces nothing. The client's own duplicate suppression is a
+second line, not the only one.
+
+### 11.3 Failure is always tolerable
+
+`NotificationAnnouncer` **never raises**, which is a deliberate departure
+from `NotificationSink`'s "a sink may raise". A retry would re-announce
+something the client can already read, and raising would fail a relay tick
+whose durable work is already done.
+
+| Failure | What happens |
+| --- | --- |
+| Nobody connected | Counted as `no_connection`. The ordinary state of a player who is not looking at the app |
+| The socket dropped | The frame is lost; the next read recovers it |
+| The recipient is on another node | Forwarded through the existing bus — §11.4 |
+| The fan-out raised | Counted as `failed`; the rest of the batch still goes |
+| The client never got it | Nothing is lost. The row is durable and the badge is a `GET` away |
+
+### 11.4 Cross-node
+
+Unchanged, and that is the claim. `RoomBroadcaster` partitions recipients
+into local sockets and remote nodes through `FleetConnectionRouter`, and the
+remote half is published to the node's bus stream where its `GatewayForwarder`
+delivers it. The notification path uses the same fan-out as moves and match
+offers; it introduces no transport of its own.
+
+### 11.5 The client half
+
+One handler on the **one shared socket** — no second connection, no
+notification-specific socket, no local pub/sub, no `BroadcastChannel`.
+Mounted by `AppShell`, so it is alive on every route.
+
+It reads exactly one field, the id, to tell news from a duplicate. Then it
+**invalidates two query keys and does nothing else**. It never renders the
+payload and never mutates a count, which is what makes a late frame
+harmless: a notification already read stays read, because the refetch says
+so.
+
+Duplicates collapse twice over — an id already reconciled is dropped, and
+several distinct ids arriving together share one refetch.
+
+### 11.6 Polling is not removed
+
+The badge still refetches on focus and the list on its own terms. A build
+whose socket never connects is exactly the product A64-021.1 shipped; §11.3's
+table is the whole of the fallback, and there is no code path to take.
+
+### 11.7 Cost
+
+| Measurement | Value |
+| --- | --- |
+| Server-side latency, request accepted → frame published | ~1 s, bounded by the outbox relay's 1.0 s poll interval; the push itself is within the same log second |
+| Client requests caused by one frame | 2 — the list and the count, once each |
+| Client requests caused by 3 duplicate frames | 0 |
+| Polling frequency | unchanged |
+| New sockets, endpoints or connections | 0 |
+
+Before this phase the same notification became visible when the tab next
+regained focus, which is unbounded.
+
+---
+
+## 12. Extension points
 
 Everything below is deliberately absent, with the seam it will use.
 
+A64-021.2's row is gone from this table because it was built: the seam it
+used — a `NotificationAnnouncer` port satisfied at the composition root — is
+the same one each remaining row names, and §11 is what it looks like when
+taken.
+
 | Deferred to | What it adds | Where |
 | --- | --- | --- |
-| **A64-021.2 realtime in-app** | A gateway frame published *after* the durable write commits | A second `NotificationSink`, beside `DurableNotificationWriter`, inside `CompositeNotificationSink` — the arrangement `matchmaking`'s `GatewayPendingMatchSink` already uses |
 | **A64-021.3 browser push** | Permission request, `pushManager.subscribe`, a VAPID key as a `VITE_` variable, `push` and `notificationclick` handlers in **the existing** service worker, a device/subscription table | `apps/web/pwa/service-worker.ts` and `apps/api`. `shared/pwa/push-support.ts` already reports capability and asks for nothing |
 | **Email** | A provider, templates, a per-channel delivery record (`notification_delivery`, `database.md` §10.2) | A third sink, plus the delivery table NT-1 needs to record a channel failing independently |
 | **Friend challenges** | A `challenges` domain, its events, and one notification type per event | A new member of `NotificationType`, its payload, its target |
@@ -315,7 +436,7 @@ handler must not widen what a *page* may tell the service worker to do.
 
 ---
 
-## 12. Security
+## 13. Security
 
 | Guarantee | How |
 | --- | --- |

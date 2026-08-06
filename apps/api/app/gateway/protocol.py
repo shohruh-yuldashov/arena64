@@ -51,6 +51,7 @@ The server knows precisely what happened and says so in its logs.
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, Final
 from uuid import UUID
@@ -115,6 +116,7 @@ class Channel(StrEnum):
     SYSTEM = "system"
     MATCHMAKING = "matchmaking"
     GAME = "game"
+    NOTIFICATIONS = "notifications"
 
 
 class MessageType(StrEnum):
@@ -312,6 +314,32 @@ class MessageType(StrEnum):
     **Carries no ply and no sequence.** It is not a state change of the
     game, so it is never buffered into the ply-sequenced replay buffer —
     doing so would break the contiguity check a resume depends on (§12)."""
+
+    NOTIFICATION_CREATED = "notification.created"
+    """Server to **one recipient**, on the `notifications` channel —
+    A64-021.2 §2.
+
+    A durable notification now exists for this player. Sent after the row is
+    committed, never before, and addressed rather than broadcast: a
+    notification belongs to exactly one recipient and there is no room, no
+    audience and no spectator form of it.
+
+    **The payload is three fields and that is the whole design** —
+    `notification_id`, `type`, `created_at`. No actor, no username, no
+    avatar, no rendered sentence. The frame says *something happened*; what
+    happened is `GET /notifications`, which is the source of truth and stays
+    so (§5). A payload that carried the notification would be a second copy
+    of a record the client is about to fetch, and a second copy is a second
+    thing that can be stale or leak.
+
+    **An optimisation, never the source of truth** (§6). This may be
+    duplicated, may arrive late, and may be missed entirely while a socket
+    is down; every one of those is recovered by the read, and none of them
+    may reopen an unread badge for a notification the player has already
+    read.
+
+    Deliberately absent from `SPECTATOR_SAFE_EVENTS`: there is no audience
+    for somebody else's notifications."""
 
     SPECTATOR_JOIN = "spectator.join"
     """Client to server — A64-016.7 §2. Carries `match_id`. The viewer is
@@ -791,6 +819,35 @@ def match_offered(payload: dict[str, Any]) -> GatewayMessage:
     )
 
 
+def notification_created(
+    *, notification_id: UUID, type_: str, created_at: datetime
+) -> GatewayMessage:
+    """A durable notification now exists for this recipient — §2.
+
+    Takes primitives rather than a `NotificationAnnouncement`, for the
+    reason `match_offered` takes an already-projected payload: this module
+    knows nothing about `notifications` and must not. Keeping the projection
+    at the caller is what lets the protocol stay a codec.
+
+    The three fields are built here rather than handed in as a mapping,
+    which is the one place this differs from `match_offered` — and
+    deliberately: a `dict` parameter is a hole through which a fourth field
+    could be added at a call site, and §2's whole point is that there is no
+    fourth field.
+
+    **No `request_id`**: nobody asked for this.
+    """
+    return GatewayMessage(
+        type=MessageType.NOTIFICATION_CREATED,
+        payload={
+            "notification_id": str(notification_id),
+            "type": type_,
+            "created_at": created_at.isoformat(),
+        },
+        channel=Channel.NOTIFICATIONS,
+    )
+
+
 def draw_state(
     *,
     match_id: UUID,
@@ -1045,6 +1102,7 @@ __all__ = [
     "move_accepted",
     "move_applied",
     "move_rejected",
+    "notification_created",
     "pong",
     "resumed",
     "spectator_joined",

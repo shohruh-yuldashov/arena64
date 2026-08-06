@@ -195,6 +195,53 @@ class NotificationRecord:
         return self.read_at is not None
 
 
+@dataclass(frozen=True, slots=True)
+class NotificationAnnouncement:
+    """That a notification now exists — A64-021.2 §2.
+
+    The value that crosses into `app.gateway`, and it is deliberately the
+    **smallest** thing a client needs in order to know it should re-read.
+
+    ## Why it carries three fields and not the notification
+
+    §2 allows `notification_id`, `type` and `created_at`, and forbids
+    everything else — no actor, no username, no avatar, no rendered text.
+    That is not miserliness: a pushed payload is a **second copy** of a
+    record the client is about to fetch anyway, and a second copy is a
+    second thing that can be stale, be wrong, or leak. The frame says
+    *something happened*; `GET /notifications` says what.
+
+    It is also what makes the frame safe to send to a socket whose owner
+    may have signed out, changed their privacy settings, or blocked the
+    actor between the write and the push: none of those can change what
+    these three fields mean.
+
+    `recipient_id` is the **address**, not payload. The gateway uses it to
+    choose a socket and never puts it on the wire — a client already knows
+    who it is.
+    """
+
+    notification_id: UUID
+    recipient_id: UUID
+    type: NotificationType
+    created_at: datetime
+
+    @classmethod
+    def of(cls, record: "NotificationRecord") -> "NotificationAnnouncement":
+        """The announcement for a record that was **actually written**.
+
+        A classmethod rather than a constructor call at the call site, so
+        the projection is defined once and a field added to
+        `NotificationRecord` does not silently appear on the wire.
+        """
+        return cls(
+            notification_id=record.id,
+            recipient_id=record.recipient_id,
+            type=record.type,
+            created_at=record.created_at,
+        )
+
+
 class MalformedNotification(ValueError):
     """A stored row whose payload does not match its type.
 
@@ -262,6 +309,7 @@ def _optional_str(value: Any) -> str | None:
 __all__ = [
     "CATEGORY_OF",
     "ActorSummary",
+    "NotificationAnnouncement",
     "MalformedNotification",
     "NavigationTarget",
     "NavigationTargetType",

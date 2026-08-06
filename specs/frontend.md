@@ -1921,15 +1921,29 @@ per cursor would leave earlier pages to be garbage-collected out from under
 the list. **No player id is in any key** either, because the endpoints take
 none; sign-out clearing the cache is what separates two players.
 
-### 21.3 Polling — the temporary policy
+### 21.3 Delivery — pushed, with the poll left in place
 
-Realtime delivery is A64-021.2. Until then the badge is a query that
-refetches **on window focus** (the platform default) with a ten-second
-stale time, and there is **no interval**. A poll would be a request per
-player per tick for a number that changes at social-event frequency, and
-nothing here claims realtime delivery it does not have.
+**A64-021.2.** A `notification.created` frame arrives on the **one shared
+socket** and `useNotificationPush` — mounted by `AppShell`, so it is alive on
+every route — invalidates `notificationKeys.list()` and
+`notificationKeys.unreadCount()`. Nothing else.
 
-The list refetches on the same terms. Neither opens a socket.
+The handler **never renders the frame and never mutates a count.** It reads
+one field, the id, to tell news from a duplicate, and then lets HTTP decide.
+That is what makes a late frame harmless: a notification the player already
+read on another device stays read, because the refetch says so.
+
+Duplicates collapse twice — an id already reconciled is dropped, and several
+distinct ids arriving together share one refetch.
+
+**The focus refetch is still there.** The badge keeps its ten-second stale
+time and its refetch-on-focus, and the list keeps its own terms; nothing was
+removed. Realtime reduces latency from "when the tab is next focused" to
+about a second, and a build whose socket never connects is exactly the
+product A64-021.1 shipped.
+
+No second connection, no provider, no local pub/sub, no `BroadcastChannel` —
+`useFrames` subscribes to the socket `app/providers` already owns.
 
 ### 21.4 Marking read
 
@@ -1978,9 +1992,10 @@ merely forbidden.
 
 ### 21.8 Not in this phase
 
-No realtime frame, no push subscription, no notification permission, no
-preference switch, no grouping, no search, no dismissal. Each is named with
-its seam in `specs/notifications.md` §11.
+No push subscription, no notification permission, no preference switch, no
+grouping, no search, no dismissal. Each is named with its seam in
+`specs/notifications.md` §12. (The realtime frame was deferred here and
+arrived in A64-021.2 — see §21.3.)
 
 ## 22. Open questions
 
@@ -2001,7 +2016,7 @@ its seam in `specs/notifications.md` §11.
 | OQ-15 | **Match activation is not pushed.** `matchmaking.match.offered` fires on pairing; nothing fires when the opponent accepts, so an open offer keeps the two-second interval. Narrow — it lasts at most the acceptance window — and closed by a `matchmaking.match.activated` frame | A second matchmaking frame |
 | OQ-12 | **The offer dialog cannot show an avatar or a rating.** `OpponentPreview` carries three public fields by design (§15.5). Publishing more needs the privacy-gated composition `profiles` owns, which is a backend decision rather than a frontend gap | A richer match card |
 | OQ-16 | **The update check is tied to tab visibility.** `shared/pwa` calls `registration.update()` when the tab becomes visible, and nowhere else — a session left open and focused for hours never notices a deploy. Navigation preload and a periodic check are both absent (§20.14). Closed by a periodic check with a stated interval, or by a version signal the socket already carries | A deploy that must reach open sessions |
-| OQ-17 | **Notification delivery is a focus refetch, not a push.** §21.3's policy is temporary and says so: the badge is current when a player returns to the tab and stale while they sit on it. Closed by A64-021.2, which publishes a frame on the socket that already exists | Realtime in-app delivery |
+| ~~OQ-17~~ | **Closed by A64-021.2.** `notification.created` arrives on the shared socket and the client invalidates the two notification queries; HTTP stays authoritative and the focus refetch stays in place (§21.3) | — |
 | OQ-11 | **A friend's `relationship` is fetched but structurally known.** The four list endpoints state it server-side and cost nothing, but a client-side `friends` cache could serve the public profile's state too — not done, because a stale action is worse than a request | A measured need |
 
 ## Related documents

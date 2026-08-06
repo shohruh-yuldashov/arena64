@@ -367,6 +367,13 @@ class GameCommandRejection(StrEnum):
 #: down rather than one that answers a question.
 MATCH_OFFER_PUSHES: Final = "gateway.match_offer_pushes_total"
 
+#: One counter per announced notification — A64-021.2 §9.
+#:
+#: Labelled by the same three outcomes match offers use, so an operator
+#: reads one dashboard for "did the push reach anybody" rather than two that
+#: answer the question differently.
+NOTIFICATION_PUSHES: Final = "gateway.notification_pushes_total"
+
 
 class MatchOfferOutcome(StrEnum):
     """What happened to one pushed match offer."""
@@ -389,10 +396,38 @@ class MatchOfferOutcome(StrEnum):
     failure must not fail the relay tick that carried it."""
 
 
+class NotificationPushOutcome(StrEnum):
+    """What happened to one announced notification — A64-021.2 §9.
+
+    The same four members `MatchOfferOutcome` has, and a separate enum
+    rather than a shared one: they label different counters, and a shared
+    enum would make widening one push's outcome set widen the other's.
+    Sharing the *values* is what keeps a dashboard readable.
+    """
+
+    LOCAL = "local"
+    """Delivered to a socket on this node."""
+
+    REMOTE = "remote"
+    """Forwarded to another node's bus stream — A64-021.2 §7."""
+
+    NO_CONNECTION = "no_connection"
+    """Nobody was connected. **Not a failure** — it is the ordinary state
+    of a player who is not looking at the app, and the durable read is what
+    tells them when they come back (§6)."""
+
+    FAILED = "failed"
+    """The publish raised. Counted rather than propagated: an announcement
+    must not fail the relay tick that carried it, and the row it announces
+    is already committed."""
+
+
 __all__ = [
     "CONNECTIONS_ACCEPTED",
     "MATCH_OFFER_PUSHES",
+    "NOTIFICATION_PUSHES",
     "MatchOfferOutcome",
+    "NotificationPushOutcome",
     "CONNECTIONS_CLOSED",
     "CONNECTIONS_REJECTED",
     "CONNECTION_DURATION",

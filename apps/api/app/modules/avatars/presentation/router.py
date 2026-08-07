@@ -58,7 +58,7 @@ from fastapi import APIRouter, Depends, File, UploadFile, status
 from app.api.openapi import Responses, error_response
 from app.api.responses import build_response
 from app.core.responses import ApiResponse
-from app.modules.auth.presentation.dependencies import CurrentUser
+from app.modules.auth.presentation.dependencies import CurrentUser, VerifiedUser
 from app.modules.avatars.presentation.dependencies import (
     AvatarLinkBuilderDep,
     AvatarServiceDep,
@@ -111,7 +111,7 @@ _UNPROCESSABLE: Responses = error_response(
     dependencies=[Depends(enforce_avatar_upload_limit)],
 )
 async def upload_avatar(
-    user: CurrentUser,
+    user: VerifiedUser,
     service: AvatarServiceDep,
     links: AvatarLinkBuilderDep,
     file: Annotated[
@@ -216,7 +216,7 @@ async def get_avatar(
     responses=_UNAUTHORIZED,
 )
 async def delete_avatar(
-    user: CurrentUser,
+    user: VerifiedUser,
     service: AvatarServiceDep,
     links: AvatarLinkBuilderDep,
 ) -> ApiResponse[AvatarResponse]:

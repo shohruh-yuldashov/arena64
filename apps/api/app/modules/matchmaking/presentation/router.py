@@ -70,7 +70,7 @@ from fastapi import APIRouter, Depends, Path, status
 from app.api.openapi import Responses, error_response
 from app.api.responses import build_response
 from app.core.responses import ApiResponse
-from app.modules.auth.presentation.dependencies import CurrentUser
+from app.modules.auth.presentation.dependencies import CurrentUser, VerifiedUser
 from app.modules.game.public import MatchNotFound, PendingMatchView
 from app.modules.matchmaking.domain.exceptions import NotQueued
 from app.modules.matchmaking.domain.queue_pool import QueuePool
@@ -174,7 +174,7 @@ _MATCH_ANSWERED: Responses = error_response(
 )
 async def join_queue(
     payload: JoinQueueRequest,
-    user: CurrentUser,
+    user: VerifiedUser,
     service: QueueServiceDep,
 ) -> ApiResponse[QueueTicketResponse]:
     """Enters your account into a matchmaking pool.
@@ -251,7 +251,7 @@ async def join_queue(
     responses={**_UNAUTHORIZED, **_TOO_MANY_REQUESTS},
     dependencies=[Depends(enforce_queue_limit)],
 )
-async def leave_queue(user: CurrentUser, service: QueueServiceDep) -> None:
+async def leave_queue(user: VerifiedUser, service: QueueServiceDep) -> None:
     """Withdraws your queue ticket.
 
     **Your own, always.** There is no path segment or body field naming a
@@ -409,7 +409,7 @@ async def read_pending_match(
     dependencies=[Depends(enforce_acceptance_limit)],
 )
 async def accept_match(
-    user: CurrentUser,
+    user: VerifiedUser,
     match_id: MatchIdPath,
     acceptance: MatchAcceptanceDep,
     players: OpponentDirectoryDep,
@@ -455,7 +455,7 @@ async def accept_match(
     dependencies=[Depends(enforce_acceptance_limit)],
 )
 async def decline_match(
-    user: CurrentUser,
+    user: VerifiedUser,
     match_id: MatchIdPath,
     acceptance: MatchAcceptanceDep,
     players: OpponentDirectoryDep,

@@ -63,7 +63,7 @@ from app.api.openapi import error_response
 from app.api.responses import build_response
 from app.core.exceptions import NotFoundError
 from app.core.responses import ApiResponse
-from app.modules.auth.presentation.dependencies import CurrentUser
+from app.modules.auth.presentation.dependencies import CurrentUser, VerifiedUser
 from app.modules.game.public import ProductVariant
 from app.modules.rating.public import SpeedClass
 from app.modules.tournament.application.read_models import (
@@ -310,7 +310,7 @@ async def my_registration(
     },
 )
 async def enter_tournament(
-    user: CurrentUser,
+    user: VerifiedUser,
     registrations: TournamentRegistrationServiceDep,
     results: TournamentResultsDep,
     tournament_id: Annotated[UUID, Path(description="Which tournament to enter.")],
@@ -349,7 +349,7 @@ async def enter_tournament(
     },
 )
 async def withdraw_from_tournament(
-    user: CurrentUser,
+    user: VerifiedUser,
     registrations: TournamentRegistrationServiceDep,
     results: TournamentResultsDep,
     tournament_id: Annotated[UUID, Path(description="Which tournament to leave.")],

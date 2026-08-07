@@ -67,7 +67,7 @@ from app.api.openapi import Responses, error_response
 from app.api.responses import build_response
 from app.core.responses import ApiResponse
 from app.core.sentinels import UNSET, UnsetType
-from app.modules.auth.presentation.dependencies import CurrentUser
+from app.modules.auth.presentation.dependencies import CurrentUser, VerifiedUser
 from app.modules.avatars.presentation.dependencies import AvatarLinkBuilderDep
 from app.modules.profiles.presentation.dependencies import (
     PreferencesEditorDep,
@@ -185,7 +185,7 @@ async def get_my_profile(
 )
 async def update_my_profile(
     payload: ProfileUpdateRequest,
-    user: CurrentUser,
+    user: VerifiedUser,
     editor: ProfileEditorDep,
     profiles: ProfileServiceDep,
     avatar_links: AvatarLinkBuilderDep,
@@ -342,7 +342,7 @@ async def get_my_privacy_settings(
 )
 async def update_my_privacy_settings(
     payload: PrivacySettingsUpdateRequest,
-    user: CurrentUser,
+    user: VerifiedUser,
     privacy: PrivacySettingsEditorDep,
 ) -> ApiResponse[PrivacySettingsResponse]:
     """Applies a partial update to the authenticated account's privacy
@@ -510,7 +510,7 @@ async def get_my_preferences(
 )
 async def update_my_preferences(
     payload: PreferencesUpdateRequest,
-    user: CurrentUser,
+    user: VerifiedUser,
     preferences: PreferencesEditorDep,
 ) -> ApiResponse[PreferencesResponse]:
     """Applies a partial update to the authenticated account's preferences.

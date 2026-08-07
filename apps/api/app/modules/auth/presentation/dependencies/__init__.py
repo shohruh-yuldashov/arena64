@@ -87,6 +87,10 @@ from app.modules.auth.presentation.dependencies.current_user import (
     get_current_user_optional,
     get_token_validator,
 )
+from app.modules.auth.presentation.dependencies.verified_user import (
+    VerifiedUser,
+    require_verified_email,
+)
 from app.modules.users.application.services import UserService
 from app.modules.users.application.services.email_verification_writer import (
     EmailVerificationWriter,
@@ -440,6 +444,8 @@ __all__ = [
     "EmailVerifierDep",
     "Clock",
     "CurrentUser",
+    "VerifiedUser",
+    "require_verified_email",
     "OptionalCurrentUser",
     "RequireAuthentication",
     "PasswordHasherDep",

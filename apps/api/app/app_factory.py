@@ -125,10 +125,6 @@ from app.modules.notifications.application.services.tournament_notification_disp
 from app.modules.notifications.application.services.tournament_notification_dispatcher import (
     SUBSCRIBED_EVENT_TYPES as TOURNAMENT_NOTIFICATION_EVENTS,
 )
-from app.modules.notifications.domain.preference import (
-    ChannelAvailability,
-    DeliveryChannel,
-)
 from app.modules.notifications.infrastructure import (
     CompositeNotificationSink,
     LoggingNotificationSink,
@@ -145,6 +141,8 @@ from app.modules.notifications.presentation.dependencies import (
     build_game_notification_dispatcher,
     build_social_notification_dispatcher,
     build_tournament_notification_dispatcher,
+    channel_availability_for,
+    email_channel_available,
 )
 from app.modules.profiles.presentation.dependencies import build_profile_renderer
 from app.modules.rating.application.services.match_completion_consumer import (
@@ -473,10 +471,7 @@ def build_outbox_worker(
     # see `DurableNotificationWriter.store`. Read once here rather than per
     # tick, because it is a configuration reading and cannot change under a
     # running process.
-    channel_availability = ChannelAvailability.of(
-        DeliveryChannel.IN_APP,
-        *([DeliveryChannel.EMAIL] if settings.notification_email.enabled else []),
-    )
+    channel_availability = channel_availability_for(settings)
 
     clock = SystemClock()
 
@@ -1011,11 +1006,8 @@ def build_task_schedulers(
     # transport holds no session and the availability is a configuration
     # reading, and constructing either per pass would put the console
     # provider's production guard on a timer instead of at boot.
-    email_provider = build_email_provider(settings.environment)
-    channel_availability = ChannelAvailability.of(
-        DeliveryChannel.IN_APP,
-        *([DeliveryChannel.EMAIL] if settings.notification_email.enabled else []),
-    )
+    email_provider = build_email_provider(settings.environment, settings.email)
+    channel_availability = channel_availability_for(settings)
 
     if settings.outbox.retention_enabled:
         handlers.append(
@@ -1215,7 +1207,7 @@ def build_task_schedulers(
     # channel and deliberately chose no vendor, so a deployment that has not
     # configured one runs without this task and reports email unavailable in
     # Settings. See `NotificationEmailSettings`.
-    if settings.notification_email.enabled:
+    if email_channel_available(settings):
         handlers.append(
             NotificationEmailDeliveryTask(
                 session_factory=db.session_factory,
@@ -1226,6 +1218,7 @@ def build_task_schedulers(
                     clock=clock,
                     availability=channel_availability,
                     settings=settings.notification_email,
+                    public_url=settings.app.public_url,
                 ),
             )
         )
@@ -1267,7 +1260,7 @@ def build_task_schedulers(
                 interval_seconds=settings.game.clock_interval_seconds,
             )
         )
-    if settings.notification_email.enabled:
+    if email_channel_available(settings):
         schedulers.append(
             PeriodicTaskScheduler(
                 dispatcher=dispatcher,

@@ -310,17 +310,24 @@ EmailVerifierDep = Annotated[EmailVerifier, Depends(get_email_verifier)]
 def get_email_provider(settings: SettingsDep) -> EmailProvider:
     """This request's transport — A64-021.5 moved the choice.
 
-    Delegates to `platform.email.build_email_provider`, which is now the one
+    Delegates to `platform.email.build_email_provider`, which is the one
     place the provider is selected. `notifications`' email worker holds the
     same transport, and two selection points would be two sender identities
     and two places a credential is configured.
 
+    **Verification and reset mail therefore go through Resend** in any
+    process configured with `RESEND_API_KEY`, and this file did not have to
+    know that. Nothing about the two services changed: not the token
+    semantics, not the expiry, not the responses — only which class the port
+    resolves to.
+
     The startup guard is unchanged and still lands here for HTTP callers:
-    `ConsoleEmailProvider` refuses to construct in a production-like
-    environment, so a deployed tier without a real provider fails visibly at
-    boot rather than by silently sending nobody anything (DI-06).
+    without a credential this returns `ConsoleEmailProvider`, which refuses
+    to construct in a production-like environment, so a deployed tier without
+    a transport fails visibly at boot rather than by silently sending nobody
+    anything (DI-06).
     """
-    return build_email_provider(settings.environment)
+    return build_email_provider(settings.environment, settings.email)
 
 
 EmailProviderDep = Annotated[EmailProvider, Depends(get_email_provider)]

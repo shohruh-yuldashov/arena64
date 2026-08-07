@@ -59,7 +59,7 @@ from app.modules.notifications.domain.email_delivery import (
 from app.modules.notifications.domain.preference import ChannelAvailability, DeliveryChannel
 from app.modules.notifications.domain.record import CATEGORY_OF, NotificationRecord
 from app.modules.users.public import EmailRecipient, EmailRecipientDirectory
-from app.platform.email import EmailMessage, EmailProvider
+from app.platform.email import EmailMessage, EmailProvider, PermanentEmailFailure
 from app.platform.metrics import MetricsRecorder
 
 logger = logging.getLogger(__name__)
@@ -79,25 +79,6 @@ NOTIFICATION_EMAIL_DELIVERIES: Final = "notifications.email.deliveries"
 #: of making it. Ten minutes is far outside that and far inside "nobody
 #: noticed for an hour", which is the window this exists to close.
 STALE_CLAIM_AFTER: Final = timedelta(minutes=10)
-
-
-class RetryableEmailFailure(Exception):
-    """A provider fault that may not recur — §11.
-
-    Raised by an adapter, never constructed here. The classification is the
-    *adapter's* job because only it can read a vendor's status code, and
-    putting it there is what keeps this service free of provider vocabulary.
-
-    Anything an adapter does not classify reaches this service as a plain
-    exception and is treated as retryable: an unknown fault is more likely
-    transient than permanent, and the attempt limit bounds the cost of being
-    wrong.
-    """
-
-
-class PermanentEmailFailure(Exception):
-    """A provider fault that will recur — a malformed address, a rejected
-    sender. Retrying is asking the same question and being told no again."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,12 +276,24 @@ class EmailDeliveryService:
             return EmailDeliveryOutcome.SKIPPED_UNSUPPORTED_TYPE, None
 
         try:
-            await self._provider.send(
+            message_id = await self._provider.send(
                 EmailMessage(
                     to=recipient.email,
                     subject=rendered.subject,
                     text_body=rendered.text_body,
                     html_body=rendered.html_body,
+                    # **The notification's own id**, which is the delivery
+                    # row's key. Deterministic across retries by
+                    # construction, so a provider that deduplicates on it
+                    # recognises the one case this platform's table cannot
+                    # cover: a request that timed out *after* it was
+                    # accepted. The row is retried — correctly, since nothing
+                    # knows it arrived — and the second request sends no
+                    # second copy.
+                    #
+                    # Safe in a header: it is an identifier the recipient
+                    # already holds on their own notification, not a secret.
+                    idempotency_key=str(record.id),
                 )
             )
         except PermanentEmailFailure:
@@ -321,7 +314,7 @@ class EmailDeliveryService:
             )
             return EmailDeliveryOutcome.RETRYABLE_FAILURE, None
 
-        return EmailDeliveryOutcome.DELIVERED, None
+        return EmailDeliveryOutcome.DELIVERED, message_id
 
     async def _resolve(
         self,
@@ -392,7 +385,5 @@ __all__ = [
     "STALE_CLAIM_AFTER",
     "EmailDeliveryPass",
     "EmailDeliveryService",
-    "PermanentEmailFailure",
-    "RetryableEmailFailure",
     "deliveries_for",
 ]

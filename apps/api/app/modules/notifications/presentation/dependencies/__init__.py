@@ -39,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import ClockDep, DbSessionDep, PresenceSettingsDep, SettingsDep
 from app.api.outbox_deps import EventPublisherDep
-from app.config.settings import NotificationEmailSettings
+from app.config.settings import NotificationEmailSettings, Settings
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.friends.application.ports import SocialGraphCache
@@ -91,14 +91,28 @@ from app.modules.users.infrastructure.repositories.email_recipient_directory imp
     SqlAlchemyEmailRecipientDirectory,
 )
 from app.modules.users.presentation.dependencies import PresenceServiceDep
-from app.platform.email import EmailProvider
+from app.platform.email import EmailProvider, can_deliver_email
 from app.platform.metrics import MetricsRecorder
 from app.platform.outbox import NoEventPublisher
 
 logger = logging.getLogger(__name__)
 
 
-def get_channel_availability(settings: SettingsDep) -> ChannelAvailability:
+def email_channel_available(settings: Settings) -> bool:
+    """Whether this process can put a notification email in an inbox.
+
+    **Two conditions, and one place that composes them.** A transport —
+    `RESEND_API_KEY`, read through `platform.email.can_deliver_email`, the
+    same value that decides which provider is built — and the operational
+    kill switch on `NotificationEmailSettings`. Composing them here rather
+    than at each of the four call sites is what stops a settings screen and a
+    delivery worker disagreeing about whether email works, which is the
+    failure §5 and §26 both name.
+    """
+    return settings.notification_email.enabled and can_deliver_email(settings.email)
+
+
+def channel_availability_for(settings: Settings) -> ChannelAvailability:
     """What this **process** can deliver on — A64-021.5 §26.
 
     Derived from configuration rather than from a constant, and that is the
@@ -106,15 +120,18 @@ def get_channel_availability(settings: SettingsDep) -> ChannelAvailability:
     deployment wired, not about the build. A settings screen told otherwise
     would be offering a switch nothing honours.
 
-    `NOTIFICATION_EMAIL_ENABLED` is off by default. A64-021.5 built the
-    channel and deliberately chose no vendor — see `NotificationEmailSettings`
-    — so a deployment that has not configured one reports email unavailable
-    and the screen keeps saying "coming soon", which is true.
+    A plain function, not a `Depends`: the background composition needs the
+    same value and has no request to resolve against.
     """
     channels = [DeliveryChannel.IN_APP]
-    if settings.notification_email.enabled:
+    if email_channel_available(settings):
         channels.append(DeliveryChannel.EMAIL)
     return ChannelAvailability.of(*channels)
+
+
+def get_channel_availability(settings: SettingsDep) -> ChannelAvailability:
+    """The same value, for a request."""
+    return channel_availability_for(settings)
 
 
 ChannelAvailabilityDep = Annotated[ChannelAvailability, Depends(get_channel_availability)]
@@ -275,6 +292,7 @@ def build_email_delivery_service(
     clock: Clock,
     availability: ChannelAvailability,
     settings: NotificationEmailSettings,
+    public_url: str,
 ) -> EmailDeliveryService:
     """The email worker's service, over one pass's session — A64-021.5 §24.
 
@@ -297,7 +315,11 @@ def build_email_delivery_service(
                 session, availability=availability
             )
         ),
-        renderer=TemplateEmailRenderer(public_origin=settings.public_origin),
+        # The **canonical** frontend origin — `PUBLIC_APP_URL` on
+        # `AppSettings`, not a second copy on this module's settings. Three
+        # settings holding the same host is three chances for an email to
+        # link a player into the wrong tier.
+        renderer=TemplateEmailRenderer(public_origin=public_url),
         provider=provider,
         metrics=metrics,
         unit_of_work=SessionUnitOfWork(session),
@@ -392,6 +414,8 @@ __all__ = [
     "NotificationServiceDep",
     "PresenceNotificationServiceDep",
     "ChannelAvailabilityDep",
+    "channel_availability_for",
+    "email_channel_available",
     "build_durable_notification_writer",
     "build_email_delivery_reader",
     "build_email_delivery_service",

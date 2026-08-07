@@ -38,12 +38,36 @@ import { Button, Skeleton } from "@/shared/ui";
  * every other authenticated page, which is where a challenge acceptance
  * needed it.
  *
+ * ## Why this page still navigates, when the shell also does — A64-022.7 §11
+ *
+ * Two owners, and they are kept because they fire on **different triggers**
+ * rather than because they happen to agree on a URL:
+ *
+ *     MatchOfferSurface   "an offer I showed became active" — the handoff,
+ *                         wherever the player is
+ *     PlayPage            "the lobby's derived state is transitioning" —
+ *                         which is true on a **reload** of this page with a
+ *                         match already active
+ *
+ * The second case is the one the shell deliberately declines, and it must:
+ * `pending_for` reports an active match with no time window, so a shell
+ * that navigated on it would drag a player out of `/profile` for the whole
+ * duration of a game. Here it is correct — reloading the lobby mid-handoff
+ * should land on the board, which is this page's documented recovery.
+ *
+ * Unifying them would mean the shell checking which route it is on, which
+ * is worse than two guarded effects that target the same place.
+ *
  * ## Navigation happens once, and in an effect
  *
  * Two rules, and the second is the one that bites. `navigated` guards
  * against a double handoff — both the accept response and the derived
  * `transitioning` state can produce one, and a route change dispatched
  * twice is a lost history entry at best.
+ *
+ * A boolean is right **here** and was wrong in the shell: this page unmounts
+ * on the way to the board and remounts with a fresh ref, where `AppShell`
+ * never unmounts — see `MatchOfferSurface.handedOff`.
  *
  * And it runs in an effect rather than during render. Navigating while
  * rendering asks the router to change state in the middle of React's

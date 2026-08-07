@@ -83,7 +83,7 @@ export default defineConfig({
   // while development works fine.
   server: {
     proxy: API_PROXY,
-    allowedHosts: ["shohruh-yuldashov.jprq.live"],
+    allowedHosts: ["beatles-share-iowa-attached.trycloudflare.com"],
   },
   preview: { proxy: API_PROXY },
   resolve: {

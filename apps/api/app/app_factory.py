@@ -63,6 +63,9 @@ from app.modules.matchmaking.application.services import (
     QueueRetentionService,
     QueueService,
 )
+from app.modules.matchmaking.application.services.challenge_expiry_service import (
+    ChallengeExpiryService,
+)
 from app.modules.matchmaking.application.services.match_outcome_service import (
     CONSUMER_NAME as ACCEPTANCE_FAILURE_CONSUMER,
 )
@@ -83,17 +86,20 @@ from app.modules.matchmaking.application.services.reconciliation_timeline_servic
 )
 from app.modules.matchmaking.domain.queue_pool import every_pool
 from app.modules.matchmaking.infrastructure import (
+    ChallengeExpiryTask,
     LoggingPendingMatchSink,
     PairingReconciliationTask,
     PairingTask,
     QueueExpiryTask,
     QueueRetentionTask,
+    challenge_expiry_request,
     expiry_request,
     pairing_request,
     queue_retention_request,
     reconciliation_request,
 )
 from app.modules.matchmaking.presentation.dependencies import (
+    build_challenge_expiry_service,
     build_eligibility_policy,
     build_match_acceptance,
     build_match_creation,
@@ -1149,6 +1155,25 @@ def build_task_schedulers(
         # in cache.
         logger.warning("queue_retention_disabled", extra={"reason": "configuration"})
 
+    # A64-022.6 §2. The friend challenge expiry sweep — the job that finally
+    # writes down a transition the read predicates have been assuming since
+    # A64-022.1. Its own switch, like every sweep here, so one tier runs it
+    # and the API tier does not.
+    if settings.matchmaking.challenge_expiry_enabled:
+        handlers.append(
+            ChallengeExpiryTask(
+                session_factory=db.session_factory,
+                service_factory=lambda session: _challenge_expiry_for(session, settings, clock),
+            )
+        )
+    else:
+        # `INFO`, not `WARNING`, and the difference from the retention
+        # switch above is what stops happening. Retention off means a table
+        # grows without bound; this off means challenges stay `pending` past
+        # their window — invisible to every read and unanswerable either
+        # way. A loss of record, not of rule (§2).
+        logger.info("challenge_expiry_disabled", extra={"reason": "configuration"})
+
     # A64-016.5 §6, AD-21. The clock is adjudicated by a worker against
     # Redis rather than by in-process timers, because a timer lives on one
     # node and a node that is deployed takes every timer it held with it —
@@ -1424,6 +1449,14 @@ def build_task_schedulers(
                 interval_seconds=settings.matchmaking.retention_interval_seconds,
             )
         )
+    if settings.matchmaking.challenge_expiry_enabled:
+        schedulers.append(
+            PeriodicTaskScheduler(
+                dispatcher=dispatcher,
+                request=challenge_expiry_request(),
+                interval_seconds=settings.matchmaking.challenge_expiry_interval_seconds,
+            )
+        )
     if settings.matchmaking.reconciliation_enabled:
         # **One scheduler, not one per pool.** A stranded reservation is a
         # stranded reservation whatever pool produced it, and the claim that
@@ -1586,6 +1619,21 @@ def _queue_retention_for(
     """One retention run's object graph — A64-015.5 §8."""
     return build_queue_retention_service(
         session, settings=settings.matchmaking, clock=clock, metrics=_metrics()
+    )
+
+
+def _challenge_expiry_for(
+    session: AsyncSession, settings: Settings, clock: SystemClock
+) -> ChallengeExpiryService:
+    """One friend challenge expiry sweep's object graph — A64-022.6 §2."""
+    return build_challenge_expiry_service(
+        session,
+        settings=settings.matchmaking,
+        clock=clock,
+        metrics=_metrics(),
+        # The outbox over the same session as the repository, so the
+        # transition and the event announcing it commit together (AD-16).
+        events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
     )
 
 

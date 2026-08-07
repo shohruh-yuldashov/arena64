@@ -17,6 +17,12 @@ and A64-015.6 adds one more, an operator-facing projection:
 
     ReconciliationTimelineProjector  what recovery did to a ticket (§4)
 
+A64-022.6 adds the eighth, and it is a job rather than a use case for the
+same reason the three above are:
+
+    ChallengeExpiryService   writing down the friend challenge expiries the
+                             read predicates have been assuming (§2)
+
 Six classes rather than methods on one, exactly as A64-015.1 predicted:
 what differs is the capability, and a service that could queue a player,
 create a match on their behalf, rewrite a reservation's outcome, bar them
@@ -25,6 +31,10 @@ of all five. `QueueService` reaches the HTTP layer; the other five never do
 — their callers are background tasks and outbox consumers.
 """
 
+from app.modules.matchmaking.application.services.challenge_expiry_service import (
+    ChallengeExpiryService,
+    ChallengeExpirySweep,
+)
 from app.modules.matchmaking.application.services.match_outcome_service import (
     MatchOutcomeService,
 )
@@ -54,6 +64,8 @@ from app.modules.matchmaking.application.services.reconciliation_timeline_servic
 )
 
 __all__ = [
+    "ChallengeExpiryService",
+    "ChallengeExpirySweep",
     "ExpirySweep",
     "MatchOutcomeService",
     "PairingOutcome",

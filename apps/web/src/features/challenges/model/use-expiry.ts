@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * How long a challenge has left, coarsely — A64-022.5 §3, §10, §16.
@@ -26,6 +26,15 @@ import { useEffect, useState } from "react";
  *
  * `expired` is therefore a *display* state. The Accept button is disabled
  * on it as a courtesy; the server is what refuses the answer.
+ *
+ * ## Reaching zero asks a question — A64-022.6 §11
+ *
+ * `onExpired` fires **once**, when the local clock crosses the deadline,
+ * and what a caller does with it is invalidate a query. That is the whole
+ * of the improvement: the row stops waiting for the next navigation to
+ * disappear, and the client still decides nothing — the refetch is what
+ * removes it, because the server is the only thing that knows whether the
+ * sweep has run or somebody answered in the last second.
  */
 export interface Expiry {
   /** Whole minutes remaining, floored at zero. */
@@ -36,14 +45,21 @@ export interface Expiry {
 
 const MINUTE_MS = 60_000;
 
-export function useExpiry(deadline: string): Expiry {
+export function useExpiry(deadline: string, onExpired?: () => void): Expiry {
   const target = Date.parse(deadline);
   const [now, setNow] = useState(() => Date.now());
+
+  // Held in a ref so a caller may pass an inline closure without
+  // rescheduling the timer on every render — the deadline is the only
+  // thing the schedule depends on.
+  const expired = useRef(onExpired);
+  expired.current = onExpired;
 
   useEffect(() => {
     if (Number.isNaN(target)) return;
 
     let timer: ReturnType<typeof setTimeout>;
+    let asked = false;
 
     // Each tick is scheduled for the instant the displayed minute should
     // next change, computed from the deadline itself, so error does not
@@ -52,7 +68,21 @@ export function useExpiry(deadline: string): Expiry {
     const schedule = () => {
       const current = Date.now();
       setNow(current);
-      if (current >= target) return;
+      if (current >= target) {
+        // **Once, and it asks rather than concludes** — A64-022.6 §11.
+        // The callback's job is to invalidate a query; the server then
+        // says whether the challenge is still there. Nothing here marks
+        // a row expired, and a device whose clock is fast simply asks
+        // the question early.
+        //
+        // Guarded so a re-render cannot turn 'the window closed' into a
+        // refetch loop: the effect reschedules only on a new deadline.
+        if (!asked) {
+          asked = true;
+          expired.current?.();
+        }
+        return;
+      }
       const untilNextMinuteBoundary = (target - current) % MINUTE_MS || MINUTE_MS;
       timer = setTimeout(schedule, untilNextMinuteBoundary);
     };

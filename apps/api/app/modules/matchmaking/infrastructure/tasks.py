@@ -53,6 +53,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.modules.matchmaking.application.services import (
+    ChallengeExpiryService,
     PairingReconciliationService,
     PairingService,
     QueueRetentionService,
@@ -367,3 +368,70 @@ class QueueRetentionTask:
         """
         async with self._session_factory() as session:
             await self._service_factory(session).prune_once()
+
+
+#: The name a friend challenge expiry sweep is dispatched under — A64-022.6 §2.
+CHALLENGE_EXPIRY_TASK = "matchmaking.challenge.expire"
+
+#: What the composition root supplies: an expiry service over one session.
+ChallengeExpiryServiceFactory = Callable[[AsyncSession], ChallengeExpiryService]
+
+
+def challenge_expiry_request() -> TaskRequest:
+    """The request that asks for one challenge expiry sweep.
+
+    Routed to `maintenance`, not `matchmaking`, and the split is the one
+    `QUEUE_RETENTION_TASK` already draws. AD-20 separates work by what a
+    delay costs: a queue expiry that falls behind leaves players holding
+    tickets the platform has stopped honouring, where a late challenge
+    expiry is a *record* written a minute later than it might have been.
+    Nothing waits on it — the recipient already cannot answer an overdue
+    challenge and already cannot see it.
+
+    An empty payload, for the reason every request in this file carries
+    none: the batch size is configuration and the instant is the service's
+    clock. A request carrying a cutoff would let a stale schedule sweep
+    against yesterday's, which on this job means expiring challenges that
+    are still live.
+    """
+    return TaskRequest(name=CHALLENGE_EXPIRY_TASK, queue=MAINTENANCE_QUEUE)
+
+
+class ChallengeExpiryTask:
+    """`platform.tasks.TaskHandler` — one challenge sweep, over one session.
+
+    The same shape as the four handlers above and the same division: the
+    *schedule* is `PeriodicTaskScheduler`'s, the *routing* is the
+    dispatcher's, and what is left here is "build a service over a session
+    and call one method".
+
+    ## Duplicate delivery is safe
+
+    AD-17's contract is at-least-once, so this will occasionally run twice
+    for one scheduled tick. The second run's claim excludes every row the
+    first moved — `claim_expired`'s predicate is `status = 'pending'` — so
+    it finds an empty batch, transitions nothing and publishes nothing.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        service_factory: ChallengeExpiryServiceFactory,
+    ) -> None:
+        self._session_factory = session_factory
+        self._service_factory = service_factory
+
+    @property
+    def name(self) -> str:
+        return CHALLENGE_EXPIRY_TASK
+
+    async def run(self, payload: Mapping[str, Any]) -> None:
+        """Ignores the payload — see `challenge_expiry_request`.
+
+        Does not catch: `ChallengeExpiryService.expire_due` records its own
+        failures and never raises, so a `try` here would be a second swallow
+        with nothing left to swallow.
+        """
+        async with self._session_factory() as session:
+            await self._service_factory(session).expire_due()

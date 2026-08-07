@@ -114,6 +114,101 @@ class SqlAlchemyChallengeRepository:
         if not result.rowcount:
             raise ConflictError("This challenge has already been answered.")
 
+    async def claim_expired(self, *, now: datetime, limit: int) -> Sequence[Challenge]:
+        """Takes up to `limit` overdue challenges for this worker —
+        A64-022.6 §2, §3.
+
+        `SELECT ... FOR UPDATE SKIP LOCKED`, the same mechanism the queue's
+        `claim_due` uses and the one the outbox proved. Nothing new is
+        invented here, which is the point: §3 forbids a process-local mutex,
+        and a second sweeper polling mid-batch must *skip* these rows rather
+        than wait behind them.
+
+        "Overdue" is two conditions, and each excludes a different row:
+
+            status = 'pending'   not already answered — a challenge somebody
+                                 declined a second ago must not be expired
+                                 on top of their decline
+            expires_at <= now    the window has actually closed
+
+        Ordered by `expires_at` so a backlog drains in deadline order, which
+        is what makes each `FriendChallengeExpired` event's `occurred_at`
+        agree with the order the relay publishes them in. Served by
+        `ix_friend_challenge__expiring`, whose predicate matches the first
+        condition exactly — so the scan touches only what could still
+        expire, never the answered history the table accumulates.
+
+        **Claiming is not a transition.** The rows come back `PENDING` and
+        stay that way until `expire` runs; the lock is what excludes another
+        worker, and it lasts as long as the caller's transaction. A worker
+        that dies here leaves challenges the next sweep claims again.
+
+        There is no `claimed_by` column and deliberately so: correctness is
+        `SKIP LOCKED`'s, not a marker's, and a column recording who *tried*
+        would need its own staleness rule.
+        """
+        overdue = (
+            select(FriendChallengeModel.id)
+            .where(
+                FriendChallengeModel.status == ChallengeStatus.PENDING.value,
+                FriendChallengeModel.expires_at <= now,
+            )
+            .order_by(FriendChallengeModel.expires_at, FriendChallengeModel.id)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+
+        claimed_ids = list((await self._session.scalars(overdue)).all())
+        if not claimed_ids:
+            return ()
+
+        rows = await self._session.scalars(
+            select(FriendChallengeModel).where(FriendChallengeModel.id.in_(claimed_ids))
+        )
+        return [_to_domain(row) for row in rows.all()]
+
+    async def expire(
+        self, challenge_ids: Sequence[uuid.UUID], *, at: datetime
+    ) -> frozenset[uuid.UUID]:
+        """Settles a whole claimed batch in **one** statement. Returns the
+        ids that actually moved — A64-022.6 §4, §16.
+
+        One `UPDATE` whatever the batch size, which is what keeps a sweep
+        of two hundred at one round trip rather than two hundred. The
+        per-row alternative is the N+1 §16 forbids, and it is invisible in
+        any test with one challenge.
+
+        `status = 'pending'` in the predicate as well as the id list, so a
+        challenge answered between this worker's claim and its commit is
+        **not** re-stamped as expired. That is §5's race resolved by the
+        database rather than by a clock.
+
+        **`RETURNING id`, not a row count**, and the difference is the whole
+        point of §4: the caller publishes one `FriendChallengeExpired` per
+        id this returns, so a challenge that was accepted a millisecond
+        earlier produces no expiry event at all. A count would tell the
+        caller *how many* moved and not *which*, and it would then have to
+        either publish for everything it claimed — announcing the expiry of
+        a challenge that was accepted — or publish for nothing.
+
+        Only the two columns an expiry may write. `created_match_id` is
+        untouched, which is what makes "expired with a match" unreachable
+        from here — see §19.
+        """
+        if not challenge_ids:
+            return frozenset()
+
+        moved = await self._session.scalars(
+            update(FriendChallengeModel)
+            .where(
+                FriendChallengeModel.id.in_(challenge_ids),
+                FriendChallengeModel.status == ChallengeStatus.PENDING.value,
+            )
+            .values(status=ChallengeStatus.EXPIRED.value, responded_at=at)
+            .returning(FriendChallengeModel.id)
+        )
+        return frozenset(moved.all())
+
     async def list_for_party(
         self,
         party_id: uuid.UUID,

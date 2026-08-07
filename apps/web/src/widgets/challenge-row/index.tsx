@@ -48,14 +48,23 @@ export function ChallengeRow({
   challenge,
   controls,
   actions,
+  onExpired,
 }: {
   challenge: Challenge;
   /** The catalogue, for the clock. Absent while it loads. */
   controls: readonly TimeControl[] | undefined;
   actions: ChallengeActionSet;
+  /**
+   * The local countdown crossed the deadline — A64-022.6 §11.
+   *
+   * A request to **re-read**, not a statement that the challenge is gone.
+   * The page invalidates and the server answers; a device whose clock is a
+   * minute fast asks early and is told the row is still there.
+   */
+  onExpired?: () => void;
 }) {
   const { t, locale } = useTranslation();
-  const expiry = useExpiry(challenge.expires_at);
+  const expiry = useExpiry(challenge.expires_at, onExpired);
 
   const control = controls?.find((entry) => entry.id === challenge.time_control_id);
   const clock = control ? formatTimeControl(control, locale) : challenge.time_control_id;

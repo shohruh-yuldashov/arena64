@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef } from "react";
 
 import { matchOf } from "@/entities/queue";
 import { useLobbyState } from "@/features/matchmaking/model/lobby-state";
-import { MatchOfferDialog } from "@/features/matchmaking/ui/match-offer-dialog";
 import { QueueForm } from "@/features/matchmaking/ui/queue-form";
 import { WaitingCard } from "@/features/matchmaking/ui/waiting-card";
 import { useTranslation } from "@/shared/i18n";
@@ -32,6 +31,12 @@ import { Button, Skeleton } from "@/shared/ui";
  * whatever the queue says. That is deliberate: when the offer resolves —
  * declined, expired, or the opponent vanished — the player is left looking
  * at the real state rather than at a blank page waiting for a refetch.
+ *
+ * **A64-022.6 §13 moved the dialog itself to `AppShell`**, which changes
+ * nothing about that: it still renders over this page and this page still
+ * shows the queue behind it. What changed is that it now also renders over
+ * every other authenticated page, which is where a challenge acceptance
+ * needed it.
  *
  * ## Navigation happens once, and in an effect
  *
@@ -102,17 +107,12 @@ export default function PlayPage() {
         <QueueForm disabled={match !== null} />
       )}
 
-      {match !== null && (
-        <MatchOfferDialog
-          // Keyed by the match, so a second offer after a decline mounts a
-          // fresh dialog rather than reusing one whose countdown is running
-          // against the previous deadline.
-          key={match.match_id}
-          match={match}
-          onExpired={lobby.refetch}
-          onAccepted={goToGame}
-        />
-      )}
+      {/* The offer dialog is **not** rendered here — A64-022.6 §13.
+          `AppShell` owns the one instance in the app, so a player paired
+          while reading a profile sees it too. This page still derives
+          `match` for its own state: the form is disabled while an offer is
+          open, and the transitioning navigation below is this page's
+          documented reload recovery. */}
     </section>
   );
 }

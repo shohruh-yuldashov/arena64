@@ -41,6 +41,22 @@ const VIEWER = {
 const RIVAL_ID = "019fb9ea-0a0c-7cec-9c5f-402727c31b01";
 
 const envelope = <T,>(data: T) => ({ data, meta: { request_id: null, correlation_id: null } });
+
+/** A deadline the local clock crosses while the page is mounted. */
+const soon = () => new Date(Date.now() + 400).toISOString();
+
+/** What `/profile` needs to render, and nothing more. */
+const PROFILE = {
+  ...VIEWER,
+  avatar_url: null,
+  thumbnail_url: null,
+  country: null,
+  language: "uz",
+  bio: null,
+  joined_at: "2026-01-01T10:00:00Z",
+  ratings: { classic: null, rapid: null, blitz: null },
+  statistics: null,
+};
 const cursorPage = <T,>(items: T[]) =>
   envelope({ items, page: { next_cursor: null, has_more: false } });
 
@@ -458,4 +474,114 @@ it("navigates from a challenge notification to the challenge list", async () => 
 
   const list = await screen.findByRole("list", { name: /notifications/i });
   expect(within(list).getByRole("link")).toHaveAttribute("href", "/challenges");
+});
+
+it("re-reads the lists when a row's countdown reaches zero", async () => {
+  // A64-022.6 §11, §22.8. The countdown **asks**; the server answers.
+  //
+  // The row is served with a deadline a moment away, so the local clock
+  // crosses it while the page is mounted. What must happen is a refetch —
+  // and what must *not* is the client deciding the challenge is gone: the
+  // second read is what removes it, which is why the backend stops serving
+  // it between the two.
+  const state = backend({ incoming: [challenge({ expires_at: soon() })] });
+  signedIn(state);
+  renderApp({ path: "/challenges" });
+
+  expect(await screen.findByText(/Rival/)).toBeVisible();
+  const before = state.incomingReads;
+
+  // The sweep has since run, so the authoritative read no longer has it.
+  state.incoming = [];
+
+  await waitFor(() => expect(state.incomingReads).toBeGreaterThan(before), { timeout: 3000 });
+  expect(await screen.findByText(/no challenges waiting/i)).toBeVisible();
+});
+
+it("reloads to whatever the server currently says", async () => {
+  // §12, §22.9. No `localStorage`, no client-held challenge state: a fresh
+  // mount runs the same read a first visit does, so a challenge answered on
+  // another device is simply absent.
+  const state = backend({ incoming: [challenge()] });
+  signedIn(state);
+  const first = renderApp({ path: "/challenges" });
+  expect(await screen.findByText(/Rival/)).toBeVisible();
+  first.unmount();
+
+  // Accepted elsewhere between the two mounts.
+  state.incoming = [];
+  renderApp({ path: "/challenges" });
+
+  expect(await screen.findByText(/no challenges waiting/i)).toBeVisible();
+});
+
+it("offers a pending match from a page that is not the lobby", async () => {
+  // §13, §22.10 — the global handoff, and the reason it was worth moving.
+  //
+  // `/profile` mounts no matchmaking code of its own. Before A64-022.6 a
+  // challenger reading it would learn nothing about a game they had a
+  // ten-minute window to join; now `AppShell` renders the one offer dialog
+  // in the app and it reaches them anywhere.
+  const state = backend();
+  signedIn(state);
+  mswServer.use(
+    http.get(PENDING, () =>
+      HttpResponse.json(
+        envelope({
+          match_id: MATCH_ID,
+          status: "pending_acceptance",
+          you_accepted: false,
+          opponent: { player_id: RIVAL_ID, username: "rival", display_name: "Rival" },
+          rated: false,
+          speed_class: "blitz",
+          base_time_ms: 180_000,
+          increment_ms: 2_000,
+          acceptance_deadline: new Date(Date.now() + 30_000).toISOString(),
+        }),
+      ),
+    ),
+    http.get(url("/profile/me"), () => HttpResponse.json(envelope(PROFILE))),
+  );
+
+  renderApp({ path: "/profile" });
+
+  expect(await screen.findByRole("alertdialog")).toBeVisible();
+});
+
+it("does not drag a player into a game they are already playing", async () => {
+  // The hazard the §13 audit found, and the reason the shell does not
+  // navigate on `active` alone.
+  //
+  // `GET /matchmaking/matches/pending` reports an **active** match with no
+  // time window, so a player with a game in progress gets one on every
+  // page. A shell that navigated on it would make `/profile` unreachable
+  // for the whole match. It navigates only for a match it offered.
+  const state = backend();
+  signedIn(state);
+  mswServer.use(
+    http.get(PENDING, () =>
+      HttpResponse.json(
+        envelope({
+          match_id: MATCH_ID,
+          status: "active",
+          you_accepted: true,
+          opponent: { player_id: RIVAL_ID, username: "rival", display_name: "Rival" },
+          rated: false,
+          speed_class: "blitz",
+          base_time_ms: 180_000,
+          increment_ms: 2_000,
+          acceptance_deadline: new Date(Date.now() + 30_000).toISOString(),
+        }),
+      ),
+    ),
+    http.get(url("/profile/me"), () => HttpResponse.json(envelope(PROFILE))),
+  );
+
+  const { router } = renderApp({ path: "/profile" });
+
+  await waitFor(() => expect(state.incomingReads >= 0).toBe(true));
+  // Given time to misbehave, and it does not.
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  expect(router.state.location.pathname).toBe("/profile");
+  expect(screen.queryByRole("alertdialog")).toBeNull();
 });

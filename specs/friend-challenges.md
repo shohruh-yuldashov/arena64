@@ -2,9 +2,9 @@
 
 | | |
 | --- | --- |
-| **Status** | Domain and persistence — A64-022.1. No API, no UI, no realtime, no notification |
+| **Status** | Domain, persistence and HTTP API — A64-022.2. No UI, no realtime, no notification, no acceptance |
 | **Owner** | platform |
-| **Last updated** | 2026-08-07 — A64-022.1, domain and persistence |
+| **Last updated** | 2026-08-07 — A64-022.2, API and lifecycle events |
 | **Related** | `docs/01-architecture/domain-model.md` §10.3, `specs/matchmaking.md`, `specs/friends.md`, `specs/notifications.md` §15.15 |
 
 A **friend challenge** is a direct, named invitation: one player asking one
@@ -13,18 +13,19 @@ players signing out, and it resolves when the recipient answers.
 
 ## 1. Scope of A64-022.1
 
-Built: the aggregate, its invariants, its persistence, and the application
-commands that prove them.
+Built through A64-022.2: the aggregate, its invariants, its persistence, the
+application commands, the authenticated HTTP API, and the lifecycle events
+three later phases consume.
 
 **Not** built, and each is a later phase rather than an omission:
 
 | | Phase |
 | --- | --- |
-| HTTP API | A64-022.2 |
 | Acceptance and match creation | A64-022.3 |
-| Realtime frame and notification | A64-022.2 |
-| Frontend | A64-022.4 |
+| Realtime frame and notification | A64-022.4 |
+| Frontend | A64-022.5 |
 | Expiry sweep | A64-022.6 |
+| Terminal history endpoint | undecided — see §17 |
 
 ## 2. Where it lives, and why
 
@@ -304,7 +305,139 @@ so the singular use case costs the same query with a one-element `IN`. No
 cache — challenge state is durable product state, and `SocialGraphCache` is
 `friends`' own decorator rather than a cache of challenges.
 
-## 16. Deferred
+## 16. HTTP API — A64-022.2
+
+| Route | Auth | Limit |
+| --- | --- | --- |
+| `POST /challenges` | `VerifiedUser` | `challenge_create_user`, 20/hour |
+| `GET /challenges/incoming` | `CurrentUser` | none |
+| `GET /challenges/outgoing` | `CurrentUser` | none |
+| `GET /challenges/{id}` | `CurrentUser` | none |
+| `POST /challenges/{id}/decline` | `VerifiedUser` | `challenge_respond_user`, 60/5min |
+| `DELETE /challenges/{id}` | `VerifiedUser` | the same bucket |
+
+**There is no `POST /accept`**, and `ChallengeService` has no `accept`. See
+§3 and §17.
+
+### 16.1 Create
+
+Accepts exactly four fields — `recipient_id`, `time_control_id`, `variant`,
+`rated` — with `extra="forbid"`, so a body carrying `challenger_id`,
+`status`, `expires_at` or `created_match_id` is a `422` rather than a
+silently ignored field. The actor is the session's, always.
+
+### 16.2 Reading, and who may
+
+Every route is scoped to a party. A challenge between two other people is
+**`404`**, never `403`: an identifier that answered differently would be an
+existence oracle for a UUID somebody could otherwise probe.
+
+`403` is reserved for the two people who *are* parties and used the wrong
+verb — a challenger declining, a recipient cancelling. Both already know it
+exists, so hiding it would be a fiction rather than a protection.
+
+### 16.3 Lists are live-only
+
+Both lists return **pending, unexpired, still-permitted** challenges, newest
+first, keyset-paginated. A terminal challenge leaves them silently; the row
+is not deleted, and it stays readable by id — a client holding an identifier
+deserves to learn the invitation was declined rather than that it vanished.
+
+**There is deliberately no history endpoint.** Whether a player wants a log
+of past invitations is a product decision nobody has taken, and an unbounded
+one added quietly would be a list nobody designed.
+
+Expiry is applied **in the query**, so `limit` means what it says for that
+predicate. The relationship filter is applied **after** the page — see below.
+
+### 16.4 Unfriending and blocking after creation
+
+A live challenge disappears from both lists the moment the two stop being
+friends. Removing the friendship is the general test and covers blocking too,
+because a block also ends the friendship — which is why this module needs no
+notion of blocking and BL-2 is satisfied without one.
+
+This is a **visibility rule, not the security boundary**. The row is still
+stored and still readable by id, and acceptance re-checks the relationship in
+A64-022.3, so a stale invitation cannot become a game even if something
+failed to hide it. Persistence cleanup stays deferred to A64-022.6, and no
+new terminal state was invented for it.
+
+The filter runs in the application layer rather than the query because the
+friendship lives in another module's schema, and a join would be the
+cross-context reach DM-06 designs against. The consequence is stated on the
+endpoints: `limit` is an upper bound on a page, not a promise.
+
+### 16.5 Response
+
+The challenge's facts plus the **other party's** public profile, composed
+through `profiles`' batch directory — so it obeys exactly the privacy rules
+`GET /profiles/{username}` does, and this module re-derives none of them.
+
+One batch lookup per page. A page of twenty costs one challenge query and one
+profile batch, never twenty-one queries.
+
+A challenge whose counterpart has been deactivated is **omitted** from a list
+and **500s** on the singular read. The asymmetry is deliberate: a client that
+asked for one specific challenge deserves to know something is wrong, where a
+list that failed entirely because one row's counterpart withdrew would be a
+screen nobody can use.
+
+### 16.6 Errors
+
+| Code | HTTP | |
+| --- | --- | --- |
+| `challenge_self_not_allowed` | 422 | you named yourself |
+| `challenge_not_friends` | 422 | not friends **or** blocked — indistinguishable |
+| `challenge_invalid_time_control` | 422 | that clock is not offered |
+| `challenge_already_pending` | 409 | one is already live between you |
+| `challenge_not_pending` | 422 | already answered |
+| `challenge_expired` | 422 | too late |
+| `permission_denied` | 403 | a party, wrong verb |
+| `not_found` | 404 | no such challenge **of yours** |
+
+No SQL constraint name reaches a caller, and there is deliberately no
+`challenge_blocked` — see §4.
+
+### 16.7 Events
+
+Three of the four are published, each **inside the transaction that made the
+fact true** (AD-16), so a challenge that committed without its event cannot
+exist:
+
+    create   → matchmaking.friend_challenge_created
+    decline  → matchmaking.friend_challenge_declined
+    cancel   → matchmaking.friend_challenge_cancelled
+
+Only after a transition that actually happened: `save` raises on a row
+somebody else settled first, so a losing writer never reaches the publish and
+a duplicate decline emits no second event.
+
+`friend_challenge_expired` is published by the sweep that writes the terminal
+row (A64-022.6), not by `ChallengeService.expire` — emitting from both would
+announce one challenge twice.
+
+`occurred_at` is the aggregate's own timestamp, never a second clock read.
+
+### 16.8 Downstream seams
+
+**A64-022.4 notifications.** `friend_challenge_created` carries the challenge
+id, both player ids, the settings and `expires_at` — everything a
+`friend_challenge_received` notification needs, with no prose, no names and
+no channel-specific payload. A consumer that wants to say "Aziz challenged
+you" composes it through `profiles`, which owns names and knows whether the
+viewer may see one.
+
+**A64-022.4 realtime.** No gateway frame and no socket call from
+`matchmaking`. The relay already carries these events, and a consumer built
+beside `SocialNotificationDispatcher` reaches the existing gateway.
+
+**A64-022.3 match creation.** The seam is unchanged and now smaller: add
+`accept` to the aggregate and the service, create the match in the same
+transaction, write `created_match_id`, publish two events. No new table, no
+schema change — the column and the `CHECK` are already there.
+
+## 17. Deferred
 
 | | Notes |
 | --- | --- |

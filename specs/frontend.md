@@ -6,7 +6,7 @@
 | **Status** | Approved through A64-021.4 — foundation, authentication, profile, social, game, tournaments, PWA, notifications and their event coverage |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-07 — A64-021.4, notification event coverage |
+| **Last updated** | 2026-08-07 — A64-021.5H, email verification codes |
 | **Related ADRs** | [`ADR-002`](../docs/07-decisions/ADR-002-frontend-spa.md) |
 | **Related specs** | [`rating.md`](./rating.md), [`leaderboard.md`](./leaderboard.md), [`tournament.md`](./tournament.md) |
 | **Related** | `docs/01-architecture/architecture.md` §5, `docs/04-frontend/` |
@@ -90,26 +90,32 @@ TanStack Router, **code-based** (`src/app/router/routes.tsx`), not file-based.
 | `/` | `pages/home` | none |
 | `/login` | `pages/login` | `RequireAnonymous` |
 | `/register` | `pages/register` | `RequireAnonymous` |
-| `/verify-email?token=` | `pages/verify-email` | none — see below |
+| `/verify-email` | `pages/verify-email` | none — see below and §12.9 |
 | `/forgot-password` | `pages/forgot-password` | none |
 | `/reset-password?token=` | `pages/reset-password` | none — see below |
-| `/profile` | `pages/profile` | **`RequireAuth`** |
+| `/profile` | `pages/profile` | **`RequireAuth`** + `RequireVerifiedEmail` |
 | `/players/$username` | `pages/public-profile` | none — public |
-| `/settings/profile` | `pages/settings-profile` | `RequireAuth` |
-| `/settings/preferences` | `pages/settings-preferences` | `RequireAuth` |
-| `/settings/privacy` | `pages/settings-privacy` | `RequireAuth` |
-| `/settings/sessions` | `pages/settings-sessions` | `RequireAuth` |
-| `/friends` | `pages/friends` | `RequireAuth` |
-| `/friends/requests` | `pages/friend-requests` | `RequireAuth` |
-| `/friends/blocked` | `pages/blocked` | `RequireAuth` |
-| `/search` | `pages/search` | `RequireAuth` |
-| `/play` | `pages/play` | `RequireAuth` |
-| `/games/$matchId` | `pages/game-ready` | `RequireAuth` |
-| `/games/$matchId/replay` | `pages/replay` | `RequireAuth` |
-| `/games/history` | `pages/history` | `RequireAuth` |
-| `/tournaments` | `pages/tournaments` | `RequireAuth` — §19.1 |
-| `/tournaments/$tournamentId` | `pages/tournament` | `RequireAuth` — §19.1 |
+| `/settings/profile` | `pages/settings-profile` | `RequireAuth` + `RequireVerifiedEmail` |
+| `/settings/preferences` | `pages/settings-preferences` | `RequireAuth` + `RequireVerifiedEmail` |
+| `/settings/privacy` | `pages/settings-privacy` | `RequireAuth` + `RequireVerifiedEmail` |
+| `/settings/sessions` | `pages/settings-sessions` | `RequireAuth` + `RequireVerifiedEmail` |
+| `/friends` | `pages/friends` | `RequireAuth` + `RequireVerifiedEmail` |
+| `/friends/requests` | `pages/friend-requests` | `RequireAuth` + `RequireVerifiedEmail` |
+| `/friends/blocked` | `pages/blocked` | `RequireAuth` + `RequireVerifiedEmail` |
+| `/search` | `pages/search` | `RequireAuth` + `RequireVerifiedEmail` |
+| `/play` | `pages/play` | `RequireAuth` + `RequireVerifiedEmail` |
+| `/games/$matchId` | `pages/game-ready` | `RequireAuth` + `RequireVerifiedEmail` |
+| `/games/$matchId/replay` | `pages/replay` | `RequireAuth` + `RequireVerifiedEmail` |
+| `/games/history` | `pages/history` | `RequireAuth` + `RequireVerifiedEmail` |
+| `/tournaments` | `pages/tournaments` | `RequireAuth` + `RequireVerifiedEmail` — §19.1 |
+| `/tournaments/$tournamentId` | `pages/tournament` | `RequireAuth` + `RequireVerifiedEmail` — §19.1 |
 | *anything unmatched* | `pages/not-found` | The root route's `notFoundComponent` |
+
+Every guarded route carries **both** guards, `RequireVerifiedEmail` nested
+inside `RequireAuth` — A64-021.5H, §12.9. The order is the only one that
+works: the verified flag lives on the session's user, so there is nothing to
+check until there is a session, and an unauthenticated visitor must be sent
+to `/login` rather than to a code form for an account that does not exist.
 
 The three link-landing pages are **deliberately unguarded**. A signed-in
 player can legitimately be verifying a new address or following a reset link
@@ -309,10 +315,21 @@ starts, and saves each one's **browser session** (`test-results/.auth/*.json`, g
 | `e2e_social_alice`, `e2e_social_bob` | **0** — their sessions survive, probed and rotated in setup |
 | `e2e_profile_owner` | **1 login** — that spec asserts "sign out everywhere", which revokes its own session by design |
 | `auth.spec.ts` | **1 registration** — registration is its subject |
+| `verify-email.spec.ts` | **1 registration** — A64-021.5H. An account that is not yet verified is the whole subject, and every seeded account is |
 
-So a run costs one login and one registration, and the binding limit is three registrations
-per hour: roughly **three full runs an hour** from one IP. Not zero, and stated rather than
-discovered.
+So a run costs one login and **two** registrations, and the binding limit is ten
+registrations per hour: roughly **five full runs an hour** from one IP. Not zero, and stated
+rather than discovered.
+
+A sixth run in the same hour fails at *registration* rather than at an assertion, which
+reads as a broken spec and is not one. The remedy is
+`uv run python -m app.operator.rate_limits clear`, not a change to the spec.
+
+**Every seeded account is marked verified in setup** (A64-021.5H), through
+`python -m app.operator.accounts verify` — one process for all of them, run *after* the seed
+loop, because `seed` returns early for an account whose saved session still works and a call
+inside the loop would leave every long-lived fixture account unverified forever. Without
+this, every product route bounces the suite to `/verify-email`.
 
 **The accounts accumulate state.** A friendship from one run is still there on the next, so
 `resetRelationship` returns the pair to strangers through the same endpoints a player uses
@@ -483,6 +500,78 @@ auth pages themselves. Anything not an in-app absolute path becomes `/`.
 An unvalidated `next` is an open redirect, and an open redirect on a real
 login page is among the most effective phishing primitives there is —
 every visible signal up to the final hop is genuine.
+
+### 12.9 Email verification — A64-021.5H
+
+Registration now navigates to `/verify-email`, not to the app. The session
+exists at that point and the address does not, so a home page whose every
+write answers `403` is a worse destination than the one screen that has
+something to do. The attempted destination rides along as `?next=`.
+
+`RequireVerifiedEmail` sits **inside** `RequireAuth` on every guarded route
+and redirects an unverified session to `/verify-email`, again carrying the
+attempted path. `/verify-email` itself is unguarded, because the link half
+must work for somebody who has never signed in on that browser.
+
+The page branches on the URL rather than on the session:
+
+| URL | Screen | Session |
+| --- | --- | --- |
+| `?token=…` | exchanges the token — the pre-A64-021.5H flow, unchanged | not required |
+| no token | the six-digit code form | required; without one, the anonymous resend form |
+
+**Nothing on the screen is authoritative.** The verified flag comes from the
+session's user, code validity from the server, and the cooldown from the
+`409`'s `Retry-After` — so a reload rebuilds all three and loses only a
+half-typed field, and a tab that verifies is noticed by the others on their
+next navigation. `verify-code` returns the server's own `UserRead` and that
+is what the session stores, so a client cannot mark itself verified.
+
+Already-verified is not an error state: a person who verified in another tab
+or by clicking an older link is redirected onward rather than shown a form
+refusing to let them past a condition that already holds.
+
+#### The input
+
+One field, not six boxes. Six focus-jumping inputs are a known accessibility
+trap — a screen reader announces six unlabelled boxes, and backspace and
+paste both have to be hand-written. One field gets all of that from the
+platform, and the visual segmentation people expect is `letter-spacing`,
+which is presentation and cannot break semantics.
+
+| Attribute | Why |
+| --- | --- |
+| `inputMode="numeric"` | A phone keypad rather than a keyboard |
+| `autoComplete="one-time-code"` | On iOS this is the only way the code is offered from the message |
+| `maxLength={6}` | A seventh digit is dropped rather than submitted and rejected |
+
+Non-digits are stripped as the person types, because the common case is a
+paste that carried a space out of a mail client and refusing it would blame
+somebody for their mail client's formatting.
+
+**No automatic submit** on the sixth digit. A paste that lands one character
+at a time fires it early, and a mistyped last digit spends an attempt before
+it can be corrected — five attempts is not a budget to spend on a flourish.
+
+#### Error states
+
+Each maps to a distinct message, because they are distinct instructions:
+
+| Code | What the person is told |
+| --- | --- |
+| `email_verification_code_invalid` | The code is wrong — try again |
+| `email_verification_code_expired` | It has expired — request a new one. Never "try again": retyping an expired code spends an attempt |
+| `email_verification_attempts_exceeded` | Too many attempts — request a new code |
+| `email_verification_resend_too_soon` | Wait *n* seconds, counted down from the server's `Retry-After` and never invented locally |
+
+#### Accessibility
+
+The error is `role="alert"` and referenced by `aria-describedby` alongside the
+hint, with `aria-invalid` on the field. Both ids are always referenced and the
+error id only when an error exists, because a reference to an unrendered
+element is announced inconsistently across screen readers. The address is
+masked (`n•••••@example.com`) — enough to recognise which mailbox to open, not
+enough to publish on a shared screen.
 
 ## 13. Profile — A64-020.3
 
@@ -1460,8 +1549,8 @@ a tournament is there for everybody or absent for everybody.
 
 | Path | Guard | What it reads |
 | --- | --- | --- |
-| `/tournaments` | `RequireAuth` | `GET /tournaments` (keyset) |
-| `/tournaments/$tournamentId` | `RequireAuth` | detail, bracket, standings, own entry |
+| `/tournaments` | `RequireAuth` + `RequireVerifiedEmail` | `GET /tournaments` (keyset) |
+| `/tournaments/$tournamentId` | `RequireAuth` + `RequireVerifiedEmail` | detail, bracket, standings, own entry |
 
 Reached from `SessionMenu` — the same place `/play` and `/friends` are —
 and from every row of the profile's tournament history.

@@ -42,6 +42,11 @@ EXPLICIT_JWT_SECRET = "a-real-deployment-signing-key-well-over-the-minimum-lengt
 #: construction below has to supply one — which is the guard working.
 EXPLICIT_PUBLIC_URL = "https://arena64.example"
 
+#: The key a six-digit verification code is stored under. A deployed tier on
+#: the development value is refused (A64-021.5H), so every production-like
+#: construction below supplies one — which is the guard working.
+EXPLICIT_OTP_SECRET = "a-real-deployment-otp-secret-well-over-the-minimum-length"
+
 
 class TestEnvironment:
     def test_defaults_to_local_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -139,7 +144,7 @@ class TestSettings:
                 auth=AuthSettings(),
                 jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
                 session=SessionSettings(),
-                email=EmailSettings(),
+                email=EmailSettings(otp_secret=SecretStr(EXPLICIT_OTP_SECRET)),
                 notification_email=NotificationEmailSettings(),
                 storage=StorageSettings(),
                 rate_limit=RateLimitSettings(),
@@ -166,7 +171,7 @@ class TestSettings:
                 auth=AuthSettings(),
                 jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
                 session=SessionSettings(),
-                email=EmailSettings(),
+                email=EmailSettings(otp_secret=SecretStr(EXPLICIT_OTP_SECRET)),
                 notification_email=NotificationEmailSettings(),
                 storage=StorageSettings(),
                 rate_limit=RateLimitSettings(),
@@ -198,7 +203,7 @@ class TestSettings:
             auth=AuthSettings(),
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             session=SessionSettings(),
-            email=EmailSettings(),
+            email=EmailSettings(otp_secret=SecretStr(EXPLICIT_OTP_SECRET)),
             notification_email=NotificationEmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
@@ -338,7 +343,7 @@ class TestJWTProductionGuard:
             ),
             auth=AuthSettings(),
             session=SessionSettings(),
-            email=EmailSettings(),
+            email=EmailSettings(otp_secret=SecretStr(EXPLICIT_OTP_SECRET)),
             notification_email=NotificationEmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),

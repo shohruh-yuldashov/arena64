@@ -3,6 +3,7 @@
 from pydantic import Field
 
 from app.core.dto import BaseRequestDTO, BaseResponseDTO
+from app.modules.auth.domain.otp import OTP_LENGTH
 from app.modules.users.presentation.schemas.user import EmailField
 
 
@@ -32,6 +33,29 @@ class VerifyEmailRequest(BaseRequestDTO):
             "examples": [{"token": "IqL9nQ8vXo2Zc7Rm4tYp1WkE6dGh0BsN3aFj5UvTxCe"}]
         },
     }
+
+
+class VerifyCodeRequest(BaseRequestDTO):
+    """The `POST /auth/email/verify-code` body — A64-021.5H §9.
+
+    **No email address.** The session says who is verifying, so asking for
+    the address again would be asking a caller to assert an identity they
+    have already proved — and would make this endpoint accept an address
+    somebody else owns.
+
+    A `str`, not an `int`. `000042` is a code this platform issues
+    (`domain.otp.generate_otp`), and an integer field would parse it as
+    `42`, compare six characters against two, and reject a code that was
+    correct. The pattern is the validation.
+    """
+
+    code: str = Field(
+        min_length=OTP_LENGTH,
+        max_length=OTP_LENGTH,
+        pattern=rf"^\d{{{OTP_LENGTH}}}$",
+        description="The six digits from the verification email.",
+        examples=["482193"],
+    )
 
 
 class ResendVerificationRequest(BaseRequestDTO):

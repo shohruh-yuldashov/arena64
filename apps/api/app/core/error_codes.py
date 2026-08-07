@@ -283,6 +283,37 @@ class ErrorCode(StrEnum):
     NOTIFICATION_CHANNEL_UNAVAILABLE = "notification_channel_unavailable"
 
     DUPLICATE_PREFERENCE_CHANGE = "duplicate_preference_change"
+
+    # `auth` (A64-021.5H). Six codes for the six-digit verification flow,
+    # and the count is earned rather than bent: every one of them is a
+    # different sentence and a different next action on one screen.
+    #
+    #   ..._CODE_INVALID          type the current code again
+    #   ..._CODE_EXPIRED          retyping is pointless — ask for another
+    #   ..._ATTEMPTS_EXCEEDED     the challenge is gone; ask for another
+    #   ..._RESEND_TOO_SOON       wait, and the response says how long
+    #   EMAIL_ALREADY_VERIFIED    there is nothing left to do
+    #   ..._REQUIRED              this action needs a verified address
+    #
+    # The link endpoint keeps its single `INVALID_VERIFICATION_TOKEN` and
+    # should: it is **unauthenticated**, so distinguishing its failures
+    # reports on whether a token somebody holds was ever real. The code
+    # endpoint is reached by a caller already proven to be this account, so
+    # there is no account to enumerate and every distinction is one the
+    # person needs.
+    EMAIL_VERIFICATION_CODE_INVALID = "email_verification_code_invalid"
+    EMAIL_VERIFICATION_CODE_EXPIRED = "email_verification_code_expired"
+    EMAIL_VERIFICATION_ATTEMPTS_EXCEEDED = "email_verification_attempts_exceeded"
+    EMAIL_VERIFICATION_RESEND_TOO_SOON = "email_verification_resend_too_soon"
+    EMAIL_ALREADY_VERIFIED = "email_already_verified"
+
+    EMAIL_VERIFICATION_REQUIRED = "email_verification_required"
+    """A write refused because the address is unconfirmed — `403`.
+
+    Its own code because it is the one refusal a client answers by
+    *navigating* rather than by retrying or re-authenticating: the fix is
+    `/verify-email`, and a bare `permission_denied` would send the user
+    looking for a permission nobody can grant them."""
     """One request named the same category and channel twice, so it has no
     single intent. Its own code because it is the one `422` on that endpoint
     a *client bug* produces rather than a player action — nothing on the

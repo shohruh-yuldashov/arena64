@@ -68,11 +68,32 @@ from uuid import UUID
 
 from app.config.settings import EmailSettings
 from app.core.clock import Clock
+from app.core.enums import Locale
 from app.core.unit_of_work import UnitOfWork
 from app.modules.auth.application.ports import VerificationTokenRepository
 from app.modules.auth.application.services.opaque_tokens import OpaqueTokenService
-from app.modules.auth.domain.exceptions import InvalidVerificationToken
-from app.modules.auth.domain.verification import EmailVerificationToken
+from app.modules.auth.application.verification_email import build_verification_code_email
+from app.modules.auth.domain.exceptions import (
+    EmailAlreadyVerified,
+    InvalidVerificationCode,
+    InvalidVerificationToken,
+    VerificationAttemptsExceeded,
+    VerificationCodeExpired,
+    VerificationResendTooSoon,
+)
+from app.modules.auth.domain.otp import (
+    OTP_MAX_ATTEMPTS,
+    OTP_RESEND_COOLDOWN_SECONDS,
+    OTP_TTL_MINUTES,
+    generate_otp,
+    is_well_formed,
+    matches,
+    otp_verifier,
+)
+from app.modules.auth.domain.verification import (
+    EmailVerificationToken,
+    VerificationChallengeKind,
+)
 from app.modules.users.public import EmailVerifier, UserProfileReader, UserRead
 from app.platform.email import EmailMessage, EmailProvider
 
@@ -303,6 +324,233 @@ class EmailVerificationService:
         await self._deliver(account, issued.raw_token)
 
         logger.info("verification_resend_sent", extra={"user_id": str(account.id)})
+
+    # --- the code path — A64-021.5H -----------------------------------------
+
+    async def send_verification_code(self, account: UserRead) -> None:
+        """Issues a six-digit code and mails it. The primary flow.
+
+        Replaces whatever challenge came before it — a link or an older
+        code — because the partial unique index allows exactly one live row
+        per account and because §2 requires only the latest code to work.
+
+        Does not check `is_verified`: the two callers know. Registration
+        just created the account; `resend_code` checked and stayed silent
+        about the answer.
+        """
+        issued = await self._issue_code(account.id)
+        await self._deliver_code(account, issued)
+
+    async def resend_code(self, user_id: UUID) -> None:
+        """A fresh code for an authenticated, unverified account — §11.
+
+        Raises `EmailAlreadyVerified` for an account that is done, and
+        `VerificationResendTooSoon` inside the cooldown. Both are safe to
+        distinguish here and would not be on the unauthenticated
+        `resend_verification` below: the caller has already proved they are
+        this account, so neither answer tells them anything about somebody
+        else's.
+        """
+        account = await self._profiles.get_profile(user_id)
+        if account.is_verified:
+            raise EmailAlreadyVerified("this address is already verified")
+
+        live = await self._tokens.live_for_user(user_id, at=self._clock.now())
+        if live is not None:
+            self._require_cooldown_elapsed(live)
+
+        await self.send_verification_code(account)
+        logger.info("verification_code_resent", extra={"user_id": str(user_id)})
+
+    async def verify_code(self, user_id: UUID, code: str) -> UserRead:
+        """Redeems a code. Raises for every way it can fail — §9.
+
+        Order matters and is chosen so a caller learns as little as
+        possible while losing as little as possible:
+
+            already verified   answered as success, not as an error. §23:
+                               a code typed in one tab after another tab
+                               verified is not a mistake the person made
+            malformed          rejected **without** counting an attempt.
+                               §10 — a client bug must not spend one of
+                               five guesses
+            no live challenge  invalid. Nothing to compare against, and
+                               saying "there is no challenge" would tell a
+                               caller which accounts have one open
+            expired            its own error, because the recovery differs:
+                               ask for another rather than retype
+            exhausted          the challenge is destroyed, not merely
+                               refused
+            wrong              one attempt spent, and the *database*
+                               counts it
+        """
+        account = await self._profiles.get_profile(user_id)
+        if account.is_verified:
+            # §23. Idempotent by design: two tabs, or a link redeemed while
+            # this page was open. The person did the right thing and the
+            # outcome they wanted is already true.
+            return account
+
+        if not is_well_formed(code):
+            raise InvalidVerificationCode("that is not a six-digit code")
+
+        now = self._clock.now()
+        live = await self._tokens.live_for_user(user_id, at=now)
+        if live is None or live.kind is not VerificationChallengeKind.OTP:
+            raise InvalidVerificationCode("no verification code is outstanding")
+
+        if live.is_expired_at(now):
+            raise VerificationCodeExpired("that code has expired")
+
+        if live.attempts_exhausted:
+            await self._destroy(live)
+            raise VerificationAttemptsExceeded("too many incorrect codes")
+
+        if not matches(
+            verifier=otp_verifier(
+                secret=self._settings.otp_secret.get_secret_value().encode("utf-8"),
+                challenge_id=live.id,
+                user_id=user_id,
+                code=code,
+            ),
+            expected=live.token_hash,
+        ):
+            await self._count_wrong_guess(live)
+            raise InvalidVerificationCode("that code is not correct")
+
+        return await self._redeem(live)
+
+    async def _issue_code(self, user_id: UUID) -> str:
+        """Writes the challenge and returns the code to send.
+
+        The code exists in memory here and in one email, and nowhere else:
+        what is stored is `otp_verifier`'s output. It is returned rather
+        than held on the entity for the reason `IssuedVerificationToken`
+        exists — an entity that could carry the plaintext is an entity that
+        will eventually be logged with it.
+        """
+        now = self._clock.now()
+        code = generate_otp()
+        challenge = EmailVerificationToken.issue(
+            user_id=user_id,
+            # Replaced below, once the entity's own id exists. `issue`
+            # generates it in Python (DB-07), so the verifier can bind to a
+            # challenge that has not been inserted yet.
+            token_hash=b"",
+            issued_at=now,
+            lifetime=timedelta(minutes=OTP_TTL_MINUTES),
+        )
+        challenge.kind = VerificationChallengeKind.OTP
+        challenge.token_hash = otp_verifier(
+            secret=self._settings.otp_secret.get_secret_value().encode("utf-8"),
+            challenge_id=challenge.id,
+            user_id=user_id,
+            code=code,
+        )
+
+        async with self._uow:
+            # Both statements in one transaction, so the window in which an
+            # account has two live challenges — which the partial unique
+            # index would reject anyway — cannot be observed.
+            await self._tokens.invalidate_active_for_user(user_id, at=now)
+            created = await self._tokens.create(challenge)
+            await self._uow.commit()
+
+        # Identifiers only. Never the code, never the verifier, never the
+        # address.
+        logger.info(
+            "verification_code_issued",
+            extra={"user_id": str(user_id), "challenge_id": str(created.id)},
+        )
+        return code
+
+    def _require_cooldown_elapsed(self, live: EmailVerificationToken) -> None:
+        """Refuses a resend inside the window, and says how long is left.
+
+        Measured from the live challenge's `created_at` — a durable row —
+        rather than from anything in process memory, so a restart, a second
+        node and a second tab all agree. §11: the frontend's countdown is
+        presentation, and this is the authority.
+        """
+        elapsed = (self._clock.now() - live.created_at).total_seconds()
+        remaining = OTP_RESEND_COOLDOWN_SECONDS - elapsed
+        if remaining > 0:
+            raise VerificationResendTooSoon(
+                "another code was sent moments ago",
+                # Rounded **up**, for the reason `exception_handlers`
+                # states: a client retrying at the floor of a fractional
+                # second is refused again for the remainder, which is the
+                # one thing a retry hint must not do.
+                retry_after_seconds=remaining,
+            )
+
+    async def _count_wrong_guess(self, live: EmailVerificationToken) -> None:
+        """Spends one attempt, and destroys the challenge at the limit.
+
+        The increment is the database's (`record_failed_attempt`), so two
+        concurrent guesses cannot both read four. Reaching the limit
+        invalidates the row in the same transaction rather than leaving it
+        for the next submission to notice: a challenge that is finished
+        should be finished for every caller at once.
+        """
+        now = self._clock.now()
+        async with self._uow:
+            attempts = await self._tokens.record_failed_attempt(live.id)
+            if attempts >= OTP_MAX_ATTEMPTS:
+                await self._tokens.invalidate_active_for_user(live.user_id, at=now)
+            await self._uow.commit()
+
+        logger.info(
+            "verification_code_rejected",
+            # The count, never the code and never how close it was. §9: a
+            # caller must not learn that a guess was nearly right.
+            extra={"user_id": str(live.user_id), "attempts": attempts},
+        )
+
+    async def _destroy(self, live: EmailVerificationToken) -> None:
+        async with self._uow:
+            await self._tokens.invalidate_active_for_user(live.user_id, at=self._clock.now())
+            await self._uow.commit()
+
+    async def _redeem(self, live: EmailVerificationToken) -> UserRead:
+        """Consumes the challenge and marks the address verified.
+
+        Same two writes the link path makes, in the same order and the same
+        transaction — which is what §13 means by "both converge on the same
+        verified state". A code that succeeds also ends any live link,
+        because it *is* the live challenge: one row, one rule.
+        """
+        now = self._clock.now()
+        async with self._uow:
+            await self._tokens.invalidate_active_for_user(live.user_id, at=now)
+            account = await self._verifier.mark_email_verified(live.user_id)
+            await self._uow.commit()
+
+        logger.info(
+            "email_verified_by_code",
+            extra={"user_id": str(live.user_id), "challenge_id": str(live.id)},
+        )
+        return account
+
+    async def _deliver_code(self, account: UserRead, code: str) -> None:
+        """Mails the code. Never raises — §7.
+
+        The same policy the link path has and for the same reason: the
+        challenge is already committed and a resend produces a fresh one,
+        so turning a transient vendor outage into a failed registration
+        would be the worse trade.
+        """
+        message = build_verification_code_email(
+            code=code,
+            recipient_name=account.display_name or account.username,
+            locale=Locale(account.preferred_language),
+        )
+        try:
+            await self._email.send(EmailMessage(to=account.email, **message))
+        except Exception:  # noqa: BLE001 — see the docstring
+            # No `exc_info`: a provider exception's message can carry the
+            # address it was given.
+            logger.warning("verification_code_delivery_failed", extra={"user_id": str(account.id)})
 
     async def send_verification(self, account: UserRead) -> None:
         """Issues and delivers a link for an account that is known to

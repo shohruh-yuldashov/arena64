@@ -127,12 +127,22 @@ async def browser_register(
     access_tokens: AccessTokenServiceDep,
     presence: PresenceNotificationServiceDep,
 ) -> ApiResponse[BrowserSession]:
-    """Registers, sends the verification mail, and signs the browser in.
+    """Registers, sends a six-digit code, and signs the browser in.
 
-    The registration and the mail are `RegistrationService`'s and
-    `EmailVerificationService`'s, unchanged — including the rule that a
-    delivery failure never fails the request, because the account exists
-    and the person can ask for another link.
+    **A code, not a link** — A64-021.5H. The session exists either way and
+    the account is unverified either way; what changed is that the person
+    carries six digits from their inbox to the page they are already on,
+    rather than moving a session to wherever their mail is.
+
+    Signing in before verification is unchanged and is deliberate: the
+    frontend needs an authenticated call to submit the code, and the
+    verified-email policy (`VerifiedUser`) is what stops that session doing
+    anything else.
+
+    A delivery failure still never fails the request. The account exists,
+    the challenge is committed, and the person can ask for another code —
+    turning a transient vendor outage into a failed registration would be
+    the worse trade.
     """
     created = await registration.register(
         RegisterUser(
@@ -144,7 +154,7 @@ async def browser_register(
             display_name=payload.display_name,
         )
     )
-    await verification.send_verification(created)
+    await verification.send_verification_code(created)
 
     issued = await sessions.create_session(created.id, device=_device_of(request))
     access = access_tokens.create_access_token(created)

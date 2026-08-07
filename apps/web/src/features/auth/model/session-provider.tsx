@@ -12,6 +12,7 @@ import {
 } from "react";
 
 import type { SessionState } from "@/entities/session";
+import type { User } from "@/entities/user";
 import * as authApi from "@/features/auth/api";
 import { type AuthChannel, createAuthChannel } from "@/features/auth/model/auth-channel";
 import { isSessionEnded } from "@/features/auth/model/error-messages";
@@ -59,6 +60,21 @@ interface SessionContextValue {
   signOutEverywhere: () => Promise<void>;
   /** Retries the bootstrap after an `unavailable` result. */
   retryBootstrap: () => void;
+  /**
+   * Replaces the cached account with a **server** answer — A64-021.5H §22.
+   *
+   * One caller: the verification page, holding the `UserRead` that
+   * `POST /auth/email/verify-code` returned. That response is the
+   * authoritative current user, so applying it is how `is_verified` becomes
+   * true everywhere — the route guard, the header, and any page that reads
+   * it — without a second request and without the frontend deciding
+   * anything.
+   *
+   * Deliberately takes a whole `User` rather than a flag. A
+   * `markVerified()` would let a client set a state the server never
+   * reported, which is precisely what §26 forbids.
+   */
+  applyUser: (user: User) => void;
 }
 
 /**
@@ -250,6 +266,17 @@ export function SessionProvider({
     }
   }, [channel, clearLocalSession]);
 
+  const applyUser = useCallback(
+    (user: User) => {
+      // A no-op unless there is a session to apply it to: a response that
+      // arrived after a sign-out must not resurrect one.
+      const current = store.getState();
+      if (current.status !== "authenticated") return;
+      store.set({ ...current, user });
+    },
+    [store],
+  );
+
   const value = useMemo<SessionContextValue>(
     () => ({
       state,
@@ -258,8 +285,9 @@ export function SessionProvider({
       signOut,
       signOutEverywhere,
       retryBootstrap: () => void bootstrap(),
+      applyUser,
     }),
-    [bootstrap, signIn, signOut, signOutEverywhere, signUp, state],
+    [applyUser, bootstrap, signIn, signOut, signOutEverywhere, signUp, state],
   );
 
   return <SessionContext value={value}>{children}</SessionContext>;

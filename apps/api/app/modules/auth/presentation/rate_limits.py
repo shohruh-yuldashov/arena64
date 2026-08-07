@@ -33,8 +33,11 @@ docstring on why a refused request must not consume the other bucket.
 
 The remaining endpoints have one meaningful dimension each. Registration
 has no account yet, so there is nothing but the host to count. The two
-mail-senders are abusive against an *inbox*, so the address is the
-dimension that protects the victim. Refresh presents an opaque token,
+*anonymous* mail-senders are abusive against an *inbox*, so the address is
+the dimension that protects the victim; the authenticated code resend
+(A64-021.5H) has no address in its request at all, so the host is again the
+only dimension available — see `RateLimitSettings` on why it needs a rule
+despite its own per-user cooldown. Refresh presents an opaque token,
 which is a credential rather than an identity — counting it would let an
 attacker holding a thousand stolen tokens make a thousand times the
 allowance, which counts the wrong noun.
@@ -121,6 +124,14 @@ def build_rules(settings: RateLimitSettings) -> dict[str, tuple[RateLimitRule, .
                 window=timedelta(seconds=settings.resend_verification_window_seconds),
             ),
         ),
+        "resend_code": (
+            RateLimitRule(
+                name="resend_code_ip",
+                scope=RateLimitScope.IP,
+                limit=settings.resend_code_ip_limit,
+                window=timedelta(seconds=settings.resend_code_window_seconds),
+            ),
+        ),
         "refresh": (
             RateLimitRule(
                 name="refresh_ip",
@@ -160,4 +171,5 @@ REGISTER_RATE_LIMIT = _guard("register")
 FORGOT_PASSWORD_RATE_LIMIT = _guard("forgot_password")
 RESET_PASSWORD_RATE_LIMIT = _guard("reset_password")
 RESEND_VERIFICATION_RATE_LIMIT = _guard("resend_verification")
+RESEND_CODE_RATE_LIMIT = _guard("resend_code")
 REFRESH_RATE_LIMIT = _guard("refresh")

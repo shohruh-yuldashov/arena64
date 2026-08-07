@@ -110,6 +110,7 @@ from app.modules.auth.presentation.rate_limits import (
     LOGIN_RATE_LIMIT,
     REFRESH_RATE_LIMIT,
     REGISTER_RATE_LIMIT,
+    RESEND_CODE_RATE_LIMIT,
     RESEND_VERIFICATION_RATE_LIMIT,
     RESET_PASSWORD_RATE_LIMIT,
 )
@@ -122,6 +123,7 @@ from app.modules.auth.presentation.schemas import (
     ResetPasswordRequest,
     TokenPair,
     VerificationAccepted,
+    VerifyCodeRequest,
     VerifyEmailRequest,
     WebSocketTicketRead,
 )
@@ -235,9 +237,9 @@ async def register(
     session here would also mean an unverified account holding a 30-day
     credential before A64-011.6 has had a chance to verify anything.
 
-    A verification link is sent to the address (A64-011.6). Delivery
-    failure does not fail the request — the account exists and the person
-    can ask for another link.
+    A six-digit verification code is sent to the address (A64-021.5H).
+    Delivery failure does not fail the request — the account exists, the
+    challenge is committed, and the person can ask for another code.
 
     The body carries no `password_hash`: `UserRead` has no such field, so
     that is a property of the type rather than of remembering to exclude
@@ -254,12 +256,12 @@ async def register(
         )
     )
 
-    # A64-011.6: the first verification link. `send_verification` never
-    # raises for a delivery failure — see `EmailVerificationService` — so
-    # a mail provider being briefly unreachable cannot turn a successful
-    # registration into a 500. The account exists either way and the
-    # person can ask for a new link.
-    await verification.send_verification(created)
+    # A64-021.5H: the first verification code. `send_verification_code`
+    # never raises for a delivery failure — see `EmailVerificationService`
+    # — so a mail provider being briefly unreachable cannot turn a
+    # successful registration into a 500. The account exists either way and
+    # the person can ask for a new code.
+    await verification.send_verification_code(created)
 
     # Both prefixes: `API_V1_PREFIX` alone is "/v1", and the mount point
     # adds "/api" on top of it (`app_factory`). Composing them here is
@@ -595,6 +597,85 @@ async def verify_email(
     returned unchanged rather than erroring.
     """
     return build_response(await verification.verify_email(payload.token))
+
+
+@auth_router.post(
+    "/email/verify-code",
+    summary="Confirm an email address with a six-digit code",
+    response_description="The account, now verified.",
+    responses={**_UNAUTHORIZED, **_UNPROCESSABLE},
+)
+async def verify_email_code(
+    payload: VerifyCodeRequest,
+    user: CurrentUser,
+    verification: EmailVerificationServiceDep,
+) -> ApiResponse[UserRead]:
+    """Redeems the code from the verification email — A64-021.5H §9.
+
+    **Authenticated, and takes no address.** The session says whose
+    challenge this is, so a caller cannot verify somebody else's account by
+    naming it and cannot discover whether an address has one open. That is
+    what makes it safe to distinguish the failures below, where the
+    unauthenticated link endpoint deliberately cannot.
+
+    Four outcomes a client acts on differently:
+
+        email_verification_code_invalid            type the current code
+        email_verification_code_expired            ask for another
+        email_verification_attempts_exceeded       ask for another; the
+                                                   challenge is destroyed
+        (success)                                  continue
+
+    **Idempotent for an account that is already verified** — §23. A code
+    submitted in one tab after another tab or an emailed link succeeded is
+    not a mistake, and answering `422` for a state the caller wanted would
+    be reporting a race as their error.
+
+    A malformed body is `422` from the schema and **costs no attempt**
+    (§10): a client's own bug must not spend one of five guesses.
+    """
+    return build_response(await verification.verify_code(user.id, payload.code))
+
+
+@auth_router.post(
+    "/email/resend-code",
+    # The **IP** rule, not `/email/resend`'s email-scoped one: this request
+    # carries no address — the session says whose challenge it is — and an
+    # email-scoped rule with no address to key on contributes no subject and
+    # therefore limits nothing at all. A guard that reads as protection and
+    # counts nothing is worse than none.
+    dependencies=[Depends(RESEND_CODE_RATE_LIMIT)],
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Send another six-digit verification code",
+    responses={**_UNAUTHORIZED, **_CONFLICT, **_UNPROCESSABLE, **_TOO_MANY_REQUESTS},
+)
+async def resend_verification_code(
+    user: CurrentUser,
+    verification: EmailVerificationServiceDep,
+) -> ApiResponse[VerificationAccepted]:
+    """Issues a fresh code, invalidating the previous one — §11.
+
+    **Authenticated**, unlike `/email/resend`, and the difference is what
+    each is for. That one serves somebody who never received a link and may
+    never have signed in, so it takes an address and must say nothing. This
+    one serves somebody sitting on `/verify-email` inside a session, so
+    there is no account to enumerate — and it can therefore tell them the
+    two things they need: that they are already verified, or how long until
+    another code may be sent.
+
+    `409 email_already_verified` for an account that is done. `409
+    email_verification_resend_too_soon` with a `Retry-After` header inside
+    the sixty-second cooldown,
+    which is measured from a **durable row** rather than from anything in
+    process memory — so a reload, a second tab and a second node agree.
+
+    `202 Accepted`: the work is handed to a mail provider and the outcome is
+    not known when this returns.
+    """
+    await verification.resend_code(user.id)
+    return build_response(
+        VerificationAccepted(detail="A new verification code has been sent to your email address.")
+    )
 
 
 @auth_router.post(

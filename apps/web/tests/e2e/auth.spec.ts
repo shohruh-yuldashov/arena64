@@ -48,9 +48,12 @@ test("a player registers, reloads, stays signed in, and signs out", async ({
   await page.getByLabel(/confirm password/i).fill("CorrectHorse1!");
   await page.getByRole("button", { name: /create account/i }).click();
 
-  // Registration signs the browser in and lands on the app.
+  // **A64-021.5H.** Registration signs the browser in and lands on the
+  // verification screen, not the app: the session exists and the address
+  // does not, so every product write behind the app would answer `403`.
   await expect(page.getByRole("button", { name: /sign out/i })).toBeVisible();
-  expect(new URL(page.url()).pathname).toBe("/");
+  expect(new URL(page.url()).pathname).toBe("/verify-email");
+  await expect(page.getByLabel(/verification code|tasdiqlash kodi/i)).toBeVisible();
 
   // --- the cookie is real, and unreachable from script ---
   const cookies = await page.context().cookies();
@@ -70,17 +73,36 @@ test("a player registers, reloads, stays signed in, and signs out", async ({
   expect(stored).not.toContain("Bearer");
 
   // --- the reload: the access token is gone, the cookie is not ---
+  //
+  // Still on the verification screen afterwards, which is §22's claim: no
+  // part of that state lives in this component, so a reload rebuilds it
+  // from the session and the server rather than losing it.
   await page.reload();
   await expect(page.getByRole("button", { name: /sign out/i })).toBeVisible();
+  await expect(page.getByLabel(/verification code|tasdiqlash kodi/i)).toBeVisible();
 
   // --- sign out clears both halves ---
+  //
+  // The signed-out signal is the **header's** sign-in link, matched by its
+  // exact name — and both halves of that are load-bearing since A64-021.5H
+  // moved this moment onto `/verify-email`:
+  //
+  //   `/verify-email` renders a "Go to sign in" link of its own, which a
+  //     `/sign in/i` pattern matches while still signed *in*;
+  //   the sign-out button's accessible name becomes the spinner's the
+  //     instant it is clicked, so waiting for it to disappear is waiting
+  //     for the click rather than for the request.
+  //
+  // Either one reads the cookie mid-flight and fails intermittently. The
+  // banner's link appears only for `anonymous`, which the session reaches
+  // after the logout response has been applied.
   await page.getByRole("button", { name: /sign out/i }).click();
-  await expect(page.getByRole("link", { name: /sign in/i })).toBeVisible();
+  await expect(page.getByRole("banner").getByRole("link", { name: "Sign in" })).toBeVisible();
   const afterLogout = await page.context().cookies();
   expect(afterLogout.find((cookie) => cookie.name === "arena64_refresh")?.value ?? "").toBe("");
 
   // And it stays signed out across a reload — a cookie that survived would
   // mean `delete_cookie` and `set_cookie` disagreed about `Path`.
   await page.reload();
-  await expect(page.getByRole("link", { name: /sign in/i })).toBeVisible();
+  await expect(page.getByRole("banner").getByRole("link", { name: "Sign in" })).toBeVisible();
 });

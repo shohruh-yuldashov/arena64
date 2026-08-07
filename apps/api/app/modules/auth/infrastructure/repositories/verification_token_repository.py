@@ -35,7 +35,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError
-from app.modules.auth.domain.verification import EmailVerificationToken
+from app.modules.auth.domain.verification import (
+    EmailVerificationToken,
+    VerificationChallengeKind,
+)
 from app.modules.auth.infrastructure.models import EmailVerificationTokenModel
 
 logger = logging.getLogger(__name__)
@@ -57,6 +60,8 @@ class SqlAlchemyVerificationTokenRepository:
             created_at=row.created_at,
             expires_at=row.expires_at,
             used_at=row.used_at,
+            kind=VerificationChallengeKind(row.kind),
+            attempt_count=row.attempt_count,
         )
 
     @staticmethod
@@ -68,6 +73,8 @@ class SqlAlchemyVerificationTokenRepository:
             created_at=token.created_at,
             expires_at=token.expires_at,
             used_at=token.used_at,
+            kind=token.kind.value,
+            attempt_count=token.attempt_count,
         )
 
     async def create(self, token: EmailVerificationToken) -> EmailVerificationToken:
@@ -111,6 +118,48 @@ class SqlAlchemyVerificationTokenRepository:
             ),
         )
         return result.rowcount
+
+    async def live_for_user(self, user_id: UUID, *, at: datetime) -> EmailVerificationToken | None:
+        """The account's one live challenge, or `None` — A64-021.5H.
+
+        "Live" is `used_at IS NULL` and nothing else: expiry is decided by
+        the caller against its injected clock, because `now()` is not
+        immutable and the partial unique index that guarantees *one* live
+        row could not use it either.
+
+        The OTP path needs this and the link path does not, and the
+        asymmetry is the whole difference between the two credentials: a
+        link arrives carrying its own identifier, so a lookup by digest
+        finds the row. Six digits identify nothing — the *session* says who
+        is verifying, and this is how the challenge is found from that.
+        """
+        row = await self._session.scalar(
+            select(EmailVerificationTokenModel).where(
+                EmailVerificationTokenModel.user_id == user_id,
+                EmailVerificationTokenModel.used_at.is_(None),
+            )
+        )
+        return None if row is None else self._to_domain(row)
+
+    async def record_failed_attempt(self, challenge_id: UUID) -> int:
+        """Counts one wrong guess. Returns the new total.
+
+        **The database increments**, and this is the one column an attacker
+        can move. A read-then-write would let two concurrent submissions
+        each read four and each write five, handing out a sixth guess — the
+        same race the module docstring above describes for resends, applied
+        to the value that bounds a brute force.
+
+        `RETURNING` rather than a second read, so the caller decides whether
+        the limit is reached from the number this statement actually wrote.
+        """
+        total = await self._session.scalar(
+            update(EmailVerificationTokenModel)
+            .where(EmailVerificationTokenModel.id == challenge_id)
+            .values(attempt_count=EmailVerificationTokenModel.attempt_count + 1)
+            .returning(EmailVerificationTokenModel.attempt_count)
+        )
+        return int(total or 0)
 
     async def count_active_for_user(self, user_id: UUID, *, at: datetime) -> int:
         rows = (

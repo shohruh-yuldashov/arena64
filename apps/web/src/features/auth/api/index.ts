@@ -15,6 +15,7 @@ import type { components } from "@/shared/api/generated/schema";
  * scoped by `Path` on the server side anyway.
  */
 type Schemas = components["schemas"];
+type UserRead = Schemas["UserRead"];
 
 const BROWSER = "/auth/browser";
 
@@ -47,6 +48,22 @@ export function logoutEverywhere(): Promise<void> {
 
 export function verifyEmail(payload: Schemas["VerifyEmailRequest"]): Promise<unknown> {
   return api.post(`/auth/email/verify`, payload);
+}
+
+/**
+ * Submits the six digits from the verification email — A64-021.5H.
+ *
+ * **Authenticated and address-free.** The session says whose challenge this
+ * is, so there is no field in which to name somebody else's account and no
+ * way to discover whether an address has one open.
+ */
+export function verifyEmailCode(payload: Schemas["VerifyCodeRequest"]): Promise<UserRead> {
+  return api.post<UserRead>("/auth/email/verify-code", payload);
+}
+
+/** Asks for a fresh code. `409` inside the sixty-second cooldown. */
+export function resendVerificationCode(): Promise<unknown> {
+  return api.post("/auth/email/resend-code");
 }
 
 export function resendVerification(

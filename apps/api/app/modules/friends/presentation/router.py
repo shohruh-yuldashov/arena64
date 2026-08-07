@@ -73,7 +73,7 @@ from app.api.responses import build_response
 from app.core.constants import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from app.core.pagination import CursorPage, CursorPageInfo
 from app.core.responses import ApiResponse
-from app.modules.auth.presentation.dependencies import CurrentUser
+from app.modules.auth.presentation.dependencies import CurrentUser, VerifiedUser
 from app.modules.avatars.presentation.dependencies import AvatarLinkBuilderDep
 from app.modules.friends.domain.friend_request import FriendRequest
 from app.modules.friends.presentation.dependencies import (
@@ -152,7 +152,7 @@ _TOO_MANY_REQUESTS: Responses = error_response(
 )
 async def send_friend_request(
     payload: SendFriendRequestRequest,
-    user: CurrentUser,
+    user: VerifiedUser,
     service: FriendRequestServiceDep,
     directory: ProfileDirectoryDep,
     avatar_links: AvatarLinkBuilderDep,
@@ -303,7 +303,7 @@ async def list_outgoing(
 )
 async def accept_friend_request(
     request_id: Annotated[UUID, Path(description="The request identifier.")],
-    user: CurrentUser,
+    user: VerifiedUser,
     service: FriendRequestServiceDep,
     directory: ProfileDirectoryDep,
     avatar_links: AvatarLinkBuilderDep,
@@ -351,7 +351,7 @@ async def accept_friend_request(
 )
 async def decline_friend_request(
     request_id: Annotated[UUID, Path(description="The request identifier.")],
-    user: CurrentUser,
+    user: VerifiedUser,
     service: FriendRequestServiceDep,
     directory: ProfileDirectoryDep,
     avatar_links: AvatarLinkBuilderDep,
@@ -396,7 +396,7 @@ async def decline_friend_request(
 )
 async def cancel_friend_request(
     request_id: Annotated[UUID, Path(description="The request identifier.")],
-    user: CurrentUser,
+    user: VerifiedUser,
     service: FriendRequestServiceDep,
     directory: ProfileDirectoryDep,
     avatar_links: AvatarLinkBuilderDep,
@@ -706,7 +706,7 @@ async def get_friendship(
 )
 async def remove_friend(
     player_id: Annotated[UUID, Path(description="The friend to remove.")],
-    user: CurrentUser,
+    user: VerifiedUser,
     service: FriendshipServiceDep,
 ) -> None:
     """Ends your friendship with `player_id`.
@@ -779,7 +779,7 @@ _SELF_BLOCK: Responses = error_response(422, "You cannot block yourself.")
 )
 async def block_player(
     payload: BlockPlayerRequest,
-    user: CurrentUser,
+    user: VerifiedUser,
     service: BlockingServiceDep,
     directory: ProfileDirectoryDep,
     avatar_links: AvatarLinkBuilderDep,
@@ -924,7 +924,7 @@ async def list_blocked_players(
 )
 async def unblock_player(
     player_id: Annotated[UUID, Path(description="The player to unblock.")],
-    user: CurrentUser,
+    user: VerifiedUser,
     service: BlockingServiceDep,
 ) -> None:
     """Lifts your block on `player_id`.

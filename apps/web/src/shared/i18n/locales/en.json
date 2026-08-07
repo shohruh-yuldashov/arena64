@@ -561,6 +561,12 @@
         "draw_offer_not_allowed_yet": "Wait for your opponent to move before offering again.",
         "unknown": "That could not be done. Try again."
       }
+    },
+    "rating": {
+      "title": "Rating",
+      "becomes": "becomes",
+      "updating": "Rating is being updated…",
+      "late": "Rating update is taking longer than expected."
     }
   },
   "replay": {

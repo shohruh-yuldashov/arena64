@@ -561,6 +561,12 @@
         "draw_offer_not_allowed_yet": "Yana taklif qilishdan oldin raqibingiz yurishini kuting.",
         "unknown": "Buni bajarib bo'lmadi. Qayta urinib ko'ring."
       }
+    },
+    "rating": {
+      "title": "Reyting",
+      "becomes": "bo'ladi",
+      "updating": "Reyting yangilanmoqda…",
+      "late": "Reyting yangilanishi kutilganidan uzoqroq davom etmoqda."
     }
   },
   "replay": {

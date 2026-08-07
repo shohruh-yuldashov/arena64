@@ -4,6 +4,7 @@ import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { initialState, reduce } from "@/features/game/model/state";
+import { RATING_POLL_MS, useRatingResult } from "@/features/game/model/use-rating-result";
 import { GameControls } from "@/features/game/ui/game-controls";
 import { matchmakingKeys } from "@/features/matchmaking/api/keys";
 import { httpClient } from "@/shared/api/client";
@@ -12,7 +13,7 @@ import { I18nProvider } from "@/shared/i18n";
 import type { SnapshotPayload } from "@/shared/realtime";
 import { RealtimeClient } from "@/shared/realtime";
 import { mswServer } from "@/shared/test/msw/server";
-import { renderApp } from "@/shared/test/render";
+import { renderApp, renderWithProviders } from "@/shared/test/render";
 
 /**
  * The control surface, rendered — A64-020.5C §21.
@@ -414,4 +415,117 @@ it("stops treating a finished match as the current one", async () => {
   await waitFor(() =>
     expect(queryClient.getQueryData(matchmakingKeys.pending())).toBeUndefined(),
   );
+});
+
+describe("the rated result — A64-023 §14", () => {
+  /**
+   * `useRatingResult` directly, because that is where every decision is:
+   * whether to ask again, when to stop, and which of the three states the
+   * screen is in. The panel above it renders what it is handed and is
+   * covered by the type checker and the page suite.
+   *
+   * Rendered through a probe rather than the panel, which needs a router
+   * context for its two `Link`s — mounting the whole page to assert a
+   * number would be testing the router.
+   */
+  function row(overrides: Record<string, unknown>) {
+    return {
+      match_id: MATCH,
+      variant: "russian_8x8",
+      speed_class: "blitz",
+      rated: true,
+      engine_version: 2,
+      light_player_id: VIEWER,
+      dark_player_id: OPPONENT,
+      opponent_id: OPPONENT,
+      outcome: "win",
+      termination_reason: "resignation",
+      winner: "light",
+      ply_number: 24,
+      opponent: null,
+      time_control: null,
+      rating: null,
+      started_at: "2026-08-05T10:00:00Z",
+      ended_at: "2026-08-05T10:05:00Z",
+      ...overrides,
+    };
+  }
+
+  function Probe() {
+    const rating = useRatingResult({ matchId: MATCH, viewerId: VIEWER, enabled: true });
+    return (
+      <p>
+        {JSON.stringify({
+          delta: rating.change?.delta ?? null,
+          before: rating.change?.before ?? null,
+          rated: rating.rated,
+          pending: rating.isPending,
+          late: rating.hasGivenUp,
+        })}
+      </p>
+    );
+  }
+
+  /** Serves the history page, and counts how many times it was asked. */
+  function serve(page: Record<string, unknown>): { calls: () => number } {
+    let calls = 0;
+    mswServer.use(
+      http.get(url(`/players/${VIEWER}/matches`), () => {
+        calls += 1;
+        return HttpResponse.json(envelope({ entries: [page], next_cursor: null }));
+      }),
+    );
+    return { calls: () => calls };
+  }
+
+  it("reports the server's before, after and delta", async () => {
+    serve(row({ rating: { before: 1524, after: 1537, delta: 13 } }));
+    renderWithProviders(<Probe />);
+
+    await waitFor(() => expect(screen.getByText(/"delta":13/)).toBeVisible());
+    expect(screen.getByText(/"before":1524/)).toBeVisible();
+    // Nothing is being waited for once the answer is in.
+    expect(screen.getByText(/"pending":false/)).toBeVisible();
+  });
+
+  it("reports a loss as a negative delta, unchanged", async () => {
+    serve(row({ rating: { before: 1537, after: 1524, delta: -13 } }));
+    renderWithProviders(<Probe />);
+
+    await waitFor(() => expect(screen.getByText(/"delta":-13/)).toBeVisible());
+  });
+
+  it("is pending — not zero — while the projection has not landed", async () => {
+    // The state a fabricated `+0` would have hidden. `rated` is true and
+    // the change is absent, which is exactly what the row says.
+    serve(row({ rating: null }));
+    renderWithProviders(<Probe />);
+
+    await waitFor(() => expect(screen.getByText(/"rated":true/)).toBeVisible());
+    expect(screen.getByText(/"delta":null/)).toBeVisible();
+    expect(screen.getByText(/"pending":true/)).toBeVisible();
+  });
+
+  it("asks once for a casual match and never waits", async () => {
+    const served = serve(row({ rated: false, rating: null }));
+    renderWithProviders(<Probe />);
+
+    await waitFor(() => expect(screen.getByText(/"rated":false/)).toBeVisible());
+    expect(screen.getByText(/"pending":false/)).toBeVisible();
+    expect(screen.getByText(/"late":false/)).toBeVisible();
+
+    // A casual game has nothing to wait for, so the schedule stops after
+    // the first answer rather than spending the budget.
+    await new Promise((resolve) => setTimeout(resolve, RATING_POLL_MS * 2));
+    expect(served.calls()).toBe(1);
+  });
+
+  // **The bounded stop is not asserted here**, deliberately.
+  //
+  // `refetchInterval` does not run while the document is hidden, and jsdom
+  // never reports it visible — so a test of the budget would be measuring
+  // the environment rather than the hook. The bound itself is one
+  // expression in `refetchInterval`, and the defect that mattered — a
+  // `gcTime: 0` that reset the attempt counter and made the budget
+  // unreachable — was found by writing this test and is fixed.
 });

@@ -15,7 +15,7 @@ Skipped, not failed, when PostgreSQL is unreachable.
 """
 
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
@@ -32,6 +32,8 @@ from app.modules.game.infrastructure.repositories.match_record_repository import
 )
 from app.modules.game.presentation.dependencies import get_match_history, get_match_replay
 from app.modules.game.public import UnsupportedEngineVersion
+from app.modules.rating.domain.keys import SpeedClass
+from app.modules.rating.infrastructure.models import PlayerRatingModel, RatingAdjustmentModel
 from tests.contract.contract_app import build_contract_app, contract_client
 from tests.contract.test_matchmaking_queue_api import register
 
@@ -87,6 +89,65 @@ async def _finished(
             termination_reason=TerminationReason.RESIGNATION,
             winner=PlayerSide.LIGHT,
             ply_number=24,
+        )
+    )
+    await session.flush()
+
+
+async def _adjustment(
+    session: AsyncSession,
+    *,
+    player: UUID,
+    match_id: UUID,
+    before: float,
+    after: float,
+) -> None:
+    """One `rating_adjustment` row, as the outbox consumer writes it.
+
+    Written directly rather than by running `MatchRatingService`: what these
+    tests are about is the **read** contract, and driving the Glicko-2
+    calculation to obtain two numbers would couple them to an algorithm
+    whose outputs are the rating suite's subject.
+    """
+    # `fk_rating_adjustment__player_rating` requires the rating the
+    # adjustment moved to exist — an adjustment is a record of a change to a
+    # row, so there is no such thing as one without it.
+    session.add(
+        PlayerRatingModel(
+            player_id=player,
+            variant=ProductVariant.RUSSIAN_8X8,
+            speed_class=SpeedClass.BLITZ,
+            rating_value=after,
+            rating_deviation=58.0,
+            rating_volatility=0.06,
+            games_played=1,
+            # `ck_player_rating__played_iff_rated_at` ties the two: a rating
+            # that has played has a last-rated instant.
+            last_rated_at=NOW,
+        )
+    )
+    await session.flush()
+
+    session.add(
+        RatingAdjustmentModel(
+            id=uuid4(),
+            player_id=player,
+            match_id=match_id,
+            variant=ProductVariant.RUSSIAN_8X8,
+            speed_class=SpeedClass.BLITZ,
+            rating_before=before,
+            deviation_before=60.0,
+            volatility_before=0.06,
+            rating_after=after,
+            deviation_after=58.0,
+            volatility_after=0.06,
+            opponent_rating=1500.0,
+            opponent_deviation=60.0,
+            opponent_volatility=0.06,
+            expected_score=0.5,
+            actual_score=1.0,
+            algorithm_version="glicko2-v1",
+            applied_at=NOW,
         )
     )
     await session.flush()
@@ -508,3 +569,120 @@ class TestMatchOrigin:
         assert stored is not None
         assert stored.origin is MatchOrigin.QUEUE
         assert stored.origin_ref is None
+
+
+class TestRatingResult:
+    """What a rated match did to the reader's own rating — A64-023 §1, §14.
+
+    The data has been persisted since A64-017.6 and no read exposed it, so
+    a player finished a rated game and was told nothing about the number it
+    moved. These four cover the contract and the two `null` meanings it has
+    to keep apart.
+    """
+
+    async def test_a_rated_match_carries_before_after_and_delta(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """§14.1. Integers, and `delta` served rather than left to the client."""
+        me = await register(client)
+        await _finished(
+            contract_session,
+            match_id=_id(420),
+            light=me.id,
+            dark=_id(9),
+            created_at=NOW,
+            rated=True,
+        )
+        await _adjustment(
+            contract_session, player=me.id, match_id=_id(420), before=1524.4, after=1536.6
+        )
+        await contract_session.commit()
+
+        response = await client.get(f"/api/v1/players/{me.id}/matches", headers=me.auth)
+
+        assert response.status_code == 200, response.text
+        entry = response.json()["data"]["entries"][0]
+        # Rounded once, and the delta derived from the rounded pair — a
+        # separately rounded float difference would read `+12` beside
+        # `1524 → 1537`.
+        assert entry["rating"] == {"before": 1524, "after": 1537, "delta": 13}
+
+    async def test_a_casual_match_carries_no_rating_block(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """§14.2. `null`, never a fabricated zero — a casual game moved
+        nothing and saying `+0` would claim it was rated."""
+        me = await register(client)
+        await _finished(
+            contract_session,
+            match_id=_id(421),
+            light=me.id,
+            dark=_id(9),
+            created_at=NOW,
+            rated=False,
+        )
+        await contract_session.commit()
+
+        response = await client.get(f"/api/v1/players/{me.id}/matches", headers=me.auth)
+
+        entry = response.json()["data"]["entries"][0]
+        assert entry["rated"] is False
+        assert entry["rating"] is None
+
+    async def test_a_rated_match_reads_null_until_the_projection_lands(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """§14.3, and the state the frontend has to distinguish.
+
+        `MatchRatingService` consumes `game.match_completed` through the
+        outbox, so the adjustment is written *after* the match ends. A
+        client tells this apart from a casual game by `rated`, which is why
+        both are on the row.
+        """
+        me = await register(client)
+        await _finished(
+            contract_session,
+            match_id=_id(422),
+            light=me.id,
+            dark=_id(9),
+            created_at=NOW,
+            rated=True,
+        )
+        await contract_session.commit()
+
+        response = await client.get(f"/api/v1/players/{me.id}/matches", headers=me.auth)
+
+        entry = response.json()["data"]["entries"][0]
+        assert entry["rated"] is True
+        assert entry["rating"] is None
+
+    async def test_a_stranger_is_told_nothing_about_your_rating(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """§11. A rated match is publicly visible; the rating change is not.
+
+        The route asks the reader only when `player_id` is the caller, so a
+        stranger reading a public history gets the row and no `rating` — and
+        it is the same `null` an unprojected match has, which discloses
+        nothing about whether one exists.
+        """
+        owner = _id(701)
+        stranger = await register(client)
+        await _finished(
+            contract_session,
+            match_id=_id(423),
+            light=owner,
+            dark=_id(9),
+            created_at=NOW,
+            rated=True,
+        )
+        await _adjustment(
+            contract_session, player=owner, match_id=_id(423), before=1500, after=1512
+        )
+        await contract_session.commit()
+
+        response = await client.get(f"/api/v1/players/{owner}/matches", headers=stranger.auth)
+
+        entry = response.json()["data"]["entries"][0]
+        assert entry["match_id"] == str(_id(423))
+        assert entry["rating"] is None

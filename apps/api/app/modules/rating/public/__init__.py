@@ -1,9 +1,11 @@
 """`rating`'s published surface — the only way into this module.
 
-    RatingKey, SpeedClass   what a rating is *of*
-    LeaderboardReader       standings for one key, paginated by cursor
-    RatingSnapshot          what a player rates, as a Glicko-2 triple
-    RatingReader            the one question this module answers publicly
+    RatingKey, SpeedClass         what a rating is *of*
+    LeaderboardReader             standings for one key, paginated by cursor
+    RatingSnapshot                what a player rates, as a Glicko-2 triple
+    RatingReader                  the one question this module answers publicly
+    RatingChange                  what one match did to one player's rating
+    MatchRatingAdjustmentReader   that, for a page of matches, in one query
 
 Everything else is private and is held so by the `import-linter` contract
 `rating-internals-are-private`: no module may reach `rating.domain`,
@@ -29,6 +31,7 @@ boundary that needs it.
 """
 
 from app.modules.rating.domain.keys import DEFAULT_SPEED_CLASS, RatingKey, SpeedClass
+from app.modules.rating.public.adjustments import MatchRatingAdjustmentReader, RatingChange
 from app.modules.rating.public.leaderboard import (
     LeaderboardCursor,
     LeaderboardEntry,
@@ -39,10 +42,12 @@ from app.modules.rating.public.ratings import RatingReader, RatingSnapshot
 
 __all__ = [
     "DEFAULT_SPEED_CLASS",
+    "MatchRatingAdjustmentReader",
     "LeaderboardCursor",
     "LeaderboardEntry",
     "LeaderboardPage",
     "LeaderboardReader",
+    "RatingChange",
     "RatingKey",
     "RatingReader",
     "RatingSnapshot",

@@ -37,6 +37,7 @@ from app.core.exceptions import NotFoundError
 from app.core.responses import ApiResponse
 from app.modules.auth.presentation.dependencies import CurrentUser
 from app.modules.game.presentation.dependencies import (
+    MatchRatingChangesDep,
     ReplayPlayersDep,
     VisibleMatchHistoryDep,
     VisibleMatchReplayDep,
@@ -70,6 +71,7 @@ async def player_match_history(
     user: CurrentUser,
     history: VisibleMatchHistoryDep,
     players: ReplayPlayersDep,
+    rating_changes: MatchRatingChangesDep,
     player_id: Annotated[UUID, Path(description="Whose history to read.")],
     after: Annotated[
         str | None, Query(description="An opaque cursor from a previous page.")
@@ -103,7 +105,26 @@ async def player_match_history(
     # so this is usually a lookup of one or two ids rather than twenty.
     opponents = MatchHistoryResponse.opponents_in(page, viewer_id=user.id)
     profiles = await players.find_public_profiles(opponents) if opponents else {}
-    return build_response(MatchHistoryResponse.of(page, viewer_id=user.id, profiles=profiles))
+
+    # **What each rated match did to *your* rating** — A64-023 §1, §4.
+    #
+    # Gated on reading your own history, and that is the whole of the
+    # authorization: `player_id == user.id` is the condition, and the reader
+    # takes the player as its first argument, so there is no arrangement of
+    # this call that could fetch somebody else's adjustment. A stranger
+    # reading a public rated history gets `rating: null` on every row —
+    # which is the same shape a not-yet-projected match has, and a client
+    # renders neither.
+    #
+    # One batched lookup for the page, like the profile read above, and
+    # **no query at all** when the page holds no rated match — a history of
+    # casual games must not pay for a table it cannot have rows in.
+    rated = MatchHistoryResponse.rated_match_ids(page) if player_id == user.id else []
+    ratings = await rating_changes.changes_for(user.id, rated) if rated else {}
+
+    return build_response(
+        MatchHistoryResponse.of(page, viewer_id=user.id, profiles=profiles, ratings=ratings)
+    )
 
 
 @replay_router.get(

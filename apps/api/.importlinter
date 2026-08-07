@@ -266,12 +266,26 @@ layers =
 [importlinter:contract:rating-internals-are-private]
 name = rating internals are reachable only through rating.public
 type = forbidden
+# `game` is listed by **layer**, not wholesale — A64-023.
+#
+# The same shape `users-internals-are-private` has always had, and for the
+# same reason: `game.presentation.dependencies` is a composition root, and
+# assembling another module's adapter is what a root is for (BR-6). It
+# already names `users`' `SqlAlchemyUserRepository` and `UserService` under
+# that rule; it now names `rating`'s adjustment reader too.
+#
+# Everything above the root still holds only ports. The history route holds
+# `MatchRatingAdjustmentReader` — one batch-only method, scoped to one
+# player — so it cannot reach a rating it could write, a leaderboard, or
+# another player's adjustment.
 source_modules =
     app.gateway
     app.modules.auth
     app.modules.avatars
     app.modules.friends
-    app.modules.game
+    app.modules.game.domain
+    app.modules.game.application
+    app.modules.game.infrastructure
     app.modules.matchmaking.domain
     app.modules.matchmaking.application
     app.modules.matchmaking.infrastructure

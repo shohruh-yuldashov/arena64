@@ -44,6 +44,7 @@ from app.modules.rating.domain.glicko2 import Glicko2Rating
 from app.modules.rating.domain.keys import RatingKey, SpeedClass
 from app.modules.rating.domain.player_rating import PlayerRating, RatingAdjustment
 from app.modules.rating.infrastructure.models import PlayerRatingModel, RatingAdjustmentModel
+from app.modules.rating.public.adjustments import RatingChange
 from app.modules.rating.public.ratings import RatingSnapshot
 
 #: The constraint whose violation means "already applied" — PR-1.
@@ -282,3 +283,59 @@ def _to_snapshot(row: PlayerRatingModel) -> RatingSnapshot:
 
 
 __all__ = ["SqlAlchemyPlayerRatingRepository", "SqlAlchemyRatingReader"]
+
+
+class SqlAlchemyMatchRatingAdjustmentReader:
+    """`rating.public.MatchRatingAdjustmentReader` over one session — A64-023 §3.
+
+    A third class in this file rather than a method on either above, and the
+    boundary is the same one `SqlAlchemyRatingReader` draws: the repository
+    loads an aggregate to be saved, that reader answers "what is this
+    player's rating now", and this answers "what did these matches do to
+    it". `game` holds only this one, so it cannot reach a rating it could
+    write or a leaderboard it could read.
+
+    **Read-only by construction.** `rating_adjustment` is append-only —
+    the model's docstring makes that the answer to "why did I lose 14
+    points" — and there is no method here that could write to it.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def changes_for(
+        self, player_id: uuid.UUID, match_ids: Sequence[uuid.UUID]
+    ) -> Mapping[uuid.UUID, RatingChange]:
+        """One query for the whole page, whatever its size — §3.
+
+        `(player_id, match_id IN (...))` against
+        `uq_rating_adjustment__player_match`, which is the unique index the
+        rows are keyed by — so this is an index lookup per id rather than a
+        scan, and at most one row can come back per match.
+
+        Two columns are selected out of fourteen. The rest exist to explain
+        a change and are not this contract's to publish; selecting them
+        would put the opponent's rating on a wire that has no use for it.
+
+        Deduplicated, and an empty request reads nothing at all — a history
+        page of casual matches must not cost a query to learn that none of
+        them moved a rating.
+        """
+        wanted = list(dict.fromkeys(match_ids))
+        if not wanted:
+            return {}
+
+        rows = await self._session.execute(
+            select(
+                RatingAdjustmentModel.match_id,
+                RatingAdjustmentModel.rating_before,
+                RatingAdjustmentModel.rating_after,
+            ).where(
+                RatingAdjustmentModel.player_id == player_id,
+                RatingAdjustmentModel.match_id.in_(wanted),
+            )
+        )
+        return {
+            row.match_id: RatingChange.of(before=row.rating_before, after=row.rating_after)
+            for row in rows.all()
+        }

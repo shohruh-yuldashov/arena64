@@ -108,6 +108,7 @@ from app.modules.friends.infrastructure.repositories import (
     SqlAlchemyBlockedPlayerRepository,
     SqlAlchemyFriendshipRepository,
 )
+from app.modules.friends.presentation.dependencies import SocialGraphCacheDep
 from app.modules.friends.public import PairingExclusions
 from app.modules.game.application.ports import ClockDeadlineStore
 from app.modules.game.application.services import (
@@ -817,7 +818,11 @@ __all__ = [
 
 
 def build_challenge_service(
-    session: AsyncSession, *, clock: Clock, cache: SocialGraphCache
+    session: AsyncSession,
+    *,
+    clock: Clock,
+    cache: SocialGraphCache,
+    events: EventPublisher,
 ) -> ChallengeService:
     """The friend challenge use cases, over one unit of work — A64-022.1 §25.
 
@@ -853,6 +858,31 @@ def build_challenge_service(
         # against is the one the queue offers. Two readers would be two
         # menus.
         time_controls=SqlAlchemyTimeControlCatalogue(session),
+        # A64-022.2. The outbox, over the **same session** as the repository:
+        # a challenge and the event announcing it commit together or neither
+        # does (AD-16). A publisher on a second session would be an event
+        # that survived a rolled-back challenge.
+        events=events,
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
     )
+
+
+def get_challenge_service(
+    session: DbSessionDep,
+    clock: ClockDep,
+    cache: SocialGraphCacheDep,
+    events: EventPublisherDep,
+) -> ChallengeService:
+    """The same graph, assembled for one request — A64-022.2.
+
+    A64-022.1 had no HTTP surface, so `build_challenge_service` took its
+    collaborators positionally and nothing resolved them. This is the
+    `Depends` form the router uses; the builder stays because the contract
+    suite and any future worker reach it without a request to resolve
+    against.
+    """
+    return build_challenge_service(session, clock=clock, cache=cache, events=events)
+
+
+ChallengeServiceDep = Annotated[ChallengeService, Depends(get_challenge_service)]

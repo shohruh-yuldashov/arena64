@@ -39,10 +39,11 @@ and a caller holding the old value still holds the old value.
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Final
+from typing import ClassVar, Final
 from uuid import UUID
 
-from app.core.exceptions import RuleViolationError
+from app.core.error_codes import ErrorCode
+from app.core.exceptions import PermissionDeniedError, RuleViolationError
 from app.modules.game.public import ProductVariant
 from app.modules.reference.public import TimeControlId
 
@@ -340,6 +341,8 @@ def issue(
 class ChallengeSelfNotAllowed(RuleViolationError):
     """A player named themselves as the recipient."""
 
+    default_code: ClassVar[ErrorCode] = ErrorCode.CHALLENGE_SELF_NOT_ALLOWED
+
 
 class ChallengeNotPending(RuleViolationError):
     """The challenge has already reached a terminal state.
@@ -351,6 +354,8 @@ class ChallengeNotPending(RuleViolationError):
     asked for.
     """
 
+    default_code: ClassVar[ErrorCode] = ErrorCode.CHALLENGE_NOT_PENDING
+
 
 class ChallengeExpired(RuleViolationError):
     """Still `PENDING` in the database, and past its window.
@@ -360,14 +365,22 @@ class ChallengeExpired(RuleViolationError):
     answered.
     """
 
+    default_code: ClassVar[ErrorCode] = ErrorCode.CHALLENGE_EXPIRED
 
-class ChallengeForbidden(RuleViolationError):
+
+class ChallengeForbidden(PermissionDeniedError):
     """The actor is a party to this challenge and not the right one.
+
+    A **permission** error rather than a rule violation, so it answers `403`
+    rather than `422` — A64-022.2 §3. The distinction is real: `422` says the
+    request was understood and the state refuses it, where this says the
+    caller is not the person who may do this. A challenger who has been
+    told `422` will retry.
 
     Never raised for a stranger: a challenge somebody is not part of is
     reported as **not found**, so an identifier cannot be probed for
-    existence (§21's IDOR rule). This is the challenger trying to decline, or
-    the recipient trying to cancel.
+    existence (§25's IDOR rule). This is the challenger trying to decline, or
+    the recipient trying to cancel — both of whom already know it exists.
     """
 
 

@@ -714,6 +714,34 @@ class ChallengeRepository(Protocol):
         """
         ...
 
+    async def list_for_party(
+        self,
+        party_id: UUID,
+        *,
+        as_challenger: bool,
+        now: datetime,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[Sequence[Challenge], str | None]:
+        """One keyset page of this player's **live** challenges — A64-022.2 §7.
+
+        `as_challenger` chooses the direction: outgoing when `True`, incoming
+        when `False`. One method rather than two, because the two differ in a
+        single predicate and a second method would be a second place the
+        ordering, the tiebreak and the over-fetch could drift.
+
+        **Live means pending and unexpired**, which is why `now` is a
+        parameter rather than a database `now()`: expiry is decided by the
+        platform's injected clock (AD-07), and a query that read the server's
+        wall clock would disagree with the aggregate that refuses an answer.
+
+        A64-022.2 exposes no history. A terminal challenge leaves these lists
+        silently and is not deleted — the row is the record that an
+        invitation happened, and a history endpoint is a product decision
+        nobody has taken.
+        """
+        ...
+
     async def find_live_between(self, first: UUID, second: UUID) -> Challenge | None:
         """The live challenge between these two, whichever direction.
 

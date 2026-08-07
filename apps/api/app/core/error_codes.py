@@ -308,6 +308,34 @@ class ErrorCode(StrEnum):
     EMAIL_ALREADY_VERIFIED = "email_already_verified"
 
     EMAIL_VERIFICATION_REQUIRED = "email_verification_required"
+
+    # --- friend challenges (A64-022.2) ---------------------------------------
+    # Six codes for six different next moves. The rule that grants a code is
+    # "a client's next action differs", and each of these genuinely does:
+    #
+    #   ..._SELF_NOT_ALLOWED      you named yourself — pick somebody else
+    #   ..._NOT_FRIENDS           you cannot challenge them
+    #   ..._ALREADY_PENDING       one already exists — answer or cancel it
+    #   ..._NOT_PENDING           it was already answered — refresh
+    #   ..._EXPIRED              too late — send another
+    #   ..._INVALID_TIME_CONTROL  that clock is no longer offered
+    #
+    # **There is deliberately no `challenge_blocked`.** `domain-model.md`
+    # §10.3, BL-2 and FR-2 require a challenge to a blocked player to fail
+    # indistinguishably from one to a stranger, so a block raises
+    # `CHALLENGE_NOT_FRIENDS` with the same message. A code that existed
+    # would be the disclosure whatever sentence sat beside it.
+    #
+    # **No `challenge_forbidden` either.** A challenger who tries to decline
+    # is a `403` with the platform's generic permission code; inventing a
+    # challenge-specific one would say which of the two parties the caller
+    # is, which the caller already knows and which nothing needs.
+    CHALLENGE_SELF_NOT_ALLOWED = "challenge_self_not_allowed"
+    CHALLENGE_NOT_FRIENDS = "challenge_not_friends"
+    CHALLENGE_ALREADY_PENDING = "challenge_already_pending"
+    CHALLENGE_NOT_PENDING = "challenge_not_pending"
+    CHALLENGE_EXPIRED = "challenge_expired"
+    CHALLENGE_INVALID_TIME_CONTROL = "challenge_invalid_time_control"
     """A write refused because the address is unconfirmed — `403`.
 
     Its own code because it is the one refusal a client answers by

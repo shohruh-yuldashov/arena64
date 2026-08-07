@@ -1341,6 +1341,33 @@ class RateLimitSettings(SectionSettings):
     friend_request_send_user_limit: int = Field(default=20, ge=1)
     friend_request_send_window_seconds: int = Field(default=60 * 60, ge=1)
 
+    # --- POST /challenges (A64-022.2) ----------------------------------------
+    # Per **account**, for the reason the friend-request send limit above
+    # gives: what this bounds is one person spraying invitations, and a
+    # per-IP budget is defeated by a botnet while throttling a shared
+    # connection for everybody on it.
+    #
+    # The structural rules already do most of the work — a challenge can only
+    # go to a friend, and only one may be live per pair — so an attacker's
+    # remaining move is to challenge *every* friend, which only a per-account
+    # counter sees.
+    #
+    # Twenty an hour, matching friend requests deliberately: both are "invite
+    # somebody you know", the legitimate pattern is the same handful in one
+    # sitting, and two different numbers for one shape of action would be two
+    # numbers to explain rather than one to tune. It is also more than the
+    # median friend list, so reaching it means challenging people you have
+    # not played — which is the signal.
+    challenge_create_user_limit: int = Field(default=20, ge=1)
+    challenge_create_window_seconds: int = Field(default=60 * 60, ge=1)
+
+    # Decline and cancel share one counter, like the friend-request responses
+    # below. Neither can reach a challenge the caller is not party to, so this
+    # bounds a stuck client rather than an attack — sixty in five minutes is
+    # far past any human rate and well under a retry loop's.
+    challenge_respond_user_limit: int = Field(default=60, ge=1)
+    challenge_respond_window_seconds: int = Field(default=5 * 60, ge=1)
+
     # Accept, decline and cancel share one counter. None can reach a request
     # the caller is not party to, so this bounds a stuck client rather than
     # an attacker — hence the far looser figure and the short window.

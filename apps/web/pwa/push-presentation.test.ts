@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { NOTIFICATION_ROUTES } from "@/shared/config/notification-routes";
+
 import { isPushPayload, presentationFor } from "./push-presentation";
 
 /**
@@ -56,6 +58,8 @@ describe("what a push notification says", () => {
       "tournament_round_published",
       "tournament_registration_confirmed",
       "tournament_completed",
+      "friend_request_received",
+      "friend_request_accepted",
       "unknown",
     ];
 
@@ -63,6 +67,35 @@ describe("what a push notification says", () => {
       const { title, body } = presentationFor({ n: NOTIFICATION_ID, t: type });
       expect(`${title} ${body}`).not.toContain(NOTIFICATION_ID);
     }
+  });
+});
+
+describe("the social types — A64-021.6A", () => {
+  it("says a request arrived without saying who sent it", () => {
+    // **§4.** The strictest rule in the table, and stricter than the
+    // tournament entries follow. A tournament notification discloses that
+    // somebody plays in tournaments; a social one would disclose *who is
+    // trying to reach them*, on a lock screen, to whoever is looking.
+    const received = presentationFor({ n: NOTIFICATION_ID, t: "friend_request_received" });
+    const accepted = presentationFor({ n: NOTIFICATION_ID, t: "friend_request_accepted" });
+
+    expect(received.title).toBe("Arena64");
+    expect(received.body).toBe("You have a new friend request.");
+    expect(accepted.title).toBe("Arena64");
+    expect(accepted.body).toBe("Your friend request was accepted.");
+  });
+
+  it("routes each one to the page that answers it", () => {
+    // **§5**, and through the shared constants rather than string literals:
+    // the in-app list resolves the same destinations through the same
+    // values, so a copy here that drifted would be a push whose text says
+    // "friend request" and whose tap opens a different page.
+    expect(presentationFor({ n: NOTIFICATION_ID, t: "friend_request_received" }).path).toBe(
+      NOTIFICATION_ROUTES.friendRequests,
+    );
+    expect(presentationFor({ n: NOTIFICATION_ID, t: "friend_request_accepted" }).path).toBe(
+      NOTIFICATION_ROUTES.friends,
+    );
   });
 });
 

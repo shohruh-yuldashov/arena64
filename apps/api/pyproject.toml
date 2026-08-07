@@ -33,6 +33,25 @@ dependencies = [
     # for FastAPI's ASGI client, so this promotes a package that was being
     # installed and audited anyway rather than adding one (CLAUDE.md §2.6).
     "httpx>=0.27,<1.0",
+    # Web Push cryptography (A64-021.6). Web Push is two standards and both
+    # are cryptographic: RFC 8292 signs a VAPID assertion with ES256 over
+    # P-256, and RFC 8291 encrypts every payload with ECDH + HKDF-SHA256 +
+    # AES-128-GCM. There is no version of this feature that does not need
+    # these primitives, and none of them may be hand-rolled.
+    #
+    # `cryptography` rather than `pywebpush`, and it is one package instead
+    # of four. `pywebpush` brings `requests`, `http-ece` and `py-vapid` on
+    # top of this same library, and its `webpush()` is **synchronous** — in
+    # the delivery worker, whose entire job is I/O, that is the objection
+    # that ruled out the Resend SDK in A64-021.5, with the same consequence
+    # (a blocked event loop, or a thread per message) and the same missing
+    # per-request timeout. What it saves is roughly eighty lines of RFC 8291,
+    # which is written once and pinned to a standard that does not move.
+    #
+    # PyJWT above already has an ES256 path and needs exactly this library
+    # to take it, so half of what is added here was a latent requirement of
+    # a dependency this repository already audited.
+    "cryptography>=44.0,<47.0",
     # Image processing (A64-012.2). Pillow is the only mature option in
     # Python and is the one the task names. Used for exactly three things —
     # decoding an *already signature-validated* upload, applying EXIF

@@ -67,6 +67,7 @@ from sqlalchemy import (
     Boolean,
     Index,
     Integer,
+    LargeBinary,
     PrimaryKeyConstraint,
     String,
     UniqueConstraint,
@@ -344,10 +345,184 @@ class NotificationEmailDeliveryModel(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 
+class PushSubscriptionModel(UUIDPrimaryKeyMixin, Base):
+    """The `notifications.push_subscription` row — A64-021.6 §2, §3.
+
+    One row per **browser**, not per person and not per device: a laptop
+    with two browsers is two subscriptions, and a browser whose site data
+    was cleared becomes a new one. That is the only granularity the Push API
+    offers — there is no device identifier — and pretending otherwise would
+    invent an identity nothing can maintain.
+
+    ## The endpoint is unique, and that is the ownership rule
+
+    `uq_push_subscription__endpoint` is what makes "this browser belongs to
+    this account" a database fact rather than a service check. A browser
+    that re-subscribes with an endpoint another account already registered
+    **takes it over** (`ON CONFLICT DO UPDATE`), which is §23's requirement:
+    two people sharing a laptop must not inherit each other's
+    notifications, and the browser saying "this endpoint is now mine" is the
+    signal that the previous binding is stale.
+
+    Unique across live *and* revoked rows, deliberately. A revoked row
+    reappearing as a second live one for the same endpoint would push twice
+    to one browser.
+
+    ## No foreign key to `users`
+
+    The same rule as every table here: cross-context references are opaque
+    `user_id` values (DM-06), so the two schemas stay deployable apart.
+
+    ## What is stored, and how it must be handled
+
+    `endpoint`, `p256dh` and `auth` together are a **capability**: anyone
+    holding them can push to that browser, subject to VAPID. They are never
+    returned to a client, never logged, and never accepted as a lookup key a
+    caller supplies. The keys are `LargeBinary` rather than base64 text
+    because that is what the encryption takes — storing the encoded form
+    would mean decoding on every delivery and would let a malformed value
+    survive the write.
+    """
+
+    __tablename__ = "push_subscription"
+
+    __table_args__ = (
+        UniqueConstraint("endpoint", name="uq_push_subscription__endpoint"),
+        # The fan-out query, exactly: every live subscription for one
+        # recipient. Partial on live rows, so a table that accumulates
+        # revoked history costs nothing to fan out over — and §9's "avoid
+        # N+1" is a single indexed read per notification rather than a
+        # lookup per device.
+        Index(
+            "ix_push_subscription__user_live",
+            "user_id",
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        {"schema": NOTIFICATIONS_SCHEMA},
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
+    endpoint: Mapped[str] = mapped_column(String(2048), nullable=False)
+    """`domain.subscription.MAX_ENDPOINT_LENGTH`. Long because push services
+    choose these and some are long; bounded so the column cannot be used as
+    storage."""
+
+    p256dh: Mapped[bytes] = mapped_column(LargeBinary(65), nullable=False)
+    auth: Mapped[bytes] = mapped_column(LargeBinary(16), nullable=False)
+    """Exact lengths, fixed by RFC 8291. A value of any other length cannot
+    encrypt anything, so the boundary refuses it and the column records that
+    it did."""
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+    last_seen_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    """When this browser last re-registered. The only "is this device still
+    real" signal available — a push service reports nothing until a delivery
+    fails."""
+
+    revoked_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    """Set rather than deleted, so an operator asking *why did this device
+    stop receiving notifications* gets an answer. Two things set it: a push
+    service answering `404`/`410`, and signing out on that browser."""
+
+
+class NotificationPushDeliveryModel(Base):
+    """The `notifications.notification_push_delivery` row — A64-021.6 §10, §19.
+
+    ## Why the key is a pair, where email's is not
+
+    `(notification_id, subscription_id)`. A person has one address and may
+    have three browsers, so one notification owes **one** email and *n*
+    pushes — and each succeeds or fails on its own (§9: one dead device must
+    not prevent the others).
+
+    That pair is also §19's idempotency, structurally: enqueueing is
+    `INSERT ... ON CONFLICT DO NOTHING`, so a redelivered source event that
+    inserts no notification inserts no deliveries, and a relay retry that
+    somehow reached the fan-out twice converges on the same rows without
+    reading first.
+
+    ## No foreign key to `push_subscription`, despite both living here
+
+    Retention, the same argument the email delivery table makes: the
+    delivery record is the *operational* answer to "did we try", and it must
+    outlive the subscription it describes. A cascade would delete the audit
+    with the device — which is precisely the history somebody investigating
+    "my phone stopped getting these" needs.
+
+    ## What is not stored
+
+    The endpoint or the keys. They are read from `push_subscription` at send
+    time, so a browser that re-subscribed between enqueue and send is pushed
+    at its *current* address, and so this table is not a second copy of a
+    capability.
+
+    The payload. It is two identifiers derived from the notification at send
+    time (`domain.push.PushPayload`), and freezing it here would send a
+    stale type after a correction.
+
+    A push service's response body. `outcome` is a **bounded label this
+    platform chose**, never vendor text, which is what keeps it safe to read
+    and safe on a metric.
+    """
+
+    __tablename__ = "notification_push_delivery"
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "notification_id", "subscription_id", name="pk_notification_push_delivery"
+        ),
+        # The worker's claim query, exactly: pending rows whose time has
+        # come, oldest first. Partial on `PENDING`, so a table that is
+        # mostly delivered history costs nothing to scan for work.
+        Index(
+            "ix_notification_push_delivery__due",
+            "next_attempt_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
+        {"schema": NOTIFICATIONS_SCHEMA},
+    )
+
+    notification_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
+    recipient_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    """Whose preference to read at send time. Denormalised from the
+    notification rather than joined, because the claim query must not read a
+    second table to decide what it holds — and because the delivery record
+    outlives the notification."""
+
+    notification_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    """`domain.record.NotificationType`. Carried so the worker can refuse an
+    unsupported type without loading the notification, and so a metric can be
+    labelled by type without a join."""
+
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    """`domain.push_delivery.PushDeliveryOutcome`, or `NULL` while a row has
+    never been attempted. Text rather than a PostgreSQL enum, like every
+    other closed vocabulary here: adding an outcome must be a code change and
+    a migration of rows, never an `ALTER TYPE` that locks the relation."""
+
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    """When this becomes due. `NULL` on a terminal row, so the partial index
+    above never holds one."""
+
+    last_attempt_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
 __all__ = [
     "NOTIFICATIONS_SCHEMA",
     "NOTIFICATION_SOURCE_UNIQUE",
     "NotificationEmailDeliveryModel",
     "NotificationModel",
     "NotificationPreferenceModel",
+    "NotificationPushDeliveryModel",
+    "PushSubscriptionModel",
 ]

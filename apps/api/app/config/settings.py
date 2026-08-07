@@ -2314,6 +2314,45 @@ class MatchmakingSettings(SectionSettings):
     holding hundreds of row locks and as many outbox inserts.
     """
 
+    challenge_expiry_enabled: bool = True
+    """Whether *this process* expires overdue friend challenges — A64-022.6.
+
+    Per-process, exactly like `expiry_enabled` above and for the same
+    reason: one API tier with it off, one worker tier with it on, running
+    the same image.
+
+    With it off everywhere, `expires_at` still governs what a player sees —
+    the list reads exclude an overdue row and `_require_answerable` refuses
+    to act on one, so no challenge becomes answerable that should not be.
+    What stops happening is the *transition*: no `expired` status, no event,
+    no record. That is a loss of history rather than of the rule, which is
+    exactly the trade the queue's own switch makes.
+    """
+
+    challenge_expiry_interval_seconds: float = Field(default=60.0, ge=1.0, le=3600.0)
+    """How often overdue challenges are swept.
+
+    The worst-case delay between a challenge falling due and the platform
+    recording it. **A minute, not fifteen seconds**, and the difference from
+    the queue's cadence is the window each job serves: a queue ticket lives
+    ten minutes and a late expiry is a player staring at a dead spinner; a
+    challenge lives twenty-four hours and a minute is four thousandths of
+    one percent of its life.
+
+    Nothing waits on this. The recipient already cannot answer an overdue
+    challenge and already cannot see it, so the sweep is writing the record,
+    not enforcing the rule.
+    """
+
+    challenge_expiry_batch_size: int = Field(default=200, ge=1, le=2000)
+    """How many challenges one sweep may expire.
+
+    Bounded for the reason every batch on this platform is (CLAUDE.md
+    §10.5). The interesting case is a sweeper that was off for a day: two
+    hundred per tick drains the backlog in a few ticks without one
+    transaction holding hundreds of row locks and as many outbox inserts.
+    """
+
     @model_validator(mode="after")
     def _rating_window_widens(self) -> "MatchmakingSettings":
         """The maximum cannot be below the starting width.

@@ -154,6 +154,9 @@ from app.modules.matchmaking.application.services import (
     ReconciliationTimelineProjector,
     queue_retention_policy,
 )
+from app.modules.matchmaking.application.services.challenge_expiry_service import (
+    ChallengeExpiryService,
+)
 from app.modules.matchmaking.application.services.challenge_service import ChallengeService
 from app.modules.matchmaking.domain.pairing import PairingEngine, RatingWindowPolicy
 from app.modules.matchmaking.infrastructure import (
@@ -887,6 +890,42 @@ def build_challenge_service(
         events=events,
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
+    )
+
+
+def build_challenge_expiry_service(
+    session: AsyncSession,
+    *,
+    settings: MatchmakingSettings,
+    clock: Clock,
+    metrics: MetricsRecorder,
+    events: EventPublisher,
+) -> ChallengeExpiryService:
+    """One expiry sweep's object graph, over one session — A64-022.6 §2.
+
+    Deliberately **much narrower** than `build_challenge_service` above: a
+    repository, the outbox, a clock and a counter. No social graph, no time
+    control catalogue, no match creation, no rating provider.
+
+    That is the point rather than an economy. Expiry is the one challenge
+    transition with no actor and no negotiation — nothing is validated
+    against a relationship, nothing is looked up in a catalogue, and no game
+    is created — so a sweep able to name `MatchCreationUseCase` would be a
+    scheduled job that could produce a match. §19 asks whether an actorless
+    scheduler can bypass a domain invariant, and the honest answer is that
+    it cannot reach the collaborators it would need to.
+
+    The publisher is over the **same session** as the repository, so the
+    transition and the event announcing it commit together or neither does
+    (AD-16).
+    """
+    return ChallengeExpiryService(
+        challenges=SqlAlchemyChallengeRepository(session),
+        events=events,
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+        metrics=metrics,
+        batch_size=settings.challenge_expiry_batch_size,
     )
 
 

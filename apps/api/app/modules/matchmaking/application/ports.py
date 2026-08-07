@@ -742,6 +742,33 @@ class ChallengeRepository(Protocol):
         """
         ...
 
+    async def claim_expired(self, *, now: datetime, limit: int) -> Sequence[Challenge]:
+        """Locks up to `limit` overdue pending challenges for this worker —
+        A64-022.6 §2, §3.
+
+        `SELECT ... FOR UPDATE SKIP LOCKED`, so several nodes may sweep at
+        once and each takes a disjoint set. **Claiming is not a transition**:
+        the rows come back `PENDING`, and a worker that dies holding them
+        leaves challenges the next sweep claims again.
+
+        The only unscoped read on this port, and it earns the exception:
+        expiry is the platform's own act, has no actor to scope to, and
+        returns nothing to a caller who is not a scheduled task.
+        """
+        ...
+
+    async def expire(self, challenge_ids: Sequence[UUID], *, at: datetime) -> frozenset[UUID]:
+        """Settles a claimed batch in one statement. Returns the ids that
+        actually moved — A64-022.6 §4, §5.
+
+        Guarded on `status = 'pending'`, so a challenge answered between the
+        claim and this call is not re-stamped. The returned set is what the
+        caller publishes events for: a count would say how many moved and
+        not which, and the caller would then be announcing the expiry of a
+        challenge somebody had just accepted.
+        """
+        ...
+
     async def find_live_between(self, first: UUID, second: UUID) -> Challenge | None:
         """The live challenge between these two, whichever direction.
 

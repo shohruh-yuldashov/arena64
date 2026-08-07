@@ -65,6 +65,19 @@ PENDING_MATCH_DELIVERIES = "matchmaking.pending_match_deliveries_total"
 #: Rows removed by retention, by relation — §8.
 RETENTION_DELETIONS = "matchmaking.retention_deletions_total"
 
+#: What the friend challenge expiry sweep did — A64-022.6 §18.
+#:
+#: One counter with a three-valued label, and that is the whole observability
+#: this task gets: §18 forbids building a subsystem for one job. No
+#: `challenge_id` and no player — the cardinality of either is the number of
+#: challenges ever sent, which is a metrics backend outage rather than a
+#: dashboard.
+#:
+#: Cold by construction: a challenge expires at most once, twenty-four hours
+#: after it was sent, so this counts in the tens per tick on a busy platform
+#: rather than in the thousands per second like `PAIRING_SCANS`.
+CHALLENGE_EXPIRIES = "matchmaking.challenge_expiries_total"
+
 #: What one pairing scan did — A64-015.6 §7.
 #:
 #: **The hottest counter on the platform.** One increment per scan, and a scan
@@ -119,6 +132,26 @@ class AcceptanceFailureAction(StrEnum):
     NO_ACTION = "no_action"
     """They answered nothing and accepted nothing. Silence is not a
     decline (§3), so it earns neither a requeue nor a cooldown."""
+
+
+class ChallengeExpiryOutcome(StrEnum):
+    """What became of one claimed friend challenge — A64-022.6 §5, §18."""
+
+    EXPIRED = "expired"
+    """The sweep wrote the transition. The ordinary outcome."""
+
+    LOST_RACE = "lost_race"
+    """Claimed, then found already answered when the guarded `UPDATE` ran —
+    somebody accepted, declined or cancelled in the window between.
+
+    **Not a failure.** It is the race resolving correctly, and it is worth
+    counting precisely because it is the one number that would move if the
+    ordering ever broke: a platform where this is consistently high has a
+    sweep running too eagerly against its own clock."""
+
+    FAILED = "failed"
+    """The round raised. The rows stay `PENDING` and the next tick claims
+    them again — see `ChallengeExpiryService` on why nothing propagates."""
 
 
 class DeliveryOutcome(StrEnum):

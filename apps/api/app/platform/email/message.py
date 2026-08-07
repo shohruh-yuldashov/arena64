@@ -31,18 +31,25 @@ the correct behaviour for a transport detail — `ConsoleEmailProvider`
 does not have a concept of a sender reputation and should not have to
 pretend.
 
-## Why `send` is async and returns nothing
+## Why `send` is async, and what it now returns
 
 Async because every real implementation is network I/O, and a
 synchronous `send` in an async handler would block the event loop for the
-duration of an SMTP conversation — the same reasoning that put Argon2 on
-a worker thread, for a cost two orders of magnitude larger.
+duration of an HTTP round trip — the same reasoning that put Argon2 on a
+worker thread, for a cost two orders of magnitude larger.
 
-Returns `None` because there is nothing truthful to return. A provider
-accepting a message means the *provider* accepted it, not that anyone
-received it; delivery is asynchronous, out of this process, and reported
-by webhook if at all. A `bool` here would be a lie that callers would
-branch on.
+A64-011.6 returned `None`, on the reasoning that *"a provider accepting a
+message means the provider accepted it, not that anyone received it… a
+`bool` here would be a lie that callers would branch on."* That is still
+true and is why there is still no boolean.
+
+What it returns instead is the **provider's own reference** for the
+message, or `None` where a transport has none. That is not a delivery
+claim: it is the string an operator types into a vendor's dashboard to
+find out what happened to a message somebody says never arrived. A
+platform that could not answer *"we sent it, here is their id for it"*
+would have nothing to investigate with — and that answer is truthful in a
+way `delivered: bool` never was.
 
 ## What this deliberately does not do
 
@@ -103,6 +110,44 @@ class EmailMessage:
     concept of a multipart message and should not have to pretend.
     """
 
+    idempotency_key: str | None = None
+    """A caller-chosen reference that makes a retry safe at the *provider*.
+
+    `None` where a caller has nothing stable to key on. `auth`'s two
+    messages are examples: a verification resend is a **new** message the
+    player asked for, and keying it would make the second request silently
+    return the first one's result.
+
+    A notification email has one — its delivery row's identity — and the
+    value of sending it is what it covers that this platform's own
+    idempotency cannot. The delivery table stops a *second attempt* being
+    started; nothing here can stop a first attempt that timed out after the
+    provider had already accepted it. That message is already sent, and the
+    retry is what would duplicate it.
+
+    Not a secret and not a token: it is derived from an identifier the
+    recipient already holds, so it may appear in a request header.
+    """
+
+
+class PermanentEmailFailure(Exception):
+    """A provider rejection that will recur — A64-021.5 §11.
+
+    A malformed address, a sender the provider will not accept, a body it
+    cannot parse. Retrying is asking the same question and being told no
+    again.
+
+    **Here rather than in `notifications`**, because it is the transport's
+    vocabulary: an adapter raises it and a caller reads it, and putting it in
+    a bounded context would mean `platform` importing one to describe its own
+    contract — which `.importlinter` forbids, correctly.
+
+    There is deliberately no `TransientEmailFailure` beside it. Everything
+    that is *not* this is retryable, including exceptions no adapter
+    classified, and a second type would invite an adapter to raise neither
+    and leave a caller with a third case to guess at.
+    """
+
 
 class EmailProvider(Protocol):
     """Hands a composed message to a transport.
@@ -117,12 +162,22 @@ class EmailProvider(Protocol):
     `SesEmailProvider` reads as "this is wired up".
     """
 
-    async def send(self, message: EmailMessage) -> None:
-        """Delivers, or raises.
+    async def send(self, message: EmailMessage) -> str | None:
+        """Delivers and returns the provider's reference, or raises.
 
         Raises rather than returning a failure flag, because a caller that
         can meaningfully continue after a send failure is rare and should
         say so explicitly with a `try`. See `EmailVerificationService` for
         the one place that does, and why.
+
+        **The exception type is the classification.** An implementation
+        raises `PermanentEmailFailure` for a rejection that will recur — a
+        malformed address, a sender the provider will not accept — and lets
+        everything else propagate. That split belongs here rather than in a
+        service because only the adapter can read a vendor's status code,
+        and a service branching on one would be a service that knows a
+        vendor.
+
+        Returns `None` where a transport has no reference to give.
         """
         ...

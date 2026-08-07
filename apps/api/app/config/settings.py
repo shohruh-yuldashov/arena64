@@ -35,6 +35,10 @@ _LOCAL_JWT_SECRET_KEY = (
     # it was never a secret.
     "insecure-local-development-key-do-not-use-outside-local-0123456"
 )
+#: The frontend a developer runs. Refused in a deployed tier by the guard on
+#: `Settings`, for the reason that guard gives.
+_LOCAL_PUBLIC_APP_URL = "http://localhost:3000"
+
 _LOCAL_REDIS_URLS = {
     "live": "redis://localhost:6379/0",
     "bus": "redis://localhost:6379/1",
@@ -42,6 +46,20 @@ _LOCAL_REDIS_URLS = {
     "cache": "redis://localhost:6379/3",
     "limits": "redis://localhost:6379/4",
 }
+
+
+def _require_bare_origin(value: str, *, variable: str) -> str:
+    """A scheme and a host, and nothing else.
+
+    Shared by `PUBLIC_APP_URL` and by the two `auth` URL templates' origin
+    check, so "what counts as an origin" is decided once rather than in each
+    validator that happens to need it.
+    """
+    if not value.startswith(("http://", "https://")):
+        raise ValueError(f"{variable} must start with http:// or https://")
+    if value.endswith("/") or "/" in value.split("://", 1)[1]:
+        raise ValueError(f"{variable} must be a bare origin — no trailing slash and no path")
+    return value
 
 
 class AppSettings(BaseSettings):
@@ -56,6 +74,28 @@ class AppSettings(BaseSettings):
     # to override that default, e.g. JSON logs on a local machine to test a
     # log pipeline.
     log_format: Literal["json", "human"] | None = None
+
+    public_url: str = _LOCAL_PUBLIC_APP_URL
+    """Where this platform lives, as a player types it — `PUBLIC_APP_URL`.
+
+    **The canonical frontend origin, and there is exactly one.** A64-021.5
+    put the notification email's origin on `NotificationEmailSettings`, and
+    the continuation moved it here for the reason a second copy always
+    justifies: `auth`'s two URL templates carry an origin too, and three
+    settings holding the same host is three chances for an email to link a
+    player into the wrong tier.
+
+    A bare scheme and host — no trailing slash, no path — checked at
+    construction, because both failures are silent: a trailing slash renders
+    `https://x//tournaments`, and a path renders a link into the wrong part
+    of the app. The mail sends and looks fine either way.
+
+    Production is `https://arena64.gg`, and it is deliberately **not** the
+    default: a default naming the real origin would make a misconfigured
+    staging deploy send people into production. `Settings` refuses to start
+    on the localhost default in a production-like tier — see
+    `_forbid_local_defaults_outside_local`.
+    """
 
     metrics_flush_interval_seconds: float = Field(default=60.0, ge=1.0, le=600.0)
     """How often accumulated counters are emitted — A64-015.6 §6.
@@ -75,6 +115,11 @@ class AppSettings(BaseSettings):
     The floor is a guard against a configuration that turns the flush into a
     busy loop, not a tuning range.
     """
+
+    @model_validator(mode="after")
+    def _public_url_must_be_an_origin(self) -> "AppSettings":
+        _require_bare_origin(self.public_url, variable="PUBLIC_APP_URL")
+        return self
 
 
 class PostgresSettings(BaseSettings):
@@ -459,8 +504,43 @@ class EmailSettings(BaseSettings):
     #: this API as a query parameter; see `ResetPasswordRequest`.
     password_reset_url_template: str = "http://localhost:3000/reset-password?token={token}"
 
-    from_address: str = "no-reply@arena64.local"
+    from_address: str = "no-reply@arena64.gg"
+    """Who transactional mail comes from — `EMAIL_FROM_ADDRESS`.
+
+    `arena64.gg` is the **verified sending domain**, and the default names it
+    because it is the only address this platform is entitled to send as. It
+    was `no-reply@arena64.local` while no domain existed; a placeholder TLD
+    is the right default for a platform that cannot send and the wrong one
+    for a platform that can.
+
+    Changing it is not a configuration knob so much as a deliverability
+    decision: an address outside a domain with SPF, DKIM and DMARC records
+    for Resend is refused by the provider, which this platform records as a
+    permanent failure and stops retrying.
+    """
+
     from_name: str = "Arena64"
+    """The display name beside the address — `EMAIL_FROM_NAME`."""
+
+    resend_api_key: SecretStr | None = None
+    """The Resend credential — `RESEND_API_KEY`. **Server-side only.**
+
+    `SecretStr`, like every credential here, so it cannot reach a log line, a
+    traceback or an error reporter through a repr (services.md §8.5).
+
+    `None` means *no transport is configured*, and it is the switch the whole
+    channel turns on:
+
+        set    `ResendEmailProvider` is built, and the notification email
+               channel reports itself available
+        unset  `ConsoleEmailProvider` is built — which refuses to construct
+               in a production-like tier, so a deployed process without a key
+               fails at boot rather than sending nobody anything (DI-06)
+
+    That is why availability is not a second flag. A boolean saying "email
+    works" that could disagree with whether a credential exists is exactly
+    the settings-screen lie A64-021.5 §26 forbids.
+    """
 
     @model_validator(mode="after")
     def _url_templates_must_carry_the_token(self) -> "EmailSettings":
@@ -508,45 +588,34 @@ class NotificationEmailSettings(BaseSettings):
     **channel**: whether it delivers at all, how a link into the app is
     built, and how a failed send is retried.
 
-    ## `enabled` is off by default, and that is not caution
+    ## `enabled` is a kill switch, not the provider gate
 
-    A64-021.5 built the whole channel and deliberately did **not** choose a
-    vendor: none has been selected, and picking one silently is the decision
-    this codebase must not make on its own. The only `EmailProvider` that
-    exists writes to the log and refuses to construct in a production-like
-    environment.
+    It was off by default while this platform had chosen no email vendor.
+    Resend is now the vendor, and **`RESEND_API_KEY` is the gate**: a process
+    with a credential can send and one without cannot, which is a fact rather
+    than a flag. `platform.email.can_deliver_email` reads it, and the same
+    value decides which provider is built.
 
-    So the switch is what turns a configured transport into an *available
-    channel*, and while it is off the preference API reports email
-    unavailable and the settings screen keeps saying "coming soon". That is
-    true, which is the whole point — §26: do not lie in Settings.
+    What is left here is an operational switch — a way to stop notification
+    email without withdrawing the credential that `auth`'s verification and
+    reset mail also depend on. Two knobs answering different questions: *can
+    this process send at all*, and *should it send notifications*.
 
-    A developer turning this on locally gets the entire pipeline against
-    `ConsoleEmailProvider`, which is how the flow is exercised end to end
-    without a vendor account.
+    Defaulting it to `True` is what makes the pair honest. An operator who
+    configures Resend expects notification email to work; a default of
+    `False` would mean a correctly configured deployment silently sending
+    nothing, which is the same surprise pointing the other way.
     """
 
     model_config = SettingsConfigDict(env_prefix="NOTIFICATION_EMAIL_", frozen=True, extra="forbid")
 
-    enabled: bool = False
-    """Whether this process delivers notification email at all.
+    enabled: bool = True
+    """Whether this process delivers notification **email** — the kill switch.
 
-    Read once at the composition root into a `ChannelAvailability`, which is
-    threaded to every preference read and every refusal — see
-    `notifications.domain.preference`."""
-
-    #: Where a call-to-action link points.
-    #:
-    #: **A frontend origin, not this API's**, for the reason
-    #: `verification_url_template` is a template: the routes an email links
-    #: to are the client's, and a mobile build points the same setting at a
-    #: deep link. Validated below, because an origin with a trailing slash
-    #: or a path produces links that are subtly wrong and does so silently.
-    #:
-    #: The production value is `https://arena64.gg` and is **not** the
-    #: default: a default that named the real origin would make a
-    #: misconfigured staging deploy send people to production.
-    public_origin: str = "http://localhost:3000"
+    Necessary and not sufficient: a process also needs a transport, which is
+    `RESEND_API_KEY`. Both are composed into one `ChannelAvailability` at the
+    composition root and threaded to every preference read and every refusal
+    — see `notifications.presentation.dependencies.email_channel_available`."""
 
     #: How many deliveries one worker pass claims. Small, because each is a
     #: network call to a provider and a pass that claimed hundreds would
@@ -568,25 +637,6 @@ class NotificationEmailSettings(BaseSettings):
     #: The first retry delay, doubling each attempt up to the ceiling.
     retry_base_seconds: int = Field(default=60, ge=1)
     retry_max_seconds: int = Field(default=6 * 60 * 60, ge=60)
-
-    @model_validator(mode="after")
-    def _origin_must_be_an_origin(self) -> "NotificationEmailSettings":
-        """A scheme, a host, and nothing else.
-
-        Checked at construction rather than at render time, because the
-        failure is silent: a trailing slash produces `https://x//tournaments`
-        and a path produces a link into the wrong part of the app. Both send
-        mail that looks fine and goes nowhere useful.
-        """
-        origin = self.public_origin
-        if not origin.startswith(("http://", "https://")):
-            raise ValueError("NOTIFICATION_EMAIL_PUBLIC_ORIGIN must start with http:// or https://")
-        if origin.endswith("/") or "/" in origin.split("://", 1)[1]:
-            raise ValueError(
-                "NOTIFICATION_EMAIL_PUBLIC_ORIGIN must be a bare origin — "
-                "no trailing slash and no path"
-            )
-        return self
 
 
 class StorageSettings(BaseSettings):
@@ -2499,6 +2549,17 @@ class Settings(BaseModel):
             raise ValueError(
                 f"{', '.join(unset)} must be set explicitly in {self.environment} "
                 "— refusing the local default"
+            )
+
+        # A64-021.5. The origin every transactional email links to. A
+        # deployed tier on the localhost default sends verification links,
+        # password resets and tournament confirmations that point at a
+        # machine the recipient does not have — and nothing about it fails
+        # visibly: the mail sends and the links are simply dead.
+        if self.app.public_url == _LOCAL_PUBLIC_APP_URL:
+            raise ValueError(
+                f"PUBLIC_APP_URL must be set explicitly in {self.environment} "
+                "— every email link would point at localhost"
             )
 
         # The most consequential of the three. A deployed tier running on

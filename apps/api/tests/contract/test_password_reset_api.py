@@ -536,8 +536,7 @@ class TestLogging:
         leaked = [
             record.name
             for record in caplog.records
-            if token in record.getMessage()
-            and record.name != "app.platform.email.console"
+            if token in record.getMessage() and record.name != "app.platform.email.console"
         ]
         assert leaked == []
 

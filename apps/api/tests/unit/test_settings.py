@@ -37,6 +37,11 @@ from app.config.settings import (
 #: than tripping the JWT guard first.
 EXPLICIT_JWT_SECRET = "a-real-deployment-signing-key-well-over-the-minimum-length"
 
+#: A deployed tier's frontend origin. Refusing the localhost default in
+#: production is a guard of its own (A64-021.5), so every production-like
+#: construction below has to supply one — which is the guard working.
+EXPLICIT_PUBLIC_URL = "https://arena64.example"
+
 
 class TestEnvironment:
     def test_defaults_to_local_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -122,7 +127,7 @@ class TestSettings:
         with pytest.raises(PydanticValidationError, match="POSTGRES_DSN"):
             Settings(
                 environment=Environment.PRODUCTION,
-                app=AppSettings(),
+                app=AppSettings(public_url=EXPLICIT_PUBLIC_URL),
                 postgres=PostgresSettings(),  # left at the local default
                 redis=RedisSettings(
                     live_url=SecretStr("redis://prod-live:6379/0"),
@@ -153,7 +158,7 @@ class TestSettings:
         with pytest.raises(PydanticValidationError, match="REDIS_"):
             Settings(
                 environment=Environment.PRODUCTION,
-                app=AppSettings(),
+                app=AppSettings(public_url=EXPLICIT_PUBLIC_URL),
                 postgres=PostgresSettings(
                     dsn=SecretStr("postgresql+asyncpg://real:pw@prod-host:5432/arena64")
                 ),
@@ -179,7 +184,7 @@ class TestSettings:
     def test_production_accepts_fully_explicit_configuration(self) -> None:
         settings = Settings(
             environment=Environment.PRODUCTION,
-            app=AppSettings(),
+            app=AppSettings(public_url=EXPLICIT_PUBLIC_URL),
             postgres=PostgresSettings(
                 dsn=SecretStr("postgresql+asyncpg://real:pw@prod-host:5432/arena64")
             ),
@@ -320,7 +325,7 @@ class TestJWTProductionGuard:
     def _production(self, **jwt_overrides: object) -> Settings:
         return Settings(
             environment=Environment.PRODUCTION,
-            app=AppSettings(),
+            app=AppSettings(public_url=EXPLICIT_PUBLIC_URL),
             postgres=PostgresSettings(
                 dsn=SecretStr("postgresql+asyncpg://real:pw@prod-host:5432/arena64")
             ),

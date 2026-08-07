@@ -6,7 +6,7 @@
 | **Status** | Approved through A64-021.4 — foundation, authentication, profile, social, game, tournaments, PWA, notifications and their event coverage |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-07 — A64-022.5, the friend challenge UI |
+| **Last updated** | 2026-08-07 — A64-022.6, expiry reconciliation and the global match handoff |
 | **Related ADRs** | [`ADR-002`](../docs/07-decisions/ADR-002-frontend-spa.md) |
 | **Related specs** | [`rating.md`](./rating.md), [`leaderboard.md`](./leaderboard.md), [`tournament.md`](./tournament.md) |
 | **Related** | `docs/01-architecture/architecture.md` §5, `docs/04-frontend/` |
@@ -2262,7 +2262,54 @@ the frame carries a type but not a side.
 **Nothing polls the lists.** A challenge lives for twenty-four hours and
 changes when a person does something.
 
-### 21A.6 Navigation targets, updated
+### 21A.6 Expiry reconciliation — A64-022.6
+
+A row's countdown reaching zero invalidates both lists **once**. That is a
+question, not a conclusion: the refetch removes the row, because only the
+server knows whether the sweep has run or somebody answered in the last
+second. A device whose clock is fast asks early and is told the challenge is
+still there.
+
+No second-by-second polling, and no client-held authority over expiry —
+`useExpiry` still decides nothing.
+
+### 21A.7 The global match handoff — A64-022.6 §13
+
+**`MatchOfferSurface` is mounted by `AppShell`, and it is the only
+`MatchOfferDialog` in the app.** `/play` and `/challenges` no longer render
+their own.
+
+A64-020.5D shipped the offer push mounted by the lobby and recorded the
+limitation: *"a player on `/profile` when they are paired learns on their
+next visit to `/play`"*. Friend challenges made it matter — a challenger
+told "your challenge was accepted" while reading a profile has a real game
+waiting inside a ten-minute join window.
+
+| Property | How |
+| --- | --- |
+| No second socket | `useMatchOfferPush` fans out over the one connection `app/providers` owns |
+| No second query | the same `matchmakingKeys.pending()` entry; TanStack serves one request to any number of observers |
+| No new polling | the interval is the query's own, the one it has always applied to an open offer — ticket or no ticket |
+| Nothing anonymous | `AppShell` renders the surface only for a signed-in session, so a logged-out visitor makes no request |
+
+#### It does not navigate on `active` alone, and that is the whole design
+
+`GET /matchmaking/matches/pending` returns a match that is
+`pending_acceptance` **or `active`**, with no time window. A shell that
+derived "there is an active match, go there" would navigate on every
+authenticated page load for the whole duration of a game — a player could
+not open their profile mid-match.
+
+So the surface navigates only for a match it **showed an offer for**:
+
+    saw an offer for X, X is now active   ->  go to the board
+    X was already active when it mounted  ->  do nothing
+
+`/play` keeps its own `transitioning` navigation for its documented reload
+recovery. The two are guarded independently and target the same route, so a
+double dispatch is a no-op.
+
+### 21A.8 Navigation targets, updated
 
 `friend_challenge_received` now targets `challenges` → `/challenges`, in
 both the in-app mapper and the service worker, through the same

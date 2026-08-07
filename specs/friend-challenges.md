@@ -2,9 +2,9 @@
 
 | | |
 | --- | --- |
-| **Status** | Complete through acceptance — A64-022.3. No UI, no realtime, no notification |
+| **Status** | Complete — domain, API, acceptance, notifications, UI, and durable expiry (A64-022.1 through A64-022.6) |
 | **Owner** | platform |
-| **Last updated** | 2026-08-07 — A64-022.5, the challenge UI |
+| **Last updated** | 2026-08-07 — A64-022.6, expiry and lifecycle hardening |
 | **Related** | `docs/01-architecture/domain-model.md` §10.3, `specs/matchmaking.md`, `specs/friends.md`, `specs/notifications.md` §15.15 |
 
 A **friend challenge** is a direct, named invitation: one player asking one
@@ -23,7 +23,7 @@ three later phases consume.
 | --- | --- |
 | Realtime frame and notification | A64-022.4 |
 | Frontend | A64-022.5 |
-| Expiry sweep | A64-022.6 |
+| Durable expiry sweep | A64-022.6 — §26 |
 | Terminal history endpoint | undecided — see §17 |
 
 ## 2. Where it lives, and why
@@ -64,10 +64,12 @@ challenge, so a transition that moved the status and created no match would
 be a challenge claiming a game nobody can play. It arrives with match
 creation, in one place, in A64-022.3.
 
-`Voided-by-block` — §10.3's sixth state — is **deferred**. A block placed
-after a challenge is sent should void it, which needs a consumer of
-`friends.player_blocked`; that is a phase with an event subscriber in it. In
-the meantime a block cannot be *bypassed*: acceptance re-checks it.
+`Voided-by-block` — §10.3's sixth state — is **deferred, and A64-022.6
+looked at it and declined to fake it**. A block placed after a challenge is
+sent leaves the row `PENDING` and hidden until it expires, because none of
+the four terminal states truthfully describes an invalidated relationship.
+§26.8 states the reasoning; a block still cannot be *bypassed*, because
+acceptance re-checks it.
 
 ## 4. Who may challenge whom
 
@@ -701,7 +703,147 @@ immediately; if not, the existing match offer surface says so. §24's seam is
 closed in the client, and the backend is unchanged — the match is still
 `BILATERAL` and both seats are still real.
 
-## 26. Deferred
+## 26. Expiry, and the rest of the lifecycle — A64-022.6
+
+### 26.1 The sweep
+
+`ChallengeExpiryTask`, on `PeriodicTaskScheduler`, routed to the
+`maintenance` queue.
+
+| | |
+| --- | --- |
+| Predicate | `status = 'pending' AND expires_at <= now` |
+| Claim | `SELECT ... FOR UPDATE SKIP LOCKED`, ordered by `expires_at`, served by `ix_friend_challenge__expiring` |
+| Settle | one `UPDATE ... RETURNING id`, guarded on `status = 'pending'` |
+| Batch | `MATCHMAKING_CHALLENGE_EXPIRY_BATCH_SIZE`, default 200 |
+| Rounds per tick | 8, so a backlog drains over ticks rather than in one transaction |
+| Cadence | `MATCHMAKING_CHALLENGE_EXPIRY_INTERVAL_SECONDS`, default **60** |
+| Switch | `MATCHMAKING_CHALLENGE_EXPIRY_ENABLED`, per process |
+
+A minute rather than the queue's fifteen seconds, because the two windows
+differ by three orders of magnitude: a queue ticket lives ten minutes and a
+late expiry is a player staring at a dead spinner; a challenge lives
+twenty-four hours and **nothing waits on this**. The recipient already
+cannot answer an overdue challenge and already cannot see it — the sweep
+writes the record, it does not enforce the rule.
+
+With the switch off everywhere, that remains true. What is lost is history,
+not correctness.
+
+**No migration.** `EXPIRED`, `responded_at` and `ix_friend_challenge__expiring`
+all shipped with A64-022.1; this is the first writer of a status the enum
+has declared since then.
+
+### 26.2 One transaction, and why it differs from the queue
+
+`QueueService.expire_due` claims in one transaction and settles in a second.
+This does both in one, because a challenge has a competing writer the queue
+does not: **acceptance, which creates a match**.
+
+Holding the `FOR UPDATE` locks from claim to commit makes `EXPIRED + Match`
+unreachable rather than unlikely. An acceptance arriving mid-sweep blocks on
+the row lock; when it is released the guarded `UPDATE` in
+`ChallengeRepository.save` matches no `PENDING` row, and the recipient is
+told the challenge was already answered. `SKIP LOCKED` still lets a second
+sweeper work in parallel on a disjoint set.
+
+### 26.3 Races, stated exactly
+
+| Ordering | Outcome |
+| --- | --- |
+| Accept commits first | `ACCEPTED` **with** `created_match_id`. The sweep's `UPDATE` matches nothing, so no expiry event is published for it |
+| Sweep commits first | `EXPIRED`, `created_match_id` `NULL`. The acceptance is refused |
+| Decline commits first | `DECLINED`. Not claimable |
+| Sweep first, then decline | Refused with `challenge_not_pending` — the aggregate checks pending before expiry, so the recipient is told it was *answered* rather than that it expired |
+
+`EXPIRED` with a match and `ACCEPTED` without one are both **structurally**
+unreachable: `expire` writes only `status` and `responded_at`, and `accept`
+writes `created_match_id` in the transaction that creates the match.
+
+### 26.4 Cancel around expiry — the semantics that changed
+
+`cancel` checks only "is it pending", deliberately: before A64-022.6 that is
+what let a challenger tidy an overdue row the platform had not swept.
+
+That behaviour is **unchanged**, and what changed is the window it applies
+in — a minute rather than forever. After the sweep the row is terminal and
+cancel is refused. There is no double-terminal transition, because the
+guarded `UPDATE` admits exactly one.
+
+### 26.5 Idempotency
+
+A second sweep finds the rows `EXPIRED` and does not claim them. Nothing
+transitions twice, `responded_at` is written once, and no second event is
+built — events are composed from the ids `expire` **returned**, so a row
+that did not move contributes none. An outbox redelivery is
+`platform.processed_event`'s concern, unchanged.
+
+### 26.6 `FriendChallengeExpired` — published, and consumed by nobody
+
+The event now has a producer. It deliberately has **no consumer**:
+
+| Candidate | Why not |
+| --- | --- |
+| A durable notification | §14's rule. Nothing happened — a row about the absence of an event is inbox noise |
+| Web Push | The same, on a lock screen |
+| A realtime frame | Would need a new frame type and a new client protocol, which A64-022.6 §27 names as a stop condition. The UI reconciles over HTTP instead — §26.7 |
+
+It is published anyway for the reason A64-022.1 gives for the other four: a
+consumer added later has no record of what happened before it existed, and
+an unsubscribed event costs one outbox row.
+
+### 26.7 UI reconciliation
+
+The challenge row's local countdown reaching zero invalidates both lists
+**once**. That is a question, not a conclusion — the refetch is what removes
+the row, because only the server knows whether the sweep has run or somebody
+answered in the last second. A device whose clock is fast asks early and is
+told the challenge is still there.
+
+No second-by-second polling, and no client-held authority over expiry.
+
+### 26.8 Block and unfriend — deliberately no cleanup
+
+**A live challenge between a pair who block or unfriend is left `PENDING`
+and hidden until it expires.** This is a decision, not an omission.
+
+`PlayerBlocked` and `FriendRemoved` are authoritative seams and a consumer
+could be written. What does not exist is a **truthful terminal state**:
+
+| State | What it means | Why it would be a lie |
+| --- | --- | --- |
+| `CANCELLED` | the challenger withdrew it | They did not — and when the *recipient* blocks, the challenger did nothing at all |
+| `DECLINED` | the recipient said no | They did not |
+| `EXPIRED` | the window closed unanswered | It did not. `Challenge.expire` refuses to run before `expires_at`, so this is not even constructible without weakening a domain guard |
+
+A64-022.6 §8 says to stop rather than invent one, and A64-022.7's audit is
+where a sixth state — `invalidated`, or similar — would be argued for on its
+merits.
+
+Nothing about safety depends on it. Acceptance revalidates the relationship
+inside its own transaction, both list reads exclude a blocked pair, and the
+row expires within twenty-four hours regardless.
+
+### 26.9 Recovery
+
+| Situation | What the player gets |
+| --- | --- |
+| Reload `/challenges` | The same HTTP read a first visit makes. No `localStorage`, no client-held challenge state |
+| Challenge accepted on another device | Absent from the list on the next read |
+| Accepted challenge, challenger elsewhere | The `friend_challenge_accepted` notification, **and** the pending-match offer — which since A64-022.6 renders on every authenticated page, not only `/play` |
+
+See `specs/frontend.md` §21A.7 for the global handoff and the hazard its
+design avoids.
+
+### 26.10 Remaining lifecycle gaps
+
+| Gap | Note |
+| --- | --- |
+| Block/unfriend leaves a hidden `PENDING` row for up to 24h | §26.8. Needs a truthful state, which is A64-022.7's question |
+| A challenge whose time control is retired is unacceptable and says only "not found" | The reason is not surfaced. `challenge_invalid_time_control` exists and is mapped, but `require()` raises `UnsupportedTimeControl` first |
+| No challenge history surface | The rows are kept; nothing reads a terminal one |
+
+## 27. Deferred
 
 | | Notes |
 | --- | --- |

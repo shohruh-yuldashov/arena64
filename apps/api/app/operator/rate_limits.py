@@ -67,12 +67,13 @@ import argparse
 import asyncio
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from redis.asyncio import Redis
 
 from app.common.logging import configure_logging
 from app.config.settings import Settings, get_settings
-from app.core.rate_limiting import KEY_PREFIX, KEY_VERSION
+from app.core.rate_limiting import KEY_PREFIX, KEY_VERSION, RateLimitProfile, scaled
 from app.modules.auth.presentation.rate_limits import build_rules as auth_rules
 from app.modules.avatars.presentation.rate_limits import build_rules as avatar_rules
 from app.modules.friends.presentation.rate_limits import build_rules as friends_rules
@@ -183,22 +184,56 @@ async def _clear_rule(client: Redis, rule: str, *, dry_run: bool) -> int:
             return cleared
 
 
-async def show() -> list[tuple[str, int, int]]:
-    """Every rule as `(name, limit, window_seconds)`, in the same order
-    `clear` walks them.
+@dataclass(frozen=True, slots=True)
+class EffectiveRule:
+    """One rule as this process actually enforces it — A64-021.6 §8.
+
+    Carries **both** numbers, and that is the point: a developer asking why
+    they can sign in a hundred times on a laptop and five times in
+    production should be able to see the production figure and the
+    multiplier that moved it, in one line, rather than reading two files and
+    inferring a mapping.
+    """
+
+    name: str
+    base_limit: int
+    """As the module policy declares it. Always production's figure."""
+
+    effective_limit: int
+    """As this process enforces it. `base_limit × profile.multiplier`."""
+
+    window_seconds: int
+
+
+async def show() -> tuple[RateLimitProfile, list[EffectiveRule]]:
+    """The profile in force, and every rule as it is actually enforced.
 
     Reported because the first question during an incident is "what is the
     limit actually set to here", and reading it from the running process's
     settings answers it for *this* deployment rather than for the file
     somebody has open.
+
+    Since A64-021.6 that question has two halves — the declared figure and
+    the environment's multiplier — and answering only the first would be
+    the more misleading of the two.
     """
     settings = get_settings()
-    return sorted(
-        (rule.name, rule.limit, int(rule.window.total_seconds()))
+    profile = settings.rate_limit.profile
+    effective = [
+        EffectiveRule(
+            name=rule.name,
+            base_limit=rule.limit,
+            effective_limit=scaled(rule, profile).limit,
+            window_seconds=int(rule.window.total_seconds()),
+        )
         for build_rules in _POLICY_REGISTRIES
-        for rules in build_rules(settings.rate_limit).values()
-        for rule in rules
-    )
+        for group in build_rules(settings.rate_limit).values()
+        for rule in group
+    ]
+    # By name, explicitly: `EffectiveRule` is not orderable and should not
+    # be — a dataclass with four numeric fields that sorted by all of them
+    # would order by whichever happened to come first.
+    return profile, sorted(effective, key=lambda entry: entry.name)
 
 
 def _parser(known: Sequence[str]) -> argparse.ArgumentParser:
@@ -237,8 +272,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser(known).parse_args(argv)
 
     if arguments.command == "show":
-        for name, limit, window in asyncio.run(show()):
-            print(f"{name:28s} {limit:5d} per {window:6d}s")  # noqa: T201 — an operator's terminal
+        profile, rules = asyncio.run(show())
+        # The profile first, because it explains every number below it.
+        print(  # noqa: T201 — an operator's terminal
+            f"environment={settings.environment.value} "
+            f"profile={profile.value} multiplier=x{profile.multiplier}"
+        )
+        if profile is not RateLimitProfile.PRODUCTION:
+            print(  # noqa: T201
+                "  (production figures are shown in brackets and are unchanged)"
+            )
+        for entry in rules:
+            scaling = (
+                "" if entry.base_limit == entry.effective_limit else f"  [prod {entry.base_limit}]"
+            )
+            print(  # noqa: T201
+                f"{entry.name:28s} {entry.effective_limit:6d} "
+                f"per {entry.window_seconds:6d}s{scaling}"
+            )
         return 0
 
     # `--rule` is validated against the registry by argparse, so an unknown

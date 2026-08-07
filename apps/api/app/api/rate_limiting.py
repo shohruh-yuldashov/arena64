@@ -71,6 +71,7 @@ from app.core.rate_limiting import (
     RateLimitRule,
     RateLimitScope,
     RateLimitSubject,
+    scaled_all,
 )
 
 logger = logging.getLogger(__name__)
@@ -277,16 +278,31 @@ class RateLimit:
         self._rules_for = rules_for
 
     def rules(self, settings: RateLimitSettings) -> Sequence[RateLimitRule]:
-        """The rules this guard would apply under `settings`.
+        """The rules this guard would apply under `settings`, **as scaled**.
 
         Public so a test can assert *which* limits a route carries without
         sending eleven requests to infer it — the only other way to check
         that `POST /auth/login` counts per email as well as per IP.
+
+        ## The one place the environment profile is applied — A64-021.6 §5
+
+        Every guard on the platform resolves its rules here, so scaling here
+        scales all of them, including rules nobody has written yet. That is
+        the whole reason it is not done in each module's `build_rules`: a
+        rule added next year is scaled by having been written at all, rather
+        than by somebody remembering a second registry.
+
+        The module policies therefore stay **production's numbers**, which
+        is what keeps `tests/unit/test_auth_rate_limits.py`'s table readable
+        and what makes "production is unchanged" directly assertable.
+
+        `PRODUCTION` returns the rules untouched — `scaled_all` returns each
+        rule itself — so the production path allocates nothing.
         """
         rules = self._rules_for(settings)
         if not rules:
             raise ValueError(f"rate limit guard for {self.endpoint!r} resolved to no rules")
-        return rules
+        return scaled_all(rules, settings.profile)
 
     async def __call__(
         self,

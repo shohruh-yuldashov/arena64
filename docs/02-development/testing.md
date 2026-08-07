@@ -8,6 +8,32 @@
 
 Defines the test pyramid, coverage expectations, and quality gates for every change.
 
+## Rate limits in the suites — A64-021.6
+
+The limiter is **on** in every environment, including `test` and `ci`. A
+suite that only passes with it disabled never exercises the thing that
+ships, and the first regression in it is found in production.
+
+What changes is the ceiling. `ENVIRONMENT=test` (and `ci`) applies a ×100
+multiplier to every declared limit — see
+`docs/01-architecture/security.md` for the mechanism and why production is
+untouched. That is sized so a suite whose whole traffic comes from one
+address can be run repeatedly without anybody first learning to clear
+buckets.
+
+Two things follow for anybody writing a test:
+
+**Do not raise a limit to make a test pass.** If a suite exhausts even the
+scaled budget, it is making far more requests than a person would and that
+is the finding. `python -m app.operator.rate_limits show` prints what is
+actually in force.
+
+**A test that asserts a limit *fires* must override the settings**, not
+send a hundred times as many requests. `RateLimit` holds a resolver rather
+than concrete rules precisely so `dependency_overrides` can lower a limit
+for one test — see its docstring.
+
+
 ## Scope
 
 Test categories, tooling, fixtures, and CI gating. Excludes individual test cases.

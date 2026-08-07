@@ -184,6 +184,128 @@ class RateLimitRule:
         return int(self.window.total_seconds() * 1000)
 
 
+class RateLimitProfile(StrEnum):
+    """How hard the limits bite, as one value per deployment kind.
+
+    ## The problem this exists for
+
+    Every limit on this platform is chosen for **production**, where the
+    caller is one person on one connection. Local development and the
+    end-to-end suite are the opposite: one address, one after another,
+    dozens of legitimate sessions a minute. A64-021.6's Playwright run was
+    logging 261 `refresh_ip` rejections against a 30-per-minute rule and
+    failing whichever spec lost the race — a suite that reports a product
+    defect and has found none.
+
+    The two wrong answers were both available and both rejected:
+
+        turn the limiter off      a suite that only passes without the
+                                  limiter never exercises the limiter that
+                                  ships, and the first regression in it is
+                                  found in production
+        edit the numbers          a limit lowered "for the test run" is a
+                                  limit somebody eventually deploys
+
+    So the numbers stay exactly as they are and a **multiplier** is applied
+    to them, chosen by the environment and by nothing else.
+
+    ## Why a multiplier and not a second table of numbers
+
+    A second table is a second thing to maintain, and the failure mode is
+    that a rule added today gets a production number and no development
+    one — so the person who adds it discovers the gap by being rate limited
+    on their own laptop. A multiplier applies to every rule that exists,
+    including the ones nobody has written yet, which is the property
+    §A64-021.6.6 asks for.
+
+    It also keeps the **shape** of every limit: the window, the scope and
+    the relative severity of one endpoint against another are unchanged, so
+    development behaves like production with more headroom rather than like
+    a different system.
+
+    ## Fail-closed
+
+    `for_environment` returns `PRODUCTION` for anything it does not
+    recognise. An environment nobody thought about gets production limits,
+    which is the direction a mistake here must fail in — the alternative is
+    a new tier silently shipping with hundred-fold allowances.
+    """
+
+    PRODUCTION = "production"
+    """The numbers as written. Staging and production, and the default for
+    anything unrecognised."""
+
+    DEVELOPMENT = "development"
+    """`local`. Twenty times production.
+
+    Sized against what a developer actually does: sign in repeatedly while
+    working on the sign-in screen, register a handful of throwaway accounts,
+    reload a page fifty times. Twenty absorbs a working afternoon and still
+    refuses a runaway loop, which is worth keeping — a script that requests
+    in a tight loop should be stopped on a laptop too.
+    """
+
+    TEST = "test"
+    """`test` and `ci`. A hundred times production.
+
+    Sized against the end-to-end suite, whose whole traffic comes from one
+    address: the run that motivated this was making roughly thirty session
+    refreshes a minute against a thirty-per-minute rule, and a suite must
+    be runnable several times in a row without a developer learning to
+    clear buckets first.
+
+    Still finite, and that matters more than the number: the limiter is the
+    same limiter, the counters are the same Redis counters, and a test that
+    asserts a limit fires still fires — it just has to make a hundred times
+    as many requests to prove it, which is why such tests override the
+    settings instead.
+    """
+
+    @property
+    def multiplier(self) -> int:
+        return _MULTIPLIERS[self]
+
+
+#: The scaling, in one place.
+#:
+#: A mapping rather than a chain of `if`s, so a profile added without a
+#: multiplier fails at the lookup instead of defaulting to something
+#: plausible — the same reason every other closed vocabulary here is a dict.
+_MULTIPLIERS: dict[RateLimitProfile, int] = {
+    RateLimitProfile.PRODUCTION: 1,
+    RateLimitProfile.DEVELOPMENT: 20,
+    RateLimitProfile.TEST: 100,
+}
+
+
+def scaled(rule: RateLimitRule, profile: RateLimitProfile) -> RateLimitRule:
+    """One rule as this profile applies it.
+
+    The **window is untouched**, deliberately. Widening it too would change
+    what the limit means — "20 in 15 minutes" and "20 in 5 hours" are
+    different rules — where multiplying the count alone keeps the shape and
+    only adds headroom.
+
+    Returns the rule itself under `PRODUCTION`, so the production path
+    allocates nothing and a caller can assert identity.
+    """
+    if profile is RateLimitProfile.PRODUCTION:
+        return rule
+    return RateLimitRule(
+        name=rule.name,
+        scope=rule.scope,
+        limit=rule.limit * profile.multiplier,
+        window=rule.window,
+    )
+
+
+def scaled_all(
+    rules: Sequence[RateLimitRule], profile: RateLimitProfile
+) -> tuple[RateLimitRule, ...]:
+    """Every rule as this profile applies it — the guard's entry point."""
+    return tuple(scaled(rule, profile) for rule in rules)
+
+
 @dataclass(frozen=True, slots=True)
 class RateLimitSubject:
     """A rule bound to the thing being counted.

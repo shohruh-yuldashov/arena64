@@ -59,6 +59,7 @@ from app.modules.matchmaking.infrastructure.repositories.challenge_repository im
 )
 from app.modules.matchmaking.presentation.dependencies import build_challenge_service
 from app.modules.reference.public import TimeControlId
+from app.platform.outbox import OutboxEventPublisher, SqlAlchemyOutboxRepository
 
 NOW = datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
 VARIANT = ProductVariant.RUSSIAN_8X8
@@ -86,7 +87,13 @@ def service(session: AsyncSession, clock: Clock | None = None) -> ChallengeServi
     than what it answers.
     """
     return build_challenge_service(
-        session, clock=clock or MovableClock(NOW), cache=NoSocialGraphCache()
+        session,
+        clock=clock or MovableClock(NOW),
+        cache=NoSocialGraphCache(),
+        # The **real** publisher over the same session — A64-022.2 stages
+        # every lifecycle event in the challenge's own transaction, so a
+        # no-op here would let a service that never published pass.
+        events=OutboxEventPublisher(SqlAlchemyOutboxRepository(session)),
     )
 
 

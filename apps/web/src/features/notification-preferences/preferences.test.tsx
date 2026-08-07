@@ -89,6 +89,40 @@ beforeEach(() => {
   servePreferences();
 });
 
+it("reflects an available email channel instead of claiming it is not", async () => {
+  // A64-021.5 §26, §31.12. The server decides whether email delivers, and
+  // the screen must agree with it in **both** directions: the earlier test
+  // covers the unavailable state, this one covers the day a provider is
+  // configured.
+  //
+  // The failure this prevents is a hardcoded "not available yet" hint that
+  // keeps saying so after the channel works — the same lie as offering a
+  // switch that does nothing, pointing the other way.
+  mswServer.use(
+    http.get(url("/notifications/preferences"), () =>
+      HttpResponse.json(
+        envelope({
+          settings: defaultSettings().map((setting) =>
+            setting.channel === "email"
+              ? { ...setting, available: true, editable: true, locked_reason: null }
+              : setting,
+          ),
+        }),
+      ),
+    ),
+  );
+  renderApp({ path: "/settings/notifications" });
+
+  const social = await screen.findByRole("group", { name: /friends and social/i });
+  const email = within(social).getByRole("checkbox", { name: /email/i });
+  expect(email).toBeEnabled();
+  expect(within(social).queryByText(/not available yet/i)).not.toBeInTheDocument();
+  // And the one thing a player has to know before turning it on.
+  expect(
+    within(social).getByText(/only a verified email address receives notifications/i),
+  ).toBeInTheDocument();
+});
+
 it("explains every control a player may not change", async () => {
   renderApp({ path: "/settings/notifications" });
 

@@ -868,8 +868,8 @@
     },
     "channelHints": {
       "in_app": "The bell and the notification list.",
-      "email": "Not available yet.",
-      "push": "Not available yet."
+      "email": "Sent to your verified email address.",
+      "push": "Sent to this device."
     },
     "locked": {
       "essential": "Always on — we must be able to tell you about your account.",
@@ -885,6 +885,9 @@
       "rateLimited": "Too many changes. Please wait a moment.",
       "network": "No connection. Please try again.",
       "unexpected": "Something went wrong. Please try again."
+    },
+    "notes": {
+      "unverifiedEmail": "Only a verified email address receives notifications."
     }
   }
 }

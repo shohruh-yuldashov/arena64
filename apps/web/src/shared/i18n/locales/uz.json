@@ -868,8 +868,8 @@
     },
     "channelHints": {
       "in_app": "Qo'ng'iroq va bildirishnomalar ro'yxati.",
-      "email": "Hozircha mavjud emas.",
-      "push": "Hozircha mavjud emas."
+      "email": "Tasdiqlangan email manzilingizga yuboriladi.",
+      "push": "Shu qurilmaga yuboriladi."
     },
     "locked": {
       "essential": "Doim yoqilgan — hisobingiz haqida sizga xabar bera olishimiz kerak.",
@@ -885,6 +885,9 @@
       "rateLimited": "Juda ko'p o'zgarish. Biroz kuting.",
       "network": "Aloqa yo'q. Qayta urinib ko'ring.",
       "unexpected": "Xatolik yuz berdi. Qayta urinib ko'ring."
+    },
+    "notes": {
+      "unverifiedEmail": "Bildirishnomalarni faqat tasdiqlangan email manzil oladi."
     }
   }
 }

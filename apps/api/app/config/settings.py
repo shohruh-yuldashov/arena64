@@ -40,6 +40,14 @@ _LOCAL_JWT_SECRET_KEY = (
 #: `Settings`, for the reason that guard gives.
 _LOCAL_PUBLIC_APP_URL = "http://localhost:3000"
 
+_LOCAL_OTP_SECRET = (
+    # Same shape and same reasoning as `_LOCAL_JWT_SECRET_KEY`: the literal
+    # words are load-bearing, so a deployed tier that somehow reached it is
+    # named in the crash and anybody reading a leaked verifier's key sees
+    # immediately that it was never a secret.
+    "insecure-local-development-otp-secret-do-not-use-outside-local-01"
+)
+
 _LOCAL_REDIS_URLS = {
     "live": "redis://localhost:6379/0",
     "bus": "redis://localhost:6379/1",
@@ -620,6 +628,39 @@ class EmailSettings(SectionSettings):
     #: this API as a query parameter; see `ResetPasswordRequest`.
     password_reset_url_template: str = "http://localhost:3000/reset-password?token={token}"
 
+    otp_secret: SecretStr = Field(
+        default=SecretStr(_LOCAL_OTP_SECRET),
+        validation_alias="EMAIL_VERIFICATION_OTP_SECRET",
+    )
+    """The key the six-digit verification code is stored under —
+    `EMAIL_VERIFICATION_OTP_SECRET`. **Server-side only.**
+
+    Aliased past this class's `EMAIL_` prefix so the variable says what it
+    is for. `EMAIL_OTP_SECRET` would read as "a secret about email"; this
+    one names the flow it belongs to, which matters on a platform that will
+    have more than one thing to verify.
+
+    Its own secret rather than `JWT_SECRET_KEY`, and the separation is the
+    point (A64-021.5H §6). A key that both signs access tokens and derives
+    verification verifiers is a key whose compromise is two breaches, and
+    rotating it for one reason invalidates the other. Domain separation
+    costs one environment variable.
+
+    Explicitly **not** any of: `RESEND_API_KEY` (a third party holds the
+    other half), an access or refresh token (per-session, and rotated), or
+    the database password (the thing the verifier is meant to survive the
+    theft of).
+
+    Why it matters more than a hash salt: a six-digit code has a million
+    possibilities, so an unkeyed digest of one is a table an attacker builds
+    in a second. Without this key, a stolen `email_verification_tokens` row
+    cannot be inverted at all — see `domain.otp.otp_verifier`.
+
+    Refused in a deployed tier while it is the local default, by the same
+    guard that refuses the development JWT key. `SecretStr`, so it cannot
+    reach a log or a traceback through a repr.
+    """
+
     from_address: str = "no-reply@arena64.gg"
     """Who transactional mail comes from — `EMAIL_FROM_ADDRESS`.
 
@@ -996,6 +1037,24 @@ class RateLimitSettings(SectionSettings):
     # A64-011.9 rather than a limit invented here.
     resend_verification_email_limit: int = Field(default=3, ge=1)
     resend_verification_window_seconds: int = Field(default=60 * 60, ge=1)
+
+    # --- POST /auth/email/resend-code ---------------------------------------
+    # A64-021.5H. The code resend is *authenticated*, so its primary bound is
+    # already the 60-second per-user cooldown in `EmailVerificationService` —
+    # this rule answers what that cooldown cannot.
+    #
+    # The cooldown is per account, and accounts are cheap: `register_ip`
+    # permits ten an hour from one host, and ten accounts each resending once
+    # a minute is six hundred messages an hour from one connection. That is a
+    # sending-reputation problem for `arena64.gg` before it is anything else.
+    #
+    # Per IP rather than per email because the endpoint takes no address —
+    # the session says whose challenge it is — so there is no address to key
+    # on. Twenty an hour leaves every one of the ten permitted registrations
+    # two resends, which is more than a real person needs and far less than a
+    # script wants.
+    resend_code_ip_limit: int = Field(default=20, ge=1)
+    resend_code_window_seconds: int = Field(default=60 * 60, ge=1)
 
     # --- POST /auth/refresh -------------------------------------------------
     # The brief gives "30 requests / minute" without a dimension. Read as
@@ -2691,6 +2750,16 @@ class Settings(BaseModel):
         # source. Unlike a wrong database URL, nothing about it fails
         # visibly: the service starts, serves traffic, and is silently
         # unauthenticated.
+        # A64-021.5H. The key a six-digit code is stored under. A deployed
+        # tier on the development value means anybody holding this
+        # repository can compute the verifier for any code, for any
+        # account — which turns a million-value secret into a lookup.
+        if self.email.otp_secret.get_secret_value() == _LOCAL_OTP_SECRET:
+            raise ValueError(
+                f"EMAIL_VERIFICATION_OTP_SECRET must be set explicitly in {self.environment} "
+                "— the development value is in the repository"
+            )
+
         if self.jwt.secret_key.get_secret_value() == _LOCAL_JWT_SECRET_KEY:
             raise ValueError(
                 f"JWT_SECRET_KEY must be set explicitly in {self.environment} "

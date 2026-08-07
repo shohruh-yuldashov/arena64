@@ -12,6 +12,7 @@ from app.modules.auth.presentation.schemas.tokens import RefreshRequest, TokenPa
 from app.modules.auth.presentation.schemas.verification import (
     ResendVerificationRequest,
     VerificationAccepted,
+    VerifyCodeRequest,
     VerifyEmailRequest,
 )
 
@@ -25,6 +26,7 @@ __all__ = [
     "ResetPasswordRequest",
     "TokenPair",
     "VerificationAccepted",
+    "VerifyCodeRequest",
     "VerifyEmailRequest",
     "WebSocketTicketRead",
 ]

@@ -55,6 +55,9 @@ REFRESH_URL = "/api/v1/auth/refresh"
 ME_URL = "/api/v1/auth/me"
 FORGOT_URL = "/api/v1/auth/password/forgot"
 RESET_URL = "/api/v1/auth/password/reset"
+#: The anonymous link sender — the only issuer of verification *links* now
+#: that registration sends a code (A64-021.5H).
+RESEND_URL = "/api/v1/auth/email/resend"
 
 OLD_PASSWORD = "CorrectHorse1!"
 NEW_PASSWORD = "BrandNewHorse2!"
@@ -380,11 +383,18 @@ class TestTokenLifecycle:
         self, client: AsyncClient, caplog: pytest.LogCaptureFixture
     ) -> None:
         """The two credentials live in different tables and are different
-        types. Registration delivers a verification link; presenting it
-        here must fail, or every unverified account would be resettable by
-        anyone who saw the welcome email."""
+        types. Presenting a verification link here must fail, or every
+        unverified account would be resettable by anyone who saw the mail.
+
+        The link comes from `/auth/email/resend` rather than from
+        registration, because A64-021.5H made registration deliver a
+        **code**. The claim under test is unchanged — it was never about
+        which message carried the token, only about the token's type.
+        """
+        account = await register(client)
         with caplog.at_level(logging.WARNING):
-            await register(client)
+            resent = await client.post(RESEND_URL, json={"email": account["email"]})
+            assert resent.status_code == 202, resent.text
 
         verification = next(
             record.getMessage().split("token=")[1].split()[0]

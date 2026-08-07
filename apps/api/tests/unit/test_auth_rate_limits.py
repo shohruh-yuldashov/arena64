@@ -60,6 +60,10 @@ EXPECTED: list[tuple[str, str, RateLimitScope, int, int]] = [
         3,
         60 * 60,
     ),
+    # A64-021.5H. Per **IP**, unlike its anonymous sibling above: the
+    # request carries no address, so an email-scoped rule would key on
+    # nothing and count nothing.
+    ("/api/v1/auth/email/resend-code", "resend_code_ip", RateLimitScope.IP, 20, 60 * 60),
     ("/api/v1/auth/refresh", "refresh_ip", RateLimitScope.IP, 30, 60),
     # Listed under "Endpoints" with no limit given — this figure is chosen,
     # and `RateLimitSettings` says so at length.
@@ -170,6 +174,13 @@ class TestTheWalkerItself:
                                exactly who needs it to work
             /auth/email/verify a one-time token, single-use by construction,
                                and the sender is already limited
+            /auth/email/verify-code
+                               five attempts per challenge, counted in the
+                               database, and a sixth challenge costs a
+                               60-second cooldown — so the guessing rate is
+                               capped at 5/minute/account from *any* number
+                               of hosts. An IP rule would add no bound and
+                               would refuse a shared connection
             /auth/ws-ticket    one ticket per socket, and a client reconnects
                                on a flaky network — a rule tuned for sign-in
                                attempts would refuse ordinary reconnection
@@ -181,6 +192,7 @@ class TestTheWalkerItself:
             "/api/v1/auth/browser/logout",
             "/api/v1/auth/browser/logout-all",
             "/api/v1/auth/email/verify",
+            "/api/v1/auth/email/verify-code",
             "/api/v1/auth/ws-ticket",
         }
         auth_paths = {path for path, _ in api_routes(app) if path.startswith("/api/v1/auth/")}
@@ -271,6 +283,7 @@ class TestRulesFollowConfiguration:
             "forgot_password",
             "reset_password",
             "resend_verification",
+            "resend_code",
             "refresh",
         }
 
@@ -305,6 +318,7 @@ class TestUnguardedEndpoints:
             "/api/v1/auth/logout",
             "/api/v1/auth/logout-all",
             "/api/v1/auth/email/verify",
+            "/api/v1/auth/email/verify-code",
         ],
     )
     def test_is_not_rate_limited(self, app: FastAPI, path: str) -> None:

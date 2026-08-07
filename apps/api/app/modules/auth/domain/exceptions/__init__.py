@@ -12,7 +12,9 @@ from typing import ClassVar
 from app.core.error_codes import ErrorCode
 from app.core.exceptions import (
     AuthenticationFailed,
+    ConflictError,
     PermissionDeniedError,
+    TemporaryConflictError,
     ValidationError,
 )
 
@@ -309,6 +311,107 @@ class InvalidVerificationToken(ValidationError):
     default_code: ClassVar[ErrorCode] = ErrorCode.INVALID_VERIFICATION_TOKEN
 
 
+# --- the six-digit code (A64-021.5H) ----------------------------------------
+#
+# Four exceptions where the link path has one, and the asymmetry is the
+# difference between the two credentials rather than an inconsistency.
+#
+# A link is a 32-byte random value: unknown, used and expired are one answer
+# because a caller can do nothing differently and distinguishing them reports
+# on whether a token they hold was ever real. A code is six digits typed by
+# somebody who **is already authenticated as this account**, so there is no
+# account to enumerate and every distinction below is one the person needs:
+# retype it, ask for another, or wait.
+
+
+class InvalidVerificationCode(ValidationError):
+    """The code is wrong, malformed, or there is no challenge — 422.
+
+    Three causes, one answer, and here that *is* the right collapse: all
+    three mean "this did not work, type the current code". Splitting "wrong"
+    from "no challenge outstanding" would tell a caller whether an account
+    has one open, which is the one thing this endpoint should not report.
+
+    Never says how close a guess was — §9.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.EMAIL_VERIFICATION_CODE_INVALID
+
+
+class VerificationCodeExpired(ValidationError):
+    """The ten-minute window elapsed — 422.
+
+    Its own code because the recovery genuinely differs: retyping is
+    pointless and the client should offer a resend rather than the field
+    again. That distinction is safe to make for an authenticated caller and
+    would not be for the anonymous link endpoint.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.EMAIL_VERIFICATION_CODE_EXPIRED
+
+
+class VerificationAttemptsExceeded(ValidationError):
+    """Five wrong codes — 422, and the challenge is gone.
+
+    Distinct from expiry because the *cause* is different and so is what a
+    client should say: waiting does not help, and a new code is required.
+    Distinct from a plain refusal because the state changed — nothing about
+    the old challenge will work again.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.EMAIL_VERIFICATION_ATTEMPTS_EXCEEDED
+
+
+class VerificationResendTooSoon(TemporaryConflictError):
+    """A code was sent less than a minute ago — 409, with `Retry-After`.
+
+    A `TemporaryConflictError` rather than a rate limit, and the platform
+    already made this exact distinction for the matchmaking decline
+    cooldown: *"the platform's state refused the request, and the caller did
+    nothing wrong"*. No budget was spent — a code exists and is still valid,
+    which is why another one is refused.
+
+    Choosing the existing type also means the transport rendering is
+    already written: `exception_handlers` emits `Retry-After` for anything
+    that is one of these, without knowing which module raised it.
+
+    The interval is measured from the **stored challenge**, never from the
+    configured window, for the reason that class gives about extending
+    cooldowns — a durable row is what a reload, a second tab and a second
+    node all agree about (§11, §22).
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.EMAIL_VERIFICATION_RESEND_TOO_SOON
+
+
+class EmailAlreadyVerified(ConflictError):
+    """The address is already confirmed — 409.
+
+    Only ever raised on **resend**, never on verify: §23 makes a code
+    submitted after another tab succeeded an idempotent success, because
+    the person did the right thing and the outcome they wanted is true.
+    Asking for another code when there is nothing to verify is a different
+    situation — nothing would be sent, and saying so is more useful than a
+    silent acceptance.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.EMAIL_ALREADY_VERIFIED
+
+
+class EmailVerificationRequired(PermissionDeniedError):
+    """This action needs a verified address — 403.
+
+    The one exception the *product* surfaces rather than the verification
+    flow: raised by `RequireVerifiedEmail` on a write an unverified account
+    attempted. `403` rather than `401`, and the distinction is a client
+    behaviour — the caller is authenticated and re-authenticating would
+    change nothing. The fix is `/verify-email`, and the stable code is what
+    tells a client to go there.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.EMAIL_VERIFICATION_REQUIRED
+
+
 # --- password reset (A64-011.7) ----------------------------------------------
 
 
@@ -346,6 +449,12 @@ class InvalidResetToken(ValidationError):
 
 __all__ = [
     "AccountLocked",
+    "EmailAlreadyVerified",
+    "EmailVerificationRequired",
+    "InvalidVerificationCode",
+    "VerificationAttemptsExceeded",
+    "VerificationCodeExpired",
+    "VerificationResendTooSoon",
     "AuthenticationRequired",
     "ExpiredRefreshToken",
     "ExpiredToken",

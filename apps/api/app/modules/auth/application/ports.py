@@ -303,6 +303,26 @@ class VerificationTokenRepository(Protocol):
         port. Returns the row **whatever its state**."""
         ...
 
+    async def live_for_user(self, user_id: UUID, *, at: datetime) -> EmailVerificationToken | None:
+        """The account's one live challenge, or `None` — A64-021.5H.
+
+        Needed by the code path and not by the link path: a link carries its
+        own identifier, so a lookup by digest finds the row; six digits
+        identify nothing, and the session is what says whose challenge to
+        read.
+        """
+        ...
+
+    async def record_failed_attempt(self, challenge_id: UUID) -> int:
+        """Counts one wrong guess against a code. Returns the new total.
+
+        The increment must happen **in the database**. A read-then-write
+        lets two concurrent submissions each read four and each write five,
+        which hands an attacker a sixth guess against a million-value
+        secret.
+        """
+        ...
+
     async def invalidate_active_for_user(self, user_id: UUID, *, at: datetime) -> int:
         """Marks every unused token for a user as used; returns how many.
 

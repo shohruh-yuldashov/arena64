@@ -46,7 +46,15 @@ there is no column here that could hold a recoverable form of it.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, LargeBinary, String, text
+from sqlalchemy import (
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    text,
+)
 from sqlalchemy.dialects.postgresql import ENUM as PgEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -283,6 +291,29 @@ class EmailVerificationTokenModel(Base, UUIDPrimaryKeyMixin):
     Both mean "cannot be redeemed again", which is exactly what this
     column says — see the entity's `consume` docstring on why there is no
     fourth state."""
+
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'link'"))
+    """`domain.verification.VerificationChallengeKind` — A64-021.5H §4.
+
+    Text rather than a PostgreSQL enum, like every other closed vocabulary
+    on this platform: adding a challenge kind must be a code change and a
+    migration of rows, never an `ALTER TYPE` that locks a credential table.
+
+    `server_default` so the migration backfills every existing row as a
+    link without a second statement — which is what they are, and what
+    keeps already-issued links working (§13)."""
+
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    """Failed guesses against a code.
+
+    **Incremented by the database, never read-then-written.** A
+    check-then-act would let two concurrent submissions each read four and
+    each write five, giving an attacker a sixth guess — the same argument
+    the partial unique index above makes about concurrent resends, applied
+    to the one column an attacker can move.
+
+    Always `0` for a link: guessing a 32-byte random value is not a threat
+    model, so nothing increments it."""
 
     id: Mapped[uuid.UUID]
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)

@@ -25,6 +25,7 @@ service here would put the thing under test behind a fake.
 """
 
 import logging
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
@@ -581,14 +582,54 @@ def link_from_log(caplog: pytest.LogCaptureFixture) -> str:
     raise AssertionError("no verification link was delivered")
 
 
+def code_from_log(caplog: pytest.LogCaptureFixture) -> str:
+    """Reads the six-digit code out of `ConsoleEmailProvider`'s output.
+
+    The same boundary `link_from_log` uses, and the same reason: a test
+    should obtain the credential the way a *person* does — out of the
+    delivered message — rather than out of the service's return value,
+    which no user has.
+
+    Reads the **last** message, because a resend supersedes the code before
+    it and only the latest one works (A64-021.5H §2).
+    """
+    for record in reversed(caplog.records):
+        match = re.search(r"^\s{4}(\d{6})$", record.getMessage(), re.M)
+        if match:
+            return match.group(1)
+    raise AssertionError("no verification code was delivered")
+
+
+async def issue_link(client: AsyncClient, email: str, caplog: pytest.LogCaptureFixture) -> str:
+    """Obtains a **link** token for an account — A64-021.5H §13.
+
+    Registration sends a six-digit code now, so a link comes from the
+    anonymous resend endpoint, which still issues one. That endpoint is the
+    documented transition path: somebody who never signed in has no session
+    to submit a code with, so links remain their route until a later phase
+    gives them a session-less one.
+
+    Every link assertion below goes through here, which is what keeps them
+    testing *backward compatibility* rather than testing a flow nothing
+    produces any more.
+    """
+    with caplog.at_level(logging.WARNING):
+        response = await client.post(RESEND_URL, json={"email": email})
+    assert response.status_code == 202, response.text
+    return link_from_log(caplog)
+
+
 class TestEmailVerification:
-    async def test_registration_delivers_a_link(
+    async def test_registration_delivers_a_six_digit_code(
         self, client: AsyncClient, caplog: pytest.LogCaptureFixture
     ) -> None:
+        """A64-021.5H: the primary flow. Registration mails a code, not a
+        link — the person carries six digits from their inbox to the page
+        they are already on."""
         with caplog.at_level(logging.WARNING):
             await register(client)
 
-        assert link_from_log(caplog)
+        assert len(code_from_log(caplog)) == 6
 
     async def test_the_delivered_link_verifies_the_account(
         self, client: AsyncClient, caplog: pytest.LogCaptureFixture
@@ -598,9 +639,8 @@ class TestEmailVerification:
         the token was hashed by `OpaqueTokenService`, stored by
         PostgreSQL, and looked up by digest."""
         body = credentials()
-        with caplog.at_level(logging.WARNING):
-            created = await register(client, body)
-        token = link_from_log(caplog)
+        created = await register(client, body)
+        token = await issue_link(client, body["email"], caplog)
 
         response = await client.post(VERIFY_URL, json={"token": token})
 
@@ -615,9 +655,9 @@ class TestEmailVerification:
         asserting the committed row rather than the response the write
         path happened to build."""
         body = credentials()
-        with caplog.at_level(logging.WARNING):
-            await register(client, body)
-        await client.post(VERIFY_URL, json={"token": link_from_log(caplog)})
+        await register(client, body)
+        token = await issue_link(client, body["email"], caplog)
+        await client.post(VERIFY_URL, json={"token": token})
         tokens = await sign_in(client, body)
 
         me = await client.get(ME_URL, headers=bearer(tokens))
@@ -629,9 +669,9 @@ class TestEmailVerification:
     ) -> None:
         """One-time use. Clicking the same link twice must not succeed
         twice."""
-        with caplog.at_level(logging.WARNING):
-            await register(client)
-        token = link_from_log(caplog)
+        body = credentials()
+        await register(client, body)
+        token = await issue_link(client, body["email"], caplog)
         await client.post(VERIFY_URL, json={"token": token})
 
         replay = await client.post(VERIFY_URL, json={"token": token})
@@ -648,9 +688,9 @@ class TestEmailVerification:
     async def test_an_unknown_and_a_used_token_are_indistinguishable(
         self, client: AsyncClient, caplog: pytest.LogCaptureFixture
     ) -> None:
-        with caplog.at_level(logging.WARNING):
-            await register(client)
-        token = link_from_log(caplog)
+        body = credentials()
+        await register(client, body)
+        token = await issue_link(client, body["email"], caplog)
         await client.post(VERIFY_URL, json={"token": token})
 
         used = await client.post(VERIFY_URL, json={"token": token})
@@ -666,9 +706,9 @@ class TestEmailVerification:
     async def test_the_token_is_not_echoed_in_the_response(
         self, client: AsyncClient, caplog: pytest.LogCaptureFixture
     ) -> None:
-        with caplog.at_level(logging.WARNING):
-            await register(client)
-        token = link_from_log(caplog)
+        body = credentials()
+        await register(client, body)
+        token = await issue_link(client, body["email"], caplog)
 
         response = await client.post(VERIFY_URL, json={"token": token})
 
@@ -681,9 +721,9 @@ class TestEmailVerification:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """§4.5: a database read "must not yield a working" credential."""
-        with caplog.at_level(logging.WARNING):
-            await register(client)
-        token = link_from_log(caplog)
+        body = credentials()
+        await register(client, body)
+        token = await issue_link(client, body["email"], caplog)
 
         hit = (
             await contract_session.execute(
@@ -728,7 +768,9 @@ class TestResendVerification:
         body = credentials()
         with caplog.at_level(logging.WARNING):
             await register(client, body)
-        await client.post(VERIFY_URL, json={"token": link_from_log(caplog)})
+        await client.post(
+            VERIFY_URL, json={"token": await issue_link(client, body["email"], caplog)}
+        )
 
         response = await client.post(RESEND_URL, json={"email": body["email"]})
 
@@ -756,9 +798,8 @@ class TestResendVerification:
         body = credentials()
         with caplog.at_level(logging.WARNING):
             await register(client, body)
-            original = link_from_log(caplog)
-            await client.post(RESEND_URL, json={"email": body["email"]})
-            newest = link_from_log(caplog)
+            original = await issue_link(client, body["email"], caplog)
+            newest = await issue_link(client, body["email"], caplog)
 
         assert original != newest
         assert (await client.post(VERIFY_URL, json={"token": original})).status_code == 422

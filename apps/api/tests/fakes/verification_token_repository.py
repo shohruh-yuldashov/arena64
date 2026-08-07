@@ -54,6 +54,30 @@ class FakeVerificationTokenRepository:
                 return copy.deepcopy(token)
         return None
 
+    async def live_for_user(self, user_id: UUID, *, at: datetime) -> EmailVerificationToken | None:
+        """A64-021.5H. Relies on the same one-live-per-user rule `create`
+        enforces above, so there is never a second candidate to choose
+        between — and a fake that returned an arbitrary one of two would
+        hide exactly the bug that invariant exists to prevent."""
+        for token in self._tokens.values():
+            if token.user_id == user_id and not token.is_used:
+                return copy.deepcopy(token)
+        return None
+
+    async def record_failed_attempt(self, challenge_id: UUID) -> int:
+        """A64-021.5H. Mutates the **stored** token and returns the new
+        total, matching the real adapter's `UPDATE ... RETURNING`.
+
+        Deliberately not `copy`-then-store: the point of this method is
+        that the count survives, and a fake that incremented a copy would
+        let a service test spend an unlimited number of guesses.
+        """
+        token = self._tokens.get(challenge_id)
+        if token is None:
+            raise LookupError(f"no verification challenge {challenge_id}")
+        token.attempt_count += 1
+        return token.attempt_count
+
     async def invalidate_active_for_user(self, user_id: UUID, *, at: datetime) -> int:
         invalidated = 0
         for token in self._tokens.values():

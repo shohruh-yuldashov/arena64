@@ -65,7 +65,9 @@ def _require_bare_origin(value: str, *, variable: str) -> str:
 class AppSettings(BaseSettings):
     """`app` — architecture.md §5 process identity and log posture."""
 
-    model_config = SettingsConfigDict(env_prefix="APP_", frozen=True, extra="forbid")
+    model_config = SettingsConfigDict(
+        env_prefix="APP_", frozen=True, extra="forbid", populate_by_name=True
+    )
 
     name: str = "arena64-api"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
@@ -75,8 +77,12 @@ class AppSettings(BaseSettings):
     # log pipeline.
     log_format: Literal["json", "human"] | None = None
 
-    public_url: str = _LOCAL_PUBLIC_APP_URL
+    public_url: str = Field(default=_LOCAL_PUBLIC_APP_URL, validation_alias="PUBLIC_APP_URL")
     """Where this platform lives, as a player types it — `PUBLIC_APP_URL`.
+
+    Aliased past this class's `APP_` prefix, because the origin is a
+    platform-wide fact rather than an API-process one and `APP_PUBLIC_URL`
+    would read as the latter.
 
     **The canonical frontend origin, and there is exactly one.** A64-021.5
     put the notification email's origin on `NotificationEmailSettings`, and
@@ -454,7 +460,9 @@ class EmailSettings(BaseSettings):
     template at a deep link.
     """
 
-    model_config = SettingsConfigDict(env_prefix="EMAIL_", frozen=True, extra="forbid")
+    model_config = SettingsConfigDict(
+        env_prefix="EMAIL_", frozen=True, extra="forbid", populate_by_name=True
+    )
 
     verification_token_ttl_hours: int = Field(default=24, ge=1, le=168)
 
@@ -522,8 +530,14 @@ class EmailSettings(BaseSettings):
     from_name: str = "Arena64"
     """The display name beside the address — `EMAIL_FROM_NAME`."""
 
-    resend_api_key: SecretStr | None = None
+    resend_api_key: SecretStr | None = Field(default=None, validation_alias="RESEND_API_KEY")
     """The Resend credential — `RESEND_API_KEY`. **Server-side only.**
+
+    The alias is load-bearing. This class carries an `EMAIL_` prefix, so
+    without it the variable would be `EMAIL_RESEND_API_KEY` — and an
+    operator following the provider's own documentation would set
+    `RESEND_API_KEY`, get no error, and run a deployment that silently
+    cannot send. `PUBLIC_APP_URL` carries one for the same reason.
 
     `SecretStr`, like every credential here, so it cannot reach a log line, a
     traceback or an error reporter through a repr (services.md §8.5).

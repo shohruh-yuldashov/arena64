@@ -17,7 +17,7 @@ import pytest
 from pydantic import SecretStr
 
 from app.config.environment import Environment
-from app.config.settings import EmailSettings, NotificationEmailSettings
+from app.config.settings import AppSettings, EmailSettings, NotificationEmailSettings
 from app.modules.auth.presentation.dependencies import get_email_provider
 from app.modules.notifications.presentation.dependencies import email_channel_available
 from app.platform.email import (
@@ -83,6 +83,38 @@ class TestAuthUsesTheSameTransport:
         provider = get_email_provider(_Settings())  # type: ignore[arg-type]
 
         assert isinstance(provider, ResendEmailProvider)
+
+
+class TestTheEnvironmentVariableNames:
+    """The names an operator actually types.
+
+    **This class exists because of a bug the other tests could not catch.**
+    `EmailSettings` carries an `EMAIL_` prefix, so `resend_api_key` read
+    `EMAIL_RESEND_API_KEY` — while every test above constructed the settings
+    object directly and passed. An operator following Resend's own
+    documentation would have set `RESEND_API_KEY`, seen no error, and run a
+    deployment that silently could not send.
+
+    Constructing a settings class is not the same as configuring one, and
+    these two read the environment.
+    """
+
+    def test_the_resend_key_is_read_from_resend_api_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("RESEND_API_KEY", "re_from_the_environment")
+        monkeypatch.delenv("EMAIL_RESEND_API_KEY", raising=False)
+
+        settings = EmailSettings()
+
+        assert settings.resend_api_key is not None
+        assert settings.resend_api_key.get_secret_value() == "re_from_the_environment"
+
+    def test_the_origin_is_read_from_public_app_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("PUBLIC_APP_URL", "https://arena64.gg")
+        monkeypatch.delenv("APP_PUBLIC_URL", raising=False)
+
+        assert AppSettings().public_url == "https://arena64.gg"
 
 
 class TestAvailability:

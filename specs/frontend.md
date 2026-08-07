@@ -6,7 +6,7 @@
 | **Status** | Approved through A64-021.4 — foundation, authentication, profile, social, game, tournaments, PWA, notifications and their event coverage |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-07 — A64-022.4, friend challenge notification rendering |
+| **Last updated** | 2026-08-07 — A64-022.5, the friend challenge UI |
 | **Related ADRs** | [`ADR-002`](../docs/07-decisions/ADR-002-frontend-spa.md) |
 | **Related specs** | [`rating.md`](./rating.md), [`leaderboard.md`](./leaderboard.md), [`tournament.md`](./tournament.md) |
 | **Related** | `docs/01-architecture/architecture.md` §5, `docs/04-frontend/` |
@@ -2158,6 +2158,120 @@ A64-022.5 owns that surface. `notificationHref` gains one branch,
 `friends`, resolved through the same `NOTIFICATION_ROUTES.friends` constant
 the service worker uses — so a push whose text says "challenge" cannot open
 a different page from the row that says it. A64-022.5 replaces both together.
+
+## 21A. Friend challenges — A64-022.5
+
+`/challenges`, protected **and** verified, lazy, and reached from the social
+navigation beside the request lists. Verified is not decoration: every
+challenge write takes `VerifiedUser`, so an unverified account would render
+a page whose every button returns `403`.
+
+### 21A.1 The page
+
+Two tabs over two endpoints — `incoming` and `outgoing`. Nothing on the
+client decides which side of a challenge the viewer is on; the server
+already did, by answering two different questions.
+
+Tabs rather than two stacked lists: at 360px the second list is below the
+fold and nobody finds it, and the common case is looking at one of them.
+Both queries stay mounted, so switching is instant and a realtime
+invalidation refreshes the one that is not on screen.
+
+| Element | Source |
+| --- | --- |
+| The other player | `PlayerRow`, the same widget every social list uses — presence gated in one place |
+| Clock | the **catalogue**, looked up by the challenge's stored `time_control_id`. A retired control renders as its bare code |
+| Mode | `rated` on the challenge |
+| Remaining | a coarse bucket — hours above an hour, minutes below |
+| Actions | accept/decline on incoming, cancel on outgoing, as a discriminated union so the wrong pair is unrepresentable |
+
+Loading is `ListState`'s skeleton, failure is its retry, and both empty
+states are a heading and a sentence.
+
+### 21A.2 Expiry is display, not authority
+
+`useExpiry` counts against the **local** clock and re-renders only when the
+displayed bucket can have changed — a row showing "23h" updates once an
+hour. A device two minutes fast reaches zero early, and all that does is
+disable the incoming row's buttons and change its meta line. Nothing cancels,
+hides or rewrites a challenge on a timer: the row is removed by the next
+read, and the server refuses a late answer.
+
+Cancel stays available on a lapsed outgoing row. Withdrawing a challenge you
+sent is not an answer to it.
+
+### 21A.3 Sending one
+
+`ChallengeButton` renders wherever a friend appears — the friends list and
+the public profile — and renders **nothing** unless `relationship` is
+`friend`. Self and blocked need no branch: a profile of oneself carries no
+relationship, and a block is not friendship.
+
+It deliberately does **not** hide for an already-pending challenge. Knowing
+would cost a read of the outgoing list on every surface that renders a
+friend, and would still be a cached answer racing the create. So a second
+challenge is allowed to be attempted and is refused by
+`uq_friend_challenge__live_pair`, rendered as "you already have a live
+challenge with them".
+
+The dialog offers the clock and the mode, and nothing else. Variant is not a
+choice while `ProductVariant` has one member; the opponent is not a choice
+at all, because the dialog is opened *from* a friend. The clock has no
+default and Send stays disabled until one is picked — every control is a
+genuinely different game.
+
+Validation is entirely the backend's. There is no client-side friendship,
+duplicate or expiry check: each is re-evaluated inside the create
+transaction against state that can have changed since the dialog opened.
+
+### 21A.4 Accept is one press — the bilateral join, in UX
+
+A64-022.3 makes acceptance create a **`BILATERAL`** match: the game exists
+the moment the recipient says yes, and both players must still take their
+seats inside ten minutes. A64-022.4 recorded that as a seam for the UI to
+close, and this is how it closes — by chaining two existing calls:
+
+    POST /challenges/{id}/accept             the challenge is answered and
+                                             the match created, atomically
+    POST /matchmaking/matches/{id}/accept    this player takes their seat
+
+If the challenger is already in, the second call answers `active` and the
+navigation happens immediately. If not, the **shared** `MatchOfferDialog`
+takes over — the same component the lobby renders, driven by the same query,
+with the same countdown.
+
+Nothing about the waiting half is re-implemented. `usePendingMatch` keeps its
+two-second interval **while an offer is open regardless of a queue ticket**,
+which is exactly this case, and `useMatchOfferPush` supplies the same
+wake-up frame. A second definition of "is this game ready" would be a second
+thing to get wrong about a ten-minute window.
+
+### 21A.5 State and realtime
+
+React Query only. Two keys — `incoming` and `outgoing` — invalidated by a
+named set per mutation; no store, no context, no second copy of a challenge.
+Creating invalidates only `outgoing`: the recipient's list is on their
+client, and what reaches it is the notification.
+
+`useChallengePush` invalidates **both** on a `notification.created` frame
+whose type is either challenge type. No new websocket and no new protocol:
+the frame says *something happened* and the HTTP read decides the rest,
+which is what makes a late or duplicated frame harmless. Both lists, because
+the frame carries a type but not a side.
+
+**Nothing polls the lists.** A challenge lives for twenty-four hours and
+changes when a person does something.
+
+### 21A.6 Navigation targets, updated
+
+`friend_challenge_received` now targets `challenges` → `/challenges`, in
+both the in-app mapper and the service worker, through the same
+`NOTIFICATION_ROUTES.challenges` constant.
+
+`friends` is **retired and kept**: A64-022.4 wrote it on every received
+challenge as a stated placeholder, rows still hold it, and it still resolves
+to `/friends`. A notification is history, and rewriting where an old one
+leads would be worse than leaving it truthful.
 
 ## 22. Notification preferences — A64-021.3
 

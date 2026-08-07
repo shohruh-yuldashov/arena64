@@ -66,7 +66,7 @@ Eight, and each has a source event that names its recipients unambiguously.
 | `tournament_round_published` | `tournament` | `tournament.round_published` | every **live** entrant | `tournament` | A64-021.4 |
 | `tournament_completed` | `tournament` | `tournament.completed` | everybody with a **standing** | `tournament` | A64-021.4 |
 | `game_completed` | `game` | `game.match_completed` | both seats | `match_replay` | A64-021.4 |
-| `friend_challenge_received` | `social` | `matchmaking.friend_challenge_created` | the recipient | `friends` (placeholder — see `specs/friend-challenges.md` §20) | A64-022.4 |
+| `friend_challenge_received` | `social` | `matchmaking.friend_challenge_created` | the recipient | `challenges` | A64-022.4, retargeted in A64-022.5 |
 | `friend_challenge_accepted` | `social` | `matchmaking.friend_challenge_accepted` | the **challenger** | `live_game` | A64-022.4 |
 
 **No actor is told what they just did.** Sending a request notifies the
@@ -202,7 +202,8 @@ build's routing into rows that outlive it.
 | Target | `ref` | Route |
 | --- | --- | --- |
 | `friend_requests` | `null` | `/friends/requests` |
-| `friends` | `null` | `/friends` |
+| `friends` | `null` | `/friends` — **retired in A64-022.5**, kept because rows hold it |
+| `challenges` | `null` | `/challenges` |
 | `player_profile` | the actor's username | `/players/{username}` |
 | `tournament` | the tournament's id | `/tournaments/{id}` |
 | `live_game` | the match's id | `/games/{id}` |
@@ -215,12 +216,12 @@ ended yesterday. `live_game` acquired its first producer in A64-022.4 —
 `friend_challenge_accepted`, whose whole point is reaching a board that
 exists and has not started.
 
-`friends` is a **placeholder with a date on it**, and the only target here
-that is not the destination its type wants. A received challenge belongs on
-a challenge surface; A64-022.5 owns that surface and it does not exist yet.
-The three options were a route that 404s, a row that cannot be tapped, and
-the closest existing truth — a challenge exists only between friends. When
-A64-022.5 lands, this member and the client's mapper change together.
+`friends` was a placeholder A64-022.4 wrote on received challenges because
+no challenge surface existed. A64-022.5 built one, so `challenges` is what
+new rows carry — and `friends` is **retired rather than deleted**: rows
+written in the interval still hold it, and deleting the member would make
+them raise on the way out. It is now readable and unproducible, which is the
+correct end state for a target that was honest when it was written.
 
 The client maps a target onto a route it already owns and renders anything
 it does not recognise as a **non-navigable** notification. External
@@ -1102,7 +1103,7 @@ the product name and the body names nobody.
 | --- | --- | --- |
 | `friend_request_received` | *Arena64* — "You have a new friend request." | `/friends/requests` |
 | `friend_request_accepted` | *Arena64* — "Your friend request was accepted." | `/friends` |
-| `friend_challenge_received` | *Arena64* — "You have a new game challenge." | `/friends` (until A64-022.5) |
+| `friend_challenge_received` | *Arena64* — "You have a new game challenge." | `/challenges` |
 | `friend_challenge_accepted` | *Arena64* — "Your game challenge was accepted." | `/games/{match_id}` |
 
 A tournament notification discloses that somebody plays in tournaments; a

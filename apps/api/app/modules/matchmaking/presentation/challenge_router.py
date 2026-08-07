@@ -247,6 +247,65 @@ async def get_challenge(
 
 
 @challenges_router.post(
+    "/{challenge_id}/accept",
+    dependencies=[Depends(enforce_challenge_respond_limit)],
+    response_model=ApiResponse[ChallengeResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Accept a challenge and start the game",
+    responses={**_UNAUTHORIZED, **_FORBIDDEN, **_NOT_FOUND, **_CONFLICT, **_UNPROCESSABLE},
+)
+async def accept_challenge(
+    user: VerifiedUser,
+    challenges: ChallengeServiceDep,
+    directory: ProfileDirectoryDep,
+    avatar_links: AvatarLinkBuilderDep,
+    challenge_id: Annotated[UUID, Path(description="Which challenge to accept.")],
+) -> ApiResponse[ChallengeResponse]:
+    """Says yes, and the game exists by the time this returns.
+
+    **No body.** The recipient accepts exactly the proposal already stored —
+    the time control, the variant and whether it counts were all chosen when
+    the challenge was sent, and a settings field here would be a way to
+    change what was agreed after agreeing to it.
+
+    Accepting a `rated` challenge **is** the consent that makes the match
+    rated. There is no second flag, and `Match.rated` is always the
+    challenge's.
+
+    Only the recipient may. A challenger who tries gets `403`: they are a
+    party and know it exists, so hiding it would be a fiction.
+
+    ## What has to still be true
+
+    The relationship is re-checked here rather than trusted from creation — a
+    friendship can end and a block can be placed in the twenty-four hours
+    between the two. The window is re-checked too, and the time control must
+    still be one the platform offers: a retired clock cannot be resolved to
+    the numbers a match needs, so the invitation can no longer be taken up.
+
+    Any of those failing means **no match and no acceptance** — the whole
+    operation is one transaction.
+
+    ## The handoff
+
+    `created_match_id` on the response is the game. A client navigates to it;
+    there is deliberately no URL in the payload, because a route is the
+    client's to build and a server-supplied one is a redirect nobody
+    validated.
+    """
+    challenge = await challenges.accept(challenge_id, by=user.id)
+    return build_response(
+        await _render(
+            challenge,
+            other=challenge.challenger_id,
+            viewer_id=user.id,
+            directory=directory,
+            links=avatar_links,
+        )
+    )
+
+
+@challenges_router.post(
     "/{challenge_id}/decline",
     dependencies=[Depends(enforce_challenge_respond_limit)],
     response_model=ApiResponse[ChallengeResponse],

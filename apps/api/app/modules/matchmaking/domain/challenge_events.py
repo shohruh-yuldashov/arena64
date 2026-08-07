@@ -114,6 +114,49 @@ class FriendChallengeCreated(_ChallengeEvent):
 
 
 @dataclass(frozen=True)
+class FriendChallengeAccepted(_ChallengeEvent):
+    """The recipient agreed, and a match exists — A64-022.3 §13.
+
+    Carries `match_id`, which is the fact everything downstream needs and
+    the one this event exists to publish: a consumer that only learned "a
+    challenge was accepted" would have to go looking for the game.
+
+    Carries the settings too, for the reason `FriendChallengeCreated` does —
+    a notification saying "your challenge was accepted" is more useful for
+    naming what will be played, and a consumer that had to read the row for
+    it would be reading a row a retention sweep may remove.
+
+    ## Ordering against `match.created`
+
+    Both are staged in the same transaction and both are published by the
+    same relay pass, so a consumer sees both or neither. Their **order
+    within** that pass is the outbox's `occurred_at`, and `game` stamps the
+    match a moment before this is built — so `match.created` arrives first.
+
+    That ordering is not depended on by anything today and nothing here
+    requires it. It is recorded because it is the ordering that exists, and
+    a future consumer that does depend on it should find it written down
+    rather than discovered.
+    """
+
+    event_type: ClassVar[str] = "matchmaking.friend_challenge_accepted"
+
+    match_id: UUID
+    time_control_id: TimeControlId
+    variant: ProductVariant
+    rated: bool
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            **self._parties(),
+            "match_id": str(self.match_id),
+            "time_control_id": self.time_control_id.value,
+            "variant": self.variant.value,
+            "rated": self.rated,
+        }
+
+
+@dataclass(frozen=True)
 class FriendChallengeDeclined(_ChallengeEvent):
     """The recipient said no.
 
@@ -161,6 +204,7 @@ class FriendChallengeExpired(_ChallengeEvent):
 
 __all__ = [
     "CHALLENGE_AGGREGATE",
+    "FriendChallengeAccepted",
     "FriendChallengeCancelled",
     "FriendChallengeCreated",
     "FriendChallengeDeclined",

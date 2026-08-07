@@ -12,19 +12,16 @@ intention lives, not in what they are.
     | Lifetime  | seconds to minutes | hours to days     |
     | Resolution| the pairing worker | the recipient     |
 
-## What this phase builds, and what it deliberately does not
+## Acceptance takes a match id, and that is the whole design
 
-A64-022.1 is the aggregate and its persistence. There is **no HTTP surface,
-no realtime frame, no notification and no `Match`** — those are A64-022.2
-and later.
+`domain-model.md` §10.3: *"acceptance creates the match in the same
+transaction that consumes the challenge."* `accept` therefore **requires**
+`match_id` — there is no way to reach `ACCEPTED` without one, so a challenge
+claiming a game nobody can play is not a state this type can express.
 
-The consequence worth stating plainly is `ACCEPTED`. It is a member of the
-status enum and **nothing in this phase can reach it**. `domain-model.md`
-§10.3 is explicit that "acceptance creates the match in the same transaction
-that consumes the challenge", so an `accept()` that moved the status and
-created no match would be a lie in the type system — a challenge that says
-it was accepted with no game to show for it. The transition arrives with
-match creation, in one place, in A64-022.3.
+The match is created by `game`, outside this file, and its id arrives as an
+argument. The aggregate stays framework-free and knows nothing about how a
+match is made; what it owns is the rule that the two facts are inseparable.
 
 `decline`, `cancel` and `expire` have no such coupling: each is a terminal
 state and nothing downstream has to exist for it to be true.
@@ -40,7 +37,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import ClassVar, Final
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from app.core.error_codes import ErrorCode
 from app.core.exceptions import PermissionDeniedError, RuleViolationError
@@ -95,9 +92,10 @@ class ChallengeStatus(StrEnum):
     ACCEPTED = "accepted"
     """The recipient agreed and a match exists.
 
-    **Unreachable in A64-022.1.** See the module docstring: the transition
-    belongs with match creation, and a status that could be set without one
-    would describe a game nobody can play.
+    Reachable since A64-022.3, and only through `accept`, which **requires a
+    match id**. A challenge cannot be accepted without a game to show for it
+    — that is the invariant `domain-model.md` §10.3 states and the `CHECK`
+    on `created_match_id` enforces.
     """
 
     DECLINED = "declined"
@@ -209,13 +207,10 @@ class Challenge:
     created_match_id: UUID | None = None
     """The match acceptance produced, or `None`.
 
-    **Always `None` in A64-022.1** — the column exists so that A64-022.3's
-    migration is not a schema change on a live table, and so that the
-    aggregate's shape does not change when acceptance arrives.
-
-    It is written by the platform in the same transaction that creates the
-    match. A client cannot supply it, which is what stops a forged link
-    between a challenge and somebody else's game.
+    Set by `accept` and by nothing else, in the same transaction that creates
+    the match. A client cannot supply it, which is what stops a forged link
+    between a challenge and somebody else's game — and a `CHECK` refuses it
+    on any row that is not `ACCEPTED`.
     """
 
     def is_expired_at(self, moment: datetime) -> bool:
@@ -237,6 +232,32 @@ class Challenge:
     @property
     def is_pending(self) -> bool:
         return self.status is ChallengeStatus.PENDING
+
+    def accept(self, *, by: UUID, at: datetime, match_id: UUID) -> "Challenge":
+        """The recipient agrees, and the match that agreement produced.
+
+        Only the recipient. A challenger who could accept their own challenge
+        would be starting a game the other player never answered.
+
+        `match_id` is **required and set exactly once**: `_settle` writes it
+        alongside the status, so there is no path that reaches `ACCEPTED`
+        with a null match and none that overwrites an existing one — the
+        aggregate is terminal afterwards, so a second `accept` is refused by
+        `_require_answerable` before the id is looked at.
+
+        Refuses an expired challenge, like `decline` and unlike `cancel`.
+        Twenty-four hours is the platform's, and a match created from a stale
+        invitation is a game somebody stopped expecting.
+        """
+        self._require_answerable(at)
+        if by != self.recipient_id:
+            raise ChallengeForbidden("only the recipient may accept a challenge")
+        return replace(
+            self,
+            status=ChallengeStatus.ACCEPTED,
+            responded_at=at,
+            created_match_id=match_id,
+        )
 
     def decline(self, *, by: UUID, at: datetime) -> "Challenge":
         """The recipient says no.
@@ -386,6 +407,7 @@ class ChallengeForbidden(PermissionDeniedError):
 
 __all__ = [
     "CHALLENGE_TTL",
+    "challenge_match_id",
     "TERMINAL_STATUSES",
     "Challenge",
     "ChallengeExpired",
@@ -395,3 +417,37 @@ __all__ = [
     "ChallengeStatus",
     "issue",
 ]
+
+
+#: The namespace `challenge_match_id` derives from — A64-022.3 §20.
+#:
+#: A fixed UUID rather than a random one, because the derivation must be
+#: **reproducible**: the same challenge must always name the same match, on
+#: this process and on the one that retries after a crash.
+_CHALLENGE_MATCH_NAMESPACE: Final = UUID("019fdd0a-7c3b-7a4e-9b21-5f6c8d0e1a42")
+
+
+def challenge_match_id(challenge_id: UUID) -> UUID:
+    """The match this challenge produces, named before it exists.
+
+    `game` keys its idempotency on `CreateMatchRequest.pairing_id` and
+    enforces it with `uq_match__pairing_id`, so a derived id makes "one
+    challenge, at most one match" a **database constraint** rather than a
+    check somebody remembered — the same device `tournament.match_key` uses,
+    and for the same reason.
+
+    Two consequences follow, and both are the point:
+
+        a retry is safe        a process that died after `game` committed
+                               and before this module recorded anything can
+                               ask again and receive the match it already
+                               made, rather than making a second one
+        the id exists first    acceptance can write `created_match_id` in
+                               the same transaction that creates the match,
+                               because the identity is known before the row
+                               is
+
+    A `uuid5` rather than a `uuid7`: those are *unique*, and this must be
+    *reproducible*.
+    """
+    return uuid5(_CHALLENGE_MATCH_NAMESPACE, str(challenge_id))

@@ -32,6 +32,7 @@ from httpx import AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.game.infrastructure.models import MatchRecordModel
 from app.platform.outbox.models import OutboxModel
 from tests.contract.contract_app import build_contract_app, contract_client
 
@@ -101,11 +102,13 @@ async def friends_pair(client: AsyncClient, session: AsyncSession) -> tuple[Play
     return first, second
 
 
-async def challenge(client: AsyncClient, sender: Player, recipient: Player) -> dict[str, Any]:
+async def challenge(
+    client: AsyncClient, sender: Player, recipient: Player, *, rated: bool = False
+) -> dict[str, Any]:
     sent = await client.post(
         CHALLENGES_URL,
         headers=sender.auth,
-        json={"recipient_id": str(recipient.id), "time_control_id": CLOCK},
+        json={"recipient_id": str(recipient.id), "time_control_id": CLOCK, "rated": rated},
     )
     assert sent.status_code == 201, sent.text
     body: dict[str, Any] = sent.json()["data"]
@@ -116,6 +119,32 @@ async def events_of(session: AsyncSession, event_type: str) -> list[dict[str, An
     """Every outbox entry of one type, as the relay would read them."""
     rows = await session.scalars(select(OutboxModel).where(OutboxModel.event_type == event_type))
     return [dict(row.payload) for row in rows]
+
+
+async def match_row(session: AsyncSession, match_id: UUID) -> MatchRecordModel | None:
+    row: MatchRecordModel | None = await session.scalar(
+        select(MatchRecordModel).where(MatchRecordModel.id == match_id)
+    )
+    return row
+
+
+async def match_count(session: AsyncSession) -> int:
+    """How many matches exist at all.
+
+    The suite runs in a rolled-back transaction of its own, so "at all" is
+    "created by this test" — which is what makes `== 0` a meaningful
+    assertion about a refusal.
+    """
+    return len((await session.scalars(select(MatchRecordModel.id))).all())
+
+
+async def status_of(session: AsyncSession, challenge_id: UUID) -> str:
+    row = await session.scalar(
+        text("SELECT status FROM matchmaking.friend_challenge WHERE id = :id").bindparams(
+            id=challenge_id
+        )
+    )
+    return str(row)
 
 
 class TestCreating:
@@ -333,6 +362,192 @@ class TestAnswering:
         assert wrong_decline.status_code == 403
         assert wrong_cancel.status_code == 403
         assert await events_of(contract_session, "matchmaking.friend_challenge_declined") == []
+
+
+class TestAccepting:
+    """Acceptance, and the invariant the whole phase exists for — §1.
+
+    Never an accepted challenge without a match, never a match without an
+    accepted challenge, never two matches for one challenge.
+    """
+
+    async def test_accepting_creates_exactly_one_match_with_the_stored_settings(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """The whole operation, asserted on **both** rows.
+
+        The settings are the ones the *challenger* chose — the recipient
+        agreed to a proposal and had no way to alter it, because the accept
+        request carries no body at all.
+        """
+        challenger, recipient = await friends_pair(client, contract_session)
+        created = await challenge(client, challenger, recipient, rated=True)
+
+        accepted = await client.post(
+            f"{CHALLENGES_URL}/{created['id']}/accept", headers=recipient.auth
+        )
+
+        assert accepted.status_code == 200, accepted.text
+        body = accepted.json()["data"]
+        assert body["status"] == "accepted"
+        match_id = UUID(body["created_match_id"])
+
+        match = await match_row(contract_session, match_id)
+        assert match is not None
+        assert match.variant.value == "russian_8x8"
+        assert match.rated is True
+        # The challenge's own settings, never the request's.
+        assert match.origin.value == "challenge"
+        assert match.origin_ref == UUID(created["id"])
+        # Exactly one, and its identity is derived — so a retry cannot make a
+        # second.
+        assert await match_count(contract_session) == 1
+
+    async def test_the_two_seats_are_the_two_players_and_neither_is_predictable(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """§9. Both players are seated, and the challenger is **not** always
+        light — that would hand a measurable edge to whoever sends the
+        invitation, in rated games, forever.
+
+        Asserted as a set rather than by position: which of them is light is
+        the parity of a derived id, which this test must not restate.
+        """
+        challenger, recipient = await friends_pair(client, contract_session)
+        created = await challenge(client, challenger, recipient)
+
+        accepted = await client.post(
+            f"{CHALLENGES_URL}/{created['id']}/accept", headers=recipient.auth
+        )
+
+        match = await match_row(contract_session, UUID(accepted.json()["data"]["created_match_id"]))
+        assert match is not None
+        assert {match.light_player_id, match.dark_player_id} == {challenger.id, recipient.id}
+
+    async def test_the_challenger_cannot_accept_their_own_challenge(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """`403`, and **no match** — the assertion that matters, because a
+        refusal that still created a game would be the worst outcome
+        available."""
+        challenger, recipient = await friends_pair(client, contract_session)
+        created = await challenge(client, challenger, recipient)
+
+        refused = await client.post(
+            f"{CHALLENGES_URL}/{created['id']}/accept", headers=challenger.auth
+        )
+
+        assert refused.status_code == 403
+        assert await match_count(contract_session) == 0
+
+    async def test_an_unfriended_challenge_cannot_be_accepted(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """**§3, and the reason the creation-time check is not enough.**
+
+        A friendship can end in the twenty-four hours between sending and
+        answering, and the snapshot is not authority for mutable
+        relationship state. Removing the friendship covers blocking too,
+        because a block also ends one.
+
+        The challenge stays `pending` and no match exists: the whole
+        operation is one transaction, so a failed revalidation leaves
+        nothing behind.
+        """
+        challenger, recipient = await friends_pair(client, contract_session)
+        created = await challenge(client, challenger, recipient)
+        await contract_session.execute(
+            text(
+                "DELETE FROM friends.friendship "
+                "WHERE player_low_id = :low AND player_high_id = :high"
+            ),
+            {
+                "low": min(challenger.id, recipient.id, key=str),
+                "high": max(challenger.id, recipient.id, key=str),
+            },
+        )
+
+        refused = await client.post(
+            f"{CHALLENGES_URL}/{created['id']}/accept", headers=recipient.auth
+        )
+
+        assert refused.status_code == 422
+        assert refused.json()["code"] == "challenge_not_friends"
+        assert await match_count(contract_session) == 0
+        assert await status_of(contract_session, UUID(created["id"])) == "pending"
+
+    async def test_a_second_accept_creates_no_second_match(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """§16, §20. Two defences and this proves both hold together.
+
+        The guarded update refuses the second transition, so the second
+        request is a bounded conflict rather than a success. And even if it
+        were not, `pairing_id` is derived from the challenge id and `game`'s
+        unique index admits one match per key — so a second match is
+        structurally impossible rather than merely prevented.
+        """
+        challenger, recipient = await friends_pair(client, contract_session)
+        created = await challenge(client, challenger, recipient)
+
+        first = await client.post(
+            f"{CHALLENGES_URL}/{created['id']}/accept", headers=recipient.auth
+        )
+        second = await client.post(
+            f"{CHALLENGES_URL}/{created['id']}/accept", headers=recipient.auth
+        )
+
+        assert first.status_code == 200
+        assert second.status_code == 422
+        assert second.json()["code"] == "challenge_not_pending"
+        assert await match_count(contract_session) == 1
+        assert len(await events_of(contract_session, "matchmaking.friend_challenge_accepted")) == 1
+
+    async def test_cancelling_first_means_no_match_is_ever_created(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """**§17's race, in the order that must not produce a game.**
+
+        `CANCELLED + Match` is the forbidden outcome. The challenge is a
+        single row and every transition is guarded on `status = 'pending'`,
+        so whichever commits first wins and the loser touches nothing —
+        which means acceptance cannot create a match after a cancel landed.
+        """
+        challenger, recipient = await friends_pair(client, contract_session)
+        created = await challenge(client, challenger, recipient)
+
+        await client.request("DELETE", f"{CHALLENGES_URL}/{created['id']}", headers=challenger.auth)
+        refused = await client.post(
+            f"{CHALLENGES_URL}/{created['id']}/accept", headers=recipient.auth
+        )
+
+        assert refused.status_code == 422
+        assert await status_of(contract_session, UUID(created["id"])) == "cancelled"
+        assert await match_count(contract_session) == 0
+
+    async def test_both_events_are_staged_together(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """§14, §15. One transaction, so a consumer sees both or neither.
+
+        `match.created` is `game`'s own event, published by `game`'s own use
+        case — this phase publishes no duplicate of it. Asserting both are in
+        the outbox is what proves the two modules committed together rather
+        than one succeeding and the other being retried.
+        """
+        challenger, recipient = await friends_pair(client, contract_session)
+        created = await challenge(client, challenger, recipient)
+
+        await client.post(f"{CHALLENGES_URL}/{created['id']}/accept", headers=recipient.auth)
+
+        accepted = await events_of(contract_session, "matchmaking.friend_challenge_accepted")
+        matches = await events_of(contract_session, "game.match_created")
+        assert len(accepted) == 1
+        assert len(matches) == 1
+        # The handoff fact, and the one a notification needs.
+        assert accepted[0]["match_id"] == matches[0]["match_id"]
+        # Durable identifiers only — no prose, no names.
+        assert "username" not in accepted[0]
 
 
 class TestSocialChangesAfterCreation:

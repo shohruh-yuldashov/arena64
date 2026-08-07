@@ -6,7 +6,7 @@
 | **Status** | Approved through A64-021.4 — foundation, authentication, profile, social, game, tournaments, PWA, notifications and their event coverage |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-07 — A64-021.6, Web Push notifications |
+| **Last updated** | 2026-08-07 — A64-022.4, friend challenge notification rendering |
 | **Related ADRs** | [`ADR-002`](../docs/07-decisions/ADR-002-frontend-spa.md) |
 | **Related specs** | [`rating.md`](./rating.md), [`leaderboard.md`](./leaderboard.md), [`tournament.md`](./tournament.md) |
 | **Related** | `docs/01-architecture/architecture.md` §5, `docs/04-frontend/` |
@@ -2133,6 +2133,31 @@ Every `ref` is `encodeURIComponent`-ed and every branch is a literal
 template. A missing `ref` renders a **non-navigable** row rather than a link
 to a list page: a notification about *a* tournament that could not name one
 is malformed, and quietly sending somebody to the lobby would hide that.
+
+### 21.11 Challenge type rendering — A64-022.4
+
+Two more types, and no new machinery: they read the response's fourth
+subject key, `challenge`.
+
+| Type | Sentence | Avatar | Target |
+| --- | --- | --- | --- |
+| `friend_challenge_received` | names the challenger | the challenger's | `friends` → `/friends` |
+| `friend_challenge_accepted` | names the player who accepted | theirs | `live_game` → `/games/{match_id}` |
+
+**Four keys, not two**, for the reason `game_completed` pays for six: an
+opponent whose account is gone arrives as `null`, and a sentence that begins
+with an empty string is one no language recovers from.
+
+The sentence names the person. The **push** body deliberately does not —
+this row is behind a session and a lock screen is not. See
+`specs/notifications.md` §15.5.
+
+The clock and whether the game is rated are on the payload and are **not**
+in the sentence: they are facts a challenge surface should show, and
+A64-022.5 owns that surface. `notificationHref` gains one branch,
+`friends`, resolved through the same `NOTIFICATION_ROUTES.friends` constant
+the service worker uses — so a push whose text says "challenge" cannot open
+a different page from the row that says it. A64-022.5 replaces both together.
 
 ## 22. Notification preferences — A64-021.3
 

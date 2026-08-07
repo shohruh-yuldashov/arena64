@@ -2,9 +2,9 @@
 
 | | |
 | --- | --- |
-| **Status** | Domain, persistence and HTTP API — A64-022.2. No UI, no realtime, no notification, no acceptance |
+| **Status** | Complete through acceptance — A64-022.3. No UI, no realtime, no notification |
 | **Owner** | platform |
-| **Last updated** | 2026-08-07 — A64-022.2, API and lifecycle events |
+| **Last updated** | 2026-08-07 — A64-022.3, acceptance and match creation |
 | **Related** | `docs/01-architecture/domain-model.md` §10.3, `specs/matchmaking.md`, `specs/friends.md`, `specs/notifications.md` §15.15 |
 
 A **friend challenge** is a direct, named invitation: one player asking one
@@ -21,7 +21,6 @@ three later phases consume.
 
 | | Phase |
 | --- | --- |
-| Acceptance and match creation | A64-022.3 |
 | Realtime frame and notification | A64-022.4 |
 | Frontend | A64-022.5 |
 | Expiry sweep | A64-022.6 |
@@ -313,11 +312,11 @@ cache — challenge state is durable product state, and `SocialGraphCache` is
 | `GET /challenges/incoming` | `CurrentUser` | none |
 | `GET /challenges/outgoing` | `CurrentUser` | none |
 | `GET /challenges/{id}` | `CurrentUser` | none |
-| `POST /challenges/{id}/decline` | `VerifiedUser` | `challenge_respond_user`, 60/5min |
+| `POST /challenges/{id}/accept` | `VerifiedUser` | `challenge_respond_user`, 60/5min |
+| `POST /challenges/{id}/decline` | `VerifiedUser` | the same bucket |
 | `DELETE /challenges/{id}` | `VerifiedUser` | the same bucket |
 
-**There is no `POST /accept`**, and `ChallengeService` has no `accept`. See
-§3 and §17.
+`POST /challenges/{id}/accept` is §18.
 
 ### 16.1 Create
 
@@ -437,11 +436,146 @@ beside `SocialNotificationDispatcher` reaches the existing gateway.
 transaction, write `created_match_id`, publish two events. No new table, no
 schema change — the column and the `CHECK` are already there.
 
-## 17. Deferred
+## 18. Acceptance — A64-022.3
+
+The recipient says yes, and a game exists by the time the request returns.
+
+`POST /challenges/{id}/accept`, `VerifiedUser`, **no body**. The recipient
+accepts exactly the proposal already stored; a settings field would be a way
+to change what was agreed after agreeing to it.
+
+### 18.1 One transaction, and how two services share it
+
+Four things must land together or not at all: the match, the challenge's
+transition, `game.match_created` and
+`matchmaking.friend_challenge_accepted`.
+
+`MatchCreationUseCase` commits by contract — correct for every caller that
+only creates a match, wrong for this one. Rather than special-casing that
+inside `game`, acceptance hands it a **`ParticipatingUnitOfWork`**: a unit of
+work that stages and flushes and leaves the commit to its caller. `game` is
+unchanged, its other callers are unchanged, and the caller that needs to own
+the transaction says so by construction.
+
+    1. load, scoped to a party
+    2. re-check the relationship
+    3. resolve the clock
+    4. read both rating snapshots
+    5. create the match          ← stages, flushes, does not commit
+    6. challenge.accept(match_id)
+    7. save, guarded on pending
+    8. stage the accepted event
+    9. commit                    ← all four, once
+
+The match is created **first** because its identity is generated at
+persistence and the challenge has to record it. The window that ordering
+would normally open — a match with no accepted challenge — does not exist,
+because nothing has committed until step 9.
+
+### 18.2 What is revalidated, and why the snapshot is not enough
+
+| | Why |
+| --- | --- |
+| Friendship and blocks | Mutable. Twenty-four hours is long enough for a friendship to end, and the creation-time check is not authority for state that changes |
+| Expiry | Server-authoritative; a device's clock has no say |
+| The time control | `reference.require` refuses a retired one, and **no reader returns an inactive control's parameters** — so a clock withdrawn after the invitation was sent makes it unacceptable. That is the seams' only possible behaviour rather than a rule chosen here |
+
+Any of them failing means no match, no acceptance, and a challenge left
+`pending`.
+
+### 18.3 Rated consent
+
+The challenger chose `rated` when sending. **Accepting is the consent**, and
+`Match.rated` is always the challenge's — there is no second flag anywhere,
+and the accept request has no body to put one in.
+
+### 18.4 Seats
+
+`Pairing.of`'s policy, reused: the **parity of the derived pairing id**
+decides who plays light. Its own docstring rejects "whoever waited" and
+"lower rating" because both hand a measurable edge to a predictable player,
+in rated games, forever — and "the challenger always moves first" is exactly
+that shape, so it is not what happens.
+
+### 18.5 Why the match waits to be joined
+
+`MatchRecord` refuses a **system-activated match that carries a time
+control**: the first flag deadline is written when a match activates, and the
+one place that happens is `MatchAcceptanceService`. A system-activated timed
+match would start a clock nothing had scheduled a deadline for — a game that
+can never flag. The invariant says so in as many words, and says it exists so
+a later task is *made* to schedule the deadline.
+
+A challenge match is timed, so it is created `BILATERAL` and activated by the
+existing handshake, which does schedule it. That is also what
+`domain-model.md` §10.3 describes: *"resolves through the `Created` join
+deadline"* — a match that resolves through a join deadline is one that was
+waiting to be joined. The join window is ten minutes.
+
+For a player that is one tap on a screen they are already looking at, and
+A64-022.5 can make it a single action; the protocol is the one that already
+works.
+
+### 18.6 Match origin, and one challenge → one match
+
+`origin = CHALLENGE`, `origin_ref = challenge_id`, both server-owned —
+nothing from the request reaches them, so a client cannot claim a match came
+from a challenge it did not.
+
+`pairing_id` is a `uuid5` derived from the challenge id, and `game` enforces
+`uq_match__pairing_id`. So a second acceptance cannot produce a second match
+**even if the guarded challenge update let it through** — two independent
+defences, and no new constraint was needed for either.
+
+### 18.7 Races
+
+| Race | Outcome |
+| --- | --- |
+| Two accepts | One match, one `ACCEPTED`, one event. The second is `challenge_not_pending` |
+| Accept vs cancel | Whichever commits first wins. `CANCELLED + Match` cannot happen: the guarded update refuses the loser before any match is created |
+| Accept vs expiry | The window is checked inside the transaction, against the injected clock. An accepted challenge is terminal, so a later sweep cannot expire it |
+| Accept vs unfriend/block | Checked inside the transaction, as close to creation as the architecture allows. If the relationship change commits first there is no match; if acceptance commits first the match exists and a later change does not retroactively remove it — a game that was legitimately started is a game that was played |
+
+### 18.8 Events
+
+`matchmaking.friend_challenge_accepted` carries the challenge id, both
+players, **the match id** and the settings. No prose, no names, no URLs.
+
+`game.match_created` is `game`'s own and is not duplicated here. Both are
+staged in one transaction, so a consumer sees both or neither; within a relay
+pass `match.created` is stamped first. Nothing depends on that ordering
+today, and it is written down so a consumer that does depend on it finds it
+rather than discovers it.
+
+### 18.9 Matchmaking interaction
+
+**Nothing is checked**, deliberately. This platform has no "one active match"
+rule: the queue does not check for an active match, tournaments do not, and
+`QueueEligibilityPolicy` governs entering a *pool* rather than starting a
+game. Adding one to challenges alone would make them stricter than every
+other path into a match, and whether the platform wants such a rule is a
+decision that belongs to all three at once.
+
+### 18.10 The handoff
+
+`created_match_id` on the response is the game. There is deliberately no URL
+in the payload: a route is the client's to build, and a server-supplied one
+is a redirect nobody validated.
+
+### 18.11 Notification and realtime seams — A64-022.4
+
+`friend_challenge_accepted` carries everything a `friend_challenge_accepted`
+notification needs, including the match id so the notification can offer the
+game. No gateway frame and no socket call from `matchmaking`; a consumer
+built beside `SocialNotificationDispatcher` reaches the existing gateway.
+
+Challenge matches are not excluded by any origin filter — `MatchOrigin` is
+stored and handed back, never branched on.
+
+## 19. Deferred
 
 | | Notes |
 | --- | --- |
-| `ACCEPTED` | A64-022.3, with match creation, in one transaction |
 | `Voided-by-block` | needs a `friends.player_blocked` consumer |
 | Open (link-shareable) challenges | §10.3 allows them; this epic is directed-only |
 | Rematch | explicitly out of scope |

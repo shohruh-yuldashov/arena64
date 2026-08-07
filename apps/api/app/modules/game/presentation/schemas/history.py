@@ -34,6 +34,7 @@ from app.modules.game.public import (
     ReplayPly,
     ReplaySeat,
 )
+from app.modules.rating.public import RatingChange
 from app.modules.users.public import PublicUserProfile
 
 _CURSOR_SEPARATOR = "|"
@@ -108,6 +109,24 @@ class ReplaySeatResponse(BaseModel):
         )
 
 
+class MatchRatingChangeResponse(BaseModel):
+    """What a rated match did to **the requesting player's** rating — A64-023 §1.
+
+    Three integers, and nothing that explains them: the deviations, the
+    volatilities, the opponent's triple and the expected score are all on
+    `rating_adjustment` and are all `rating`'s to publish if a
+    rating-history surface is ever built.
+
+    `delta` is served rather than left to the client, because the platform
+    must not have two subtractions of one fact — see
+    `rating.public.RatingChange.delta`.
+    """
+
+    before: int
+    after: int
+    delta: int = Field(description="`after - before`. Negative for a loss.")
+
+
 class MatchHistoryEntryResponse(BaseModel):
     """One finished match, as a list renders it.
 
@@ -151,6 +170,18 @@ class MatchHistoryEntryResponse(BaseModel):
         default=None, description="How much time each side had. `null` for an untimed match."
     )
 
+    rating: MatchRatingChangeResponse | None = Field(
+        default=None,
+        description=(
+            "What this match did to **your** rating, and only ever yours — it is "
+            "served solely when you are reading your own history. `null` has two "
+            "meanings, and `rated` tells them apart: on a casual match there is no "
+            "rating change to report, and on a rated one the adjustment has not been "
+            "applied yet — it is written by an asynchronous consumer of "
+            "`game.match_completed`, so it lands shortly after the match ends."
+        ),
+    )
+
     started_at: datetime
     ended_at: datetime | None
 
@@ -161,9 +192,11 @@ class MatchHistoryEntryResponse(BaseModel):
         *,
         viewer_id: UUID,
         profiles: Mapping[UUID, PublicUserProfile] | None = None,
+        ratings: Mapping[UUID, RatingChange] | None = None,
     ) -> "MatchHistoryEntryResponse":
         opponent = _opponent_of(entry, viewer_id)
         seen = profiles or {}
+        change = (ratings or {}).get(entry.match_id)
         return cls(
             match_id=entry.match_id,
             variant=entry.variant.value,
@@ -209,6 +242,17 @@ class MatchHistoryEntryResponse(BaseModel):
             ),
             winner=entry.winner.value if entry.winner else None,
             ply_number=entry.ply_number,
+            # Absent unless the route looked it up, and the route looks it
+            # up only for a player reading their own history — see
+            # `player_match_history`. There is no argument here that could
+            # carry somebody else's adjustment.
+            rating=(
+                MatchRatingChangeResponse(
+                    before=change.before, after=change.after, delta=change.delta
+                )
+                if change is not None
+                else None
+            ),
             started_at=entry.created_at,
             ended_at=entry.ended_at,
         )
@@ -227,14 +271,28 @@ class MatchHistoryResponse(BaseModel):
         *,
         viewer_id: UUID,
         profiles: Mapping[UUID, PublicUserProfile] | None = None,
+        ratings: Mapping[UUID, RatingChange] | None = None,
     ) -> "MatchHistoryResponse":
         return cls(
             entries=[
-                MatchHistoryEntryResponse.of(entry, viewer_id=viewer_id, profiles=profiles)
+                MatchHistoryEntryResponse.of(
+                    entry, viewer_id=viewer_id, profiles=profiles, ratings=ratings
+                )
                 for entry in page.entries
             ],
             next_cursor=encode_cursor(page.next_cursor) if page.next_cursor else None,
         )
+
+    @staticmethod
+    def rated_match_ids(page: MatchHistoryPage) -> list[UUID]:
+        """Which matches on this page could have moved a rating — A64-023 §3.
+
+        Casual matches are excluded here rather than in the reader, so a
+        page with none of them costs no query at all. The reader would
+        answer correctly either way; this is what makes the common case
+        free.
+        """
+        return [entry.match_id for entry in page.entries if entry.rated]
 
     @staticmethod
     def opponents_in(page: MatchHistoryPage, *, viewer_id: UUID) -> list[UUID]:

@@ -82,6 +82,10 @@ from app.modules.game.public import (
     SubmitMoveUseCase,
     engine_services,
 )
+from app.modules.rating.infrastructure.repositories.player_rating_repository import (
+    SqlAlchemyMatchRatingAdjustmentReader,
+)
+from app.modules.rating.public import MatchRatingAdjustmentReader
 from app.modules.users.application.services.public_profile_service import PublicProfileService
 from app.modules.users.application.services.user_service import UserService
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
@@ -262,6 +266,25 @@ def get_replay_players(session: DbSessionDep, clock: ClockDep) -> PublicProfileR
 
 
 ReplayPlayersDep = Annotated[PublicProfileReader, Depends(get_replay_players)]
+
+
+def get_match_rating_changes(session: DbSessionDep) -> MatchRatingAdjustmentReader:
+    """`rating`'s adjustment reader, for the history route — A64-023 §4.
+
+    Named concretely here for the reason `get_replay_players` names `users`'
+    classes: assembling another module's adapter is what a composition root
+    is for, and the route holds only the **published port**.
+
+    That port is what makes the narrowness structural rather than a
+    convention: it has one method, it is batch-only, and its first argument
+    is the player whose adjustments are wanted — so a route holding it
+    cannot read a rating it could write, cannot reach a leaderboard, and
+    cannot ask what a match did to somebody else.
+    """
+    return SqlAlchemyMatchRatingAdjustmentReader(session)
+
+
+MatchRatingChangesDep = Annotated[MatchRatingAdjustmentReader, Depends(get_match_rating_changes)]
 
 
 class SessionScopedGameCommands:
@@ -456,6 +479,7 @@ __all__ = [
     "get_match_snapshot_ws",
     "SessionScopedLiveMoves",
     "SessionScopedMatchRosters",
+    "MatchRatingChangesDep",
     "ReplayPlayersDep",
     "WebSocketGameCommandsDep",
     "WebSocketLiveMovesDep",

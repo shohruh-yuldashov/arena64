@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 
+import { isResolved } from "@/entities/session";
+import { useSession } from "@/features/auth/model/session-provider";
 import { useNotificationPush } from "@/features/notifications/model/use-notification-push";
+import { MatchOfferSurface } from "@/widgets/match-offer";
 import { NotificationBell } from "@/widgets/notification-bell";
 import { PwaNotices } from "@/widgets/pwa";
 import { SessionMenu } from "@/widgets/session-menu";
@@ -47,6 +50,20 @@ export function AppShell({ children }: { children: ReactNode }) {
   // socket `app/providers` already owns and invalidates two query keys.
   useNotificationPush();
 
+  // A64-022.6 §13. The pending match offer, on every authenticated page.
+  //
+  // Rendered conditionally rather than gated inside, so a signed-out
+  // visitor mounts no query and makes no request — and so the hooks the
+  // surface owns are unconditional relative to its own mount.
+  //
+  // Here for the reason `useNotificationPush` is: a match a player has
+  // agreed to must reach them wherever they are, and until this existed
+  // it reached them only on `/play`. A challenge accepted while they read
+  // a profile had a ten-minute join window and nothing on the page said
+  // so.
+  const { state: session } = useSession();
+  const signedIn = isResolved(session) && session.status === "authenticated";
+
   return (
     <div className="bg-background text-foreground flex min-h-full flex-col">
       <a
@@ -86,6 +103,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           the route the player happens to be on. Last in the DOM and pinned
           by its own positioning, so it is last in the tab order and covers
           nothing until it has something to say. */}
+      {signedIn && <MatchOfferSurface />}
+
       <PwaNotices />
     </div>
   );

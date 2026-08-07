@@ -17,6 +17,10 @@ import { useTranslation } from "@/shared/i18n";
 const LINKS = [
   { to: "/friends", key: "social.nav.friends" },
   { to: "/friends/requests", key: "social.nav.requests" },
+  // A64-022.5 §2. Beside the request lists rather than under `/play`: a
+  // challenge is directed at a person you already know, which is what every
+  // other entry here is about. The lobby is where you look for a stranger.
+  { to: "/challenges", key: "social.nav.challenges" },
   { to: "/friends/blocked", key: "social.nav.blocked" },
   { to: "/search", key: "social.nav.search" },
 ] as const;

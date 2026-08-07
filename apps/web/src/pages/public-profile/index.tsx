@@ -2,6 +2,7 @@ import { Link, useParams } from "@tanstack/react-router";
 
 import { isResolved } from "@/entities/session";
 import { useSession } from "@/features/auth/model/session-provider";
+import { ChallengeButton } from "@/features/challenges/ui/challenge-button";
 import { isNotFound } from "@/features/profile/model/error-messages";
 import { usePlayerRatings, usePublicProfile } from "@/features/profile/model/queries";
 import { QueryState } from "@/features/profile/ui/query-state";
@@ -91,7 +92,17 @@ export default function PublicProfilePage() {
                   your own page" rule visible where somebody reading the
                   page would look for it. */}
               {session.status === "authenticated" && session.user.id !== profile.data.id && (
-                <div className="mt-3">
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {/* A64-022.5 §13. Rendered from the **same** `relationship`
+                      the actions beside it read — one server-computed value,
+                      so the button cannot appear for a stranger, a blocked
+                      player, or the viewer's own page. */}
+                  <ChallengeButton
+                    playerId={profile.data.id}
+                    playerName={profile.data.display_name ?? profile.data.username}
+                    state={profile.data.relationship}
+                    size="default"
+                  />
                   <RelationshipActions
                     playerId={profile.data.id}
                     playerName={profile.data.display_name ?? profile.data.username}

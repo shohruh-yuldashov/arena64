@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
+import { promisify } from "node:util";
 
 import { request } from "@playwright/test";
 
@@ -11,6 +13,11 @@ import {
   type SeededAccount,
   statePath,
 } from "./accounts";
+
+const run = promisify(execFile);
+
+/** The API directory, from `apps/web`. */
+const API_DIR = resolve(process.cwd(), "..", "api");
 
 /**
  * Seeds the E2E accounts **once**, before any worker starts — A64-020.4 §21.
@@ -42,11 +49,20 @@ import {
  *                               everywhere", which revokes its own session
  *                               by design, so the next run must sign in
  *     auth.spec                 1 registration — registration is its subject
+ *     verify-email.spec         1 registration — A64-021.5H. An account
+ *                               that is *not* yet verified is the whole
+ *                               subject, and every seeded account is, so
+ *                               this one cannot be borrowed
  *
- * So a run costs one login and one registration, and the binding limit is
- * **three registrations per hour**: roughly three full runs an hour from
- * one IP. Down from A64-020.3's every-run-registers, and not zero — stated
- * in `specs/frontend.md` §10.1 rather than discovered.
+ * So a run costs one login and **two** registrations. With `register_ip` at
+ * ten an hour (A64-020.6 raised it from three) that is roughly five full
+ * runs an hour from one IP — and a sixth fails at registration rather than
+ * at an assertion, which reads as a broken spec and is not one. Clear the
+ * buckets rather than debugging it:
+ *
+ *     uv run python -m app.operator.rate_limits clear
+ *
+ * Stated in `specs/frontend.md` §10.1 rather than discovered.
  *
  * ## What was deliberately not done
  *
@@ -73,11 +89,60 @@ export default async function globalSetup(): Promise<void> {
     }
 
     mkdirSync(AUTH_DIR, { recursive: true });
-    for (const username of Object.values(E2E_ACCOUNTS)) {
+    const usernames = Object.values(E2E_ACCOUNTS);
+    for (const username of usernames) {
       await seed(context, username);
     }
+    await verifyAccounts(usernames.map((username) => `${username}@example.com`));
   } finally {
     await context.dispose();
+  }
+}
+
+/**
+ * Marks every fixture address verified — **A64-021.5H**.
+ *
+ * Every product route requires a verified address now, so an unverified
+ * fixture account lands fourteen specs on `/verify-email` instead of the
+ * page they came for.
+ *
+ * Through the repository's own operator command, the same class of entry
+ * point `tournament.spec.ts` uses to create a tournament, rather than an
+ * HTTP call. There is no endpoint that can do this and there must not be:
+ * one would remove email verification from the platform for anything that
+ * could reach the API.
+ *
+ * Called **once for all accounts, after the seed loop**, and both halves
+ * are deliberate. One process rather than fourteen because each costs an
+ * interpreter start. After the loop rather than inside it because `seed`
+ * returns early for an account whose saved session still works — the
+ * common case on a rerun — so a call inside would leave every long-lived
+ * fixture account unverified forever, which is exactly how this was first
+ * written and exactly how it failed. It is idempotent, so paying for it on
+ * every run costs one process and changes nothing.
+ *
+ * `python -m app.operator.accounts verify`, against the same database the
+ * API uses. Nothing here truncates a table, flushes Redis, disables a rate
+ * limit, or reaches a browser-visible endpoint.
+ */
+async function verifyAccounts(emails: string[]): Promise<void> {
+  const { stdout } = await run(
+    "uv",
+    [
+      "run",
+      "python",
+      "-m",
+      "app.operator.accounts",
+      "verify",
+      ...emails.flatMap((email) => ["--email", email]),
+    ],
+    { cwd: API_DIR },
+  );
+  const confirmed = stdout.match(/verified/g)?.length ?? 0;
+  if (confirmed < emails.length) {
+    throw new Error(
+      `[e2e] verified ${confirmed} of ${emails.length} accounts: ${stdout.trim()}`,
+    );
   }
 }
 

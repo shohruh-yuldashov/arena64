@@ -32,6 +32,7 @@ from app.modules.auth.presentation.router import auth_router
 from app.modules.avatars.presentation.router import avatar_router
 from app.modules.friends.presentation.router import blocks_router, friends_router
 from app.modules.game.presentation.router import history_router, replay_router
+from app.modules.matchmaking.presentation.challenge_router import challenges_router
 from app.modules.matchmaking.presentation.router import matchmaking_router
 from app.modules.notifications.presentation.router import notifications_router
 from app.modules.profiles.presentation.router import profiles_router
@@ -71,6 +72,9 @@ v1_router.include_router(profiles_router)
 v1_router.include_router(my_profile_router)
 v1_router.include_router(avatar_router)
 v1_router.include_router(friends_router)
+# A64-022.2. Registered beside `friends`: a challenge is a social action
+# between two players, and a client that has one list open has the other.
+v1_router.include_router(challenges_router)
 v1_router.include_router(blocks_router)
 
 # A64-014.1. Registration order is immaterial here: `/matchmaking/queue` and

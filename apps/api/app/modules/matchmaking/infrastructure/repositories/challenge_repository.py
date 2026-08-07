@@ -16,14 +16,18 @@ challenging each other at the same moment).
 """
 
 import uuid
+from collections.abc import Sequence
+from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, func, or_, select, update
+from sqlalchemy import CursorResult, and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.error_codes import ErrorCode
 from app.core.exceptions import ConflictError
 from app.modules.matchmaking.domain.challenge import Challenge, ChallengeStatus
+from app.modules.matchmaking.infrastructure.challenge_cursor import ChallengeCursor
 from app.modules.matchmaking.infrastructure.models import FriendChallengeModel
 
 
@@ -52,7 +56,8 @@ class SqlAlchemyChallengeRepository:
             await self._session.flush()
         except IntegrityError as conflict:
             raise ConflictError(
-                "There is already a live challenge between these players."
+                "There is already a live challenge between these players.",
+                code=ErrorCode.CHALLENGE_ALREADY_PENDING,
             ) from conflict
 
     async def get_for_party(
@@ -108,6 +113,73 @@ class SqlAlchemyChallengeRepository:
         )
         if not result.rowcount:
             raise ConflictError("This challenge has already been answered.")
+
+    async def list_for_party(
+        self,
+        party_id: uuid.UUID,
+        *,
+        as_challenger: bool,
+        now: datetime,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[Sequence[Challenge], str | None]:
+        """Keyset page over `(created_at DESC, id DESC)`.
+
+        **Newest first**, which is what a challenge list means: the thing you
+        have not answered yet is the thing you just received. That makes the
+        keyset a *descending* one, so the cursor predicate is `<` and runs
+        the same direction as the `ORDER BY` — getting one of those backwards
+        silently returns an empty second page, which is why both are written
+        here rather than assembled by a caller.
+
+        `id` is the unique tiebreak. `created_at` alone is not unique — two
+        challenges can share a millisecond — and a keyset without a unique
+        tiebreak skips or repeats rows at a page boundary.
+
+        **`expires_at > now` is in the predicate**, not applied afterwards.
+        Filtering a fetched page would make `limit` mean "up to twenty, fewer
+        if some expired", so a page could come back empty with a cursor still
+        pointing at live rows further down.
+
+        Over-fetches by one to learn whether a further page exists without a
+        second count (RP-03).
+        """
+        party = (
+            FriendChallengeModel.challenger_id == party_id
+            if as_challenger
+            else FriendChallengeModel.recipient_id == party_id
+        )
+        statement = select(FriendChallengeModel).where(
+            party,
+            FriendChallengeModel.status == ChallengeStatus.PENDING.value,
+            FriendChallengeModel.expires_at > now,
+        )
+
+        if cursor is not None:
+            position = ChallengeCursor.decode(cursor)
+            statement = statement.where(
+                or_(
+                    FriendChallengeModel.created_at < position.created_at,
+                    and_(
+                        FriendChallengeModel.created_at == position.created_at,
+                        FriendChallengeModel.id < position.row_id,
+                    ),
+                )
+            )
+
+        statement = statement.order_by(
+            FriendChallengeModel.created_at.desc(), FriendChallengeModel.id.desc()
+        ).limit(limit + 1)
+
+        rows = list((await self._session.scalars(statement)).all())
+        page = rows[:limit]
+
+        next_cursor: str | None = None
+        if len(rows) > limit and page:
+            last = page[-1]
+            next_cursor = ChallengeCursor(created_at=last.created_at, row_id=last.id).encode()
+
+        return [_to_domain(row) for row in page], next_cursor
 
     async def find_live_between(self, first: uuid.UUID, second: uuid.UUID) -> Challenge | None:
         """The pending challenge between these two, whichever direction.

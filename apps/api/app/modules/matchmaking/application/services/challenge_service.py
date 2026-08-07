@@ -25,20 +25,32 @@ and since a block also ends a friendship, the sentence is true in both.
 That is why there is no `challenge_blocked` error. An error code that
 existed would be the disclosure, whatever the message beside it said.
 
-## What this service does not do
+## Events — A64-022.2
 
-It publishes no events yet. `FriendChallengeCreated` and its three siblings
-exist (`domain/challenge_events.py`) and nothing writes them to the outbox,
-because their consumers are A64-022.2's realtime frame and notification —
-and an event with no consumer that also has no producer is the honest state
-for a phase that built neither. Wiring the publisher is one constructor
-argument, and it belongs with the first consumer.
+Three of the four are published here, each **inside the transaction that
+made the fact true** (AD-16). A challenge that committed without its event
+would be an invitation nobody is told about, with nothing recording that a
+notification was owed.
+
+`occurred_at` is the aggregate's own timestamp rather than a second clock
+read: the thing happened once, and two readings would be two answers to one
+question.
+
+`FriendChallengeExpired` is published by the sweep that writes the terminal
+row (A64-022.6), not here. `expire` exists on this service for a read path
+that finds a stale row, and a phase that published from both would emit the
+event twice for one challenge.
+
+`FriendChallengeAccepted` does not exist — see the aggregate on why.
 """
 
 import logging
+from collections.abc import Sequence
+from typing import ClassVar
 from uuid import UUID
 
 from app.core.clock import Clock
+from app.core.error_codes import ErrorCode
 from app.core.exceptions import NotFoundError, RuleViolationError
 from app.core.identifiers import generate_uuid7
 from app.core.unit_of_work import UnitOfWork
@@ -48,9 +60,16 @@ from app.modules.matchmaking.application.ports import ChallengeRepository
 from app.modules.matchmaking.domain.challenge import (
     Challenge,
     ChallengeSelfNotAllowed,
+    ChallengeStatus,
     issue,
 )
+from app.modules.matchmaking.domain.challenge_events import (
+    FriendChallengeCancelled,
+    FriendChallengeCreated,
+    FriendChallengeDeclined,
+)
 from app.modules.reference.public import TimeControlCatalogue, TimeControlId
+from app.platform.outbox import EventPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +82,8 @@ class ChallengeNotFriends(RuleViolationError):
     one thing BL-1 withholds.
     """
 
+    default_code: ClassVar[ErrorCode] = ErrorCode.CHALLENGE_NOT_FRIENDS
+
 
 class ChallengeInvalidTimeControl(RuleViolationError):
     """The requested clock is not one the platform currently offers.
@@ -71,6 +92,8 @@ class ChallengeInvalidTimeControl(RuleViolationError):
     existed: a control removed from the catalogue must not be choosable for a
     new game, while rows that already reference it stay readable.
     """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.CHALLENGE_INVALID_TIME_CONTROL
 
 
 class ChallengeService:
@@ -83,10 +106,12 @@ class ChallengeService:
         social_graph: SocialGraphReader,
         exclusions: PairingExclusions,
         time_controls: TimeControlCatalogue,
+        events: EventPublisher,
         unit_of_work: UnitOfWork,
         clock: Clock,
     ) -> None:
         self._challenges = challenges
+        self._events = events
         self._social_graph = social_graph
         self._exclusions = exclusions
         self._time_controls = time_controls
@@ -149,6 +174,20 @@ class ChallengeService:
             # between two friends challenging each other at the same moment,
             # which is exactly the pair the rule is about.
             await self._challenges.add(challenge)
+            # Staged inside the same transaction as the row, so the two
+            # commit together or neither does.
+            await self._events.publish(
+                FriendChallengeCreated(
+                    occurred_at=challenge.created_at,
+                    challenge_id=challenge.id,
+                    challenger_id=challenge.challenger_id,
+                    recipient_id=challenge.recipient_id,
+                    time_control_id=challenge.time_control_id,
+                    variant=challenge.variant,
+                    rated=challenge.rated,
+                    expires_at=challenge.expires_at,
+                )
+            )
             await self._unit_of_work.commit()
 
         # Ids only. No player names, no settings — a log line that carried
@@ -182,6 +221,106 @@ class ChallengeService:
         """
         return await self._settle(challenge_id, by=by, transition="expire")
 
+    async def incoming(
+        self, recipient_id: UUID, *, limit: int, cursor: str | None
+    ) -> tuple[Sequence[Challenge], str | None]:
+        """Live challenges this player has **received**, newest first.
+
+        Read-only; opens no transaction. Returns the page and the next
+        cursor — composing player profiles happens above this layer, which is
+        what keeps this service free of any dependency on `profiles`.
+
+        Live means pending, unexpired, **and still permitted** — see
+        `_still_offerable`.
+        """
+        page, next_cursor = await self._challenges.list_for_party(
+            recipient_id,
+            as_challenger=False,
+            now=self._clock.now(),
+            limit=limit,
+            cursor=cursor,
+        )
+        return await self._still_offerable(page, viewer_id=recipient_id), next_cursor
+
+    async def outgoing(
+        self, challenger_id: UUID, *, limit: int, cursor: str | None
+    ) -> tuple[Sequence[Challenge], str | None]:
+        """Live challenges this player has **sent**. See `incoming`."""
+        page, next_cursor = await self._challenges.list_for_party(
+            challenger_id,
+            as_challenger=True,
+            now=self._clock.now(),
+            limit=limit,
+            cursor=cursor,
+        )
+        return await self._still_offerable(page, viewer_id=challenger_id), next_cursor
+
+    async def _still_offerable(
+        self, page: Sequence[Challenge], *, viewer_id: UUID
+    ) -> Sequence[Challenge]:
+        """Drops challenges the current relationship no longer permits — §19, §20.
+
+        A challenge outlives the friendship that allowed it: the row is the
+        record that an invitation happened, and A64-022.1 does not delete
+        history. What must not outlive it is the **invitation** — an
+        actionable row offering a game with somebody who has since unfriended
+        or blocked you.
+
+        Removing the friendship is the general test and covers both cases,
+        because a block also ends the friendship. That is why this module
+        needs no notion of blocking: BL-2 is satisfied by asking whether they
+        are friends, which is the question a challenge needed in the first
+        place.
+
+        **This is a visibility rule, not the security boundary.** The row is
+        still stored and still readable by id, and acceptance re-checks the
+        relationship in A64-022.3 — so a stale invitation cannot become a
+        game even if something failed to hide it.
+
+        ## Why it is applied here and not in the query
+
+        The friendship lives in another module's schema. A join would be the
+        cross-context reach `.importlinter` forbids and DM-06 designs
+        against, so the page is fetched and then filtered — which makes
+        `limit` an upper bound rather than an exact count. That is stated on
+        the endpoints, and it is the honest trade: the alternative is
+        `matchmaking` querying `friends`' tables.
+
+        One batch read per page, never one per row.
+        """
+        if not page:
+            return page
+
+        others = {
+            challenge.recipient_id
+            if challenge.challenger_id == viewer_id
+            else challenge.challenger_id
+            for challenge in page
+        }
+        friends = await self._social_graph.friend_ids_among(viewer_id, list(others))
+        return [
+            challenge
+            for challenge in page
+            if (
+                challenge.recipient_id
+                if challenge.challenger_id == viewer_id
+                else challenge.challenger_id
+            )
+            in friends
+        ]
+
+    async def get(self, challenge_id: UUID, *, by: UUID) -> Challenge:
+        """One challenge, scoped to somebody who is part of it.
+
+        Raises `NotFoundError` for a challenge that does not exist **and**
+        for one between two other people — an id that answered differently
+        would be an existence oracle (§25).
+        """
+        challenge = await self._challenges.get_for_party(challenge_id, party_id=by)
+        if challenge is None:
+            raise NotFoundError("No such challenge.")
+        return challenge
+
     async def _settle(self, challenge_id: UUID, *, by: UUID, transition: str) -> Challenge:
         """The shared half of the three terminal transitions.
 
@@ -211,6 +350,32 @@ class ChallengeService:
                 else challenge.cancel(by=by, at=now)
             )
             await self._challenges.save(settled)
+            # **Only after a transition that actually happened.** `save`
+            # raises on a row somebody else settled first, so this line is
+            # unreachable for a losing writer — which is what stops a
+            # duplicate decline emitting a second event.
+            #
+            # Expiry publishes nothing here: the sweep that writes the
+            # terminal row owns that event (A64-022.6), and emitting from
+            # both would announce one challenge twice.
+            if settled.status is ChallengeStatus.DECLINED:
+                await self._events.publish(
+                    FriendChallengeDeclined(
+                        occurred_at=now,
+                        challenge_id=settled.id,
+                        challenger_id=settled.challenger_id,
+                        recipient_id=settled.recipient_id,
+                    )
+                )
+            elif settled.status is ChallengeStatus.CANCELLED:
+                await self._events.publish(
+                    FriendChallengeCancelled(
+                        occurred_at=now,
+                        challenge_id=settled.id,
+                        challenger_id=settled.challenger_id,
+                        recipient_id=settled.recipient_id,
+                    )
+                )
             await self._unit_of_work.commit()
 
         logger.info(

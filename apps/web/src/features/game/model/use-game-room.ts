@@ -10,6 +10,7 @@ import {
   reduce,
 } from "@/features/game/model/state";
 import { matchHistoryKeys } from "@/features/match-history/api/keys";
+import { matchmakingKeys } from "@/features/matchmaking/api/keys";
 import { profileKeys } from "@/features/profile/api/keys";
 import { reportError } from "@/shared/lib/report-error";
 import {
@@ -126,6 +127,35 @@ export function useGameRoom(matchId: string): GameRoom {
   const refreshDurableRecords = useCallback(() => {
     void client.invalidateQueries({ queryKey: profileKeys.me() });
     void client.invalidateQueries({ queryKey: matchHistoryKeys.root });
+
+    // --- the finished match must stop being the *current* one ------------
+    //
+    // **`removeQueries`, not `invalidateQueries`**, and that distinction is
+    // the whole fix.
+    //
+    // `GET /matchmaking/matches/pending` answers with a match that is
+    // `pending_acceptance` **or `active`** — `MatchRecordRepository.pending_for`
+    // says so, and it is right for the lobby, where the first acceptor has
+    // to learn their game began. The backend excludes a *completed* match
+    // correctly; what went wrong was on this side.
+    //
+    // Nothing cleared this cache entry when a game ended, so the copy left
+    // behind still said `active`. Invalidation would not have been enough:
+    // an invalidated query still **serves its stale value** while it
+    // refetches, and both readers act on it synchronously —
+    //
+    //     /play               derives `transitioning` and navigates
+    //     MatchOfferSurface   sees an active match it offered and navigates
+    //
+    // — so pressing "Back to lobby" sent the player straight back into the
+    // game they had just finished, where `room.join` is refused and the page
+    // renders "That game could not be opened". Removing the entry means the
+    // lobby has nothing to act on until the server answers again.
+    //
+    // The queue key goes with it: a finished game is also the moment a
+    // player may queue again, and a stale ticket read would disagree.
+    client.removeQueries({ queryKey: matchmakingKeys.pending() });
+    void client.invalidateQueries({ queryKey: matchmakingKeys.queue() });
   }, [client]);
 
   // --- inbound ------------------------------------------------------------

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { initialState, reduce } from "@/features/game/model/state";
 import { GameControls } from "@/features/game/ui/game-controls";
+import { matchmakingKeys } from "@/features/matchmaking/api/keys";
 import { httpClient } from "@/shared/api/client";
 import { env } from "@/shared/config/env";
 import { I18nProvider } from "@/shared/i18n";
@@ -283,4 +284,134 @@ it("puts a real resign frame on the real socket from the real game page", async 
     // Correlated through the existing registry, not a second token.
     expect(typeof resign?.request_id).toBe("string");
   });
+});
+
+it("stops treating a finished match as the current one", async () => {
+  // **The lobby bug, at the level it actually lives.**
+  //
+  // `GET /matchmaking/matches/pending` answers with a match that is
+  // `pending_acceptance` **or `active`**, with no time window. The backend
+  // excludes a *completed* match correctly; what went wrong was that
+  // nothing on this side cleared the cached copy when a game ended.
+  //
+  // The copy left behind still said `active`, and an invalidated query
+  // still serves its stale value while it refetches — so pressing "Back to
+  // lobby" put the player back into the game they had just finished, where
+  // `room.join` is refused and the page renders "That game could not be
+  // opened".
+  let onmessage: ((event: { data: string }) => void) | null = null;
+
+  mswServer.use(
+    http.post(url("/auth/browser/refresh"), () =>
+      HttpResponse.json(envelope({ access_token: "token-1", user: SESSION })),
+    ),
+    http.post(url("/auth/ws-ticket"), () =>
+      HttpResponse.json(envelope({ ticket: "t1", expires_at: "2026-08-05T10:00:30Z" }), {
+        status: 201,
+      }),
+    ),
+  );
+
+  vi.stubGlobal(
+    "WebSocket",
+    class {
+      static readonly OPEN = 1;
+      static readonly CONNECTING = 0;
+      readyState = 1;
+      onclose: unknown = null;
+      onerror: unknown = null;
+      set onmessage(handler: (event: { data: string }) => void) {
+        onmessage = handler;
+      }
+      constructor() {
+        queueMicrotask(() => {
+          onmessage?.({
+            data: JSON.stringify({
+              v: 1,
+              type: "connection.ready",
+              channel: "system",
+              payload: {},
+            }),
+          });
+        });
+      }
+      close() {}
+      send(frame: string) {
+        const parsed = JSON.parse(frame) as { type: string; request_id?: string };
+        if (parsed.type === "room.join") {
+          onmessage?.({
+            data: JSON.stringify({
+              v: 1,
+              type: "room.joined",
+              request_id: parsed.request_id ?? null,
+              channel: "game",
+              payload: {
+                match_id: MATCH,
+                participants: [VIEWER, OPPONENT],
+                both_connected: true,
+              },
+            }),
+          });
+        }
+        if (parsed.type === "game.resume") {
+          onmessage?.({
+            data: JSON.stringify({
+              v: 1,
+              type: "game.snapshot",
+              request_id: parsed.request_id ?? null,
+              channel: "game",
+              payload: snapshot({
+                offer: null,
+                may_offer: true,
+                may_accept: false,
+                may_decline: false,
+              }),
+            }),
+          });
+        }
+      }
+    },
+  );
+
+  const { queryClient } = renderApp({
+    path: `/games/${MATCH}`,
+    realtimeClient: new RealtimeClient(),
+  });
+
+  // What the lobby left behind on its way into this game.
+  queryClient.setQueryData(matchmakingKeys.pending(), {
+    match_id: MATCH,
+    status: "active",
+    you_accepted: true,
+    opponent: null,
+    rated: true,
+    speed_class: "blitz",
+    base_time_ms: 180_000,
+    increment_ms: 2_000,
+    acceptance_deadline: "2026-08-05T10:00:30Z",
+  });
+
+  await screen.findByRole("button", { name: /^resign$/i }, { timeout: 5000 });
+
+  // Through a closure, so the narrowing that would make `onmessage` look
+  // like `never` here — it is only ever assigned from inside the stub — does
+  // not apply.
+  const deliver = (frame: unknown) => onmessage?.({ data: JSON.stringify(frame) });
+  deliver({
+    v: 1,
+    type: "game.completed",
+    channel: "game",
+    payload: {
+      match_id: MATCH,
+      ply: 12,
+      result: { outcome: "win", winner: "light", termination_reason: "resignation" },
+    },
+  });
+
+  // The finished match is no longer the current one. `undefined`, not a
+  // stale object — the lobby has nothing to navigate on until the server
+  // answers again.
+  await waitFor(() =>
+    expect(queryClient.getQueryData(matchmakingKeys.pending())).toBeUndefined(),
+  );
 });

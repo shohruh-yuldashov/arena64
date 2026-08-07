@@ -691,6 +691,7 @@ def move_applied(
     captured: Sequence[str],
     promoted_to: str | None,
     result: Mapping[str, Any] | None = None,
+    clock: Mapping[str, Any] | None = None,
 ) -> GatewayMessage:
     """The broadcast both participants receive.
 
@@ -703,6 +704,18 @@ def move_applied(
     the game, so the **opponent** learns the game is over from the frame
     that shows them the move that ended it — rather than from a separate
     completion message that could arrive in either order.
+
+    ## And the clock, for the same reason — A64-024
+
+    A move changes whose clock runs, and this frame is the only thing a
+    client is told about the move. Without the clock on it a client had no
+    authoritative way to learn that ownership had passed: it kept counting
+    down the side that had just moved, and only a reload — which fetches a
+    snapshot — put it right.
+
+    `None` for an untimed match, which is a real state rather than a gap.
+    The shape is `game.snapshot`'s exactly, so one client-side projection
+    applies to both and neither can drift from the other.
     """
     payload: dict[str, Any] = {
         "match_id": str(match_id),
@@ -713,6 +726,8 @@ def move_applied(
     }
     if result is not None:
         payload["result"] = dict(result)
+    if clock is not None:
+        payload["clock"] = dict(clock)
 
     return GatewayMessage(type=MessageType.MOVE_APPLIED, payload=payload, channel=Channel.GAME)
 

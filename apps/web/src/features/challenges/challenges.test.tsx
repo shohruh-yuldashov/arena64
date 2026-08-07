@@ -28,6 +28,7 @@ const QUEUE_ME = url("/matchmaking/queue/me");
 
 const MATCH_ID = "019fe500-0000-7000-8000-0000000000b2";
 const CHALLENGE_ID = "019fe500-0000-7000-8000-0000000000c3";
+const SECOND_MATCH_ID = "019fe500-0000-7000-8000-0000000000d4";
 
 const VIEWER = {
   id: "019fb9ea-0a0c-7cec-9c5f-402727c31a96",
@@ -54,7 +55,14 @@ const PROFILE = {
   language: "uz",
   bio: null,
   joined_at: "2026-01-01T10:00:00Z",
-  ratings: { classic: null, rapid: null, blitz: null },
+  // Well-formed rather than null: `RatingCards` dereferences each entry,
+  // and a null one crashes the page into its error boundary — which then
+  // swallows the shell, and with it the dialog these tests are about.
+  ratings: {
+    classic: { rating: 1200, deviation: 350, games_played: 0, is_provisional: true },
+    rapid: { rating: 1200, deviation: 350, games_played: 0, is_provisional: true },
+    blitz: { rating: 1200, deviation: 350, games_played: 0, is_provisional: true },
+  },
   statistics: null,
 };
 const cursorPage = <T,>(items: T[]) =>
@@ -584,4 +592,111 @@ it("does not drag a player into a game they are already playing", async () => {
   await new Promise((resolve) => setTimeout(resolve, 150));
   expect(router.state.location.pathname).toBe("/profile");
   expect(screen.queryByRole("alertdialog")).toBeNull();
+});
+
+it("hands off a second match in the same session", async () => {
+  // **A64-022.7 §11, §12 — the defect the audit found.**
+  //
+  // `MatchOfferSurface` is mounted by `AppShell`, which never unmounts, so
+  // its navigation guard was a `useRef(false)` that stayed `true` for the
+  // rest of the session. The first handoff worked and every later one was
+  // silently skipped — a player's second game of an evening would show the
+  // dialog, accept it, and go nowhere.
+  //
+  // Two matches, one session, driven through the shell's own dialog. The
+  // socket is stubbed because that is how a *second* offer reaches a
+  // client in production: the pending read stops polling once an offer
+  // settles, and `matchmaking.match.offered` is what wakes it again.
+  const sockets = stubWebSocket();
+  signedIn(backend());
+
+  const offer = (matchId: string, status: string) => ({
+    match_id: matchId,
+    status,
+    you_accepted: status !== "pending_acceptance",
+    opponent: { player_id: RIVAL_ID, username: "rival", display_name: "Rival" },
+    rated: false,
+    speed_class: "blitz",
+    base_time_ms: 180_000,
+    increment_ms: 2_000,
+    acceptance_deadline: new Date(Date.now() + 30_000).toISOString(),
+  });
+
+  // The one authoritative read, driven explicitly so each step is a state
+  // the server could really be in.
+  let pending = offer(MATCH_ID, "pending_acceptance");
+  mswServer.use(
+    http.get(PENDING, () => HttpResponse.json(envelope(pending))),
+    http.post(url(`/matchmaking/matches/${MATCH_ID}/accept`), () => {
+      pending = offer(MATCH_ID, "active");
+      return HttpResponse.json(envelope(pending));
+    }),
+    http.post(url(`/matchmaking/matches/${SECOND_MATCH_ID}/accept`), () => {
+      pending = offer(SECOND_MATCH_ID, "active");
+      return HttpResponse.json(envelope(pending));
+    }),
+  );
+
+  // `/challenges` rather than `/profile`: the surface is mounted by the
+  // shell either way, and this page needs no rating or statistics fixture.
+  // That a non-lobby page surfaces an offer at all is the previous test.
+  const { router } = renderApp({ path: "/challenges" });
+
+  await userEvent.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", { name: /^accept —/i }),
+  );
+  await waitFor(() => expect(router.state.location.pathname).toBe(`/games/${MATCH_ID}`));
+
+  // That game ends, and a second pairing arrives — later in the **same**
+  // session, with the shell never having unmounted.
+  pending = offer(SECOND_MATCH_ID, "pending_acceptance");
+  await waitFor(() => expect(sockets.length).toBeGreaterThan(0));
+  sockets[0]?.onmessage?.({
+    data: JSON.stringify({
+      v: 1,
+      type: "matchmaking.match.offered",
+      request_id: null,
+      channel: "matchmaking",
+      payload: { match_id: SECOND_MATCH_ID },
+    }),
+  });
+
+  await userEvent.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", { name: /^accept —/i }),
+  );
+  await waitFor(() => expect(router.state.location.pathname).toBe(`/games/${SECOND_MATCH_ID}`));
+});
+
+it("explains a retired time control instead of saying to try again", async () => {
+  // **A64-022.7 §18 — the second defect the audit found.**
+  //
+  // Creating a challenge with a retired clock raises the challenge module's
+  // own code; **accepting** one whose clock was retired in the meantime
+  // goes through `reference`'s catalogue and raises
+  // `unsupported_time_control`, which was unmapped. The recipient saw
+  // "Something went wrong. Please try again." — untrue, and advice that
+  // cannot work, because retrying accepts the same dead challenge.
+  const state = backend({ incoming: [challenge()] });
+  signedIn(state);
+  mswServer.use(
+    http.post(url(`/challenges/${CHALLENGE_ID}/accept`), () =>
+      HttpResponse.json(
+        {
+          code: "unsupported_time_control",
+          message: "That time control is not available.",
+          request_id: null,
+          correlation_id: null,
+        },
+        { status: 422 },
+      ),
+    ),
+  );
+
+  renderApp({ path: "/challenges" });
+  await userEvent.click(
+    await screen.findByRole("button", { name: /accept the challenge from rival/i }),
+  );
+
+  expect(await screen.findByText(/no longer available/i)).toBeVisible();
+  expect(screen.queryByText(/something went wrong/i)).toBeNull();
 });

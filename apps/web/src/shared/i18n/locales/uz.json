@@ -983,7 +983,8 @@
       "rateLimited": "Juda ko'p chorlov. Biroz kuting.",
       "verificationRequired": "Chorlov yuborish uchun elektron pochtangizni tasdiqlang.",
       "network": "Internetga ulanmagansiz. Ulanishni tekshiring.",
-      "unexpected": "Nimadir xato ketdi. Qayta urinib ko'ring."
+      "unexpected": "Nimadir xato ketdi. Qayta urinib ko'ring.",
+      "timeControlRetired": "Bu vaqt nazorati endi mavjud emas. Do'stingizdan yangi chorlov yuborishini so'rang."
     }
   }
 }

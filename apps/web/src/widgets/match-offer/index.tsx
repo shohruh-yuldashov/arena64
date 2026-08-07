@@ -78,12 +78,27 @@ export function MatchOfferSurface() {
   const match = pending.data ?? null;
 
   const offered = useRef<string | null>(null);
-  const navigated = useRef(false);
+
+  /**
+   * The match this surface has already handed off to — **not a boolean**.
+   *
+   * A64-022.7 found the defect a boolean caused. `PlayPage` guards its own
+   * navigation with `useRef(false)` and that is correct *there*, because the
+   * page unmounts on the way to the board and remounts with a fresh ref.
+   * This surface is mounted by `AppShell`, which never unmounts: a `true`
+   * set on the first match of a session would still be `true` for the
+   * second, and every later handoff would be silently skipped.
+   *
+   * Keyed by id, the guard does what it was meant to — one navigation per
+   * match — and it also survives an account switch, where a stale id from
+   * the previous user can never equal a new one.
+   */
+  const handedOff = useRef<string | null>(null);
 
   const goToGame = useCallback(
     (matchId: string) => {
-      if (navigated.current) return;
-      navigated.current = true;
+      if (handedOff.current === matchId) return;
+      handedOff.current = matchId;
       void navigate({ to: "/games/$matchId", params: { matchId } });
     },
     [navigate],

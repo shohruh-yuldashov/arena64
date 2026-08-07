@@ -34,6 +34,18 @@ const CODE_MESSAGES: Partial<Record<ErrorCode, TranslationKey>> = {
   challenge_not_pending: "challenges.errors.notPending",
   challenge_expired: "challenges.errors.expired",
   challenge_invalid_time_control: "challenges.errors.invalidTimeControl",
+  // **The accept path's version of the same fact** — A64-022.7 §18.
+  //
+  // Creating a challenge with a retired clock raises
+  // `ChallengeInvalidTimeControl`; **accepting** one whose clock has since
+  // been retired goes through `TimeControlCatalogue.require`, which raises
+  // `reference`'s own `UnsupportedTimeControl` — a different code entirely.
+  //
+  // It was unmapped, so the one case that cannot be recovered from rendered
+  // "Something went wrong. Please try again.", which is both untrue and
+  // advice that cannot work: retrying accepts the same dead challenge. The
+  // sentence it maps to says what actually has to happen instead.
+  unsupported_time_control: "challenges.errors.timeControlRetired",
   not_found: "challenges.errors.notFound",
   conflict: "challenges.errors.conflict",
   permission_denied: "challenges.errors.permissionDenied",

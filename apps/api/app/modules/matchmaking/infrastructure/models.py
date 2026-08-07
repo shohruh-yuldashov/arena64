@@ -147,6 +147,7 @@ from app.database.base import Base
 from app.database.mixins.uuid_pk import UUIDPrimaryKeyMixin
 from app.database.types import UtcDateTime
 from app.modules.game.public import ProductVariant
+from app.modules.matchmaking.domain.challenge import ChallengeStatus
 from app.modules.matchmaking.domain.cooldown import CooldownReason
 from app.modules.matchmaking.domain.events import ReconciliationAction
 from app.modules.matchmaking.domain.queue_pool import QueueType, Region
@@ -207,6 +208,14 @@ _REGION_ENUM = _enum(Region, "queue_region")
 _STATUS_ENUM = _enum(QueueStatus, "queue_ticket_status")
 _TIME_CONTROL_ENUM = _enum(TimeControlId, "queue_time_control")
 _SPEED_CLASS_ENUM = _enum(SpeedClass, "queue_speed_class")
+
+#: A64-022.1. Its own PostgreSQL types rather than reusing the queue's, and
+#: the reason is that a shared type is a shared migration: adding a status to
+#: one aggregate would `ALTER TYPE` a column belonging to the other, and
+#: `ProductVariant` gaining a member would lock both relations at once.
+_CHALLENGE_STATUS_ENUM = _enum(ChallengeStatus, "challenge_status")
+_CHALLENGE_VARIANT_ENUM = _enum(ProductVariant, "challenge_variant")
+_CHALLENGE_TIME_CONTROL_ENUM = _enum(TimeControlId, "challenge_time_control")
 
 
 class QueueTicketModel(UUIDPrimaryKeyMixin, Base):
@@ -723,3 +732,129 @@ class ReconciliationTimelineModel(UUIDPrimaryKeyMixin, Base):
     recorded_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     """When the projection saw it. The gap between the two is relay lag, which
     is what an operator investigating "why was this late" reads."""
+
+
+class FriendChallengeModel(UUIDPrimaryKeyMixin, Base):
+    """The `matchmaking.friend_challenge` row — A64-022.1 §13, §14.
+
+    Composes `UUIDPrimaryKeyMixin` (application-generated UUIDv7, DB-07) like
+    every other aggregate root here. Not `TimestampMixin`: `created_at` is
+    the moment the challenge was *issued* and is supplied by the service from
+    one clock read, so a database default would be a second, drifting answer
+    to the same question.
+
+    ## No foreign keys, in any direction
+
+    `challenger_id` and `recipient_id` are opaque cross-context identifiers
+    (DM-06), so the schemas stay deployable apart — the same rule every table
+    on this platform follows for a player.
+
+    `created_match_id` has none either, and that one is a *retention*
+    decision rather than a boundary one: a challenge is the record of an
+    invitation and must outlive the game it produced, where a cascade would
+    delete the invitation along with the match somebody is asking about.
+
+    ## One live challenge per **pair**, whichever direction
+
+    `uq_friend_challenge__live_pair` is the product rule (§6, policy A) as a
+    constraint rather than a service check. Two people cannot have two live
+    invitations between them: not two in the same direction, and not one each
+    way.
+
+    Keyed on `least(challenger_id, recipient_id), greatest(...)` so the pair
+    is unordered — a plain unique on the two columns would permit exactly the
+    opposite-direction case it exists to prevent, and a service check would
+    lose the race between two simultaneous creates.
+
+    **Partial**, on `pending` alone, for the reason
+    `uq_queue_ticket__one_live` is: a plain unique would mean two players
+    could challenge each other once ever. What the rule is about is the live
+    state.
+    """
+
+    __tablename__ = "friend_challenge"
+    __table_args__ = (
+        Index(
+            "uq_friend_challenge__live_pair",
+            text("least(challenger_id, recipient_id)"),
+            text("greatest(challenger_id, recipient_id)"),
+            unique=True,
+            postgresql_where=text(f"status = '{ChallengeStatus.PENDING.value}'"),
+        ),
+        # The recipient's "who has invited me" read, and the challenger's
+        # "what have I sent". Two indexes rather than one composite, because
+        # the two questions are asked by different screens with different
+        # players in the predicate — and both are partial on `pending`, so
+        # a table that accumulates answered history costs nothing to scan.
+        Index(
+            "ix_friend_challenge__recipient_pending",
+            "recipient_id",
+            postgresql_where=text(f"status = '{ChallengeStatus.PENDING.value}'"),
+        ),
+        Index(
+            "ix_friend_challenge__challenger_pending",
+            "challenger_id",
+            postgresql_where=text(f"status = '{ChallengeStatus.PENDING.value}'"),
+        ),
+        # The expiry sweep's claim query, exactly: pending rows whose window
+        # has closed. Partial for the same reason, so the index holds only
+        # what could still expire.
+        Index(
+            "ix_friend_challenge__expiring",
+            "expires_at",
+            postgresql_where=text(f"status = '{ChallengeStatus.PENDING.value}'"),
+        ),
+        # A challenge to oneself is not a policy that could be configured
+        # differently — it is a row that cannot mean anything. The domain
+        # refuses it at `issue`; this refuses it for anything that ever
+        # writes here without going through the domain.
+        CheckConstraint(
+            "challenger_id <> recipient_id",
+            name="ck_friend_challenge__distinct_players",
+        ),
+        # A terminal challenge has a response time and a pending one does
+        # not. The invariant `_settle` establishes, expressed where a second
+        # writer cannot miss it.
+        CheckConstraint(
+            f"(status = '{ChallengeStatus.PENDING.value}') = (responded_at IS NULL)",
+            name="ck_friend_challenge__responded_when_settled",
+        ),
+        # Only an accepted challenge may name a match. A `created_match_id`
+        # on a declined row would be a game nobody agreed to play.
+        CheckConstraint(
+            f"created_match_id IS NULL OR status = '{ChallengeStatus.ACCEPTED.value}'",
+            name="ck_friend_challenge__match_only_when_accepted",
+        ),
+        {"schema": MATCHMAKING_SCHEMA},
+    )
+
+    challenger_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    recipient_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
+    time_control_id: Mapped[TimeControlId] = mapped_column(
+        _CHALLENGE_TIME_CONTROL_ENUM, nullable=False
+    )
+    """Which clock, by stable code. Validated against the **active** catalogue
+    at creation, so a control retired since stays readable on this row and
+    cannot be chosen for a new one."""
+
+    variant: Mapped[ProductVariant] = mapped_column(_CHALLENGE_VARIANT_ENUM, nullable=False)
+
+    rated: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    """What the challenger **asked** for. Not an agreement — Arena64 requires
+    both players to consent before a direct game affects ratings, and the
+    recipient's half lives at acceptance (A64-022.3)."""
+
+    status: Mapped[ChallengeStatus] = mapped_column(_CHALLENGE_STATUS_ENUM, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+    responded_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    """When it left `pending`. One column for all four terminal transitions —
+    `status` already says which happened."""
+
+    created_match_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    """The match acceptance produced. **Always `NULL` until A64-022.3**; the
+    column exists now so that adding acceptance is not a schema change on a
+    live table. Written by the platform, never supplied by a client."""

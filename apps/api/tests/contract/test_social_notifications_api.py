@@ -32,7 +32,7 @@ from uuid import UUID, uuid4
 
 import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import OutboxSettings, get_settings
@@ -107,7 +107,7 @@ def sink() -> RecordingSink:
     return RecordingSink()
 
 
-async def register(client: AsyncClient) -> Player:
+async def register(client: AsyncClient, session: AsyncSession) -> Player:
     suffix = uuid4().hex[:8]
     username = f"player{suffix}"
     assert len(username) <= 20, f"test username {username!r} exceeds the platform limit"
@@ -117,6 +117,16 @@ async def register(client: AsyncClient) -> Player:
         json={"username": username, "email": f"{suffix}@example.com", "password": PASSWORD},
     )
     assert created.status_code == 201, created.text
+
+    # **Verified**, because A64-021.5H made every friend-graph write require
+    # it — and friend-graph writes are this suite's source events. The same
+    # thing `app.operator.accounts verify` does; the OTP flow itself belongs
+    # to `test_otp_verification.py` and coupling every social test to it
+    # would make one phase's copy change break six suites.
+    await session.execute(
+        text("UPDATE users.user SET is_verified = true WHERE id = :id"),
+        {"id": UUID(created.json()["data"]["id"])},
+    )
 
     signed_in = await client.post(
         LOGIN_URL, json={"email": f"{suffix}@example.com", "password": PASSWORD}
@@ -215,7 +225,10 @@ class TestNoFanOutDuringTheRequest:
         has no dispatcher and no sink in its dependency graph at all. Wiring
         one in would make this fail, which is what the assertion is for.
         """
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
 
         await befriend(client, alice, bob)
 
@@ -225,7 +238,10 @@ class TestNoFanOutDuringTheRequest:
     async def test_blocking_queues_an_event_and_delivers_nothing(
         self, client: AsyncClient, contract_session: AsyncSession, sink: RecordingSink
     ) -> None:
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
 
         blocked = await client.post(BLOCKS_URL, headers=alice.auth, json={"player_id": str(bob.id)})
         assert blocked.status_code == 201, blocked.text
@@ -238,7 +254,10 @@ class TestNoFanOutDuringTheRequest:
     ) -> None:
         """The trigger that is easiest to forget, because the endpoint is
         idempotent and returns `204` either way."""
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         await client.post(BLOCKS_URL, headers=alice.auth, json={"player_id": str(bob.id)})
 
         lifted = await client.delete(f"{BLOCKS_URL}/{bob.id}", headers=alice.auth)
@@ -252,7 +271,10 @@ class TestNoFanOutDuringTheRequest:
         """Lifting a block that is not there succeeds and changes nothing —
         so it must not announce a change. The publish sits after the
         repository's `remove`, which raises when there was nothing to lift."""
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
 
         lifted = await client.delete(f"{BLOCKS_URL}/{bob.id}", headers=alice.auth)
         assert lifted.status_code == 204, lifted.text
@@ -262,7 +284,10 @@ class TestNoFanOutDuringTheRequest:
     async def test_removing_a_friend_queues_an_event(
         self, client: AsyncClient, contract_session: AsyncSession
     ) -> None:
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         await befriend(client, alice, bob)
 
         removed = await client.delete(f"{FRIENDS_URL}/{bob.id}", headers=alice.auth)
@@ -276,7 +301,7 @@ class TestNoFanOutDuringTheRequest:
         """AD-16's other half: the event is written in the *same transaction*
         as the state change, so a refused write leaves no event behind. A
         self-block never commits — and never announces."""
-        alice = await register(client)
+        alice = await register(client, contract_session)
 
         refused = await client.post(
             BLOCKS_URL, headers=alice.auth, json={"player_id": str(alice.id)}
@@ -297,7 +322,10 @@ class TestWorkerDelivery:
         two events: sending a request tells the addressee, accepting it tells
         the requester. Neither actor is told what they themselves just did.
         """
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         await befriend(client, alice, bob)
 
         await drain(contract_session, sink)
@@ -314,7 +342,10 @@ class TestWorkerDelivery:
     async def test_a_drained_event_is_marked_published(
         self, client: AsyncClient, contract_session: AsyncSession, sink: RecordingSink
     ) -> None:
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         await befriend(client, alice, bob)
 
         await drain(contract_session, sink)
@@ -326,7 +357,10 @@ class TestWorkerDelivery:
     ) -> None:
         """At-least-once delivery with an idempotent consumer. The second
         tick claims nothing, and even if it did the ledger would filter it."""
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         await befriend(client, alice, bob)
 
         await drain(contract_session, sink)
@@ -343,7 +377,10 @@ class TestWorkerDelivery:
     ) -> None:
         """FS-2 and BL-1 through the whole stack: a removal, a block and an
         unblock are all recorded and none of them tells anybody."""
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         await befriend(client, alice, bob)
         await client.delete(f"{FRIENDS_URL}/{bob.id}", headers=alice.auth)
         await client.post(BLOCKS_URL, headers=alice.auth, json={"player_id": str(bob.id)})
@@ -372,7 +409,10 @@ class TestBlockedRecipients:
         the payload names her. Bob then blocks her. The relay runs, re-reads
         the block set, and delivers nothing.
         """
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         await befriend(client, alice, bob)
 
         blocked = await client.post(BLOCKS_URL, headers=bob.auth, json={"player_id": str(alice.id)})
@@ -387,7 +427,10 @@ class TestBlockedRecipients:
     ) -> None:
         """The control for the test above: the suppression must be the
         block, not the re-read."""
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         await befriend(client, alice, bob)
 
         await drain(contract_session, sink)
@@ -399,7 +442,10 @@ class TestBlockedRecipients:
     ) -> None:
         """`blocked_ids_for` is symmetric, so it does not matter which of the
         two placed the block — a blocked player learns nothing either way."""
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         await befriend(client, alice, bob)
         await client.post(BLOCKS_URL, headers=alice.auth, json={"player_id": str(bob.id)})
 

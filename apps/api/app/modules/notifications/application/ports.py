@@ -56,12 +56,14 @@ from app.modules.notifications.domain.notification import SocialNotification
 from app.modules.notifications.domain.preference import (
     DeliveryChannel,
 )
+from app.modules.notifications.domain.push_delivery import PushDeliveryOutcome
 from app.modules.notifications.domain.record import (
     NotificationAnnouncement,
     NotificationCategory,
     NotificationRecord,
     NotificationType,
 )
+from app.modules.notifications.domain.subscription import PushSubscription
 from app.modules.users.public import DeviceType, Presence
 
 
@@ -258,6 +260,167 @@ class EmailDeliveryRepository(Protocol):
         an address, which is what makes the operator surface safe to expose:
         it can report that eleven deliveries are failing and cannot say to
         whom.
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class DuePushDelivery:
+    """One device's delivery a worker has claimed — A64-021.6 §10.
+
+    Everything the worker needs to decide *whether* to send, without reading
+    the notification: whose preference to check, which type it is, and which
+    subscription to encrypt for. The notification itself is never loaded —
+    unlike email, whose body is rendered from it — because a push payload is
+    two identifiers this row already carries.
+    """
+
+    notification_id: UUID
+    subscription_id: UUID
+    recipient_id: UUID
+    notification_type: NotificationType
+    attempt_count: int
+
+
+class PushSubscriptionRepository(Protocol):
+    """Storage for browsers that asked to be notified — A64-021.6 §2, §3, §9.
+
+    **No method takes an endpoint from a caller as a lookup key.** An
+    endpoint is a bearer capability, and a repository that could be asked
+    "who owns this endpoint" is one call away from an enumeration surface.
+    `register` takes one because the browser that issued it is submitting
+    it; nothing reads by one.
+    """
+
+    async def register(self, subscription: PushSubscription) -> PushSubscription:
+        """Stores a browser's subscription, or takes over an existing one.
+
+        `ON CONFLICT (endpoint) DO UPDATE`, which is the §23 ownership rule
+        as a single statement: a browser re-subscribing keeps working, and
+        one that now belongs to a different account is **re-bound** rather
+        than duplicated or refused. Returns the stored row, whose `id` may
+        be the pre-existing one.
+
+        An upsert rather than read-then-write, so two tabs registering
+        concurrently produce one row rather than a race whose loser gets a
+        unique-violation.
+        """
+        ...
+
+    async def live_for(self, user_id: UUID) -> list[PushSubscription]:
+        """Every browser this account can currently be reached on.
+
+        One indexed read per notification rather than a lookup per device —
+        §9's "avoid N+1" is this method's signature, not a caching layer.
+        """
+        ...
+
+    async def live_for_many(
+        self, user_ids: Sequence[UUID]
+    ) -> Mapping[UUID, list[PushSubscription]]:
+        """The same, for a batch of recipients, in **one** query.
+
+        The fan-out read. A tournament round publishes to a hundred and
+        twenty-eight players at once, and calling `live_for` in a loop
+        inside the notification's transaction would be a hundred and
+        twenty-eight round trips holding a write lock — §27's N+1, in the
+        one place it would actually hurt.
+
+        Recipients with no live subscription are **absent** from the map
+        rather than present with an empty list, so a caller iterating it
+        touches only accounts that can be reached.
+        """
+        ...
+
+    async def get_for(self, subscription_id: UUID, *, user_id: UUID) -> PushSubscription | None:
+        """One subscription, **scoped to its owner**.
+
+        The `user_id` is not a filter applied afterwards; it is half the
+        question. A lookup by id alone would serve one account another's
+        capability, which is exactly what §25 forbids.
+        """
+        ...
+
+    async def revoke(self, subscription_id: UUID, *, at: datetime) -> bool:
+        """Marks one subscription undeliverable. `True` if it was live.
+
+        Not a delete — see `domain.subscription.PushSubscription.revoked_at`
+        on why the row survives. Idempotent: revoking an already-revoked
+        subscription is `False` and not an error, because the caller's
+        intent ("this must not be deliverable") already holds.
+        """
+        ...
+
+    async def revoke_by_endpoint(self, endpoint: str, *, user_id: UUID, at: datetime) -> bool:
+        """Revokes the caller's own subscription for one endpoint.
+
+        The one method that takes an endpoint, and it is scoped to the
+        owner: it serves *"this browser is signing out"*, where the browser
+        knows its own endpoint and the session says whose it is. A caller
+        cannot revoke somebody else's device by guessing a URL.
+        """
+        ...
+
+
+class PushDeliveryRepository(Protocol):
+    """Storage for the pushes a notification is owed — A64-021.6 §10, §19.
+
+    The email repository's shape, with one difference that propagates
+    everywhere: a row is `(notification_id, subscription_id)`, because one
+    notification is owed one push **per device**.
+    """
+
+    async def enqueue(self, deliveries: Sequence[DuePushDelivery], *, at: datetime) -> int:
+        """Records that these notifications are owed a push, per device.
+
+        Returns how many rows were **inserted**. `ON CONFLICT DO NOTHING` on
+        the pair, so a redelivered source event enqueues nothing — §19's
+        idempotency as a constraint rather than a check somebody remembered.
+
+        Called inside the notification's own transaction, so the intent to
+        push is exactly as durable as the record it describes.
+        """
+        ...
+
+    async def claim_due(self, *, now: datetime, limit: int) -> list[DuePushDelivery]:
+        """Takes up to `limit` deliveries that are due, marking them claimed.
+
+        Claimed rather than merely read: two workers polling the same table
+        must not both push the same message to the same device.
+        """
+        ...
+
+    async def reclaim_stale(self, *, before: datetime, at: datetime) -> int:
+        """Returns claims that were never resolved to the pending pool.
+
+        A worker that died between a claim and its result left a delivery
+        owed and invisible; without this it stays that way forever.
+        """
+        ...
+
+    async def record(
+        self,
+        notification_id: UUID,
+        subscription_id: UUID,
+        *,
+        outcome: PushDeliveryOutcome,
+        at: datetime,
+        next_attempt_at: datetime | None = None,
+    ) -> None:
+        """Writes how one device's attempt ended.
+
+        `next_attempt_at` is set only for a retryable outcome and cleared
+        otherwise, so the partial index the claim reads holds exactly the
+        rows that are still owed.
+        """
+        ...
+
+    async def counts_by_status(self) -> Mapping[str, int]:
+        """How many deliveries sit in each status — the operator diagnostic.
+
+        Aggregate only. Nothing here returns a recipient, a subscription or
+        an endpoint, which is what makes the surface safe to expose: it can
+        report that eleven pushes are failing and cannot say to whom.
         """
         ...
 

@@ -6,7 +6,7 @@
 | **Status** | Approved through A64-021.4 — foundation, authentication, profile, social, game, tournaments, PWA, notifications and their event coverage |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-07 — A64-021.5H, email verification codes |
+| **Last updated** | 2026-08-07 — A64-021.6, Web Push notifications |
 | **Related ADRs** | [`ADR-002`](../docs/07-decisions/ADR-002-frontend-spa.md) |
 | **Related specs** | [`rating.md`](./rating.md), [`leaderboard.md`](./leaderboard.md), [`tournament.md`](./tournament.md) |
 | **Related** | `docs/01-architecture/architecture.md` §5, `docs/04-frontend/` |
@@ -2249,7 +2249,179 @@ switch and receives nothing, with no explanation anywhere.
 No provider name reaches the UI, and nothing in the frontend knows one
 exists. There is no `VITE_` email variable and never will be.
 
-## 23. Open questions
+## 23. Push notifications — A64-021.6
+
+The push section of `/settings/notifications`, and the service worker behind
+it. The backend contract is `specs/notifications.md` §15; what follows is
+only what the browser owns.
+
+### 23.1 The states, and why they are not a boolean
+
+Eight distinguishable situations, each with its own sentence, because they
+need **different instructions** — and the flattening happens by accident the
+moment a component renders `disabled={!available || permission !== "granted"}`.
+
+| State | What the person is told | Action offered |
+| --- | --- | --- |
+| `unsupported` | This browser cannot receive push notifications | none |
+| `unavailable` | Not available on this server yet | none |
+| `denied` | You blocked notifications; allow them in browser settings | **none** — see below |
+| `askable` | Get tournament updates here; the browser will ask | Enable |
+| `not-subscribed` | This device is not receiving them yet | Enable |
+| `muted` | Registered, but switched off | Enable |
+| `active` | This device receives tournament push notifications | Turn off here |
+| `loading` | — | spinner |
+
+`denied` offers **nothing**, deliberately. A page cannot re-prompt once
+somebody has refused — the browser will not ask again — so a button there
+would do nothing, and teach people the feature is broken rather than that
+they turned it off.
+
+The state is resolved by a pure function (`model/state.ts`) over three
+inputs, none of which is sufficient alone: the **server** knows whether it
+holds a VAPID pair and cannot see a permission prompt; the **browser** knows
+what the person answered and not whether the server can send; and *this*
+browser's subscription says whether this device is one of the registered
+ones — somebody with push on their phone and not their laptop is in two
+different states on two screens.
+
+### 23.2 Permission is asked for, never volunteered
+
+No permission request runs on load, on mount, or on navigation.
+`Notification.requestPermission()` is reachable only from `enablePush`,
+which is reachable only from a button somebody pressed.
+
+A prompt on first page load is the most reliable way to have a permission
+denied permanently, and a denied permission cannot be re-requested from the
+page at all.
+
+### 23.3 The enable flow, and its ordering
+
+One mutation, five steps, in this order:
+
+    1. support        `PushManager`, `serviceWorker`, `Notification`
+    2. permission     explicit, from the click
+    3. subscribe      through the **existing** worker's `pushManager`,
+                      `userVisibleOnly: true`, the server's VAPID key
+    4. POST           the three browser-issued fields, and nothing else
+    5. preference     enabled **last**
+
+Step 5 is last because the two failure modes are not symmetrical. A
+preference enabled before a subscription exists tells somebody push is on
+with nowhere for it to arrive; a subscription stored without the preference
+costs one unused row and makes no wrong claim.
+
+If the VAPID key changed under an existing subscription, `subscribe()`
+throws — the browser would otherwise return the stale subscription forever
+and every delivery would be refused. The old one is discarded and a fresh
+one requested, invisibly.
+
+### 23.4 Disabling means this device stops
+
+Turning the switch off **unsubscribes this browser and removes the record**,
+then mutes the channel — not muting alone.
+
+Keeping the subscription for a quick re-enable was considered and rejected:
+it leaves a live capability on a device somebody just asked to stop
+notifying them, and the "quick" it saves is one permission-free
+`subscribe()` call. What a person means by turning push off on this laptop
+is that this laptop stops receiving push.
+
+The device count is shown when there is more than one, because "push is on"
+reads differently across three browsers — and this turns it off on *this*
+one.
+
+### 23.5 Sign-out — the leak this closes
+
+A push subscription belongs to the **browser profile**. It survives a
+sign-out, a tab close and a restart, so without an explicit release a shared
+laptop delivers the previous account's notifications to whoever signs in
+next.
+
+`PushReleaseProvider` (in the `app` layer, inside `SessionProvider`)
+registers through `onSessionEnding` — a second seam alongside
+`onSessionEnded`, and it exists because these run **before** the server is
+told to end the session: removing the backend record needs the session that
+is about to be revoked.
+
+Best-effort by construction: releases run under `allSettled`, so a network
+failure cannot stop somebody signing out. The browser is already
+unsubscribed by then, so a stored row answers `410` on its next delivery and
+the worker revokes it.
+
+`features/auth` does not import `features/notification-push`. The seam is
+the whole point.
+
+### 23.6 Nothing is remembered
+
+No `localStorage`, no module cache, no "we think we are subscribed" flag.
+The browser's `PushManager` holds the subscription and the backend holds the
+record; this code reads both, every time.
+
+Somebody who cleared site data, revoked the permission in browser settings,
+or switched profiles must see the truth on the next render, and the only way
+to guarantee that is not to remember anything.
+
+### 23.7 The service worker
+
+The **existing** worker (`pwa/service-worker.ts`), not a second one. Two
+listeners were added and the `message` contract was not widened — a page
+still cannot tell the worker to do anything but skip waiting.
+
+`push` always displays something. Every browser that delivers a push to a
+worker requires a notification to be shown, and penalises an origin that
+does not — Chrome substitutes its own "This site has been updated in the
+background". An unparseable payload therefore renders the generic
+notification rather than returning, which is also correct on its own terms:
+a push that displays nothing cannot be reported.
+
+`notificationclick` closes the notification, focuses an existing tab and
+navigates it, or opens one. Both the text and the destination come from a
+closed table in `pwa/push-presentation.ts` — every path is a literal, so no
+payload value can become a URL, and the worker refuses anything that does
+not resolve to its own origin.
+
+The text is English and untranslated. The worker has no i18n runtime and no
+access to the language the person chose; `navigator.language` is the
+operating system's preference and is frequently a different one. A
+notification in the wrong language is worse than one in a consistent one,
+and the real notification is one tap away.
+
+### 23.8 Accessibility
+
+The section is a `<section>` with a heading, the explanation is text rather
+than a tooltip, failures are `role="alert"`, and the action is a real button
+at the 44px target every other control here uses. There is no icon-only
+control and no state conveyed by colour alone.
+
+### 23.9 Testing, and what it does not prove
+
+`pwa/push-presentation.test.ts` covers the closed tables directly, as
+`cache-policy.test.ts` does — these are the security-relevant decisions and
+they must be testable without a `ServiceWorkerGlobalScope`.
+
+`src/features/notification-push/push.test.tsx` renders through the real
+router with MSW and a **defined** `PushManager`, because `jsdom` implements
+none of the Push API.
+
+Neither proves external Web Push delivery, and no frontend test can. What
+they establish is the flow: that permission is requested only on a click,
+that the subscription is serialised into the three fields the API accepts,
+that the preference moves last, and that each state renders its own
+instruction.
+
+### 23.10 No `VITE_` push variable
+
+The VAPID **public** key arrives from `GET /notifications/push/status`, at
+runtime, rather than being baked into the bundle. Two reasons: a key baked
+at build time is wrong the moment a deployment rotates one, and the same
+response carries whether the server can send at all — which a build-time
+constant cannot know.
+
+The **private** key is server-side only and appears nowhere in this
+application, in any form.
+
+## 24. Open questions
 
 | # | Question | Blocked work |
 | --- | --- | --- |

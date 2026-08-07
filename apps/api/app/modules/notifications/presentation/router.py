@@ -51,20 +51,26 @@ from fastapi import APIRouter, Depends, Path, Query, status
 from app.api.openapi import error_response
 from app.api.responses import build_response
 from app.core.responses import ApiResponse
-from app.modules.auth.presentation.dependencies import CurrentUser
+from app.modules.auth.presentation.dependencies import CurrentUser, VerifiedUser
 from app.modules.avatars.presentation.dependencies import AvatarLinkBuilderDep
 from app.modules.notifications.application.services import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from app.modules.notifications.presentation.dependencies import (
     NotificationPreferenceServiceDep,
     NotificationServiceDep,
+    PushSubscriptionServiceDep,
 )
 from app.modules.notifications.presentation.rate_limits import (
     enforce_notification_preferences_update_limit,
+    enforce_push_subscription_limit,
 )
 from app.modules.notifications.presentation.schemas import (
     MarkAllReadResponse,
     NotificationPageResponse,
     NotificationPreferencesResponse,
+    PushStatusResponse,
+    PushSubscriptionResponse,
+    RegisterPushSubscriptionRequest,
+    RemovePushSubscriptionRequest,
     UnreadCountResponse,
     UpdateNotificationPreferencesRequest,
     decode_cursor,
@@ -233,6 +239,125 @@ async def mark_read(
     """
     changed = await notifications.mark_read(notification_id, recipient_id=user.id)
     return build_response(MarkAllReadResponse(marked_read=1 if changed else 0))
+
+
+@notifications_router.post(
+    "/push/subscriptions",
+    dependencies=[Depends(enforce_push_subscription_limit)],
+    response_model=ApiResponse[PushSubscriptionResponse],
+    status_code=status.HTTP_201_CREATED,
+    summary="Register this browser for push notifications",
+    responses=error_response(422, "The subscription is malformed, or push is unavailable"),
+)
+async def register_push_subscription(
+    user: VerifiedUser,
+    push: PushSubscriptionServiceDep,
+    body: RegisterPushSubscriptionRequest,
+) -> ApiResponse[PushSubscriptionResponse]:
+    """Registers, re-registers or takes over one browser's subscription — §3, §4.
+
+    **The account comes from the session.** There is no `user_id` on the
+    request body and no path parameter — a caller cannot subscribe somebody
+    else's account to their own browser, and the schema's `extra="forbid"`
+    means an attempt to supply one is a `422` rather than a silently ignored
+    field.
+
+    Called on enabling push *and* on each app start, so re-registering is the
+    normal case. An endpoint already registered — by this account or another
+    — is **taken over** rather than rejected: a browser is the only thing
+    that can tell this platform its previous binding is stale, and refusing
+    the claim would leave a shared laptop bound to whoever used it first
+    (§23).
+
+    `VerifiedUser` rather than `CurrentUser` — §24. The verified-email policy
+    A64-021.5H established governs every outward-facing write, and a push
+    subscription is one: an unverified throwaway account could otherwise
+    accumulate endpoints this platform will POST to on a schedule.
+
+    `201` on both a create and a takeover. The distinction is not the
+    client's business — it asked for "this browser is subscribed", and it is.
+    """
+    subscription = await push.register(
+        user.id,
+        endpoint=body.endpoint,
+        p256dh=body.decoded_p256dh(),
+        auth=body.decoded_auth(),
+    )
+    return build_response(PushSubscriptionResponse.of(subscription))
+
+
+@notifications_router.post(
+    "/push/subscriptions/remove",
+    dependencies=[Depends(enforce_push_subscription_limit)],
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove this browser's push subscription",
+)
+async def remove_push_subscription(
+    user: CurrentUser,
+    push: PushSubscriptionServiceDep,
+    body: RemovePushSubscriptionRequest,
+) -> None:
+    """Removes the calling browser's own subscription — §22, §23.
+
+    The browser is identified by the endpoint it submits — the one thing it
+    can produce about itself without having been told anything. It is not an
+    authorization token: the session decides whose device this is, so an
+    endpoint belonging to another account removes nothing.
+
+    ## Why `POST .../remove` and not `DELETE`
+
+    §4 offers `DELETE /push/subscriptions/current` "or equivalent", and the
+    equivalent is chosen for one reason: the endpoint has to travel, and
+    both `DELETE` shapes are worse places to put it.
+
+        in the path or query   the endpoint is a bearer capability, and a
+                               URL lands in access logs, proxy logs and
+                               browser history (§25)
+        in a DELETE body       permitted by HTTP and stripped in practice by
+                               enough intermediaries that it is not
+                               dependable
+
+    A body on a `POST` is neither. The cost is a verb that does not name the
+    effect, which the path does instead.
+
+    **Always `204`.** An endpoint that was never registered, one already
+    removed, and one belonging to somebody else all answer identically —
+    distinguishing them would answer *"does this endpoint belong to another
+    account"* about a value that is a bearer capability.
+
+    `CurrentUser` rather than `VerifiedUser`, deliberately and unlike the
+    register above: this is the path a **sign-out** takes (§23), and a
+    person whose verification lapsed must still be able to stop their
+    devices being pushed to. Removing a capability is never the operation to
+    gate.
+    """
+    await push.remove(user.id, endpoint=body.endpoint)
+
+
+@notifications_router.get(
+    "/push/status",
+    response_model=ApiResponse[PushStatusResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Whether push works here, and how many browsers are registered",
+)
+async def push_status(
+    user: CurrentUser,
+    push: PushSubscriptionServiceDep,
+) -> ApiResponse[PushStatusResponse]:
+    """What the settings screen needs — §20.
+
+    Answers `available: false` with a `null` key on a server with no VAPID
+    pair, rather than `404` or an error: "push is not available here" is a
+    state the UI renders, not a failure it handles.
+
+    Carries no rate limit, like the preference read it sits beside: it is
+    one indexed read of at most a handful of the caller's own rows, and a
+    caller who repeats it learns how many devices they have.
+
+    The **public** key only. The one that signs never appears in a response,
+    a log, or a `VITE_` variable.
+    """
+    return build_response(PushStatusResponse.of(await push.status(user.id)))
 
 
 __all__ = ["notifications_router"]

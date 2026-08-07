@@ -243,6 +243,47 @@ For the same reason the message is one fixed string, identical whether or
 not the address exists: a 429 that varied would reintroduce the account
 enumeration oracle `/auth/password/forgot` is built to deny.
 
+### Environment scaling — A64-021.6
+
+**Every number in `RateLimitSettings` is production's, in every
+environment.** What differs is a multiplier applied at the guard:
+
+| `ENVIRONMENT` | Profile | Multiplier |
+| --- | --- | --- |
+| `production`, `staging` | `production` | ×1 |
+| `local` | `development` | ×20 |
+| `test`, `ci` | `test` | ×100 |
+
+The motivation is a false negative, not a convenience: the A64-021.6
+Playwright run was producing 261 `refresh_ip` rejections against a
+30-per-minute rule from a single address, and failing whichever spec lost
+the race — a suite reporting a product defect that did not exist. Both
+obvious answers were rejected. Disabling the limiter means a suite that
+never exercises the limiter that ships. Lowering the production numbers
+means a number somebody eventually deploys.
+
+Four properties make the scaling safe:
+
+| Property | How |
+| --- | --- |
+| Production is byte-for-byte unchanged | `scaled()` returns the **same object** under `PRODUCTION`; there is no arithmetic on the deployed path |
+| The environment is the authority | `RATE_LIMIT_PROFILE` in the process environment is read and then **overwritten** by `get_settings()`. There is no variable that relaxes a deployed tier |
+| An unrecognised environment is strict | The mapping is `.get(..., PRODUCTION)`. A tier nobody thought about fails closed |
+| The limiter is still the limiter | The same Redis counters, scopes, `Retry-After`, error mapping and rule names. Only the ceiling moves, and it stays finite |
+
+It is applied in **one place** — `api.rate_limiting.RateLimit.rules()`,
+which every guard on the platform resolves through — so a policy written
+next year is scaled by having been written at all. A second table of
+development numbers was the alternative, and its failure mode is a rule
+added with a production figure and no development one, discovered by the
+author being rate limited on their own laptop.
+
+`python -m app.operator.rate_limits show` prints the profile, the
+multiplier, and each effective limit with the production figure beside it.
+
+Nothing about this keys on an IP address, on `localhost`, or on a
+User-Agent. Configuration decides, and configuration only.
+
 ### Failure policy
 
 **Fails open by default**, logging at ERROR. A Redis outage then degrades

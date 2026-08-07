@@ -2683,6 +2683,130 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notifications/push/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register this browser for push notifications
+         * @description Registers, re-registers or takes over one browser's subscription — §3, §4.
+         *
+         *     **The account comes from the session.** There is no `user_id` on the
+         *     request body and no path parameter — a caller cannot subscribe somebody
+         *     else's account to their own browser, and the schema's `extra="forbid"`
+         *     means an attempt to supply one is a `422` rather than a silently ignored
+         *     field.
+         *
+         *     Called on enabling push *and* on each app start, so re-registering is the
+         *     normal case. An endpoint already registered — by this account or another
+         *     — is **taken over** rather than rejected: a browser is the only thing
+         *     that can tell this platform its previous binding is stale, and refusing
+         *     the claim would leave a shared laptop bound to whoever used it first
+         *     (§23).
+         *
+         *     `VerifiedUser` rather than `CurrentUser` — §24. The verified-email policy
+         *     A64-021.5H established governs every outward-facing write, and a push
+         *     subscription is one: an unverified throwaway account could otherwise
+         *     accumulate endpoints this platform will POST to on a schedule.
+         *
+         *     `201` on both a create and a takeover. The distinction is not the
+         *     client's business — it asked for "this browser is subscribed", and it is.
+         */
+        post: operations["register_push_subscription_api_v1_notifications_push_subscriptions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notifications/push/subscriptions/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove this browser's push subscription
+         * @description Removes the calling browser's own subscription — §22, §23.
+         *
+         *     The browser is identified by the endpoint it submits — the one thing it
+         *     can produce about itself without having been told anything. It is not an
+         *     authorization token: the session decides whose device this is, so an
+         *     endpoint belonging to another account removes nothing.
+         *
+         *     ## Why `POST .../remove` and not `DELETE`
+         *
+         *     §4 offers `DELETE /push/subscriptions/current` "or equivalent", and the
+         *     equivalent is chosen for one reason: the endpoint has to travel, and
+         *     both `DELETE` shapes are worse places to put it.
+         *
+         *         in the path or query   the endpoint is a bearer capability, and a
+         *                                URL lands in access logs, proxy logs and
+         *                                browser history (§25)
+         *         in a DELETE body       permitted by HTTP and stripped in practice by
+         *                                enough intermediaries that it is not
+         *                                dependable
+         *
+         *     A body on a `POST` is neither. The cost is a verb that does not name the
+         *     effect, which the path does instead.
+         *
+         *     **Always `204`.** An endpoint that was never registered, one already
+         *     removed, and one belonging to somebody else all answer identically —
+         *     distinguishing them would answer *"does this endpoint belong to another
+         *     account"* about a value that is a bearer capability.
+         *
+         *     `CurrentUser` rather than `VerifiedUser`, deliberately and unlike the
+         *     register above: this is the path a **sign-out** takes (§23), and a
+         *     person whose verification lapsed must still be able to stop their
+         *     devices being pushed to. Removing a capability is never the operation to
+         *     gate.
+         */
+        post: operations["remove_push_subscription_api_v1_notifications_push_subscriptions_remove_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notifications/push/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether push works here, and how many browsers are registered
+         * @description What the settings screen needs — §20.
+         *
+         *     Answers `available: false` with a `null` key on a server with no VAPID
+         *     pair, rather than `404` or an error: "push is not available here" is a
+         *     state the UI renders, not a failure it handles.
+         *
+         *     Carries no rate limit, like the preference read it sits beside: it is
+         *     one indexed read of at most a handful of the caller's own rows, and a
+         *     caller who repeats it learns how many devices they have.
+         *
+         *     The **public** key only. The one that signs never appears in a response,
+         *     a log, or a `VITE_` variable.
+         */
+        get: operations["push_status_api_v1_notifications_push_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/time-controls": {
         parameters: {
             query?: never;
@@ -2876,6 +3000,16 @@ export interface components {
         /** ApiResponse[PublicUserResponse] */
         ApiResponse_PublicUserResponse_: {
             data: components["schemas"]["PublicUserResponse"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        /** ApiResponse[PushStatusResponse] */
+        ApiResponse_PushStatusResponse_: {
+            data: components["schemas"]["PushStatusResponse"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        /** ApiResponse[PushSubscriptionResponse] */
+        ApiResponse_PushSubscriptionResponse_: {
+            data: components["schemas"]["PushSubscriptionResponse"];
             meta: components["schemas"]["ResponseMeta"];
         };
         /** ApiResponse[QueueTicketResponse] */
@@ -5087,6 +5221,48 @@ export interface components {
             thumbnail_url: string | null;
         };
         /**
+         * PushStatusResponse
+         * @description What the settings screen needs to decide what to render — §20.
+         *
+         *     Three fields, and none of them can be turned back into a device. The
+         *     client combines them with what only *it* knows — browser support and the
+         *     `Notification.permission` value — to reach the state it shows, which is
+         *     why this response deliberately does not try to be that state: the server
+         *     cannot see a permission prompt.
+         */
+        PushStatusResponse: {
+            /** Available */
+            available: boolean;
+            /**
+             * Vapid Public Key
+             * @example BEl62iUYgUiv...
+             */
+            vapid_public_key?: string | null;
+            /**
+             * Device Count
+             * @example 2
+             */
+            device_count: number;
+        };
+        /**
+         * PushSubscriptionResponse
+         * @description What registering answers.
+         *
+         *     **No endpoint and no keys.** A client already has them — it sent them —
+         *     and echoing a bearer capability back is a copy in a response body, a
+         *     browser cache and any proxy that logs one.
+         *
+         *     The id is safe: it names a row, is useless without the session that owns
+         *     it, and gives a client something stable to key its own state on.
+         */
+        PushSubscriptionResponse: {
+            /**
+             * Id
+             * @example 019fb9ea-0a0c-7cec-9c5f-402727c31a96
+             */
+            id: string;
+        };
+        /**
          * QueueStatus
          * @description A ticket's position in its lifecycle — see this module's docstring
          *     for the mapping to domain-model.md §10.2's seven.
@@ -5251,6 +5427,22 @@ export interface components {
          */
         Region: "global" | "europe" | "north_america" | "south_america" | "asia" | "africa" | "oceania";
         /**
+         * RegisterPushSubscriptionRequest
+         * @description One browser registering itself.
+         *
+         *     Sent on enabling push and again on each app start, which is why the
+         *     endpoint behind it is an upsert: re-registering is the normal case, not
+         *     an error.
+         */
+        RegisterPushSubscriptionRequest: {
+            /** Endpoint */
+            endpoint: string;
+            /** P256Dh */
+            p256dh: string;
+            /** Auth */
+            auth: string;
+        };
+        /**
          * RegisterRequest
          * @description The `POST /auth/register` body.
          *
@@ -5388,6 +5580,24 @@ export interface components {
          * @enum {string}
          */
         RelationshipState: "none" | "outgoing_request" | "incoming_request" | "friend" | "blocked";
+        /**
+         * RemovePushSubscriptionRequest
+         * @description One browser removing itself — §22, §23.
+         *
+         *     Carries its own endpoint rather than a subscription id, because that is
+         *     what a browser can produce without having been told anything: it reads
+         *     it back from `pushManager.getSubscription()`. An id would have to be
+         *     remembered across a sign-out, which is exactly the state a sign-out
+         *     clears.
+         *
+         *     It is not an authorization token. The session decides whose device this
+         *     is; a caller submitting somebody else's endpoint removes nothing and is
+         *     told the same thing as one submitting their own.
+         */
+        RemovePushSubscriptionRequest: {
+            /** Endpoint */
+            endpoint: string;
+        };
         /**
          * ReplayPlyResponse
          * @description One ply, and the board it produced.
@@ -9395,6 +9605,90 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_push_subscription_api_v1_notifications_push_subscriptions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterPushSubscriptionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_PushSubscriptionResponse_"];
+                };
+            };
+            /** @description The subscription is malformed, or push is unavailable */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    remove_push_subscription_api_v1_notifications_push_subscriptions_remove_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemovePushSubscriptionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    push_status_api_v1_notifications_push_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_PushStatusResponse_"];
                 };
             };
         };

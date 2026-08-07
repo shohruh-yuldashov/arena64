@@ -42,6 +42,7 @@ from uuid import UUID, uuid4
 
 import pytest_asyncio
 from httpx import AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import OutboxSettings, get_settings
@@ -98,7 +99,7 @@ async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
         yield http
 
 
-async def register(client: AsyncClient) -> Player:
+async def register(client: AsyncClient, session: AsyncSession) -> Player:
     suffix = uuid4().hex[:8]
     username = f"player{suffix}"
     assert len(username) <= 20, f"test username {username!r} exceeds the platform limit"
@@ -108,6 +109,20 @@ async def register(client: AsyncClient) -> Player:
         json={"username": username, "email": f"{suffix}@example.com", "password": PASSWORD},
     )
     assert created.status_code == 201, created.text
+
+    # **Verified, because A64-021.5H made every outward-facing write require
+    # it** — and a friend request is the source event this whole suite is
+    # built on. Written directly rather than through the OTP flow: the code
+    # is not this suite's subject, and reading it out of a log to type it
+    # back would couple every notification test to the verification one.
+    #
+    # This is the same thing `app.operator.accounts verify` does, and its
+    # absence is why these suites went red on A64-021.5H — that phase's
+    # focused regression did not include this file.
+    await session.execute(
+        text("UPDATE users.user SET is_verified = true WHERE id = :id"),
+        {"id": UUID(created.json()["data"]["id"])},
+    )
 
     signed_in = await client.post(
         LOGIN_URL, json={"email": f"{suffix}@example.com", "password": PASSWORD}
@@ -248,7 +263,10 @@ class TestNotificationsAreProducedBySourceEvents:
         did: the addressee learns a request arrived, and the requester learns
         it was accepted.
         """
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
 
         sent = await client.post(REQUESTS_URL, headers=alice.auth, json={"player_id": str(bob.id)})
         assert sent.status_code == 201, sent.text
@@ -296,7 +314,10 @@ class TestNotificationsAreProducedBySourceEvents:
         concurrent consumer processes all look like from this table. The
         constraint refuses the duplicate; nothing here reads first.
         """
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         sent = await client.post(REQUESTS_URL, headers=alice.auth, json={"player_id": str(bob.id)})
         await client.post(f"{REQUESTS_URL}/{sent.json()['data']['id']}/accept", headers=bob.auth)
 
@@ -354,7 +375,10 @@ class TestRealtimeAnnouncement:
         is catching up is not told the same thing twice by the server. The
         client's own duplicate guard is a second line, not the only one.
         """
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         announcer = RecordingAnnouncer(contract_session)
 
         sent = await client.post(REQUESTS_URL, headers=alice.auth, json={"player_id": str(bob.id)})
@@ -389,7 +413,10 @@ class TestOwnership:
     ) -> None:
         """§32.3, §30. A notification belongs to one recipient and to nobody
         else — and the refusal is indistinguishable from "no such thing"."""
-        owner, stranger = await register(client), await register(client)
+        owner, stranger = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         (notification_id,) = await seed(contract_session, owner.id, count=1)
 
         assert (await client.get(NOTIFICATIONS_URL, headers=stranger.auth)).json()["data"][
@@ -419,7 +446,7 @@ class TestPaging:
     ) -> None:
         """§32.4. Newest first, no duplicate, no gap, and a last page that
         says so."""
-        owner = await register(client)
+        owner = await register(client, contract_session)
         written = await seed(contract_session, owner.id, count=5)
         newest_first = [str(identifier) for identifier in reversed(written)]
 
@@ -455,7 +482,7 @@ class TestReadState:
     ) -> None:
         """§32.5, §9. Marking is idempotent and the badge is consistent with
         the list at every step."""
-        owner = await register(client)
+        owner = await register(client, contract_session)
         written = await seed(contract_session, owner.id, count=3)
 
         assert (await client.get(UNREAD_URL, headers=owner.auth)).json()["data"][

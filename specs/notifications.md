@@ -1,6 +1,6 @@
 # Notifications
 
-> **Status:** foundation — A64-021.1; realtime in-app delivery — A64-021.2; preferences — A64-021.3; tournament and game coverage — A64-021.4; email through Resend — A64-021.5
+> **Status:** foundation — A64-021.1; realtime in-app delivery — A64-021.2; preferences — A64-021.3; tournament and game coverage — A64-021.4; email through Resend — A64-021.5; Web Push — A64-021.6
 > **Owner:** platform
 > **Related:** `docs/01-architecture/domain-model.md` §9.3, `docs/01-architecture/database.md` §10.2 and §10.3, `specs/friends.md`, `specs/frontend.md` §21 and §22
 
@@ -658,15 +658,23 @@ this table predicted — a published recipient reader on `users`, a durable
 delivery queue, and the same `NotificationDeliveryPolicy` asked with
 `channel=email`. §13 is what it looks like when taken.
 
+A64-021.6's push channel is gone as well, and it is the strongest evidence
+the seam holds: a second channel, a second transport, a second delivery
+table and a browser permission flow, with **no change** to the notification
+record, the exactly-once key, the realtime frame or the preference model.
+The one prediction it did not keep is where the VAPID key lives — this table
+guessed a `VITE_` variable, and §15 says why the *private* half must never
+be one.
+
 | Deferred to | What it adds | Where |
 | --- | --- | --- |
-| **A64-021.6 browser push** | Permission request, `pushManager.subscribe`, a VAPID key as a `VITE_` variable, `push` and `notificationclick` handlers in **the existing** service worker, a device/subscription table | `apps/web/pwa/service-worker.ts` and `apps/api`. `shared/pwa/push-support.ts` already reports capability and asks for nothing. A64-021.5 built most of what it needs: `ChannelAvailability` makes a channel a runtime fact, and the delivery queue, the retry policy and the outcome vocabulary are channel-agnostic — push adds a subscription table, a transport, and one member to `ChannelAvailability.of` |
 | **Friend challenges** | A `challenges` domain, its events, and one notification type per event | A new member of `NotificationType`, its payload, its target |
 | **`tournament_match_ready`** | An event. `TournamentMatchLauncher` holds no publisher, `game.match_activated` carries no `origin`, and `launch()` does not report whether an attempt was newly recorded — without the third, a re-launch after a restart notifies twice | `tournament.application.services.match_launcher`, and one more member of `tournament.public`'s event re-exports |
 | **`tournament_cancelled`** | A publisher. The event is declared and no service emits it | `tournament.application.services` — wherever cancellation is eventually implemented |
 
-The worker's message contract must stay as narrow as it is: adding a `push`
-handler must not widen what a *page* may tell the service worker to do.
+The worker's message contract stayed as narrow as it was. A64-021.6 added
+`push` and `notificationclick` listeners and **no** new `message` branch: a
+page still cannot tell the worker to do anything but skip waiting.
 
 ---
 
@@ -878,6 +886,268 @@ a subject, a body, or a provider's response — and a provider exception is
 | No token is ever in an email URL | Every link is the configured origin plus a path built from an identifier. The preference link is a page behind a session, not a one-click unsubscribe token |
 | Logs and metrics carry no address | The metric's two labels are closed enumerations; the log lines carry a type, an outcome and counts. A provider exception is logged **without** `exc_info`, because its message can contain an address |
 | The delivery table is not exposed | No route reads it. The operator command returns counts by status and cannot name a recipient |
+| A caller cannot subscribe another account | The account comes from the session; there is no `user_id` field, and `extra="forbid"` makes supplying one a `422` |
+| A push endpoint cannot be enumerated | No method reads by an endpoint a caller supplies except the owner-scoped removal, which answers identically for an endpoint that is not theirs and one already gone |
+| A subscription is never returned to a client | Registration answers an id. The endpoint and both keys appear in no response, no log and no metric |
+| A previous account cannot be pushed on a shared browser | Two independent mechanisms: the endpoint upsert re-binds ownership atomically, and signing out unsubscribes the browser and revokes the row before the session ends |
+| A push payload carries nothing private | Two identifiers. The text is a closed table compiled into the service worker; no body, name, address or token travels |
+| A push cannot navigate anywhere | Every destination is a literal path in that same table. No branch concatenates a payload value into a URL, and the worker refuses anything that does not resolve to its own origin |
+| The VAPID signing key is server-side only | `SecretStr` read at the composition root. Never a `VITE_` variable, never in a response, never logged. The **public** half is served, because a browser cannot subscribe without it |
+| A stored endpoint cannot become a request to an arbitrary host | The boundary refuses anything that is not an absolute `https` URL, in the domain rather than only in a schema |
+| A malformed key cannot be stored | 65 and 16 bytes exactly, enforced at the boundary and by the column. A key of any other length can never encrypt anything |
+| A push service's own words never escape | The transport raises a typed exception carrying a status code; the error body is never logged, persisted or returned |
+| The subscription API is not cached by the service worker | `cache-policy.ts` classifies everything on `/api` as `"network"` — unchanged, and it already covered these routes the day they were added |
+
+---
+
+## 15. Web Push — A64-021.6
+
+The third channel. In-app delivery is the record and email reaches somebody
+who is away; push reaches somebody whose browser is closed, within seconds,
+and is the only channel that can interrupt.
+
+That is also why it is the most restricted: a push is an interruption, and
+the cost of getting it wrong is that people switch the channel off — not one
+category, the channel.
+
+### 15.1 What is pushed
+
+`domain/push.py`'s `PUSH_CAPABLE_TYPES`: the same three tournament types the
+email channel sends.
+
+| Pushed | Why |
+| --- | --- |
+| `tournament_registration_confirmed` | Confirmed after the tab was closed |
+| `tournament_round_published` | Published while the player is away; time-critical |
+| `tournament_completed` | Finishes overnight |
+
+| Not pushed | Why |
+| --- | --- |
+| `game_completed` | The player is looking at the result screen. Pushing it notifies them of something they are already reading |
+| `friend_request_received` / `_accepted` | **Attacker-controllable.** Anybody can send a friend request, so a type on this list is a type a stranger can use to make somebody's phone buzz. That needs a rate-limit story of its own before it is safe, and inventing one now would be speculative |
+
+Push defaults to **off** for every category (`_default_for`: in-app on,
+everything else off). A channel that interrupts has to be asked for.
+
+### 15.2 Subscriptions
+
+`notifications.push_subscription`, one row per **browser** — not per person
+and not per device. A laptop with two browsers is two subscriptions and a
+browser whose site data was cleared becomes a new one, because the Push API
+offers no device identifier and inventing one would be an identity nothing
+can maintain.
+
+| Column | Note |
+| --- | --- |
+| `endpoint` | The push service's URL. **Unique across live and revoked rows** — this is the ownership rule, see §15.3 |
+| `p256dh`, `auth` | The browser's public key (65 bytes) and auth secret (16), exact lengths fixed by RFC 8291 |
+| `last_seen_at` | Written on every re-registration. The only "is this device still real" signal available — a push service reports nothing until a delivery fails |
+| `revoked_at` | Set, never deleted, so an operator asking *why did this device stop* gets an answer |
+
+The three fields together are a **bearer capability**: anybody holding them
+can push to that browser, subject to VAPID. They are never returned to a
+client, never logged, and never accepted as a lookup key a caller supplies.
+
+### 15.3 Ownership, and the shared-browser leak
+
+`POST /notifications/push/subscriptions` derives the account from the
+**session**. There is no `user_id` field, and `extra="forbid"` makes an
+attempt to supply one a `422` rather than a silently ignored field.
+
+Registration is `ON CONFLICT (endpoint) DO UPDATE`. A browser re-subscribing
+keeps working; a browser whose endpoint now belongs to a different account
+is **re-bound**, in one statement, with no window in which two rows claim
+it. That is not a convenience — it is the leak defence:
+
+    A signs in on a shared laptop, enables push, signs out
+    B signs in on the same browser and enables push
+    → the endpoint is re-bound to B, and A can no longer reach it
+
+The other half — B never enables push — is closed on the client. Signing out
+unsubscribes this browser and revokes the row, through `onSessionEnding`,
+**before** the session is revoked (the removal needs it). Both halves are
+required: the upsert alone leaves A's subscription live until B opts in, and
+the sign-out alone leaves it live if A never signs out.
+
+### 15.4 Delivery
+
+`notifications.notification_push_delivery`, keyed
+`(notification_id, subscription_id)` — one row per notification **per
+device**, which is the whole difference from the email table. Each is
+claimed, attempted and settled independently, so one dead device does not
+prevent the others.
+
+The pipeline is the email one's:
+
+    durable notification (committed)
+      → push delivery rows, in the same transaction, fanned out over the
+        recipients' live subscriptions in one query
+      → worker claim (`FOR UPDATE SKIP LOCKED`, `attempt_count` incremented
+        by the claim)
+      → availability, type, preference, subscription
+      → encrypt, POST, classify
+      → record; revoke the subscription if it is gone
+
+Enqueueing is `ON CONFLICT DO NOTHING` on the pair, so a redelivered source
+event pushes nothing twice — §19's idempotency as a constraint rather than a
+check somebody remembered.
+
+The preference is read at **delivery** time, so somebody who mutes push
+after a round is published is not pushed.
+
+### 15.5 The payload, and what a lock screen says
+
+Two fields: `{"n": <notification id>, "t": <type>}`, short keys because the
+encrypted envelope has a fixed 86-byte overhead against a ~4 KB ceiling.
+
+Absent, deliberately: the notification body, any display name, any address,
+any token, and any URL. A push payload lands in a browser's notification
+store on a device that may be shared, and shows on a lock screen.
+
+The **text** is a closed table compiled into the service worker
+(`pwa/push-presentation.ts`) — §12's approach B. Server-composed text was
+rejected because it is *specific* text: "Round 3 is live in the Tashkent
+Open" names a tournament somebody is in, in public. "A new round is live"
+discloses that this person uses Arena64 and nothing more.
+
+The text is English and not translated. A service worker has no i18n
+runtime and no access to the language the person chose;
+`navigator.language` is the operating system's preference, which is
+frequently a different language, and a notification in the wrong language is
+worse than one in a consistent one. The full notification, in their own
+language, is one tap away.
+
+### 15.6 `notificationclick`
+
+Close, then focus an existing tab and navigate it, or open one. The
+destination comes from the **same closed table** — every entry is a literal
+path, so there is no branch that can concatenate a payload value into a URL.
+The worker resolves it against its own origin and refuses anything that does
+not stay there.
+
+Every route is a list (`/tournaments`, `/notifications`) rather than an item,
+because the payload's id names a *notification* and not a tournament —
+`/tournaments/{notification id}` would open something that does not exist.
+A protected route may bounce to `/login` and back, unchanged by this being a
+push.
+
+### 15.7 VAPID
+
+| Variable | Note |
+| --- | --- |
+| `VAPID_PUBLIC_KEY` | **Not a secret.** Handed to every browser that subscribes and served by `GET /notifications/push/status` |
+| `VAPID_PRIVATE_KEY` | Server-side only. `SecretStr`, never a `VITE_` variable, never in a response, never in a log |
+| `VAPID_SUBJECT` | `mailto:no-reply@arena64.gg`. A contact address for a push service operator; the one field safe to log |
+
+Generate with `python -m app.operator.push_keys generate`. Never at startup:
+a browser commits to the public key when it subscribes, so **changing the
+pair invalidates every existing subscription immediately and permanently**,
+and a platform that generated one when it could not find its configuration
+would do that silently on a restart. The symptom is push ceasing to work for
+everybody who had enabled it, with no error anywhere.
+
+An absent pair is allowed and reports the channel unavailable; a **present
+but mismatched** pair raises at startup, because accepting it binds every
+subscription created afterwards to a key that cannot sign for them.
+
+### 15.8 Availability
+
+`can_deliver_push(settings)` — does this process hold a VAPID pair. There is
+no `PUSH_ENABLED`, because a boolean beside the keys can disagree with them,
+and the player is the one who finds out.
+
+A server without one answers `available: false` with a `null` key, refuses
+to store a subscription, and the settings screen says so.
+
+### 15.9 Error classification and retry
+
+| Push service says | Outcome | Effect |
+| --- | --- | --- |
+| `404`, `410` | `subscription_gone` | The subscription is **revoked**. No retry — this is the ordinary end of a browser's life |
+| `429`, `5xx`, timeout, connection error | `retryable_failure` | Exponential backoff, capped, to `PUSH_MAX_ATTEMPTS` |
+| other `4xx`, unusable stored key | `permanent_failure` | Abandoned. Retrying asks the same question |
+| — | `skipped_preference` / `skipped_unsupported_type` / `skipped_no_subscription` / `skipped_channel_unavailable` | Not sent, and nothing was wrong |
+
+Backoff is the email channel's, identical rather than a second schedule
+(§18), through the same `PeriodicTaskScheduler`.
+
+### 15.10 API
+
+| Endpoint | Auth | Limit |
+| --- | --- | --- |
+| `POST /notifications/push/subscriptions` | `VerifiedUser` | `push_subscription_user`, 60/hour |
+| `POST /notifications/push/subscriptions/remove` | `CurrentUser` | the same bucket |
+| `GET /notifications/push/status` | `CurrentUser` | none — one indexed read of the caller's own rows |
+
+Registration requires a **verified** address (§24, aligning with
+A64-021.5H): an unverified throwaway account could otherwise accumulate
+endpoints this platform POSTs to on a schedule. Removal deliberately does
+**not** — it is the path a sign-out takes, and a person whose verification
+lapsed must still be able to stop their devices being pushed to. Removing a
+capability is never the operation to gate.
+
+`POST .../remove` rather than `DELETE`, because the endpoint has to travel
+and both `DELETE` shapes are worse places to put a bearer capability: a URL
+lands in access and proxy logs, and a `DELETE` body is stripped by enough
+intermediaries not to be dependable.
+
+### 15.11 Transport
+
+RFC 8030 over `httpx`, RFC 8291 encryption and RFC 8292 VAPID implemented
+against `cryptography` — one new dependency rather than `pywebpush`'s four,
+and the deciding factor is the one that ruled out the Resend SDK: its
+`webpush()` is synchronous, in a worker whose entire job is I/O, with no
+per-request timeout.
+
+Nothing about a vendor appears above `app/platform/push/`. The transport is
+endpoint-blind: no code parses an endpoint or branches on its host.
+
+### 15.12 Metrics and logs
+
+    notifications.push.deliveries{type, outcome}
+
+Both labels are closed enumerations this platform defines. **No** endpoint,
+user id, notification id or subscription id — every one is unbounded
+cardinality and three are fed by a third party.
+
+Log lines carry counts, outcomes and a subscription id at most. No endpoint,
+no key, no recipient. A push service's error body is never logged: it can
+quote the endpoint it rejected.
+
+### 15.13 Performance
+
+| Case | Cost |
+| --- | --- |
+| Fan-out, 1 recipient × 1 device | 1 subscription query, 1 insert, 1 POST |
+| Fan-out, 1 recipient × 3 devices | 1 subscription query, 1 insert (3 rows), 3 POSTs |
+| Tournament round, 128 players × 2 devices | **1** subscription query (`user_id IN (...)` over a partial index), **1** insert of 256 rows, then 256 POSTs across 13 worker passes at `PUSH_BATCH_SIZE=20` |
+
+No per-device user lookup and no per-notification query: `live_for_many`
+exists precisely so the fan-out inside the notification's transaction is one
+round trip. The worker reads subscriptions once per pass, not once per row,
+and never loads the notification — the payload is two identifiers the
+delivery row already carries.
+
+### 15.14 Testing, and its limits
+
+| Layer | Covers |
+| --- | --- |
+| `tests/unit/test_web_push_protocol.py` | RFC 8291 **decrypted as a browser would**, and a VAPID assertion verified against the public half. Both failures are otherwise silent |
+| `tests/contract/test_push_notifications.py` | The real API and worker against a **stub push service**: ownership, account switch, availability, delivery, `410`, retry, preference, idempotency |
+| `pwa/push-presentation.test.ts` | The closed text and route tables |
+| `src/features/notification-push/push.test.tsx` | The settings states and the enable/disable flow, over a mocked `PushManager` |
+
+**No test proves external Web Push delivery, and none can.** No real push
+service is contacted anywhere in this suite (§28). What is established is
+that the bytes are the ones RFC 8291 specifies, that every status code a
+real service can answer with leads to the right state, and that the browser
+flow calls what it should in the order it should.
+
+### 15.15 Migration
+
+`e26a0159c56b` creates both tables. **No backfill** — there are no
+subscriptions on the day it runs, so nothing fans out and no notification
+already stored generates a push.
 
 ---
 
@@ -889,4 +1159,5 @@ a subject, a body, or a provider's response — and a provider exception is
 - `docs/07-decisions/ADR-003-pwa-service-worker.md` — the worker a push channel will extend
 - `specs/frontend.md` §21 — the in-app read surface
 - `specs/frontend.md` §22 — the preference screen
-- `apps/api/.env.example` — the email settings an operator must supply
+- `apps/api/.env.example` — the email and push settings an operator must supply
+- `specs/frontend.md` §23 — the push settings screen and the permission flow

@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 
+import { PushReleaseProvider } from "@/app/providers/push-release-provider";
 import { RealtimeProvider } from "@/app/providers/realtime-provider";
 import type { AuthChannel } from "@/features/auth/model/auth-channel";
 import { SessionProvider } from "@/features/auth/model/session-provider";
@@ -47,6 +48,12 @@ import { ErrorBoundary } from "@/shared/ui";
  * must close it. That dependency is one-directional, which is why the
  * session provider knows nothing about a socket and publishes
  * `onSessionEnded` instead — A64-020.5B §3.
+ *
+ * **`PushReleaseProvider` is directly inside `SessionProvider`** for the
+ * same reason and through the same kind of seam — `onSessionEnding`,
+ * A64-021.6 §23. It renders nothing; it exists so that signing out removes
+ * this browser's push subscription from *any* page, rather than only from
+ * the one screen that knows about push.
  *
  * **`RealtimeProvider` is innermost, and above the router** — A64-020.5B.
  * One socket per tab (AD-11), and it survives navigation: a connection
@@ -96,9 +103,11 @@ export function AppProviders({
         <I18nProvider>
           <QueryClientProvider client={client}>
             <SessionProvider {...(authChannel ? { channel: authChannel } : {})}>
-              <RealtimeProvider {...(realtimeClient ? { client: realtimeClient } : {})}>
-                {children}
-              </RealtimeProvider>
+              <PushReleaseProvider>
+                <RealtimeProvider {...(realtimeClient ? { client: realtimeClient } : {})}>
+                  {children}
+                </RealtimeProvider>
+              </PushReleaseProvider>
             </SessionProvider>
           </QueryClientProvider>
         </I18nProvider>

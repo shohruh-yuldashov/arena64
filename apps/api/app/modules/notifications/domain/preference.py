@@ -74,8 +74,14 @@ class DeliveryChannel(StrEnum):
     """Deferred to A64-021.5. No provider, no template, no sender."""
 
     PUSH = "push"
-    """Deferred to A64-021.6. The service worker exists (A64-020.9); the
-    subscription, the VAPID key and the push handler do not."""
+    """A browser notification, delivered through Web Push — A64-021.6.
+
+    Available only where a process holds a VAPID key pair *and* the player's
+    browser has an active subscription. The first is `ChannelAvailability`'s
+    question; the second is not a preference at all and is deliberately not
+    modelled here — a player with push enabled and no subscribed device has
+    asked to be pushed and has nowhere to be pushed to, which is a state the
+    settings screen shows and this enum has no business encoding."""
 
 
 #: Which channels this **build** can deliver on, before configuration.
@@ -107,7 +113,13 @@ class DeliveryChannel(StrEnum):
 CHANNEL_AVAILABILITY: Final[Mapping[DeliveryChannel, bool]] = {
     DeliveryChannel.IN_APP: True,
     DeliveryChannel.EMAIL: True,
-    DeliveryChannel.PUSH: False,
+    # A64-021.6. The channel is built: subscriptions, VAPID, the transport,
+    # the delivery queue and the service worker handler all exist. Whether a
+    # *process* can send one is `ChannelAvailability`'s question, and it is
+    # answered by whether a VAPID key pair is configured — see
+    # `platform/push/provider.py` on why the key pair is the switch and not
+    # a second boolean beside it.
+    DeliveryChannel.PUSH: True,
 }
 
 

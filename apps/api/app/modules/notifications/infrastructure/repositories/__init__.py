@@ -9,9 +9,17 @@ from app.modules.notifications.infrastructure.repositories.notification_reposito
 from app.modules.notifications.infrastructure.repositories.preference_repository import (
     SqlAlchemyNotificationPreferenceRepository,
 )
+from app.modules.notifications.infrastructure.repositories.push_delivery_repository import (
+    SqlAlchemyPushDeliveryRepository,
+)
+from app.modules.notifications.infrastructure.repositories.push_subscription_repository import (
+    SqlAlchemyPushSubscriptionRepository,
+)
 
 __all__ = [
     "SqlAlchemyEmailDeliveryRepository",
     "SqlAlchemyNotificationPreferenceRepository",
     "SqlAlchemyNotificationRepository",
+    "SqlAlchemyPushDeliveryRepository",
+    "SqlAlchemyPushSubscriptionRepository",
 ]

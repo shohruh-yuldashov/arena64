@@ -19,6 +19,43 @@ from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from app.config.environment import Environment, current_environment, env_file_for
+from app.core.rate_limiting import RateLimitProfile
+
+
+def rate_limit_profile_for(environment: Environment) -> RateLimitProfile:
+    """How hard rate limits bite in this environment — A64-021.6 §5.
+
+    The **one** place the mapping lives, so a new policy anywhere on the
+    platform is scaled by having been written at all, rather than by
+    somebody remembering to add it to a second table.
+
+    ## Fail-closed on anything unrecognised
+
+    `.get(..., PRODUCTION)` rather than an exhaustive match that raises. An
+    environment nobody thought about gets **production** limits, which is
+    the direction a mistake here has to fail in: the alternative is a new
+    tier silently shipping with hundred-fold allowances, and nothing about
+    it would look wrong.
+
+    Raising instead was considered and rejected for the same reason a
+    missing translation renders a key rather than a blank page — a startup
+    crash on an unrecognised environment name is a worse outcome than
+    correct-and-strict behaviour, and `Environment` is a closed enum anyway,
+    so the branch is reachable only by adding a member.
+    """
+    return _PROFILE_BY_ENVIRONMENT.get(environment, RateLimitProfile.PRODUCTION)
+
+
+#: The mapping, and every member of `Environment` is listed deliberately —
+#: including the two that map to `PRODUCTION`, so that "staging is strict" is
+#: something a reader can see rather than infer from an absence.
+_PROFILE_BY_ENVIRONMENT: dict[Environment, RateLimitProfile] = {
+    Environment.LOCAL: RateLimitProfile.DEVELOPMENT,
+    Environment.TEST: RateLimitProfile.TEST,
+    Environment.CI: RateLimitProfile.TEST,
+    Environment.STAGING: RateLimitProfile.PRODUCTION,
+    Environment.PRODUCTION: RateLimitProfile.PRODUCTION,
+}
 
 # Convenience defaults for `local` and `test`, where "it just runs" matters
 # more than explicit configuration. Never valid for a deployed tier — see
@@ -802,6 +839,119 @@ class NotificationEmailSettings(SectionSettings):
     retry_max_seconds: int = Field(default=6 * 60 * 60, ge=60)
 
 
+class PushSettings(SectionSettings):
+    """`push` — Web Push identity and delivery, A64-021.6 §5, §18.
+
+    ## The key pair is the switch
+
+    There is no `PUSH_ENABLED`. A process holding a valid VAPID pair can
+    send a push notification; one that does not, cannot — and
+    `ChannelAvailability` is built from exactly that. A boolean beside the
+    keys would be a second source of truth that can disagree with them, and
+    the player is the one who finds out: a settings switch that turns on a
+    channel with nothing behind it (§6).
+
+    ## Absent is allowed; wrong is not
+
+    Unlike `RESEND_API_KEY`, whose absence makes registration unverifiable,
+    an unset pair costs one optional channel. A tier that has not generated
+    keys reports push unavailable, refuses to store subscriptions, and says
+    so on the settings screen — all true, so there is nothing to fail at
+    boot over.
+
+    A *malformed or mismatched* pair does raise at startup, and the
+    asymmetry is deliberate: it means somebody intended to configure push
+    and got it wrong, and accepting it binds every subscription created
+    afterwards to a key that cannot sign for it. Fixing the configuration
+    later does not repair those subscriptions.
+
+    ## Why rotation is not routine
+
+    A browser commits to the public key when it subscribes, and a push
+    service refuses anything not signed by its private half. Changing the
+    pair therefore invalidates **every existing subscription immediately**
+    — every browser must subscribe again. That makes this operational state
+    rather than a credential on a rotation schedule, and it is why nothing
+    in this platform generates a pair at startup.
+
+    Generate one deliberately:
+
+        python -m app.operator.push_keys generate
+    """
+
+    model_config = SettingsConfigDict(env_prefix="PUSH_", frozen=True, extra="forbid")
+
+    vapid_public_key: str | None = Field(default=None, validation_alias="VAPID_PUBLIC_KEY")
+    """The application server key, base64url, unpadded — `VAPID_PUBLIC_KEY`.
+
+    **Not a secret.** It is handed to every browser that subscribes and is
+    served to the frontend, which is why it is a plain `str`: marking it
+    `SecretStr` would imply a handling rule that does not exist and would
+    make the one value that *must* be published look like one that must not.
+
+    The alias is load-bearing, for the reason `RESEND_API_KEY` documents:
+    this class carries a `PUSH_` prefix, so without it an operator following
+    any Web Push documentation would set `VAPID_PUBLIC_KEY`, get no error,
+    and run a deployment that silently cannot send.
+    """
+
+    vapid_private_key: SecretStr | None = Field(default=None, validation_alias="VAPID_PRIVATE_KEY")
+    """The signing key, base64url, unpadded — `VAPID_PRIVATE_KEY`.
+    **Server-side only.**
+
+    Never reaches a browser, a `VITE_` variable or a response body. Anybody
+    holding it can sign an assertion this platform's own subscriptions
+    accept, which means they can push to every one of them.
+
+    `SecretStr` so it cannot reach a log line, a traceback or an error
+    reporter through a repr (services.md §8.5).
+    """
+
+    vapid_subject: str = Field(
+        default="mailto:no-reply@arena64.gg", validation_alias="VAPID_SUBJECT"
+    )
+    """A way for a push service operator to reach whoever is sending —
+    `VAPID_SUBJECT`, `mailto:` or `https:` per RFC 8292 §2.1.
+
+    Has a real default rather than `None` because it is not a secret, is the
+    same in every tier, and a missing one makes some push services refuse
+    the assertion. It is also the one field here safe to log, and is what a
+    boot line uses to say which configuration was loaded.
+    """
+
+    ttl_seconds: int = Field(default=6 * 60 * 60, ge=0, le=28 * 24 * 60 * 60)
+    """How long a push service may hold a message for an offline device.
+
+    Six hours. The message is a *pointer* to a durable notification that is
+    already stored, so a device that was off overnight loses nothing by
+    missing the push — it sees the notification on next open. What the
+    window buys is the laptop closed for an afternoon.
+
+    Not zero, which would drop anything for a sleeping device, and not days,
+    which would wake somebody at breakfast about a tournament round that
+    finished before they went to bed.
+    """
+
+    batch_size: int = Field(default=20, ge=1, le=200)
+    """Deliveries claimed per worker pass. Matches the email channel's, and
+    for the same reason: a pass holds a database session for its duration,
+    and a large batch is a long-lived transaction."""
+
+    poll_interval_seconds: float = Field(default=30.0, ge=1.0, le=600.0)
+    """How often the worker looks for due deliveries."""
+
+    max_attempts: int = Field(default=5, ge=1, le=10)
+    """Attempts before a delivery is abandoned.
+
+    Five, matching email. A push service that has been unreachable across
+    five backoffs is not going to take this message, and the notification
+    itself is already durable — nothing is lost but the interruption.
+    """
+
+    retry_base_seconds: int = Field(default=60, ge=1)
+    retry_max_seconds: int = Field(default=6 * 60 * 60, ge=60)
+
+
 class StorageSettings(SectionSettings):
     """`storage` — where binary objects live (A64-012.2).
 
@@ -880,6 +1030,15 @@ class RateLimitSettings(SectionSettings):
     dimension) — a chosen default is worth more than a missing one, and
     saying which is which is worth more than either.
 
+    ## The numbers here are **production's**, always
+
+    A64-021.6 added `profile`, which scales every one of them for local
+    development and for the end-to-end suite. Nothing below changes: the
+    figures are production's, the scaling is a multiplier applied at the
+    guard, and `profile` is **derived from `ENVIRONMENT` and cannot be set**
+    — see the field for why an operator-settable one would be a way to ship
+    hundred-fold limits.
+
     ## `ge=` floors, and why there are no `le=` ceilings
 
     The floors exist because a limit of zero takes an endpoint down
@@ -894,6 +1053,23 @@ class RateLimitSettings(SectionSettings):
     """
 
     model_config = SettingsConfigDict(env_prefix="RATE_LIMIT_", frozen=True, extra="forbid")
+
+    profile: RateLimitProfile = RateLimitProfile.PRODUCTION
+    """How hard every limit below bites — A64-021.6.
+
+    **Derived from `ENVIRONMENT`, and overwritten by `get_settings()` after
+    this class is constructed.** `RATE_LIMIT_PROFILE` may be present in an
+    environment and is *ignored*: an operator-settable profile is a way to
+    ship hundred-fold limits to production by editing one variable, which is
+    exactly the failure this whole mechanism must not introduce. The default
+    is `PRODUCTION` so that a `RateLimitSettings` built by hand — in a test,
+    or by a future caller — is the strict one until something deliberately
+    relaxes it.
+
+    The scaling is applied at the guard (`api.rate_limiting.RateLimit.rules`)
+    rather than to the numbers below, so every figure in this class stays
+    production's and every assertion about them stays readable.
+    """
 
     enabled: bool = True
     """The kill switch. `False` disables every rule — for a load test, or
@@ -1263,6 +1439,24 @@ class RateLimitSettings(SectionSettings):
     # repeats it learns their own settings.
     notification_preferences_update_user_limit: int = Field(default=30, ge=1)
     notification_preferences_update_window_seconds: int = Field(default=5 * 60, ge=1)
+
+    # --- POST /notifications/push/subscriptions (A64-021.6) -------------------
+    # Per **user**, not per IP: what this bounds is one account accumulating
+    # rows, and an office behind one address is many accounts each entitled
+    # to their own devices.
+    #
+    # A client registers on enabling push and again on each app start, so a
+    # person who opens the app ten times a day and has three browsers is
+    # thirty registrations — all upserts, all of which touch one row each.
+    # Sixty an hour absorbs that and still stops a script minting endpoints,
+    # which is the only real abuse available here: every row is a capability
+    # the delivery worker will POST to.
+    #
+    # `DELETE` is limited by the same rule, deliberately sharing the bucket.
+    # Enable and disable are two halves of one action, and separate counters
+    # would let anybody willing to alternate have double the allowance.
+    push_subscription_user_limit: int = Field(default=60, ge=1)
+    push_subscription_window_seconds: int = Field(default=60 * 60, ge=1)
 
 
 class StatisticsSettings(SectionSettings):
@@ -2682,6 +2876,7 @@ class Settings(BaseModel):
     session: SessionSettings
     email: EmailSettings
     notification_email: NotificationEmailSettings
+    push: PushSettings
     storage: StorageSettings
     rate_limit: RateLimitSettings
     statistics: StatisticsSettings
@@ -2806,8 +3001,16 @@ def get_settings() -> Settings:
         session=SessionSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         email=EmailSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         notification_email=NotificationEmailSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        push=PushSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         storage=StorageSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
-        rate_limit=RateLimitSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        # **The profile is forced, never read.** A64-021.6: the environment
+        # is the authority, so whatever `RATE_LIMIT_PROFILE` may say in the
+        # process environment is discarded here — see the field's docstring
+        # on why an operator-settable one would be a way to ship
+        # hundred-fold limits.
+        rate_limit=RateLimitSettings(_env_file=env_file).model_copy(  # pyright: ignore[reportCallIssue]
+            update={"profile": rate_limit_profile_for(environment)}
+        ),
         statistics=StatisticsSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         presence=PresenceSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         friends=FriendsSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]

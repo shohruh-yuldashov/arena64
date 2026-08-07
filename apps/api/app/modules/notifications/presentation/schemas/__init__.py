@@ -56,6 +56,12 @@ from app.modules.notifications.presentation.schemas.preferences import (
     PreferenceSettingResponse,
     UpdateNotificationPreferencesRequest,
 )
+from app.modules.notifications.presentation.schemas.push import (
+    PushStatusResponse,
+    PushSubscriptionResponse,
+    RegisterPushSubscriptionRequest,
+    RemovePushSubscriptionRequest,
+)
 from app.modules.users.public import AvatarReference
 
 #: Separator inside the encoded cursor. A character that cannot appear in an
@@ -357,6 +363,10 @@ __all__ = [
     "NotificationTournamentResponse",
     "PreferenceChangeRequest",
     "PreferenceSettingResponse",
+    "PushStatusResponse",
+    "PushSubscriptionResponse",
+    "RegisterPushSubscriptionRequest",
+    "RemovePushSubscriptionRequest",
     "UnreadCountResponse",
     "UpdateNotificationPreferencesRequest",
     "decode_cursor",

@@ -44,11 +44,14 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from app.core.enums import Locale
 from app.modules.notifications.application.read_models import (
     MarkReadOutcome,
     NotificationCursor,
     NotificationPage,
 )
+from app.modules.notifications.domain.email import RenderedEmail
+from app.modules.notifications.domain.email_delivery import EmailDeliveryOutcome
 from app.modules.notifications.domain.notification import SocialNotification
 from app.modules.notifications.domain.preference import (
     DeliveryChannel,
@@ -57,6 +60,7 @@ from app.modules.notifications.domain.record import (
     NotificationAnnouncement,
     NotificationCategory,
     NotificationRecord,
+    NotificationType,
 )
 from app.modules.users.public import DeviceType, Presence
 
@@ -149,6 +153,115 @@ class DurableNotificationStore(Protocol):
         ...
 
 
+class NotificationEmailRenderer(Protocol):
+    """Turns one notification into a message — A64-021.5 §13.
+
+    A port, and the layer rule is why: rendering a subject line in a
+    language is `presentation`'s work, and `notifications layers point
+    inward` forbids the delivery service from importing it. So the service
+    holds this and the composition root supplies `TemplateEmailRenderer`.
+
+    That is not bookkeeping. The renderer holds the configured public origin,
+    which is process configuration — a service that imported the templates
+    directly would have to thread the origin through every call, and the
+    caller that forgot would send links to nowhere.
+    """
+
+    def render(self, record: NotificationRecord, *, locale: Locale) -> RenderedEmail:
+        """The message for this notification, in this language.
+
+        **Raises** for a type or locale it has no template for, rather than
+        returning `None`: reaching it means `supports_email` and the template
+        set disagreed, which is a defect and not an outcome.
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class DueEmailDelivery:
+    """One delivery a worker has claimed — A64-021.5 §9.
+
+    Everything the worker needs to decide *whether* to send, without reading
+    the notification: the recipient whose address and preference to check,
+    and the type whose template and category it needs. The notification
+    itself is loaded only for the ones that survive those checks, which is
+    what keeps a batch of muted recipients cheap.
+    """
+
+    notification_id: UUID
+    recipient_id: UUID
+    notification_type: NotificationType
+    attempt_count: int
+
+
+class EmailDeliveryRepository(Protocol):
+    """Storage for the email a notification is owed — A64-021.5 §9, §10, §19.
+
+    Declared here because the port belongs to the layer that needs it
+    (AD-06), and because every method is a *use case's* question rather than
+    a table's: "what is due", "this one is done", "how much is outstanding".
+    """
+
+    async def enqueue(self, deliveries: Sequence[DueEmailDelivery], *, at: datetime) -> int:
+        """Records that these notifications are owed an email.
+
+        Returns how many rows were **inserted**. `ON CONFLICT DO NOTHING`
+        against the notification's own id, so a redelivered source event
+        enqueues nothing — the idempotency §10 asks for, as a constraint
+        rather than a check somebody remembered to write.
+
+        Called inside the notification's own transaction, so the intent to
+        email is exactly as durable as the record it describes.
+        """
+        ...
+
+    async def claim_due(self, *, now: datetime, limit: int) -> list[DueEmailDelivery]:
+        """Takes up to `limit` deliveries that are due, marking them claimed.
+
+        Claimed rather than merely read: two workers polling the same table
+        must not both send the same message, and a `SELECT` followed by an
+        `UPDATE` is a race however small the window looks.
+        """
+        ...
+
+    async def reclaim_stale(self, *, before: datetime, at: datetime) -> int:
+        """Returns claims that were never resolved to the pending pool.
+
+        A worker that died between a claim and its result left a delivery
+        owed and invisible. Without this it stays that way forever and
+        nothing reports it — which is the silent failure a claim-based queue
+        has instead of a lost message.
+        """
+        ...
+
+    async def record(
+        self,
+        notification_id: UUID,
+        *,
+        outcome: EmailDeliveryOutcome,
+        at: datetime,
+        next_attempt_at: datetime | None = None,
+        provider_message_id: str | None = None,
+    ) -> None:
+        """Writes how one attempt ended.
+
+        `next_attempt_at` is set only for a retryable outcome and cleared
+        otherwise, so the partial index the claim reads holds exactly the
+        rows that are still owed.
+        """
+        ...
+
+    async def counts_by_status(self) -> Mapping[str, int]:
+        """How many deliveries sit in each status — §21's diagnostics.
+
+        Aggregate only. There is no method here that returns a recipient or
+        an address, which is what makes the operator surface safe to expose:
+        it can report that eleven deliveries are failing and cannot say to
+        whom.
+        """
+        ...
+
+
 class NotificationRepository(Protocol):
     """Storage for the durable `Notification` — A64-021.1 §7, §9, §10.
 
@@ -185,6 +298,23 @@ class NotificationRepository(Protocol):
         limit: int,
     ) -> NotificationPage:
         """One page, newest first, keyset-ordered by `(created_at, id)` DESC."""
+        ...
+
+    async def for_recipient(
+        self, notification_id: UUID, *, recipient_id: UUID
+    ) -> NotificationRecord | None:
+        """One notification, **scoped to its recipient** — A64-021.5.
+
+        Added for the email worker, which has to render a message from the
+        record a delivery row names. Recipient-scoped like every other method
+        here and for the same reason: A64-021.1 §30 makes "there is no
+        `get(id)`" a structural property, and a worker that could read any
+        notification by id would be the first hole in it.
+
+        The scoping is free at the call site — a delivery row carries the
+        recipient — and it means a delivery row whose recipient was somehow
+        wrong renders nothing rather than somebody else's notification.
+        """
         ...
 
     async def count_unread(self, recipient_id: UUID) -> int:

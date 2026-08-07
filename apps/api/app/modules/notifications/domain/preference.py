@@ -78,18 +78,77 @@ class DeliveryChannel(StrEnum):
     subscription, the VAPID key and the push handler do not."""
 
 
-#: Which channels this build can actually deliver on.
+#: Which channels this **build** can deliver on, before configuration.
 #:
 #: **A backend fact, and separate from what a browser supports.** A player
 #: on a browser with `PushManager` still cannot receive a push from Arena64,
 #: because Arena64 does not send one. The frontend shows browser capability
-#: as *context*; this decides whether a switch may be turned on at all
-#: (§13), and the API refuses an attempt either way.
+#: as *context*; this decides whether a switch may be turned on at all, and
+#: the API refuses an attempt either way.
+#:
+#: ## Why `EMAIL` is `True` here and still frequently unavailable
+#:
+#: A64-021.5 built the whole email channel — the delivery table, the retry
+#: policy, the templates, the worker — and did **not** choose a vendor,
+#: because none has been selected and picking one silently is the decision
+#: this codebase must not make on its own.
+#:
+#: So the question split in two. This constant answers *"has this build got
+#: an email channel at all"* — it has. `ChannelAvailability` below answers
+#: *"can this **process**, as configured, actually send one"*, and that is
+#: what a settings screen is told. A deployment with only
+#: `ConsoleEmailProvider` reports email unavailable and keeps saying "coming
+#: soon", which is true.
+#:
+#: Splitting them rather than flipping this one is what stops the settings
+#: screen lying (§26). A constant cannot know whether a provider was
+#: configured, and a build flag that claimed it could would be a promise
+#: made at compile time about a runtime fact.
 CHANNEL_AVAILABILITY: Final[Mapping[DeliveryChannel, bool]] = {
     DeliveryChannel.IN_APP: True,
-    DeliveryChannel.EMAIL: False,
+    DeliveryChannel.EMAIL: True,
     DeliveryChannel.PUSH: False,
 }
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelAvailability:
+    """What this **process**, as configured, can actually deliver on.
+
+    Constructed once at the composition root from the transports that were
+    wired, and threaded through every read and every refusal — see
+    `effective` and `ensure_settable`, which take one rather than reaching
+    for a module-level constant.
+
+    Threading it is deliberately more work than a global. A global would be
+    a second source of truth about whether email works, set at import time,
+    in a process that decides at construction time — and the failure mode is
+    a settings screen offering a switch nothing honours.
+    """
+
+    delivers: frozenset[DeliveryChannel]
+
+    @classmethod
+    def of(cls, *channels: DeliveryChannel) -> "ChannelAvailability":
+        """The channels this process delivers on.
+
+        Filtered against `CHANNEL_AVAILABILITY`, so a caller cannot enable a
+        channel the *build* does not implement — configuring a push provider
+        would not make push work, because nothing sends one.
+        """
+        return cls(frozenset(c for c in channels if CHANNEL_AVAILABILITY[c]))
+
+    def can_deliver(self, channel: DeliveryChannel) -> bool:
+        return channel in self.delivers
+
+
+#: What a caller gets with no configuration read: in-app and nothing else.
+#:
+#: Not a default parameter anywhere. It is named so that "this code path
+#: does not know what is configured" is a visible choice at the call site —
+#: the same reason `NullNotificationAnnouncer` is a class rather than a
+#: `None` check.
+IN_APP_ONLY: Final[ChannelAvailability] = ChannelAvailability.of(DeliveryChannel.IN_APP)
 
 
 class LockedReason(StrEnum):
@@ -145,6 +204,18 @@ def _default_for(category: NotificationCategory, channel: DeliveryChannel) -> bo
     day it ships, to every account that never asked — which is the "no
     hidden default should surprise users later" §4 names, and the reason it
     is worth being explicit that a channel arriving is not consent.
+
+    **A64-021.5 built the email channel and did not change this.** That
+    sentence above is exactly what would have happened: every account that
+    had been told email was unavailable would have begun receiving it the
+    day a provider was configured. So notification email is **opt-in** — a
+    player who wants a tournament confirmation in their inbox turns it on,
+    and everybody else is where they were left.
+
+    The cost is that the channel ships quiet, and that is the correct
+    direction to be wrong in. A player who wanted email and has to enable it
+    is mildly inconvenienced; a player who did not and receives it has been
+    emailed without consent.
     """
     return channel is DeliveryChannel.IN_APP
 
@@ -178,19 +249,19 @@ def is_locked(category: NotificationCategory, channel: DeliveryChannel) -> bool:
     return (category, channel) in LOCKED
 
 
-def is_available(channel: DeliveryChannel) -> bool:
-    return CHANNEL_AVAILABILITY[channel]
-
-
-def default_enabled(category: NotificationCategory, channel: DeliveryChannel) -> bool:
+def default_enabled(
+    category: NotificationCategory,
+    channel: DeliveryChannel,
+    availability: ChannelAvailability,
+) -> bool:
     """The effective value with no override stored.
 
     A locked preference is always on: `LOCKED` means "cannot be switched
-    off", which is only meaningful if it starts on. An unavailable channel
-    is always off, whatever the default would otherwise say — a channel that
-    cannot deliver must never report `enabled`.
+    off", which is only meaningful if it starts on. A channel this process
+    cannot deliver on is always off, whatever the default would otherwise
+    say — a channel that cannot deliver must never report `enabled`.
     """
-    if not is_available(channel):
+    if not availability.can_deliver(channel):
         return False
     if is_locked(category, channel):
         return True
@@ -199,6 +270,7 @@ def default_enabled(category: NotificationCategory, channel: DeliveryChannel) ->
 
 def effective(
     overrides: Mapping[tuple[NotificationCategory, DeliveryChannel], bool],
+    availability: ChannelAvailability,
 ) -> tuple[PreferenceSetting, ...]:
     """Every category on every channel, resolved.
 
@@ -211,7 +283,7 @@ def effective(
     diff of two responses is about their content.
     """
     return tuple(
-        _resolve(category, channel, overrides)
+        _resolve(category, channel, overrides, availability)
         for category in NotificationCategory
         for channel in DeliveryChannel
     )
@@ -221,8 +293,9 @@ def _resolve(
     category: NotificationCategory,
     channel: DeliveryChannel,
     overrides: Mapping[tuple[NotificationCategory, DeliveryChannel], bool],
+    availability: ChannelAvailability,
 ) -> PreferenceSetting:
-    available = is_available(channel)
+    available = availability.can_deliver(channel)
     locked = is_locked(category, channel)
 
     if not available:
@@ -252,7 +325,7 @@ def _resolve(
     return PreferenceSetting(
         category=category,
         channel=channel,
-        enabled=default_enabled(category, channel) if stored is None else stored,
+        enabled=default_enabled(category, channel, availability) if stored is None else stored,
         available=True,
         editable=True,
         locked_reason=None,
@@ -300,7 +373,10 @@ class PreferenceRefused(RuleViolationError):
 
 
 def ensure_settable(
-    category: NotificationCategory, channel: DeliveryChannel, enabled: bool
+    category: NotificationCategory,
+    channel: DeliveryChannel,
+    enabled: bool,
+    availability: ChannelAvailability,
 ) -> None:
     """Raises `PreferenceRefused` unless this change is legal.
 
@@ -313,7 +389,7 @@ def ensure_settable(
     stored `true` on a dead channel is a value that begins delivering the
     day the channel ships, to somebody who was told it did not work.
     """
-    if not is_available(channel):
+    if not availability.can_deliver(channel):
         raise PreferenceRefused(
             category=category, channel=channel, reason=LockedReason.CHANNEL_UNAVAILABLE
         )
@@ -323,7 +399,9 @@ def ensure_settable(
 
 __all__ = [
     "CHANNEL_AVAILABILITY",
+    "IN_APP_ONLY",
     "LOCKED",
+    "ChannelAvailability",
     "DeliveryChannel",
     "LockedReason",
     "PreferenceRefused",
@@ -331,6 +409,5 @@ __all__ = [
     "default_enabled",
     "effective",
     "ensure_settable",
-    "is_available",
     "is_locked",
 ]

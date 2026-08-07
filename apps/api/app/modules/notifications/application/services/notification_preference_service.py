@@ -38,6 +38,7 @@ from app.core.exceptions import ValidationError
 from app.core.unit_of_work import UnitOfWork
 from app.modules.notifications.application.ports import NotificationPreferenceRepository
 from app.modules.notifications.domain.preference import (
+    ChannelAvailability,
     DeliveryChannel,
     PreferenceRefused,
     PreferenceSetting,
@@ -93,14 +94,23 @@ class NotificationPreferenceService:
         preferences: NotificationPreferenceRepository,
         unit_of_work: UnitOfWork,
         clock: Clock,
+        availability: ChannelAvailability,
     ) -> None:
         self._preferences = preferences
         self._unit_of_work = unit_of_work
         self._clock = clock
+        self._availability = availability
+        """What this **process** can deliver on — A64-021.5 §26.
+
+        Held rather than imported, because whether email works is a fact
+        about the transports the composition root wired, not about the
+        build. A settings screen that offered an email switch a deployment
+        cannot honour would be telling a player something untrue, and this
+        is the value that stops it."""
 
     async def effective_for(self, user_id: UUID) -> tuple[PreferenceSetting, ...]:
         """The whole matrix, defaults resolved. One query."""
-        return effective(await self._preferences.overrides_for(user_id))
+        return effective(await self._preferences.overrides_for(user_id), self._availability)
 
     async def apply(
         self, user_id: UUID, *, changes: Sequence[PreferenceChange]
@@ -120,7 +130,7 @@ class NotificationPreferenceService:
         for change in changes:
             # Raises `PreferenceRefused`. Every change is checked **before**
             # any is written; see this module's docstring.
-            ensure_settable(change.category, change.channel, change.enabled)
+            ensure_settable(change.category, change.channel, change.enabled, self._availability)
 
         if changes:
             async with self._unit_of_work:

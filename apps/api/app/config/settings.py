@@ -500,6 +500,95 @@ class EmailSettings(BaseSettings):
         return self.password_reset_url_template.format(token=token)
 
 
+class NotificationEmailSettings(BaseSettings):
+    """`notification_email` — the Notification email channel, A64-021.5.
+
+    Separate from `EmailSettings`, which owns the *transport identity* and
+    the two credential links `auth` sends. What lives here is the
+    **channel**: whether it delivers at all, how a link into the app is
+    built, and how a failed send is retried.
+
+    ## `enabled` is off by default, and that is not caution
+
+    A64-021.5 built the whole channel and deliberately did **not** choose a
+    vendor: none has been selected, and picking one silently is the decision
+    this codebase must not make on its own. The only `EmailProvider` that
+    exists writes to the log and refuses to construct in a production-like
+    environment.
+
+    So the switch is what turns a configured transport into an *available
+    channel*, and while it is off the preference API reports email
+    unavailable and the settings screen keeps saying "coming soon". That is
+    true, which is the whole point — §26: do not lie in Settings.
+
+    A developer turning this on locally gets the entire pipeline against
+    `ConsoleEmailProvider`, which is how the flow is exercised end to end
+    without a vendor account.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="NOTIFICATION_EMAIL_", frozen=True, extra="forbid")
+
+    enabled: bool = False
+    """Whether this process delivers notification email at all.
+
+    Read once at the composition root into a `ChannelAvailability`, which is
+    threaded to every preference read and every refusal — see
+    `notifications.domain.preference`."""
+
+    #: Where a call-to-action link points.
+    #:
+    #: **A frontend origin, not this API's**, for the reason
+    #: `verification_url_template` is a template: the routes an email links
+    #: to are the client's, and a mobile build points the same setting at a
+    #: deep link. Validated below, because an origin with a trailing slash
+    #: or a path produces links that are subtly wrong and does so silently.
+    #:
+    #: The production value is `https://arena64.gg` and is **not** the
+    #: default: a default that named the real origin would make a
+    #: misconfigured staging deploy send people to production.
+    public_origin: str = "http://localhost:3000"
+
+    #: How many deliveries one worker pass claims. Small, because each is a
+    #: network call to a provider and a pass that claimed hundreds would
+    #: hold them all against one timeout budget.
+    batch_size: int = Field(default=20, ge=1, le=200)
+
+    #: How often the worker looks for due deliveries. Email is not
+    #: interactive — a minute of latency on a tournament confirmation is
+    #: invisible, and polling every second would be a query per second for a
+    #: table that is empty most of the time.
+    poll_interval_seconds: float = Field(default=30.0, ge=1.0, le=600.0)
+
+    #: Attempts before a delivery is abandoned. Five, spanning roughly seven
+    #: hours with the backoff below — long enough to outlast a provider
+    #: incident, short enough that a permanently broken address stops being
+    #: retried the same day.
+    max_attempts: int = Field(default=5, ge=1, le=10)
+
+    #: The first retry delay, doubling each attempt up to the ceiling.
+    retry_base_seconds: int = Field(default=60, ge=1)
+    retry_max_seconds: int = Field(default=6 * 60 * 60, ge=60)
+
+    @model_validator(mode="after")
+    def _origin_must_be_an_origin(self) -> "NotificationEmailSettings":
+        """A scheme, a host, and nothing else.
+
+        Checked at construction rather than at render time, because the
+        failure is silent: a trailing slash produces `https://x//tournaments`
+        and a path produces a link into the wrong part of the app. Both send
+        mail that looks fine and goes nowhere useful.
+        """
+        origin = self.public_origin
+        if not origin.startswith(("http://", "https://")):
+            raise ValueError("NOTIFICATION_EMAIL_PUBLIC_ORIGIN must start with http:// or https://")
+        if origin.endswith("/") or "/" in origin.split("://", 1)[1]:
+            raise ValueError(
+                "NOTIFICATION_EMAIL_PUBLIC_ORIGIN must be a bare origin — "
+                "no trailing slash and no path"
+            )
+        return self
+
+
 class StorageSettings(BaseSettings):
     """`storage` — where binary objects live (A64-012.2).
 
@@ -2361,6 +2450,7 @@ class Settings(BaseModel):
     jwt: JWTSettings
     session: SessionSettings
     email: EmailSettings
+    notification_email: NotificationEmailSettings
     storage: StorageSettings
     rate_limit: RateLimitSettings
     statistics: StatisticsSettings
@@ -2463,6 +2553,7 @@ def get_settings() -> Settings:
         jwt=JWTSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         session=SessionSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         email=EmailSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        notification_email=NotificationEmailSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         storage=StorageSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         rate_limit=RateLimitSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         statistics=StatisticsSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]

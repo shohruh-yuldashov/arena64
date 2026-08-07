@@ -66,6 +66,7 @@ from typing import Any, Final
 from sqlalchemy import (
     Boolean,
     Index,
+    Integer,
     PrimaryKeyConstraint,
     String,
     UniqueConstraint,
@@ -244,9 +245,109 @@ class NotificationPreferenceModel(Base):
     service from one clock read so a create and its update agree."""
 
 
+class NotificationEmailDeliveryModel(Base):
+    """The `notifications.notification_email_delivery` row — A64-021.5 §9, §19.
+
+    One row per notification that is **owed** an email, written in the same
+    transaction as the notification itself. Not one per attempt: §10 is
+    explicit that a retry reuses the record, and a row per attempt would make
+    "has this been sent" a `MAX(...)` over a history nobody reads.
+
+    ## The primary key is the notification
+
+    `notification_id`, and nothing else. A notification belongs to exactly
+    one recipient (that is what makes the durable row a row) and email is one
+    channel, so `(notification_id, channel)` and
+    `(notification_id, recipient_id, channel)` would both be the same key
+    with columns that cannot vary. Adding them would invite a second row for
+    the same message the day somebody passed a different channel.
+
+    It is also the idempotency §10 asks for, structurally: enqueueing is
+    `INSERT ... ON CONFLICT DO NOTHING`, so a redelivered source event that
+    inserts no notification inserts no delivery either, and one that somehow
+    tried twice converges on one row without reading first.
+
+    ## No foreign key to `notification`
+
+    Deliberate, and not for the cross-schema reason the other tables give —
+    both live here. It is retention: `notification` is append-only today
+    (§14) and will not stay that way, and a delivery record is the
+    *operational* answer to "did we try", which must outlive the message it
+    describes. A cascade would delete the audit with the artefact.
+
+    ## What is not stored
+
+    The rendered subject and body. §13 prefers rendering from the typed
+    payload at send time, and the reason is a retry: a body frozen at enqueue
+    time would be sent in whatever locale the recipient had *then*, and would
+    keep being sent after a template fixed a mistake in it.
+
+    The recipient's email address. §5 is explicit — it is resolved at
+    delivery time from the authoritative account, so a change of address
+    between enqueue and send reaches the right inbox, and so this table is
+    not a list of email addresses.
+
+    A provider's response body. `last_error_code` is a **bounded label this
+    platform chose** (`EmailDeliveryOutcome`), never vendor text, which is
+    what keeps the column safe to read and safe to put on a metric.
+    """
+
+    __tablename__ = "notification_email_delivery"
+
+    __table_args__ = (
+        PrimaryKeyConstraint("notification_id", name="pk_notification_email_delivery"),
+        # The worker's claim query, exactly: pending rows whose time has
+        # come, oldest first. Partial on `PENDING`, so the index holds only
+        # what is owed — a table that is mostly delivered history costs
+        # nothing to scan for work.
+        Index(
+            "ix_notification_email_delivery__due",
+            "next_attempt_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
+        {"schema": NOTIFICATIONS_SCHEMA},
+    )
+
+    notification_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+
+    recipient_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    """Whose address to resolve at send time. Denormalised from the
+    notification rather than joined, because the claim query must not read a
+    second table to decide what it holds — and because the delivery record
+    outlives the notification."""
+
+    notification_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    """`domain.record.NotificationType`. Carried so the worker can refuse an
+    unsupported type without loading the notification, and so a metric can be
+    labelled by type without a join."""
+
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    """`domain.email_delivery.EmailDeliveryOutcome`, or `NULL` while a row
+    has never been attempted. Text rather than a PostgreSQL enum, like every
+    other closed vocabulary here: adding an outcome must be a code change and
+    a migration of rows, never an `ALTER TYPE` that locks the relation."""
+
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    """When this becomes due. `NULL` on a terminal row, so the partial index
+    above never holds one."""
+
+    last_attempt_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    provider_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    """What the provider called it. **Infrastructure metadata, never API
+    data** (§19): it is how an operator correlates a complaint with a
+    vendor's dashboard, and it appears on no response and no metric label."""
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
 __all__ = [
     "NOTIFICATIONS_SCHEMA",
     "NOTIFICATION_SOURCE_UNIQUE",
+    "NotificationEmailDeliveryModel",
     "NotificationModel",
     "NotificationPreferenceModel",
 ]

@@ -159,6 +159,24 @@ class SqlAlchemyNotificationRepository:
         )
         return NotificationPage(entries=[self.to_domain(row) for row in page], next_cursor=cursor)
 
+    async def for_recipient(
+        self, notification_id: UUID, *, recipient_id: UUID
+    ) -> NotificationRecord | None:
+        """One notification, scoped to its recipient — A64-021.5.
+
+        Both predicates, always. The id alone would locate the row; the
+        recipient is what keeps A64-021.1 §30's "there is no `get(id)`" a
+        structural property rather than a convention the email worker was
+        trusted to honour.
+        """
+        row = await self._session.scalar(
+            select(NotificationModel).where(
+                NotificationModel.id == notification_id,
+                NotificationModel.recipient_id == recipient_id,
+            )
+        )
+        return None if row is None else self.to_domain(row)
+
     async def count_unread(self, recipient_id: UUID) -> int:
         """`COUNT(*)` over the partial index. No rows are loaded — §10."""
         statement = (

@@ -70,7 +70,7 @@ class Player:
         self.auth = auth
 
 
-async def register(client: AsyncClient) -> Player:
+async def register(client: AsyncClient, session: AsyncSession) -> Player:
     suffix = uuid4().hex[:10]
     username = f"player{suffix}"
     created = await client.post(
@@ -78,6 +78,16 @@ async def register(client: AsyncClient) -> Player:
         json={"username": username, "email": f"{suffix}@example.com", "password": PASSWORD},
     )
     assert created.status_code == 201, created.text
+
+    # **Verified**, because A64-021.5H made every friend-graph write require
+    # it — and friend-graph writes are this suite's whole subject. The same
+    # thing `app.operator.accounts verify` does; the OTP flow belongs to
+    # `test_otp_verification.py`, and coupling every social suite to it would
+    # make one phase's copy change break six of them.
+    await session.execute(
+        text("UPDATE users.user SET is_verified = true WHERE id = :id"),
+        {"id": UUID(created.json()["data"]["id"])},
+    )
 
     signed_in = await client.post(
         LOGIN_URL, json={"email": f"{suffix}@example.com", "password": PASSWORD}
@@ -117,13 +127,13 @@ def _friendship_service(session: AsyncSession) -> FriendshipService:
 
 
 @pytest_asyncio.fixture
-async def alice(client: AsyncClient) -> Player:
-    return await register(client)
+async def alice(client: AsyncClient, contract_session: AsyncSession) -> Player:
+    return await register(client, contract_session)
 
 
 @pytest_asyncio.fixture
-async def bob(client: AsyncClient) -> Player:
-    return await register(client)
+async def bob(client: AsyncClient, contract_session: AsyncSession) -> Player:
+    return await register(client, contract_session)
 
 
 async def befriend(client: AsyncClient, a: Player, b: Player) -> str:
@@ -312,9 +322,11 @@ class TestFriendList:
         assert [i["player"]["id"] for i in from_alice] == [str(bob.id)]
         assert [i["player"]["id"] for i in from_bob] == [str(alice.id)]
 
-    async def test_a_stranger_sees_neither(self, client: AsyncClient, alice: Player) -> None:
-        bob = await register(client)
-        stranger = await register(client)
+    async def test_a_stranger_sees_neither(
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player
+    ) -> None:
+        bob = await register(client, contract_session)
+        stranger = await register(client, contract_session)
         await befriend(client, alice, bob)
 
         items = (await client.get(FRIENDS_URL, headers=stranger.auth)).json()["data"]["items"]
@@ -332,10 +344,10 @@ class TestFriendList:
         assert item["friends_since"]
 
     async def test_pages_with_a_cursor_and_never_repeats(
-        self, client: AsyncClient, alice: Player
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player
     ) -> None:
         for _ in range(5):
-            await befriend(client, alice, await register(client))
+            await befriend(client, alice, await register(client, contract_session))
 
         first = (await client.get(FRIENDS_URL, headers=alice.auth, params={"limit": 2})).json()[
             "data"
@@ -363,13 +375,13 @@ class TestFriendList:
         assert len(seen) == len(set(seen)) == 5
 
     async def test_the_count_matches_the_number_of_friends(
-        self, client: AsyncClient, alice: Player
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player
     ) -> None:
         """A count that did not match the list beside it is the kind of
         defect nobody reports as a bug because it looks like a caching
         artefact — which is why both go through one `_involves` predicate."""
         for _ in range(3):
-            await befriend(client, alice, await register(client))
+            await befriend(client, alice, await register(client, contract_session))
 
         assert (await client.get(COUNT_URL, headers=alice.auth)).json()["data"]["total"] == 3
 
@@ -392,7 +404,7 @@ class TestRemove:
         assert (await client.get(COUNT_URL, headers=bob.auth)).json()["data"]["total"] == 0
 
     async def test_a_stranger_cannot_remove_somebody_elses_friendship(
-        self, client: AsyncClient, alice: Player, bob: Player
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player, bob: Player
     ) -> None:
         """The ownership rule, and the assertion that matters is the second
         one.
@@ -404,7 +416,7 @@ class TestRemove:
         changed nothing, and could not have, because the lookup is keyed on
         (caller, target) and there is no friendship between them and Bob.
         """
-        stranger = await register(client)
+        stranger = await register(client, contract_session)
         await befriend(client, alice, bob)
 
         response = await client.delete(f"{FRIENDS_URL}/{bob.id}", headers=stranger.auth)
@@ -515,7 +527,7 @@ class TestFriendshipDetails:
         )
 
     async def test_a_stranger_cannot_inspect_a_friendship(
-        self, client: AsyncClient, alice: Player, bob: Player
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player, bob: Player
     ) -> None:
         """Ownership is structural: the lookup is keyed on (caller, target),
         so a third party asking about Bob finds no friendship *of theirs*.
@@ -524,7 +536,7 @@ class TestFriendshipDetails:
         which is the point — it says nothing about whether Alice and Bob are
         friends.
         """
-        stranger = await register(client)
+        stranger = await register(client, contract_session)
         await befriend(client, alice, bob)
 
         response = await client.get(f"{FRIENDS_URL}/{bob.id}", headers=stranger.auth)
@@ -582,9 +594,9 @@ class TestMutualFriends:
     async def test_it_counts_only_friends_both_players_share(
         self, client: AsyncClient, contract_session: AsyncSession, alice: Player, bob: Player
     ) -> None:
-        shared_one = await register(client)
-        shared_two = await register(client)
-        alice_only = await register(client)
+        shared_one = await register(client, contract_session)
+        shared_two = await register(client, contract_session)
+        alice_only = await register(client, contract_session)
 
         await befriend(client, alice, bob)
         for other in (shared_one, shared_two, alice_only):
@@ -601,8 +613,8 @@ class TestMutualFriends:
     async def test_two_players_with_nobody_in_common_have_none(
         self, client: AsyncClient, contract_session: AsyncSession, alice: Player, bob: Player
     ) -> None:
-        await befriend(client, alice, await register(client))
-        await befriend(client, bob, await register(client))
+        await befriend(client, alice, await register(client, contract_session))
+        await befriend(client, bob, await register(client, contract_session))
 
         service = _friendship_service(contract_session)
 
@@ -613,7 +625,7 @@ class TestMutualFriends:
     ) -> None:
         """A count of shared friends is a fact about two friend lists, so it
         does not require the two to be friends and does not raise."""
-        shared = await register(client)
+        shared = await register(client, contract_session)
         await befriend(client, alice, shared)
         await befriend(client, bob, shared)
 
@@ -627,7 +639,7 @@ class TestMutualFriends:
         """`ended_at` is the one thing every friend query must agree about —
         a mutual count that included ended rows would disagree with the
         friend list beside it."""
-        shared = await register(client)
+        shared = await register(client, contract_session)
         await befriend(client, alice, shared)
         await befriend(client, bob, shared)
         await client.delete(f"{FRIENDS_URL}/{shared.id}", headers=alice.auth)
@@ -639,7 +651,7 @@ class TestMutualFriends:
 
 class TestFriendVisibility:
     async def test_a_friends_only_field_is_visible_to_a_friend_and_hidden_from_others(
-        self, client: AsyncClient, alice: Player, bob: Player
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player, bob: Player
     ) -> None:
         """**`VisibilityLevel.FRIENDS` end to end** — the value a boolean
         could not express, and the reason A64-013.2 widened the type.
@@ -648,7 +660,7 @@ class TestFriendVisibility:
         is the *difference* between them: the same field, the same endpoint,
         three answers determined only by who is asking.
         """
-        stranger = await register(client)
+        stranger = await register(client, contract_session)
         await befriend(client, alice, bob)
 
         # Alice restricts her last-seen to friends. Before A64-013.3 this
@@ -705,7 +717,7 @@ class TestBatchComposition:
         number any unrelated query change would break.
         """
         for _ in range(6):
-            await befriend(client, alice, await register(client))
+            await befriend(client, alice, await register(client, contract_session))
 
         statements: list[str] = []
 
@@ -744,7 +756,7 @@ class TestBatchComposition:
         statement that identifies which read was issued.
         """
         for _ in range(3):
-            await befriend(client, alice, await register(client))
+            await befriend(client, alice, await register(client, contract_session))
 
         statements: list[str] = []
 
@@ -823,7 +835,9 @@ class TestRouteResolution:
 
 
 class TestOpenApi:
-    async def test_every_endpoint_is_documented(self, client: AsyncClient) -> None:
+    async def test_every_endpoint_is_documented(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
         spec = (await client.get("/openapi.json")).json()
 
         for verb, path in (

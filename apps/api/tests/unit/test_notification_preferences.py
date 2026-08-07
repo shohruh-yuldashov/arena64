@@ -36,6 +36,7 @@ from app.modules.notifications.application.services import (
     PreferenceDeliveryPolicy,
 )
 from app.modules.notifications.domain.preference import (
+    IN_APP_ONLY,
     DeliveryChannel,
     LockedReason,
     PreferenceRefused,
@@ -145,7 +146,7 @@ class TestTheResolvedMatrix:
                 setting.editable,
                 setting.locked_reason,
             )
-            for setting in effective({})
+            for setting in effective({}, IN_APP_ONLY)
         }
 
         expected: dict[
@@ -174,9 +175,9 @@ class TestWhatCannotBeChanged:
         *which* refusal it hit, because "you may not" and "not built yet"
         are different sentences to render (§20)."""
         with pytest.raises(PreferenceRefused) as muting_essential:
-            ensure_settable(NotificationCategory.SYSTEM, DeliveryChannel.IN_APP, False)
+            ensure_settable(NotificationCategory.SYSTEM, DeliveryChannel.IN_APP, False, IN_APP_ONLY)
         with pytest.raises(PreferenceRefused) as enabling_dead_channel:
-            ensure_settable(NotificationCategory.SOCIAL, DeliveryChannel.PUSH, True)
+            ensure_settable(NotificationCategory.SOCIAL, DeliveryChannel.PUSH, True, IN_APP_ONLY)
 
         assert (muting_essential.value.code, enabling_dead_channel.value.code) == (
             ErrorCode.NOTIFICATION_PREFERENCE_LOCKED,
@@ -199,7 +200,10 @@ class TestApplyingChanges:
         """
         preferences = _FakePreferences()
         service = NotificationPreferenceService(
-            preferences=preferences, unit_of_work=_NullUnitOfWork(), clock=_FixedClock()
+            preferences=preferences,
+            unit_of_work=_NullUnitOfWork(),
+            clock=_FixedClock(),
+            availability=IN_APP_ONLY,
         )
         legal = PreferenceChange(
             category=NotificationCategory.SOCIAL,

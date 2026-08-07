@@ -55,7 +55,7 @@ from app.modules.notifications.application.services.game_notification_dispatcher
 from app.modules.notifications.application.services.tournament_notification_dispatcher import (
     CONSUMER_NAME as TOURNAMENT_CONSUMER,
 )
-from app.modules.notifications.domain.preference import DeliveryChannel
+from app.modules.notifications.domain.preference import IN_APP_ONLY, DeliveryChannel
 from app.modules.notifications.domain.record import (
     GameResultSummary,
     NavigationTargetType,
@@ -349,7 +349,9 @@ class TestRoundPublished:
         nothing to hide on read and nothing for the badge to count.
         """
         muted, listening = uuid4(), uuid4()
-        await SqlAlchemyNotificationPreferenceRepository(contract_session).replace(
+        await SqlAlchemyNotificationPreferenceRepository(
+            contract_session, availability=IN_APP_ONLY
+        ).replace(
             muted,
             changes=[(NotificationCategory.TOURNAMENT, DeliveryChannel.IN_APP, False)],
             at=NOW,

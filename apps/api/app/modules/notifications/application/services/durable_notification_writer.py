@@ -53,10 +53,19 @@ finds the row already there and does nothing.
 **A64-021.2 adds one line after the commit**, and its position is the
 contract: the realtime announcement is published once the row is durable,
 carrying only the records this call actually inserted. See `deliver`.
+
+## Two entry points, one path — A64-021.4
+
+`deliver` is `NotificationSink`, and takes the social pipeline's rendered
+`SocialNotification`. `store` takes records a producer composed itself,
+which is what the tournament and game dispatchers hand over. The first is
+a four-line adapter onto the second, so preference suppression, the
+transaction boundary, the log line and the announcement exist exactly once
+however a notification arrives.
 """
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from app.core.identifiers import generate_uuid7
@@ -113,8 +122,9 @@ class DurableNotificationWriter:
         self._policy = policy
 
     async def deliver(self, notifications: list[SocialNotification]) -> None:
-        """Stores a batch. An empty batch, or one that is entirely transient,
-        commits nothing.
+        """Stores a batch of **social** notifications — `NotificationSink`.
+
+        An empty batch, or one that is entirely transient, commits nothing.
 
         **Raises on failure**, which is `NotificationSink`'s contract and
         the correct choice here: a notification that could not be stored is
@@ -122,11 +132,30 @@ class DurableNotificationWriter:
         failed and the relay retries it. Swallowing it would mark the event
         published and lose the record silently.
         """
-        durable = [
-            record
-            for notification in notifications
-            if (record := self._record_for(notification)) is not None
-        ]
+        await self.store(
+            [
+                record
+                for notification in notifications
+                if (record := self._record_for(notification)) is not None
+            ]
+        )
+
+    async def store(self, records: Sequence[NotificationRecord]) -> None:
+        """Stores records a producer composed itself — A64-021.4 §11.
+
+        The entry point for the tournament and game dispatchers, which have
+        no `SocialNotification` to hand over: their payload is a tournament
+        or a result, not a rendered profile, and forcing them through
+        `deliver` would mean inventing a social shape to carry a fact that
+        is not social.
+
+        **`deliver` is now a thin adapter onto this**, which is the property
+        that matters: preference enforcement, the transaction, the log line
+        and the realtime announcement are written once and every producer
+        gets the same ones. A dispatcher that wrote its own rows would be a
+        second place §10's suppression could be forgotten.
+        """
+        durable = list(records)
         if not durable:
             return
 

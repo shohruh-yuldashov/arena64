@@ -53,16 +53,19 @@ from app.modules.friends.infrastructure.repositories import (
     SqlAlchemyFriendshipRepository,
 )
 from app.modules.notifications.application.ports import (
+    DurableNotificationStore,
     NotificationAnnouncer,
     NotificationSink,
 )
 from app.modules.notifications.application.services import (
     DurableNotificationWriter,
+    GameNotificationDispatcher,
     NotificationPreferenceService,
     NotificationService,
     PreferenceDeliveryPolicy,
     PresenceNotificationService,
     SocialNotificationDispatcher,
+    TournamentNotificationDispatcher,
 )
 from app.modules.notifications.infrastructure import NullNotificationAnnouncer
 from app.modules.notifications.infrastructure.repositories import (
@@ -70,6 +73,7 @@ from app.modules.notifications.infrastructure.repositories import (
     SqlAlchemyNotificationRepository,
 )
 from app.modules.profiles.application.services.profile_renderer import BatchProfileRenderer
+from app.modules.tournament.public import TournamentNotificationReader
 from app.modules.users.presentation.dependencies import PresenceServiceDep
 from app.platform.outbox import NoEventPublisher
 
@@ -215,6 +219,36 @@ def build_durable_notification_writer(
     )
 
 
+def build_tournament_notification_dispatcher(
+    *,
+    tournaments: TournamentNotificationReader,
+    store: DurableNotificationStore,
+) -> TournamentNotificationDispatcher:
+    """The tournament consumer — A64-021.4 §11.
+
+    Takes both collaborators rather than a session, unlike its social
+    sibling: the reader is `tournament`'s to construct and this module must
+    not name a `tournament` repository (`tournament-internals-are-private`).
+    `app_factory` builds each side from its own module's root and hands them
+    over, which is the same arrangement `build_social_notification_dispatcher`
+    uses for the profile renderer.
+    """
+    return TournamentNotificationDispatcher(tournaments=tournaments, store=store)
+
+
+def build_game_notification_dispatcher(
+    *, profiles: BatchProfileRenderer, store: DurableNotificationStore
+) -> GameNotificationDispatcher:
+    """The game consumer — A64-021.4 §19.
+
+    Holds a profile renderer and somewhere durable, and nothing that can
+    reach a match: the completion event carries everything about the game,
+    so a consumer able to read `game`'s tables would be one that could
+    disagree with the event it was handed.
+    """
+    return GameNotificationDispatcher(profiles=profiles, store=store)
+
+
 def build_social_notification_dispatcher(
     session: AsyncSession,
     *,
@@ -258,7 +292,9 @@ __all__ = [
     "NotificationServiceDep",
     "PresenceNotificationServiceDep",
     "build_durable_notification_writer",
+    "build_game_notification_dispatcher",
     "build_social_notification_dispatcher",
+    "build_tournament_notification_dispatcher",
     "get_notification_preference_service",
     "get_notification_service",
     "get_presence_notification_service",

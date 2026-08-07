@@ -59,10 +59,9 @@ class NotificationCategory(StrEnum):
     product defines no such notification, and a category nothing produces is
     a preference that silently does nothing.
 
-    Only `SOCIAL` has a producer today. The other three exist because the
-    *category* is the unit `users.notification_preference` will key on
-    (database.md §4.9), and adding a category later means migrating rows
-    that were written without one.
+    `SOCIAL`, `TOURNAMENT` and `GAME` all have producers as of A64-021.4.
+    `SYSTEM` does not, and is the one a player may never mute — see
+    `domain.preference.LOCKED`.
     """
 
     SOCIAL = "social"
@@ -79,11 +78,18 @@ class NotificationType(StrEnum):
     why, and it is the reason this enum is the contract: the backend states
     a fact, the frontend translates it into uz, ru or en.
 
-    Two members, because two source events exist that name their recipient
-    unambiguously (§12). Every other candidate — a published round, a
-    completed tournament, a registration — needs a source event that either
-    does not exist or does not say who to tell, and inventing one to
-    populate a list is what §4 forbids.
+    ## Six members, and each one earned its place
+
+    A64-021.1 shipped two, and recorded the bar the rest had to clear: a
+    real source event that *names its recipients*. A64-021.4 admits four
+    more that clear it and defers the rest — see `specs/notifications.md`
+    §14 for the deferral table, which names the missing seam in each case
+    rather than the intention to build one.
+
+    The bar matters because a durable notification is a permanent record.
+    A type whose recipients had to be guessed would be a row somebody
+    cannot explain receiving, and a type whose fact expires in seconds
+    would be an inbox entry that is already wrong when it is read.
     """
 
     FRIEND_REQUEST_RECEIVED = "friend_request_received"
@@ -91,6 +97,29 @@ class NotificationType(StrEnum):
 
     FRIEND_REQUEST_ACCEPTED = "friend_request_accepted"
     """Someone accepted the request you sent them."""
+
+    TOURNAMENT_REGISTRATION_CONFIRMED = "tournament_registration_confirmed"
+    """You are entered in a tournament — A64-021.4.
+
+    A receipt, and the reason it is durable rather than a toast: entering a
+    tournament is a commitment to turn up at a time the player does not
+    choose, and the confirmation is the thing they look back for. A
+    withdrawal does not delete it; it records what was true then."""
+
+    TOURNAMENT_ROUND_PUBLISHED = "tournament_round_published"
+    """A round of a tournament you are in has been paired."""
+
+    TOURNAMENT_COMPLETED = "tournament_completed"
+    """A tournament you played in is over, and the results are final."""
+
+    GAME_COMPLETED = "game_completed"
+    """A game you played has finished — A64-021.4.
+
+    Durable **because the participant may not have been watching**: a
+    tournament no-show adjudication, a clock expiry on a closed tab, or an
+    abandonment all end a match with nobody looking at it. A player who
+    was at the board saw the result live and gets a row they can ignore;
+    one who was not gets the only notice there is."""
 
 
 #: Which family each type belongs to. A mapping rather than a field on the
@@ -100,6 +129,10 @@ class NotificationType(StrEnum):
 CATEGORY_OF: Final[Mapping[NotificationType, NotificationCategory]] = {
     NotificationType.FRIEND_REQUEST_RECEIVED: NotificationCategory.SOCIAL,
     NotificationType.FRIEND_REQUEST_ACCEPTED: NotificationCategory.SOCIAL,
+    NotificationType.TOURNAMENT_REGISTRATION_CONFIRMED: NotificationCategory.TOURNAMENT,
+    NotificationType.TOURNAMENT_ROUND_PUBLISHED: NotificationCategory.TOURNAMENT,
+    NotificationType.TOURNAMENT_COMPLETED: NotificationCategory.TOURNAMENT,
+    NotificationType.GAME_COMPLETED: NotificationCategory.GAME,
 }
 
 
@@ -112,9 +145,11 @@ class NavigationTargetType(StrEnum):
     outlive it. The client maps a target type plus one safe identifier onto
     a route it already owns.
 
-    Two members, for the two types above. `play`, `live_game`, `tournament`
-    and `match_replay` are named by §6 and are not here, for the reason the
-    types are not: nothing produces them yet.
+    Five members. `play` and `match_history` are named by A64-021.1 §6 and
+    are still absent, for the reason the two social ones were the only
+    members then: nothing produces them. A destination is added when a
+    notification needs it, never in anticipation — an unreachable target
+    type is a branch every client must handle and no server can send.
     """
 
     PLAYER_PROFILE = "player_profile"
@@ -125,6 +160,21 @@ class NavigationTargetType(StrEnum):
     FRIEND_REQUESTS = "friend_requests"
     """The incoming-requests list. `ref` is `None`: the destination is the
     viewer's own page and carries no identifier to get wrong."""
+
+    TOURNAMENT = "tournament"
+    """`ref` is the tournament's **id** — `/tournaments/{id}`. An id rather
+    than a name: a name is not unique and is not a route parameter here."""
+
+    LIVE_GAME = "live_game"
+    """`ref` is the match's **id** — `/games/{id}`."""
+
+    MATCH_REPLAY = "match_replay"
+    """`ref` is the match's **id** — `/games/{id}/replay`.
+
+    Separate from `LIVE_GAME` rather than derived from it by the client:
+    which of the two a finished match should open is a *server* decision
+    about whether the game is still being played, and a client that guessed
+    would send somebody to a live board that ended yesterday."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,10 +210,78 @@ class ActorSummary:
     avatar_version: int
 
 
-#: The payload union. One member today; the alias is the seam a second type
-#: with a different shape arrives through, and it is what `payload_of`
-#: dispatches on.
-NotificationPayload = ActorSummary
+@dataclass(frozen=True, slots=True)
+class TournamentSummary:
+    """The tournament a notification is about — A64-021.4 §8.
+
+    Four fields, and two of them are `None` for most types. That is
+    deliberate: a player reading "round 3 is paired" and one reading "you
+    finished 5th" are looking at the same tournament through the same row
+    shape, and three near-identical payload classes would be three decoders,
+    three wire keys and three frontend branches for one noun.
+
+    **The name is a snapshot**, like `ActorSummary`'s display name and for
+    the same reason: re-reading it at render time would cost one query per
+    row (§31) and would rewrite history if a tournament were ever renamed.
+
+    What is deliberately absent: the bracket, the standings table, the
+    entrant list, the schedule. A notification says *what happened*; the
+    tournament page says what it looks like — and a payload carrying a field
+    of 128 players would put a tournament's whole state into every one of
+    their inboxes.
+    """
+
+    tournament_id: UUID
+    tournament_name: str
+
+    round_number: int | None = None
+    """Which round was paired. `None` for every type that is not about one."""
+
+    final_rank: int | None = None
+    """**This recipient's** finishing position, not the winner's.
+
+    The one recipient-specific field on this platform's fan-out payloads,
+    and it is what makes a completion notification worth sending: "the
+    tournament ended" is on the page already, "you came 5th" is not.
+
+    `None` when the tournament has no standing for them — a player who
+    withdrew before seeding has no result, and inventing a rank would be
+    reporting a placement they never earned.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class GameResultSummary:
+    """One finished game, from the recipient's own point of view — §8.
+
+    `outcome` is **already resolved against this recipient**: the stored
+    value is `win`, `loss` or `draw` for the person holding the row, not the
+    match's `light_wins`. A client that had to work out which seat it was
+    would need the seats, and the seats are two more players in a payload
+    about one game.
+    """
+
+    match_id: UUID
+    outcome: str
+    """`win`, `loss` or `draw`. A closed vocabulary, resolved by
+    `GameNotificationDispatcher` — see `RecipientOutcome`."""
+
+    termination_reason: str
+    """How it ended, as `game`'s own `TerminationReason` value. Carried
+    because "you lost" and "you lost on time" are different sentences, and
+    because an adjudicated result is the case this notification exists for."""
+
+    opponent: ActorSummary | None
+    """Who they played, through the privacy gate. `None` when the opponent
+    has no public profile any more — a deactivated account still leaves a
+    game that was played."""
+
+
+#: The payload union. Three members, and the alias is what `payload_of`
+#: dispatches on: a stored row is decoded against its own `type`, so a
+#: payload written by a producer that no longer exists fails at the row
+#: rather than reaching a client half-rendered.
+NotificationPayload = ActorSummary | TournamentSummary | GameResultSummary
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,32 +377,97 @@ def payload_as_json(payload: NotificationPayload) -> dict[str, Any]:
     dataclass grows next — including something that should not be stored.
     Writing the keys out means the stored contract changes only when
     somebody edits this function.
+
+    Dispatched on the payload's own type rather than on the notification's,
+    so encoding and decoding cannot disagree about which shape a row holds.
     """
+    if isinstance(payload, ActorSummary):
+        return _actor_as_json(payload)
+    if isinstance(payload, TournamentSummary):
+        return {
+            "tournament_id": str(payload.tournament_id),
+            "tournament_name": payload.tournament_name,
+            "round_number": payload.round_number,
+            "final_rank": payload.final_rank,
+        }
     return {
-        "actor_player_id": str(payload.player_id),
-        "actor_username": payload.username,
-        "actor_display_name": payload.display_name,
-        "actor_avatar_object_key": payload.avatar_object_key,
-        "actor_avatar_version": payload.avatar_version,
+        "match_id": str(payload.match_id),
+        "outcome": payload.outcome,
+        "termination_reason": payload.termination_reason,
+        # Nested rather than flattened into `opponent_*` keys, because the
+        # opponent **is** an actor and flattening it would be a second
+        # spelling of a shape this file already encodes.
+        "opponent": None if payload.opponent is None else _actor_as_json(payload.opponent),
     }
+
+
+def _actor_as_json(actor: ActorSummary) -> dict[str, Any]:
+    return {
+        "actor_player_id": str(actor.player_id),
+        "actor_username": actor.username,
+        "actor_display_name": actor.display_name,
+        "actor_avatar_object_key": actor.avatar_object_key,
+        "actor_avatar_version": actor.avatar_version,
+    }
+
+
+#: Which payload shape each type stores. A mapping rather than a chain of
+#: `if`s, so a type added without a decoder raises at the row it was asked
+#: for instead of falling through to something plausible.
+_PAYLOAD_SHAPE: Final[Mapping[NotificationType, str]] = {
+    NotificationType.FRIEND_REQUEST_RECEIVED: "actor",
+    NotificationType.FRIEND_REQUEST_ACCEPTED: "actor",
+    NotificationType.TOURNAMENT_REGISTRATION_CONFIRMED: "tournament",
+    NotificationType.TOURNAMENT_ROUND_PUBLISHED: "tournament",
+    NotificationType.TOURNAMENT_COMPLETED: "tournament",
+    NotificationType.GAME_COMPLETED: "game",
+}
 
 
 def payload_of(type_: NotificationType, stored: Mapping[str, Any]) -> NotificationPayload:
     """Decodes a stored payload against its type. Raises `MalformedNotification`.
 
-    The dispatch is on `type_` even though both members decode identically
-    today, because that is the whole point of the seam: the second payload
-    shape is a branch here, not a new column and not an `if` at every reader.
+    The dispatch is on `type_` rather than on the stored keys, which is the
+    whole point of the seam: a row is read as the shape its type promises,
+    so a payload written by a producer that has since changed fails here
+    instead of being duck-typed into whichever class happens to match.
     """
-    if type_ in (
-        NotificationType.FRIEND_REQUEST_RECEIVED,
-        NotificationType.FRIEND_REQUEST_ACCEPTED,
-    ):
+    shape = _PAYLOAD_SHAPE.get(type_)
+    if shape == "actor":
         return _actor_of(stored)
-    # Unreachable while the enum has two members and both are handled. Kept
-    # so that adding a member without a decoder fails at the row rather than
-    # silently returning the wrong shape.
+    if shape == "tournament":
+        return _tournament_of(stored)
+    if shape == "game":
+        return _game_result_of(stored)
+    # Unreachable while every member is mapped. Kept so that adding a type
+    # without a decoder fails at the row rather than silently returning the
+    # wrong shape.
     raise MalformedNotification(f"no payload decoder for {type_}")
+
+
+def _tournament_of(stored: Mapping[str, Any]) -> TournamentSummary:
+    try:
+        return TournamentSummary(
+            tournament_id=UUID(str(stored["tournament_id"])),
+            tournament_name=str(stored["tournament_name"]),
+            round_number=_optional_int(stored["round_number"]),
+            final_rank=_optional_int(stored["final_rank"]),
+        )
+    except (KeyError, TypeError, ValueError) as malformed:
+        raise MalformedNotification("stored payload does not match its type") from malformed
+
+
+def _game_result_of(stored: Mapping[str, Any]) -> GameResultSummary:
+    try:
+        opponent = stored["opponent"]
+        return GameResultSummary(
+            match_id=UUID(str(stored["match_id"])),
+            outcome=str(stored["outcome"]),
+            termination_reason=str(stored["termination_reason"]),
+            opponent=None if opponent is None else _actor_of(opponent),
+        )
+    except (KeyError, TypeError, ValueError) as malformed:
+        raise MalformedNotification("stored payload does not match its type") from malformed
 
 
 def _actor_of(stored: Mapping[str, Any]) -> ActorSummary:
@@ -306,9 +489,15 @@ def _optional_str(value: Any) -> str | None:
     return None if value is None else str(value)
 
 
+def _optional_int(value: Any) -> int | None:
+    return None if value is None else int(value)
+
+
 __all__ = [
     "CATEGORY_OF",
     "ActorSummary",
+    "GameResultSummary",
+    "TournamentSummary",
     "NotificationAnnouncement",
     "MalformedNotification",
     "NavigationTarget",

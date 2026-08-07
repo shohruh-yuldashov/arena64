@@ -44,7 +44,12 @@ from app.modules.notifications.application.read_models import (
     NotificationCursor,
     NotificationPage,
 )
-from app.modules.notifications.domain.record import ActorSummary, NotificationRecord
+from app.modules.notifications.domain.record import (
+    ActorSummary,
+    GameResultSummary,
+    NotificationRecord,
+    TournamentSummary,
+)
 from app.modules.notifications.presentation.schemas.preferences import (
     NotificationPreferencesResponse,
     PreferenceChangeRequest,
@@ -133,8 +138,61 @@ class NotificationTargetResponse(BaseResponseDTO):
     )
 
 
+class NotificationTournamentResponse(BaseResponseDTO):
+    """The tournament a notification is about — A64-021.4 §8.
+
+    `round_number` and `final_rank` are `null` for the types they do not
+    apply to, and present rather than omitted so a client reads one shape.
+    `final_rank` is **this recipient's** placement, never the winner's.
+    """
+
+    tournament_id: UUID
+    tournament_name: str
+    round_number: int | None = Field(
+        description="Which round was paired, or `null` when the type is not about one."
+    )
+    final_rank: int | None = Field(
+        description=(
+            "The recipient's finishing position, or `null` when they have no "
+            "standing. Ranks are as recorded — ties share one and gaps are real."
+        )
+    )
+
+
+class NotificationGameResponse(BaseResponseDTO):
+    """The finished game a notification is about — §8.
+
+    `outcome` is already resolved **from the recipient's point of view**, so
+    a client renders "you won" without knowing which seat it held.
+    """
+
+    match_id: UUID
+    outcome: str = Field(description="`win`, `loss` or `draw`.", examples=["win"])
+    termination_reason: str = Field(
+        description="A `TerminationReason` value.", examples=["resignation"]
+    )
+    opponent: NotificationActorResponse | None = Field(
+        description="Who they played, or `null` when that account no longer has a profile."
+    )
+
+
 class NotificationResponse(BaseResponseDTO):
-    """One durable notification."""
+    """One durable notification.
+
+    ## Three optional subject keys, exactly one of which is present
+
+    A64-021.1 shipped with `actor` required and predicted this: *"the first
+    type without an actor makes this optional and adds its own key beside
+    it."* A64-021.4 is that phase, and `actor`, `tournament` and `game` are
+    now three nullable keys — a social notification carries the first, a
+    tournament notification the second, a completed game the third.
+
+    A discriminated union on the wire was the alternative and was not taken.
+    It would name the payload shape twice — once as `type`, once as the
+    discriminator — and the two would eventually disagree; a client already
+    branches on `type` to choose a sentence, and reading the matching key is
+    the same branch.
+    """
 
     id: UUID
     type: str = Field(
@@ -142,7 +200,15 @@ class NotificationResponse(BaseResponseDTO):
         examples=["friend_request_received"],
     )
     category: str = Field(description="A `NotificationCategory` value.", examples=["social"])
-    actor: NotificationActorResponse
+    actor: NotificationActorResponse | None = Field(
+        default=None, description="The player a social notification is about."
+    )
+    tournament: NotificationTournamentResponse | None = Field(
+        default=None, description="The tournament a tournament notification is about."
+    )
+    game: NotificationGameResponse | None = Field(
+        default=None, description="The game a completed-game notification is about."
+    )
     target: NotificationTargetResponse
     created_at: datetime = Field(
         description="When the notified fact happened — not when the row was inserted."
@@ -165,34 +231,75 @@ class NotificationResponse(BaseResponseDTO):
         implicit conversion is how `source_event_id` would appear on a
         response the day somebody adds a field to the record.
         """
-        actor: ActorSummary = record.payload
-        # `uploaded_at` is `None` rather than stored: the notification's own
-        # `created_at` already says when this snapshot was taken, and the
-        # link builder uses `version` — not the instant — as its cache
-        # buster. Storing a second timestamp nothing reads would be a column
-        # that looks maintained.
-        links = avatars.links_for(
-            AvatarReference(
-                object_key=actor.avatar_object_key,
-                version=actor.avatar_version,
-                uploaded_at=None,
-            )
-        )
+        payload = record.payload
         return cls(
             id=record.id,
             type=record.type.value,
             category=record.category.value,
-            actor=NotificationActorResponse(
-                player_id=actor.player_id,
-                username=actor.username,
-                display_name=actor.display_name,
-                thumbnail_url=links.thumbnail_url if links else None,
+            # Exactly one of the three is populated, chosen by the payload's
+            # own type rather than by the notification's. The record was
+            # decoded against its `type` on the way out of storage
+            # (`payload_of`), so a mismatch has already been refused — this
+            # only has to project what it was handed.
+            actor=(
+                _actor_response(payload, avatars=avatars)
+                if isinstance(payload, ActorSummary)
+                else None
+            ),
+            tournament=(
+                NotificationTournamentResponse(
+                    tournament_id=payload.tournament_id,
+                    tournament_name=payload.tournament_name,
+                    round_number=payload.round_number,
+                    final_rank=payload.final_rank,
+                )
+                if isinstance(payload, TournamentSummary)
+                else None
+            ),
+            game=(
+                NotificationGameResponse(
+                    match_id=payload.match_id,
+                    outcome=payload.outcome,
+                    termination_reason=payload.termination_reason,
+                    opponent=(
+                        None
+                        if payload.opponent is None
+                        else _actor_response(payload.opponent, avatars=avatars)
+                    ),
+                )
+                if isinstance(payload, GameResultSummary)
+                else None
             ),
             target=NotificationTargetResponse(type=record.target.type.value, ref=record.target.ref),
             created_at=record.created_at,
             read_at=record.read_at,
             is_read=record.is_read,
         )
+
+
+def _actor_response(
+    actor: ActorSummary, *, avatars: AvatarLinkBuilder
+) -> NotificationActorResponse:
+    """One stored actor snapshot as the wire shape.
+
+    `uploaded_at` is `None` rather than stored: the notification's own
+    `created_at` already says when this snapshot was taken, and the link
+    builder uses `version` — not the instant — as its cache buster. Storing
+    a second timestamp nothing reads would be a column that looks maintained.
+    """
+    links = avatars.links_for(
+        AvatarReference(
+            object_key=actor.avatar_object_key,
+            version=actor.avatar_version,
+            uploaded_at=None,
+        )
+    )
+    return NotificationActorResponse(
+        player_id=actor.player_id,
+        username=actor.username,
+        display_name=actor.display_name,
+        thumbnail_url=links.thumbnail_url if links else None,
+    )
 
 
 class NotificationPageResponse(BaseResponseDTO):
@@ -242,10 +349,12 @@ __all__ = [
     "InvalidCursor",
     "MarkAllReadResponse",
     "NotificationActorResponse",
+    "NotificationGameResponse",
     "NotificationPageResponse",
     "NotificationPreferencesResponse",
     "NotificationResponse",
     "NotificationTargetResponse",
+    "NotificationTournamentResponse",
     "PreferenceChangeRequest",
     "PreferenceSettingResponse",
     "UnreadCountResponse",

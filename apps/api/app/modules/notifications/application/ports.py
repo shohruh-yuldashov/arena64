@@ -126,6 +126,29 @@ class NotificationSink(Protocol):
         ...
 
 
+class DurableNotificationStore(Protocol):
+    """Where a producer that composed its own records puts them —
+    A64-021.4 §11.
+
+    The narrower half of `DurableNotificationWriter`, published as a port so
+    the tournament and game dispatchers depend on *"somewhere durable"*
+    rather than on the class. What they must not be able to do is write a
+    row without the preference check, the transaction and the announcement
+    that come with it — and a port with exactly one method is the shape that
+    makes bypassing it a visible decision rather than a shortcut.
+
+    **May raise**, like `NotificationSink` and for the same reason: a record
+    that could not be stored is one the platform promised would exist, so it
+    propagates to the dispatcher, which reports the event as failed and lets
+    the relay retry it.
+    """
+
+    async def store(self, records: Sequence[NotificationRecord]) -> None:
+        """Persists a batch, minus whatever preferences suppress. An empty
+        batch is a legal no-op."""
+        ...
+
+
 class NotificationRepository(Protocol):
     """Storage for the durable `Notification` — A64-021.1 §7, §9, §10.
 

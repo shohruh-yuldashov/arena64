@@ -112,7 +112,19 @@ from app.modules.notifications.application.services import (
     SUBSCRIBED_EVENT_TYPES,
     SocialNotificationDispatcher,
 )
+from app.modules.notifications.application.services.game_notification_dispatcher import (
+    CONSUMER_NAME as GAME_NOTIFICATION_CONSUMER,
+)
+from app.modules.notifications.application.services.game_notification_dispatcher import (
+    SUBSCRIBED_EVENT_TYPES as GAME_NOTIFICATION_EVENTS,
+)
 from app.modules.notifications.application.services.presence_sweeper import PresenceSweeper
+from app.modules.notifications.application.services.tournament_notification_dispatcher import (
+    CONSUMER_NAME as TOURNAMENT_NOTIFICATION_CONSUMER,
+)
+from app.modules.notifications.application.services.tournament_notification_dispatcher import (
+    SUBSCRIBED_EVENT_TYPES as TOURNAMENT_NOTIFICATION_EVENTS,
+)
 from app.modules.notifications.infrastructure import (
     CompositeNotificationSink,
     LoggingNotificationSink,
@@ -121,7 +133,9 @@ from app.modules.notifications.infrastructure import (
 )
 from app.modules.notifications.presentation.dependencies import (
     build_durable_notification_writer,
+    build_game_notification_dispatcher,
     build_social_notification_dispatcher,
+    build_tournament_notification_dispatcher,
 )
 from app.modules.profiles.presentation.dependencies import build_profile_renderer
 from app.modules.rating.application.services.match_completion_consumer import (
@@ -177,6 +191,7 @@ from app.modules.tournament.presentation.dependencies import (
     build_deadline_service,
     build_match_completion_consumer,
     build_no_show_service,
+    build_notification_reader,
 )
 from app.modules.tournament.presentation.dependencies import (
     # Aliased: `matchmaking` publishes a factory of the same name for its
@@ -642,6 +657,52 @@ def build_outbox_worker(
             dispatcher_factory=lambda session: _statistics_consumer_for(session, clock),
             consumer=STATISTICS_CONSUMER,
             event_types=frozenset({MATCH_COMPLETED}),
+        )
+    )
+    # A64-021.4. Two more notification consumers, and the reason they are
+    # separate from `social_notifications` rather than event types added to
+    # it: each holds a different collaborator — one `tournament`'s published
+    # reader, one `profiles`' renderer — and a single dispatcher would hold
+    # both to serve either. They also fail independently, which is the
+    # property that matters on a relay: a tournament whose standings are not
+    # yet visible must not stall a finished game's notification.
+    #
+    # **Each has its own `processed_event` partition**, like every consumer
+    # here. `game_notifications` is the fourth subscriber to
+    # `game.match_completed`; none may mark another's work done.
+    handlers.append(
+        SessionScopedNotificationHandler(
+            session_factory=db.session_factory,
+            dispatcher_factory=lambda session: build_tournament_notification_dispatcher(
+                tournaments=build_notification_reader(session),
+                # The same writer the social path uses, built the same way:
+                # per tick, over this tick's session, with the announcer the
+                # fleet shares. That is what makes A64-021.3's preference
+                # suppression and A64-021.2's realtime frame apply to a
+                # tournament notification without either being re-implemented.
+                store=build_durable_notification_writer(session, announcer=notification_announcer),
+            ),
+            consumer=TOURNAMENT_NOTIFICATION_CONSUMER,
+            event_types=TOURNAMENT_NOTIFICATION_EVENTS,
+        )
+    )
+    handlers.append(
+        SessionScopedNotificationHandler(
+            session_factory=db.session_factory,
+            dispatcher_factory=lambda session: build_game_notification_dispatcher(
+                profiles=build_profile_renderer(
+                    session,
+                    pools=redis_pools,
+                    settings=settings,
+                    cache=NoSocialGraphCache()
+                    if not settings.friends.cache_enabled
+                    else RedisSocialGraphCache(redis_pools.cache, settings=settings.friends),
+                    clock=clock,
+                ),
+                store=build_durable_notification_writer(session, announcer=notification_announcer),
+            ),
+            consumer=GAME_NOTIFICATION_CONSUMER,
+            event_types=GAME_NOTIFICATION_EVENTS,
         )
     )
     if settings.matchmaking.realtime_delivery_enabled:

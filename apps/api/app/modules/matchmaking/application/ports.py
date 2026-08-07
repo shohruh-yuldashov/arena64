@@ -38,6 +38,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.modules.game.public import ProductVariant
+from app.modules.matchmaking.domain.challenge import Challenge
 from app.modules.matchmaking.domain.cooldown import QueueCooldown
 from app.modules.matchmaking.domain.cooldown_audit import CooldownRecord
 from app.modules.matchmaking.domain.pending_match import PendingMatchOffer
@@ -658,5 +659,67 @@ class ReconciliationTimelineRepository(Protocol):
         The cutoff is `occurred_at`, so the timeline's floor lines up with the
         outbox entries it was projected from rather than with when the relay
         happened to catch up.
+        """
+        ...
+
+
+class ChallengeRepository(Protocol):
+    """Storage for friend challenges — A64-022.1 §15.
+
+    Declared here because the port belongs to the layer that needs it
+    (AD-06), and deliberately **narrow**: four methods, each one a use case's
+    question. There is no `list_pending_for`, because nothing in this phase
+    reads a list — that arrives with the API in A64-022.2, and a method
+    written now would be a method nothing exercised.
+
+    ## Every read is scoped
+
+    There is no `get(challenge_id)`. A reader that could fetch a row by id
+    alone is one line away from serving a challenge between two strangers,
+    and the actor is not a filter applied afterwards — it is half the
+    question (§21's IDOR rule).
+    """
+
+    async def add(self, challenge: Challenge) -> None:
+        """Stores a new pending challenge.
+
+        Raises `ConflictError` when the pair already has a live one. The
+        rule is `uq_friend_challenge__live_pair`, a partial unique index over
+        the *unordered* pair — so this is an insert that may be refused
+        rather than a check followed by an insert, and two simultaneous
+        creates in opposite directions produce one row and one conflict
+        instead of two winners of a race neither could see.
+        """
+        ...
+
+    async def get_for_party(self, challenge_id: UUID, *, party_id: UUID) -> Challenge | None:
+        """One challenge, **scoped to somebody who is part of it**.
+
+        `party_id` matches either side: both the challenger and the recipient
+        may act on a challenge, and which of them may do *what* is the
+        aggregate's rule rather than this one's.
+
+        `None` for a challenge that does not exist **and** for one between
+        two other people, deliberately indistinguishable — an id that
+        answered differently for a stranger would be an existence oracle.
+        """
+        ...
+
+    async def save(self, challenge: Challenge) -> None:
+        """Writes a settled challenge back.
+
+        Takes the whole aggregate rather than a status, because the
+        transition already produced one and passing the parts would let a
+        caller write a terminal status with no `responded_at`.
+        """
+        ...
+
+    async def find_live_between(self, first: UUID, second: UUID) -> Challenge | None:
+        """The live challenge between these two, whichever direction.
+
+        Unordered, matching the constraint. Its purpose is a **message**, not
+        a guard: `add` is what actually enforces the rule, and this exists so
+        the service can answer "you already have one with them" instead of
+        surfacing a conflict the caller cannot interpret.
         """
         ...

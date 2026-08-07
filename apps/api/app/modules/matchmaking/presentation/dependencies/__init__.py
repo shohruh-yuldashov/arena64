@@ -96,8 +96,18 @@ from app.api.outbox_deps import EventPublisherDep
 from app.config.settings import MatchmakingSettings
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
-from app.modules.friends.application.services import PairingExclusionService
-from app.modules.friends.infrastructure.repositories import SqlAlchemyBlockedPlayerRepository
+from app.modules.friends.application.ports import SocialGraphCache
+from app.modules.friends.application.services import (
+    PairingExclusionService,
+    SocialGraphReaderService,
+)
+from app.modules.friends.application.services.cached_social_graph_reader import (
+    CachedSocialGraphReader,
+)
+from app.modules.friends.infrastructure.repositories import (
+    SqlAlchemyBlockedPlayerRepository,
+    SqlAlchemyFriendshipRepository,
+)
 from app.modules.friends.public import PairingExclusions
 from app.modules.game.application.ports import ClockDeadlineStore
 from app.modules.game.application.services import (
@@ -143,6 +153,7 @@ from app.modules.matchmaking.application.services import (
     ReconciliationTimelineProjector,
     queue_retention_policy,
 )
+from app.modules.matchmaking.application.services.challenge_service import ChallengeService
 from app.modules.matchmaking.domain.pairing import PairingEngine, RatingWindowPolicy
 from app.modules.matchmaking.infrastructure import (
     PublishedRatingProvider,
@@ -151,6 +162,9 @@ from app.modules.matchmaking.infrastructure import (
     SqlAlchemyQueueRepository,
     SqlAlchemyQueueRetentionStore,
     SqlAlchemyReconciliationTimelineRepository,
+)
+from app.modules.matchmaking.infrastructure.repositories.challenge_repository import (
+    SqlAlchemyChallengeRepository,
 )
 from app.modules.rating.infrastructure.repositories.player_rating_repository import (
     SqlAlchemyRatingReader,
@@ -800,3 +814,45 @@ __all__ = [
     "get_presence_reader",
     "get_queue_service",
 ]
+
+
+def build_challenge_service(
+    session: AsyncSession, *, clock: Clock, cache: SocialGraphCache
+) -> ChallengeService:
+    """The friend challenge use cases, over one unit of work — A64-022.1 §25.
+
+    Named concretely here, which is what a composition root is for: the
+    service itself holds only ports — `ChallengeRepository`,
+    `SocialGraphReader`, `PairingExclusions`, `TimeControlCatalogue` — and so
+    cannot reach into `friends` or `reference` for anything else.
+
+    **The social graph arrives through `CachedSocialGraphReader`**, the same
+    decorator the profile path and the notification relay use. Not for speed
+    here — a challenge asks about one player — but so that this entry point
+    and every other cannot disagree about what the graph says. A friendship
+    revoked a second ago must be revoked for a challenge too, and a second
+    uncached reader would be a second answer.
+
+    **Not a `Depends`.** A64-022.1 has no HTTP surface (§16 forbids one), so
+    a request-scoped factory would be a signature nothing resolves. It takes
+    a session because it is built per unit of work: it holds a repository, a
+    repository holds a session, and a session must not outlive the work it
+    serves.
+    """
+    return ChallengeService(
+        challenges=SqlAlchemyChallengeRepository(session),
+        social_graph=CachedSocialGraphReader(
+            SocialGraphReaderService(
+                friendships=SqlAlchemyFriendshipRepository(session),
+                blocks=SqlAlchemyBlockedPlayerRepository(session),
+            ),
+            cache,
+        ),
+        exclusions=build_pairing_exclusions(session),
+        # `reference`'s own adapter, so the catalogue a challenge validates
+        # against is the one the queue offers. Two readers would be two
+        # menus.
+        time_controls=SqlAlchemyTimeControlCatalogue(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+    )

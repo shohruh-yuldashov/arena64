@@ -74,7 +74,7 @@ class Player:
         self.auth = auth
 
 
-async def register(client: AsyncClient, *, prefix: str = "player") -> Player:
+async def register(client: AsyncClient, session: AsyncSession, *, prefix: str = "player") -> Player:
     """One registered, signed-in account.
 
     `prefix` lets a search test give several accounts a shared, unique
@@ -91,6 +91,15 @@ async def register(client: AsyncClient, *, prefix: str = "player") -> Player:
     )
     assert created.status_code == 201, created.text
 
+    # **Verified**, because A64-021.5H made every friend-graph write require
+    # it — and blocking is a friend-graph write. The same thing
+    # `app.operator.accounts verify` does; the OTP flow belongs to
+    # `test_otp_verification.py`.
+    await session.execute(
+        text("UPDATE users.user SET is_verified = true WHERE id = :id"),
+        {"id": UUID(created.json()["data"]["id"])},
+    )
+
     signed_in = await client.post(
         LOGIN_URL, json={"email": f"{suffix}@example.com", "password": PASSWORD}
     )
@@ -103,13 +112,13 @@ async def register(client: AsyncClient, *, prefix: str = "player") -> Player:
 
 
 @pytest_asyncio.fixture
-async def alice(client: AsyncClient) -> Player:
-    return await register(client)
+async def alice(client: AsyncClient, contract_session: AsyncSession) -> Player:
+    return await register(client, contract_session)
 
 
 @pytest_asyncio.fixture
-async def bob(client: AsyncClient) -> Player:
-    return await register(client)
+async def bob(client: AsyncClient, contract_session: AsyncSession) -> Player:
+    return await register(client, contract_session)
 
 
 async def befriend(client: AsyncClient, a: Player, b: Player) -> str:
@@ -267,9 +276,11 @@ class TestBlockList:
         assert item["player"]["username"] == bob.username
         assert item["player"]["statistics"] is not None
 
-    async def test_it_pages_with_a_cursor(self, client: AsyncClient, alice: Player) -> None:
+    async def test_it_pages_with_a_cursor(
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player
+    ) -> None:
         for _ in range(3):
-            await block(client, alice, await register(client))
+            await block(client, alice, await register(client, contract_session))
 
         first = (await client.get(BLOCKS_URL, headers=alice.auth, params={"limit": 2})).json()[
             "data"
@@ -520,7 +531,7 @@ class TestOptionalAuthentication:
         assert response.status_code == 401
 
     async def test_a_friend_sees_a_friends_only_field_and_a_stranger_does_not(
-        self, client: AsyncClient, alice: Player, bob: Player
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player, bob: Player
     ) -> None:
         """**`VisibilityLevel.FRIENDS` on the profile endpoint**, which is
         what optional authentication was needed for.
@@ -531,7 +542,7 @@ class TestOptionalAuthentication:
         and must therefore behave identically for both — the control that
         shows this is testing the audience path rather than the flag.
         """
-        stranger = await register(client)
+        stranger = await register(client, contract_session)
         await befriend(client, alice, bob)
         await client.patch(PRIVACY_URL, headers=alice.auth, json={"last_seen": "friends"})
 
@@ -552,10 +563,10 @@ class TestOptionalAuthentication:
 
 class TestSearchExclusion:
     async def test_a_blocked_player_disappears_from_search(
-        self, client: AsyncClient, alice: Player
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player
     ) -> None:
         tag = uuid4().hex[:4]
-        target = await register(client, prefix=f"t{tag}")
+        target = await register(client, contract_session, prefix=f"t{tag}")
 
         before = await client.get(SEARCH_URL, headers=alice.auth, params={"q": target.username})
         assert [i["id"] for i in before.json()["data"]["items"]] == [str(target.id)]
@@ -566,13 +577,13 @@ class TestSearchExclusion:
         assert after.json()["data"]["items"] == []
 
     async def test_the_blocked_player_cannot_find_the_blocker_either(
-        self, client: AsyncClient, alice: Player
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player
     ) -> None:
         """Symmetric, and it has to be: a one-directional exclusion would
         make the asymmetry itself the signal BL-1 withholds."""
         tag = uuid4().hex[:4]
-        target = await register(client, prefix=f"t{tag}")
-        blocker = await register(client, prefix=f"t{tag}")
+        target = await register(client, contract_session, prefix=f"t{tag}")
+        blocker = await register(client, contract_session, prefix=f"t{tag}")
 
         await block(client, blocker, target)
 
@@ -581,11 +592,11 @@ class TestSearchExclusion:
         assert found.json()["data"]["items"] == []
 
     async def test_unrelated_players_are_unaffected(
-        self, client: AsyncClient, alice: Player
+        self, client: AsyncClient, contract_session: AsyncSession, alice: Player
     ) -> None:
         tag = uuid4().hex[:4]
-        blocked = await register(client, prefix=f"t{tag}")
-        other = await register(client, prefix=f"t{tag}")
+        blocked = await register(client, contract_session, prefix=f"t{tag}")
+        other = await register(client, contract_session, prefix=f"t{tag}")
         await block(client, alice, blocked)
 
         found = await client.get(SEARCH_URL, headers=alice.auth, params={"q": f"t{tag}"})
@@ -604,7 +615,7 @@ class TestBatchComposition:
         The bound asserts the count does **not grow with the page**.
         """
         for _ in range(6):
-            await block(client, alice, await register(client))
+            await block(client, alice, await register(client, contract_session))
 
         statements: list[str] = []
 

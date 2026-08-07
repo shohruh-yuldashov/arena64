@@ -1199,7 +1199,7 @@ delivery pipeline, which is zero. A challenge type is the same shape.
 
 | Step | Where | What it takes |
 | --- | --- | --- |
-| 1. The events | a new `challenges` module | `challenges.challenge_issued` and `challenges.challenge_accepted` through the outbox, like every other source event. **This is the only real work.** |
+| 1. The events | **`matchmaking`** — `domain-model.md` §10.3 places `Challenge` beside `QueueTicket`, corrected by A64-022.1; the events exist as of that phase and nothing publishes them yet | Wiring the publisher is one constructor argument on `ChallengeService` |
 | 2. The types | `notifications/domain/record.py` | Two members of `NotificationType`, two entries in `CATEGORY_OF` — both `SOCIAL`, which already exists in the preference matrix and already has a switch per channel |
 | 3. The target | `notifications/domain/record.py` | One member of `NavigationTargetType`. A challenge has an identifier, so it is a `ref`-carrying target like `tournament` |
 | 4. The consumer | `notifications/application/services/` | A dispatcher beside `SocialNotificationDispatcher`, subscribing to the two events and composing a `NotificationRecord` |

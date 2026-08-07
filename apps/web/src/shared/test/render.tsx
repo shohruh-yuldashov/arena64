@@ -36,7 +36,7 @@ export function createTestQueryClient(): QueryClient {
 
 export function renderApp(
   options: { path?: string; channel?: AuthChannel; realtimeClient?: RealtimeClient } = {},
-): RenderResult & { queryClient: QueryClient } {
+): RenderResult & { queryClient: QueryClient; router: AppRouter } {
   const router = createAppRouter(
     createMemoryHistory({ initialEntries: [options.path ?? "/"] }),
   );
@@ -51,8 +51,15 @@ export function renderApp(
       />,
     ),
     queryClient,
+    // Returned so a test can assert **where the app navigated to** —
+    // A64-022.5. `window.location` cannot answer that: the router runs on a
+    // memory history, so the browser's URL never moves and asserting
+    // against it silently passes for every route.
+    router,
   };
 }
+
+type AppRouter = ReturnType<typeof createAppRouter>;
 
 export function renderWithProviders(ui: ReactElement): RenderResult & {
   queryClient: QueryClient;

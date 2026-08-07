@@ -126,6 +126,44 @@ function runCleanups(): void {
   }
 }
 
+/**
+ * What must be released **while the session still works** — A64-021.6 §23.
+ *
+ * A second extension point, and the difference from `onSessionEnded` above
+ * is the only reason it exists: these run *before* the server is told to
+ * end the session, and they may be async.
+ *
+ * The push subscription is why. It is bound to the browser rather than to
+ * the tab, so it outlives a sign-out unless something removes it — and
+ * removing the backend's record of it needs the session that is about to be
+ * revoked. A cleanup that ran afterwards would be calling an endpoint with
+ * a dead token, and the row would stay live, pointed at the previous account
+ * on a browser somebody else is about to use.
+ *
+ * An extension point rather than an import, for the same reason as
+ * `onSessionEnded`: `features/auth` must not know that push exists.
+ */
+const releases = new Set<() => Promise<void>>();
+
+export function onSessionEnding(release: () => Promise<void>): () => void {
+  releases.add(release);
+  return () => {
+    releases.delete(release);
+  };
+}
+
+async function runReleases(): Promise<void> {
+  // `allSettled`, never `all`: one release that rejects must not stop the
+  // others and must not stop the sign-out. Somebody who asked to be signed
+  // out is signed out, whatever a push service said.
+  const outcomes = await Promise.allSettled([...releases].map((release) => release()));
+  for (const outcome of outcomes) {
+    if (outcome.status === "rejected") {
+      reportError(outcome.reason, { scope: "session-release" });
+    }
+  }
+}
+
 export function SessionProvider({
   children,
   store: injectedStore,
@@ -240,6 +278,22 @@ export function SessionProvider({
 
   const signOut = useCallback(async () => {
     let failure: unknown = null;
+    // **A64-021.6 §23 — before the session ends, and this ordering is the
+    // whole cross-account defence.**
+    //
+    // A push subscription is bound to the *browser*, not the tab, and it
+    // outlives a sign-out unless something removes it. Leaving one behind
+    // means the next person to sign in on this laptop shares a browser with
+    // a live capability pointing at the previous account — and the delivery
+    // worker would keep pushing to it.
+    //
+    // It runs **first** because removing the backend record needs the
+    // session that is about to be revoked. Best-effort: a network failure
+    // here must not leave somebody signed in, and the browser-side
+    // `unsubscribe()` has already happened by then, so the worst outcome is
+    // a stored row that answers `410` on its next delivery and is revoked
+    // automatically (§17).
+    await runReleases();
     try {
       await authApi.logout();
     } catch (error) {
@@ -258,6 +312,11 @@ export function SessionProvider({
   }, [channel, clearLocalSession]);
 
   const signOutEverywhere = useCallback(async () => {
+    // The same reason as `signOut`. This device is one of the ones being
+    // signed out, and it is the only one whose browser subscription this
+    // code can reach — the others are revoked when their own sessions end,
+    // or by a `410` on the next delivery.
+    await runReleases();
     try {
       await authApi.logoutEverywhere();
     } finally {

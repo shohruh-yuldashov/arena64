@@ -676,6 +676,25 @@ class TestAvailability:
         assert private not in status.text
 
 
+async def _make_due(session: AsyncSession, notification_id: UUID) -> None:
+    """Brings a pending delivery forward so the next pass claims it.
+
+    The alternative is a movable clock threaded through the service, which
+    the email suite uses because it also asserts *when* the next attempt
+    falls. This suite asserts only that the attempts stop, so moving the row
+    is the smaller substitution — and it moves the row the worker reads
+    rather than the time the worker believes.
+    """
+    await session.execute(
+        text(
+            "UPDATE notifications.notification_push_delivery "
+            "SET next_attempt_at = created_at "
+            "WHERE notification_id = :n AND status = 'pending'"
+        ),
+        {"n": notification_id},
+    )
+
+
 class TestDelivery:
     async def test_every_device_is_pushed_and_recorded(
         self, client: AsyncClient, contract_session: AsyncSession, vapid: tuple[str, str]
@@ -760,6 +779,51 @@ class TestDelivery:
         assert row.outcome == PushDeliveryOutcome.RETRYABLE_FAILURE.value
         assert row.status == PushDeliveryStatus.PENDING.value
         assert row.next_attempt_at is not None
+        assert len(await live_subscription_ids(contract_session, account["id"])) == 1
+
+    async def test_retries_stop_at_the_limit(
+        self, client: AsyncClient, contract_session: AsyncSession, vapid: tuple[str, str]
+    ) -> None:
+        """**A64-021.7 §5, §6.** Bounded, and the row says which bound it hit.
+
+        The email channel has had this since A64-021.5 and push had not — the
+        audit's finding was that push applied its cap inside `_send`, on the
+        one branch that could produce a retryable outcome, where email
+        applied it in `_resolve`, the last gate before the write. Both were
+        correct; only one was correct *by construction*. The cap now lives at
+        the same gate in both, and this is the coverage that was missing.
+
+        `attempts_exhausted` rather than `permanent_failure`, because the two
+        mean different things to an operator: one is a broken subscription,
+        the other is a push service that was down for hours.
+
+        The subscription is left **live**, which is the second half: a
+        service having a bad afternoon must not cost somebody their device.
+        """
+        account = await register(client, contract_session)
+        await enable_push(client, account)
+        await client.post(SUBSCRIBE_URL, json=subscription(), headers=auth(account))
+        (device,) = await live_subscription_ids(contract_session, account["id"])
+        notification_id = await owe_push(
+            contract_session, recipient_id=account["id"], subscription_ids=[device]
+        )
+
+        # A service that is down for every attempt. `503` on each pass, and
+        # the rows are made due again between passes rather than waiting out
+        # a real backoff.
+        service = StubPushService(*([503] * 4))
+        for _ in range(4):
+            await worker(contract_session, service.provider(vapid), max_attempts=3).deliver_once()
+            await _make_due(contract_session, notification_id)
+
+        row = await delivery_row(contract_session, notification_id, device)
+        assert (row.status, row.outcome) == (
+            PushDeliveryStatus.FAILED.value,
+            PushDeliveryOutcome.ATTEMPTS_EXHAUSTED.value,
+        )
+        # Terminal means terminal: nothing the claim query can ever see
+        # again, so the row cannot sit `pending` forever.
+        assert row.next_attempt_at is None
         assert len(await live_subscription_ids(contract_session, account["id"])) == 1
 
     async def test_a_muted_preference_sends_nothing(

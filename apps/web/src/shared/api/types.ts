@@ -91,6 +91,18 @@ export type ErrorCode =
   | "already_registered"
   | "registration_not_found"
   | "invalid_tournament_state"
+  // Friend challenges — A64-022.2. Six, and the two the registry
+  // deliberately does **not** publish are worth knowing about: there is no
+  // `challenge_blocked` (a challenge to a blocked player answers exactly as
+  // one to a non-friend, so a block stays invisible) and no
+  // `challenge_forbidden` (naming which party the caller was would disclose
+  // the other side of a challenge they may not see).
+  | "challenge_self_not_allowed"
+  | "challenge_not_friends"
+  | "challenge_already_pending"
+  | "challenge_not_pending"
+  | "challenge_expired"
+  | "challenge_invalid_time_control"
   // Notification preferences — A64-021.3. All three are `422` on one
   // endpoint, which is why they are separate codes: the sentences differ.
   // "Not allowed" and "not built yet" are not the same thing to a player,

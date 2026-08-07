@@ -302,7 +302,8 @@
       "blocked": "Bloklanganlar",
       "search": "Qidiruv",
       "incomingBadge": "Kiruvchi: {count}",
-      "outgoingBadge": "Chiquvchi: {count}"
+      "outgoingBadge": "Chiquvchi: {count}",
+      "challenges": "Chorlovlar"
     },
     "search": {
       "title": "O'yinchilarni qidirish",
@@ -927,6 +928,62 @@
       "deviceCount": "Sizda {{count}} ta qurilmada push bildirishnomalari yoqilgan. Bu faqat shu qurilmada o'chiradi.",
       "subscribeFailed": "Push bildirishnomalarini yoqib bo'lmadi. Qayta urinib ko'ring.",
       "noServiceWorker": "Push bildirishnomalari fonda ishlaydigan service worker'ni talab qiladi, bu brauzer esa uni ro'yxatdan o'tkazmagan. Lokal ishlab chiqishda bu production build ishga tushirish kerakligini bildiradi (`npm run build && npm run preview`), dev server emas."
+    }
+  },
+  "challenges": {
+    "title": "Chorlovlar",
+    "description": "Do'stlaringiz sizni taklif qilgan o'yinlar va siz yuborganlaringiz.",
+    "loadMore": "Yana yuklash",
+    "tabs": {
+      "incoming": "Kelgan",
+      "outgoing": "Yuborilgan"
+    },
+    "empty": {
+      "incomingTitle": "Kutayotgan chorlov yo'q",
+      "incomingHint": "Do'stingiz sizni o'yinga taklif qilsa, shu yerda ko'rinadi.",
+      "outgoingTitle": "Siz hech kimni chorlamadingiz",
+      "outgoingHint": "Do'stlar ro'yxatidan yoki profilidan taklif qiling."
+    },
+    "row": {
+      "terms": "{clock} · {mode} · {remaining}",
+      "hoursLeft": "{hours} soat qoldi",
+      "minutesLeft": "{minutes} daqiqa qoldi",
+      "expired": "Muddati o'tgan"
+    },
+    "actions": {
+      "challenge": "Chorlash",
+      "challengeLabel": "{name} ni o'yinga chorlash",
+      "accept": "Qabul qilish",
+      "acceptLabel": "{name} ning chorlovini qabul qilish",
+      "accepting": "Qabul qilinmoqda…",
+      "decline": "Rad etish",
+      "declineLabel": "{name} ning chorlovini rad etish",
+      "cancel": "Bekor qilish",
+      "cancelLabel": "{name} ga yuborilgan chorlovni bekor qilish",
+      "cancelling": "Bekor qilinmoqda…"
+    },
+    "create": {
+      "title": "{name} ni chorlash",
+      "description": "Soat va turini tanlang. Javob berishga 24 soat bor.",
+      "send": "Chorlov yuborish",
+      "sending": "Yuborilmoqda…"
+    },
+    "errors": {
+      "self": "O'zingizni chorlay olmaysiz.",
+      "notFriends": "Faqat do'stlaringizni chorlay olasiz.",
+      "alreadyPending": "Bu o'yinchi bilan javobsiz chorlovingiz bor.",
+      "notPending": "Bu chorlovga allaqachon javob berilgan.",
+      "expired": "Bu chorlovning muddati o'tgan.",
+      "invalidTimeControl": "Bu vaqt nazorati endi mavjud emas. Sahifani yangilang.",
+      "catalogue": "Vaqt nazoratlarini yuklab bo'lmadi.",
+      "notFound": "Bu chorlov endi mavjud emas.",
+      "conflict": "Hozir buni bajarib bo'lmadi. Qayta urinib ko'ring.",
+      "permissionDenied": "Bunga ruxsatingiz yo'q.",
+      "validation": "Ma'lumotlarni tekshirib, qayta urinib ko'ring.",
+      "rateLimited": "Juda ko'p chorlov. Biroz kuting.",
+      "verificationRequired": "Chorlov yuborish uchun elektron pochtangizni tasdiqlang.",
+      "network": "Internetga ulanmagansiz. Ulanishni tekshiring.",
+      "unexpected": "Nimadir xato ketdi. Qayta urinib ko'ring."
     }
   }
 }

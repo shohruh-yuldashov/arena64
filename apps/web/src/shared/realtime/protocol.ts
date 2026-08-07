@@ -367,6 +367,19 @@ export interface MovePayload {
   applied: AppliedMove;
   /** Present only when this move ended the game. */
   result?: ResultPayload;
+  /**
+   * The clock **after** this move — A64-024.
+   *
+   * A move is what changes whose clock runs, and this frame is the only
+   * thing a client is told about the move. Without it the countdown kept
+   * running for the player who had just moved until a reload fetched a
+   * snapshot.
+   *
+   * Absent for an untimed match, and absent from an older server — the
+   * reducer keeps whatever it had in both cases rather than blanking a
+   * clock it can still count.
+   */
+  clock?: ClockPayload | null;
 }
 
 /** `game.move.rejected` — about the *move*, not the frame. */

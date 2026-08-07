@@ -273,6 +273,18 @@ export function reduce(state: GameState, action: GameAction): GameState {
         board,
         sequence: move.ply,
         sideToMove: move.side_to_move,
+        // **Re-anchored from the frame** — A64-024, and the fix for a clock
+        // that kept counting down the player who had just moved.
+        //
+        // Nothing here derives ownership: `active_side` is the server's,
+        // and `useClock` re-measures its offset the moment this object
+        // changes identity, so no locally elapsed time is carried across an
+        // authoritative update.
+        //
+        // Kept when the frame has none — an untimed match, or a server that
+        // predates the field. Blanking would stop a clock this client can
+        // still count correctly.
+        clock: move.clock ?? state.clock,
         fingerprint: move.fingerprint,
         result: move.result ?? state.result,
         lastMove: { path: move.applied.path, captured: move.applied.captured },

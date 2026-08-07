@@ -2454,3 +2454,58 @@ class TestParticipantCommands:
             MessageType.DRAW_ACCEPT,
             MessageType.DRAW_DECLINE,
         } <= dispatch.routes
+
+
+class TestTheMoveFrameCarriesTheClock:
+    """A64-024 — the frame that changes whose clock runs must say so.
+
+    `game.move.applied` carried no clock, so a client had no authoritative
+    way to learn that ownership had passed: it kept counting down the player
+    who had just moved, and only a reload — which fetches a snapshot — put
+    it right. The data was already on `SubmitMoveResult.clock`; the frame
+    simply dropped it.
+    """
+
+    def test_a_timed_move_publishes_the_new_ownership(self) -> None:
+        sent = move_applied(
+            match_id=generate_uuid7(),
+            ply=7,
+            side_to_move="dark",
+            fingerprint="fp-7",
+            path=["c3", "d4"],
+            captured=[],
+            promoted_to=None,
+            clock={
+                "light_ms": 170_000,
+                "dark_ms": 180_000,
+                "active_side": "dark",
+                "deadline": "2026-08-05T10:03:00Z",
+                "server_time": "2026-08-05T10:00:10Z",
+            },
+        )
+
+        clock = sent.payload["clock"]
+        # The side that must now be counted down, and the two absolute
+        # instants the client re-anchors its interpolation against.
+        assert clock["active_side"] == "dark"
+        assert clock["server_time"] == "2026-08-05T10:00:10Z"
+        assert clock["deadline"] == "2026-08-05T10:03:00Z"
+        # The same shape `game.snapshot` publishes, so one client-side
+        # projection serves both and they cannot drift.
+        assert set(clock) == {"light_ms", "dark_ms", "active_side", "deadline", "server_time"}
+
+    def test_an_untimed_move_carries_no_clock_key_at_all(self) -> None:
+        """`None` is a real state — an untimed match — and it is absent
+        rather than null, so a client keeps the clock it has instead of
+        being handed one that says nothing."""
+        sent = move_applied(
+            match_id=generate_uuid7(),
+            ply=7,
+            side_to_move="dark",
+            fingerprint="fp-7",
+            path=["c3", "d4"],
+            captured=[],
+            promoted_to=None,
+        )
+
+        assert "clock" not in sent.payload

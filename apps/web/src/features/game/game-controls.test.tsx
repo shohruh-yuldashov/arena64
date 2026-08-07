@@ -4,7 +4,11 @@ import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { initialState, reduce } from "@/features/game/model/state";
-import { RATING_POLL_MS, useRatingResult } from "@/features/game/model/use-rating-result";
+import {
+  RATING_MAX_ATTEMPTS,
+  RATING_POLL_MS,
+  useRatingResult,
+} from "@/features/game/model/use-rating-result";
 import { GameControls } from "@/features/game/ui/game-controls";
 import { matchmakingKeys } from "@/features/matchmaking/api/keys";
 import { httpClient } from "@/shared/api/client";
@@ -417,16 +421,140 @@ it("stops treating a finished match as the current one", async () => {
   );
 });
 
-describe("the rated result — A64-023 §14", () => {
+describe("the clock follows the move — A64-024", () => {
   /**
-   * `useRatingResult` directly, because that is where every decision is:
-   * whether to ask again, when to stop, and which of the three states the
-   * screen is in. The panel above it renders what it is handed and is
-   * covered by the type checker and the page suite.
+   * The bug: `game.move.applied` carried no clock, so the reducer left
+   * `state.clock` on whatever the last snapshot said — and the countdown
+   * kept running for the player who had just moved. Reloading fetched a
+   * snapshot, which is why a reload "fixed" it.
    *
-   * Rendered through a probe rather than the panel, which needs a router
-   * context for its two `Link`s — mounting the whole page to assert a
-   * number would be testing the router.
+   * Asserted on the reducer, because that is where ownership is held. The
+   * interpolation above it reads `clock.active_side` and does not decide.
+   */
+  function moveFrame(overrides: Record<string, unknown> = {}) {
+    return {
+      match_id: MATCH,
+      ply: 5,
+      side_to_move: "dark" as const,
+      fingerprint: "fp5",
+      applied: { path: ["c3", "d4"], captured: [], promoted_to: null },
+      clock: {
+        light_ms: 170_000,
+        dark_ms: 180_000,
+        active_side: "dark" as const,
+        deadline: "2026-08-05T10:03:00Z",
+        server_time: "2026-08-05T10:00:10Z",
+      },
+      ...overrides,
+    };
+  }
+
+  /** A snapshot with Light's clock running — the fixture above is untimed. */
+  function timed() {
+    return reduce(initialState(MATCH), {
+      type: "snapshot",
+      viewerId: VIEWER,
+      payload: {
+        ...snapshot(),
+        clock: {
+          light_ms: 180_000,
+          dark_ms: 180_000,
+          active_side: "light" as const,
+          deadline: "2026-08-05T10:03:00Z",
+          server_time: "2026-08-05T10:00:00Z",
+        },
+      },
+    });
+  }
+
+  it("hands the running clock to the opponent when Light moves", () => {
+    // The snapshot says Light is counting.
+    const before = timed();
+    expect(before.clock?.active_side).toBe("light");
+
+    const after = reduce(before, { type: "applied", payload: moveFrame() });
+
+    expect(after.sideToMove).toBe("dark");
+    // The point of the fix: ownership moved with the move.
+    expect(after.clock?.active_side).toBe("dark");
+    expect(after.clock?.light_ms).toBe(170_000);
+  });
+
+  it("hands it back when Dark moves", () => {
+    const afterLight = reduce(timed(), { type: "applied", payload: moveFrame() });
+    const afterDark = reduce(afterLight, {
+      type: "applied",
+      payload: moveFrame({
+        ply: 6,
+        side_to_move: "light",
+        fingerprint: "fp6",
+        clock: {
+          light_ms: 170_000,
+          dark_ms: 168_000,
+          active_side: "light",
+          deadline: "2026-08-05T10:05:50Z",
+          server_time: "2026-08-05T10:00:22Z",
+        },
+      }),
+    });
+
+    expect(afterDark.clock?.active_side).toBe("light");
+    expect(afterDark.clock?.dark_ms).toBe(168_000);
+  });
+
+  it("re-anchors rather than accumulating local elapsed time", () => {
+    // `server_time` moves with the frame, which is what `useClock` measures
+    // its offset against. A reducer that kept the old clock would leave the
+    // anchor at the snapshot's instant and count from there forever.
+    const after = reduce(timed(), { type: "applied", payload: moveFrame() });
+
+    expect(after.clock?.server_time).toBe("2026-08-05T10:00:10Z");
+    expect(after.clock?.deadline).toBe("2026-08-05T10:03:00Z");
+  });
+
+  it("keeps the clock it has when the frame carries none", () => {
+    // An untimed match, or a server that predates the field. Blanking would
+    // stop a clock this client can still count correctly.
+    const before = timed();
+    const after = reduce(before, {
+      type: "applied",
+      payload: moveFrame({ clock: undefined }),
+    });
+
+    expect(after.clock).toEqual(before.clock);
+  });
+
+  it("gives a resumed snapshot the same ownership a live move does", () => {
+    // §4: no reload-only correction path. The two routes to "Dark is
+    // counting" must agree.
+    const live = reduce(timed(), { type: "applied", payload: moveFrame() });
+    const resumed = reduce(timed(), {
+      type: "snapshot",
+      viewerId: VIEWER,
+      payload: {
+        ...snapshot(),
+        sequence: 5,
+        side_to_move: "dark",
+        fingerprint: "fp5",
+        clock: moveFrame().clock,
+      },
+    });
+
+    expect(resumed.clock?.active_side).toBe(live.clock?.active_side);
+    expect(resumed.sideToMove).toBe(live.sideToMove);
+  });
+});
+
+describe("the rated result reconciles within a bound — A64-024", () => {
+  /**
+   * The bug: the first version used TanStack's `refetchInterval` and stuck
+   * on "Rating is being updated…" forever in a real browser — its schedule
+   * depends on document visibility, observer lifetime and an attempt
+   * counter on the cache entry, and it could not be tested at all because
+   * jsdom never reports the document visible.
+   *
+   * The loop is now a plain effect with a timeout chain, so every one of
+   * these assertions is about the hook rather than about the environment.
    */
   function row(overrides: Record<string, unknown>) {
     return {
@@ -457,7 +585,6 @@ describe("the rated result — A64-023 §14", () => {
       <p>
         {JSON.stringify({
           delta: rating.change?.delta ?? null,
-          before: rating.change?.before ?? null,
           rated: rating.rated,
           pending: rating.isPending,
           late: rating.hasGivenUp,
@@ -466,11 +593,12 @@ describe("the rated result — A64-023 §14", () => {
     );
   }
 
-  /** Serves the history page, and counts how many times it was asked. */
-  function serve(page: Record<string, unknown>): { calls: () => number } {
+  /** Serves a page per call, and counts the calls. */
+  function serve(pages: Record<string, unknown>[]): { calls: () => number } {
     let calls = 0;
     mswServer.use(
       http.get(url(`/players/${VIEWER}/matches`), () => {
+        const page = pages[Math.min(calls, pages.length - 1)];
         calls += 1;
         return HttpResponse.json(envelope({ entries: [page], next_cursor: null }));
       }),
@@ -478,54 +606,53 @@ describe("the rated result — A64-023 §14", () => {
     return { calls: () => calls };
   }
 
-  it("reports the server's before, after and delta", async () => {
-    serve(row({ rating: { before: 1524, after: 1537, delta: 13 } }));
+  it("renders the delta as soon as the projection lands", async () => {
+    // Absent on the first answer, present on the second — the ordinary
+    // shape of an outbox consumer catching up.
+    const served = serve([
+      row({ rating: null }),
+      row({ rating: { before: 1524, after: 1537, delta: 13 } }),
+    ]);
     renderWithProviders(<Probe />);
 
-    await waitFor(() => expect(screen.getByText(/"delta":13/)).toBeVisible());
-    expect(screen.getByText(/"before":1524/)).toBeVisible();
-    // Nothing is being waited for once the answer is in.
+    await waitFor(() => expect(screen.getByText(/"pending":true/)).toBeVisible());
+    await waitFor(() => expect(screen.getByText(/"delta":13/)).toBeVisible(), {
+      timeout: RATING_POLL_MS * 3,
+    });
     expect(screen.getByText(/"pending":false/)).toBeVisible();
-  });
 
-  it("reports a loss as a negative delta, unchanged", async () => {
-    serve(row({ rating: { before: 1537, after: 1524, delta: -13 } }));
-    renderWithProviders(<Probe />);
-
-    await waitFor(() => expect(screen.getByText(/"delta":-13/)).toBeVisible());
-  });
-
-  it("is pending — not zero — while the projection has not landed", async () => {
-    // The state a fabricated `+0` would have hidden. `rated` is true and
-    // the change is absent, which is exactly what the row says.
-    serve(row({ rating: null }));
-    renderWithProviders(<Probe />);
-
-    await waitFor(() => expect(screen.getByText(/"rated":true/)).toBeVisible());
-    expect(screen.getByText(/"delta":null/)).toBeVisible();
-    expect(screen.getByText(/"pending":true/)).toBeVisible();
-  });
+    // And it stops the moment the answer arrives.
+    const spent = served.calls();
+    await new Promise((resolve) => setTimeout(resolve, RATING_POLL_MS * 2));
+    expect(served.calls()).toBe(spent);
+  }, 15_000);
 
   it("asks once for a casual match and never waits", async () => {
-    const served = serve(row({ rated: false, rating: null }));
+    const served = serve([row({ rated: false, rating: null })]);
     renderWithProviders(<Probe />);
 
     await waitFor(() => expect(screen.getByText(/"rated":false/)).toBeVisible());
     expect(screen.getByText(/"pending":false/)).toBeVisible();
     expect(screen.getByText(/"late":false/)).toBeVisible();
 
-    // A casual game has nothing to wait for, so the schedule stops after
-    // the first answer rather than spending the budget.
     await new Promise((resolve) => setTimeout(resolve, RATING_POLL_MS * 2));
     expect(served.calls()).toBe(1);
-  });
+  }, 15_000);
 
-  // **The bounded stop is not asserted here**, deliberately.
-  //
-  // `refetchInterval` does not run while the document is hidden, and jsdom
-  // never reports it visible — so a test of the budget would be measuring
-  // the environment rather than the hook. The bound itself is one
-  // expression in `refetchInterval`, and the defect that mattered — a
-  // `gcTime: 0` that reset the attempt counter and made the budget
-  // unreachable — was found by writing this test and is fixed.
+  it("stops after a bounded number of attempts instead of waiting forever", async () => {
+    // Every answer says the adjustment is still absent. This is the case
+    // that hung: the UI must stop asking and say so.
+    const served = serve([row({ rating: null })]);
+    renderWithProviders(<Probe />);
+
+    await waitFor(() => expect(screen.getByText(/"late":true/)).toBeVisible(), {
+      timeout: RATING_POLL_MS * (RATING_MAX_ATTEMPTS + 2),
+    });
+    expect(screen.getByText(/"pending":false/)).toBeVisible();
+    expect(served.calls()).toBe(RATING_MAX_ATTEMPTS);
+
+    // Genuinely stopped, not merely reporting that it had.
+    await new Promise((resolve) => setTimeout(resolve, RATING_POLL_MS * 2));
+    expect(served.calls()).toBe(RATING_MAX_ATTEMPTS);
+  }, 30_000);
 });

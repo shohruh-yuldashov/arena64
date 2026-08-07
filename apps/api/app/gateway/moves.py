@@ -50,7 +50,7 @@ the log where the caller cannot read it.
 import logging
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Final
+from typing import Any, Final
 from uuid import UUID
 
 from app.gateway.delivery import RoomBroadcaster
@@ -75,6 +75,7 @@ from app.gateway.room_service import GameRoomService
 from app.gateway.spectators import SpectatorStore, SpectatorSubscription
 from app.modules.game.public import (
     ClockExpired,
+    ClockView,
     IllegalMoveSubmitted,
     MatchNotActive,
     MatchNotFound,
@@ -274,6 +275,12 @@ class MoveSubmissionHandler:
             captured=result.applied.captured,
             promoted_to=result.applied.promoted_to,
             result=_result_payload(result),
+            # A64-024. A move changes whose clock runs, and this frame is
+            # the only thing the opponent is told about the move — so it has
+            # to carry the new ownership. It did not, and the effect was a
+            # countdown that kept running for the player who had just moved
+            # until somebody reloaded.
+            clock=_clock_payload(result.clock),
         )
 
         # **Buffered before it is delivered** — A64-016.6 §2, §3. A client
@@ -539,3 +546,26 @@ def _submission_of(
 
 
 __all__ = ["MoveSubmissionHandler"]
+
+
+def _clock_payload(clock: ClockView | None) -> dict[str, Any] | None:
+    """The clock after a move, in `game.snapshot`'s shape — A64-024.
+
+    Absolute instants, never durations, for the reason `projections.py`
+    gives for the snapshot's: a duration re-based on receipt drifts by the
+    latency it was meant to describe.
+
+    The shape is deliberately identical to the snapshot's, so the client
+    re-anchors from a move exactly as it does from a resume — one projection
+    on that side rather than two that could disagree about which side is
+    counting.
+    """
+    if clock is None:
+        return None
+    return {
+        "light_ms": clock.light_ms,
+        "dark_ms": clock.dark_ms,
+        "active_side": clock.active_side.value,
+        "deadline": clock.deadline.isoformat(),
+        "server_time": clock.server_time.isoformat(),
+    }

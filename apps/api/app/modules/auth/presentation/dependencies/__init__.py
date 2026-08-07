@@ -58,7 +58,6 @@ from fastapi import Depends
 from app.api.deps import ClockDep, DbSessionDep, RedisPoolsDep, SettingsDep
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
-from app.modules.auth.application.email import EmailProvider
 from app.modules.auth.application.ports import PasswordHasher
 from app.modules.auth.application.services import (
     AccessTokenService,
@@ -72,7 +71,6 @@ from app.modules.auth.application.services import (
 from app.modules.auth.application.services.opaque_tokens import OpaqueTokenService
 from app.modules.auth.application.services.websocket_tickets import WebSocketTicketService
 from app.modules.auth.infrastructure import (
-    ConsoleEmailProvider,
     JwtTokenProvider,
     RedisWebSocketTicketStore,
     SqlAlchemyPasswordResetTokenRepository,
@@ -105,6 +103,7 @@ from app.modules.users.public import (
     UserCredentialStore,
     UserProfileReader,
 )
+from app.platform.email import EmailProvider, build_email_provider
 
 
 def get_password_hasher(settings: SettingsDep) -> PasswordHasher:
@@ -309,17 +308,19 @@ EmailVerifierDep = Annotated[EmailVerifier, Depends(get_email_verifier)]
 
 
 def get_email_provider(settings: SettingsDep) -> EmailProvider:
-    """The only provider A64-011.6 ships.
+    """This request's transport — A64-021.5 moved the choice.
 
+    Delegates to `platform.email.build_email_provider`, which is now the one
+    place the provider is selected. `notifications`' email worker holds the
+    same transport, and two selection points would be two sender identities
+    and two places a credential is configured.
+
+    The startup guard is unchanged and still lands here for HTTP callers:
     `ConsoleEmailProvider` refuses to construct in a production-like
-    environment, so this factory is also the point at which a deployed
-    tier without a real provider configured fails to start — visibly, at
-    boot, rather than by silently sending nobody anything (DI-06).
-
-    Adding SMTP or a vendor is a branch here plus a class in
-    `infrastructure/`; no service changes.
+    environment, so a deployed tier without a real provider fails visibly at
+    boot rather than by silently sending nobody anything (DI-06).
     """
-    return ConsoleEmailProvider(settings.environment)
+    return build_email_provider(settings.environment)
 
 
 EmailProviderDep = Annotated[EmailProvider, Depends(get_email_provider)]

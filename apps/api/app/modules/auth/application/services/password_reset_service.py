@@ -136,7 +136,6 @@ from app.config.settings import EmailSettings
 from app.core.clock import Clock
 from app.core.exceptions import ConflictError
 from app.core.unit_of_work import UnitOfWork
-from app.modules.auth.application.email import EmailMessage, EmailProvider
 from app.modules.auth.application.ports import PasswordHasher, PasswordResetTokenRepository
 from app.modules.auth.application.services.opaque_tokens import OpaqueTokenService
 from app.modules.auth.application.services.session_service import SessionService
@@ -145,6 +144,7 @@ from app.modules.auth.domain.password_reset import PasswordResetToken
 from app.modules.auth.domain.sessions import RevocationReason
 from app.modules.auth.domain.validators import validate_password
 from app.modules.users.public import PasswordResetter, UserProfileReader, UserRead
+from app.platform.email import EmailMessage, EmailProvider
 
 logger = logging.getLogger(__name__)
 

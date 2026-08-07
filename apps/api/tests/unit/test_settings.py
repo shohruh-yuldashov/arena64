@@ -18,6 +18,7 @@ from app.config.settings import (
     GatewaySettings,
     JWTSettings,
     MatchmakingSettings,
+    NotificationEmailSettings,
     OutboxSettings,
     PostgresSettings,
     PresenceSettings,
@@ -99,6 +100,7 @@ class TestSettings:
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             session=SessionSettings(),
             email=EmailSettings(),
+            notification_email=NotificationEmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
@@ -133,6 +135,7 @@ class TestSettings:
                 jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
                 session=SessionSettings(),
                 email=EmailSettings(),
+                notification_email=NotificationEmailSettings(),
                 storage=StorageSettings(),
                 rate_limit=RateLimitSettings(),
                 statistics=StatisticsSettings(),
@@ -159,6 +162,7 @@ class TestSettings:
                 jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
                 session=SessionSettings(),
                 email=EmailSettings(),
+                notification_email=NotificationEmailSettings(),
                 storage=StorageSettings(),
                 rate_limit=RateLimitSettings(),
                 statistics=StatisticsSettings(),
@@ -190,6 +194,7 @@ class TestSettings:
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             session=SessionSettings(),
             email=EmailSettings(),
+            notification_email=NotificationEmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
@@ -214,6 +219,7 @@ class TestSettings:
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             session=SessionSettings(),
             email=EmailSettings(),
+            notification_email=NotificationEmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
@@ -328,6 +334,7 @@ class TestJWTProductionGuard:
             auth=AuthSettings(),
             session=SessionSettings(),
             email=EmailSettings(),
+            notification_email=NotificationEmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
@@ -366,6 +373,7 @@ class TestJWTProductionGuard:
             auth=AuthSettings(),
             session=SessionSettings(),
             email=EmailSettings(),
+            notification_email=NotificationEmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
@@ -470,7 +478,7 @@ class TestConsoleEmailProviderGuard:
         [Environment.LOCAL, Environment.TEST, Environment.CI],
     )
     def test_constructs_outside_production(self, environment: Environment) -> None:
-        from app.modules.auth.infrastructure import ConsoleEmailProvider
+        from app.platform.email import ConsoleEmailProvider
 
         assert ConsoleEmailProvider(environment)
 
@@ -479,7 +487,7 @@ class TestConsoleEmailProviderGuard:
         """A deployed tier wired to this provider would send nobody
         anything *and* write live links into the log pipeline. Refusing to
         start is a visible deploy failure; starting is a silent one."""
-        from app.modules.auth.infrastructure import ConsoleEmailProvider
+        from app.platform.email import ConsoleEmailProvider
 
         with pytest.raises(ValueError, match="ConsoleEmailProvider"):
             ConsoleEmailProvider(environment)

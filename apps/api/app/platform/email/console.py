@@ -1,4 +1,4 @@
-"""`ConsoleEmailProvider` — the only `EmailProvider` A64-011.6 ships.
+"""`ConsoleEmailProvider` — the only `EmailProvider` this platform ships.
 
 Writes the message to the application log instead of sending it, so the
 whole verification flow is exercisable end to end on a developer machine
@@ -28,7 +28,7 @@ an alert can match on, not one that blends into request logging.
 import logging
 
 from app.config.environment import Environment
-from app.modules.auth.application.email import EmailMessage
+from app.platform.email.message import EmailMessage
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,12 @@ class ConsoleEmailProvider:
 
     async def send(self, message: EmailMessage) -> None:
         """Writes the message where a developer will see it.
+
+        The **text** part only, even when a caller supplied markup: a log
+        line is a text transport, and dumping a rendered HTML document into
+        one buries the sentence a developer is looking for. §17's rule that
+        every transactional email carries both parts is about what reaches a
+        mailbox, not about what a console prints.
 
         Never raises. The console transport has no failure mode worth
         modelling, and inventing one would make every caller handle an

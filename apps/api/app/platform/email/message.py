@@ -1,5 +1,21 @@
 """Outbound email — the port, the message, and nothing about SMTP.
 
+## Why this lives in `platform` and not in `auth` — A64-021.5
+
+It was `auth.application.email` from A64-011.6, when the only outbound mail
+on this platform was a verification link. A64-021.5 gave it a second
+consumer — `notifications`, sending a tournament confirmation — and a
+transport that two bounded contexts share is not one context's domain.
+
+The alternative was a second stack, which §1 of that brief forbids for the
+obvious reason: two ways to send an email is two sender identities, two
+retry stories and two places a credential is configured.
+
+`platform` is where the outbox and the task scheduler already live, and the
+rule that keeps it honest is `.importlinter`'s: **platform imports no
+bounded context**. A message and a `send` cannot reach a user, a
+notification or a session.
+
 `EmailProvider` is the seam. Everything above it composes messages;
 everything below it is a vendor. A64-011.6's brief is explicit that no
 SMTP provider is integrated yet, and the shape here is what makes adding
@@ -52,11 +68,12 @@ class EmailMessage:
     verification link is precisely the thing that must never be
     serialisable into an HTTP response.
 
-    `text_body` and no HTML. A verification email that is plain text
-    renders everywhere, cannot carry a tracking pixel, and cannot be the
-    vector for the markup bugs that mail clients are famous for. HTML is a
-    presentation upgrade for whoever adds templates, not a requirement of
-    the flow.
+    A64-011.6 shipped `text_body` and no HTML, on the reasoning that a
+    verification email in plain text renders everywhere, cannot carry a
+    tracking pixel, and cannot be the vector for the markup bugs mail
+    clients are famous for. That reasoning still holds for a link somebody
+    must click, and `html_body` is **additive** for the messages that are
+    read rather than acted on — see below.
     """
 
     to: str
@@ -66,6 +83,25 @@ class EmailMessage:
     raw token*. It is the one place on the platform where that value
     legitimately exists in full, and a dataclass repr lands in tracebacks
     and error reporters (services.md §8.5)."""
+
+    html_body: str | None = field(default=None, repr=False)
+    """The same message as markup, or `None` — A64-021.5 §17.
+
+    Optional rather than required, and the two callers make opposite
+    choices for the same reason. A verification message is a link somebody
+    must click and is sent as **text only**: nothing about it is improved by
+    markup, and every mail client renders a bare URL. A notification email
+    is *read*, has a call to action, and ships both parts — §17 requires
+    that a transactional email never be HTML-only, which is a property of
+    the pair rather than of this field.
+
+    `repr=False` for the reason above: a rendered body carries a display
+    name, and a dataclass repr lands in tracebacks.
+
+    A provider that cannot honour markup ignores it, which is the correct
+    behaviour for a transport detail — `ConsoleEmailProvider` has no
+    concept of a multipart message and should not have to pretend.
+    """
 
 
 class EmailProvider(Protocol):

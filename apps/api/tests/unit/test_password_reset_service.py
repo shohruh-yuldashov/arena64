@@ -33,7 +33,6 @@ import pytest
 from app.config.settings import EmailSettings, SessionSettings
 from app.core.enums import Locale
 from app.core.exceptions import ConflictError
-from app.modules.auth.application.email import EmailMessage
 from app.modules.auth.application.services import (
     OpaqueTokenService,
     PasswordResetService,
@@ -48,6 +47,7 @@ from app.modules.auth.domain.exceptions import (
 from app.modules.auth.domain.password_reset import PasswordResetToken
 from app.modules.auth.domain.sessions import RevocationReason, SessionDevice
 from app.modules.users.public import AvatarReference, UserNotFound, UserRead
+from app.platform.email import EmailMessage
 from tests.fakes.password_reset_token_repository import FakePasswordResetTokenRepository
 from tests.fakes.session_repository import FakeSessionRepository
 

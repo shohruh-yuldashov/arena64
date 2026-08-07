@@ -69,12 +69,12 @@ from uuid import UUID
 from app.config.settings import EmailSettings
 from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork
-from app.modules.auth.application.email import EmailMessage, EmailProvider
 from app.modules.auth.application.ports import VerificationTokenRepository
 from app.modules.auth.application.services.opaque_tokens import OpaqueTokenService
 from app.modules.auth.domain.exceptions import InvalidVerificationToken
 from app.modules.auth.domain.verification import EmailVerificationToken
 from app.modules.users.public import EmailVerifier, UserProfileReader, UserRead
+from app.platform.email import EmailMessage, EmailProvider
 
 logger = logging.getLogger(__name__)
 

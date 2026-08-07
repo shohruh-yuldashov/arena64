@@ -20,13 +20,13 @@ import pytest
 
 from app.config.settings import EmailSettings
 from app.core.enums import Locale
-from app.modules.auth.application.email import EmailMessage
 from app.modules.auth.application.services import (
     EmailVerificationService,
     OpaqueTokenService,
 )
 from app.modules.auth.domain.exceptions import InvalidVerificationToken
 from app.modules.users.public import AvatarReference, UserRead
+from app.platform.email import EmailMessage
 from tests.fakes.verification_token_repository import FakeVerificationTokenRepository
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)

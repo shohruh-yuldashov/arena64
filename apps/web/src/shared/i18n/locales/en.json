@@ -921,7 +921,8 @@
       "muted": "This device is registered, but push notifications are switched off.",
       "active": "This device receives friend and tournament push notifications.",
       "deviceCount": "You have push notifications on {{count}} devices. This turns them off here only.",
-      "subscribeFailed": "Could not turn push notifications on. Please try again."
+      "subscribeFailed": "Could not turn push notifications on. Please try again.",
+      "noServiceWorker": "Push notifications need a background service worker, and this browser has not registered one. In local development that means running a production build (`npm run build && npm run preview`) rather than the dev server."
     }
   }
 }

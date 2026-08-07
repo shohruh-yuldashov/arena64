@@ -921,7 +921,8 @@
       "muted": "Bu qurilma ro'yxatdan o'tgan, lekin push bildirishnomalari o'chirilgan.",
       "active": "Bu qurilma do'stlik va turnir push bildirishnomalarini oladi.",
       "deviceCount": "Sizda {{count}} ta qurilmada push bildirishnomalari yoqilgan. Bu faqat shu qurilmada o'chiradi.",
-      "subscribeFailed": "Push bildirishnomalarini yoqib bo'lmadi. Qayta urinib ko'ring."
+      "subscribeFailed": "Push bildirishnomalarini yoqib bo'lmadi. Qayta urinib ko'ring.",
+      "noServiceWorker": "Push bildirishnomalari fonda ishlaydigan service worker'ni talab qiladi, bu brauzer esa uni ro'yxatdan o'tkazmagan. Lokal ishlab chiqishda bu production build ishga tushirish kerakligini bildiradi (`npm run build && npm run preview`), dev server emas."
     }
   }
 }

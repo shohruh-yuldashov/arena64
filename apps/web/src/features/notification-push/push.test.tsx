@@ -310,8 +310,14 @@ describe("enabling", () => {
       "endpoint",
       "p256dh",
     ]);
+    // **Both** pushable categories — A64-021.6A. This control is the
+    // channel, and one that enabled `tournament` alone would tell somebody
+    // push was on and then deliver no friend request.
     expect(calls.patched[0]).toEqual({
-      changes: [{ category: "tournament", channel: "push", enabled: true }],
+      changes: [
+        { category: "tournament", channel: "push", enabled: true },
+        { category: "social", channel: "push", enabled: true },
+      ],
     });
     // The subscription was stored before the preference moved.
     expect(calls.registered).toHaveLength(1);
@@ -370,6 +376,47 @@ describe("signing out", () => {
   });
 });
 
+describe("a browser with no service worker", () => {
+  it("answers instead of spinning forever", async () => {
+    // **A regression test for a hang somebody hit on the first real use.**
+    //
+    // `navigator.serviceWorker.ready` never settles when nothing is
+    // registered — no rejection, no timeout — and `enablePush` awaited it.
+    // The button spun forever with no error, nothing in the console and
+    // nothing to retry.
+    //
+    // It was reached immediately, because `registerServiceWorker` is gated
+    // on `import.meta.env.PROD`: the dev server has no worker at all, so
+    // every click on it hung. A first visit before the worker installs is
+    // the same shape.
+    //
+    // `currentSubscription` had already been fixed for this; the enable
+    // path was left on `ready` reasoning that "a button somebody pressed
+    // has a spinner in front of them". That was exactly backwards.
+    installBrowserPush({ permission: "granted" });
+    Object.defineProperty(navigator, "serviceWorker", {
+      configurable: true,
+      value: {
+        // The shape a page with no registration actually has.
+        ready: new Promise(() => {}),
+        getRegistration: () => Promise.resolve(undefined),
+      },
+    });
+    const calls = api();
+    renderApp({ path: "/settings/notifications" });
+
+    await userEvent.click(await screen.findByRole("button", { name: /enable push/i }));
+
+    // A stated reason, not a spinner. Before the fix this assertion timed
+    // out — which is the same failure the person saw, reproduced.
+    expect(await screen.findByRole("alert")).toHaveTextContent(/service worker/i);
+    // And nothing was stored: a subscription cannot exist without a worker
+    // to deliver through, so registering one would be a row that can never
+    // receive anything.
+    expect(calls.registered).toEqual([]);
+  });
+});
+
 describe("disabling", () => {
   it("unsubscribes this browser and removes the record, not just the preference", async () => {
     // **§22's semantics, decided and asserted.** Turning push off here means
@@ -385,7 +432,10 @@ describe("disabling", () => {
     expect(browser.unsubscribed).toBe(1);
     expect(calls.removed[0]).toEqual({ endpoint: "https://push.example.com/wpush/abc123" });
     expect(calls.patched[0]).toEqual({
-      changes: [{ category: "tournament", channel: "push", enabled: false }],
+      changes: [
+        { category: "tournament", channel: "push", enabled: false },
+        { category: "social", channel: "push", enabled: false },
+      ],
     });
   });
 });

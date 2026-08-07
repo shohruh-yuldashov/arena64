@@ -1,3 +1,4 @@
+import type { EnableFailure } from "@/features/notification-push/model/subscription";
 import { usePushSection } from "@/features/notification-push/model/use-push";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { Button, Spinner } from "@/shared/ui";
@@ -113,8 +114,13 @@ const EXPLANATIONS: Record<
  */
 const ACTIONABLE = new Set(["askable", "not-subscribed", "muted", "active"]);
 
-const FAILURES: Record<"unsupported" | "denied" | "subscribe-failed", TranslationKey> = {
+const FAILURES: Record<EnableFailure, TranslationKey> = {
   unsupported: "notificationPreferences.push.unsupported",
   denied: "notificationPreferences.push.denied",
+  // The one somebody actually hits: no worker is registered, so there is
+  // nothing to subscribe through. Named rather than folded into
+  // `subscribe-failed`, because the remedy is completely different — this
+  // one is fixed by how the app is being served, not by trying again.
+  "no-service-worker": "notificationPreferences.push.noServiceWorker",
   "subscribe-failed": "notificationPreferences.push.subscribeFailed",
 };

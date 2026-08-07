@@ -20,6 +20,23 @@ import {
 } from "./subscription";
 
 /**
+ * The categories this switch turns on and off — A64-021.6A.
+ *
+ * **Every category the backend can push**, and keeping the two in step is
+ * the point: A64-021.6A added the social types to `PUSH_CAPABLE_TYPES` while
+ * this list still said `tournament` only, so somebody who pressed "Enable
+ * push notifications" was told push was on and then received nothing when a
+ * friend request arrived — the switch and the channel disagreeing about what
+ * "on" means.
+ *
+ * Somebody who wants tournament pushes and not social ones has the matrix
+ * below this section for exactly that. This control is the **channel**, and
+ * a channel switch that enabled part of a channel is the settings-screen lie
+ * §6 forbids.
+ */
+const PUSHABLE_CATEGORIES = ["tournament", "social"] as const;
+
+/**
  * The push settings section's state and its two actions — A64-021.6 §21, §22.
  *
  * ## Why the whole enable flow is one mutation
@@ -93,9 +110,9 @@ export function usePushSection(preferenceEnabled: boolean): PushSection {
 
       await registerPushSubscription(result.keys);
       // **Last**, and only once the subscription is stored — see above.
-      await updateNotificationPreferences([
-        { category: "tournament", channel: "push", enabled: true },
-      ]);
+      await updateNotificationPreferences(
+        PUSHABLE_CATEGORIES.map((category) => ({ category, channel: "push", enabled: true })),
+      );
       return null;
     },
     onSuccess: async (reason) => {
@@ -121,9 +138,9 @@ export function usePushSection(preferenceEnabled: boolean): PushSection {
       // existing subscription and skips the `subscribe()` that would have
       // refreshed it. Browser first, then the record.
       if (endpoint) await removePushSubscription(endpoint);
-      await updateNotificationPreferences([
-        { category: "tournament", channel: "push", enabled: false },
-      ]);
+      await updateNotificationPreferences(
+        PUSHABLE_CATEGORIES.map((category) => ({ category, channel: "push", enabled: false })),
+      );
     },
     onSettled: async () => {
       setFailure(null);

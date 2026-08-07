@@ -203,14 +203,14 @@ const PRESENTATIONS: Readonly<Record<string, Presentation>> = {
   // not where that belongs. The body says a challenge exists and nothing
   // about the opponent, the clock, or whether it is rated.
   //
-  // The destination is `/friends` until A64-022.5 builds the challenge
-  // surface — the same value the in-app row resolves, because a push whose
-  // text says "challenge" must not open a different page from the row that
-  // says the same thing.
+  // **A64-022.5 §12.** The destination is now the challenge list, where the
+  // invitation can actually be answered — the same value the in-app row
+  // resolves, because a push whose text says "challenge" must not open a
+  // different page from the row that says the same thing.
   friend_challenge_received: {
     title: "Arena64",
     body: "You have a new game challenge.",
-    path: NOTIFICATION_ROUTES.friends,
+    path: NOTIFICATION_ROUTES.challenges,
   },
   // The one entry with a `pathWithRef`, and the reason the payload gained a
   // ref at all: the match already exists, both players still have to join

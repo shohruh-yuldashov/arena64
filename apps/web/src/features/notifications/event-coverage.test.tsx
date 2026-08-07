@@ -177,9 +177,9 @@ it("renders both challenge types and links an accepted one to its game", async (
         expires_at: "2026-08-08T10:00:00Z",
         match_id: null,
       },
-      // A placeholder until A64-022.5 owns a challenge route — the same
+      // A64-022.5. The list where it can be answered — the same
       // destination the service worker resolves for the same type.
-      target: { type: "friends", ref: null },
+      target: { type: "challenges", ref: null },
     }),
     notification({
       id: "019fe400-0000-7000-8000-000000000008",
@@ -213,7 +213,7 @@ it("renders both challenge types and links an accepted one to its game", async (
     .map((link) => link.getAttribute("href"));
   // The handoff: the challenger reaches the created game in one tap, which
   // matters because the join window is ten minutes.
-  expect(hrefs).toEqual(["/friends", `/games/${MATCH_ID}`]);
+  expect(hrefs).toEqual(["/challenges", `/games/${MATCH_ID}`]);
 });
 
 it("degrades safely for an unnamed opponent, an unknown type and a missing ref", async () => {
@@ -231,6 +231,27 @@ it("degrades safely for an unnamed opponent, an unknown type and a missing ref",
         opponent: null,
       },
       target: { type: "match_replay", ref: MATCH_ID },
+    }),
+    notification({
+      id: "019fe400-0000-7000-8000-00000000000b",
+      type: "friend_challenge_received",
+      category: "social",
+      tournament: null,
+      // **The retired target** — A64-022.4 wrote it on every received
+      // challenge before the surface existed, and rows still hold it. It
+      // must keep resolving, because a notification is history and
+      // rewriting where an old one leads would be worse than leaving it
+      // truthful.
+      challenge: {
+        challenge_id: CHALLENGE_ID,
+        opponent: OPPONENT,
+        time_control_id: "blitz_3_2",
+        variant: "russian_8x8",
+        rated: false,
+        expires_at: "2026-08-08T10:00:00Z",
+        match_id: null,
+      },
+      target: { type: "friends", ref: null },
     }),
     notification({
       id: "019fe400-0000-7000-8000-000000000006",
@@ -253,5 +274,9 @@ it("degrades safely for an unnamed opponent, an unknown type and a missing ref",
   // The unknown type's target names no identifier, so its row is **not** a
   // link: a notification that cannot be navigated from is still worth
   // reading, and a link that goes nowhere is worse than none.
-  expect(within(list).getAllByRole("link")).toHaveLength(1);
+  // Two links: the completed game, and the retired-target challenge row.
+  const hrefs = within(list)
+    .getAllByRole("link")
+    .map((link) => link.getAttribute("href"));
+  expect(hrefs).toEqual([`/games/${MATCH_ID}/replay`, "/friends"]);
 });

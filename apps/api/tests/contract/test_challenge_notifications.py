@@ -261,8 +261,9 @@ class TestInvitation:
         assert payload.expires_at == EXPIRES_AT
         # No match exists until somebody says yes.
         assert payload.match_id is None
-        # A placeholder with a date on it — A64-022.5 replaces this target.
-        assert record.target.type is NavigationTargetType.FRIENDS
+        # The list where it can be answered — A64-022.5 built the surface
+        # A64-022.4 had to point past.
+        assert record.target.type is NavigationTargetType.CHALLENGES
         assert record.target.ref is None
 
     async def test_a_muted_social_category_produces_no_row(

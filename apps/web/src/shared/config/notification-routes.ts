@@ -32,6 +32,9 @@ export const NOTIFICATION_ROUTES = {
   friendRequests: "/friends/requests",
   /** The friend list — where an accepted request lands. */
   friends: "/friends",
+  /** Friend challenges, both directions — where a received one is answered.
+   *  A64-022.5 replaced A64-022.4's `/friends` placeholder with this. */
+  challenges: "/challenges",
   /** The notification list. The destination for anything not otherwise
    *  mapped, and never nothing: a notification that cannot be navigated
    *  from is still worth reading. */

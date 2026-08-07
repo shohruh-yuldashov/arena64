@@ -315,15 +315,18 @@ def _target_for(item: _Told) -> NavigationTarget:
     it, and the join window is ten minutes. `LIVE_GAME` is the existing
     target for exactly this and needed no change.
 
-    A **received invitation** has nowhere of its own to go yet. A64-022.5
-    owns the challenge surface, it does not exist, and a target naming a
-    route that 404s would be worse than one that lands somewhere true — see
-    `NavigationTargetType.FRIENDS` on why the friend list is the closest
-    existing truth and what replaces it.
+    A **received invitation** opens the challenge list, where it can be
+    answered — the same argument `FRIEND_REQUESTS` makes for a received
+    friend request, and for the same reason: the action the recipient wants
+    is accept or decline, and any other page is one navigation short of it.
+
+    A64-022.4 wrote `FRIENDS` here as a stated placeholder, because the
+    surface did not exist. A64-022.5 built it, and this is the one line that
+    changed.
     """
     if item.match_id is not None:
         return NavigationTarget(type=NavigationTargetType.LIVE_GAME, ref=str(item.match_id))
-    return NavigationTarget(type=NavigationTargetType.FRIENDS)
+    return NavigationTarget(type=NavigationTargetType.CHALLENGES)
 
 
 def _actor(profile: PublicProfile | None) -> ActorSummary | None:

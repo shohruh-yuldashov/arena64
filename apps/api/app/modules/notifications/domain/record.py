@@ -186,17 +186,26 @@ class NavigationTargetType(StrEnum):
     FRIENDS = "friends"
     """The friend list. `ref` is `None`.
 
-    **A placeholder with a date on it — A64-022.4 §5.** A received friend
-    challenge belongs on a challenge surface, and A64-022.5 owns that
-    surface; it does not exist yet, so there is no route to name. The three
-    options were a route that 404s, a row that cannot be tapped, and the
-    closest existing truth — and this is the third: a challenge exists only
-    between friends, and `/friends` is the one page today that is about that
-    relationship.
+    **Retired as a destination in A64-022.5, and kept because rows hold it.**
+    A64-022.4 wrote it on every received challenge as a stated placeholder —
+    there was no challenge surface to point at — and A64-022.5 built one, so
+    `CHALLENGES` below is what new rows carry.
 
-    A64-022.5 replaces this with its own target type, and the change is
-    two lines — this member and the client's mapper. Nothing else keys on
-    it."""
+    This member stays because a notification is history: rows written in the
+    interval say `friends`, and deleting the member would make them raise on
+    the way out. It is now readable and unproducible, which is the correct
+    end state for a target that was honest when it was written.
+    """
+
+    CHALLENGES = "challenges"
+    """The challenge list — `/challenges`. `ref` is `None`.
+
+    A64-022.5. `ref` is absent for `FRIEND_REQUESTS`'s reason: the
+    destination is the viewer's own page, and it carries no identifier to
+    get wrong. A challenge id in the route would name a row the recipient
+    already sees at the top of that page, and would put an identifier in a
+    URL for nothing.
+    """
 
     TOURNAMENT = "tournament"
     """`ref` is the tournament's **id** — `/tournaments/{id}`. An id rather

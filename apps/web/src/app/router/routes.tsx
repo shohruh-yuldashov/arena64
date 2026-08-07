@@ -284,6 +284,23 @@ export const blockedRoute = createRoute({
   component: protectedPage(() => import("@/pages/blocked")),
 });
 
+/**
+ * `/challenges` — friend challenges, both directions. A64-022.5 §2.
+ *
+ * Protected **and** verified, like every other product route, and the
+ * verified half is not decoration here: `POST /challenges` and its accept,
+ * decline and cancel siblings all take `VerifiedUser`, so an unverified
+ * account would render a page whose every button returns `403`.
+ *
+ * Lazy like every other route. A player who never challenges anybody never
+ * pays for the list, the dialog, or the offer surface it mounts.
+ */
+export const challengesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/challenges",
+  component: protectedPage(() => import("@/pages/challenges")),
+});
+
 export const searchRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/search",
@@ -436,6 +453,7 @@ export const routeTree = rootRoute.addChildren([
   friendsRoute,
   friendRequestsRoute,
   blockedRoute,
+  challengesRoute,
   searchRoute,
   playRoute,
   gameRoute,

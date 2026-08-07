@@ -302,7 +302,8 @@
       "blocked": "Blocked",
       "search": "Search",
       "incomingBadge": "Incoming: {count}",
-      "outgoingBadge": "Outgoing: {count}"
+      "outgoingBadge": "Outgoing: {count}",
+      "challenges": "Challenges"
     },
     "search": {
       "title": "Find players",
@@ -927,6 +928,62 @@
       "deviceCount": "You have push notifications on {{count}} devices. This turns them off here only.",
       "subscribeFailed": "Could not turn push notifications on. Please try again.",
       "noServiceWorker": "Push notifications need a background service worker, and this browser has not registered one. In local development that means running a production build (`npm run build && npm run preview`) rather than the dev server."
+    }
+  },
+  "challenges": {
+    "title": "Challenges",
+    "description": "Games your friends have invited you to, and the ones you have sent.",
+    "loadMore": "Load more",
+    "tabs": {
+      "incoming": "Incoming",
+      "outgoing": "Sent"
+    },
+    "empty": {
+      "incomingTitle": "No challenges waiting",
+      "incomingHint": "When a friend invites you to a game, it appears here.",
+      "outgoingTitle": "You have not challenged anyone",
+      "outgoingHint": "Invite a friend from your friends list or their profile."
+    },
+    "row": {
+      "terms": "{clock} · {mode} · {remaining}",
+      "hoursLeft": "{hours}h left",
+      "minutesLeft": "{minutes}m left",
+      "expired": "Expired"
+    },
+    "actions": {
+      "challenge": "Challenge",
+      "challengeLabel": "Challenge {name} to a game",
+      "accept": "Accept",
+      "acceptLabel": "Accept the challenge from {name}",
+      "accepting": "Accepting…",
+      "decline": "Decline",
+      "declineLabel": "Decline the challenge from {name}",
+      "cancel": "Cancel",
+      "cancelLabel": "Cancel the challenge to {name}",
+      "cancelling": "Cancelling…"
+    },
+    "create": {
+      "title": "Challenge {name}",
+      "description": "Pick a clock and a mode. They have 24 hours to answer.",
+      "send": "Send challenge",
+      "sending": "Sending…"
+    },
+    "errors": {
+      "self": "You cannot challenge yourself.",
+      "notFriends": "You can only challenge friends.",
+      "alreadyPending": "You already have a live challenge with this player.",
+      "notPending": "That challenge has already been answered.",
+      "expired": "That challenge has expired.",
+      "invalidTimeControl": "That time control is no longer available. Please reload.",
+      "catalogue": "Time controls could not be loaded.",
+      "notFound": "That challenge no longer exists.",
+      "conflict": "That could not be done right now. Please try again.",
+      "permissionDenied": "You are not allowed to do that.",
+      "validation": "Please check the details and try again.",
+      "rateLimited": "Too many challenges. Please wait a moment.",
+      "verificationRequired": "Verify your email address to send challenges.",
+      "network": "You appear to be offline. Please check your connection.",
+      "unexpected": "Something went wrong. Please try again."
     }
   }
 }

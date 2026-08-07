@@ -4,7 +4,7 @@
 | --- | --- |
 | **Status** | Complete through acceptance — A64-022.3. No UI, no realtime, no notification |
 | **Owner** | platform |
-| **Last updated** | 2026-08-07 — A64-022.4, notifications and realtime |
+| **Last updated** | 2026-08-07 — A64-022.5, the challenge UI |
 | **Related** | `docs/01-architecture/domain-model.md` §10.3, `specs/matchmaking.md`, `specs/friends.md`, `specs/notifications.md` §15.15 |
 
 A **friend challenge** is a direct, named invitation: one player asking one
@@ -607,15 +607,18 @@ the one that reaches a phone in seconds.
 
 | Type | In-app target | Push opens |
 | --- | --- | --- |
-| `friend_challenge_received` | `friends` (`/friends`) | `/friends` |
+| `friend_challenge_received` | `challenges` (`/challenges`) | `/challenges` |
 | `friend_challenge_accepted` | `live_game` (`/games/{match_id}`) | `/games/{match_id}` |
 
-The received type's target is a **placeholder with a date on it**. A
-challenge belongs on a challenge surface, A64-022.5 owns that surface, and
-it does not exist — so the three options were a route that 404s, a row that
-cannot be tapped, and the closest existing truth. A challenge only ever
-exists between friends. When A64-022.5 lands, `NavigationTargetType.FRIENDS`
-and the client mapper change together, and nothing else does.
+A64-022.4 wrote `friends` on the received type as a stated placeholder,
+because the challenge surface did not exist. **A64-022.5 built it**, and the
+change was the two lines that were predicted: one target member and one
+client mapper branch.
+
+`NavigationTargetType.FRIENDS` is **retired, not deleted**. Rows written in
+the interval still hold it and still resolve to `/friends` — a notification
+is history, and rewriting where an old one leads would be worse than leaving
+it truthful.
 
 Push copy names **nobody**: *Arena64* — "You have a new game challenge." No
 username, no display name, no clock, no rated flag, no avatar. The
@@ -684,7 +687,21 @@ make it feel like one action:
 | The recipient (who accepted) | The accept response body — `created_match_id` |
 | The challenger | `friend_challenge_accepted`'s payload and target, **and** the pending-match offer the existing gateway path already delivers |
 
-## 25. Deferred
+## 25. The UI — A64-022.5
+
+`/challenges`, protected and verified, with incoming and outgoing tabs, a
+create dialog opened from a friend, and accept/decline/cancel. Detail lives
+in `specs/frontend.md` §21A; what belongs here is the one thing that is a
+*product* decision rather than a rendering one:
+
+**Accept is one press.** The UI chains `POST /challenges/{id}/accept` into
+`POST /matchmaking/matches/{id}/accept`, so the recipient takes their seat
+in the same interaction. If the challenger is already in, the game opens
+immediately; if not, the existing match offer surface says so. §24's seam is
+closed in the client, and the backend is unchanged — the match is still
+`BILATERAL` and both seats are still real.
+
+## 26. Deferred
 
 | | Notes |
 | --- | --- |
@@ -694,6 +711,4 @@ make it feel like one action:
 | Tournament challenge semantics | out of scope |
 | Event publication | with the first consumer |
 | Expiry sweep | A64-022.6 |
-| A dedicated challenge surface and its route | A64-022.5. Until then `friend_challenge_received` targets `/friends` — §20 |
-| Challenge query invalidation and UI reconciliation | A64-022.5 |
 | `friend_challenge_declined` / `_cancelled` / `_expired` notifications | Deliberately not built — §22 |

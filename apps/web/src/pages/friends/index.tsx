@@ -1,3 +1,4 @@
+import { ChallengeButton } from "@/features/challenges/ui/challenge-button";
 import { useFriendCount, useFriends } from "@/features/social/model/queries";
 import { ListState } from "@/features/social/ui/list-state";
 import { RelationshipActions } from "@/features/social/ui/relationship-actions";
@@ -60,11 +61,23 @@ export default function FriendsPage() {
                   date: formatDate(entry.friends_since, locale) ?? "",
                 })}
                 actions={
-                  <RelationshipActions
-                    playerId={entry.player.id}
-                    playerName={entry.player.display_name ?? entry.player.username}
-                    state={entry.player.relationship}
-                  />
+                  // A64-022.5 §14. The challenge sits **before** the
+                  // relationship actions, because it is the thing somebody
+                  // came to a friends list to do — and because the actions
+                  // beside it are removal and blocking, which should not be
+                  // the first controls under a cursor.
+                  <div className="flex flex-wrap items-center gap-2">
+                    <ChallengeButton
+                      playerId={entry.player.id}
+                      playerName={entry.player.display_name ?? entry.player.username}
+                      state={entry.player.relationship}
+                    />
+                    <RelationshipActions
+                      playerId={entry.player.id}
+                      playerName={entry.player.display_name ?? entry.player.username}
+                      state={entry.player.relationship}
+                    />
+                  </div>
                 }
               />
             ))}

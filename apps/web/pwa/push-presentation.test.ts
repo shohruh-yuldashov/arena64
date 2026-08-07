@@ -146,11 +146,11 @@ describe("the challenge types — A64-022.4", () => {
   });
 
   it("sends a received challenge where the in-app row sends it", () => {
-    // A64-022.5 replaces this with the challenge surface. Until then both
-    // consumers resolve the same constant, so a push whose text says
+    // A64-022.5 built the challenge surface A64-022.4 had to point past.
+    // Both consumers resolve the same constant, so a push whose text says
     // "challenge" cannot open a different page from the row that says it.
     expect(presentationFor({ n: NOTIFICATION_ID, t: "friend_challenge_received" }).path).toBe(
-      NOTIFICATION_ROUTES.friends,
+      NOTIFICATION_ROUTES.challenges,
     );
   });
 });

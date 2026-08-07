@@ -37,8 +37,10 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import ClockDep, DbSessionDep, PresenceSettingsDep
+from app.api.deps import ClockDep, DbSessionDep, PresenceSettingsDep, SettingsDep
 from app.api.outbox_deps import EventPublisherDep
+from app.config.settings import NotificationEmailSettings
+from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.friends.application.ports import SocialGraphCache
 from app.modules.friends.application.services import PresenceAudienceService
@@ -54,6 +56,7 @@ from app.modules.friends.infrastructure.repositories import (
 )
 from app.modules.notifications.application.ports import (
     DurableNotificationStore,
+    EmailDeliveryRepository,
     NotificationAnnouncer,
     NotificationSink,
 )
@@ -67,17 +70,54 @@ from app.modules.notifications.application.services import (
     SocialNotificationDispatcher,
     TournamentNotificationDispatcher,
 )
+from app.modules.notifications.application.services.email_delivery_service import (
+    EmailDeliveryService,
+)
+from app.modules.notifications.domain.preference import (
+    IN_APP_ONLY,
+    ChannelAvailability,
+    DeliveryChannel,
+)
 from app.modules.notifications.infrastructure import NullNotificationAnnouncer
 from app.modules.notifications.infrastructure.repositories import (
+    SqlAlchemyEmailDeliveryRepository,
     SqlAlchemyNotificationPreferenceRepository,
     SqlAlchemyNotificationRepository,
 )
+from app.modules.notifications.presentation.email import TemplateEmailRenderer
 from app.modules.profiles.application.services.profile_renderer import BatchProfileRenderer
 from app.modules.tournament.public import TournamentNotificationReader
+from app.modules.users.infrastructure.repositories.email_recipient_directory import (
+    SqlAlchemyEmailRecipientDirectory,
+)
 from app.modules.users.presentation.dependencies import PresenceServiceDep
+from app.platform.email import EmailProvider
+from app.platform.metrics import MetricsRecorder
 from app.platform.outbox import NoEventPublisher
 
 logger = logging.getLogger(__name__)
+
+
+def get_channel_availability(settings: SettingsDep) -> ChannelAvailability:
+    """What this **process** can deliver on — A64-021.5 §26.
+
+    Derived from configuration rather than from a constant, and that is the
+    whole point: whether email works is a fact about the transports this
+    deployment wired, not about the build. A settings screen told otherwise
+    would be offering a switch nothing honours.
+
+    `NOTIFICATION_EMAIL_ENABLED` is off by default. A64-021.5 built the
+    channel and deliberately chose no vendor — see `NotificationEmailSettings`
+    — so a deployment that has not configured one reports email unavailable
+    and the screen keeps saying "coming soon", which is true.
+    """
+    channels = [DeliveryChannel.IN_APP]
+    if settings.notification_email.enabled:
+        channels.append(DeliveryChannel.EMAIL)
+    return ChannelAvailability.of(*channels)
+
+
+ChannelAvailabilityDep = Annotated[ChannelAvailability, Depends(get_channel_availability)]
 
 
 def get_presence_notification_service(
@@ -159,7 +199,7 @@ NotificationServiceDep = Annotated[NotificationService, Depends(get_notification
 
 
 def get_notification_preference_service(
-    session: DbSessionDep, clock: ClockDep
+    session: DbSessionDep, clock: ClockDep, availability: ChannelAvailabilityDep
 ) -> NotificationPreferenceService:
     """The settings screen's service — A64-021.3 §14.
 
@@ -170,9 +210,10 @@ def get_notification_preference_service(
     never what already exists).
     """
     return NotificationPreferenceService(
-        preferences=SqlAlchemyNotificationPreferenceRepository(session),
+        preferences=SqlAlchemyNotificationPreferenceRepository(session, availability=availability),
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
+        availability=availability,
     )
 
 
@@ -182,7 +223,10 @@ NotificationPreferenceServiceDep = Annotated[
 
 
 def build_durable_notification_writer(
-    session: AsyncSession, *, announcer: NotificationAnnouncer | None = None
+    session: AsyncSession,
+    *,
+    announcer: NotificationAnnouncer | None = None,
+    availability: ChannelAvailability = IN_APP_ONLY,
 ) -> DurableNotificationWriter:
     """The sink that keeps notifications — A64-021.1 §12, A64-021.2 §1.
 
@@ -214,9 +258,65 @@ def build_durable_notification_writer(
         unit_of_work=SessionUnitOfWork(session),
         announcer=announcer if announcer is not None else NullNotificationAnnouncer(),
         policy=PreferenceDeliveryPolicy(
-            preferences=SqlAlchemyNotificationPreferenceRepository(session)
+            preferences=SqlAlchemyNotificationPreferenceRepository(
+                session, availability=availability
+            )
         ),
+        deliveries=SqlAlchemyEmailDeliveryRepository(session),
+        availability=availability,
     )
+
+
+def build_email_delivery_service(
+    session: AsyncSession,
+    *,
+    provider: EmailProvider,
+    metrics: MetricsRecorder,
+    clock: Clock,
+    availability: ChannelAvailability,
+    settings: NotificationEmailSettings,
+) -> EmailDeliveryService:
+    """The email worker's service, over one pass's session — A64-021.5 §24.
+
+    Every collaborator is this module's own except two: the transport, which
+    is `platform`'s and is chosen at the composition root, and the recipient
+    directory, which is `users`' published port and is passed in for the same
+    reason the profile renderer is — this module must not name a `users`
+    repository.
+
+    Built per pass rather than per process, like every other worker service
+    here: it holds repositories, repositories hold a session, and a session
+    must not outlive the unit of work it serves.
+    """
+    return EmailDeliveryService(
+        deliveries=SqlAlchemyEmailDeliveryRepository(session),
+        notifications=SqlAlchemyNotificationRepository(session),
+        recipients=SqlAlchemyEmailRecipientDirectory(session),
+        policy=PreferenceDeliveryPolicy(
+            preferences=SqlAlchemyNotificationPreferenceRepository(
+                session, availability=availability
+            )
+        ),
+        renderer=TemplateEmailRenderer(public_origin=settings.public_origin),
+        provider=provider,
+        metrics=metrics,
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+        availability=availability,
+        batch_size=settings.batch_size,
+        max_attempts=settings.max_attempts,
+        retry_base_seconds=settings.retry_base_seconds,
+        retry_max_seconds=settings.retry_max_seconds,
+    )
+
+
+def build_email_delivery_reader(session: AsyncSession) -> EmailDeliveryRepository:
+    """The operator's read-only handle — §21.
+
+    Typed as the **port**, so a diagnostic command can count deliveries by
+    status and cannot claim one, send one, or learn whose it is.
+    """
+    return SqlAlchemyEmailDeliveryRepository(session)
 
 
 def build_tournament_notification_dispatcher(
@@ -291,7 +391,11 @@ __all__ = [
     "NotificationPreferenceServiceDep",
     "NotificationServiceDep",
     "PresenceNotificationServiceDep",
+    "ChannelAvailabilityDep",
     "build_durable_notification_writer",
+    "build_email_delivery_reader",
+    "build_email_delivery_service",
+    "get_channel_availability",
     "build_game_notification_dispatcher",
     "build_social_notification_dispatcher",
     "build_tournament_notification_dispatcher",

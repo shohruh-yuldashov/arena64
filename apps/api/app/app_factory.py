@@ -125,14 +125,23 @@ from app.modules.notifications.application.services.tournament_notification_disp
 from app.modules.notifications.application.services.tournament_notification_dispatcher import (
     SUBSCRIBED_EVENT_TYPES as TOURNAMENT_NOTIFICATION_EVENTS,
 )
+from app.modules.notifications.domain.preference import (
+    ChannelAvailability,
+    DeliveryChannel,
+)
 from app.modules.notifications.infrastructure import (
     CompositeNotificationSink,
     LoggingNotificationSink,
     PresenceSweeperWorker,
     SessionScopedNotificationHandler,
 )
+from app.modules.notifications.infrastructure.tasks import (
+    NotificationEmailDeliveryTask,
+    email_delivery_request,
+)
 from app.modules.notifications.presentation.dependencies import (
     build_durable_notification_writer,
+    build_email_delivery_service,
     build_game_notification_dispatcher,
     build_social_notification_dispatcher,
     build_tournament_notification_dispatcher,
@@ -202,6 +211,7 @@ from app.modules.users.infrastructure.presence import (
     NoPresenceProvider,
     RedisPresenceProvider,
 )
+from app.platform.email import build_email_provider
 from app.platform.metrics import (
     AggregatingMetrics,
     MetricsFlushTask,
@@ -458,6 +468,16 @@ def build_outbox_worker(
     if not settings.outbox.worker_enabled:
         return None
 
+    # A64-021.5. The relay's writers enqueue an email alongside every
+    # notification they insert, and only when this process can send one —
+    # see `DurableNotificationWriter.store`. Read once here rather than per
+    # tick, because it is a configuration reading and cannot change under a
+    # running process.
+    channel_availability = ChannelAvailability.of(
+        DeliveryChannel.IN_APP,
+        *([DeliveryChannel.EMAIL] if settings.notification_email.enabled else []),
+    )
+
     clock = SystemClock()
 
     # A64-013.7's seam, and no longer the *only* sink: A64-021.1 puts
@@ -564,7 +584,11 @@ def build_outbox_worker(
             # above, which is process-wide because it holds nothing.
             sink=CompositeNotificationSink(
                 [
-                    build_durable_notification_writer(session, announcer=notification_announcer),
+                    build_durable_notification_writer(
+                        session,
+                        announcer=notification_announcer,
+                        availability=channel_availability,
+                    ),
                     sink,
                 ]
             ),
@@ -680,7 +704,11 @@ def build_outbox_worker(
                 # fleet shares. That is what makes A64-021.3's preference
                 # suppression and A64-021.2's realtime frame apply to a
                 # tournament notification without either being re-implemented.
-                store=build_durable_notification_writer(session, announcer=notification_announcer),
+                store=build_durable_notification_writer(
+                    session,
+                    announcer=notification_announcer,
+                    availability=channel_availability,
+                ),
             ),
             consumer=TOURNAMENT_NOTIFICATION_CONSUMER,
             event_types=TOURNAMENT_NOTIFICATION_EVENTS,
@@ -699,7 +727,11 @@ def build_outbox_worker(
                     else RedisSocialGraphCache(redis_pools.cache, settings=settings.friends),
                     clock=clock,
                 ),
-                store=build_durable_notification_writer(session, announcer=notification_announcer),
+                store=build_durable_notification_writer(
+                    session,
+                    announcer=notification_announcer,
+                    availability=channel_availability,
+                ),
             ),
             consumer=GAME_NOTIFICATION_CONSUMER,
             event_types=GAME_NOTIFICATION_EVENTS,
@@ -975,6 +1007,16 @@ def build_task_schedulers(
     handlers: list[TaskHandler] = []
     schedulers: list[PeriodicTaskScheduler] = []
 
+    # A64-021.5. Built once for this process rather than per pass: the
+    # transport holds no session and the availability is a configuration
+    # reading, and constructing either per pass would put the console
+    # provider's production guard on a timer instead of at boot.
+    email_provider = build_email_provider(settings.environment)
+    channel_availability = ChannelAvailability.of(
+        DeliveryChannel.IN_APP,
+        *([DeliveryChannel.EMAIL] if settings.notification_email.enabled else []),
+    )
+
     if settings.outbox.retention_enabled:
         handlers.append(
             OutboxRetentionTask(
@@ -1164,6 +1206,35 @@ def build_task_schedulers(
     # A64-015.6 §6. Always registered — there is no switch, because the
     # accumulator is filled by services that are always wired and a process
     # that never drained it would hold counters forever and report none.
+    # A64-021.5 §24. The email worker, and it is registered only when the
+    # channel is on — a handler that claimed deliveries in a process that
+    # cannot send them would mark every one `skipped_channel_unavailable`
+    # and quietly drain the queue.
+    #
+    # `NOTIFICATION_EMAIL_ENABLED` is off by default: the phase built the
+    # channel and deliberately chose no vendor, so a deployment that has not
+    # configured one runs without this task and reports email unavailable in
+    # Settings. See `NotificationEmailSettings`.
+    if settings.notification_email.enabled:
+        handlers.append(
+            NotificationEmailDeliveryTask(
+                session_factory=db.session_factory,
+                service_factory=lambda session: build_email_delivery_service(
+                    session,
+                    provider=email_provider,
+                    metrics=_metrics(),
+                    clock=clock,
+                    availability=channel_availability,
+                    settings=settings.notification_email,
+                ),
+            )
+        )
+    else:
+        # `INFO`: an unconfigured channel is a deployment state, not a
+        # fault. What makes it safe is that Settings agrees — the preference
+        # API reports email unavailable from the same value.
+        logger.info("notification_email_disabled", extra={"reason": "configuration"})
+
     handlers.append(MetricsFlushTask(metrics=_metrics()))
 
     if not handlers:
@@ -1194,6 +1265,14 @@ def build_task_schedulers(
                 dispatcher=dispatcher,
                 request=adjudication_request(),
                 interval_seconds=settings.game.clock_interval_seconds,
+            )
+        )
+    if settings.notification_email.enabled:
+        schedulers.append(
+            PeriodicTaskScheduler(
+                dispatcher=dispatcher,
+                request=email_delivery_request(),
+                interval_seconds=settings.notification_email.poll_interval_seconds,
             )
         )
     if settings.gateway.forwarding_enabled:

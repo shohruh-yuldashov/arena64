@@ -24,7 +24,11 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.notifications.application.ports import DeliveryRequest
-from app.modules.notifications.domain.preference import DeliveryChannel, default_enabled
+from app.modules.notifications.domain.preference import (
+    ChannelAvailability,
+    DeliveryChannel,
+    default_enabled,
+)
 from app.modules.notifications.domain.record import NotificationCategory
 from app.modules.notifications.infrastructure.models import NotificationPreferenceModel
 
@@ -35,8 +39,15 @@ class SqlAlchemyNotificationPreferenceRepository:
     """Constructed per use case with the active session
     (repositories.md §5.1) — never holds one longer than that."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, availability: ChannelAvailability) -> None:
         self._session = session
+        self._availability = availability
+        """Needed by `permitted` alone, and needed there for a reason worth
+        stating: a recipient with no stored override falls to the default,
+        and the default for a channel this process cannot deliver on is
+        **off**. Without it a misconfigured node would consider every
+        never-touched preference enabled and hand the sink work it cannot
+        do."""
 
     async def overrides_for(
         self, user_id: UUID
@@ -155,7 +166,7 @@ class SqlAlchemyNotificationPreferenceRepository:
             for request in requests
             if overrides.get(
                 (request.recipient_id, request.category),
-                default_enabled(request.category, channel),
+                default_enabled(request.category, channel, self._availability),
             )
         )
 

@@ -66,18 +66,23 @@ however a notification arrives.
 
 import logging
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Final
 
 from app.core.identifiers import generate_uuid7
 from app.core.unit_of_work import UnitOfWork
 from app.modules.notifications.application.ports import (
     DeliveryRequest,
+    EmailDeliveryRepository,
     NotificationAnnouncer,
     NotificationDeliveryPolicy,
     NotificationRepository,
 )
+from app.modules.notifications.application.services.email_delivery_service import (
+    deliveries_for,
+)
 from app.modules.notifications.domain.notification import NotificationKind, SocialNotification
-from app.modules.notifications.domain.preference import DeliveryChannel
+from app.modules.notifications.domain.preference import ChannelAvailability, DeliveryChannel
 from app.modules.notifications.domain.record import (
     CATEGORY_OF,
     ActorSummary,
@@ -115,11 +120,15 @@ class DurableNotificationWriter:
         unit_of_work: UnitOfWork,
         announcer: NotificationAnnouncer,
         policy: NotificationDeliveryPolicy,
+        deliveries: EmailDeliveryRepository,
+        availability: ChannelAvailability,
     ) -> None:
         self._notifications = notifications
         self._unit_of_work = unit_of_work
         self._announcer = announcer
         self._policy = policy
+        self._deliveries = deliveries
+        self._availability = availability
 
     async def deliver(self, notifications: list[SocialNotification]) -> None:
         """Stores a batch of **social** notifications — `NotificationSink`.
@@ -194,6 +203,22 @@ class DurableNotificationWriter:
             for record in durable:
                 if await self._notifications.append(record):
                     stored.append(record)
+
+            # **A64-021.5 §8 — the email is owed in the same transaction.**
+            #
+            # Only for rows this call actually inserted, so a redelivered
+            # event queues nothing, and *inside* the unit of work, so the
+            # intent to email is exactly as durable as the record it
+            # describes. Enqueueing after the commit would leave a window in
+            # which a crash produced a notification nobody would ever be
+            # emailed about — and nothing would record that one was owed.
+            #
+            # No provider is called here and no address is read. This writes
+            # a row saying "somebody owes this an email"; the worker decides
+            # whether to send it, minutes later, against the preference and
+            # the address as they are *then* (§7).
+            if self._availability.can_deliver(DeliveryChannel.EMAIL):
+                await self._deliveries.enqueue(deliveries_for(stored), at=_queued_at(stored))
             await self._unit_of_work.commit()
 
         logger.info(
@@ -266,6 +291,21 @@ def _target_for(type_: NotificationType, actor_username: str) -> NavigationTarge
     if type_ is NotificationType.FRIEND_REQUEST_RECEIVED:
         return NavigationTarget(type=NavigationTargetType.FRIEND_REQUESTS)
     return NavigationTarget(type=NavigationTargetType.PLAYER_PROFILE, ref=actor_username)
+
+
+def _queued_at(stored: Sequence[NotificationRecord]) -> datetime:
+    """When the email became owed.
+
+    The **newest** notification's own instant, not `now`. This service holds
+    no clock by design — every instant it needs is on a record — and the
+    alternative would be injecting one for a value whose only use is
+    ordering a queue.
+
+    A relay catching up after an outage therefore enqueues with the events'
+    own instants, which are in the past, so every one of them is immediately
+    due. That is correct: they were owed then.
+    """
+    return max(record.created_at for record in stored)
 
 
 __all__ = ["DURABLE_TYPES", "DurableNotificationWriter"]

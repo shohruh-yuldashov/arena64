@@ -18,6 +18,7 @@ from app.config.settings import (
     GatewaySettings,
     JWTSettings,
     MatchmakingSettings,
+    NotificationEmailSettings,
     OutboxSettings,
     PostgresSettings,
     PresenceSettings,
@@ -35,6 +36,11 @@ from app.config.settings import (
 #: production tests below fail for the reason each one is about rather
 #: than tripping the JWT guard first.
 EXPLICIT_JWT_SECRET = "a-real-deployment-signing-key-well-over-the-minimum-length"
+
+#: A deployed tier's frontend origin. Refusing the localhost default in
+#: production is a guard of its own (A64-021.5), so every production-like
+#: construction below has to supply one — which is the guard working.
+EXPLICIT_PUBLIC_URL = "https://arena64.example"
 
 
 class TestEnvironment:
@@ -99,6 +105,7 @@ class TestSettings:
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             session=SessionSettings(),
             email=EmailSettings(),
+            notification_email=NotificationEmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
@@ -120,7 +127,7 @@ class TestSettings:
         with pytest.raises(PydanticValidationError, match="POSTGRES_DSN"):
             Settings(
                 environment=Environment.PRODUCTION,
-                app=AppSettings(),
+                app=AppSettings(public_url=EXPLICIT_PUBLIC_URL),
                 postgres=PostgresSettings(),  # left at the local default
                 redis=RedisSettings(
                     live_url=SecretStr("redis://prod-live:6379/0"),
@@ -133,6 +140,7 @@ class TestSettings:
                 jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
                 session=SessionSettings(),
                 email=EmailSettings(),
+                notification_email=NotificationEmailSettings(),
                 storage=StorageSettings(),
                 rate_limit=RateLimitSettings(),
                 statistics=StatisticsSettings(),
@@ -150,7 +158,7 @@ class TestSettings:
         with pytest.raises(PydanticValidationError, match="REDIS_"):
             Settings(
                 environment=Environment.PRODUCTION,
-                app=AppSettings(),
+                app=AppSettings(public_url=EXPLICIT_PUBLIC_URL),
                 postgres=PostgresSettings(
                     dsn=SecretStr("postgresql+asyncpg://real:pw@prod-host:5432/arena64")
                 ),
@@ -159,6 +167,7 @@ class TestSettings:
                 jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
                 session=SessionSettings(),
                 email=EmailSettings(),
+                notification_email=NotificationEmailSettings(),
                 storage=StorageSettings(),
                 rate_limit=RateLimitSettings(),
                 statistics=StatisticsSettings(),
@@ -175,7 +184,7 @@ class TestSettings:
     def test_production_accepts_fully_explicit_configuration(self) -> None:
         settings = Settings(
             environment=Environment.PRODUCTION,
-            app=AppSettings(),
+            app=AppSettings(public_url=EXPLICIT_PUBLIC_URL),
             postgres=PostgresSettings(
                 dsn=SecretStr("postgresql+asyncpg://real:pw@prod-host:5432/arena64")
             ),
@@ -190,6 +199,7 @@ class TestSettings:
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             session=SessionSettings(),
             email=EmailSettings(),
+            notification_email=NotificationEmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
@@ -214,6 +224,7 @@ class TestSettings:
             jwt=JWTSettings(secret_key=SecretStr(EXPLICIT_JWT_SECRET)),
             session=SessionSettings(),
             email=EmailSettings(),
+            notification_email=NotificationEmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
@@ -314,7 +325,7 @@ class TestJWTProductionGuard:
     def _production(self, **jwt_overrides: object) -> Settings:
         return Settings(
             environment=Environment.PRODUCTION,
-            app=AppSettings(),
+            app=AppSettings(public_url=EXPLICIT_PUBLIC_URL),
             postgres=PostgresSettings(
                 dsn=SecretStr("postgresql+asyncpg://real:pw@prod-host:5432/arena64")
             ),
@@ -328,6 +339,7 @@ class TestJWTProductionGuard:
             auth=AuthSettings(),
             session=SessionSettings(),
             email=EmailSettings(),
+            notification_email=NotificationEmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
@@ -366,6 +378,7 @@ class TestJWTProductionGuard:
             auth=AuthSettings(),
             session=SessionSettings(),
             email=EmailSettings(),
+            notification_email=NotificationEmailSettings(),
             storage=StorageSettings(),
             rate_limit=RateLimitSettings(),
             statistics=StatisticsSettings(),
@@ -470,7 +483,7 @@ class TestConsoleEmailProviderGuard:
         [Environment.LOCAL, Environment.TEST, Environment.CI],
     )
     def test_constructs_outside_production(self, environment: Environment) -> None:
-        from app.modules.auth.infrastructure import ConsoleEmailProvider
+        from app.platform.email import ConsoleEmailProvider
 
         assert ConsoleEmailProvider(environment)
 
@@ -479,7 +492,7 @@ class TestConsoleEmailProviderGuard:
         """A deployed tier wired to this provider would send nobody
         anything *and* write live links into the log pipeline. Refusing to
         start is a visible deploy failure; starting is a silent one."""
-        from app.modules.auth.infrastructure import ConsoleEmailProvider
+        from app.platform.email import ConsoleEmailProvider
 
         with pytest.raises(ValueError, match="ConsoleEmailProvider"):
             ConsoleEmailProvider(environment)

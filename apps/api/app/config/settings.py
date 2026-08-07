@@ -35,6 +35,10 @@ _LOCAL_JWT_SECRET_KEY = (
     # it was never a secret.
     "insecure-local-development-key-do-not-use-outside-local-0123456"
 )
+#: The frontend a developer runs. Refused in a deployed tier by the guard on
+#: `Settings`, for the reason that guard gives.
+_LOCAL_PUBLIC_APP_URL = "http://localhost:3000"
+
 _LOCAL_REDIS_URLS = {
     "live": "redis://localhost:6379/0",
     "bus": "redis://localhost:6379/1",
@@ -44,10 +48,26 @@ _LOCAL_REDIS_URLS = {
 }
 
 
+def _require_bare_origin(value: str, *, variable: str) -> str:
+    """A scheme and a host, and nothing else.
+
+    Shared by `PUBLIC_APP_URL` and by the two `auth` URL templates' origin
+    check, so "what counts as an origin" is decided once rather than in each
+    validator that happens to need it.
+    """
+    if not value.startswith(("http://", "https://")):
+        raise ValueError(f"{variable} must start with http:// or https://")
+    if value.endswith("/") or "/" in value.split("://", 1)[1]:
+        raise ValueError(f"{variable} must be a bare origin — no trailing slash and no path")
+    return value
+
+
 class AppSettings(BaseSettings):
     """`app` — architecture.md §5 process identity and log posture."""
 
-    model_config = SettingsConfigDict(env_prefix="APP_", frozen=True, extra="forbid")
+    model_config = SettingsConfigDict(
+        env_prefix="APP_", frozen=True, extra="forbid", populate_by_name=True
+    )
 
     name: str = "arena64-api"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
@@ -56,6 +76,32 @@ class AppSettings(BaseSettings):
     # to override that default, e.g. JSON logs on a local machine to test a
     # log pipeline.
     log_format: Literal["json", "human"] | None = None
+
+    public_url: str = Field(default=_LOCAL_PUBLIC_APP_URL, validation_alias="PUBLIC_APP_URL")
+    """Where this platform lives, as a player types it — `PUBLIC_APP_URL`.
+
+    Aliased past this class's `APP_` prefix, because the origin is a
+    platform-wide fact rather than an API-process one and `APP_PUBLIC_URL`
+    would read as the latter.
+
+    **The canonical frontend origin, and there is exactly one.** A64-021.5
+    put the notification email's origin on `NotificationEmailSettings`, and
+    the continuation moved it here for the reason a second copy always
+    justifies: `auth`'s two URL templates carry an origin too, and three
+    settings holding the same host is three chances for an email to link a
+    player into the wrong tier.
+
+    A bare scheme and host — no trailing slash, no path — checked at
+    construction, because both failures are silent: a trailing slash renders
+    `https://x//tournaments`, and a path renders a link into the wrong part
+    of the app. The mail sends and looks fine either way.
+
+    Production is `https://arena64.gg`, and it is deliberately **not** the
+    default: a default naming the real origin would make a misconfigured
+    staging deploy send people into production. `Settings` refuses to start
+    on the localhost default in a production-like tier — see
+    `_forbid_local_defaults_outside_local`.
+    """
 
     metrics_flush_interval_seconds: float = Field(default=60.0, ge=1.0, le=600.0)
     """How often accumulated counters are emitted — A64-015.6 §6.
@@ -75,6 +121,11 @@ class AppSettings(BaseSettings):
     The floor is a guard against a configuration that turns the flush into a
     busy loop, not a tuning range.
     """
+
+    @model_validator(mode="after")
+    def _public_url_must_be_an_origin(self) -> "AppSettings":
+        _require_bare_origin(self.public_url, variable="PUBLIC_APP_URL")
+        return self
 
 
 class PostgresSettings(BaseSettings):
@@ -409,7 +460,9 @@ class EmailSettings(BaseSettings):
     template at a deep link.
     """
 
-    model_config = SettingsConfigDict(env_prefix="EMAIL_", frozen=True, extra="forbid")
+    model_config = SettingsConfigDict(
+        env_prefix="EMAIL_", frozen=True, extra="forbid", populate_by_name=True
+    )
 
     verification_token_ttl_hours: int = Field(default=24, ge=1, le=168)
 
@@ -459,8 +512,49 @@ class EmailSettings(BaseSettings):
     #: this API as a query parameter; see `ResetPasswordRequest`.
     password_reset_url_template: str = "http://localhost:3000/reset-password?token={token}"
 
-    from_address: str = "no-reply@arena64.local"
+    from_address: str = "no-reply@arena64.gg"
+    """Who transactional mail comes from — `EMAIL_FROM_ADDRESS`.
+
+    `arena64.gg` is the **verified sending domain**, and the default names it
+    because it is the only address this platform is entitled to send as. It
+    was `no-reply@arena64.local` while no domain existed; a placeholder TLD
+    is the right default for a platform that cannot send and the wrong one
+    for a platform that can.
+
+    Changing it is not a configuration knob so much as a deliverability
+    decision: an address outside a domain with SPF, DKIM and DMARC records
+    for Resend is refused by the provider, which this platform records as a
+    permanent failure and stops retrying.
+    """
+
     from_name: str = "Arena64"
+    """The display name beside the address — `EMAIL_FROM_NAME`."""
+
+    resend_api_key: SecretStr | None = Field(default=None, validation_alias="RESEND_API_KEY")
+    """The Resend credential — `RESEND_API_KEY`. **Server-side only.**
+
+    The alias is load-bearing. This class carries an `EMAIL_` prefix, so
+    without it the variable would be `EMAIL_RESEND_API_KEY` — and an
+    operator following the provider's own documentation would set
+    `RESEND_API_KEY`, get no error, and run a deployment that silently
+    cannot send. `PUBLIC_APP_URL` carries one for the same reason.
+
+    `SecretStr`, like every credential here, so it cannot reach a log line, a
+    traceback or an error reporter through a repr (services.md §8.5).
+
+    `None` means *no transport is configured*, and it is the switch the whole
+    channel turns on:
+
+        set    `ResendEmailProvider` is built, and the notification email
+               channel reports itself available
+        unset  `ConsoleEmailProvider` is built — which refuses to construct
+               in a production-like tier, so a deployed process without a key
+               fails at boot rather than sending nobody anything (DI-06)
+
+    That is why availability is not a second flag. A boolean saying "email
+    works" that could disagree with whether a credential exists is exactly
+    the settings-screen lie A64-021.5 §26 forbids.
+    """
 
     @model_validator(mode="after")
     def _url_templates_must_carry_the_token(self) -> "EmailSettings":
@@ -498,6 +592,65 @@ class EmailSettings(BaseSettings):
     def password_reset_url(self, token: str) -> str:
         """The link to put in the reset message. See `verification_url`."""
         return self.password_reset_url_template.format(token=token)
+
+
+class NotificationEmailSettings(BaseSettings):
+    """`notification_email` — the Notification email channel, A64-021.5.
+
+    Separate from `EmailSettings`, which owns the *transport identity* and
+    the two credential links `auth` sends. What lives here is the
+    **channel**: whether it delivers at all, how a link into the app is
+    built, and how a failed send is retried.
+
+    ## `enabled` is a kill switch, not the provider gate
+
+    It was off by default while this platform had chosen no email vendor.
+    Resend is now the vendor, and **`RESEND_API_KEY` is the gate**: a process
+    with a credential can send and one without cannot, which is a fact rather
+    than a flag. `platform.email.can_deliver_email` reads it, and the same
+    value decides which provider is built.
+
+    What is left here is an operational switch — a way to stop notification
+    email without withdrawing the credential that `auth`'s verification and
+    reset mail also depend on. Two knobs answering different questions: *can
+    this process send at all*, and *should it send notifications*.
+
+    Defaulting it to `True` is what makes the pair honest. An operator who
+    configures Resend expects notification email to work; a default of
+    `False` would mean a correctly configured deployment silently sending
+    nothing, which is the same surprise pointing the other way.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="NOTIFICATION_EMAIL_", frozen=True, extra="forbid")
+
+    enabled: bool = True
+    """Whether this process delivers notification **email** — the kill switch.
+
+    Necessary and not sufficient: a process also needs a transport, which is
+    `RESEND_API_KEY`. Both are composed into one `ChannelAvailability` at the
+    composition root and threaded to every preference read and every refusal
+    — see `notifications.presentation.dependencies.email_channel_available`."""
+
+    #: How many deliveries one worker pass claims. Small, because each is a
+    #: network call to a provider and a pass that claimed hundreds would
+    #: hold them all against one timeout budget.
+    batch_size: int = Field(default=20, ge=1, le=200)
+
+    #: How often the worker looks for due deliveries. Email is not
+    #: interactive — a minute of latency on a tournament confirmation is
+    #: invisible, and polling every second would be a query per second for a
+    #: table that is empty most of the time.
+    poll_interval_seconds: float = Field(default=30.0, ge=1.0, le=600.0)
+
+    #: Attempts before a delivery is abandoned. Five, spanning roughly seven
+    #: hours with the backoff below — long enough to outlast a provider
+    #: incident, short enough that a permanently broken address stops being
+    #: retried the same day.
+    max_attempts: int = Field(default=5, ge=1, le=10)
+
+    #: The first retry delay, doubling each attempt up to the ceiling.
+    retry_base_seconds: int = Field(default=60, ge=1)
+    retry_max_seconds: int = Field(default=6 * 60 * 60, ge=60)
 
 
 class StorageSettings(BaseSettings):
@@ -2361,6 +2514,7 @@ class Settings(BaseModel):
     jwt: JWTSettings
     session: SessionSettings
     email: EmailSettings
+    notification_email: NotificationEmailSettings
     storage: StorageSettings
     rate_limit: RateLimitSettings
     statistics: StatisticsSettings
@@ -2409,6 +2563,17 @@ class Settings(BaseModel):
             raise ValueError(
                 f"{', '.join(unset)} must be set explicitly in {self.environment} "
                 "— refusing the local default"
+            )
+
+        # A64-021.5. The origin every transactional email links to. A
+        # deployed tier on the localhost default sends verification links,
+        # password resets and tournament confirmations that point at a
+        # machine the recipient does not have — and nothing about it fails
+        # visibly: the mail sends and the links are simply dead.
+        if self.app.public_url == _LOCAL_PUBLIC_APP_URL:
+            raise ValueError(
+                f"PUBLIC_APP_URL must be set explicitly in {self.environment} "
+                "— every email link would point at localhost"
             )
 
         # The most consequential of the three. A deployed tier running on
@@ -2463,6 +2628,7 @@ def get_settings() -> Settings:
         jwt=JWTSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         session=SessionSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         email=EmailSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        notification_email=NotificationEmailSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         storage=StorageSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         rate_limit=RateLimitSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         statistics=StatisticsSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]

@@ -1,6 +1,6 @@
 # Notifications
 
-> **Status:** foundation — A64-021.1; realtime in-app delivery — A64-021.2; preferences — A64-021.3; tournament and game coverage — A64-021.4
+> **Status:** foundation — A64-021.1; realtime in-app delivery — A64-021.2; preferences — A64-021.3; tournament and game coverage — A64-021.4; email through Resend — A64-021.5
 > **Owner:** platform
 > **Related:** `docs/01-architecture/domain-model.md` §9.3, `docs/01-architecture/database.md` §10.2 and §10.3, `specs/friends.md`, `specs/frontend.md` §21 and §22
 
@@ -20,6 +20,12 @@ and email remain deferred, and §12 states exactly what each must add.
 A64-021.3 adds the **preferences** that govern all of it (§10). A muted
 category produces no durable row and no realtime frame — suppression at the
 point of creation, never a filter applied on read.
+
+A64-021.5 adds the **second delivery channel**: transactional email for the
+three tournament types, opt-in, to verified addresses only, through a
+durable queue that survives a restart (§13). It delivers through **Resend**
+from `no-reply@arena64.gg`, and a process without the credential reports the
+channel unavailable rather than pretending otherwise.
 
 A64-021.4 extends coverage from two types to **six**: three tournament facts
 and one game result, each from an event that already existed or — in one
@@ -647,10 +653,14 @@ A64-021.4 is the clearest demonstration: two new consumers, a published
 reader on `tournament`, one additive event, and **no change** to the
 transport, the preference policy, the exactly-once key or the wire frame.
 
+A64-021.5's email channel is gone from it too. What it took was the seam
+this table predicted — a published recipient reader on `users`, a durable
+delivery queue, and the same `NotificationDeliveryPolicy` asked with
+`channel=email`. §13 is what it looks like when taken.
+
 | Deferred to | What it adds | Where |
 | --- | --- | --- |
-| **A64-021.6 browser push** | Permission request, `pushManager.subscribe`, a VAPID key as a `VITE_` variable, `push` and `notificationclick` handlers in **the existing** service worker, a device/subscription table | `apps/web/pwa/service-worker.ts` and `apps/api`. `shared/pwa/push-support.ts` already reports capability and asks for nothing. The `push` **preference** already exists and is refused as unavailable — flipping `CHANNEL_AVAILABILITY` is what turns it on (§10.1) |
-| **A64-021.5 email** | A provider, templates, a per-channel delivery record (`notification_delivery`, `database.md` §10.2) | A third sink, plus the delivery table NT-1 needs to record a channel failing independently. Its preference column exists already; it must consult `NotificationDeliveryPolicy` with `channel=email` before sending, exactly as the durable writer does with `in_app` |
+| **A64-021.6 browser push** | Permission request, `pushManager.subscribe`, a VAPID key as a `VITE_` variable, `push` and `notificationclick` handlers in **the existing** service worker, a device/subscription table | `apps/web/pwa/service-worker.ts` and `apps/api`. `shared/pwa/push-support.ts` already reports capability and asks for nothing. A64-021.5 built most of what it needs: `ChannelAvailability` makes a channel a runtime fact, and the delivery queue, the retry policy and the outcome vocabulary are channel-agnostic — push adds a subscription table, a transport, and one member to `ChannelAvailability.of` |
 | **Friend challenges** | A `challenges` domain, its events, and one notification type per event | A new member of `NotificationType`, its payload, its target |
 | **`tournament_match_ready`** | An event. `TournamentMatchLauncher` holds no publisher, `game.match_activated` carries no `origin`, and `launch()` does not report whether an attempt was newly recorded — without the third, a re-launch after a restart notifies twice | `tournament.application.services.match_launcher`, and one more member of `tournament.public`'s event re-exports |
 | **`tournament_cancelled`** | A publisher. The event is declared and no service emits it | `tournament.application.services` — wherever cancellation is eventually implemented |
@@ -660,7 +670,191 @@ handler must not widen what a *page* may tell the service worker to do.
 
 ---
 
-## 13. Security
+## 13. Email — A64-021.5
+
+The second channel. In-app delivery is the record; email reaches somebody who
+is **not looking at Arena64**, which is its whole value and its whole cost.
+
+### 13.1 Which types, and why only three
+
+| Type | Email | Why |
+| --- | --- | --- |
+| `tournament_registration_confirmed` | **yes** | A commitment to be somewhere at a time the platform chose. The receipt is what a player looks back for |
+| `tournament_round_published` | **yes** | The one notification whose value *decays* — a round published while somebody is away is the case email exists for |
+| `tournament_completed` | **yes** | The final result, with the recipient's own placement |
+| `friend_request_received` | no | Answered by a button in the app, and not time-critical. It is also the type an **abuser controls the rate of** — an email per request would make the inbox a harassment surface the block list does not reach |
+| `friend_request_accepted` | no | Pleasant, and nothing follows from it |
+| `game_completed` | no | The player was at the board. The cases it exists for — an adjudication, a flag on a closed tab — are real but rare, and one email per game is the wrong price for them |
+
+**A preference is necessary and not sufficient.** Enabling tournament email
+must not sign a player up for one message per round per player per bracket,
+so a type must be email-capable *and* the category unmuted on the channel.
+
+### 13.2 Opt-in, deliberately
+
+Every non-in-app channel defaults to **off** (§10.1), and A64-021.5 did not
+change it. A64-021.3 told players email was unavailable; flipping the default
+would have started emailing every one of them the day a provider was
+configured — which is the exact scenario that paragraph warned about.
+
+The channel therefore ships quiet, and that is the correct direction to be
+wrong in: a player who wanted email and must enable it is mildly
+inconvenienced; a player who did not and receives it has been emailed without
+consent.
+
+### 13.3 Only verified addresses
+
+`users.public.EmailRecipientDirectory` answers *"may we email these people,
+and where"*. Eligibility is **the absence of a result**, not a flag:
+
+| Cause | Result |
+| --- | --- |
+| No such account, address missing, unverified, or account deactivated | Absent from the answer, and the delivery records `skipped_no_email` |
+
+Collapsing four causes into one absence is deliberate — a consumer that
+could tell "no such account" from "unverified" would be an
+account-existence oracle, and none of the four changes what a delivery does.
+
+The address is resolved **at delivery time** and never stored on a
+notification or a delivery row, so a change of address between enqueue and
+send reaches the right inbox and the delivery table is not a list of email
+addresses.
+
+### 13.4 The delivery queue
+
+`notifications.notification_email_delivery`, `PRIMARY KEY (notification_id)`.
+
+| Property | How |
+| --- | --- |
+| Durable | A row, written in the notification's **own transaction**. §9: an in-process task lives on one node and a deploy takes it with it |
+| Idempotent | The primary key *is* the identity — `INSERT ... ON CONFLICT DO NOTHING`, and a retry reuses the row rather than creating one |
+| Claimed, not read | One `UPDATE ... WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED) RETURNING`, so two workers never send the same message |
+| Recoverable | A worker that dies mid-send leaves an unresolved claim; `reclaim_stale` returns it to the pool after ten minutes |
+| Bounded | `last_error_code` is an `EmailDeliveryOutcome` this platform chose, never vendor text. No subject, no body, no address |
+
+**Nothing is rendered at enqueue time.** A frozen body would be sent in
+whichever locale the recipient had *then*, and would keep being sent after a
+template fixed a mistake in it.
+
+### 13.5 Outcomes, retries and failure
+
+Every expected result is an **outcome**, never an exception (§6):
+
+    delivered                     a provider accepted it
+    skipped_preference            the category is muted on email
+    skipped_unsupported_type      the type is not email-capable
+    skipped_no_email              ineligible recipient — see §13.3
+    skipped_channel_unavailable   this process cannot send at all
+    retryable_failure             a fault that may not recur
+    permanent_failure             a fault that will
+    attempts_exhausted            retried to the limit and never accepted
+
+Retries are exponential and capped — 1m, 2m, 4m, … to six hours, five
+attempts by default — mirroring the outbox relay's schedule rather than
+inventing a second one. `attempts_exhausted` is distinct from
+`permanent_failure` because they mean different things to an operator: a bad
+address versus a provider that was down for hours.
+
+**The classification belongs to the adapter.** Only it can read a vendor's
+status code, so it raises `PermanentEmailFailure` for a rejection that will
+recur and lets everything else propagate — and anything unclassified is
+treated as **retryable**, because an unknown fault is more likely transient
+and the attempt limit bounds the cost of being wrong.
+
+**Email never affects the record.** A provider that is down produces
+retryable rows and an in-app list that is already correct: the notification,
+the realtime frame and the source action all committed before a worker could
+run.
+
+### 13.6 The provider — Resend
+
+**Arena64's production transactional email provider is Resend**, sending
+from `no-reply@arena64.gg` on a domain already verified with them. One
+transport carries everything this platform sends: the verification link, the
+password reset, and notification email.
+
+| Setting | Value | Note |
+| --- | --- | --- |
+| `RESEND_API_KEY` | *(secret)* | Server-side only. `SecretStr`, so it cannot reach a log or a traceback through a repr. Never a `VITE_` variable, and never committed |
+| `EMAIL_FROM_ADDRESS` | `no-reply@arena64.gg` | The verified domain. An address outside a domain with SPF, DKIM and DMARC records for Resend is rejected, which this platform records as a **permanent** failure and stops retrying |
+| `EMAIL_FROM_NAME` | `Arena64` | The display name beside it |
+| `PUBLIC_APP_URL` | `https://arena64.gg` | The canonical frontend origin — **one** setting, used by every email link. Refused at startup in a deployed tier while it is the localhost default |
+
+**The credential is the switch**, and there is deliberately no second flag
+saying "email works":
+
+    key set    `ResendEmailProvider` is built and the channel reports
+               itself available
+    key unset  `ConsoleEmailProvider` is built — and it **refuses to
+               construct in a production-like tier**, so a deploy that
+               forgot the credential fails at boot rather than accepting
+               registrations nobody can verify
+
+`NOTIFICATION_EMAIL_ENABLED` remains, and is a *kill switch* rather than the
+gate: a way to stop notification mail without withdrawing the credential
+that verification and reset mail also depend on. Both are composed in one
+place — `email_channel_available` — so a settings screen and a delivery
+worker cannot disagree.
+
+#### Why a narrow HTTP adapter rather than the SDK
+
+`ResendEmailProvider` posts one JSON body to `POST /emails` through `httpx`.
+The `resend` SDK was weighed and not taken: its `send` is synchronous, which
+in a worker whose entire job is I/O means blocking the event loop or a
+thread per message; it exposes no per-request timeout, which §2 requires;
+and the API it wraps is one endpoint with five fields. `httpx` was already
+this repository's HTTP client, so no new vendor arrives — CLAUDE.md §2.6.
+
+Nothing about Resend appears in a signature, a return type or an exception
+outside that one file.
+
+#### Verifying a deployment
+
+    python -m app.operator.notification_email smoke --to you@example.com
+
+Sends **one** fixed message to an address the operator types — never a
+notification, never a stored recipient, never a default address, and never
+from pytest, HTTP or startup. It reports the provider's message id, so the
+send can be found in Resend's dashboard rather than only in an inbox.
+
+Automated tests never contact Resend: the adapter's suite stubs the HTTP
+boundary with `httpx.MockTransport`, and the delivery suite substitutes the
+provider port.
+
+### 13.7 Template safety
+
+Rendered from the typed payload, in the recipient's stored locale (uz, ru,
+en), as **both** a plain-text and an HTML part — §17 forbids HTML-only.
+
+| Rule | How |
+| --- | --- |
+| No injection | Every interpolation is `html.escape`d at the interpolation site. The text part is deliberately **not** escaped — `Bob &amp; Sons` in a text client is the same bug pointing the other way |
+| No template engine | Each template is a Python function, so no payload string can become a placeholder |
+| No arbitrary URL | Every link is the configured origin plus a path built from an identifier. No branch concatenates a caller-supplied string, so nothing can produce a scheme or a `javascript:` target |
+| No token in a URL | §18. The call to action is the tournament; the preference link is `/settings/notifications`, behind a session. A tokenised one-click unsubscribe would be a bearer credential in a mailbox |
+| No tracking | No pixel, no external stylesheet, no script, no image |
+
+### 13.8 Operations
+
+    python -m app.operator.notification_email status
+
+Counts by status, and **nothing else** — no recipient, no address, no
+notification id. An operator can learn the channel is healthy and cannot
+learn who was emailed. There is no resend, no flush and no "send this one
+now": §20 makes notification email server-controlled, and a command that
+could send an arbitrary message is the capability an attacker would want
+from a compromised shell.
+
+One metric, two closed labels: `notifications.email.deliveries{type,outcome}`.
+No address, no user id, no notification id, no provider message id — §22.
+
+Logs carry the notification type, the outcome and counts. Never a recipient,
+a subject, a body, or a provider's response — and a provider exception is
+**not** logged with `exc_info`, because its message can contain an address.
+
+---
+
+## 14. Security
 
 | Guarantee | How |
 | --- | --- |
@@ -677,6 +871,13 @@ handler must not widen what a *page* may tell the service worker to do.
 | A consumer cannot change what it reads about | `tournament.public.TournamentNotificationReader` publishes **two reads and no write** — a compromised consumer could learn a field and could not enter, withdraw, pair or finish anybody |
 | A match id in a notification grants nothing | `/games/{id}` and `/games/{id}/replay` authorize on their own; the notification is a pointer, not a capability |
 | A preference cannot be bypassed by a new producer | Every producer goes through `DurableNotificationWriter`, and the policy is a constructor argument with no default |
+| Only a verified address is emailed | `EmailRecipientDirectory`'s query filters on `is_verified`, `is_active` and a non-empty address. It is the `WHERE` clause, not a flag a consumer reads — the first one to forget it cannot exist |
+| A caller cannot name an address | The directory takes **ids**. There is no API, no payload field and no operator command through which an address is supplied, and none is stored on a notification or a delivery |
+| Provider credentials are server-side only | `RESEND_API_KEY` is a `SecretStr` read at the composition root. Nothing about it is a `VITE_` variable, nothing about it reaches a response, and no log line carries it — not even a length or a prefix |
+| A provider's own words never escape | The adapter raises a typed exception carrying a status code. A Resend error body can quote the address it rejected, so none of it is logged, persisted or returned |
+| No token is ever in an email URL | Every link is the configured origin plus a path built from an identifier. The preference link is a page behind a session, not a one-click unsubscribe token |
+| Logs and metrics carry no address | The metric's two labels are closed enumerations; the log lines carry a type, an outcome and counts. A provider exception is logged **without** `exc_info`, because its message can contain an address |
+| The delivery table is not exposed | No route reads it. The operator command returns counts by status and cannot name a recipient |
 
 ---
 
@@ -688,3 +889,4 @@ handler must not widen what a *page* may tell the service worker to do.
 - `docs/07-decisions/ADR-003-pwa-service-worker.md` — the worker a push channel will extend
 - `specs/frontend.md` §21 — the in-app read surface
 - `specs/frontend.md` §22 — the preference screen
+- `apps/api/.env.example` — the email settings an operator must supply

@@ -44,7 +44,6 @@ from fastapi.testclient import TestClient
 from app.app_factory import create_app
 from app.config.settings import EmailSettings, SessionSettings
 from app.core.enums import Locale
-from app.modules.auth.application.email import EmailMessage
 from app.modules.auth.application.services import (
     OpaqueTokenService,
     PasswordResetService,
@@ -62,6 +61,7 @@ from app.modules.users.application.services.password_reset_writer import Passwor
 from app.modules.users.application.services.user_profile_service import UserProfileService
 from app.modules.users.domain.entities import User
 from app.modules.users.domain.value_objects import Email, Timezone, Username
+from app.platform.email import EmailMessage
 from tests.fakes.password_reset_token_repository import FakePasswordResetTokenRepository
 from tests.fakes.session_repository import FakeSessionRepository
 from tests.fakes.user_repository import FakeUserRepository

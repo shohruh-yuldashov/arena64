@@ -23,6 +23,11 @@ What is published, and why only this much:
   `UserCredentialStore`  the equally narrow port `auth` uses to sign one in
   `UserProfileReader`    reads one account's own view by id (A64-011.5)
   `EmailVerifier`        marks an address verified (A64-011.6)
+  `EmailRecipientDirectory`
+                         who may be **emailed**, and at what address
+                         (A64-021.5). Read-only, batch, and eligibility is
+                         the absence of a result rather than a flag — see
+                         `email_recipients.py`
   `PasswordResetter`     replaces a password hash, and can do nothing
                          else — not even read one (A64-011.7)
   `PublicProfileReader`  reads the view a *stranger* may see, by username
@@ -171,6 +176,10 @@ from app.modules.users.public.edits import (
     PrivacyEdits,
     ProfileEdits,
 )
+from app.modules.users.public.email_recipients import (
+    EmailRecipient,
+    EmailRecipientDirectory,
+)
 from app.modules.users.public.ports import (
     AvatarStore,
     EmailVerifier,
@@ -213,6 +222,8 @@ __all__ = [
     "ProfileEditor",
     "ProfileEdits",
     "EmailAlreadyExists",
+    "EmailRecipient",
+    "EmailRecipientDirectory",
     "EmailVerifier",
     "InvalidBio",
     "InvalidCountryCode",

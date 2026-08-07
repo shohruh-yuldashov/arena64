@@ -2132,11 +2132,33 @@ so a client bug is identifiable rather than "something went wrong".
 
 ### 22.7 Not in this phase
 
-No email or push **delivery** — the channels appear, are marked unavailable,
-and cannot be switched on. No browser notification permission request, no
+**Push** delivery — the channel appears, is marked unavailable, and cannot
+be switched on. Email now delivers (`specs/notifications.md` §13); whether
+its switch is editable is the server's answer, per §22.8. No browser notification permission request, no
 `pushManager.subscribe`, no quiet hours, no per-type granularity below the
 category, no digest. `specs/notifications.md` §10.6 and §12 name each with
 its owner.
+
+### 22.8 Email availability is the server's answer — A64-021.5
+
+The matrix renders `available`, `editable` and `locked_reason` straight from
+the API, so it reflects an available email channel with **no frontend
+change**. That was the design and it held: shipping Resend flipped a value on
+the wire and nothing here needed editing.
+
+One string did need it. `channelHints.email` said "Not available yet"
+unconditionally, which would have kept saying so the day email started
+working — the same lie as offering a switch that does nothing, pointing the
+other way. The hints now describe what a channel *is*; unavailability is
+carried by `locked.channel_unavailable`, which the server sends only while
+it is true.
+
+An **editable** email switch adds one line: only a verified address receives
+notifications. Without it, somebody with an unconfirmed address enables the
+switch and receives nothing, with no explanation anywhere.
+
+No provider name reaches the UI, and nothing in the frontend knows one
+exists. There is no `VITE_` email variable and never will be.
 
 ## 23. Open questions
 

@@ -9,7 +9,6 @@ session is `auth`'s own state — it is created, rotated and revoked by
 in `auth`'s own schema (database.md §3.1).
 """
 
-from app.modules.auth.infrastructure.console_email_provider import ConsoleEmailProvider
 from app.modules.auth.infrastructure.jwt_token_provider import JwtTokenProvider
 from app.modules.auth.infrastructure.password_hasher import (
     Argon2idPasswordHasher,
@@ -24,7 +23,6 @@ from app.modules.auth.infrastructure.websocket_ticket_store import RedisWebSocke
 
 __all__ = [
     "Argon2idPasswordHasher",
-    "ConsoleEmailProvider",
     "JwtTokenProvider",
     "RedisWebSocketTicketStore",
     "SqlAlchemyPasswordResetTokenRepository",

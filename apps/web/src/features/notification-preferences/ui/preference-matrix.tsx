@@ -211,6 +211,12 @@ function ChannelToggle({
   const { t } = useTranslation();
   const id = useId();
   const channel = setting.channel as DeliveryChannel;
+  // The lock's reason when there is one, and otherwise what the channel
+  // *is* — A64-021.5 §26. The hints deliberately describe the channel
+  // rather than its availability: "not available yet" belongs to
+  // `locked.channel_unavailable`, which the server sends only while it is
+  // true. A hint that said it unconditionally would keep saying it the day
+  // email starts working, which is the same lie in the other direction.
   const hint = setting.locked_reason
     ? t(`notificationPreferences.locked.${setting.locked_reason}` as TranslationKey)
     : t(`notificationPreferences.channelHints.${channel}` as TranslationKey);
@@ -233,6 +239,15 @@ function ChannelToggle({
         <p id={`${id}-hint`} className="text-muted-foreground text-xs">
           {hint}
         </p>
+        {channel === "email" && setting.editable && (
+          // Said only where it applies. Email reaches a **verified**
+          // address and nothing else (§6), and a player whose address is
+          // unconfirmed would otherwise turn a switch on and receive
+          // nothing with no explanation anywhere.
+          <p className="text-muted-foreground text-xs">
+            {t("notificationPreferences.notes.unverifiedEmail")}
+          </p>
+        )}
       </div>
     </div>
   );

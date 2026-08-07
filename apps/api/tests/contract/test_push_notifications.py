@@ -61,6 +61,7 @@ from app.modules.notifications.infrastructure.models import (
 )
 from app.modules.notifications.infrastructure.repositories import (
     SqlAlchemyNotificationPreferenceRepository,
+    SqlAlchemyNotificationRepository,
     SqlAlchemyPushDeliveryRepository,
     SqlAlchemyPushSubscriptionRepository,
 )
@@ -237,6 +238,7 @@ def worker(
     return PushDeliveryService(
         deliveries=SqlAlchemyPushDeliveryRepository(session),
         subscriptions=SqlAlchemyPushSubscriptionRepository(session),
+        notifications=SqlAlchemyNotificationRepository(session),
         policy=PreferenceDeliveryPolicy(
             preferences=SqlAlchemyNotificationPreferenceRepository(
                 session, availability=ChannelAvailability.of(DeliveryChannel.PUSH)

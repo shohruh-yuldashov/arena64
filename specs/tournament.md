@@ -561,6 +561,26 @@ from the payload and does not gate on the write.
 materialisation are one transaction, so a consumer that saw one and not the other would be
 observing a state that cannot exist.
 
+## 6f-2. What a registration publishes — A64-021.4
+
+`register()` now emits **`tournament.player_registered`** inside the same transaction that takes
+the seat: `(tournament_id, player_id, name)`. Before this, entering a tournament was the one
+commitment on this platform that produced no durable record for the player who made it — the
+row was written and a log line was the only trace.
+
+Additive in every direction. No existing consumer sees a change, the registration behaves
+identically, and a duplicate entry raises before the publish, so a consumer counting these
+counts seats taken.
+
+The tournament's **name** rides along rather than being looked up. That is `services.md` §10.2's
+self-contained payload, and it is what makes the confirmation a snapshot: a renamed tournament
+does not rewrite a receipt somebody already holds.
+
+`notifications` is its first consumer — `specs/notifications.md` §2 — and reaches this module
+only through `tournament.public`, which publishes the three events it subscribes to and one
+read-only port (`TournamentNotificationReader`: the live field, and the final placements). No
+write of any kind crosses that boundary.
+
 ## 6g. Public reads — A64-019.6
 
 | Endpoint | Returns |

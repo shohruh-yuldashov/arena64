@@ -135,7 +135,7 @@ test("a player turns push on for this browser, reloads, and turns it off", async
 
   // Push is off to begin with — the platform default, and a channel that
   // interrupts has to be asked for.
-  const enable = page.getByRole("button", { name: /^enable$/i });
+  const enable = page.getByRole("button", { name: /enable push/i });
   await expect(enable).toBeVisible();
 
   await enable.click();
@@ -144,7 +144,9 @@ test("a player turns push on for this browser, reloads, and turns it off", async
   // this state only after `POST /push/subscriptions` stored the row and the
   // preference was written.
   await expect(page.getByRole("button", { name: /turn off here/i })).toBeVisible();
-  await expect(page.getByText(/receives tournament push notifications/i)).toBeVisible();
+  await expect(
+    page.getByText(/receives friend and tournament push notifications/i),
+  ).toBeVisible();
 
   // --- the reload: nothing about this state lives in the page ---
   //
@@ -159,5 +161,5 @@ test("a player turns push on for this browser, reloads, and turns it off", async
 
   // --- off again, and the row is gone ---
   await page.getByRole("button", { name: /turn off here/i }).click();
-  await expect(page.getByRole("button", { name: /^enable$/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /enable push/i })).toBeVisible();
 });

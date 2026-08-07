@@ -228,7 +228,7 @@ describe("the states §20 forbids compressing", () => {
     renderApp({ path: "/settings/notifications" });
 
     expect(await screen.findByText(/browser cannot receive push/i)).toBeVisible();
-    expect(screen.queryByRole("button", { name: /^enable$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /enable push/i })).not.toBeInTheDocument();
   });
 
   it("tells a denied browser to change its own settings, and offers nothing", async () => {
@@ -240,7 +240,7 @@ describe("the states §20 forbids compressing", () => {
     renderApp({ path: "/settings/notifications" });
 
     expect(await screen.findByText(/blocked notifications/i)).toBeVisible();
-    expect(screen.queryByRole("button", { name: /^enable$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /enable push/i })).not.toBeInTheDocument();
   });
 
   it("says so when the server cannot send, rather than offering a switch", async () => {
@@ -253,7 +253,34 @@ describe("the states §20 forbids compressing", () => {
     renderApp({ path: "/settings/notifications" });
 
     expect(await screen.findByText(/not available on this server/i)).toBeVisible();
-    expect(screen.queryByRole("button", { name: /^enable$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /enable push/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("recovery when the permission is already granted", () => {
+  it("offers the button and re-subscribes without asking again", async () => {
+    // **§8.** Permission granted, subscription gone — the browser was told
+    // yes at some point and the subscription has since been lost: site data
+    // cleared, a service worker update, a push service rotating endpoints.
+    //
+    // This state is invisible from the server (which sees a device count of
+    // zero, same as somebody who never enabled it) and from the permission
+    // alone (which says yes). Only the pair distinguishes it, and without a
+    // way out the person is stuck: the browser will never prompt again, so
+    // there is no dialog to reach.
+    const browser = installBrowserPush({ permission: "granted", subscribed: false });
+    const calls = api();
+    renderApp({ path: "/settings/notifications" });
+
+    expect(await screen.findByText(/not receiving push notifications/i)).toBeVisible();
+    await userEvent.click(await screen.findByRole("button", { name: /enable push/i }));
+
+    await waitFor(() => expect(calls.registered).toHaveLength(1));
+    // Subscribed afresh, and the prompt was **not** shown a second time —
+    // `requestPermission` on an already-answered browser returns the stored
+    // answer rather than asking, which is why re-requesting is harmless here
+    // and why the count is what proves the recovery worked.
+    expect(browser.subscribeCalls).toHaveLength(1);
   });
 });
 
@@ -266,7 +293,7 @@ describe("enabling", () => {
     const calls = api();
     renderApp({ path: "/settings/notifications" });
 
-    const enable = await screen.findByRole("button", { name: /^enable$/i });
+    const enable = await screen.findByRole("button", { name: /enable push/i });
     // Nothing has been asked before the click — §7. A prompt on load is the
     // most reliable way to have a permission denied permanently.
     expect(browser.requested).toBe(0);
@@ -299,7 +326,7 @@ describe("enabling", () => {
     api();
     renderApp({ path: "/settings/notifications" });
 
-    await userEvent.click(await screen.findByRole("button", { name: /^enable$/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /enable push/i }));
 
     await waitFor(() => expect(browser.subscribeCalls).toHaveLength(1));
     expect(browser.subscribeCalls[0]).toMatchObject({ userVisibleOnly: true });

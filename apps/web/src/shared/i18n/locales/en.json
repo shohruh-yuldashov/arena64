@@ -911,15 +911,15 @@
     "push": {
       "title": "Push notifications on this device",
       "loading": "Checking push notifications…",
-      "enable": "Enable",
+      "enable": "Enable push notifications",
       "disable": "Turn off here",
       "unsupported": "This browser cannot receive push notifications.",
       "unavailable": "Push notifications are not available on this server yet.",
       "denied": "You blocked notifications for Arena64. To turn them back on, allow notifications for this site in your browser settings.",
-      "askable": "Get tournament updates on this device, even when Arena64 is closed. Your browser will ask for permission.",
-      "notSubscribed": "This device is not receiving push notifications yet.",
+      "askable": "Get friend requests and tournament updates on this device, even when Arena64 is closed. Your browser will ask for permission.",
+      "notSubscribed": "This device is not receiving push notifications. You have already allowed them, so turning them on here takes one tap.",
       "muted": "This device is registered, but push notifications are switched off.",
-      "active": "This device receives tournament push notifications.",
+      "active": "This device receives friend and tournament push notifications.",
       "deviceCount": "You have push notifications on {{count}} devices. This turns them off here only.",
       "subscribeFailed": "Could not turn push notifications on. Please try again."
     }

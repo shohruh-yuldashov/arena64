@@ -911,15 +911,15 @@
     "push": {
       "title": "Bu qurilmada push bildirishnomalari",
       "loading": "Push bildirishnomalari tekshirilmoqda…",
-      "enable": "Yoqish",
+      "enable": "Push bildirishnomalarini yoqish",
       "disable": "Bu yerda o'chirish",
       "unsupported": "Bu brauzer push bildirishnomalarini qabul qila olmaydi.",
       "unavailable": "Bu serverda push bildirishnomalari hali mavjud emas.",
       "denied": "Siz Arena64 uchun bildirishnomalarni bloklagansiz. Ularni qayta yoqish uchun brauzer sozlamalaridan bu sayt uchun bildirishnomalarga ruxsat bering.",
-      "askable": "Arena64 yopiq bo'lganda ham turnir yangiliklarini shu qurilmada oling. Brauzer ruxsat so'raydi.",
-      "notSubscribed": "Bu qurilma hali push bildirishnomalarini olmayapti.",
+      "askable": "Arena64 yopiq bo'lganda ham do'stlik so'rovlari va turnir yangiliklarini shu qurilmada oling. Brauzer ruxsat so'raydi.",
+      "notSubscribed": "Bu qurilma push bildirishnomalarini olmayapti. Siz allaqachon ruxsat bergansiz, shuning uchun yoqish bir bosishda.",
       "muted": "Bu qurilma ro'yxatdan o'tgan, lekin push bildirishnomalari o'chirilgan.",
-      "active": "Bu qurilma turnir push bildirishnomalarini oladi.",
+      "active": "Bu qurilma do'stlik va turnir push bildirishnomalarini oladi.",
       "deviceCount": "Sizda {{count}} ta qurilmada push bildirishnomalari yoqilgan. Bu faqat shu qurilmada o'chiradi.",
       "subscribeFailed": "Push bildirishnomalarini yoqib bo'lmadi. Qayta urinib ko'ring."
     }

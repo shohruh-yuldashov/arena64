@@ -668,7 +668,7 @@ be one.
 
 | Deferred to | What it adds | Where |
 | --- | --- | --- |
-| **Friend challenges** | A `challenges` domain, its events, and one notification type per event | A new member of `NotificationType`, its payload, its target |
+| **Friend challenges** | A `challenges` domain and its two events. Everything downstream of the event already exists — see §15.16 for the exact seam | A new member of `NotificationType`, its payload, its target, and one row in each of four tables that already exist |
 | **`tournament_match_ready`** | An event. `TournamentMatchLauncher` holds no publisher, `game.match_activated` carries no `origin`, and `launch()` does not report whether an attempt was newly recorded — without the third, a re-launch after a restart notifies twice | `tournament.application.services.match_launcher`, and one more member of `tournament.public`'s event re-exports |
 | **`tournament_cancelled`** | A publisher. The event is declared and no service emits it | `tournament.application.services` — wherever cancellation is eventually implemented |
 
@@ -921,13 +921,41 @@ email channel sends.
 | `tournament_round_published` | Published while the player is away; time-critical |
 | `tournament_completed` | Finishes overnight |
 
+| `friend_request_received` | A64-021.6A. Somebody is waiting: a request nobody sees is a request that expires |
+| `friend_request_accepted` | A64-021.6A. The moment two people can actually play |
+
 | Not pushed | Why |
 | --- | --- |
 | `game_completed` | The player is looking at the result screen. Pushing it notifies them of something they are already reading |
-| `friend_request_received` / `_accepted` | **Attacker-controllable.** Anybody can send a friend request, so a type on this list is a type a stranger can use to make somebody's phone buzz. That needs a rate-limit story of its own before it is safe, and inventing one now would be speculative |
 
 Push defaults to **off** for every category (`_default_for`: in-app on,
 everything else off). A channel that interrupts has to be asked for.
+
+#### The friend types, and the concern that deferred them
+
+A64-021.6 left the two social types out on the grounds that a friend request
+is attacker-controllable — anybody can send one, so a pushable type is one a
+stranger can use to make somebody's phone buzz.
+
+A64-021.6A did not overrule that concern; it found the bound already in
+place, three times over and none of it push-specific:
+
+| Control | Effect |
+| --- | --- |
+| `friend_request_send_user`, 20/hour **per sender** | A stranger gets twenty buzzes an hour across the whole platform, not twenty per victim |
+| Blocking | A blocked player cannot send a request at all — the recipient's own control removes the sender entirely |
+| Duplicate refusal | A second pending request to the same person is refused, so a sender cannot repeat |
+
+And the one that settles it: **a push exists only where a durable
+notification does.** Every rule above runs before the notification is
+written, so a request that is rate limited, blocked, duplicate or malformed
+produces no notification and therefore no delivery row. There is no path from
+a refused request to a push, and no push-specific bypass was added.
+
+What remains is a stranger's twenty an hour — the same volume the in-app
+badge and the realtime frame have always carried — and a person who does not
+want it mutes the `social` category, which the matrix has offered since
+A64-021.3.
 
 ### 15.2 Subscriptions
 
@@ -1005,7 +1033,23 @@ any token, and any URL. A push payload lands in a browser's notification
 store on a device that may be shared, and shows on a lock screen.
 
 The **text** is a closed table compiled into the service worker
-(`pwa/push-presentation.ts`) — §12's approach B. Server-composed text was
+(`pwa/push-presentation.ts`) — §12's approach B, and every `path` in it comes
+from `shared/config/notification-routes.ts`, the same constants the in-app
+list resolves through. Two copies of a route is a push whose text says
+"friend request" and whose tap opens a different page.
+
+The two social entries are stricter than the tournament ones: the title is
+the product name and the body names nobody.
+
+| Type | Lock screen | Opens |
+| --- | --- | --- |
+| `friend_request_received` | *Arena64* — "You have a new friend request." | `/friends/requests` |
+| `friend_request_accepted` | *Arena64* — "Your friend request was accepted." | `/friends` |
+
+A tournament notification discloses that somebody plays in tournaments; a
+social one would disclose **who is trying to reach them**, on a lock screen,
+to whoever is looking at it. The sender's name is one tap away, behind the
+session — and the in-app notification still shows it in full. Server-composed text was
 rejected because it is *specific* text: "Round 3 is live in the Tashkent
 Open" names a tournament somebody is in, in public. "A new round is live"
 discloses that this person uses Arena64 and nothing more.
@@ -1143,9 +1187,43 @@ that the bytes are the ones RFC 8291 specifies, that every status code a
 real service can answer with leads to the right state, and that the browser
 flow calls what it should in the order it should.
 
-### 15.15 Migration
+### 15.15 Friend challenges — the seam, and nothing else
 
-`e26a0159c56b` creates both tables. **No backfill** — there are no
+**Not implemented, and no placeholder code exists.** What follows is where
+`friend_challenge_received` and `friend_challenge_accepted` will plug in, so
+that the phase which builds them does not have to rediscover it.
+
+The point of writing it down is that the answer is *small*: A64-021.6A added
+two notification types to the push channel and touched one line of the
+delivery pipeline, which is zero. A challenge type is the same shape.
+
+| Step | Where | What it takes |
+| --- | --- | --- |
+| 1. The events | a new `challenges` module | `challenges.challenge_issued` and `challenges.challenge_accepted` through the outbox, like every other source event. **This is the only real work.** |
+| 2. The types | `notifications/domain/record.py` | Two members of `NotificationType`, two entries in `CATEGORY_OF` — both `SOCIAL`, which already exists in the preference matrix and already has a switch per channel |
+| 3. The target | `notifications/domain/record.py` | One member of `NavigationTargetType`. A challenge has an identifier, so it is a `ref`-carrying target like `tournament` |
+| 4. The consumer | `notifications/application/services/` | A dispatcher beside `SocialNotificationDispatcher`, subscribing to the two events and composing a `NotificationRecord` |
+| 5. Push | `notifications/domain/push.py` | Two members of `PUSH_CAPABLE_TYPES`. **Nothing else on the backend.** The delivery table, the fan-out, the worker, the retry policy, the idempotency key and the revocation path are all type-agnostic |
+| 6. Push text and route | `apps/web/pwa/push-presentation.ts` | Two entries. A destination that has no identifier goes in `shared/config/notification-routes.ts`; one that does is a list page, for the reason §15.6 gives — a push payload names a *notification*, not a challenge |
+| 7. In-app route | `features/notifications/model/navigation.ts` | One `case`, resolving the new target type through the same constants |
+
+What it does **not** take, and this is the part worth stating: no migration,
+no new table, no change to `ChannelAvailability`, no change to the preference
+model, no new rate-limit rule, no service worker listener, and no change to
+the payload contract. A type this build has never heard of already degrades
+safely — it renders the generic notification and opens the list — so steps 6
+and 7 can even lag step 5 without anything breaking.
+
+The privacy rule from §4 applies unchanged and is the one decision the next
+phase must actually make rather than copy: a challenge is *from somebody*,
+so the push body must name no player. "You have a new challenge" is the
+shape, and the opponent's name is one tap away behind the session.
+
+### 15.16 Migration
+
+`e26a0159c56b` creates both tables, and A64-021.6A adds **no migration at
+all** — widening the push type set is a code change over tables that already
+exist. **No backfill** — there are no
 subscriptions on the day it runs, so nothing fans out and no notification
 already stored generates a push.
 

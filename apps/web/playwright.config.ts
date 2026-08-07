@@ -67,6 +67,7 @@ export default defineConfig({
         "**/tournament.spec.ts",
         "**/pwa.spec.ts",
         "**/notifications.spec.ts",
+        "**/push.spec.ts",
       ],
     },
     {
@@ -81,9 +82,26 @@ export default defineConfig({
       testMatch: "**/pwa.spec.ts",
     },
     {
+      // **After `chromium`, and the reason is a per-minute budget.**
+      //
+      // `refresh_ip` is 30 per minute per IP, and every spec bootstraps a
+      // session on load and refreshes again on each reload. Started
+      // concurrently, the `chromium` batch and the head of this chain
+      // produce a burst well past that: a full run was logging 261
+      // rejections, and whichever spec lost the race failed on a session
+      // that could not refresh — which reads as a product bug and is not one.
+      //
+      // Depending on `chromium` staggers the two bursts. It costs a little
+      // wall-clock and nothing else: this chain was already serial behind
+      // itself, and the whole suite still finishes in about three minutes.
+      //
+      // Raising the limit was the other option and is forbidden by
+      // `.env.example` for the right reason — a suite that only passes with
+      // the limiter loosened never exercises the limiter that ships.
       name: "lobby",
       use: { ...devices["Desktop Chrome"] },
       testMatch: "**/play.spec.ts",
+      dependencies: ["chromium"],
     },
     {
       name: "live-game",
@@ -130,6 +148,36 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
       testMatch: "**/notifications.spec.ts",
       dependencies: ["chromium"],
+    },
+    {
+      // A64-021.6 §30.12. Its own project, and **after** `chromium` rather
+      // than beside it — the reason is a budget, not a fixture.
+      //
+      // `refresh_ip` is 30 per minute per IP and every spec bootstraps a
+      // session on load and again on reload. The `chromium` batch already
+      // sits close to that ceiling with `fullyParallel`, and adding a
+      // seventh file to it pushed the whole batch over: whichever spec lost
+      // the race failed on a session that could not refresh, which reads as
+      // a product bug and is not one.
+      //
+      // **Last of all**, behind the game chain rather than merely behind
+      // `chromium`. Depending on `chromium` alone put it alongside the three
+      // long two-context game specs, which hold sockets and refresh for a
+      // minute each — and this spec then lost that race instead of the
+      // batch losing it.
+      //
+      // `tournament` is the tail of that chain, so depending on it means
+      // this runs when nothing else is. It needs no fixture from tournament
+      // and asserts nothing about it; the dependency is scheduling, and it
+      // is written down here because that is not obvious from the name.
+      //
+      // Raising the limit was the other option and is forbidden by
+      // `.env.example` for the right reason: a suite that only passes with
+      // the limiter loosened never exercises the limiter that ships.
+      name: "push",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: "**/push.spec.ts",
+      dependencies: ["tournament"],
     },
     {
       name: "replay",

@@ -284,3 +284,41 @@ export async function resetRelationship(
     }
   }
 }
+
+/**
+ * Returns one account to "no push" — A64-021.6.
+ *
+ * The same shape as `resetRelationship` and for the same reason: **the
+ * accounts accumulate state.** A run that enabled push and failed before its
+ * last step leaves the subscription registered and the preference on, so the
+ * next run opens the settings screen in `active` and never finds the button
+ * it came to press.
+
+ * Through the same public endpoints a player uses — never a truncation — and
+ * every call tolerates "already absent", because the point is the end state
+ * and not the transition.
+ *
+ * The endpoint is the one the spec's stubbed `PushManager` issues, which is
+ * the only one this account can have: the browser it runs in is the only
+ * thing that registers for it.
+ */
+export async function resetPush(
+  request: APIRequestContext,
+  account: SeededAccount,
+  endpoint: string,
+): Promise<void> {
+  const headers = { Authorization: `Bearer ${account.accessToken}` };
+
+  await request.post(`${API}/api/v1/notifications/push/subscriptions/remove`, {
+    headers,
+    data: { endpoint },
+    failOnStatusCode: false,
+  });
+  await request.patch(`${API}/api/v1/notifications/preferences`, {
+    headers,
+    data: {
+      changes: [{ category: "tournament", channel: "push", enabled: false }],
+    },
+    failOnStatusCode: false,
+  });
+}

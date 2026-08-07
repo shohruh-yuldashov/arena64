@@ -46,6 +46,7 @@ from app.modules.notifications.application.read_models import (
 )
 from app.modules.notifications.domain.record import (
     ActorSummary,
+    ChallengeSummary,
     GameResultSummary,
     NotificationRecord,
     TournamentSummary,
@@ -182,6 +183,35 @@ class NotificationGameResponse(BaseResponseDTO):
     )
 
 
+class NotificationChallengeResponse(BaseResponseDTO):
+    """The friend challenge a notification is about — A64-022.4 §4.
+
+    `expires_at` is present on an invitation and `null` on an acceptance;
+    `match_id` is the reverse. Both keys are always sent rather than omitted,
+    so a client reads one shape and branches on `type` as it already does.
+
+    `opponent` is the **other** player through the privacy gate, and `null`
+    when that account no longer has a public profile.
+    """
+
+    challenge_id: UUID
+    opponent: NotificationActorResponse | None = Field(
+        description="The other player, or `null` when that account no longer has a profile."
+    )
+    time_control_id: str = Field(
+        description="A `TimeControlId` value — the catalogue code, never raw clock numbers.",
+        examples=["blitz_3_2"],
+    )
+    variant: str = Field(description="A `ProductVariant` value.", examples=["russian_8x8"])
+    rated: bool
+    expires_at: datetime | None = Field(
+        description="When the invitation stops being answerable, or `null` once it was answered."
+    )
+    match_id: UUID | None = Field(
+        description="The game acceptance produced, or `null` on an invitation."
+    )
+
+
 class NotificationResponse(BaseResponseDTO):
     """One durable notification.
 
@@ -214,6 +244,9 @@ class NotificationResponse(BaseResponseDTO):
     )
     game: NotificationGameResponse | None = Field(
         default=None, description="The game a completed-game notification is about."
+    )
+    challenge: NotificationChallengeResponse | None = Field(
+        default=None, description="The friend challenge a challenge notification is about."
     )
     target: NotificationTargetResponse
     created_at: datetime = Field(
@@ -274,6 +307,23 @@ class NotificationResponse(BaseResponseDTO):
                     ),
                 )
                 if isinstance(payload, GameResultSummary)
+                else None
+            ),
+            challenge=(
+                NotificationChallengeResponse(
+                    challenge_id=payload.challenge_id,
+                    opponent=(
+                        None
+                        if payload.opponent is None
+                        else _actor_response(payload.opponent, avatars=avatars)
+                    ),
+                    time_control_id=payload.time_control_id,
+                    variant=payload.variant,
+                    rated=payload.rated,
+                    expires_at=payload.expires_at,
+                    match_id=payload.match_id,
+                )
+                if isinstance(payload, ChallengeSummary)
                 else None
             ),
             target=NotificationTargetResponse(type=record.target.type.value, ref=record.target.ref),
@@ -355,6 +405,7 @@ __all__ = [
     "InvalidCursor",
     "MarkAllReadResponse",
     "NotificationActorResponse",
+    "NotificationChallengeResponse",
     "NotificationGameResponse",
     "NotificationPageResponse",
     "NotificationPreferencesResponse",

@@ -1,5 +1,8 @@
 """The application services — the producers, the consumer, and the readers."""
 
+from app.modules.notifications.application.services.challenge_notification_dispatcher import (
+    ChallengeNotificationDispatcher,
+)
 from app.modules.notifications.application.services.durable_notification_writer import (
     DURABLE_TYPES,
     DurableNotificationWriter,
@@ -50,6 +53,7 @@ __all__ = [
     "DURABLE_TYPES",
     "MAX_PAGE_SIZE",
     "SUBSCRIBED_EVENT_TYPES",
+    "ChallengeNotificationDispatcher",
     "DuplicatePreferenceChange",
     "DurableNotificationWriter",
     "GameNotificationDispatcher",

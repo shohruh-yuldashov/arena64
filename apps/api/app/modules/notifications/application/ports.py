@@ -488,6 +488,27 @@ class NotificationRepository(Protocol):
         """
         ...
 
+    async def target_refs_for(self, claims: Sequence[tuple[UUID, UUID]]) -> Mapping[UUID, str]:
+        """The navigation `ref` of each named notification, by notification
+        id — A64-022.4 §10.
+
+        Added for the push worker, whose payload now carries the identifier
+        its click target needs. **Batch-only**, which is the point: the
+        alternative was `for_recipient` in a loop, and that is one query per
+        device per notification on the one path a tournament fans out
+        across.
+
+        `claims` are `(notification_id, recipient_id)` pairs, because
+        recipient scoping is half the key here as it is on every other
+        method (§30) — a delivery row whose recipient was somehow wrong
+        contributes no key rather than somebody else's destination.
+
+        A notification whose target carries no identifier is **absent from
+        the result** rather than present with `None`, so a caller reads one
+        shape: a key exists exactly when there is a ref to send.
+        """
+        ...
+
     async def mark_read(
         self, notification_id: UUID, *, recipient_id: UUID, at: datetime
     ) -> MarkReadOutcome:

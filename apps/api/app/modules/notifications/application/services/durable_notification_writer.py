@@ -262,7 +262,13 @@ class DurableNotificationWriter:
             # a row saying "somebody owes this an email"; the worker decides
             # whether to send it, minutes later, against the preference and
             # the address as they are *then* (§7).
-            if self._availability.can_deliver(DeliveryChannel.EMAIL):
+            # **Only if something was actually inserted.** A batch in which
+            # every row already existed is the redelivery case — a consumer
+            # that delivered and then died before the ledger committed — and
+            # it owes nothing, because the deliveries were enqueued the
+            # first time. Guarded here rather than inside each branch so
+            # that "no new rows means no new debts" is one statement.
+            if stored and self._availability.can_deliver(DeliveryChannel.EMAIL):
                 await self._deliveries.enqueue(deliveries_for(stored), at=_queued_at(stored))
 
             # **A64-021.6 §10 — the pushes are owed in the same transaction.**
@@ -277,7 +283,7 @@ class DurableNotificationWriter:
             # rows saying "these browsers owe this a push"; the worker
             # decides whether to send, minutes later, against the preference
             # and the subscriptions as they are *then* (§14).
-            if self._availability.can_deliver(DeliveryChannel.PUSH):
+            if stored and self._availability.can_deliver(DeliveryChannel.PUSH):
                 await self._push_deliveries.enqueue(
                     await self._push_deliveries_for(stored), at=_queued_at(stored)
                 )

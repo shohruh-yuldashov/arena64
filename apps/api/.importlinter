@@ -474,6 +474,18 @@ allow_indirect_imports = True
 # likelier direction) removes itself from the source list and adds a port to
 # `matchmaking.public`. The relaxation is then a visible, argued diff rather
 # than an import somebody happened to write.
+#
+# **A64-022.4 is that diff, and the consumer is `notifications`.** It reads
+# `matchmaking.public`'s two friend-challenge lifecycle events so a recipient
+# can be told they have been invited and a challenger can be told their game
+# exists. It is absent from the source list below and **still present** in
+# `matchmaking-internals-are-private` above, so the relaxation is exactly one
+# package wide: `notifications` may name `matchmaking.public` and nothing
+# else under `matchmaking`.
+#
+# No cycle becomes constructible. What crosses is a published event class —
+# a fact, not a capability — and `matchmaking` imports no part of
+# `notifications`, so the edge is one-directional.
 [importlinter:contract:matchmaking-is-not-a-dependency]
 name = no module depends on matchmaking
 type = forbidden
@@ -481,12 +493,22 @@ source_modules =
     app.modules.auth
     app.modules.avatars
     app.modules.friends
-    app.modules.notifications
     app.modules.profiles
     app.modules.statistics
     app.modules.users
 forbidden_modules =
     app.modules.matchmaking
+# **Direct imports only**, matching `matchmaking-internals-are-private` above
+# and for the reason that contract has always needed it: once one module is
+# allowed to name `matchmaking.public`, every module that reaches *it* gains
+# an indirect edge. `auth`'s router imports `notifications`' dependency
+# module, which builds the challenge consumer — a chain that says nothing
+# about whether `auth` depends on matchmaking, and everything about how a
+# composition root is assembled.
+#
+# What the contract still enforces is the statement worth keeping: none of
+# the modules below may write `import app.modules.matchmaking` itself.
+allow_indirect_imports = True
 
 
 # ---------------------------------------------------------------------------

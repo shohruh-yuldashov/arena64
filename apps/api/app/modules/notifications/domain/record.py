@@ -112,6 +112,26 @@ class NotificationType(StrEnum):
     TOURNAMENT_COMPLETED = "tournament_completed"
     """A tournament you played in is over, and the results are final."""
 
+    FRIEND_CHALLENGE_RECEIVED = "friend_challenge_received"
+    """A friend invited you to play — A64-022.4.
+
+    Durable because a challenge **waits**: it stays answerable for
+    twenty-four hours, and a recipient who was not in the app when it
+    arrived has no other way to find it. That is the same bar
+    `TOURNAMENT_REGISTRATION_CONFIRMED` clears and the opposite of the
+    pairing events A64-021.4 refused — those resolve in under a minute, so a
+    row about one is stale before it is read.
+    """
+
+    FRIEND_CHALLENGE_ACCEPTED = "friend_challenge_accepted"
+    """Your challenge was accepted, and the game exists — A64-022.4.
+
+    The **handoff**: the match is created at acceptance and both players
+    must still join it, so this row is how a challenger who was away learns
+    that there is a board waiting. It carries the match id, which is why its
+    target is the live game rather than a list.
+    """
+
     GAME_COMPLETED = "game_completed"
     """A game you played has finished — A64-021.4.
 
@@ -133,6 +153,8 @@ CATEGORY_OF: Final[Mapping[NotificationType, NotificationCategory]] = {
     NotificationType.TOURNAMENT_ROUND_PUBLISHED: NotificationCategory.TOURNAMENT,
     NotificationType.TOURNAMENT_COMPLETED: NotificationCategory.TOURNAMENT,
     NotificationType.GAME_COMPLETED: NotificationCategory.GAME,
+    NotificationType.FRIEND_CHALLENGE_RECEIVED: NotificationCategory.SOCIAL,
+    NotificationType.FRIEND_CHALLENGE_ACCEPTED: NotificationCategory.SOCIAL,
 }
 
 
@@ -160,6 +182,21 @@ class NavigationTargetType(StrEnum):
     FRIEND_REQUESTS = "friend_requests"
     """The incoming-requests list. `ref` is `None`: the destination is the
     viewer's own page and carries no identifier to get wrong."""
+
+    FRIENDS = "friends"
+    """The friend list. `ref` is `None`.
+
+    **A placeholder with a date on it — A64-022.4 §5.** A received friend
+    challenge belongs on a challenge surface, and A64-022.5 owns that
+    surface; it does not exist yet, so there is no route to name. The three
+    options were a route that 404s, a row that cannot be tapped, and the
+    closest existing truth — and this is the third: a challenge exists only
+    between friends, and `/friends` is the one page today that is about that
+    relationship.
+
+    A64-022.5 replaces this with its own target type, and the change is
+    two lines — this member and the client's mapper. Nothing else keys on
+    it."""
 
     TOURNAMENT = "tournament"
     """`ref` is the tournament's **id** — `/tournaments/{id}`. An id rather
@@ -277,11 +314,61 @@ class GameResultSummary:
     game that was played."""
 
 
-#: The payload union. Three members, and the alias is what `payload_of`
+@dataclass(frozen=True, slots=True)
+class ChallengeSummary:
+    """The friend challenge a notification is about — A64-022.4 §4.
+
+    Two types share this shape, and two of its fields are `None` for one of
+    them. That is `TournamentSummary`'s precedent and the same argument: an
+    invitation and its acceptance are two moments of **one** challenge, so
+    two payload classes would be two decoders, two wire keys and two client
+    branches for one noun.
+
+        expires_at   when the invitation stops being answerable. `None` on
+                     an acceptance, which has already been answered
+        match_id     the game acceptance produced. `None` on an invitation,
+                     because there is no game until somebody says yes
+
+    ## What is here and what is deliberately not
+
+    The settings are here — a challenge that said only "somebody invited
+    you" would make the recipient open a surface to learn what they were
+    being asked to play, which is the reason `FriendChallengeCreated`
+    carries them too.
+
+    The **other player** is here as an `ActorSummary`, composed through the
+    privacy gate exactly as every other social payload's actor is, and
+    `None` when they no longer have a public profile. What is not here is
+    anything about the *viewer*: no rating, no eligibility, no "can you
+    accept this" — a notification is a record of a fact, and whether a
+    challenge is still answerable is a question for the endpoint that
+    answers it.
+    """
+
+    challenge_id: UUID
+    opponent: ActorSummary | None
+    """The **other** party: the challenger on a received invitation, the
+    recipient on an accepted one. `None` when that account no longer has a
+    public profile — the challenge still happened."""
+
+    time_control_id: str
+    """A `reference.TimeControlId` value. Carried as its stable code rather
+    than as clock numbers, so a client renders it through the same catalogue
+    every other surface reads."""
+
+    variant: str
+    """A `game.ProductVariant` value."""
+
+    rated: bool
+    expires_at: datetime | None = None
+    match_id: UUID | None = None
+
+
+#: The payload union. Four members, and the alias is what `payload_of`
 #: dispatches on: a stored row is decoded against its own `type`, so a
 #: payload written by a producer that no longer exists fails at the row
 #: rather than reaching a client half-rendered.
-NotificationPayload = ActorSummary | TournamentSummary | GameResultSummary
+NotificationPayload = ActorSummary | TournamentSummary | GameResultSummary | ChallengeSummary
 
 
 @dataclass(frozen=True, slots=True)
@@ -390,6 +477,20 @@ def payload_as_json(payload: NotificationPayload) -> dict[str, Any]:
             "round_number": payload.round_number,
             "final_rank": payload.final_rank,
         }
+    if isinstance(payload, ChallengeSummary):
+        return {
+            "challenge_id": str(payload.challenge_id),
+            "time_control_id": payload.time_control_id,
+            "variant": payload.variant,
+            "rated": payload.rated,
+            "expires_at": None if payload.expires_at is None else payload.expires_at.isoformat(),
+            "match_id": None if payload.match_id is None else str(payload.match_id),
+            # Nested rather than flattened, for the reason the game payload
+            # below nests its own: the other player **is** an actor, and a
+            # second spelling of a shape this file already encodes is a
+            # second decoder to keep in step.
+            "opponent": None if payload.opponent is None else _actor_as_json(payload.opponent),
+        }
     return {
         "match_id": str(payload.match_id),
         "outcome": payload.outcome,
@@ -421,6 +522,8 @@ _PAYLOAD_SHAPE: Final[Mapping[NotificationType, str]] = {
     NotificationType.TOURNAMENT_ROUND_PUBLISHED: "tournament",
     NotificationType.TOURNAMENT_COMPLETED: "tournament",
     NotificationType.GAME_COMPLETED: "game",
+    NotificationType.FRIEND_CHALLENGE_RECEIVED: "challenge",
+    NotificationType.FRIEND_CHALLENGE_ACCEPTED: "challenge",
 }
 
 
@@ -439,6 +542,8 @@ def payload_of(type_: NotificationType, stored: Mapping[str, Any]) -> Notificati
         return _tournament_of(stored)
     if shape == "game":
         return _game_result_of(stored)
+    if shape == "challenge":
+        return _challenge_of(stored)
     # Unreachable while every member is mapped. Kept so that adding a type
     # without a decoder fails at the row rather than silently returning the
     # wrong shape.
@@ -470,6 +575,22 @@ def _game_result_of(stored: Mapping[str, Any]) -> GameResultSummary:
         raise MalformedNotification("stored payload does not match its type") from malformed
 
 
+def _challenge_of(stored: Mapping[str, Any]) -> ChallengeSummary:
+    try:
+        opponent = stored["opponent"]
+        return ChallengeSummary(
+            challenge_id=UUID(str(stored["challenge_id"])),
+            opponent=None if opponent is None else _actor_of(opponent),
+            time_control_id=str(stored["time_control_id"]),
+            variant=str(stored["variant"]),
+            rated=bool(stored["rated"]),
+            expires_at=_optional_instant(stored["expires_at"]),
+            match_id=_optional_uuid(stored["match_id"]),
+        )
+    except (KeyError, TypeError, ValueError) as malformed:
+        raise MalformedNotification("stored payload does not match its type") from malformed
+
+
 def _actor_of(stored: Mapping[str, Any]) -> ActorSummary:
     try:
         return ActorSummary(
@@ -493,9 +614,18 @@ def _optional_int(value: Any) -> int | None:
     return None if value is None else int(value)
 
 
+def _optional_instant(value: Any) -> datetime | None:
+    return None if value is None else datetime.fromisoformat(str(value))
+
+
+def _optional_uuid(value: Any) -> UUID | None:
+    return None if value is None else UUID(str(value))
+
+
 __all__ = [
     "CATEGORY_OF",
     "ActorSummary",
+    "ChallengeSummary",
     "GameResultSummary",
     "TournamentSummary",
     "NotificationAnnouncement",

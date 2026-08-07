@@ -38,6 +38,7 @@ from app.modules.notifications.application.ports import (
     DeliveryRequest,
     DuePushDelivery,
     NotificationDeliveryPolicy,
+    NotificationRepository,
     PushDeliveryRepository,
     PushSubscriptionRepository,
 )
@@ -97,6 +98,7 @@ class PushDeliveryService:
         *,
         deliveries: PushDeliveryRepository,
         subscriptions: PushSubscriptionRepository,
+        notifications: NotificationRepository,
         policy: NotificationDeliveryPolicy,
         provider: PushProvider | None,
         metrics: MetricsRecorder,
@@ -111,6 +113,7 @@ class PushDeliveryService:
     ) -> None:
         self._deliveries = deliveries
         self._subscriptions = subscriptions
+        self._notifications = notifications
         self._policy = policy
         # `None` when this process holds no VAPID key pair. Not an error:
         # the rows are settled as `SKIPPED_CHANNEL_UNAVAILABLE`, which is
@@ -142,10 +145,16 @@ class PushDeliveryService:
         if not claimed:
             return result
 
-        # Two batch reads for the whole pass, before a single message is
+        # Three batch reads for the whole pass, before a single message is
         # encrypted. §27: a per-delivery lookup here is the N+1 that only
         # appears once a real tournament fans out across real devices.
         subscriptions = await self._subscriptions_for(claimed)
+        # A64-022.4 §10. Scoped by `(notification_id, recipient_id)` pairs,
+        # so this read cannot reach a notification the claimed row does not
+        # already name — see `NotificationRepository.target_refs_for`.
+        refs = await self._notifications.target_refs_for(
+            [(delivery.notification_id, delivery.recipient_id) for delivery in claimed]
+        )
         permitted = await self._policy.permitted(
             [
                 DeliveryRequest(
@@ -159,7 +168,7 @@ class PushDeliveryService:
 
         revoked = 0
         for delivery in claimed:
-            outcome = await self._attempt(delivery, subscriptions, permitted)
+            outcome = await self._attempt(delivery, subscriptions, permitted, refs)
             result.counted(outcome)
             revoked += await self._resolve(delivery, outcome)
             self._metrics.increment(
@@ -223,6 +232,7 @@ class PushDeliveryService:
         delivery: DuePushDelivery,
         subscriptions: Mapping[UUID, PushSubscription],
         permitted: frozenset[DeliveryRequest],
+        refs: Mapping[UUID, str],
     ) -> PushDeliveryOutcome:
         """One device's delivery, decided and possibly sent.
 
@@ -254,13 +264,14 @@ class PushDeliveryService:
         # The provider is passed down rather than re-read from `self`, so
         # `_send` has a non-optional one by signature and needs no assertion
         # about a check its caller already made.
-        return await self._send(delivery, subscription, self._provider)
+        return await self._send(delivery, subscription, self._provider, refs)
 
     async def _send(
         self,
         delivery: DuePushDelivery,
         subscription: PushSubscription,
         provider: PushProvider,
+        refs: Mapping[UUID, str],
     ) -> PushDeliveryOutcome:
         """The one place a push service is contacted.
 
@@ -271,6 +282,10 @@ class PushDeliveryService:
         payload = PushPayload(
             notification_id=delivery.notification_id,
             type=delivery.notification_type,
+            # A64-022.4 §10. The notification's own target identifier, read
+            # in one batch above; absent for every type whose destination is
+            # a list, which is all but one of them.
+            ref=refs.get(delivery.notification_id),
         )
         message = PushMessage(
             recipient=PushRecipient(

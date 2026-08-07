@@ -28,7 +28,7 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, and_, func, or_, select, update
+from sqlalchemy import CursorResult, and_, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -176,6 +176,28 @@ class SqlAlchemyNotificationRepository:
             )
         )
         return None if row is None else self.to_domain(row)
+
+    async def target_refs_for(self, claims: Sequence[tuple[UUID, UUID]]) -> dict[UUID, str]:
+        """Every claimed notification's navigation ref, in **one** query.
+
+        A row-value `IN`, which is what makes the recipient half of the key
+        part of the predicate rather than a filter applied afterwards: a
+        `(notification_id, recipient_id)` pair that does not match a stored
+        row simply matches nothing.
+
+        Rows whose target carries no identifier are excluded by the query,
+        so an absent key means "no ref" and a present one is never `None`.
+        """
+        if not claims:
+            return {}
+
+        rows = await self._session.execute(
+            select(NotificationModel.id, NotificationModel.target_ref).where(
+                tuple_(NotificationModel.id, NotificationModel.recipient_id).in_(claims),
+                NotificationModel.target_ref.is_not(None),
+            )
+        )
+        return {row.id: row.target_ref for row in rows.all()}
 
     async def count_unread(self, recipient_id: UUID) -> int:
         """`COUNT(*)` over the partial index. No rows are loaded — §10."""

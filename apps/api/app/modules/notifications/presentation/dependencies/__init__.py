@@ -62,6 +62,7 @@ from app.modules.notifications.application.ports import (
     PushDeliveryRepository,
 )
 from app.modules.notifications.application.services import (
+    ChallengeNotificationDispatcher,
     DurableNotificationWriter,
     GameNotificationDispatcher,
     NotificationPreferenceService,
@@ -411,6 +412,12 @@ def build_push_delivery_service(
     return PushDeliveryService(
         deliveries=SqlAlchemyPushDeliveryRepository(session),
         subscriptions=SqlAlchemyPushSubscriptionRepository(session),
+        # A64-022.4 §10. Read-only, and used for exactly one thing: the
+        # navigation `ref` a click target needs, batched once per pass. The
+        # port is recipient-scoped throughout, so holding it here gives the
+        # worker no way to read a notification its own delivery rows do not
+        # already name.
+        notifications=SqlAlchemyNotificationRepository(session),
         policy=PreferenceDeliveryPolicy(
             preferences=SqlAlchemyNotificationPreferenceRepository(
                 session, availability=availability
@@ -478,6 +485,40 @@ def build_game_notification_dispatcher(
     return GameNotificationDispatcher(profiles=profiles, store=store)
 
 
+def build_challenge_notification_dispatcher(
+    session: AsyncSession,
+    *,
+    cache: SocialGraphCache,
+    profiles: BatchProfileRenderer,
+    store: DurableNotificationStore,
+) -> ChallengeNotificationDispatcher:
+    """The friend challenge consumer — A64-022.4 §15.
+
+    Shaped like its social sibling and for the same reasons: the graph
+    arrives through `CachedSocialGraphReader`, so the relay's block re-check
+    is served from `friends:v1:` on a hot backlog and can never disagree
+    with what the API says; the renderer is `profiles`' and is built at the
+    composition root.
+
+    What it does **not** hold is anything that can reach a challenge. The
+    lifecycle events carry every fact this consumer needs, so a dispatcher
+    able to read `matchmaking`'s tables would be one that could disagree
+    with the event it was handed — and `matchmaking.public` publishes no
+    reader for it to disagree with.
+    """
+    return ChallengeNotificationDispatcher(
+        graph=CachedSocialGraphReader(
+            SocialGraphReaderService(
+                friendships=SqlAlchemyFriendshipRepository(session),
+                blocks=SqlAlchemyBlockedPlayerRepository(session),
+            ),
+            cache,
+        ),
+        profiles=profiles,
+        store=store,
+    )
+
+
 def build_social_notification_dispatcher(
     session: AsyncSession,
     *,
@@ -523,6 +564,7 @@ __all__ = [
     "ChannelAvailabilityDep",
     "channel_availability_for",
     "email_channel_available",
+    "build_challenge_notification_dispatcher",
     "build_durable_notification_writer",
     "build_email_delivery_reader",
     "build_email_delivery_service",

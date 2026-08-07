@@ -1723,6 +1723,225 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/challenges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Challenge a friend to a game
+         * @description Invites one friend to play, at settings you choose.
+         *
+         *     **You are the challenger**, from the session. There is no field for it
+         *     and the schema forbids unknown ones, so a client cannot send an
+         *     invitation on somebody else's behalf even by trying.
+         *
+         *     `VerifiedUser`: challenging somebody reaches another player, and every
+         *     outward-facing write has required a confirmed address since A64-021.5H.
+         *
+         *     Refused when you are not friends, when either of you has blocked the
+         *     other — the **same** answer for both, so a block is not disclosed — when
+         *     the clock is not currently offered, or when a live challenge already
+         *     exists between you, in either direction.
+         *
+         *     Expires twenty-four hours from now. The clock is the server's.
+         */
+        post: operations["create_challenge_api_v1_challenges_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/challenges/incoming": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List challenges you have received
+         * @description Challenges **sent to you** that are still answerable, newest first.
+         *
+         *     `player` on each row is the *challenger* — the person deciding whether to
+         *     play is the one reading this, so the profile shown is the other party's.
+         *
+         *     **Live only.** A challenge that was answered, cancelled or has passed its
+         *     twenty-four hours leaves this list silently and is not deleted: the row
+         *     is the record that an invitation happened. There is deliberately no
+         *     history endpoint — that is a product decision nobody has taken, and an
+         *     unbounded one added quietly would be a list nobody designed.
+         *
+         *     Expiry is applied in the **query**, not to a fetched page, so `limit`
+         *     means what it says: a page of twenty is twenty live challenges or the end
+         *     of the list, never twenty rows of which some are stale.
+         *
+         *     **Keyset pagination, never offset.** Follow `page.next_cursor` until it
+         *     is `null`. There is no total — counting costs as much as the page and is
+         *     not what somebody triaging invitations needs.
+         */
+        get: operations["list_incoming_api_v1_challenges_incoming_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/challenges/outgoing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List challenges you have sent
+         * @description Challenges **you have sent** that are still live. See `incoming`.
+         *
+         *     `player` is the recipient here — the other party again.
+         */
+        get: operations["list_outgoing_api_v1_challenges_outgoing_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/challenges/{challenge_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one challenge
+         * @description One challenge you are part of, in either direction.
+         *
+         *     Registered **after** `/incoming` and `/outgoing` deliberately: FastAPI
+         *     matches routes in order, so a path parameter declared first would swallow
+         *     both of them and a client asking for its incoming list would get a
+         *     `422` about a malformed UUID.
+         *
+         *     A challenge that does not exist and one between two other people produce
+         *     the same `404` — see this module's docstring.
+         *
+         *     Terminal challenges are readable here, unlike in the lists: a client
+         *     holding an id it was given deserves to learn the invitation was declined
+         *     rather than that it vanished.
+         */
+        get: operations["get_challenge_api_v1_challenges__challenge_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Withdraw a challenge you sent
+         * @description Withdraws it. Only the challenger may.
+         *
+         *     `DELETE`, and it returns the challenge rather than `204`, because the row
+         *     is not deleted — it becomes `cancelled` and stays as the record that an
+         *     invitation happened. The verb describes what the *client* is doing to its
+         *     own resource; the body says what actually became of it.
+         *
+         *     **Permitted past expiry**, unlike declining. Cancelling an expired
+         *     challenge is somebody tidying a list, and refusing it would leave a row
+         *     they cannot clear until a sweep they cannot see runs.
+         */
+        delete: operations["cancel_challenge_api_v1_challenges__challenge_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/challenges/{challenge_id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept a challenge and start the game
+         * @description Says yes, and the game exists by the time this returns.
+         *
+         *     **No body.** The recipient accepts exactly the proposal already stored —
+         *     the time control, the variant and whether it counts were all chosen when
+         *     the challenge was sent, and a settings field here would be a way to
+         *     change what was agreed after agreeing to it.
+         *
+         *     Accepting a `rated` challenge **is** the consent that makes the match
+         *     rated. There is no second flag, and `Match.rated` is always the
+         *     challenge's.
+         *
+         *     Only the recipient may. A challenger who tries gets `403`: they are a
+         *     party and know it exists, so hiding it would be a fiction.
+         *
+         *     ## What has to still be true
+         *
+         *     The relationship is re-checked here rather than trusted from creation — a
+         *     friendship can end and a block can be placed in the twenty-four hours
+         *     between the two. The window is re-checked too, and the time control must
+         *     still be one the platform offers: a retired clock cannot be resolved to
+         *     the numbers a match needs, so the invitation can no longer be taken up.
+         *
+         *     Any of those failing means **no match and no acceptance** — the whole
+         *     operation is one transaction.
+         *
+         *     ## The handoff
+         *
+         *     `created_match_id` on the response is the game. A client navigates to it;
+         *     there is deliberately no URL in the payload, because a route is the
+         *     client's to build and a server-supplied one is a redirect nobody
+         *     validated.
+         */
+        post: operations["accept_challenge_api_v1_challenges__challenge_id__accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/challenges/{challenge_id}/decline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decline a challenge you received
+         * @description Says no. Only the recipient may.
+         *
+         *     A challenger who tries gets `403`, not `404`: they are a party to it and
+         *     know it exists, so hiding it would be a fiction rather than a protection.
+         *
+         *     **Not idempotent.** A second decline is refused rather than reported as
+         *     success, because the platform cannot tell a double-click from a client
+         *     that missed the first answer — and quietly succeeding would let a
+         *     duplicate emit a second event to everything downstream.
+         *
+         *     Answering an expired challenge is refused too. Twenty-four hours is
+         *     server-authoritative and a device's clock has no say in it.
+         */
+        post: operations["decline_challenge_api_v1_challenges__challenge_id__decline_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/blocks": {
         parameters: {
             query?: never;
@@ -2882,9 +3101,19 @@ export interface components {
             data: components["schemas"]["BrowserSession"];
             meta: components["schemas"]["ResponseMeta"];
         };
+        /** ApiResponse[ChallengeResponse] */
+        ApiResponse_ChallengeResponse_: {
+            data: components["schemas"]["ChallengeResponse"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
         /** ApiResponse[CursorPage[BlockedPlayerResponse]] */
         ApiResponse_CursorPage_BlockedPlayerResponse__: {
             data: components["schemas"]["CursorPage_BlockedPlayerResponse_"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        /** ApiResponse[CursorPage[ChallengeResponse]] */
+        ApiResponse_CursorPage_ChallengeResponse__: {
+            data: components["schemas"]["CursorPage_ChallengeResponse_"];
             meta: components["schemas"]["ResponseMeta"];
         };
         /** ApiResponse[CursorPage[FriendRequestResponse]] */
@@ -3397,6 +3626,113 @@ export interface components {
             user: components["schemas"]["UserRead"];
         };
         /**
+         * ChallengeResponse
+         * @description One challenge, with the other party's public profile.
+         */
+        ChallengeResponse: {
+            /**
+             * Id
+             * Format: uuid
+             * @description The challenge identifier. Pass it to the decline and cancel endpoints — it is the only handle a client needs, and it is scoped to the two players involved.
+             * @example 019fb9ea-1b2c-7def-8a45-90ab12cd34ef
+             */
+            id: string;
+            /**
+             * @description Where the challenge is in its lifecycle. Both list endpoints return only live `pending` challenges; the other values appear in the response to the action that produced them. `accepted` is declared and unreachable until acceptance is built.
+             * @example pending
+             */
+            status: components["schemas"]["ChallengeStatus"];
+            /** @description The **other** party — the challenger on an incoming challenge, the recipient on an outgoing one. Identical in shape and in privacy behaviour to `GET /profiles/{username}`. */
+            player: components["schemas"]["ProfileResponse"];
+            /** @example blitz_3_2 */
+            time_control_id: components["schemas"]["TimeControlId"];
+            /** @example russian_8x8 */
+            variant: components["schemas"]["ProductVariant"];
+            /** Rated */
+            rated: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             * @description When the challenge was sent, UTC.
+             */
+            created_at: string;
+            /**
+             * Expires At
+             * Format: date-time
+             * @description When it stops being answerable, UTC — twenty-four hours after it was sent. Server-authoritative: a challenge past this cannot be declined however the clock on a device reads.
+             */
+            expires_at: string;
+            /**
+             * Responded At
+             * @description When it was answered, UTC. `null` while it is `pending` — the two always agree, because a database CHECK enforces the pairing.
+             */
+            responded_at?: string | null;
+            /**
+             * Created Match Id
+             * @description The match acceptance produced. Always `null` today: acceptance is not built, and a client can never supply this.
+             */
+            created_match_id?: string | null;
+        };
+        /**
+         * ChallengeStatus
+         * @description Where a challenge stands. Only `PENDING` may transition.
+         *
+         *     `domain-model.md` §10.3's lifecycle names are `Offered → (Accepted →
+         *     Consumed | Declined | Withdrawn | Expired | Voided-by-block)`. Three
+         *     deliberate differences:
+         *
+         *         `PENDING` for `Offered`     the word the rest of this platform uses
+         *                                     for "sent and unanswered" — a friend
+         *                                     request is `pending`, a delivery is
+         *                                     `pending`. One vocabulary
+         *         `CANCELLED` for `Withdrawn` likewise: `friends` already cancels a
+         *                                     request
+         *         no `Consumed`               `ACCEPTED` *is* consumption, because
+         *                                     acceptance creates the match in the same
+         *                                     transaction. A separate `Consumed` would
+         *                                     be a state between two halves of one
+         *                                     commit, which cannot be observed
+         *
+         *     `Voided-by-block` is **absent and deferred**, not dropped. A block placed
+         *     after a challenge is sent should void it, and doing that needs a consumer
+         *     of `friends.player_blocked` — which is a phase with an event subscriber
+         *     in it, not this one. Adding an unreachable member for it would leave two
+         *     states nothing can produce; see `ACCEPTED` on why one is already the
+         *     most this phase should carry.
+         * @enum {string}
+         */
+        ChallengeStatus: "pending" | "accepted" | "declined" | "cancelled" | "expired";
+        /**
+         * CreateChallengeRequest
+         * @description One player inviting one friend.
+         */
+        CreateChallengeRequest: {
+            /**
+             * Recipient Id
+             * Format: uuid
+             * @description Who to invite. Must be a friend you have not blocked and who has not blocked you — the server decides both, from the social graph, and answers the same way for either.
+             * @example 019fb9ea-0a0c-7cec-9c5f-402727c31a96
+             */
+            recipient_id: string;
+            /**
+             * @description Which clock, by its stable code. Validated against the **active** catalogue, so a control that has been retired is refused for a new challenge while older ones remain readable.
+             * @example blitz_3_2
+             */
+            time_control_id: components["schemas"]["TimeControlId"];
+            /**
+             * @description Which rule set. One value today.
+             * @default russian_8x8
+             * @example russian_8x8
+             */
+            variant: components["schemas"]["ProductVariant"];
+            /**
+             * Rated
+             * @description Whether you are **asking** for this to count towards ratings. Not an agreement: Arena64 requires both players to consent before a direct game affects ratings, and the recipient's half of that happens at acceptance. Nothing can currently grant it, because acceptance is not built yet.
+             * @default false
+             */
+            rated: boolean;
+        };
+        /**
          * CursorPageInfo
          * @description Metadata for a keyset-paginated result. Deliberately no `total`:
          *     RP-03's whole point is avoiding a count that gets slower the deeper a
@@ -3413,6 +3749,12 @@ export interface components {
         CursorPage_BlockedPlayerResponse_: {
             /** Items */
             items: components["schemas"]["BlockedPlayerResponse"][];
+            page: components["schemas"]["CursorPageInfo"];
+        };
+        /** CursorPage[ChallengeResponse] */
+        CursorPage_ChallengeResponse_: {
+            /** Items */
+            items: components["schemas"]["ChallengeResponse"][];
             page: components["schemas"]["CursorPageInfo"];
         };
         /** CursorPage[FriendRequestResponse] */
@@ -3473,7 +3815,7 @@ export interface components {
          *     per module and stops being a useful thing to exhaustively switch over.
          * @enum {string}
          */
-        ErrorCode: "internal_error" | "validation_error" | "domain_error" | "authentication_failed" | "not_found" | "conflict" | "permission_denied" | "precondition_failed" | "rule_violation" | "rate_limited" | "unsupported_engine_version" | "invalid_cursor" | "tournament_not_found" | "registration_not_open" | "registration_deadline_passed" | "tournament_full" | "already_registered" | "registration_not_found" | "invalid_tournament_state" | "infrastructure_error" | "transient_infrastructure_error" | "permanent_infrastructure_error" | "username_already_exists" | "email_already_exists" | "duplicate_friend_request" | "opposite_friend_request_pending" | "invalid_username" | "invalid_email" | "weak_password" | "invalid_credentials" | "inactive_account" | "account_locked" | "authentication_required" | "invalid_token" | "expired_token" | "invalid_session" | "session_expired" | "invalid_verification_token" | "invalid_reset_token" | "avatar_too_large" | "queue_cooldown_active" | "unsupported_time_control" | "notification_preference_locked" | "notification_channel_unavailable" | "duplicate_preference_change" | "email_verification_code_invalid" | "email_verification_code_expired" | "email_verification_attempts_exceeded" | "email_verification_resend_too_soon" | "email_already_verified" | "email_verification_required";
+        ErrorCode: "internal_error" | "validation_error" | "domain_error" | "authentication_failed" | "not_found" | "conflict" | "permission_denied" | "precondition_failed" | "rule_violation" | "rate_limited" | "unsupported_engine_version" | "invalid_cursor" | "tournament_not_found" | "registration_not_open" | "registration_deadline_passed" | "tournament_full" | "already_registered" | "registration_not_found" | "invalid_tournament_state" | "infrastructure_error" | "transient_infrastructure_error" | "permanent_infrastructure_error" | "username_already_exists" | "email_already_exists" | "duplicate_friend_request" | "opposite_friend_request_pending" | "invalid_username" | "invalid_email" | "weak_password" | "invalid_credentials" | "inactive_account" | "account_locked" | "authentication_required" | "invalid_token" | "expired_token" | "invalid_session" | "session_expired" | "invalid_verification_token" | "invalid_reset_token" | "avatar_too_large" | "queue_cooldown_active" | "unsupported_time_control" | "notification_preference_locked" | "notification_channel_unavailable" | "duplicate_preference_change" | "email_verification_code_invalid" | "email_verification_code_expired" | "email_verification_attempts_exceeded" | "email_verification_resend_too_soon" | "email_already_verified" | "email_verification_required" | "challenge_self_not_allowed" | "challenge_not_friends" | "challenge_already_pending" | "challenge_not_pending" | "challenge_expired" | "challenge_invalid_time_control";
         /**
          * ErrorResponse
          * @description The only shape an Arena64 error takes on the wire: a safe message and
@@ -4380,6 +4722,50 @@ export interface components {
          */
         NotificationCategory: "social" | "game" | "tournament" | "system";
         /**
+         * NotificationChallengeResponse
+         * @description The friend challenge a notification is about — A64-022.4 §4.
+         *
+         *     `expires_at` is present on an invitation and `null` on an acceptance;
+         *     `match_id` is the reverse. Both keys are always sent rather than omitted,
+         *     so a client reads one shape and branches on `type` as it already does.
+         *
+         *     `opponent` is the **other** player through the privacy gate, and `null`
+         *     when that account no longer has a public profile.
+         */
+        NotificationChallengeResponse: {
+            /**
+             * Challenge Id
+             * Format: uuid
+             */
+            challenge_id: string;
+            /** @description The other player, or `null` when that account no longer has a profile. */
+            opponent: components["schemas"]["NotificationActorResponse"] | null;
+            /**
+             * Time Control Id
+             * @description A `TimeControlId` value — the catalogue code, never raw clock numbers.
+             * @example blitz_3_2
+             */
+            time_control_id: string;
+            /**
+             * Variant
+             * @description A `ProductVariant` value.
+             * @example russian_8x8
+             */
+            variant: string;
+            /** Rated */
+            rated: boolean;
+            /**
+             * Expires At
+             * @description When the invitation stops being answerable, or `null` once it was answered.
+             */
+            expires_at: string | null;
+            /**
+             * Match Id
+             * @description The game acceptance produced, or `null` on an invitation.
+             */
+            match_id: string | null;
+        };
+        /**
          * NotificationGameResponse
          * @description The finished game a notification is about — §8.
          *
@@ -4473,6 +4859,8 @@ export interface components {
             tournament?: components["schemas"]["NotificationTournamentResponse"] | null;
             /** @description The game a completed-game notification is about. */
             game?: components["schemas"]["NotificationGameResponse"] | null;
+            /** @description The friend challenge a challenge notification is about. */
+            challenge?: components["schemas"]["NotificationChallengeResponse"] | null;
             target: components["schemas"]["NotificationTargetResponse"];
             /**
              * Created At
@@ -8368,6 +8756,397 @@ export interface operations {
             };
             /** @description Too many friend-request actions from this account. Counted **per user**, not per network address, so a shared connection is never somebody else's problem. `Retry-After` says how long to wait. */
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_challenge_api_v1_challenges_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateChallengeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_ChallengeResponse_"];
+                };
+            };
+            /** @description No or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A live challenge already exists, or this one was answered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request or the challenge's state refuses this */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_incoming_api_v1_challenges_incoming_get: {
+        parameters: {
+            query?: {
+                /** @description Challenges per page. */
+                limit?: number;
+                /** @description Opaque cursor from a previous page. Pass it back unchanged. */
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_CursorPage_ChallengeResponse__"];
+                };
+            };
+            /** @description No or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request or the challenge's state refuses this */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_outgoing_api_v1_challenges_outgoing_get: {
+        parameters: {
+            query?: {
+                /** @description Challenges per page. */
+                limit?: number;
+                /** @description Opaque cursor from a previous page. Pass it back unchanged. */
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_CursorPage_ChallengeResponse__"];
+                };
+            };
+            /** @description No or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request or the challenge's state refuses this */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_challenge_api_v1_challenges__challenge_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Which challenge to read. */
+                challenge_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_ChallengeResponse_"];
+                };
+            };
+            /** @description No or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such challenge of yours */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_challenge_api_v1_challenges__challenge_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Which challenge to withdraw. */
+                challenge_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_ChallengeResponse_"];
+                };
+            };
+            /** @description No or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description You are a party to this challenge but not the right one */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such challenge of yours */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A live challenge already exists, or this one was answered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_challenge_api_v1_challenges__challenge_id__accept_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Which challenge to accept. */
+                challenge_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_ChallengeResponse_"];
+                };
+            };
+            /** @description No or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description You are a party to this challenge but not the right one */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such challenge of yours */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A live challenge already exists, or this one was answered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request or the challenge's state refuses this */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    decline_challenge_api_v1_challenges__challenge_id__decline_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Which challenge to decline. */
+                challenge_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_ChallengeResponse_"];
+                };
+            };
+            /** @description No or invalid access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description You are a party to this challenge but not the right one */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such challenge of yours */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A live challenge already exists, or this one was answered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request or the challenge's state refuses this */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

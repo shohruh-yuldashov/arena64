@@ -77,6 +77,18 @@ PUSH_CAPABLE_TYPES: Final[frozenset[NotificationType]] = frozenset(
         # exists at all.
         NotificationType.FRIEND_REQUEST_RECEIVED,
         NotificationType.FRIEND_REQUEST_ACCEPTED,
+        # The challenge two — A64-022.4 §8. Both are somebody *waiting*, and
+        # both have a clock on them: an invitation expires in twenty-four
+        # hours, and an acceptance creates a match whose join window is ten
+        # minutes. A challenge nobody sees is a game that does not happen,
+        # which is the whole reason this platform has a push channel.
+        #
+        # The abuse bound is the one the friend types already rely on, and
+        # it is tighter here: a challenge can only be sent to a **friend**,
+        # only one may be live per pair, and `challenge_create_user` caps
+        # the rate. A stranger cannot reach this type at all.
+        NotificationType.FRIEND_CHALLENGE_RECEIVED,
+        NotificationType.FRIEND_CHALLENGE_ACCEPTED,
     }
 )
 
@@ -131,16 +143,49 @@ class PushPayload:
     notification_id: UUID
     type: NotificationType
 
+    ref: str | None = None
+    """The notification's own navigation identifier — A64-022.4 §10.
+
+    Added because the click contract acquired a destination that **names a
+    thing**: an accepted challenge opens `/games/{match_id}`, and until this
+    field existed every route in the worker's table was a parameterless
+    list. A player woken by "your challenge was accepted" landed on the
+    notification list and had to tap again, inside a ten-minute join window.
+
+    ## Why this is not "a URL in a payload" wearing a different name
+
+    It is the `ref` of `NavigationTarget` — the same closed target model the
+    in-app row resolves, read from the notification this push describes. The
+    worker still owns every route: it maps a **type** to a path shape and
+    substitutes this value into it. There is no branch that can turn a `ref`
+    into a scheme, a host, or a path this build did not compile in, so the
+    same-origin property is unchanged.
+
+    `None` for every type whose destination is a list, which is all but one
+    of them, and omitted from the wire entirely when absent — a key that is
+    always `null` would be pure cost against the 4 KB budget.
+
+    ## What it may be
+
+    An identifier of something the **recipient is already party to**: today,
+    the id of a match they are a player in. It is opaque, it names no
+    person, and it grants nothing — `/games/{id}` authorises against the
+    session, not against knowledge of the id.
+    """
+
     def as_dict(self) -> dict[str, str]:
         """The wire form — short keys, because 4 KB is the budget.
 
-        `n` and `t` rather than `notification_id` and `type`: the encrypted
-        envelope has a fixed 86-byte overhead and every push service caps
-        the result, so the key names are pure cost. The service worker's
-        reader is the only consumer and it is compiled from the same
-        decision.
+        `n`, `t` and `r` rather than `notification_id`, `type` and `ref`:
+        the encrypted envelope has a fixed 86-byte overhead and every push
+        service caps the result, so the key names are pure cost. The service
+        worker's reader is the only consumer and it is compiled from the
+        same decision.
         """
-        return {"n": str(self.notification_id), "t": self.type.value}
+        wire = {"n": str(self.notification_id), "t": self.type.value}
+        if self.ref is not None:
+            wire["r"] = self.ref
+        return wire
 
 
 __all__ = ["PUSH_CAPABLE_TYPES", "PushPayload", "supports_push"]

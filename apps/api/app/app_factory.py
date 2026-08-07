@@ -113,6 +113,12 @@ from app.modules.notifications.application.services import (
     SUBSCRIBED_EVENT_TYPES,
     SocialNotificationDispatcher,
 )
+from app.modules.notifications.application.services.challenge_notification_dispatcher import (
+    CONSUMER_NAME as CHALLENGE_NOTIFICATION_CONSUMER,
+)
+from app.modules.notifications.application.services.challenge_notification_dispatcher import (
+    SUBSCRIBED_EVENT_TYPES as CHALLENGE_NOTIFICATION_EVENTS,
+)
 from app.modules.notifications.application.services.game_notification_dispatcher import (
     CONSUMER_NAME as GAME_NOTIFICATION_CONSUMER,
 )
@@ -139,6 +145,7 @@ from app.modules.notifications.infrastructure.tasks import (
     push_delivery_request,
 )
 from app.modules.notifications.presentation.dependencies import (
+    build_challenge_notification_dispatcher,
     build_durable_notification_writer,
     build_email_delivery_service,
     build_game_notification_dispatcher,
@@ -735,6 +742,42 @@ def build_outbox_worker(
             ),
             consumer=GAME_NOTIFICATION_CONSUMER,
             event_types=GAME_NOTIFICATION_EVENTS,
+        )
+    )
+    # A64-022.4. The friend challenge consumer, and the first time
+    # `notifications` names `matchmaking` at all — see `.importlinter`'s
+    # `matchmaking-is-not-a-dependency` on why that relaxation is one
+    # package wide and carries no capability.
+    #
+    # Its **own** `processed_event` partition, like every consumer here.
+    # Nothing else subscribes to the challenge events today; the partition
+    # exists so that when something does, neither can mark the other's work
+    # done.
+    handlers.append(
+        SessionScopedNotificationHandler(
+            session_factory=db.session_factory,
+            dispatcher_factory=lambda session: build_challenge_notification_dispatcher(
+                session,
+                cache=NoSocialGraphCache()
+                if not settings.friends.cache_enabled
+                else RedisSocialGraphCache(redis_pools.cache, settings=settings.friends),
+                profiles=build_profile_renderer(
+                    session,
+                    pools=redis_pools,
+                    settings=settings,
+                    cache=NoSocialGraphCache()
+                    if not settings.friends.cache_enabled
+                    else RedisSocialGraphCache(redis_pools.cache, settings=settings.friends),
+                    clock=clock,
+                ),
+                store=build_durable_notification_writer(
+                    session,
+                    announcer=notification_announcer,
+                    availability=channel_availability,
+                ),
+            ),
+            consumer=CHALLENGE_NOTIFICATION_CONSUMER,
+            event_types=CHALLENGE_NOTIFICATION_EVENTS,
         )
     )
     if settings.matchmaking.realtime_delivery_enabled:

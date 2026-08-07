@@ -56,7 +56,7 @@ history every time somebody renamed themselves.
 
 ## 2. Supported types
 
-Six, and each has a source event that names its recipients unambiguously.
+Eight, and each has a source event that names its recipients unambiguously.
 
 | Type | Category | Source event | Recipients | Target | Phase |
 | --- | --- | --- | --- | --- | --- |
@@ -66,6 +66,8 @@ Six, and each has a source event that names its recipients unambiguously.
 | `tournament_round_published` | `tournament` | `tournament.round_published` | every **live** entrant | `tournament` | A64-021.4 |
 | `tournament_completed` | `tournament` | `tournament.completed` | everybody with a **standing** | `tournament` | A64-021.4 |
 | `game_completed` | `game` | `game.match_completed` | both seats | `match_replay` | A64-021.4 |
+| `friend_challenge_received` | `social` | `matchmaking.friend_challenge_created` | the recipient | `friends` (placeholder — see `specs/friend-challenges.md` §20) | A64-022.4 |
+| `friend_challenge_accepted` | `social` | `matchmaking.friend_challenge_accepted` | the **challenger** | `live_game` | A64-022.4 |
 
 **No actor is told what they just did.** Sending a request notifies the
 addressee; accepting one notifies the requester. A notification about your
@@ -97,6 +99,8 @@ does nothing.
 | `tournament_round_published` | `status = REGISTERED` at **delivery** time | The audience query's own predicate, so a withdrawal between publication and delivery excludes them without a filter anybody has to remember |
 | `tournament_completed` | Anyone with a row in `standing` | A player who withdrew before the field was fixed has no result, and telling them where they did not place is worse than silence |
 | `game_completed` | The two seats on the event | Nothing is read back |
+| `friend_challenge_received` | The recipient named on the event, **unless the pair is blocked at delivery time** | `SocialGraphReader.blocked_ids_for`, re-read by the consumer — never the enqueue-time state |
+| `friend_challenge_accepted` | The challenger named on the event | Nothing is read back, and no block suppresses it — see `specs/friend-challenges.md` §21 |
 
 **No recipient ever comes from a client.** Every one is derived from the
 event or from a `tournament.public` read; there is no endpoint, parameter or
@@ -112,6 +116,9 @@ payload field through which a caller can name who is notified.
 | `match_found` | `game.match_created` has every fact needed, and the offer expires in seconds. A durable row for it would be a list full of dead offers; it belongs with realtime delivery |
 | `friend_online` / `friend_offline` | Genuinely transient. A row per transition would be thousands a day in a list whose value is that it is short |
 | every move, draw offers, typing | Live game state and short-lived commands, not history |
+| `friend_challenge_declined` | The challenger learns nothing actionable — a decline carries no reason by design, so the row would say "no", permanently, in a list whose value is that it is short |
+| `friend_challenge_cancelled` | A **retraction**. Its consumer is a surface that must stop showing an invitation, not an inbox that must start showing one |
+| `friend_challenge_expired` | Nothing happened. A row saying so is an inbox entry about the absence of an event |
 
 The distinction those last four draw is the one that matters: **not every
 notification is durable.** An event whose fact is wrong by the time it is
@@ -125,7 +132,7 @@ Each type has a typed payload, decoded against the row's own `type` on the
 way out. A row whose JSON does not match raises rather than reaching a
 client half-rendered.
 
-Three shapes, and `type` decides which:
+Four shapes, and `type` decides which:
 
 **`ActorSummary`** — the two social types.
 
@@ -154,6 +161,23 @@ Three shapes, and `type` decides which:
 | `termination_reason` | `game`'s own value. "You lost" and "you lost on time" are different sentences, and an adjudicated result is the case this type exists for |
 | `opponent` | An actor summary, or `null` when that account no longer has a profile. The game was still played |
 
+**`ChallengeSummary`** — the two challenge types, A64-022.4.
+
+| Field | Note |
+| --- | --- |
+| `challenge_id` | |
+| `opponent` | An actor summary — the challenger on a received invitation, the recipient on an accepted one. `null` when that account no longer has a profile |
+| `time_control_id` | The catalogue **code**, never raw clock numbers. A client renders it through the same catalogue every other surface reads |
+| `variant` | |
+| `rated` | What was agreed, not what was asked: an acceptance is the recipient's half of the consent |
+| `expires_at` | When the invitation stops being answerable. `null` on an acceptance, which has already been answered |
+| `match_id` | The game acceptance produced. `null` on an invitation |
+
+Two types share one shape for the reason `TournamentSummary`'s three do: an
+invitation and its acceptance are two moments of **one** challenge, and two
+payload classes would be two decoders, two wire keys and two client branches
+for one noun.
+
 **Never stored:** an email address, a private profile field, a token or
 ticket, a Redis key, an internal identifier with no public meaning, a stack
 trace, the raw source event payload, a bracket, a standings table, or an
@@ -178,6 +202,7 @@ build's routing into rows that outlive it.
 | Target | `ref` | Route |
 | --- | --- | --- |
 | `friend_requests` | `null` | `/friends/requests` |
+| `friends` | `null` | `/friends` |
 | `player_profile` | the actor's username | `/players/{username}` |
 | `tournament` | the tournament's id | `/tournaments/{id}` |
 | `live_game` | the match's id | `/games/{id}` |
@@ -186,9 +211,16 @@ build's routing into rows that outlive it.
 `live_game` and `match_replay` are separate rather than one target the
 client decides between: whether a game is still being played is a **server**
 fact, and a client that guessed would send somebody to a live board that
-ended yesterday. Nothing produces `live_game` yet — it is here because
-`match_replay`'s existence made the distinction worth naming, and the client
-mapper handles both.
+ended yesterday. `live_game` acquired its first producer in A64-022.4 —
+`friend_challenge_accepted`, whose whole point is reaching a board that
+exists and has not started.
+
+`friends` is a **placeholder with a date on it**, and the only target here
+that is not the destination its type wants. A received challenge belongs on
+a challenge surface; A64-022.5 owns that surface and it does not exist yet.
+The three options were a route that 404s, a row that cannot be tapped, and
+the closest existing truth — a challenge exists only between friends. When
+A64-022.5 lands, this member and the client's mapper change together.
 
 The client maps a target onto a route it already owns and renders anything
 it does not recognise as a **non-navigable** notification. External
@@ -923,6 +955,8 @@ email channel sends.
 
 | `friend_request_received` | A64-021.6A. Somebody is waiting: a request nobody sees is a request that expires |
 | `friend_request_accepted` | A64-021.6A. The moment two people can actually play |
+| `friend_challenge_received` | A64-022.4. Somebody is waiting, with a clock: the invitation expires in twenty-four hours |
+| `friend_challenge_accepted` | A64-022.4. A match now exists and both players must join it inside ten minutes |
 
 | Not pushed | Why |
 | --- | --- |
@@ -956,6 +990,18 @@ What remains is a stranger's twenty an hour — the same volume the in-app
 badge and the realtime frame have always carried — and a person who does not
 want it mutes the `social` category, which the matrix has offered since
 A64-021.3.
+
+#### The challenge types — A64-022.4
+
+The same argument, and the bound is **tighter**: a challenge can only be sent
+to a friend, only one may be live per unordered pair, and
+`challenge_create_user` caps the rate. A stranger cannot reach either type at
+all, so the abuse surface the friend types had to argue about does not exist
+here.
+
+Email is **not** enabled for either. Nothing about a challenge decays over
+hours the way a tournament round does — it lives for twenty-four — and the
+channel that matters is the one that reaches a phone in seconds.
 
 ### 15.2 Subscriptions
 
@@ -1025,12 +1071,23 @@ after a round is published is not pushed.
 
 ### 15.5 The payload, and what a lock screen says
 
-Two fields: `{"n": <notification id>, "t": <type>}`, short keys because the
-encrypted envelope has a fixed 86-byte overhead against a ~4 KB ceiling.
+Three fields at most:
+`{"n": <notification id>, "t": <type>, "r": <navigation ref>}`, short keys
+because the encrypted envelope has a fixed 86-byte overhead against a ~4 KB
+ceiling. `r` is omitted entirely when the type's destination is a list,
+which is every type but one.
 
 Absent, deliberately: the notification body, any display name, any address,
 any token, and any URL. A push payload lands in a browser's notification
 store on a device that may be shared, and shows on a lock screen.
+
+`r` is the **`ref` of the notification's own `NavigationTarget`** (§4), read
+by the delivery worker in one batched, recipient-scoped query — not a path
+and not a URL. The worker still owns every route: it maps a *type* to a path
+shape and substitutes this value into it, and it accepts a UUID and nothing
+else, so a malformed ref falls back to the list rather than contributing a
+path segment. Today the only value it carries is a match id, for a match the
+recipient is already a player in.
 
 The **text** is a closed table compiled into the service worker
 (`pwa/push-presentation.ts`) — §12's approach B, and every `path` in it comes
@@ -1045,6 +1102,8 @@ the product name and the body names nobody.
 | --- | --- | --- |
 | `friend_request_received` | *Arena64* — "You have a new friend request." | `/friends/requests` |
 | `friend_request_accepted` | *Arena64* — "Your friend request was accepted." | `/friends` |
+| `friend_challenge_received` | *Arena64* — "You have a new game challenge." | `/friends` (until A64-022.5) |
+| `friend_challenge_accepted` | *Arena64* — "Your game challenge was accepted." | `/games/{match_id}` |
 
 A tournament notification discloses that somebody plays in tournaments; a
 social one would disclose **who is trying to reach them**, on a lock screen,
@@ -1069,9 +1128,16 @@ path, so there is no branch that can concatenate a payload value into a URL.
 The worker resolves it against its own origin and refuses anything that does
 not stay there.
 
-Every route is a list (`/tournaments`, `/notifications`) rather than an item,
-because the payload's id names a *notification* and not a tournament —
+Every route was a list (`/tournaments`, `/notifications`) rather than an
+item, because the payload's id names a *notification* and not a tournament —
 `/tournaments/{notification id}` would open something that does not exist.
+
+A64-022.4 added the one exception, and it is not a relaxation of that rule
+but its resolution: `friend_challenge_accepted` carries an identifier that
+names the **thing itself**, so the worker can open `/games/{match_id}`. It
+still concatenates nothing from the payload into a URL — the path shape is
+compiled in and the substituted value must be a UUID. A ref that is absent,
+empty or malformed falls back to `/notifications`.
 A protected route may bounce to `/login` and back, unchanged by this being a
 push.
 

@@ -99,6 +99,62 @@ describe("the social types — A64-021.6A", () => {
   });
 });
 
+describe("the challenge types — A64-022.4", () => {
+  const MATCH_ID = "019fb9ea-1b2c-7def-8a45-90ab12cd34ef";
+
+  it("says a challenge arrived without saying who sent it", () => {
+    // **§9.** The same rule the friend types follow, and for a stronger
+    // reason: a challenge names *who wants to play you*, plus the clock and
+    // whether it counts — three disclosures on one lock screen.
+    const received = presentationFor({ n: NOTIFICATION_ID, t: "friend_challenge_received" });
+    const accepted = presentationFor({ n: NOTIFICATION_ID, t: "friend_challenge_accepted" });
+
+    expect(received.title).toBe("Arena64");
+    expect(received.body).toBe("You have a new game challenge.");
+    expect(accepted.title).toBe("Arena64");
+    expect(accepted.body).toBe("Your game challenge was accepted.");
+  });
+
+  it("opens the created game when the payload names one", () => {
+    // **§10**, and the reason the payload gained a ref at all: the match
+    // exists, both players still have to join it, and the window is ten
+    // minutes. Landing on the list and tapping again spends that window.
+    const { path } = presentationFor({
+      n: NOTIFICATION_ID,
+      t: "friend_challenge_accepted",
+      r: MATCH_ID,
+    });
+
+    expect(path).toBe(`/games/${MATCH_ID}`);
+  });
+
+  it("falls back to the list when the ref is absent or not an identifier", () => {
+    // A missing ref is an ordinary state — an older backend, or a delivery
+    // row whose notification has been swept. A malformed one is the
+    // interesting case: it must not reach a path, and it must not produce
+    // nothing either.
+    const refs = [undefined, "", "not-a-uuid", "../../etc/passwd", "https://evil.example.com"];
+
+    for (const r of refs) {
+      const { path } = presentationFor({
+        n: NOTIFICATION_ID,
+        t: "friend_challenge_accepted",
+        r,
+      });
+      expect(path).toBe(NOTIFICATION_ROUTES.notifications);
+    }
+  });
+
+  it("sends a received challenge where the in-app row sends it", () => {
+    // A64-022.5 replaces this with the challenge surface. Until then both
+    // consumers resolve the same constant, so a push whose text says
+    // "challenge" cannot open a different page from the row that says it.
+    expect(presentationFor({ n: NOTIFICATION_ID, t: "friend_challenge_received" }).path).toBe(
+      NOTIFICATION_ROUTES.friends,
+    );
+  });
+});
+
 describe("where a tap goes", () => {
   it("never produces anything but an in-app absolute path", () => {
     // §13's "no arbitrary external URLs", asserted as a property. A payload

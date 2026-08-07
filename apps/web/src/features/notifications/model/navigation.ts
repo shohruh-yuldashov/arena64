@@ -35,6 +35,17 @@ export function notificationHref(target: NotificationTarget): string | null {
       // resolves the same type through the same value, and two copies of a
       // path is a push whose tap opens a different page from the row.
       return NOTIFICATION_ROUTES.friendRequests;
+    case "friends":
+      // A64-022.4 §5. The destination of a **received challenge**, and a
+      // placeholder with a date on it: A64-022.5 owns the challenge surface
+      // and it does not exist, so this is the closest existing truth — a
+      // challenge only ever exists between friends.
+      //
+      // The service worker resolves the same type through the same
+      // constant, which is the property `NOTIFICATION_ROUTES` exists for.
+      // When A64-022.5 lands, this case and the worker's entry change
+      // together.
+      return NOTIFICATION_ROUTES.friends;
     case "player_profile":
       // `ref` is the actor's username, which is what `/players/$username`
       // takes. Encoded rather than interpolated raw — usernames are

@@ -39,6 +39,14 @@ const VIEWER = {
 
 const TOURNAMENT_ID = "019fe500-0000-7000-8000-0000000000a1";
 const MATCH_ID = "019fe500-0000-7000-8000-0000000000b2";
+const CHALLENGE_ID = "019fe500-0000-7000-8000-0000000000c3";
+
+const OPPONENT = {
+  player_id: "019fb9ea-0a0c-7cec-9c5f-402727c31b01",
+  username: "rival",
+  display_name: "Rival",
+  thumbnail_url: null,
+};
 
 function notification(overrides: Record<string, unknown>) {
   return {
@@ -48,6 +56,7 @@ function notification(overrides: Record<string, unknown>) {
     actor: null,
     tournament: null,
     game: null,
+    challenge: null,
     target: { type: "tournament", ref: TOURNAMENT_ID },
     created_at: "2026-08-07T10:00:00Z",
     read_at: null,
@@ -147,6 +156,64 @@ it("renders every new type and links each to its own route", async () => {
     `/tournaments/${TOURNAMENT_ID}`,
     `/games/${MATCH_ID}/replay`,
   ]);
+});
+
+it("renders both challenge types and links an accepted one to its game", async () => {
+  // A64-022.4 §19, §22. The challenge surface belongs to A64-022.5, but
+  // `/notifications` must render these the day the backend can write them —
+  // a durable row nobody can read is a row that should not have been kept.
+  serve([
+    notification({
+      id: "019fe400-0000-7000-8000-000000000007",
+      type: "friend_challenge_received",
+      category: "social",
+      tournament: null,
+      challenge: {
+        challenge_id: CHALLENGE_ID,
+        opponent: OPPONENT,
+        time_control_id: "blitz_3_2",
+        variant: "russian_8x8",
+        rated: true,
+        expires_at: "2026-08-08T10:00:00Z",
+        match_id: null,
+      },
+      // A placeholder until A64-022.5 owns a challenge route — the same
+      // destination the service worker resolves for the same type.
+      target: { type: "friends", ref: null },
+    }),
+    notification({
+      id: "019fe400-0000-7000-8000-000000000008",
+      type: "friend_challenge_accepted",
+      category: "social",
+      tournament: null,
+      challenge: {
+        challenge_id: CHALLENGE_ID,
+        opponent: OPPONENT,
+        time_control_id: "blitz_3_2",
+        variant: "russian_8x8",
+        rated: true,
+        expires_at: null,
+        match_id: MATCH_ID,
+      },
+      target: { type: "live_game", ref: MATCH_ID },
+    }),
+  ]);
+
+  renderApp({ path: "/notifications" });
+
+  const list = await screen.findByRole("list", { name: /notifications/i });
+
+  // The name is in the sentence here and deliberately **not** in the push
+  // body: this is behind a session, and a lock screen is not.
+  expect(within(list).getByText("Rival challenged you to a game")).toBeVisible();
+  expect(within(list).getByText("Rival accepted your challenge")).toBeVisible();
+
+  const hrefs = within(list)
+    .getAllByRole("link")
+    .map((link) => link.getAttribute("href"));
+  // The handoff: the challenger reaches the created game in one tap, which
+  // matters because the join window is ten minutes.
+  expect(hrefs).toEqual(["/friends", `/games/${MATCH_ID}`]);
 });
 
 it("degrades safely for an unnamed opponent, an unknown type and a missing ref", async () => {

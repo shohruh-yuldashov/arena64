@@ -30,6 +30,25 @@ that a gateway exists: it holds `PendingMatchSink`, a port in the layer that
 needs it (AD-06), and the composition root supplies an implementation. What
 crosses is a value, not a capability.
 
+## The second consumer — A64-022.4
+
+`notifications`, and it needs the **friend challenge lifecycle events**:
+`FriendChallengeCreated` so a recipient is told they have been invited, and
+`FriendChallengeAccepted` so a challenger is told their game exists.
+
+This is the relaxation `.importlinter`'s `matchmaking-is-not-a-dependency`
+predicted in writing — *"the first real consumer removes itself from the
+source list and adds a port to `matchmaking.public`"* — and it is exactly
+that shape: `notifications` leaves the source list of that one contract,
+stays in `matchmaking-internals-are-private`, and can therefore reach these
+two classes and nothing else.
+
+**Events, not a reader.** What crosses is a fact that already happened, so
+`notifications` gains no ability to create, answer or inspect a challenge —
+and `matchmaking` still does not learn that a notification system exists.
+The dependency is one-directional and carries no capability, which is what
+keeps R-6's "no cycles, including through events" true.
+
 ## What will not land here
 
 A reader of who is currently queueing. Who is in a pool right now is the
@@ -41,6 +60,15 @@ no consumer whose need for it outweighs that — the same reasoning
 same reason they always have: a consumer that could name them could pair.
 """
 
+from app.modules.matchmaking.domain.challenge_events import (
+    FriendChallengeAccepted,
+    FriendChallengeCreated,
+)
 from app.modules.matchmaking.domain.pending_match import OpponentPreview, PendingMatchOffer
 
-__all__ = ["OpponentPreview", "PendingMatchOffer"]
+__all__ = [
+    "FriendChallengeAccepted",
+    "FriendChallengeCreated",
+    "OpponentPreview",
+    "PendingMatchOffer",
+]

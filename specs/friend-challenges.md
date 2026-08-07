@@ -4,7 +4,7 @@
 | --- | --- |
 | **Status** | Complete through acceptance — A64-022.3. No UI, no realtime, no notification |
 | **Owner** | platform |
-| **Last updated** | 2026-08-07 — A64-022.3, acceptance and match creation |
+| **Last updated** | 2026-08-07 — A64-022.4, notifications and realtime |
 | **Related** | `docs/01-architecture/domain-model.md` §10.3, `specs/matchmaking.md`, `specs/friends.md`, `specs/notifications.md` §15.15 |
 
 A **friend challenge** is a direct, named invitation: one player asking one
@@ -572,7 +572,119 @@ built beside `SocialNotificationDispatcher` reaches the existing gateway.
 Challenge matches are not excluded by any origin filter — `MatchOrigin` is
 stored and handed back, never branched on.
 
-## 19. Deferred
+## 19. Notifications — A64-022.4
+
+Two of the five lifecycle events become durable notifications. The other
+three notify nobody, and §22 says why.
+
+| Event | Type | Told | Category | Channels |
+| --- | --- | --- | --- | --- |
+| `friend_challenge_created` | `friend_challenge_received` | the **recipient** | `social` | in-app, realtime, push |
+| `friend_challenge_accepted` | `friend_challenge_accepted` | the **challenger** | `social` | in-app, realtime, push |
+
+In both cases the person told is the one who did **not** act, which is the
+rule every social notification on this platform follows.
+
+`ChallengeNotificationDispatcher` is an outbox consumer with its own
+`processed_event` partition (`challenge_notifications`). It composes
+`NotificationRecord`s and hands them to `DurableNotificationStore` — the
+same writer the tournament and game dispatchers use — so preference
+suppression, the transaction boundary, the push fan-out and the realtime
+announcement are written once and every producer gets the same ones. No
+second pipeline, no new worker, no direct insert from `matchmaking`.
+
+`matchmaking.public` publishes the two event classes for this, which is the
+first relaxation of `.importlinter`'s `matchmaking-is-not-a-dependency`.
+What crosses is a fact, not a capability: `notifications` gains no way to
+create, answer or read a challenge, and `matchmaking` still does not learn
+that a notification system exists.
+
+**Email is not enabled** for either type. Nothing about a challenge decays
+over hours the way a tournament round does, and the channel that matters is
+the one that reaches a phone in seconds.
+
+### 20. Where a challenge notification goes
+
+| Type | In-app target | Push opens |
+| --- | --- | --- |
+| `friend_challenge_received` | `friends` (`/friends`) | `/friends` |
+| `friend_challenge_accepted` | `live_game` (`/games/{match_id}`) | `/games/{match_id}` |
+
+The received type's target is a **placeholder with a date on it**. A
+challenge belongs on a challenge surface, A64-022.5 owns that surface, and
+it does not exist — so the three options were a route that 404s, a row that
+cannot be tapped, and the closest existing truth. A challenge only ever
+exists between friends. When A64-022.5 lands, `NavigationTargetType.FRIENDS`
+and the client mapper change together, and nothing else does.
+
+Push copy names **nobody**: *Arena64* — "You have a new game challenge." No
+username, no display name, no clock, no rated flag, no avatar. The
+authenticated in-app row shows all of it; a lock screen in public shows that
+this person uses Arena64.
+
+The accepted push opens the game directly, which is why A64-022.4 added an
+optional `r` field to the push payload — see `specs/notifications.md` §15.5.
+The join window is ten minutes, and landing on a list and tapping again
+spends it on navigation.
+
+### 21. Delivery-time semantics
+
+| Question | Answer |
+| --- | --- |
+| Recipient | Off the event, never from a client. Both player ids are on every challenge payload |
+| Block, on `friend_challenge_received` | Re-read **now** through `SocialGraphReader.blocked_ids_for` (symmetric). A pair blocked between the challenge and the relay tick produces no notification and therefore no push |
+| Block, on `friend_challenge_accepted` | **Does not suppress.** Acceptance revalidated the relationship in its own transaction and created a match that exists; withholding this would leave a challenger holding a game nobody told them about |
+| Unfriending | Not checked, in either direction — the existing social policy re-reads blocks and nothing else, and a second rule here would make two social paths disagree about what "may still interact" means |
+| The other player's profile | Rendered at `STRANGER`, like a game opponent. They are friends, and the friends-only fields are on the profile page; a notification is not the surface to widen one |
+| `created_at` | The **event's** instant, never the delivery's |
+| Exactly-once | `UNIQUE (recipient_id, source_event_id, type)`, unchanged. A redelivered event writes no second row and owes no second push |
+
+### 22. Decline, cancel and expire — no notification
+
+| Event | Why not |
+| --- | --- |
+| `friend_challenge_declined` | A decline carries no reason by design, so the row would say "no", permanently, in a list whose value is that it is short |
+| `friend_challenge_cancelled` | A **retraction**: its consumer is a surface that must stop showing an invitation, not an inbox that must start showing one |
+| `friend_challenge_expired` | Nothing happened. A row about the absence of an event |
+
+All three remain published events with real consumers coming — A64-022.5's
+challenge surface reconciles against them over HTTP. This consumer does not
+subscribe to them at all rather than subscribing and dropping them, so the
+ledger says a challenge lifecycle is five events of which two are
+notifications.
+
+### 23. No challenge-specific realtime frames
+
+None were added, and the audit that decided it found the transport already
+in place twice over:
+
+| Need | Already served by |
+| --- | --- |
+| "A challenge arrived" while the app is open | `notification.created` → invalidate → HTTP read. The list is authoritative; the frame only says *something happened* |
+| "The match now exists" for **both** players | `PendingMatchNotifier`, which consumes `game.match_created` and **does not filter on origin** — so a challenge-created match already pushes a pending-match offer to both seats over the shared gateway |
+
+A dedicated frame would carry no ephemeral state those two cannot represent,
+and a speculative protocol is what §11 of the brief forbids. A64-022.5 owns
+challenge query invalidation and may find a need; it will have a producer to
+point at when it does.
+
+`matchmaking.realtime_delivery_enabled` gates the second row. With it off, a
+client falls back to `GET /matchmaking/matches/pending` — latency, not
+correctness.
+
+### 24. The bilateral join, restated
+
+A64-022.3 left challenge-created matches `BILATERAL`: the match exists and
+both players must still join it, inside `CHALLENGE_MATCH_JOIN_WINDOW`. This
+phase did not change that, and it did preserve every fact A64-022.5 needs to
+make it feel like one action:
+
+| Who | How they learn the match id |
+| --- | --- |
+| The recipient (who accepted) | The accept response body — `created_match_id` |
+| The challenger | `friend_challenge_accepted`'s payload and target, **and** the pending-match offer the existing gateway path already delivers |
+
+## 25. Deferred
 
 | | Notes |
 | --- | --- |
@@ -582,3 +694,6 @@ stored and handed back, never branched on.
 | Tournament challenge semantics | out of scope |
 | Event publication | with the first consumer |
 | Expiry sweep | A64-022.6 |
+| A dedicated challenge surface and its route | A64-022.5. Until then `friend_challenge_received` targets `/friends` — §20 |
+| Challenge query invalidation and UI reconciliation | A64-022.5 |
+| `friend_challenge_declined` / `_cancelled` / `_expired` notifications | Deliberately not built — §22 |

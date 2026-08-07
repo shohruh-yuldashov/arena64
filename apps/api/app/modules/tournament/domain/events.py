@@ -1,8 +1,9 @@
 """`tournament`'s domain events — SPEC-TOURNAMENT §7.
 
-Declared here and **published by nobody yet**: A64-019.1 is the domain, and
-wiring an outbox consumer before there is a use case to emit from would be
-an entry point nothing reaches — the defect two audits already found twice.
+Every one of these is published by an application service today, and
+A64-021.4 gave the first of them a consumer outside this module: a
+`notifications` dispatcher that turns three of them into durable records
+(`specs/notifications.md` §11).
 
 Each carries what a consumer needs to act without reading anything back
 (`services.md` §10.2), and nothing more. No bracket, no participant list, no
@@ -76,6 +77,47 @@ class RegistrationClosed(_TournamentEvent):
 
 
 @dataclass(frozen=True)
+class PlayerRegistered(_TournamentEvent):
+    """One player entered — A64-021.4 §14.
+
+    **New, and additive.** Every other transition here was published from
+    the day the aggregate had one; registration was the exception, and the
+    consequence was that entering a tournament was the one commitment on
+    this platform that produced no durable record for the player who made
+    it. `register()` wrote a row and a log line.
+
+    Published only on the call that **created** the registration. A
+    duplicate registration raises before this point and a withdrawal is its
+    own transition, so a consumer counting these counts entries.
+
+    `player_id` is on the payload rather than derivable from it, for the
+    reason `MatchAcceptedByPlayer` carries one: a consumer routing a
+    notification wants the recipient, and re-deriving it would mean reading
+    this module's registrations from outside it.
+    """
+
+    event_type: ClassVar[str] = "tournament.player_registered"
+
+    player_id: UUID
+    name: str
+    """The tournament's name at the moment of entry.
+
+    Carried so a consumer can write "you are entered in X" without reading
+    the tournament back — `services.md` §10.2's self-contained payload, and
+    the same reason `TournamentCreated` carries it. It is also what makes
+    the notification a **snapshot**: a renamed tournament does not rewrite
+    the receipt somebody already has.
+    """
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            **super().payload(),
+            "player_id": str(self.player_id),
+            "name": self.name,
+        }
+
+
+@dataclass(frozen=True)
 class TournamentStarted(_TournamentEvent):
     event_type: ClassVar[str] = "tournament.started"
 
@@ -141,6 +183,7 @@ class TournamentCancelled(_TournamentEvent):
 
 __all__ = [
     "TOURNAMENT_AGGREGATE",
+    "PlayerRegistered",
     "RegistrationClosed",
     "RegistrationOpened",
     "RoundCompleted",

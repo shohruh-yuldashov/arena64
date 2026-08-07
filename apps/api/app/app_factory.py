@@ -22,6 +22,7 @@ from app.api.router import api_router
 from app.api.v1.health import health_router
 from app.common.logging import configure_logging
 from app.common.middleware import CorrelationIdMiddleware, RequestIdMiddleware
+from app.config.environment import describe_env_file
 from app.config.settings import Settings, get_settings
 from app.core.clock import SystemClock
 from app.core.constants import API_PREFIX
@@ -1549,6 +1550,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         format_override=settings.app.log_format,
     )
     logger.info("startup_begin", extra={"environment": settings.environment.value})
+    # A64-021.5. Which configuration file this process actually read, and
+    # whether it found one. Silence here is what let a `.env` sit unread
+    # beside a platform behaving exactly as if it had no configuration —
+    # because it had none. The line names the file and, when a
+    # differently-named one is present, says so.
+    logger.info("configuration_source", extra={"env_file": describe_env_file(settings.environment)})
 
     db = DatabaseSessionManager(settings.postgres)
     redis_pools = create_redis_pools(settings.redis)

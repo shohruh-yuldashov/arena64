@@ -13,10 +13,12 @@ each caller reaches it, is the whole claim — a test per caller sending a
 message through a stub would be three tests proving the same wiring.
 """
 
+import pathlib
+
 import pytest
 from pydantic import SecretStr
 
-from app.config.environment import Environment
+from app.config.environment import Environment, env_file_for
 from app.config.settings import AppSettings, EmailSettings, NotificationEmailSettings
 from app.modules.auth.presentation.dependencies import get_email_provider
 from app.modules.notifications.presentation.dependencies import email_channel_available
@@ -115,6 +117,88 @@ class TestTheEnvironmentVariableNames:
         monkeypatch.delenv("APP_PUBLIC_URL", raising=False)
 
         assert AppSettings().public_url == "https://arena64.gg"
+
+
+class TestTheEnvFile:
+    """Loading configuration from `.env.local`, which had never worked.
+
+    **These are the tests the defect got past.** Every other test here
+    constructs a settings object directly, and the failure was in the file
+    source: `pydantic-settings` does not filter a dotenv file by
+    `env_prefix`, so with `extra="forbid"` a file holding two sections'
+    keys made both sections refuse to construct. `.env.example`'s first line
+    says "Copy to .env.local", and doing so crashed the process.
+
+    It surfaced as a Resend credential that would not load. It was never
+    about Resend.
+    """
+
+    def test_a_realistic_file_loads_every_section(self, tmp_path: pathlib.Path) -> None:
+        """One file, four sections, no crash — and the values arrive.
+
+        The mix is the point: an `APP_`-prefixed key, an `EMAIL_`-prefixed
+        key, a `NOTIFICATION_EMAIL_`-prefixed key, and the two whose names
+        are fixed by an external contract rather than by a prefix. Before the
+        fix, any two of these together were a `ValidationError`.
+        """
+        env_file = tmp_path / ".env.local"
+        env_file.write_text(
+            "APP_LOG_LEVEL=DEBUG\n"
+            "RESEND_API_KEY=re_only_a_test_value\n"
+            "EMAIL_FROM_ADDRESS=no-reply@arena64.gg\n"
+            "EMAIL_FROM_NAME=Arena64\n"
+            "PUBLIC_APP_URL=https://arena64.gg\n"
+            "NOTIFICATION_EMAIL_ENABLED=false\n"
+        )
+
+        app = AppSettings(_env_file=env_file)  # type: ignore[call-arg]
+        email = EmailSettings(_env_file=env_file)  # type: ignore[call-arg]
+        notifications = NotificationEmailSettings(_env_file=env_file)  # type: ignore[call-arg]
+
+        assert app.log_level == "DEBUG"
+        assert app.public_url == "https://arena64.gg"
+        assert email.from_address == "no-reply@arena64.gg"
+        assert email.from_name == "Arena64"
+        assert notifications.enabled is False
+        # **The secret is never asserted, printed or compared.** That it was
+        # read is the whole claim; what it is belongs to the operator.
+        assert email.resend_api_key is not None
+        assert can_deliver_email(email) is True
+
+    def test_a_section_ignores_another_section_key(self, tmp_path: pathlib.Path) -> None:
+        """The narrowing, stated directly.
+
+        `EmailSettings` must not see `APP_LOG_LEVEL` — that is what
+        `extra="forbid"` would reject and what the filter removes. The guard
+        itself is unchanged for process environment variables, where a typo
+        in a deployed tier is still a refusal to start.
+        """
+        env_file = tmp_path / ".env.local"
+        env_file.write_text("APP_LOG_LEVEL=DEBUG\nPOSTGRES_POOL_SIZE=7\n")
+
+        assert EmailSettings(_env_file=env_file).from_name == "Arena64"  # type: ignore[call-arg]
+
+    def test_the_env_file_path_does_not_depend_on_the_working_directory(self) -> None:
+        """`.env.local`, always, wherever a command was typed.
+
+        `uv run` from `apps/api`, the API's startup command, an operator
+        module and an invocation from the repository root must read one file.
+        The path is derived from the settings module's own location, so this
+        asserts the shape rather than re-running four commands.
+        """
+        path = env_file_for(Environment.LOCAL)
+
+        assert path is not None
+        assert path.is_absolute()
+        assert path.name == ".env.local"
+        assert path.parent.name == "api"
+
+    def test_a_deployed_tier_reads_no_file_at_all(self) -> None:
+        """dependency-injection.md §2.2: secrets never come from a file
+        layer. `RESEND_API_KEY` in production is a process environment
+        variable from the secret manager, and nothing else."""
+        assert env_file_for(Environment.PRODUCTION) is None
+        assert env_file_for(Environment.TEST) is None
 
 
 class TestAvailability:

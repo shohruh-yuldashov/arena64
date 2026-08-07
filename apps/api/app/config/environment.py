@@ -16,6 +16,7 @@ variables in every deployed tier — see dependency-injection.md §2.4.
 import os
 from enum import StrEnum
 from pathlib import Path
+from typing import Final
 
 _ENVIRONMENT_VARIABLE = "ENVIRONMENT"
 
@@ -56,6 +57,14 @@ class Environment(StrEnum):
         return self is Environment.LOCAL
 
 
+#: `apps/api`, derived from this file rather than from a working directory.
+#:
+#: Two levels up from `app/config/environment.py`. A relative path here would
+#: make every command's behaviour depend on where it was typed, which is the
+#: one thing a configuration loader must not do.
+_API_ROOT: Final = Path(__file__).resolve().parents[2]
+
+
 def current_environment() -> Environment:
     """Read `ENVIRONMENT` from the process environment.
 
@@ -80,7 +89,42 @@ def env_file_for(environment: Environment) -> Path | None:
     entirely by real process environment variables and the secret manager —
     dependency-injection.md §2.2 is explicit that secrets are never sourced
     from a file layer.
+
+    **Absolute, and derived from this file's own location.** The path does
+    not depend on where a command was run from, so `uv run` in `apps/api`,
+    the API's startup command, an operator module and an invocation from the
+    repository root all read the same file. That is deliberate and is
+    verified by `tests/unit/test_settings.py`.
     """
     if environment is Environment.LOCAL:
-        return Path(__file__).resolve().parents[2] / ".env.local"
+        return _API_ROOT / ".env.local"
     return None
+
+
+def describe_env_file(environment: Environment) -> str:
+    """One line saying which file was read, for a startup log and an
+    operator command.
+
+    A missing env file is otherwise **completely silent**: the process starts
+    on code defaults and nothing says the configuration a developer wrote was
+    never opened. That silence is what turned a file named `.env` into an
+    afternoon — the platform behaved exactly as if it had no configuration,
+    because it had none.
+
+    So the line names the file, says whether it exists, and — the part that
+    would have ended it immediately — says when a differently-named file is
+    sitting beside it.
+    """
+    path = env_file_for(environment)
+    if path is None:
+        return f"{environment.value}: no env file is read; configuration comes from the environment"
+    if path.exists():
+        return f"{environment.value}: read {path}"
+
+    stray = _API_ROOT / ".env"
+    if stray.exists():
+        return (
+            f"{environment.value}: {path} does not exist and is NOT being read — "
+            f"but {stray} does. This platform reads .env.local; rename it"
+        )
+    return f"{environment.value}: {path} does not exist; running on code defaults"

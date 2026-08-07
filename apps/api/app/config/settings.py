@@ -12,10 +12,11 @@ fail mysteriously on the ten-thousandth request.
 """
 
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic.fields import FieldInfo
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from app.config.environment import Environment, current_environment, env_file_for
 
@@ -62,7 +63,114 @@ def _require_bare_origin(value: str, *, variable: str) -> str:
     return value
 
 
-class AppSettings(BaseSettings):
+class SectionSettings(BaseSettings):
+    """Every settings section on this platform, with one behaviour added.
+
+    ## The defect this exists for
+
+    `pydantic-settings` filters **process environment variables** by
+    `env_prefix` before validating them, and does not filter a **dotenv
+    file** at all: every key in the file is offered to every model. With
+    `extra="forbid"` — which every section here sets, deliberately — that
+    means a `.env.local` containing `APP_LOG_LEVEL` makes `PostgresSettings`
+    refuse to construct, because `app_log_level` is not one of its fields.
+
+    The consequence was that `.env.local` had **never worked**, for anything.
+    `.env.example`'s first line says "Copy to .env.local for local
+    development"; doing so produced a crash on the first key belonging to
+    another section, and the only reason nobody hit it is that local
+    development runs on the code-level defaults.
+
+    It surfaced as a Resend credential that would not load, which was two
+    problems wearing one coat: a file named `.env` (nothing reads that — see
+    `env_file_for`) and this.
+
+    ## The fix, and what it deliberately keeps
+
+    The dotenv source is wrapped so a section sees only the keys that are
+    **its own** — its field names, and any `validation_alias` a field
+    declares. Everything else is another section's business.
+
+    `extra="forbid"` stays, and stays meaningful where it matters: the
+    process-environment source is untouched, so a typo'd `POSTGRES_DSNN` in
+    a deployed tier is still a refusal to start (DI-06). What is relaxed is
+    only the local file, where the same typo is a line a developer can read
+    beside the correct one in `.env.example`.
+    """
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """The default order, with the dotenv source narrowed to this section.
+
+        Order is unchanged and is the layering `dependency-injection.md` §2.2
+        describes: init < dotenv < environment < secrets, read right to left
+        by precedence.
+        """
+        return (
+            init_settings,
+            env_settings,
+            _SectionDotEnv(dotenv_settings, settings_cls),
+            file_secret_settings,
+        )
+
+
+class _SectionDotEnv(PydanticBaseSettingsSource):
+    """A dotenv source that yields only one section's keys.
+
+    Wraps rather than replaces, so the file parsing, the encoding handling
+    and the prefix stripping all stay `pydantic-settings`'. What is added is
+    one filter.
+    """
+
+    def __init__(self, inner: PydanticBaseSettingsSource, settings_cls: type[BaseSettings]) -> None:
+        super().__init__(settings_cls)
+        self._inner = inner
+
+    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
+        # Never called: `__call__` below is overridden and does not delegate
+        # to the per-field protocol. Present because the abstract base
+        # declares it.
+        raise NotImplementedError  # pragma: no cover
+
+    def __call__(self) -> dict[str, Any]:
+        accepted = _accepted_keys(self.settings_cls)
+        return {key: value for key, value in self._inner().items() if key in accepted}
+
+
+def _accepted_keys(settings_cls: type[BaseSettings]) -> frozenset[str]:
+    """What one section may take from a shared file.
+
+    Two forms, because the dotenv source emits two. Given a file holding
+    `RESEND_API_KEY`, `EMAIL_FROM_NAME` and `APP_LOG_LEVEL`, it offers
+    `EmailSettings`:
+
+        RESEND_API_KEY   a declared `validation_alias`, **verbatim**
+        from_name        its own prefixed key, stripped and lowercased
+        app_log_level    another section's key, lowercased and passed through
+        public_app_url   another section's alias, likewise
+
+    The first two are this section's and the last two are not, so the
+    accepted set is field names plus alias names **as written**. Lowercasing
+    the aliases — the obvious thing, and what the first attempt did — admits
+    exactly the pass-throughs it should exclude and drops the verbatim key it
+    should keep.
+    """
+    keys = set(settings_cls.model_fields)
+    for field in settings_cls.model_fields.values():
+        alias = field.validation_alias
+        if isinstance(alias, str):
+            keys.add(alias)
+    return frozenset(keys)
+
+
+class AppSettings(SectionSettings):
     """`app` — architecture.md §5 process identity and log posture."""
 
     model_config = SettingsConfigDict(
@@ -128,7 +236,7 @@ class AppSettings(BaseSettings):
         return self
 
 
-class PostgresSettings(BaseSettings):
+class PostgresSettings(SectionSettings):
     """`postgres` — one primary DSN.
 
     Read-replica routing (database.md §13.2) is not modelled here — no
@@ -147,7 +255,7 @@ class PostgresSettings(BaseSettings):
     echo: bool = False
 
 
-class RedisSettings(BaseSettings):
+class RedisSettings(SectionSettings):
     """`redis` — five role-separated pools, never one shared client.
 
     architecture.md AD-03: a spectator fan-out storm on `bus` must not be
@@ -205,7 +313,7 @@ class RedisSettings(BaseSettings):
     limits_url: SecretStr = SecretStr(_LOCAL_REDIS_URLS["limits"])
 
 
-class AuthSettings(BaseSettings):
+class AuthSettings(SectionSettings):
     """`auth` — Argon2id cost parameters (A64-011.1).
 
     Configurable rather than hardcoded because database.md §14.2 requires
@@ -263,7 +371,7 @@ SUPPORTED_JWT_ALGORITHMS = frozenset({"HS256", "HS384", "HS512"})
 JWT_SECRET_MIN_LENGTH = 32
 
 
-class JWTSettings(BaseSettings):
+class JWTSettings(SectionSettings):
     """`jwt` — access token signing and verification (A64-011.3).
 
     ## Why the lifetime default is 15 minutes
@@ -377,7 +485,7 @@ class JWTSettings(BaseSettings):
 REFRESH_TOKEN_MIN_ENTROPY_BYTES = 32
 
 
-class SessionSettings(BaseSettings):
+class SessionSettings(SectionSettings):
     """`session` — refresh token lifetime and entropy (A64-011.4).
 
     ## Why two expiries rather than one
@@ -434,7 +542,7 @@ class SessionSettings(BaseSettings):
         return self
 
 
-class EmailSettings(BaseSettings):
+class EmailSettings(SectionSettings):
     """`email` — outbound mail, email-verification tokens (A64-011.6) and
     password-reset tokens (A64-011.7).
 
@@ -594,7 +702,7 @@ class EmailSettings(BaseSettings):
         return self.password_reset_url_template.format(token=token)
 
 
-class NotificationEmailSettings(BaseSettings):
+class NotificationEmailSettings(SectionSettings):
     """`notification_email` — the Notification email channel, A64-021.5.
 
     Separate from `EmailSettings`, which owns the *transport identity* and
@@ -653,7 +761,7 @@ class NotificationEmailSettings(BaseSettings):
     retry_max_seconds: int = Field(default=6 * 60 * 60, ge=60)
 
 
-class StorageSettings(BaseSettings):
+class StorageSettings(SectionSettings):
     """`storage` — where binary objects live (A64-012.2).
 
     One provider today and the setting that chooses it, because the choice
@@ -708,7 +816,7 @@ class StorageSettings(BaseSettings):
         return mount.rstrip("/") or "/media"
 
 
-class RateLimitSettings(BaseSettings):
+class RateLimitSettings(SectionSettings):
     """`rate_limit` — abuse prevention on the authentication endpoints
     (A64-011.8), and since A64-012.4 on the privacy settings endpoint too.
 
@@ -1098,7 +1206,7 @@ class RateLimitSettings(BaseSettings):
     notification_preferences_update_window_seconds: int = Field(default=5 * 60, ge=1)
 
 
-class StatisticsSettings(BaseSettings):
+class StatisticsSettings(SectionSettings):
     """`statistics` — the competitive-record projection (A64-012.6).
 
     One setting, and it is a kill switch rather than a feature flag.
@@ -1131,7 +1239,7 @@ class StatisticsSettings(BaseSettings):
     """
 
 
-class PresenceSettings(BaseSettings):
+class PresenceSettings(SectionSettings):
     """`presence` — who is online right now (A64-012.7).
 
     ## Which Redis role presence uses, and why it is not a sixth one
@@ -1276,7 +1384,7 @@ class PresenceSettings(BaseSettings):
         return self.ttl_seconds * 1000
 
 
-class FriendsSettings(BaseSettings):
+class FriendsSettings(SectionSettings):
     """`friends` — the social graph (A64-013.3).
 
     One setting, and it is a kill switch rather than a feature flag — the
@@ -1358,7 +1466,7 @@ class FriendsSettings(BaseSettings):
     """
 
 
-class OutboxSettings(BaseSettings):
+class OutboxSettings(SectionSettings):
     """`outbox` — the transactional event log and its relay (A64-013.7).
 
     AD-16 makes the outbox non-negotiable, so unlike presence or the social
@@ -1542,7 +1650,7 @@ class OutboxSettings(BaseSettings):
     """
 
 
-class MatchmakingSettings(BaseSettings):
+class MatchmakingSettings(SectionSettings):
     """`matchmaking` — the queue domain (A64-014.1), the pairing scan
     (A64-015.3), and the acceptance handshake (A64-015.4).
 
@@ -1991,7 +2099,7 @@ class MatchmakingSettings(BaseSettings):
         return self
 
 
-class GameSettings(BaseSettings):
+class GameSettings(SectionSettings):
     """`game` — live play (A64-016.3).
 
     One number today. It exists because AD-18 puts the in-flight position in
@@ -2050,7 +2158,7 @@ class GameSettings(BaseSettings):
     """
 
 
-class TournamentSettings(BaseSettings):
+class TournamentSettings(SectionSettings):
     """`tournament` — SPEC-TOURNAMENT §6e (A64-019.5H).
 
     The no-show policy's two numbers. They are settings rather than
@@ -2119,7 +2227,7 @@ class TournamentSettings(BaseSettings):
         return self
 
 
-class BrowserSessionSettings(BaseSettings):
+class BrowserSessionSettings(SectionSettings):
     """`browser_session` — the SPA's refresh cookie and its CSRF policy
     (A64-020.2).
 
@@ -2210,7 +2318,7 @@ class BrowserSessionSettings(BaseSettings):
         return not (environment.is_local or environment.is_test)
 
 
-class GatewaySettings(BaseSettings):
+class GatewaySettings(SectionSettings):
     """`gateway` — the realtime WebSocket transport (A64-016.1, AD-09).
 
     Four numbers, and every one of them is a *liveness* parameter rather

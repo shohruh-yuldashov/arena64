@@ -45,10 +45,11 @@ import sys
 from collections.abc import Mapping, Sequence
 
 from app.common.logging import configure_logging
+from app.config.environment import describe_env_file
 from app.config.settings import get_settings
 from app.database.session_manager import DatabaseSessionManager
 from app.modules.notifications.presentation.dependencies import build_email_delivery_reader
-from app.platform.email import EmailMessage, build_email_provider
+from app.platform.email import EmailMessage, build_email_provider, can_deliver_email
 
 
 async def status() -> Mapping[str, int]:
@@ -132,6 +133,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception as failure:  # noqa: BLE001 — an operator wants the reason, not a traceback
         print(f"could not read the delivery queue: {failure}", file=sys.stderr)  # noqa: T201
         return 1
+
+    # Said before the numbers, because it changes what every one of them
+    # means. A process that read no configuration file reports a healthy
+    # empty queue and a disabled channel, which is indistinguishable from a
+    # correctly configured platform with nothing to do.
+    print(f"config: {describe_env_file(settings.environment)}")  # noqa: T201
+    print(f"transport: {'resend' if can_deliver_email(settings.email) else 'none (console)'}")  # noqa: T201
+    print(f"sender: {settings.email.from_name} <{settings.email.from_address}>")  # noqa: T201
+    print(f"origin: {settings.app.public_url}")  # noqa: T201
 
     if not settings.notification_email.enabled:
         # Said first, because it changes how every number below reads: with

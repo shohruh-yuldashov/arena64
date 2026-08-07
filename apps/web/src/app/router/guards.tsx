@@ -1,7 +1,7 @@
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useEffect, useState } from "react";
 
-import { isResolved } from "@/entities/session";
+import { isAuthenticated, isResolved } from "@/entities/session";
 import { DEFAULT_REDIRECT, safeRedirect } from "@/features/auth/model/safe-redirect";
 import { useSession } from "@/features/auth/model/session-provider";
 import { useTranslation } from "@/shared/i18n";
@@ -109,6 +109,55 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   // `null` rather than the page: rendering it for the frame before the
   // navigation lands is a flash of somebody else's screen.
   if (state.status === "anonymous") return null;
+
+  return <>{children}</>;
+}
+
+/**
+ * A page only a player with a **confirmed address** may see — A64-021.5H §19.
+ *
+ * Layered on `RequireAuth` rather than replacing it, so the two questions
+ * stay separate: *are you signed in* and *have you proved this address*. A
+ * single guard answering both would have to decide between `/login` and
+ * `/verify-email` from one state, and would send a signed-in unverified
+ * player to a sign-in form.
+ *
+ * ## This is not the enforcement
+ *
+ * The backend refuses the writes (`VerifiedUser`), and this exists so a
+ * player is not shown a page whose every action returns `403`. A guard that
+ * were the only barrier would be one a devtools console removes.
+ *
+ * ## Why `/verify-email` is not wrapped in it
+ *
+ * It would be a loop, and an obvious one. That route carries `RequireAuth`
+ * alone — see `sessionPage` in `routes.tsx`, which exists so the
+ * distinction is a word in the route definition rather than an exception
+ * remembered here.
+ *
+ * ## `next` is captured at mount, for `RequireAuth`'s reason
+ *
+ * `useRouterState` tracks the live location and updates the instant a
+ * navigation starts, so a `next` recomputed from it feeds the destination
+ * back into itself and the URL grows on every render. That was a real
+ * lock-up in A64-020.5A; the fix is the same here.
+ */
+export function RequireVerifiedEmail({ children }: { children: ReactNode }) {
+  const { state } = useSession();
+  const navigate = useNavigate();
+  const location = useRouterState({ select: (router) => router.location });
+  const [next] = useState(() => `${location.pathname}${location.searchStr}`);
+  const unverified = isAuthenticated(state) && !state.user.is_verified;
+
+  useEffect(() => {
+    if (!unverified) return;
+    void navigate({ to: "/verify-email", search: { next }, replace: true });
+  }, [navigate, next, unverified]);
+
+  // No pending state and no unavailable branch: `RequireAuth` wraps this
+  // and has already resolved both. Repeating them would be a second answer
+  // to a question already answered.
+  if (unverified) return null;
 
   return <>{children}</>;
 }

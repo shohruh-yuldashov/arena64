@@ -67,7 +67,26 @@
       "resendTitle": "Yangi havola so'rash",
       "resend": "Havolani yuborish",
       "resendSent": "Agar bu manzil bilan hisob mavjud bo'lsa, havola yubordik.",
-      "toLogin": "Kirish sahifasiga"
+      "toLogin": "Kirish sahifasiga",
+      "codeTitle": "Kodni kiriting",
+      "codeIntro": "{email} manziliga olti xonali kod yubordik. U 10 daqiqa amal qiladi.",
+      "codeLabel": "Tasdiqlash kodi",
+      "codeHint": "Emaildagi olti raqam.",
+      "submit": "Tasdiqlash",
+      "submitting": "Tasdiqlanmoqda…",
+      "resendCode": "Yangi kod yuborish",
+      "resendCodeIn": "Yangi kodni {seconds} soniyadan keyin so'rashingiz mumkin",
+      "resendCodeSent": "Yangi kod yuborildi.",
+      "verifiedTitle": "Email tasdiqlandi",
+      "verifiedBody": "Arena64'ga o'tkazilmoqdasiz…",
+      "continue": "Davom etish",
+      "errors": {
+        "invalid": "Kod noto'g'ri. Eng oxirgi emailni tekshirib, qayta urinib ko'ring.",
+        "expired": "Kod muddati tugagan. Yangisini so'rang.",
+        "exhausted": "Juda ko'p noto'g'ri kod. Yangisini so'rang.",
+        "tooSoon": "Kod hozirgina yuborildi. Biroz kuting.",
+        "unexpected": "Xatolik yuz berdi. Qayta urinib ko'ring."
+      }
     },
     "forgotPassword": {
       "title": "Parolni tiklash",

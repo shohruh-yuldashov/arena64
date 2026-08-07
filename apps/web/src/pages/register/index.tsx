@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 
 import { messageKeyFor } from "@/features/auth/model/error-messages";
-import { safeRedirect } from "@/features/auth/model/safe-redirect";
 import { useSession } from "@/features/auth/model/session-provider";
 import { registerSchema, type RegisterValues } from "@/features/auth/schemas";
 import { FormField, usePasswordHint } from "@/features/auth/ui/form-field";
@@ -28,13 +27,16 @@ import { AuthShell } from "@/widgets/auth-shell";
  * discovered at the next sign-in, by which time the person does not know
  * what they typed.
  *
- * ## Why success is a redirect and not a "check your email" wall
+ * ## Why success now goes to `/verify-email` — A64-021.5H
  *
- * `POST /auth/browser/register` signs the browser in. Somebody who just
- * filled in this form is in the app; the verification requirement is told
- * to them there rather than behind a door they cannot pass. The account is
- * unverified either way, and whatever the platform later gates on that
- * applies equally.
+ * `POST /auth/browser/register` still signs the browser in, and the account
+ * is still unverified. What changed is that "whatever the platform later
+ * gates on that" now exists: every product write is refused for an
+ * unverified account, so landing somebody in the app would put them on a
+ * screen whose every button answers `403`.
+ *
+ * They go to the one page that has something for them to do, carrying the
+ * `next` they arrived with — so a deep link survives the detour.
  */
 export default function RegisterPage() {
   const { t, locale } = useTranslation();
@@ -65,7 +67,11 @@ export default function RegisterPage() {
         password: values.password,
         preferredLanguage: locale,
       });
-      await navigate({ to: safeRedirect(next), replace: true });
+      // **Not into the app** — A64-021.5H §18. The session exists and the
+      // address does not yet, so every product write behind the app would
+      // answer `403`. `next` travels along, so somebody who arrived from a
+      // deep link still lands there once they have verified.
+      await navigate({ to: "/verify-email", search: { next }, replace: true });
     } catch (error) {
       setFailure(messageKeyFor(error));
     }

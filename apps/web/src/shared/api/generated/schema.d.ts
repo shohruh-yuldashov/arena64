@@ -223,9 +223,9 @@ export interface paths {
          *     session here would also mean an unverified account holding a 30-day
          *     credential before A64-011.6 has had a chance to verify anything.
          *
-         *     A verification link is sent to the address (A64-011.6). Delivery
-         *     failure does not fail the request — the account exists and the person
-         *     can ask for another link.
+         *     A six-digit verification code is sent to the address (A64-021.5H).
+         *     Delivery failure does not fail the request — the account exists, the
+         *     challenge is committed, and the person can ask for another code.
          *
          *     The body carries no `password_hash`: `UserRead` has no such field, so
          *     that is a property of the type rather than of remembering to exclude
@@ -528,6 +528,85 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/email/verify-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm an email address with a six-digit code
+         * @description Redeems the code from the verification email — A64-021.5H §9.
+         *
+         *     **Authenticated, and takes no address.** The session says whose
+         *     challenge this is, so a caller cannot verify somebody else's account by
+         *     naming it and cannot discover whether an address has one open. That is
+         *     what makes it safe to distinguish the failures below, where the
+         *     unauthenticated link endpoint deliberately cannot.
+         *
+         *     Four outcomes a client acts on differently:
+         *
+         *         email_verification_code_invalid            type the current code
+         *         email_verification_code_expired            ask for another
+         *         email_verification_attempts_exceeded       ask for another; the
+         *                                                    challenge is destroyed
+         *         (success)                                  continue
+         *
+         *     **Idempotent for an account that is already verified** — §23. A code
+         *     submitted in one tab after another tab or an emailed link succeeded is
+         *     not a mistake, and answering `422` for a state the caller wanted would
+         *     be reporting a race as their error.
+         *
+         *     A malformed body is `422` from the schema and **costs no attempt**
+         *     (§10): a client's own bug must not spend one of five guesses.
+         */
+        post: operations["verify_email_code_api_v1_auth_email_verify_code_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/email/resend-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send another six-digit verification code
+         * @description Issues a fresh code, invalidating the previous one — §11.
+         *
+         *     **Authenticated**, unlike `/email/resend`, and the difference is what
+         *     each is for. That one serves somebody who never received a link and may
+         *     never have signed in, so it takes an address and must say nothing. This
+         *     one serves somebody sitting on `/verify-email` inside a session, so
+         *     there is no account to enumerate — and it can therefore tell them the
+         *     two things they need: that they are already verified, or how long until
+         *     another code may be sent.
+         *
+         *     `409 email_already_verified` for an account that is done. `409
+         *     email_verification_resend_too_soon` with a `Retry-After` header inside
+         *     the sixty-second cooldown,
+         *     which is measured from a **durable row** rather than from anything in
+         *     process memory — so a reload, a second tab and a second node agree.
+         *
+         *     `202 Accepted`: the work is handed to a mail provider and the outcome is
+         *     not known when this returns.
+         */
+        post: operations["resend_verification_code_api_v1_auth_email_resend_code_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/email/resend": {
         parameters: {
             query?: never;
@@ -705,12 +784,22 @@ export interface paths {
         put?: never;
         /**
          * Create an account and start a browser session
-         * @description Registers, sends the verification mail, and signs the browser in.
+         * @description Registers, sends a six-digit code, and signs the browser in.
          *
-         *     The registration and the mail are `RegistrationService`'s and
-         *     `EmailVerificationService`'s, unchanged — including the rule that a
-         *     delivery failure never fails the request, because the account exists
-         *     and the person can ask for another link.
+         *     **A code, not a link** — A64-021.5H. The session exists either way and
+         *     the account is unverified either way; what changed is that the person
+         *     carries six digits from their inbox to the page they are already on,
+         *     rather than moving a session to wherever their mail is.
+         *
+         *     Signing in before verification is unchanged and is deliberate: the
+         *     frontend needs an authenticated call to submit the code, and the
+         *     verified-email policy (`VerifiedUser`) is what stops that session doing
+         *     anything else.
+         *
+         *     A delivery failure still never fails the request. The account exists,
+         *     the challenge is committed, and the person can ask for another code —
+         *     turning a transient vendor outage into a failed registration would be
+         *     the worse trade.
          */
         post: operations["browser_register_api_v1_auth_browser_register_post"];
         delete?: never;
@@ -3250,7 +3339,7 @@ export interface components {
          *     per module and stops being a useful thing to exhaustively switch over.
          * @enum {string}
          */
-        ErrorCode: "internal_error" | "validation_error" | "domain_error" | "authentication_failed" | "not_found" | "conflict" | "permission_denied" | "precondition_failed" | "rule_violation" | "rate_limited" | "unsupported_engine_version" | "invalid_cursor" | "tournament_not_found" | "registration_not_open" | "registration_deadline_passed" | "tournament_full" | "already_registered" | "registration_not_found" | "invalid_tournament_state" | "infrastructure_error" | "transient_infrastructure_error" | "permanent_infrastructure_error" | "username_already_exists" | "email_already_exists" | "duplicate_friend_request" | "opposite_friend_request_pending" | "invalid_username" | "invalid_email" | "weak_password" | "invalid_credentials" | "inactive_account" | "account_locked" | "authentication_required" | "invalid_token" | "expired_token" | "invalid_session" | "session_expired" | "invalid_verification_token" | "invalid_reset_token" | "avatar_too_large" | "queue_cooldown_active" | "unsupported_time_control" | "notification_preference_locked" | "notification_channel_unavailable" | "duplicate_preference_change";
+        ErrorCode: "internal_error" | "validation_error" | "domain_error" | "authentication_failed" | "not_found" | "conflict" | "permission_denied" | "precondition_failed" | "rule_violation" | "rate_limited" | "unsupported_engine_version" | "invalid_cursor" | "tournament_not_found" | "registration_not_open" | "registration_deadline_passed" | "tournament_full" | "already_registered" | "registration_not_found" | "invalid_tournament_state" | "infrastructure_error" | "transient_infrastructure_error" | "permanent_infrastructure_error" | "username_already_exists" | "email_already_exists" | "duplicate_friend_request" | "opposite_friend_request_pending" | "invalid_username" | "invalid_email" | "weak_password" | "invalid_credentials" | "inactive_account" | "account_locked" | "authentication_required" | "invalid_token" | "expired_token" | "invalid_session" | "session_expired" | "invalid_verification_token" | "invalid_reset_token" | "avatar_too_large" | "queue_cooldown_active" | "unsupported_time_control" | "notification_preference_locked" | "notification_channel_unavailable" | "duplicate_preference_change" | "email_verification_code_invalid" | "email_verification_code_expired" | "email_verification_attempts_exceeded" | "email_verification_resend_too_soon" | "email_already_verified" | "email_verification_required";
         /**
          * ErrorResponse
          * @description The only shape an Arena64 error takes on the wire: a safe message and
@@ -5949,6 +6038,28 @@ export interface components {
             detail: string;
         };
         /**
+         * VerifyCodeRequest
+         * @description The `POST /auth/email/verify-code` body — A64-021.5H §9.
+         *
+         *     **No email address.** The session says who is verifying, so asking for
+         *     the address again would be asking a caller to assert an identity they
+         *     have already proved — and would make this endpoint accept an address
+         *     somebody else owns.
+         *
+         *     A `str`, not an `int`. `000042` is a code this platform issues
+         *     (`domain.otp.generate_otp`), and an integer field would parse it as
+         *     `42`, compare six characters against two, and reject a code that was
+         *     correct. The pattern is the validation.
+         */
+        VerifyCodeRequest: {
+            /**
+             * Code
+             * @description The six digits from the verification email.
+             * @example 482193
+             */
+            code: string;
+        };
+        /**
          * VerifyEmailRequest
          * @description The `POST /auth/email/verify` body.
          *
@@ -6606,6 +6717,104 @@ export interface operations {
             };
             /** @description A field failed validation. `code` names which one. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    verify_email_code_api_v1_auth_email_verify_code_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifyCodeRequest"];
+            };
+        };
+        responses: {
+            /** @description The account, now verified. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_UserRead_"];
+                };
+            };
+            /** @description The credential was missing, malformed, expired or revoked. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A field failed validation. `code` names which one. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    resend_verification_code_api_v1_auth_email_resend_code_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_VerificationAccepted_"];
+                };
+            };
+            /** @description The credential was missing, malformed, expired or revoked. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The username or email address is already registered. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A field failed validation. `code` names which one. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A rate limit was exceeded. `Retry-After` gives the number of seconds to wait; `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset` describe the limit that bound. The same three `X-RateLimit-*` headers are returned on successful responses, so a client can pace itself before being refused. */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

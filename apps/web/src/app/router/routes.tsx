@@ -5,7 +5,7 @@ import {
   Outlet,
 } from "@tanstack/react-router";
 
-import { RequireAnonymous, RequireAuth } from "@/app/router/guards";
+import { RequireAnonymous, RequireAuth, RequireVerifiedEmail } from "@/app/router/guards";
 import NotFoundPage from "@/pages/not-found";
 import { Spinner } from "@/shared/ui";
 import { AppShell } from "@/widgets/app-shell";
@@ -83,6 +83,21 @@ function tokenSearch(search: Record<string, unknown>): { token?: string } {
   return typeof search.token === "string" ? { token: search.token } : {};
 }
 
+/**
+ * `/verify-email`'s search: a mailed link's `?token=`, or a `?next=` the
+ * verified guard captured on its way past — A64-021.5H §18.
+ *
+ * Both optional and neither implied by the other. A person arriving from a
+ * link has no destination in mind; one bounced off a product page does, and
+ * `safeRedirect` is what stops that destination being an external URL.
+ */
+function verifyEmailSearch(search: Record<string, unknown>): {
+  token?: string;
+  next?: string;
+} {
+  return { ...tokenSearch(search), ...nextSearch(search) };
+}
+
 const LoginPage = lazyRouteComponent(() => import("@/pages/login"));
 const RegisterPage = lazyRouteComponent(() => import("@/pages/register"));
 
@@ -127,7 +142,17 @@ export const registerRoute = createRoute({
 export const verifyEmailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/verify-email",
-  validateSearch: tokenSearch,
+  validateSearch: verifyEmailSearch,
+  // **Not** `sessionPage`, and not `protectedPage` — A64-021.5H §17, §19.
+  //
+  // The page is two things behind one path: a mailed link lands here with a
+  // `?token=` and must work for somebody who has never signed in, and the
+  // six-digit form needs a session. The route therefore carries no guard
+  // and the *page* requires one for the half that needs it.
+  //
+  // Wrapping it in the verified guard would be a loop; wrapping it in
+  // `RequireAuth` would strand a link that arrived in a mail client the
+  // person is not signed in on.
   component: lazyRouteComponent(() => import("@/pages/verify-email")),
 });
 
@@ -147,19 +172,35 @@ export const resetPasswordRoute = createRoute({
 // --- profile — A64-020.3 ----------------------------------------------------
 
 /**
- * Wraps a lazily-imported page in `RequireAuth`.
+ * Wraps a lazily-imported page in `RequireAuth`, then `RequireVerifiedEmail`.
  *
- * Written once because four routes need it identically, and because the
- * mistake it prevents is silent: a settings route added later without the
- * guard renders a page that calls `/profile/me` unauthenticated, gets a
- * `401`, and looks like a loading failure rather than a missing guard.
+ * Written once because every product route needs it identically, and
+ * because the mistake it prevents is silent: a settings route added later
+ * without the guard renders a page that calls `/profile/me`
+ * unauthenticated, gets a `401`, and looks like a loading failure rather
+ * than a missing guard.
+ *
+ * ## Both guards, in this order — A64-021.5H §19
+ *
+ * The two answer different questions and the order is the answer to which
+ * matters first: a signed-out visitor belongs at `/login`, and only once
+ * they are signed in does "have you proved this address" become the next
+ * question. Reversed, an anonymous visitor would be sent to `/verify-email`
+ * to verify an account they do not have.
+ *
+ * This is **not** the enforcement. Every write behind these pages is
+ * refused by the backend for an unverified account (`VerifiedUser`); what
+ * the guard adds is that nobody is shown a screen whose every button
+ * returns `403`.
  */
 function protectedPage(load: () => Promise<{ default: () => React.JSX.Element }>) {
   const Page = lazyRouteComponent(load);
   return function Protected() {
     return (
       <RequireAuth>
-        <Page />
+        <RequireVerifiedEmail>
+          <Page />
+        </RequireVerifiedEmail>
       </RequireAuth>
     );
   };

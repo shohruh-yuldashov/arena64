@@ -67,7 +67,26 @@
       "resendTitle": "Send a new link",
       "resend": "Send link",
       "resendSent": "If an account exists for that address, we have sent a link.",
-      "toLogin": "Go to sign in"
+      "toLogin": "Go to sign in",
+      "codeTitle": "Enter your code",
+      "codeIntro": "We sent a six-digit code to {email}. It expires in 10 minutes.",
+      "codeLabel": "Verification code",
+      "codeHint": "Six digits from the email.",
+      "submit": "Verify",
+      "submitting": "Verifying…",
+      "resendCode": "Send a new code",
+      "resendCodeIn": "You can ask for a new code in {seconds}s",
+      "resendCodeSent": "A new code is on its way.",
+      "verifiedTitle": "Email confirmed",
+      "verifiedBody": "Taking you to Arena64…",
+      "continue": "Continue",
+      "errors": {
+        "invalid": "That code is not correct. Check the newest email and try again.",
+        "expired": "That code has expired. Ask for a new one.",
+        "exhausted": "Too many incorrect codes. Ask for a new one.",
+        "tooSoon": "A code was just sent. Please wait a moment.",
+        "unexpected": "Something went wrong. Please try again."
+      }
     },
     "forgotPassword": {
       "title": "Reset your password",

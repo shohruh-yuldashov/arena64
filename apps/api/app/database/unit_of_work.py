@@ -110,3 +110,72 @@ class SessionUnitOfWork:
 
     async def rollback(self) -> None:
         await self._session.rollback()
+
+
+class ParticipatingUnitOfWork:
+    """A unit of work that **stages** and leaves the commit to its caller.
+
+    `UnitOfWork`, in the sense that matters to a service: it is a scope, it
+    rolls back on an exception, and its `commit()` is the point at which the
+    service considers its work done. What it does not do is end the database
+    transaction — the enclosing unit of work does, and everything staged
+    through this one commits with it or with nothing.
+
+    ## What this exists for — A64-022.3 §10
+
+    Composing two application services into one atomic operation, where the
+    inner one commits by contract and the outer one must not let it.
+
+    Friend challenge acceptance is the case: `game.MatchCreationUseCase`
+    creates a match and commits, because that is correct for every caller
+    that only creates a match. Acceptance needs the match **and** the
+    challenge transition **and** both sets of events to land together —
+    `domain-model.md` §10.3 requires it, and A64-022.3 §10 forbids emulating
+    it with compensating cleanup.
+
+    Injecting this rather than changing `MatchCreationService` is what keeps
+    that composition from being a special case inside `game`: the service is
+    unchanged, its other callers are unchanged, and the *caller* that needs
+    to own the transaction says so by handing it a unit of work that does not
+    finish one.
+
+    ## Why the rollback still happens
+
+    `__aexit__` rolls back on an exception exactly as `SessionUnitOfWork`
+    does. An inner service that fails must not leave half its work staged for
+    the outer commit to pick up — and rolling back the shared session
+    discards the outer work too, which is the correct outcome: the whole
+    operation failed.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    @property
+    def session(self) -> AsyncSession:
+        return self._session
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        if exc_type is not None:
+            await self._session.rollback()
+
+    async def commit(self) -> None:
+        """Flushes, and deliberately does not commit.
+
+        The flush matters: it sends the staged statements so that a
+        constraint violation surfaces *here*, inside the inner service's
+        scope, rather than at the outer commit where the caller cannot tell
+        which statement caused it.
+        """
+        await self._session.flush()
+
+    async def rollback(self) -> None:
+        await self._session.rollback()

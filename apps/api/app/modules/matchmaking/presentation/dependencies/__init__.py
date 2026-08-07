@@ -95,7 +95,7 @@ from app.api.deps import ClockDep, DbSessionDep, PresenceSettingsDep, RedisPools
 from app.api.outbox_deps import EventPublisherDep
 from app.config.settings import MatchmakingSettings
 from app.core.clock import Clock
-from app.database.unit_of_work import SessionUnitOfWork
+from app.database.unit_of_work import ParticipatingUnitOfWork, SessionUnitOfWork
 from app.modules.friends.application.ports import SocialGraphCache
 from app.modules.friends.application.services import (
     PairingExclusionService,
@@ -858,6 +858,28 @@ def build_challenge_service(
         # against is the one the queue offers. Two readers would be two
         # menus.
         time_controls=SqlAlchemyTimeControlCatalogue(session),
+        # A64-022.3. `game`'s own use case, over the **same session** — which
+        # is what makes acceptance atomic: `SessionUnitOfWork` is a scope
+        # marker, so the challenge update staged before this commits with the
+        # match it creates. A second session would be two transactions and a
+        # window in which a match exists with no accepted challenge.
+        matches=PersistentMatchCreation(
+            matches=SqlAlchemyMatchRecordRepository(session),
+            events=events,
+            # **Participating, not owning** — A64-022.3 §10. `game`'s use
+            # case commits by contract, which is right for every caller that
+            # only creates a match and wrong for acceptance: the match, the
+            # challenge transition and both events must land together.
+            #
+            # Handing it a unit of work that stages and flushes rather than
+            # commits is what composes the two without special-casing either
+            # — `game` is unchanged and its other callers are unchanged.
+            unit_of_work=ParticipatingUnitOfWork(session),
+            clock=clock,
+        ),
+        # The same provider the queue reads seats through, so a challenge
+        # game and a queue game record a rating identically.
+        ratings=PublishedRatingProvider(SqlAlchemyRatingReader(session)),
         # A64-022.2. The outbox, over the **same session** as the repository:
         # a challenge and the event announcing it commit together or neither
         # does (AD-16). A publisher on a second session would be an event

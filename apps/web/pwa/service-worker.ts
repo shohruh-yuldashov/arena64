@@ -6,6 +6,7 @@ import {
   isSkipWaitingMessage,
   precacheName,
 } from "./cache-policy";
+import { isPushPayload, presentationFor } from "./push-presentation";
 
 /**
  * Arena64's one service worker — A64-020.9 §8.
@@ -59,8 +60,42 @@ interface ExtendableMessageEvent extends ExtendableEvent {
   readonly data: unknown;
 }
 
+/** A64-021.6. `PushEvent`, narrowed to what this worker reads. */
+interface PushEvent extends ExtendableEvent {
+  readonly data: { json(): unknown } | null;
+}
+
+interface NotificationOptions {
+  body?: string;
+  tag?: string;
+  data?: unknown;
+  icon?: string;
+  badge?: string;
+  renotify?: boolean;
+}
+
+interface ServiceWorkerNotification {
+  readonly data: unknown;
+  close(): void;
+}
+
+interface NotificationEvent extends ExtendableEvent {
+  readonly notification: ServiceWorkerNotification;
+}
+
+interface WindowClientLike {
+  readonly url: string;
+  focus(): Promise<WindowClientLike>;
+  navigate(url: string): Promise<WindowClientLike | null>;
+}
+
 interface ServiceWorkerClients {
   claim(): Promise<void>;
+  matchAll(options?: {
+    type?: "window";
+    includeUncontrolled?: boolean;
+  }): Promise<WindowClientLike[]>;
+  openWindow(url: string): Promise<WindowClientLike | null>;
 }
 
 interface ServiceWorkerScope {
@@ -73,6 +108,14 @@ interface ServiceWorkerScope {
   ): void;
   addEventListener(type: "fetch", listener: (event: FetchEvent) => void): void;
   addEventListener(type: "message", listener: (event: ExtendableMessageEvent) => void): void;
+  addEventListener(type: "push", listener: (event: PushEvent) => void): void;
+  addEventListener(
+    type: "notificationclick",
+    listener: (event: NotificationEvent) => void,
+  ): void;
+  registration: {
+    showNotification(title: string, options?: NotificationOptions): Promise<void>;
+  };
 }
 
 const worker = globalThis as unknown as ServiceWorkerScope;
@@ -164,6 +207,106 @@ worker.addEventListener("message", (event) => {
   if (!isSkipWaitingMessage(event.data)) return;
   event.waitUntil(worker.skipWaiting());
 });
+
+worker.addEventListener("push", (event) => {
+  // **Always shows something** — A64-021.6 §12.
+  //
+  // Every browser that delivers a push to a worker requires the worker to
+  // display a notification, and one that does not is penalised: Chrome
+  // shows its own "This site has been updated in the background", and
+  // repeated offences cost the origin its permission. So an unparseable
+  // payload renders the generic notification rather than returning.
+  //
+  // That is also the right behaviour on its own terms. A push that
+  // displays nothing is indistinguishable from one that never arrived,
+  // which is the failure nobody can report.
+  event.waitUntil(show(event));
+});
+
+worker.addEventListener("notificationclick", (event) => {
+  // §13, in order: close it, then focus an existing tab or open one.
+  event.notification.close();
+  event.waitUntil(open(event));
+});
+
+async function show(event: PushEvent): Promise<void> {
+  let payload: unknown = null;
+  try {
+    payload = event.data?.json() ?? null;
+  } catch {
+    // Not JSON. Nothing to do but say something generic — see above on why
+    // returning is not an option.
+    payload = null;
+  }
+
+  const presentation = isPushPayload(payload)
+    ? presentationFor(payload)
+    : {
+        title: "Arena64",
+        body: "You have a new notification.",
+        path: "/notifications",
+        tag: "arena64",
+      };
+
+  await worker.registration.showNotification(presentation.title, {
+    body: presentation.body,
+    tag: presentation.tag,
+    // **The path, not a URL, and computed here rather than carried.** The
+    // click handler reads this back, and what it reads is a value this
+    // worker produced from a closed table — never a string that travelled
+    // in the payload.
+    data: { path: presentation.path },
+    icon: "/icons/icon-192.png",
+    badge: "/icons/icon-192.png",
+  });
+}
+
+async function open(event: NotificationEvent): Promise<void> {
+  const path = pathOf(event.notification.data);
+  // Resolved against **this worker's own origin**, which is the same-origin
+  // guarantee: `path` cannot carry a scheme, and even if it somehow did,
+  // the check below refuses anything that did not resolve to here.
+  const target = new URL(path, worker.location.origin);
+  if (target.origin !== worker.location.origin) return;
+
+  const clients = await worker.clients.matchAll({ type: "window", includeUncontrolled: true });
+
+  // An **existing tab first**, and navigated rather than merely focused: a
+  // person with Arena64 open on the home page who taps a tournament
+  // notification means to go to the tournament. Opening a second tab for an
+  // app they already have open is the behaviour people complain about.
+  const existing = clients.find((client) => new URL(client.url).origin === target.origin);
+  if (existing) {
+    await existing.focus();
+    // `navigate` is refused by some browsers for a client the worker does
+    // not control; focusing already succeeded, so a failure here leaves the
+    // person in the app rather than nowhere.
+    await existing.navigate(target.href).catch(() => null);
+    return;
+  }
+
+  // No tab: open one. A protected route may bounce to `/login` and then
+  // back — the ordinary session flow, unchanged by this being a push.
+  await worker.clients.openWindow(target.href);
+}
+
+/** The path this worker stored, or the list. Never a payload value. */
+function pathOf(data: unknown): string {
+  if (typeof data === "object" && data !== null) {
+    const candidate = (data as Record<string, unknown>).path;
+    // Must be an in-app absolute path. A value that is not is not
+    // sanitised into one — it is discarded for the safe default, which is
+    // the same rule `safeRedirect` follows for `?next=`.
+    if (
+      typeof candidate === "string" &&
+      candidate.startsWith("/") &&
+      !candidate.startsWith("//")
+    ) {
+      return candidate;
+    }
+  }
+  return "/notifications";
+}
 
 async function precacheShell(): Promise<void> {
   const cache = await caches.open(PRECACHE);

@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import type { Side } from "@/entities/board";
 import type { GameState } from "@/features/game/model/state";
 import { type ClockReading, formatClock } from "@/features/game/model/use-clock";
+import { useRatingResult } from "@/features/game/model/use-rating-result";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
 import type { ConnectionStatus } from "@/shared/realtime";
@@ -118,8 +119,68 @@ function rejectionKey(code: string): TranslationKey {
   return known[code] ?? "game.errors.unknown";
 }
 
+/**
+ * What the match did to this player's rating — A64-023 §7, §8.
+ *
+ * Three states, and none of them is a fabricated zero:
+ *
+ *     rated + ready     1524 → 1537, +13
+ *     rated + waiting   "Rating is being updated…"
+ *     rated + late      "Rating update is taking longer than expected."
+ *     casual            nothing at all
+ *
+ * The delta is the server's — see `rating.public.RatingChange.delta` on why
+ * this platform subtracts in one place. Nothing here computes Glicko-2, and
+ * nothing here reads the profile's current rating: a profile shows what a
+ * player rates *now*, which after two quick games is not what this match
+ * did.
+ */
+function RatingResultBlock({
+  matchId,
+  viewerId,
+}: {
+  matchId: string;
+  viewerId: string | null;
+}) {
+  const { t, locale } = useTranslation();
+  const rating = useRatingResult({ matchId, viewerId, enabled: true });
+
+  // A casual match, or an answer that has not arrived at all yet. Rendering
+  // a placeholder for the second would put "updating…" under every casual
+  // result for one tick.
+  if (rating.rated !== true) return null;
+
+  const number = (value: number) => new Intl.NumberFormat(locale).format(value);
+
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-muted-foreground text-xs">{t("game.rating.title")}</p>
+      {rating.change !== null ? (
+        <p className="text-sm tabular-nums">
+          <span>{number(rating.change.before)}</span>
+          <span aria-hidden="true"> → </span>
+          <span className="sr-only">{t("game.rating.becomes")}</span>
+          <span className="font-medium">{number(rating.change.after)}</span>{" "}
+          <span className={rating.change.delta < 0 ? "text-destructive" : "text-emerald-600"}>
+            {/* The sign is part of the number, formatted rather than
+                concatenated: a minus typed as a hyphen is the wrong glyph
+                in every locale this product ships. */}
+            {new Intl.NumberFormat(locale, { signDisplay: "exceptZero" }).format(
+              rating.change.delta,
+            )}
+          </span>
+        </p>
+      ) : (
+        <p role="status" className="text-muted-foreground text-sm">
+          {t(rating.hasGivenUp ? "game.rating.late" : "game.rating.updating")}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** The result, when the server says there is one. */
-function Result({ state }: { state: GameState }) {
+function Result({ state, viewerId }: { state: GameState; viewerId: string | null }) {
   const { t } = useTranslation();
   if (state.result === null) return null;
 
@@ -159,6 +220,8 @@ function Result({ state }: { state: GameState }) {
           reason: t(reasons[state.result.termination_reason] ?? "game.reason.unknown"),
         })}
       </p>
+      <RatingResultBlock matchId={state.matchId} viewerId={viewerId} />
+
       <div className="flex flex-wrap gap-2">
         {/* A64-020.5E §22. The one existing surface with a real match id —
             there is no match-history UI yet, so this is where a replay is
@@ -181,10 +244,13 @@ export function GamePanel({
   state,
   clock,
   connection,
+  viewerId,
 }: {
   state: GameState;
   clock: ClockReading;
   connection: ConnectionStatus;
+  /** Whose rating the result block reports. `null` for a spectator. */
+  viewerId: string | null;
 }) {
   const { t } = useTranslation();
   // The viewer's own clock at the bottom, matching the board's orientation:
@@ -215,7 +281,7 @@ export function GamePanel({
         />
         <p className="text-muted-foreground text-xs">{t("game.players.you")}</p>
 
-        <Result state={state} />
+        <Result state={state} viewerId={viewerId} />
       </CardContent>
     </Card>
   );

@@ -4486,6 +4486,8 @@ export interface components {
             opponent?: components["schemas"]["ReplaySeatResponse"] | null;
             /** @description How much time each side had. `null` for an untimed match. */
             time_control?: components["schemas"]["ReplayTimeControlResponse"] | null;
+            /** @description What this match did to **your** rating, and only ever yours — it is served solely when you are reading your own history. `null` has two meanings, and `rated` tells them apart: on a casual match there is no rating change to report, and on a rated one the adjustment has not been applied yet — it is written by an asynchronous consumer of `game.match_completed`, so it lands shortly after the match ends. */
+            rating?: components["schemas"]["MatchRatingChangeResponse"] | null;
             /**
              * Started At
              * Format: date-time
@@ -4503,6 +4505,30 @@ export interface components {
              * @description Opaque. Send it back as `after`; `null` on the last page.
              */
             next_cursor?: string | null;
+        };
+        /**
+         * MatchRatingChangeResponse
+         * @description What a rated match did to **the requesting player's** rating — A64-023 §1.
+         *
+         *     Three integers, and nothing that explains them: the deviations, the
+         *     volatilities, the opponent's triple and the expected score are all on
+         *     `rating_adjustment` and are all `rating`'s to publish if a
+         *     rating-history surface is ever built.
+         *
+         *     `delta` is served rather than left to the client, because the platform
+         *     must not have two subtractions of one fact — see
+         *     `rating.public.RatingChange.delta`.
+         */
+        MatchRatingChangeResponse: {
+            /** Before */
+            before: number;
+            /** After */
+            after: number;
+            /**
+             * Delta
+             * @description `after - before`. Negative for a loss.
+             */
+            delta: number;
         };
         /**
          * MatchRecordStatus

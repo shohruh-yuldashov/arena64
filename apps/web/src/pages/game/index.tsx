@@ -1,5 +1,7 @@
 import { Link, useParams } from "@tanstack/react-router";
 
+import { isAuthenticated } from "@/entities/session";
+import { useSession } from "@/features/auth/model/session-provider";
 import { canInteract } from "@/features/game/model/state";
 import { useClock } from "@/features/game/model/use-clock";
 import { useGameRoom } from "@/features/game/model/use-game-room";
@@ -44,6 +46,7 @@ import { Button, Skeleton } from "@/shared/ui";
  */
 export default function GamePage() {
   const { t } = useTranslation();
+  const { state: session } = useSession();
   const { matchId } = useParams({ from: "/games/$matchId" });
   const connection = useConnectionStatus();
   const { state, submit, command } = useGameRoom(matchId);
@@ -121,7 +124,12 @@ export default function GamePage() {
           the board already uses (A64-020.5C §14). The controls come second
           so the clocks are never pushed off screen by an incoming offer. */}
       <div className="flex w-full flex-col gap-4 lg:w-80 lg:shrink-0">
-        <GamePanel state={state} clock={clock} connection={connection} />
+        <GamePanel
+          state={state}
+          clock={clock}
+          connection={connection}
+          viewerId={isAuthenticated(session) ? session.user.id : null}
+        />
         <GameControls state={state} onCommand={(kind) => void command(kind)} />
       </div>
     </section>

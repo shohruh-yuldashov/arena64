@@ -10,17 +10,40 @@ A push is an interruption. Email arrives in a list somebody chooses to open;
 a push lights up a lock screen, and the cost of getting it wrong is that the
 whole channel is switched off — not one category, the channel.
 
-So the set starts where the email set is, at the three tournament types, and
 `GAME_COMPLETED` is deliberately absent: a player who just finished a game
 is looking at the result screen, and pushing it to the phone in their pocket
 notifies them of something they are already reading.
 
-Friend requests are absent for a different reason, and it is worth stating
-because they look like the obvious next candidates: a friend request is
-attacker-controllable. Anybody can send one, and a type on this list is a
-type a stranger can use to make somebody's phone buzz. That needs a rate
-limit story of its own before it is safe, and inventing one here would be
-the speculative generality CLAUDE.md §1.7 forbids.
+## The friend types, and the concern that deferred them — A64-021.6A
+
+A64-021.6 left `FRIEND_REQUEST_RECEIVED` and `FRIEND_REQUEST_ACCEPTED` out
+on the grounds that a friend request is attacker-controllable: anybody can
+send one, so a type on this list is a type a stranger can use to make
+somebody's phone buzz.
+
+That concern was real and is **already answered**, which is what A64-021.6A
+established — the bound it asked for exists three times over, and none of it
+is push-specific:
+
+    friend_request_send_user   20 per hour, per *sender*. A stranger gets
+                               twenty buzzes an hour across the whole
+                               platform, not twenty per victim
+    blocking                   a blocked player cannot send a request at
+                               all, so the recipient's own control removes
+                               the sender entirely
+    duplicates                 a second pending request to the same person
+                               is refused, so a sender cannot repeat
+
+And the one that decides it: a push exists **only** where a durable
+notification does. Every rule above runs before the notification is written,
+so a request that is rate limited, blocked, duplicate or malformed produces
+no notification and therefore no push. There is no path from a refused
+request to a delivery row (§3).
+
+What is left is a stranger's twenty-an-hour, which is the same volume the
+in-app badge and the realtime frame already carry — and a person who does
+not want it mutes the `social` category, which the preference matrix has
+offered since A64-021.3.
 """
 
 from dataclasses import dataclass
@@ -39,9 +62,21 @@ from app.modules.notifications.domain.record import NotificationType
 #: looking at it.
 PUSH_CAPABLE_TYPES: Final[frozenset[NotificationType]] = frozenset(
     {
+        # The tournament three — A64-021.6. Notifications a player cannot
+        # see coming: a round published while they are away from the tab, a
+        # registration confirmed after they closed it, a tournament that
+        # ends overnight.
         NotificationType.TOURNAMENT_REGISTRATION_CONFIRMED,
         NotificationType.TOURNAMENT_ROUND_PUBLISHED,
         NotificationType.TOURNAMENT_COMPLETED,
+        # The social two — A64-021.6A. Both are somebody *waiting* on the
+        # other person: a request nobody sees is a request that expires, and
+        # an acceptance is the moment two people can actually play. See the
+        # module docstring on why the abuse concern that deferred these is
+        # already answered by the rules that run before a notification
+        # exists at all.
+        NotificationType.FRIEND_REQUEST_RECEIVED,
+        NotificationType.FRIEND_REQUEST_ACCEPTED,
     }
 )
 

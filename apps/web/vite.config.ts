@@ -83,7 +83,7 @@ export default defineConfig({
   // while development works fine.
   server: {
     proxy: API_PROXY,
-    allowedHosts: ["1320-2a05-45c2-70f1-ad00-f1c6-fefa-7cf4-7d08.ngrok-free.app"],
+    allowedHosts: ["shohruh-yuldashov.jprq.live"],
   },
   preview: { proxy: API_PROXY },
   resolve: {

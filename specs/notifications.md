@@ -1,6 +1,6 @@
 # Notifications
 
-> **Status:** foundation — A64-021.1; realtime in-app delivery — A64-021.2; preferences — A64-021.3; tournament and game coverage — A64-021.4; email through Resend — A64-021.5; Web Push — A64-021.6
+> **Status:** **production-ready** — audited A64-021.7. Foundation A64-021.1; realtime A64-021.2; preferences A64-021.3; event coverage A64-021.4; email through Resend A64-021.5; Web Push A64-021.6; social push A64-021.6A
 > **Owner:** platform
 > **Related:** `docs/01-architecture/domain-model.md` §9.3, `docs/01-architecture/database.md` §10.2 and §10.3, `specs/friends.md`, `specs/frontend.md` §21 and §22
 
@@ -668,7 +668,7 @@ be one.
 
 | Deferred to | What it adds | Where |
 | --- | --- | --- |
-| **Friend challenges** | A `challenges` domain, its events, and one notification type per event | A new member of `NotificationType`, its payload, its target |
+| **Friend challenges** | A `challenges` domain and its two events. Everything downstream of the event already exists — see §15.16 for the exact seam | A new member of `NotificationType`, its payload, its target, and one row in each of four tables that already exist |
 | **`tournament_match_ready`** | An event. `TournamentMatchLauncher` holds no publisher, `game.match_activated` carries no `origin`, and `launch()` does not report whether an attempt was newly recorded — without the third, a re-launch after a restart notifies twice | `tournament.application.services.match_launcher`, and one more member of `tournament.public`'s event re-exports |
 | **`tournament_cancelled`** | A publisher. The event is declared and no service emits it | `tournament.application.services` — wherever cancellation is eventually implemented |
 
@@ -921,13 +921,41 @@ email channel sends.
 | `tournament_round_published` | Published while the player is away; time-critical |
 | `tournament_completed` | Finishes overnight |
 
+| `friend_request_received` | A64-021.6A. Somebody is waiting: a request nobody sees is a request that expires |
+| `friend_request_accepted` | A64-021.6A. The moment two people can actually play |
+
 | Not pushed | Why |
 | --- | --- |
 | `game_completed` | The player is looking at the result screen. Pushing it notifies them of something they are already reading |
-| `friend_request_received` / `_accepted` | **Attacker-controllable.** Anybody can send a friend request, so a type on this list is a type a stranger can use to make somebody's phone buzz. That needs a rate-limit story of its own before it is safe, and inventing one now would be speculative |
 
 Push defaults to **off** for every category (`_default_for`: in-app on,
 everything else off). A channel that interrupts has to be asked for.
+
+#### The friend types, and the concern that deferred them
+
+A64-021.6 left the two social types out on the grounds that a friend request
+is attacker-controllable — anybody can send one, so a pushable type is one a
+stranger can use to make somebody's phone buzz.
+
+A64-021.6A did not overrule that concern; it found the bound already in
+place, three times over and none of it push-specific:
+
+| Control | Effect |
+| --- | --- |
+| `friend_request_send_user`, 20/hour **per sender** | A stranger gets twenty buzzes an hour across the whole platform, not twenty per victim |
+| Blocking | A blocked player cannot send a request at all — the recipient's own control removes the sender entirely |
+| Duplicate refusal | A second pending request to the same person is refused, so a sender cannot repeat |
+
+And the one that settles it: **a push exists only where a durable
+notification does.** Every rule above runs before the notification is
+written, so a request that is rate limited, blocked, duplicate or malformed
+produces no notification and therefore no delivery row. There is no path from
+a refused request to a push, and no push-specific bypass was added.
+
+What remains is a stranger's twenty an hour — the same volume the in-app
+badge and the realtime frame have always carried — and a person who does not
+want it mutes the `social` category, which the matrix has offered since
+A64-021.3.
 
 ### 15.2 Subscriptions
 
@@ -1005,7 +1033,23 @@ any token, and any URL. A push payload lands in a browser's notification
 store on a device that may be shared, and shows on a lock screen.
 
 The **text** is a closed table compiled into the service worker
-(`pwa/push-presentation.ts`) — §12's approach B. Server-composed text was
+(`pwa/push-presentation.ts`) — §12's approach B, and every `path` in it comes
+from `shared/config/notification-routes.ts`, the same constants the in-app
+list resolves through. Two copies of a route is a push whose text says
+"friend request" and whose tap opens a different page.
+
+The two social entries are stricter than the tournament ones: the title is
+the product name and the body names nobody.
+
+| Type | Lock screen | Opens |
+| --- | --- | --- |
+| `friend_request_received` | *Arena64* — "You have a new friend request." | `/friends/requests` |
+| `friend_request_accepted` | *Arena64* — "Your friend request was accepted." | `/friends` |
+
+A tournament notification discloses that somebody plays in tournaments; a
+social one would disclose **who is trying to reach them**, on a lock screen,
+to whoever is looking at it. The sender's name is one tap away, behind the
+session — and the in-app notification still shows it in full. Server-composed text was
 rejected because it is *specific* text: "Round 3 is live in the Tashkent
 Open" names a tournament somebody is in, in public. "A new round is live"
 discloses that this person uses Arena64 and nothing more.
@@ -1143,11 +1187,262 @@ that the bytes are the ones RFC 8291 specifies, that every status code a
 real service can answer with leads to the right state, and that the browser
 flow calls what it should in the order it should.
 
-### 15.15 Migration
+### 15.15 Friend challenges — the seam, and nothing else
 
-`e26a0159c56b` creates both tables. **No backfill** — there are no
+**Not implemented, and no placeholder code exists.** What follows is where
+`friend_challenge_received` and `friend_challenge_accepted` will plug in, so
+that the phase which builds them does not have to rediscover it.
+
+The point of writing it down is that the answer is *small*: A64-021.6A added
+two notification types to the push channel and touched one line of the
+delivery pipeline, which is zero. A challenge type is the same shape.
+
+| Step | Where | What it takes |
+| --- | --- | --- |
+| 1. The events | a new `challenges` module | `challenges.challenge_issued` and `challenges.challenge_accepted` through the outbox, like every other source event. **This is the only real work.** |
+| 2. The types | `notifications/domain/record.py` | Two members of `NotificationType`, two entries in `CATEGORY_OF` — both `SOCIAL`, which already exists in the preference matrix and already has a switch per channel |
+| 3. The target | `notifications/domain/record.py` | One member of `NavigationTargetType`. A challenge has an identifier, so it is a `ref`-carrying target like `tournament` |
+| 4. The consumer | `notifications/application/services/` | A dispatcher beside `SocialNotificationDispatcher`, subscribing to the two events and composing a `NotificationRecord` |
+| 5. Push | `notifications/domain/push.py` | Two members of `PUSH_CAPABLE_TYPES`. **Nothing else on the backend.** The delivery table, the fan-out, the worker, the retry policy, the idempotency key and the revocation path are all type-agnostic |
+| 6. Push text and route | `apps/web/pwa/push-presentation.ts` | Two entries. A destination that has no identifier goes in `shared/config/notification-routes.ts`; one that does is a list page, for the reason §15.6 gives — a push payload names a *notification*, not a challenge |
+| 7. In-app route | `features/notifications/model/navigation.ts` | One `case`, resolving the new target type through the same constants |
+
+What it does **not** take, and this is the part worth stating: no migration,
+no new table, no change to `ChannelAvailability`, no change to the preference
+model, no new rate-limit rule, no service worker listener, and no change to
+the payload contract. A type this build has never heard of already degrades
+safely — it renders the generic notification and opens the list — so steps 6
+and 7 can even lag step 5 without anything breaking.
+
+The privacy rule from §4 applies unchanged and is the one decision the next
+phase must actually make rather than copy: a challenge is *from somebody*,
+so the push body must name no player. "You have a new challenge" is the
+shape, and the opponent's name is one tap away behind the session.
+
+### 15.16 Migration
+
+`e26a0159c56b` creates both tables, and A64-021.6A adds **no migration at
+all** — widening the push type set is a code change over tables that already
+exist. **No backfill** — there are no
 subscriptions on the day it runs, so nothing fans out and no notification
 already stored generates a push.
+
+---
+
+## 16. Production contract — A64-021.7
+
+The audit's output. Everything below is a statement about the system **as
+built**, verified rather than intended, and this section is the one to read
+before deploying or extending the epic.
+
+### 16.1 Channel matrix
+
+| | `IN_APP` | `EMAIL` | `PUSH` |
+| --- | --- | --- | --- |
+| Available when | always | `RESEND_API_KEY` **and** `NOTIFICATION_EMAIL_ENABLED` | a valid VAPID pair |
+| Types | all six | 3 tournament | 3 tournament + 2 social |
+| Preference read at | **write** time (no row is created for a muted category) | delivery time | delivery time |
+| Durable store | `notification` | `notification_email_delivery`, PK `notification_id` | `notification_push_delivery`, PK `(notification_id, subscription_id)` |
+| Worker | none — the write *is* the delivery | `NotificationEmailDeliveryTask` | `NotificationPushDeliveryTask` |
+| Retry | n/a | 5 attempts, 60s→6h exponential | identical |
+| Permanent failure | n/a | row `failed`, notification untouched | row `failed`; `410` also revokes the subscription |
+| Metric | `gateway.notification_pushes_total` (realtime hand-off) | `notifications.email.deliveries{type,outcome}` | `notifications.push.deliveries{type,outcome}` |
+| Operator | — | `notification_email status` | `push_keys status` |
+
+**Three deliberate asymmetries**, each a consequence of the transport rather
+than an oversight:
+
+*In-app reads the preference at write time* and the other two at delivery
+time. A muted in-app category should leave no row at all — the list is the
+record, and a hidden row is a record nobody can see. Email and push are
+*deliveries* of a record that already exists, so a person who mutes between
+the event and the send must not be sent to.
+
+*Push is keyed per device* and email per notification. One address, many
+browsers.
+
+*Only push revokes on failure.* A `410` means the browser is gone, which has
+no email equivalent — a bounced address may be temporary, and this platform
+does not delete an address on one bounce.
+
+### 16.2 Type matrix
+
+| Type | Category | in-app | email | push | Target | Source event |
+| --- | --- | --- | --- | --- | --- | --- |
+| `friend_request_received` | social | ✓ | — | ✓ | `friend_requests` | `friends.friend_request_sent` |
+| `friend_request_accepted` | social | ✓ | — | ✓ | `player_profile` | `friends.friend_request_accepted` |
+| `tournament_registration_confirmed` | tournament | ✓ | ✓ | ✓ | `tournament` | `tournament.player_registered` |
+| `tournament_round_published` | tournament | ✓ | ✓ | ✓ | `tournament` | `tournament.round_published` |
+| `tournament_completed` | tournament | ✓ | ✓ | ✓ | `tournament` | `tournament.completed` |
+| `game_completed` | game | ✓ | — | — | `match_replay` | `game.match_completed` |
+
+Exactly-once identity for every type is
+`(recipient_id, source_event_id, type)`, a unique constraint rather than a
+check.
+
+`game_completed` is in-app only on purpose: the player is looking at the
+result screen, so both other channels would notify them of what they are
+reading. The social types are absent from email for a different reason — a
+friend request is not worth an inbox, and the push and in-app channels reach
+somebody faster.
+
+### 16.3 Delivery ordering, and what a provider failure cannot do
+
+    source action  ─┐
+                    ├─ one transaction ─→ outbox event
+                    ┘
+    relay ─→ durable notification ─┐
+                                    ├─ one transaction
+             email + push debt  ────┘
+                                       ↓ (after commit)
+                            realtime frame, then the workers
+
+Two properties follow, and both were verified rather than assumed:
+
+**No external call happens inside a transaction.** The workers claim in one
+transaction, call the provider outside any, and record in a third.
+
+**A provider failure rolls nothing back.** The source action, the durable
+notification and the realtime frame are all committed before a provider is
+contacted. A dead Resend or a dead push service costs a delivery row, and
+`test_notification_email.py::test_a_dead_provider_leaves_the_in_app_notification_untouched`
+is the assertion.
+
+### 16.4 Terminal states
+
+No row can sit `pending` forever. Every retryable outcome is capped, and the
+cap is applied at the **last gate before the write** in both channels —
+`_resolve`, not the branch that produced the outcome. A64-021.7 moved push's
+to match email's: both were correct, only one was correct by construction,
+and the asymmetry meant a future path returning `RETRYABLE_FAILURE` from
+elsewhere would have retried forever in one channel and not the other.
+
+| Status | Email outcomes | Push outcomes |
+| --- | --- | --- |
+| `sent` | `delivered` | `delivered` |
+| `skipped` | `skipped_preference`, `skipped_unsupported_type`, `skipped_unverified_email`, `skipped_no_email`, `skipped_channel_unavailable` | `skipped_preference`, `skipped_unsupported_type`, `skipped_no_subscription`, `skipped_channel_unavailable` |
+| `failed` | `permanent_failure`, `attempts_exhausted` | `permanent_failure`, `attempts_exhausted`, `subscription_gone` |
+| `pending` | never terminal — carries a `next_attempt_at` | same |
+
+`next_attempt_at` is `NULL` on every terminal row, so the partial index the
+claim reads holds exactly what is still owed. An operator distinguishes
+"still trying" from "gave up" by the status alone.
+
+### 16.5 Operator tooling
+
+    python -m app.operator.notification_email status      config + queue
+    python -m app.operator.notification_email smoke --to  one real email
+    python -m app.operator.push_keys status               config + queue
+    python -m app.operator.push_keys generate             a VAPID pair
+    python -m app.operator.rate_limits show               effective policy
+    python -m app.operator.rate_limits clear              buckets
+    python -m app.operator.accounts verify --email        confirm an address
+
+A64-021.7 added the queue half of `push_keys status`. Before it, push had no
+operator visibility into deliveries at all — `build_push_delivery_reader`
+existed for exactly this and nothing called it, so an operator could see that
+a key pair was configured and could not see whether a single push had ever
+been delivered, retried or abandoned.
+
+**Every one of these returns aggregates.** The delivery readers are typed as
+ports whose only method is `counts_by_status() -> Mapping[str, int]`, so they
+cannot name a recipient, an address or an endpoint —
+`tests/unit/test_operator_disclosure.py` asserts the surface rather than
+grepping the output, because a command that *fetched* a recipient and chose
+not to print it would pass the latter.
+
+### 16.6 What the audit found
+
+| # | Finding | Severity | Resolution |
+| --- | --- | --- | --- |
+| 1 | Push applied its attempt cap inside `_send` rather than at the last gate, unlike email | Latent — correct today, would retry forever if any other path produced a retryable outcome | Fixed centrally in `_resolve`; regression test added |
+| 2 | No operator visibility into push deliveries; `build_push_delivery_reader` was dead code | Production readiness — push failures were undiagnosable | `push_keys status` now prints the queue |
+| 3 | Push terminal-state behaviour had no test, where email's did | Coverage | `test_retries_stop_at_the_limit` added |
+| 4 | Notifications *created* has no metric, only a log line | Observability gap, **not fixed** | See §16.7 |
+| 5 | `/health/ready` does not report channel capability | Documented, **not fixed** | See §16.7 |
+
+Nothing else. Preference enforcement, idempotency, failure isolation,
+availability, security, privacy, logging redaction, PWA cache exclusions and
+the rate-limit profiles were audited and found correct as built.
+
+### 16.7 Accepted gaps
+
+**Notifications created is a log line, not a metric.** `notification_stored`
+carries `written` and `duplicates`, so an operator with a log aggregator can
+count them; there is no counter. Adding one means giving
+`DurableNotificationWriter` a `MetricsRecorder`, which touches its
+constructor, the composition root, the contract app and every test that
+builds one — more change than an audit phase should make for an answer that
+already exists in a different place. Worth doing in the next phase that
+touches the writer for another reason.
+
+**Readiness does not report channel capability.** `/health/ready` answers
+PostgreSQL and Redis, which are the dependencies that make the API
+*unhealthy*. Email and push are optional channels: a tier without them is
+correctly configured, not degraded, and reporting them there would invite a
+probe that fails a deploy over a channel nobody enabled. The operator
+commands answer the question instead, and they answer it better — with the
+queue beside the configuration. Revisit only if a dashboard needs it.
+
+**Retention is append-only.** See §9, unchanged. At Arena64's current scale
+this is a row per notification per recipient forever: a 128-player tournament
+produces roughly 128 registration + 128×rounds + 128 completion rows, so a
+weekly tournament is on the order of 10⁴ rows a year. That is not a problem
+this year and is a problem eventually. The cleanup this wants is a scheduled
+delete of read notifications older than a retention window, using the
+`PeriodicTaskScheduler` both delivery workers already use — deliberately
+**not** built here, because a deletion policy with no product decision behind
+it is a data-loss feature.
+
+### 16.8 Manual smoke checklist
+
+Automated tests cover everything except the two things that need a real
+provider and a real device. Run these by hand before a release that touches
+notifications.
+
+**Email**
+
+    python -m app.operator.notification_email status     → transport: resend
+    python -m app.operator.notification_email smoke --to you@example.com
+
+Expect a provider message id printed, the mail to arrive, and the sender to
+read `Arena64 <no-reply@arena64.gg>`. Nothing automated sends real email.
+
+**Push** — needs a production build; the dev server registers no service
+worker.
+
+    apps/api: python -m app.operator.push_keys status    → push: configured
+    apps/web: npm run build && npm run preview           → http://localhost:4173
+
+1. Fresh profile → sign in → `/settings/notifications`
+2. "Enable push notifications" → browser prompt → allow
+3. State becomes "receives friend and tournament push notifications"
+4. Background the tab; from a second account, send a friend request
+5. Push arrives within one worker interval (~30s)
+6. Click it → `/friends/requests` opens
+7. Accept → the original sender receives an accepted push
+8. Turn push off → `push_keys status` device count drops
+9. Sign out, sign in as somebody else → the first account receives nothing
+
+**In-app**
+
+Trigger any notification; the bell badge updates without a refresh, the row
+opens its target, and marking it read is idempotent.
+
+**OTP**
+
+Register → the code arrives → verify → a product write (a friend request)
+becomes available.
+
+### 16.9 Readiness for Friend Challenges
+
+The seam is §15.15 and the audit did not change it. What A64-021.6A
+demonstrated is the cost: adding two pushable types to a live channel was
+**two enum members and one line of documentation**, with no migration, no
+new table, no worker change and no payload change.
+
+A challenge is the same shape. The only real work is the `challenges` module
+and its two events; everything downstream already exists and is audited.
 
 ---
 

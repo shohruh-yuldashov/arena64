@@ -28,7 +28,7 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Final
 from uuid import UUID
 
@@ -291,8 +291,9 @@ class PushDeliveryService:
             # already refuses to tell this layer which status code it saw.
             return PushDeliveryOutcome.SUBSCRIPTION_GONE
         except TransientPushFailure:
-            if delivery.attempt_count >= self._max_attempts:
-                return PushDeliveryOutcome.ATTEMPTS_EXHAUSTED
+            # The attempt cap is **not** applied here — `_resolve` owns it,
+            # for the reason its docstring gives. This branch says only what
+            # the push service did.
             return PushDeliveryOutcome.RETRYABLE_FAILURE
 
         return PushDeliveryOutcome.DELIVERED
@@ -306,18 +307,38 @@ class PushDeliveryService:
         Both writes are in **one transaction**, which matters: a revoked
         subscription whose delivery row still said `PENDING` would be
         re-claimed forever against a device that is gone.
+
+        ## The attempt cap lives here — A64-021.7 §5
+
+        A retryable outcome becomes `ATTEMPTS_EXHAUSTED` at the limit rather
+        than being retried forever, and this is the **last gate** before the
+        row is written, which is where the email channel already applied it.
+
+        It was previously applied inside `_send`, on the one branch that
+        could produce a retryable outcome. That was correct and fragile in
+        the same way: the cap guarded a *branch* rather than the write, so
+        any future path returning `RETRYABLE_FAILURE` from `_attempt` — a
+        transport that grew a third failure type, a preference read that
+        became retryable — would have retried forever, in one channel and
+        not the other, with nothing to notice it.
+
+        The limit is compared against the attempts *already spent*, which
+        the claim incremented, so a delivery that has used its last attempt
+        is terminal here rather than after one more.
         """
         now = self._clock.now()
-        due = (
-            next_attempt_at(
-                now=now,
-                attempt_count=delivery.attempt_count,
-                base_seconds=self._retry_base_seconds,
-                max_seconds=self._retry_max_seconds,
-            )
-            if outcome is PushDeliveryOutcome.RETRYABLE_FAILURE
-            else None
-        )
+        due: datetime | None = None
+
+        if outcome is PushDeliveryOutcome.RETRYABLE_FAILURE:
+            if delivery.attempt_count >= self._max_attempts:
+                outcome = PushDeliveryOutcome.ATTEMPTS_EXHAUSTED
+            else:
+                due = next_attempt_at(
+                    now=now,
+                    attempt_count=delivery.attempt_count,
+                    base_seconds=self._retry_base_seconds,
+                    max_seconds=self._retry_max_seconds,
+                )
 
         async with self._unit_of_work:
             await self._deliveries.record(

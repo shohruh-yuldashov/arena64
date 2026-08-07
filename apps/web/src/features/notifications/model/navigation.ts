@@ -1,4 +1,5 @@
 import type { NotificationTarget } from "@/features/notifications/api";
+import { NOTIFICATION_ROUTES } from "@/shared/config/notification-routes";
 
 /**
  * Where a notification takes you — A64-021.1 §6, §20.
@@ -29,7 +30,11 @@ export function notificationHref(target: NotificationTarget): string | null {
   switch (target.type) {
     case "friend_requests":
       // No identifier: the destination is the viewer's own incoming list.
-      return "/friends/requests";
+      //
+      // From the shared constants since A64-021.6A: the service worker
+      // resolves the same type through the same value, and two copies of a
+      // path is a push whose tap opens a different page from the row.
+      return NOTIFICATION_ROUTES.friendRequests;
     case "player_profile":
       // `ref` is the actor's username, which is what `/players/$username`
       // takes. Encoded rather than interpolated raw — usernames are
@@ -41,7 +46,9 @@ export function notificationHref(target: NotificationTarget): string | null {
     // not name one is malformed, and sending somebody to the lobby instead
     // would hide that.
     case "tournament":
-      return target.ref ? `/tournaments/${encodeURIComponent(target.ref)}` : null;
+      return target.ref
+        ? `${NOTIFICATION_ROUTES.tournaments}/${encodeURIComponent(target.ref)}`
+        : null;
     case "live_game":
       return target.ref ? `/games/${encodeURIComponent(target.ref)}` : null;
     case "match_replay":

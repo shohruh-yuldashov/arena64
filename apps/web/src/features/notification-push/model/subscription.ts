@@ -123,7 +123,58 @@ export async function currentSubscription(): Promise<PushSubscription | null> {
 }
 
 /** Why enabling push did not work, as a stable code the UI translates. */
-export type EnableFailure = "unsupported" | "denied" | "subscribe-failed";
+export type EnableFailure = "unsupported" | "denied" | "no-service-worker" | "subscribe-failed";
+
+/**
+ * How long to wait for a registered worker to become active.
+ *
+ * Only reached when a registration exists and is still installing — a first
+ * visit, or the moments after an update. Installing takes well under a
+ * second in practice; five is generous enough never to fire on a slow
+ * machine and short enough that somebody watching a spinner gets an answer.
+ */
+const ACTIVATION_TIMEOUT_MS = 5_000;
+
+/**
+ * The active worker, or `null` — **never a promise that does not settle**.
+ *
+ * ## The defect this exists for
+ *
+ * `navigator.serviceWorker.ready` resolves when a worker becomes active and
+ * **never settles at all** when none is registered. No rejection, no
+ * timeout. `enablePush` awaited it directly, so on any page without a
+ * registration the button spun forever: no error, no state change, nothing
+ * in the console.
+ *
+ * That is reachable in ordinary use and was reached immediately:
+ *
+ *     the dev server         `registerServiceWorker` is gated on
+ *                            `import.meta.env.PROD`, so `npm run dev` has no
+ *                            worker at all and this hung on every click
+ *     a first visit          the worker is registered but still installing
+ *     workers disabled       a browser setting, or a private window in some
+ *                            browsers
+ *
+ * `currentSubscription` was already fixed for this; the enable path was
+ * left on `ready` with the reasoning that "a button somebody pressed has a
+ * spinner in front of them". That was exactly backwards — a spinner that
+ * never stops is worse than an error, because there is nothing to report
+ * and nothing to retry.
+ */
+async function activeRegistration(): Promise<ServiceWorkerRegistration | null> {
+  const existing = await navigator.serviceWorker.getRegistration();
+  if (!existing) return null;
+  if (existing.active) return existing;
+
+  // Registered and still installing. `ready` is correct *here* — there is a
+  // registration, so it will settle — but it is still raced against a
+  // timeout, because "will settle" is a claim about a browser rather than a
+  // guarantee this code can make.
+  return Promise.race([
+    navigator.serviceWorker.ready,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), ACTIVATION_TIMEOUT_MS)),
+  ]);
+}
 
 export type EnableResult =
   | { readonly ok: true; readonly keys: SubscriptionKeys }
@@ -161,12 +212,14 @@ export async function enablePush(vapidPublicKey: string): Promise<EnableResult> 
     return { ok: false, reason: "denied" };
   }
 
+  const registration = await activeRegistration();
+  if (!registration) {
+    // No worker, so there is nothing to subscribe through. Reported rather
+    // than waited on — see `activeRegistration`.
+    return { ok: false, reason: "no-service-worker" };
+  }
+
   try {
-    // `ready` here, unlike the read above: subscribing needs an **active**
-    // worker, and this path is a button somebody pressed with a spinner in
-    // front of them. The read path must never wait on it — see
-    // `currentSubscription`.
-    const registration = await navigator.serviceWorker.ready;
     const keys = applicationServerKey(vapidPublicKey);
     const subscription =
       (await registration.pushManager.getSubscription()) ??
@@ -192,8 +245,10 @@ export async function enablePush(vapidPublicKey: string): Promise<EnableResult> 
 }
 
 async function retryWithFreshSubscription(vapidPublicKey: string): Promise<EnableResult> {
+  const registration = await activeRegistration();
+  if (!registration) return { ok: false, reason: "no-service-worker" };
+
   try {
-    const registration = await navigator.serviceWorker.ready;
     const stale = await registration.pushManager.getSubscription();
     await stale?.unsubscribe();
     const subscription = await registration.pushManager.subscribe({

@@ -36,10 +36,11 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.app_factory import create_app
-from app.config.settings import get_settings
+from app.config.settings import OutboxSettings, get_settings
 from app.core.clock import SystemClock
 from app.core.identifiers import generate_uuid7
 from app.database.unit_of_work import SessionUnitOfWork
+from app.modules.friends.infrastructure.cache import NoSocialGraphCache
 from app.modules.notifications.application.ports import DuePushDelivery
 from app.modules.notifications.application.services.preference_delivery_policy import (
     PreferenceDeliveryPolicy,
@@ -53,6 +54,7 @@ from app.modules.notifications.domain.push_delivery import (
     PushDeliveryStatus,
 )
 from app.modules.notifications.domain.record import NotificationType
+from app.modules.notifications.infrastructure import CompositeNotificationSink
 from app.modules.notifications.infrastructure.models import (
     NotificationPushDeliveryModel,
     PushSubscriptionModel,
@@ -62,7 +64,17 @@ from app.modules.notifications.infrastructure.repositories import (
     SqlAlchemyPushDeliveryRepository,
     SqlAlchemyPushSubscriptionRepository,
 )
+from app.modules.notifications.presentation.dependencies import (
+    build_durable_notification_writer,
+    build_social_notification_dispatcher,
+)
+from app.modules.profiles.presentation.dependencies import build_profile_renderer
 from app.platform.metrics import NullMetrics
+from app.platform.outbox import (
+    OutboxRelay,
+    SqlAlchemyOutboxRepository,
+    SqlAlchemyProcessedEventStore,
+)
 from app.platform.push import VapidKeyPair, VapidSigner, WebPushProvider, generate_key_pair
 from tests.contract.contract_app import build_contract_app, contract_client
 
@@ -72,6 +84,7 @@ SUBSCRIBE_URL = "/api/v1/notifications/push/subscriptions"
 REMOVE_URL = "/api/v1/notifications/push/subscriptions/remove"
 STATUS_URL = "/api/v1/notifications/push/status"
 PREFERENCES_URL = "/api/v1/notifications/preferences"
+FRIEND_REQUESTS_URL = "/api/v1/friends/requests"
 PASSWORD = "CorrectHorse1!"
 
 #: A well-formed browser key, as `pushManager.subscribe()` produces one.
@@ -291,6 +304,214 @@ async def delivery_row(
     return row
 
 
+async def send_friend_request(
+    client: AsyncClient, sender: dict[str, Any], recipient: dict[str, Any]
+) -> str:
+    """One real friend request, through the endpoint a player uses."""
+    sent = await client.post(
+        FRIEND_REQUESTS_URL,
+        headers=auth(sender),
+        json={"player_id": str(recipient["id"])},
+    )
+    assert sent.status_code == 201, sent.text
+    request_id: str = sent.json()["data"]["id"]
+    return request_id
+
+
+async def relay_once(session: AsyncSession) -> None:
+    """One relay tick with **push availability on** — A64-021.6A §2.
+
+    The composition root's own factories, not a hand-built writer: the claim
+    under test is that a friend request reaches the *push* queue through the
+    pipeline that ships, and a `DurableNotificationWriter` constructed here
+    would prove the class works and nothing about whether the relay reaches
+    it.
+
+    `availability` is the one deliberate variation. `build_durable_notification_writer`
+    defaults to `IN_APP_ONLY`, which is right for a suite that is not testing
+    a channel and wrong for this one.
+    """
+    cache = NoSocialGraphCache()
+    settings = get_settings()
+    dispatcher = build_social_notification_dispatcher(
+        session,
+        cache=cache,
+        profiles=build_profile_renderer(
+            session,
+            pools=_no_redis_pools(),
+            settings=settings,
+            cache=cache,
+            clock=SystemClock(),
+        ),
+        sink=CompositeNotificationSink(
+            [
+                build_durable_notification_writer(
+                    session,
+                    availability=ChannelAvailability.of(
+                        DeliveryChannel.IN_APP, DeliveryChannel.PUSH
+                    ),
+                )
+            ]
+        ),
+    )
+    relay = OutboxRelay(
+        outbox=SqlAlchemyOutboxRepository(session),
+        processed=SqlAlchemyProcessedEventStore(session),
+        handlers=[dispatcher],
+        unit_of_work=SessionUnitOfWork(session),
+        clock=SystemClock(),
+        worker_id="push-contract-test",
+        batch_size=OutboxSettings().batch_size,
+        max_attempts=OutboxSettings().max_attempts,
+        retry_base_seconds=OutboxSettings().retry_base_seconds,
+        retry_max_seconds=OutboxSettings().retry_max_seconds,
+    )
+    await relay.run_once()
+
+
+def _no_redis_pools() -> Any:
+    """Redis pools whose only consumer here is presence, which is disabled.
+
+    Typed `Any` and returning a stub rather than a real `RedisPools`, the
+    same way `test_notifications_api.py` does: a contract suite must not need
+    Redis, and constructing the real type would need connections nothing here
+    opens.
+    """
+
+    class _Pools:
+        cache = None
+        live = None
+        bus = None
+        broker = None
+        limits = None
+
+    return _Pools()
+
+
+async def push_rows_for(session: AsyncSession, recipient_id: UUID) -> list[str]:
+    """Every notification type this recipient is owed a push for."""
+    rows = await session.scalars(
+        select(NotificationPushDeliveryModel.notification_type).where(
+            NotificationPushDeliveryModel.recipient_id == recipient_id
+        )
+    )
+    return sorted(rows)
+
+
+class TestSocialPush:
+    """Friend requests reach the push queue — A64-021.6A §2, §3.
+
+    Through the **real pipeline**: a real request through the real endpoint,
+    a real outbox event, the composition root's own relay and writer. What is
+    asserted is the delivery row, because that is the artefact the worker
+    later claims — and the worker is covered by `TestDelivery` below.
+    """
+
+    async def test_a_friend_request_owes_the_recipient_a_push(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """§2. The recipient is owed one, and the **sender is not** — a push
+        telling somebody about their own action is the noise that gets a
+        channel switched off."""
+        sender = await register(client, contract_session)
+        recipient = await register(client, contract_session)
+        await enable_push(client, recipient)
+        await client.post(SUBSCRIBE_URL, json=subscription(), headers=auth(recipient))
+
+        await send_friend_request(client, sender, recipient)
+        await relay_once(contract_session)
+
+        assert await push_rows_for(contract_session, recipient["id"]) == [
+            NotificationType.FRIEND_REQUEST_RECEIVED.value
+        ]
+        assert await push_rows_for(contract_session, sender["id"]) == []
+
+    async def test_accepting_owes_the_original_sender_a_push(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """§2. The other direction, and the one that matters more: the
+        person waiting to hear back is the one who is not looking."""
+        sender = await register(client, contract_session)
+        recipient = await register(client, contract_session)
+        await enable_push(client, sender)
+        await client.post(SUBSCRIBE_URL, json=subscription(), headers=auth(sender))
+
+        request_id = await send_friend_request(client, sender, recipient)
+        accepted = await client.post(
+            f"{FRIEND_REQUESTS_URL}/{request_id}/accept", headers=auth(recipient)
+        )
+        assert accepted.status_code == 200, accepted.text
+        await relay_once(contract_session)
+
+        assert await push_rows_for(contract_session, sender["id"]) == [
+            NotificationType.FRIEND_REQUEST_ACCEPTED.value
+        ]
+
+    async def test_a_recipient_who_never_enabled_push_is_not_contacted(
+        self, client: AsyncClient, contract_session: AsyncSession, vapid: tuple[str, str]
+    ) -> None:
+        """§3, end to end, and the assertion is on the **push service**.
+
+        Push defaults to off, so this recipient has a live subscription and
+        no preference. A row is still enqueued, deliberately — §14 reads the
+        preference at *delivery* time so that somebody who enables push after
+        a request arrives still receives it, and that only works if the row
+        exists.
+
+        What must not happen is the send. Asserting `skipped` alone would
+        pass against an implementation that contacted a push service and then
+        recorded a skip, which is the failure that matters: a message
+        delivered to somebody who never asked for the channel.
+        """
+        sender = await register(client, contract_session)
+        recipient = await register(client, contract_session)
+        await client.post(SUBSCRIBE_URL, json=subscription(), headers=auth(recipient))
+
+        await send_friend_request(client, sender, recipient)
+        await relay_once(contract_session)
+        service = StubPushService(201)
+        result = await worker(contract_session, service.provider(vapid)).deliver_once()
+
+        assert service.requests == []
+        assert result.outcomes == {PushDeliveryOutcome.SKIPPED_PREFERENCE: 1}
+
+    async def test_a_redelivered_event_owes_nothing_more(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """§3. The relay redelivers on retry, and the exactly-once key means
+        the second tick inserts no notification — so it reaches the fan-out
+        with an empty list and enqueues no second push.
+
+        Asserted by running the relay twice against one event rather than by
+        calling `enqueue` twice: the duplicate this must survive is the one
+        the *relay* produces.
+        """
+        sender = await register(client, contract_session)
+        recipient = await register(client, contract_session)
+        await enable_push(client, recipient)
+        await client.post(SUBSCRIBE_URL, json=subscription(), headers=auth(recipient))
+        await send_friend_request(client, sender, recipient)
+
+        await relay_once(contract_session)
+        await _forget_processed_events(contract_session)
+        await relay_once(contract_session)
+
+        assert await push_rows_for(contract_session, recipient["id"]) == [
+            NotificationType.FRIEND_REQUEST_RECEIVED.value
+        ]
+
+
+async def _forget_processed_events(session: AsyncSession) -> None:
+    """Makes the relay redeliver, which is what a retry after a crash does.
+
+    The ledger is what stops a second delivery, and clearing it is the only
+    way to exercise the layer *behind* it — the notification's own
+    exactly-once key, which is what actually keeps a push from being sent
+    twice when the ledger write is the thing that was lost.
+    """
+    await session.execute(text("DELETE FROM platform.processed_event"))
+
+
 class TestRegistration:
     async def test_a_verified_account_registers_its_browser(
         self, client: AsyncClient, contract_session: AsyncSession
@@ -455,6 +676,25 @@ class TestAvailability:
         assert private not in status.text
 
 
+async def _make_due(session: AsyncSession, notification_id: UUID) -> None:
+    """Brings a pending delivery forward so the next pass claims it.
+
+    The alternative is a movable clock threaded through the service, which
+    the email suite uses because it also asserts *when* the next attempt
+    falls. This suite asserts only that the attempts stop, so moving the row
+    is the smaller substitution — and it moves the row the worker reads
+    rather than the time the worker believes.
+    """
+    await session.execute(
+        text(
+            "UPDATE notifications.notification_push_delivery "
+            "SET next_attempt_at = created_at "
+            "WHERE notification_id = :n AND status = 'pending'"
+        ),
+        {"n": notification_id},
+    )
+
+
 class TestDelivery:
     async def test_every_device_is_pushed_and_recorded(
         self, client: AsyncClient, contract_session: AsyncSession, vapid: tuple[str, str]
@@ -539,6 +779,51 @@ class TestDelivery:
         assert row.outcome == PushDeliveryOutcome.RETRYABLE_FAILURE.value
         assert row.status == PushDeliveryStatus.PENDING.value
         assert row.next_attempt_at is not None
+        assert len(await live_subscription_ids(contract_session, account["id"])) == 1
+
+    async def test_retries_stop_at_the_limit(
+        self, client: AsyncClient, contract_session: AsyncSession, vapid: tuple[str, str]
+    ) -> None:
+        """**A64-021.7 §5, §6.** Bounded, and the row says which bound it hit.
+
+        The email channel has had this since A64-021.5 and push had not — the
+        audit's finding was that push applied its cap inside `_send`, on the
+        one branch that could produce a retryable outcome, where email
+        applied it in `_resolve`, the last gate before the write. Both were
+        correct; only one was correct *by construction*. The cap now lives at
+        the same gate in both, and this is the coverage that was missing.
+
+        `attempts_exhausted` rather than `permanent_failure`, because the two
+        mean different things to an operator: one is a broken subscription,
+        the other is a push service that was down for hours.
+
+        The subscription is left **live**, which is the second half: a
+        service having a bad afternoon must not cost somebody their device.
+        """
+        account = await register(client, contract_session)
+        await enable_push(client, account)
+        await client.post(SUBSCRIBE_URL, json=subscription(), headers=auth(account))
+        (device,) = await live_subscription_ids(contract_session, account["id"])
+        notification_id = await owe_push(
+            contract_session, recipient_id=account["id"], subscription_ids=[device]
+        )
+
+        # A service that is down for every attempt. `503` on each pass, and
+        # the rows are made due again between passes rather than waiting out
+        # a real backoff.
+        service = StubPushService(*([503] * 4))
+        for _ in range(4):
+            await worker(contract_session, service.provider(vapid), max_attempts=3).deliver_once()
+            await _make_due(contract_session, notification_id)
+
+        row = await delivery_row(contract_session, notification_id, device)
+        assert (row.status, row.outcome) == (
+            PushDeliveryStatus.FAILED.value,
+            PushDeliveryOutcome.ATTEMPTS_EXHAUSTED.value,
+        )
+        # Terminal means terminal: nothing the claim query can ever see
+        # again, so the row cannot sit `pending` forever.
+        assert row.next_attempt_at is None
         assert len(await live_subscription_ids(contract_session, account["id"])) == 1
 
     async def test_a_muted_preference_sends_nothing(

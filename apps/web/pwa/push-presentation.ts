@@ -59,6 +59,8 @@
  * notification exists to prompt.
  */
 
+import { NOTIFICATION_ROUTES } from "@/shared/config/notification-routes";
+
 /** A push payload, as `domain.push.PushPayload.as_dict` writes it. */
 export interface PushPayload {
   /** The notification's id. Short key: the encrypted envelope has a fixed
@@ -102,36 +104,57 @@ export interface PushPresentation {
 const GENERIC: Omit<PushPresentation, "tag"> = {
   title: "Arena64",
   body: "You have a new notification.",
-  path: "/notifications",
+  path: NOTIFICATION_ROUTES.notifications,
 };
 
 /**
  * The closed table — §12, §13.
  *
- * Three entries, matching `domain.push.PUSH_CAPABLE_TYPES` exactly. A type
+ * Five entries, matching `domain.push.PUSH_CAPABLE_TYPES` exactly. A type
  * the backend adds without an entry here is not broken: it renders the
  * generic notification and opens the list, which is `PRESENTATIONS`'s whole
  * degradation story.
  *
- * Every `path` is a literal. There is no branch below that concatenates a
- * payload value into one, which is what makes "no arbitrary URL" a property
- * of the code rather than a validation somebody has to remember.
+ * Every `path` comes from `NOTIFICATION_ROUTES`, the same constants the
+ * in-app list resolves through — so a push whose text says "friend request"
+ * cannot open a different page from the row that says the same thing. There
+ * is no branch below that concatenates a payload value into a path, which is
+ * what makes "no arbitrary URL" a property of the code rather than a
+ * validation somebody has to remember.
  */
 const PRESENTATIONS: Readonly<Record<string, Omit<PushPresentation, "tag">>> = {
   tournament_round_published: {
     title: "A new round is live",
     body: "Pairings are out for your tournament.",
-    path: "/tournaments",
+    path: NOTIFICATION_ROUTES.tournaments,
   },
   tournament_registration_confirmed: {
     title: "You are entered",
     body: "Your tournament registration is confirmed.",
-    path: "/tournaments",
+    path: NOTIFICATION_ROUTES.tournaments,
   },
   tournament_completed: {
     title: "Your tournament has finished",
     body: "Final standings are available.",
-    path: "/tournaments",
+    path: NOTIFICATION_ROUTES.tournaments,
+  },
+  // **A64-021.6A §4.** The title is the product name and the body names no
+  // person, which is a stronger rule than the tournament entries above
+  // follow — and deliberately so. A tournament notification discloses that
+  // somebody plays in tournaments; a social one would disclose *who is
+  // trying to reach them*, on a lock screen, to whoever is looking at it.
+  //
+  // "You have a new friend request" is what a stranger on a bus can see.
+  // The sender's name is one tap away, behind the session.
+  friend_request_received: {
+    title: "Arena64",
+    body: "You have a new friend request.",
+    path: NOTIFICATION_ROUTES.friendRequests,
+  },
+  friend_request_accepted: {
+    title: "Arena64",
+    body: "Your friend request was accepted.",
+    path: NOTIFICATION_ROUTES.friends,
   },
 };
 

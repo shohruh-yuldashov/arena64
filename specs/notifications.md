@@ -1,6 +1,6 @@
 # Notifications
 
-> **Status:** foundation — A64-021.1; realtime in-app delivery — A64-021.2; preferences — A64-021.3; tournament and game coverage — A64-021.4; email channel — A64-021.5
+> **Status:** foundation — A64-021.1; realtime in-app delivery — A64-021.2; preferences — A64-021.3; tournament and game coverage — A64-021.4; email through Resend — A64-021.5
 > **Owner:** platform
 > **Related:** `docs/01-architecture/domain-model.md` §9.3, `docs/01-architecture/database.md` §10.2 and §10.3, `specs/friends.md`, `specs/frontend.md` §21 and §22
 
@@ -23,9 +23,9 @@ point of creation, never a filter applied on read.
 
 A64-021.5 adds the **second delivery channel**: transactional email for the
 three tournament types, opt-in, to verified addresses only, through a
-durable queue that survives a restart (§13). It ships with **no vendor
-selected** — that decision is stated in §13.6 rather than made silently —
-so the channel reports itself unavailable until one is configured.
+durable queue that survives a restart (§13). It delivers through **Resend**
+from `no-reply@arena64.gg`, and a process without the credential reports the
+channel unavailable rather than pretending otherwise.
 
 A64-021.4 extends coverage from two types to **six**: three tournament facts
 and one game result, each from an event that already existed or — in one
@@ -766,29 +766,60 @@ retryable rows and an in-app list that is already correct: the notification,
 the realtime frame and the source action all committed before a worker could
 run.
 
-### 13.6 No vendor is selected — the decision this phase did not make
+### 13.6 The provider — Resend
 
-A64-021.5 built the channel and stopped short of an adapter. The only
-`EmailProvider` on this platform is `ConsoleEmailProvider`, which logs and
-**refuses to construct in a production-like environment** — so deploying
-without a decision fails at boot rather than silently sending nobody
-anything.
+**Arena64's production transactional email provider is Resend**, sending
+from `no-reply@arena64.gg` on a domain already verified with them. One
+transport carries everything this platform sends: the verification link, the
+password reset, and notification email.
 
-`NOTIFICATION_EMAIL_ENABLED` is off by default and `ChannelAvailability`
-reports email unavailable while it is, so the settings screen keeps saying
-"coming soon" — which is true. §26's rule is *do not lie in Settings*, and
-this is how it is kept in both directions.
+| Setting | Value | Note |
+| --- | --- | --- |
+| `RESEND_API_KEY` | *(secret)* | Server-side only. `SecretStr`, so it cannot reach a log or a traceback through a repr. Never a `VITE_` variable, and never committed |
+| `EMAIL_FROM_ADDRESS` | `no-reply@arena64.gg` | The verified domain. An address outside a domain with SPF, DKIM and DMARC records for Resend is rejected, which this platform records as a **permanent** failure and stops retrying |
+| `EMAIL_FROM_NAME` | `Arena64` | The display name beside it |
+| `PUBLIC_APP_URL` | `https://arena64.gg` | The canonical frontend origin — **one** setting, used by every email link. Refused at startup in a deployed tier while it is the localhost default |
 
-What is needed to finish it, and none of it is code this phase could write:
+**The credential is the switch**, and there is deliberately no second flag
+saying "email works":
 
-| Decision | Why it is a product/ops decision |
-| --- | --- |
-| **The vendor** — Resend, Postmark, SES, SMTP | Billing, deliverability reputation, data residency |
-| **The sending identity** | `EMAIL_FROM_ADDRESS` defaults to `no-reply@arena64.local`, a placeholder TLD. A real domain needs SPF, DKIM and DMARC records before a single message is sent |
-| **The public origin** | `NOTIFICATION_EMAIL_PUBLIC_ORIGIN` defaults to `http://localhost:3000`. Production is `https://arena64.gg`, and it is deliberately **not** the default so a misconfigured staging deploy cannot link people into production |
+    key set    `ResendEmailProvider` is built and the channel reports
+               itself available
+    key unset  `ConsoleEmailProvider` is built — and it **refuses to
+               construct in a production-like tier**, so a deploy that
+               forgot the credential fails at boot rather than accepting
+               registrations nobody can verify
 
-The adapter itself is one class in `app/platform/email/` and one branch in
-`build_email_provider`. No service changes.
+`NOTIFICATION_EMAIL_ENABLED` remains, and is a *kill switch* rather than the
+gate: a way to stop notification mail without withdrawing the credential
+that verification and reset mail also depend on. Both are composed in one
+place — `email_channel_available` — so a settings screen and a delivery
+worker cannot disagree.
+
+#### Why a narrow HTTP adapter rather than the SDK
+
+`ResendEmailProvider` posts one JSON body to `POST /emails` through `httpx`.
+The `resend` SDK was weighed and not taken: its `send` is synchronous, which
+in a worker whose entire job is I/O means blocking the event loop or a
+thread per message; it exposes no per-request timeout, which §2 requires;
+and the API it wraps is one endpoint with five fields. `httpx` was already
+this repository's HTTP client, so no new vendor arrives — CLAUDE.md §2.6.
+
+Nothing about Resend appears in a signature, a return type or an exception
+outside that one file.
+
+#### Verifying a deployment
+
+    python -m app.operator.notification_email smoke --to you@example.com
+
+Sends **one** fixed message to an address the operator types — never a
+notification, never a stored recipient, never a default address, and never
+from pytest, HTTP or startup. It reports the provider's message id, so the
+send can be found in Resend's dashboard rather than only in an inbox.
+
+Automated tests never contact Resend: the adapter's suite stubs the HTTP
+boundary with `httpx.MockTransport`, and the delivery suite substitutes the
+provider port.
 
 ### 13.7 Template safety
 
@@ -842,7 +873,8 @@ a subject, a body, or a provider's response — and a provider exception is
 | A preference cannot be bypassed by a new producer | Every producer goes through `DurableNotificationWriter`, and the policy is a constructor argument with no default |
 | Only a verified address is emailed | `EmailRecipientDirectory`'s query filters on `is_verified`, `is_active` and a non-empty address. It is the `WHERE` clause, not a flag a consumer reads — the first one to forget it cannot exist |
 | A caller cannot name an address | The directory takes **ids**. There is no API, no payload field and no operator command through which an address is supplied, and none is stored on a notification or a delivery |
-| Provider credentials are server-side only | The transport is chosen in `platform.email.build_email_provider`. Nothing about it is a `VITE_` variable and nothing about it reaches a response |
+| Provider credentials are server-side only | `RESEND_API_KEY` is a `SecretStr` read at the composition root. Nothing about it is a `VITE_` variable, nothing about it reaches a response, and no log line carries it — not even a length or a prefix |
+| A provider's own words never escape | The adapter raises a typed exception carrying a status code. A Resend error body can quote the address it rejected, so none of it is logged, persisted or returned |
 | No token is ever in an email URL | Every link is the configured origin plus a path built from an identifier. The preference link is a page behind a session, not a one-click unsubscribe token |
 | Logs and metrics carry no address | The metric's two labels are closed enumerations; the log lines carry a type, an outcome and counts. A provider exception is logged **without** `exc_info`, because its message can contain an address |
 | The delivery table is not exposed | No route reads it. The operator command returns counts by status and cannot name a recipient |

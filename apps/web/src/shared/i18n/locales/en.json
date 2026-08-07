@@ -821,6 +821,17 @@
     "types": {
       "friend_request_received": "{actor} sent you a friend request",
       "friend_request_accepted": "{actor} accepted your friend request",
+      "tournament_registration_confirmed": "You are entered in {tournament}",
+      "tournament_round_published": "Round {round} of {tournament} has been paired",
+      "tournament_completed": "{tournament} has finished",
+      "tournament_completed_ranked": "{tournament} has finished — you placed {rank}",
+      "game_completed": "A game you played has finished",
+      "game_completed_win": "You beat {opponent}",
+      "game_completed_loss": "You lost to {opponent}",
+      "game_completed_draw": "Your game with {opponent} was a draw",
+      "game_completed_win_anonymous": "You won your game",
+      "game_completed_loss_anonymous": "You lost your game",
+      "game_completed_draw_anonymous": "Your game was a draw",
       "unknown": "New notification"
     }
   },

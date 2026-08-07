@@ -68,6 +68,20 @@ export interface PushPayload {
   readonly n: string;
   /** `domain.record.NotificationType`. */
   readonly t: string;
+  /**
+   * The notification's navigation identifier, when its destination names a
+   * thing — A64-022.4 §10.
+   *
+   * Absent for every type whose destination is a list, which is all but one
+   * of them. It is the `ref` of the backend's closed `NavigationTarget`,
+   * not a path and not a URL: the table below still owns every route, and
+   * this value is substituted into a shape compiled into this worker.
+   *
+   * **Validated before use.** `isNavigationRef` accepts a UUID and nothing
+   * else, so a payload cannot contribute a path segment, a scheme or a
+   * traversal — the worst a malformed one can do is fall back to the list.
+   */
+  readonly r?: string;
 }
 
 export interface PushPresentation {
@@ -100,12 +114,40 @@ export interface PushPresentation {
   readonly tag: string;
 }
 
+/**
+ * One row of the table below.
+ *
+ * `path` is where the notification goes with **no usable ref**, and every
+ * entry has one — that is what keeps `presentationFor` total. `pathWithRef`
+ * is consulted only when the payload carried an identifier this worker
+ * accepts, so a type whose destination names a thing degrades to a list
+ * rather than to nothing when the identifier is missing or malformed.
+ */
+interface Presentation {
+  readonly title: string;
+  readonly body: string;
+  readonly path: string;
+  readonly pathWithRef?: (ref: string) => string;
+}
+
 /** What every notification falls back to. Never nothing. */
-const GENERIC: Omit<PushPresentation, "tag"> = {
+const GENERIC: Presentation = {
   title: "Arena64",
   body: "You have a new notification.",
   path: NOTIFICATION_ROUTES.notifications,
 };
+
+/**
+ * The one shape a payload identifier may have — A64-022.4 §10, §23.
+ *
+ * A UUID, checked here rather than trusted. The payload arrives decrypted
+ * by the browser from bytes this platform encrypted, so it *should* be well
+ * formed — and "should" is not a reason to interpolate it into a path. A
+ * value that is not a UUID cannot contain a slash, a scheme, a `..` or a
+ * query string, which is what makes the substitution below safe by
+ * construction rather than by escaping.
+ */
+const NAVIGATION_REF = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * The closed table — §12, §13.
@@ -122,7 +164,7 @@ const GENERIC: Omit<PushPresentation, "tag"> = {
  * what makes "no arbitrary URL" a property of the code rather than a
  * validation somebody has to remember.
  */
-const PRESENTATIONS: Readonly<Record<string, Omit<PushPresentation, "tag">>> = {
+const PRESENTATIONS: Readonly<Record<string, Presentation>> = {
   tournament_round_published: {
     title: "A new round is live",
     body: "Pairings are out for your tournament.",
@@ -156,6 +198,30 @@ const PRESENTATIONS: Readonly<Record<string, Omit<PushPresentation, "tag">>> = {
     body: "Your friend request was accepted.",
     path: NOTIFICATION_ROUTES.friends,
   },
+  // **A64-022.4 §9.** The same rule the two above follow, and the same
+  // reason: a challenge names *who wants to play you*, and a lock screen is
+  // not where that belongs. The body says a challenge exists and nothing
+  // about the opponent, the clock, or whether it is rated.
+  //
+  // The destination is `/friends` until A64-022.5 builds the challenge
+  // surface — the same value the in-app row resolves, because a push whose
+  // text says "challenge" must not open a different page from the row that
+  // says the same thing.
+  friend_challenge_received: {
+    title: "Arena64",
+    body: "You have a new game challenge.",
+    path: NOTIFICATION_ROUTES.friends,
+  },
+  // The one entry with a `pathWithRef`, and the reason the payload gained a
+  // ref at all: the match already exists, both players still have to join
+  // it, and the join window is ten minutes. Landing on the notification
+  // list and tapping again spends that window on navigation.
+  friend_challenge_accepted: {
+    title: "Arena64",
+    body: "Your game challenge was accepted.",
+    path: NOTIFICATION_ROUTES.notifications,
+    pathWithRef: (ref) => `/games/${ref}`,
+  },
 };
 
 /**
@@ -168,7 +234,12 @@ const PRESENTATIONS: Readonly<Record<string, Omit<PushPresentation, "tag">>> = {
 export function isPushPayload(value: unknown): value is PushPayload {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
-  return typeof candidate.n === "string" && typeof candidate.t === "string";
+  if (typeof candidate.n !== "string" || typeof candidate.t !== "string") return false;
+  // `r` is optional, so an absent one is well formed and a present one of
+  // the wrong *kind* is not. Its **value** is checked separately, at the
+  // point it would be substituted — a payload carrying a malformed ref is
+  // still a payload worth showing, it just does not get the deep link.
+  return candidate.r === undefined || typeof candidate.r === "string";
 }
 
 /**
@@ -180,6 +251,12 @@ export function isPushPayload(value: unknown): value is PushPayload {
  * the failure nobody can report.
  */
 export function presentationFor(payload: PushPayload): PushPresentation {
-  const known = PRESENTATIONS[payload.t];
-  return { ...(known ?? GENERIC), tag: payload.t || "arena64" };
+  const known = PRESENTATIONS[payload.t] ?? GENERIC;
+  const ref = payload.r;
+  const deep =
+    known.pathWithRef && ref !== undefined && NAVIGATION_REF.test(ref)
+      ? known.pathWithRef(ref)
+      : known.path;
+
+  return { title: known.title, body: known.body, path: deep, tag: payload.t || "arena64" };
 }

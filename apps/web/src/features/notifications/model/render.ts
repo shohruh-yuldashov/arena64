@@ -84,6 +84,25 @@ export function notificationMessage(notification: Notification): NotificationMes
       };
     }
 
+    // A64-022.4 §19. Two types, one payload key, and the sentence names the
+    // other player — the same shape the two friend types above use, because
+    // "somebody challenged you" without a name is a notification you cannot
+    // act on. The clock and whether it is rated are deliberately **not** in
+    // the sentence: they are facts on the payload, and A64-022.5's challenge
+    // surface is where they belong.
+    case "friend_challenge_received":
+    case "friend_challenge_accepted": {
+      // An opponent whose account is gone arrives as `null` — the backend
+      // keeps the challenge and loses the name — and a sentence beginning
+      // with an empty string is one no language recovers from. Four keys is
+      // the cost of never rendering one, exactly as `game_completed` pays it.
+      const actor = challengeOpponentNameOf(notification);
+      return {
+        key: challengeKey(notification.type, { named: actor !== "" }),
+        values: { actor },
+      };
+    }
+
     case "game_completed": {
       const opponent = opponentNameOf(notification);
       return {
@@ -115,6 +134,12 @@ export function notificationSubject(notification: Notification): NotificationSub
   if (notification.tournament) {
     return { label: notification.tournament.tournament_name, thumbnailUrl: null };
   }
+  if (notification.challenge) {
+    return {
+      label: challengeOpponentNameOf(notification),
+      thumbnailUrl: notification.challenge.opponent?.thumbnail_url ?? null,
+    };
+  }
   if (notification.game) {
     return {
       label: opponentNameOf(notification),
@@ -136,6 +161,24 @@ export function notificationSubject(notification: Notification): NotificationSub
 function actorNameOf(notification: Notification): string {
   const actor = notification.actor;
   return actor === null || actor === undefined ? "" : (actor.display_name ?? actor.username);
+}
+
+function challengeKey(type: string, { named }: { named: boolean }): TranslationKey {
+  if (type === "friend_challenge_received") {
+    return named
+      ? "notifications.types.friend_challenge_received"
+      : "notifications.types.friend_challenge_received_anonymous";
+  }
+  return named
+    ? "notifications.types.friend_challenge_accepted"
+    : "notifications.types.friend_challenge_accepted_anonymous";
+}
+
+function challengeOpponentNameOf(notification: Notification): string {
+  const opponent = notification.challenge?.opponent;
+  return opponent === null || opponent === undefined
+    ? ""
+    : (opponent.display_name ?? opponent.username);
 }
 
 function opponentNameOf(notification: Notification): string {

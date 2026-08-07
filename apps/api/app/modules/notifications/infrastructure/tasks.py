@@ -1,6 +1,6 @@
-"""`notifications`' scheduled work — A64-021.5 §24.
+"""`notifications`' scheduled work — A64-021.5 §24, A64-021.6 §18.
 
-One handler, one pass of the email worker. A `TaskHandler` driven by
+Two handlers, one pass each of the email and push workers. A `TaskHandler` driven by
 `PeriodicTaskScheduler` rather than a bespoke `asyncio` loop, for the reason
 every other periodic job on this platform is one: the scheduler owns the
 interval, the cancellation and the shutdown, so a job that needs none of
@@ -23,6 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.modules.notifications.application.services.email_delivery_service import (
     EmailDeliveryService,
+)
+from app.modules.notifications.application.services.push_delivery_service import (
+    PushDeliveryService,
 )
 from app.platform.outbox import MAINTENANCE_QUEUE
 from app.platform.tasks import TaskRequest
@@ -74,8 +77,59 @@ def email_delivery_request() -> TaskRequest:
     return TaskRequest(name=EMAIL_DELIVERY_TASK, queue=MAINTENANCE_QUEUE)
 
 
+#: The push dispatcher key — A64-021.6.
+#:
+#: Its own task rather than a second pass inside the email one, and §18's
+#: "do not invent a second scheduler" is satisfied by both using the same
+#: `PeriodicTaskScheduler`. What separate handlers buy is that a push
+#: service which has stopped answering delays pushes and not email — one
+#: handler doing both would put a ten-second timeout per subscription in
+#: front of every email in the batch.
+PUSH_DELIVERY_TASK: Final = "notifications.push_delivery"
+
+
+class PushDeliveryServiceFactory(Protocol):
+    def __call__(self, session: AsyncSession) -> PushDeliveryService: ...
+
+
+class NotificationPushDeliveryTask:
+    """`platform.tasks.TaskHandler` — one push pass, one session."""
+
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        service_factory: PushDeliveryServiceFactory,
+    ) -> None:
+        self._session_factory = session_factory
+        self._service_factory = service_factory
+
+    @property
+    def name(self) -> str:
+        return PUSH_DELIVERY_TASK
+
+    async def run(self, payload: Mapping[str, Any]) -> None:
+        """Ignores the payload. The batch size is the service's, from
+        `PUSH_BATCH_SIZE`."""
+        async with self._session_factory() as session:
+            await self._service_factory(session).deliver_once()
+
+
+def push_delivery_request() -> TaskRequest:
+    """The request that asks for one push pass.
+
+    An empty payload, for the reason its email twin gives: the batch size
+    and the retry schedule are configuration, and the instant is the
+    handler's clock.
+    """
+    return TaskRequest(name=PUSH_DELIVERY_TASK, queue=MAINTENANCE_QUEUE)
+
+
 __all__ = [
     "EMAIL_DELIVERY_TASK",
+    "PUSH_DELIVERY_TASK",
     "NotificationEmailDeliveryTask",
+    "NotificationPushDeliveryTask",
     "email_delivery_request",
+    "push_delivery_request",
 ]

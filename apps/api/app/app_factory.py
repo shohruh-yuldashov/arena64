@@ -134,12 +134,15 @@ from app.modules.notifications.infrastructure import (
 )
 from app.modules.notifications.infrastructure.tasks import (
     NotificationEmailDeliveryTask,
+    NotificationPushDeliveryTask,
     email_delivery_request,
+    push_delivery_request,
 )
 from app.modules.notifications.presentation.dependencies import (
     build_durable_notification_writer,
     build_email_delivery_service,
     build_game_notification_dispatcher,
+    build_push_delivery_service,
     build_social_notification_dispatcher,
     build_tournament_notification_dispatcher,
     channel_availability_for,
@@ -227,6 +230,7 @@ from app.platform.outbox import (
     prune_request,
     retention_policy,
 )
+from app.platform.push import build_push_provider, build_vapid_keys
 from app.platform.tasks import (
     InlineTaskDispatcher,
     PeriodicTaskScheduler,
@@ -1008,6 +1012,12 @@ def build_task_schedulers(
     # reading, and constructing either per pass would put the console
     # provider's production guard on a timer instead of at boot.
     email_provider = build_email_provider(settings.environment, settings.email)
+    # A64-021.6. Same reasoning, and one thing more: `build_vapid_keys`
+    # parses the pair, so a malformed or mismatched one is a **boot**
+    # failure rather than a delivery failure on the first notification of
+    # the day — see `PushSettings` on why fixing it later does not repair
+    # the subscriptions created in between.
+    push_provider = build_push_provider(build_vapid_keys(settings.push))
     channel_availability = channel_availability_for(settings)
 
     if settings.outbox.retention_enabled:
@@ -1229,6 +1239,30 @@ def build_task_schedulers(
         # API reports email unavailable from the same value.
         logger.info("notification_email_disabled", extra={"reason": "configuration"})
 
+    # A64-021.6 §18. Registered only when this process holds a VAPID key
+    # pair, for the same reason as email: a handler claiming deliveries in a
+    # process that cannot send them would mark every one
+    # `skipped_channel_unavailable` and quietly drain the queue.
+    if push_provider is not None:
+        handlers.append(
+            NotificationPushDeliveryTask(
+                session_factory=db.session_factory,
+                service_factory=lambda session: build_push_delivery_service(
+                    session,
+                    provider=push_provider,
+                    metrics=_metrics(),
+                    clock=clock,
+                    availability=channel_availability,
+                    settings=settings.push,
+                ),
+            )
+        )
+    else:
+        # `INFO`: an unconfigured channel is a deployment state, not a
+        # fault. What makes it safe is that Settings agrees — the preference
+        # API reports push unavailable from the same value.
+        logger.info("notification_push_disabled", extra={"reason": "configuration"})
+
     handlers.append(MetricsFlushTask(metrics=_metrics()))
 
     if not handlers:
@@ -1267,6 +1301,14 @@ def build_task_schedulers(
                 dispatcher=dispatcher,
                 request=email_delivery_request(),
                 interval_seconds=settings.notification_email.poll_interval_seconds,
+            )
+        )
+    if push_provider is not None:
+        schedulers.append(
+            PeriodicTaskScheduler(
+                dispatcher=dispatcher,
+                request=push_delivery_request(),
+                interval_seconds=settings.push.poll_interval_seconds,
             )
         )
     if settings.gateway.forwarding_enabled:

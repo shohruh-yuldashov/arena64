@@ -63,14 +63,16 @@ def cell(body: dict[str, Any], category: str, channel: str) -> dict[str, Any]:
 
 
 class TestReadingAndWriting:
-    async def test_the_matrix_is_complete_and_a_save_round_trips(self, client: AsyncClient) -> None:
+    async def test_the_matrix_is_complete_and_a_save_round_trips(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
         """§32.1. Every pair, defaults resolved, and a change that survives.
 
         The response of the `PATCH` is asserted to equal the response of the
         `GET` that follows it, which is §17's actual claim: a save costs one
         request because what it returns *is* what a fresh read would say.
         """
-        alice = await register(client)
+        alice = await register(client, contract_session)
 
         initial = (await client.get(PREFERENCES_URL, headers=alice.auth)).json()["data"]
         # Four categories on three channels, with nothing stored — a player
@@ -101,7 +103,7 @@ class TestReadingAndWriting:
         assert cell(reread, "game", "in_app")["enabled"] is True
 
     async def test_a_locked_change_is_refused_and_nothing_is_written(
-        self, client: AsyncClient
+        self, client: AsyncClient, contract_session: AsyncSession
     ) -> None:
         """§32.2. One illegal change rejects the whole request.
 
@@ -109,7 +111,7 @@ class TestReadingAndWriting:
         service that validated as it wrote would have committed it before
         reaching the refusal — and the re-read would show it.
         """
-        alice = await register(client)
+        alice = await register(client, contract_session)
 
         refused = await client.patch(
             PREFERENCES_URL,
@@ -149,7 +151,10 @@ class TestPreferencesGovernDelivery:
         the other two green, which is the shape a regression test should
         have — the assertion is about the suppression and nothing else.
         """
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
 
         muted = await client.patch(
             PREFERENCES_URL,

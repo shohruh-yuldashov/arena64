@@ -39,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import ClockDep, DbSessionDep, PresenceSettingsDep, SettingsDep
 from app.api.outbox_deps import EventPublisherDep
-from app.config.settings import NotificationEmailSettings, Settings
+from app.config.settings import NotificationEmailSettings, PushSettings, Settings
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.friends.application.ports import SocialGraphCache
@@ -59,6 +59,7 @@ from app.modules.notifications.application.ports import (
     EmailDeliveryRepository,
     NotificationAnnouncer,
     NotificationSink,
+    PushDeliveryRepository,
 )
 from app.modules.notifications.application.services import (
     DurableNotificationWriter,
@@ -73,6 +74,12 @@ from app.modules.notifications.application.services import (
 from app.modules.notifications.application.services.email_delivery_service import (
     EmailDeliveryService,
 )
+from app.modules.notifications.application.services.push_delivery_service import (
+    PushDeliveryService,
+)
+from app.modules.notifications.application.services.push_subscription_service import (
+    PushSubscriptionService,
+)
 from app.modules.notifications.domain.preference import (
     IN_APP_ONLY,
     ChannelAvailability,
@@ -83,6 +90,8 @@ from app.modules.notifications.infrastructure.repositories import (
     SqlAlchemyEmailDeliveryRepository,
     SqlAlchemyNotificationPreferenceRepository,
     SqlAlchemyNotificationRepository,
+    SqlAlchemyPushDeliveryRepository,
+    SqlAlchemyPushSubscriptionRepository,
 )
 from app.modules.notifications.presentation.email import TemplateEmailRenderer
 from app.modules.profiles.application.services.profile_renderer import BatchProfileRenderer
@@ -94,6 +103,7 @@ from app.modules.users.presentation.dependencies import PresenceServiceDep
 from app.platform.email import EmailProvider, can_deliver_email
 from app.platform.metrics import MetricsRecorder
 from app.platform.outbox import NoEventPublisher
+from app.platform.push import PushProvider, can_deliver_push
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +136,12 @@ def channel_availability_for(settings: Settings) -> ChannelAvailability:
     channels = [DeliveryChannel.IN_APP]
     if email_channel_available(settings):
         channels.append(DeliveryChannel.EMAIL)
+    # A64-021.6 §6. The same rule as email, asked of the value that decides
+    # whether a message can be signed at all: a process holding a VAPID key
+    # pair can push, one without cannot, and there is deliberately no second
+    # boolean beside the keys that could disagree with them.
+    if can_deliver_push(settings.push):
+        channels.append(DeliveryChannel.PUSH)
     return ChannelAvailability.of(*channels)
 
 
@@ -239,6 +255,38 @@ NotificationPreferenceServiceDep = Annotated[
 ]
 
 
+def get_push_subscription_service(
+    session: DbSessionDep,
+    clock: ClockDep,
+    availability: ChannelAvailabilityDep,
+    settings: SettingsDep,
+) -> PushSubscriptionService:
+    """The push settings service — A64-021.6 §4, §20.
+
+    Per request, over the request's session. Holds only the subscription
+    repository: a service that could also reach deliveries would be one that
+    could send a push from a settings request, and registering a device must
+    not notify anybody.
+
+    The **public** key is passed in and the private one is not — this
+    service serves the key a browser subscribes with and has no reason to
+    hold the one that signs. `platform.push` owns the signing key and is
+    reached only by the delivery worker.
+    """
+    return PushSubscriptionService(
+        subscriptions=SqlAlchemyPushSubscriptionRepository(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+        availability=availability,
+        vapid_public_key=settings.push.vapid_public_key,
+    )
+
+
+PushSubscriptionServiceDep = Annotated[
+    PushSubscriptionService, Depends(get_push_subscription_service)
+]
+
+
 def build_durable_notification_writer(
     session: AsyncSession,
     *,
@@ -280,6 +328,8 @@ def build_durable_notification_writer(
             )
         ),
         deliveries=SqlAlchemyEmailDeliveryRepository(session),
+        push_deliveries=SqlAlchemyPushDeliveryRepository(session),
+        subscriptions=SqlAlchemyPushSubscriptionRepository(session),
         availability=availability,
     )
 
@@ -330,6 +380,63 @@ def build_email_delivery_service(
         retry_base_seconds=settings.retry_base_seconds,
         retry_max_seconds=settings.retry_max_seconds,
     )
+
+
+def build_push_delivery_service(
+    session: AsyncSession,
+    *,
+    provider: PushProvider | None,
+    metrics: MetricsRecorder,
+    clock: Clock,
+    availability: ChannelAvailability,
+    settings: PushSettings,
+) -> PushDeliveryService:
+    """The push worker's service, over one pass's session — A64-021.6 §10.
+
+    Every collaborator is this module's own except the transport, which is
+    `platform`'s and is chosen at the composition root. Unlike the email
+    worker there is **no recipient directory**: a push needs no address —
+    the subscription is the address — and no renderer, because the payload
+    is two identifiers rather than a rendered message.
+
+    `provider` may be `None`, which is not a defect: a process with no VAPID
+    key pair settles its claimed rows as `SKIPPED_CHANNEL_UNAVAILABLE`,
+    which is true and is what an operator needs to see. Refusing to
+    construct would take the worker down instead.
+
+    Built per pass rather than per process, like every other worker service
+    here: it holds repositories, repositories hold a session, and a session
+    must not outlive the unit of work it serves.
+    """
+    return PushDeliveryService(
+        deliveries=SqlAlchemyPushDeliveryRepository(session),
+        subscriptions=SqlAlchemyPushSubscriptionRepository(session),
+        policy=PreferenceDeliveryPolicy(
+            preferences=SqlAlchemyNotificationPreferenceRepository(
+                session, availability=availability
+            )
+        ),
+        provider=provider,
+        metrics=metrics,
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+        availability=availability,
+        batch_size=settings.batch_size,
+        max_attempts=settings.max_attempts,
+        retry_base_seconds=settings.retry_base_seconds,
+        retry_max_seconds=settings.retry_max_seconds,
+        ttl_seconds=settings.ttl_seconds,
+    )
+
+
+def build_push_delivery_reader(session: AsyncSession) -> PushDeliveryRepository:
+    """The operator's read-only handle.
+
+    Typed as the **port**, so a diagnostic command can count deliveries by
+    status and cannot claim one, send one, revoke a device, or learn whose
+    it is.
+    """
+    return SqlAlchemyPushDeliveryRepository(session)
 
 
 def build_email_delivery_reader(session: AsyncSession) -> EmailDeliveryRepository:

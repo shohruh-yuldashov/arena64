@@ -66,6 +66,18 @@ def build_rules(settings: RateLimitSettings) -> dict[str, tuple[RateLimitRule, .
                 window=timedelta(seconds=settings.notification_preferences_update_window_seconds),
             ),
         ),
+        # A64-021.6. One rule shared by register and remove — see
+        # `RateLimitSettings` on why the two halves of one action share a
+        # bucket. `GET /push/status` carries none, like the preference read
+        # it sits beside: it is one indexed read of the caller's own rows.
+        "push_subscription": (
+            RateLimitRule(
+                name="push_subscription_user",
+                scope=RateLimitScope.USER,
+                limit=settings.push_subscription_user_limit,
+                window=timedelta(seconds=settings.push_subscription_window_seconds),
+            ),
+        ),
     }
 
 
@@ -85,6 +97,7 @@ def _guard(endpoint: str) -> RateLimit:
 
 
 PREFERENCES_UPDATE_RATE_LIMIT = _guard("notification_preferences_update")
+PUSH_SUBSCRIPTION_RATE_LIMIT = _guard("push_subscription")
 
 
 async def enforce_notification_preferences_update_limit(
@@ -109,8 +122,33 @@ async def enforce_notification_preferences_update_limit(
     )
 
 
+async def enforce_push_subscription_limit(
+    request: Request,
+    response: Response,
+    user: CurrentUser,
+    limiter: RateLimiterDep,
+    settings: RateLimitSettingsDep,
+) -> None:
+    """The push register/remove guard, counting per account — A64-021.6.
+
+    `user.id` rather than the IP, for the reason `RateLimitSettings` gives:
+    what this bounds is one account accumulating subscriptions, and an
+    office behind one address is many accounts each entitled to their own
+    devices.
+
+    **The 401 comes first.** `CurrentUser` resolves before this body runs,
+    so an unauthenticated request is refused without spending anybody's
+    allowance.
+    """
+    await PUSH_SUBSCRIPTION_RATE_LIMIT.enforce(
+        request, response, limiter=limiter, settings=settings, principal=str(user.id)
+    )
+
+
 __all__ = [
     "PREFERENCES_UPDATE_RATE_LIMIT",
+    "PUSH_SUBSCRIPTION_RATE_LIMIT",
     "build_rules",
     "enforce_notification_preferences_update_limit",
+    "enforce_push_subscription_limit",
 ]

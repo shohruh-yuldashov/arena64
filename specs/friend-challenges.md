@@ -2,9 +2,9 @@
 
 | | |
 | --- | --- |
-| **Status** | Complete — domain, API, acceptance, notifications, UI, and durable expiry (A64-022.1 through A64-022.6) |
+| **Status** | **Production-ready** — audited end to end in A64-022.7. See §28 for the consolidated contract |
 | **Owner** | platform |
-| **Last updated** | 2026-08-07 — A64-022.6, expiry and lifecycle hardening |
+| **Last updated** | 2026-08-07 — A64-022.7, the production contract |
 | **Related** | `docs/01-architecture/domain-model.md` §10.3, `specs/matchmaking.md`, `specs/friends.md`, `specs/notifications.md` §15.15 |
 
 A **friend challenge** is a direct, named invitation: one player asking one
@@ -64,12 +64,12 @@ challenge, so a transition that moved the status and created no match would
 be a challenge claiming a game nobody can play. It arrives with match
 creation, in one place, in A64-022.3.
 
-`Voided-by-block` — §10.3's sixth state — is **deferred, and A64-022.6
-looked at it and declined to fake it**. A block placed after a challenge is
-sent leaves the row `PENDING` and hidden until it expires, because none of
-the four terminal states truthfully describes an invalidated relationship.
-§26.8 states the reasoning; a block still cannot be *bypassed*, because
-acceptance re-checks it.
+`Voided-by-block` — §10.3's sixth state — is **decided against**, not
+deferred. A64-022.6 declined to fake it and A64-022.7 audited whether it
+should exist at all; §28.9 records the answer and the bar it failed. A block
+placed after a challenge is sent leaves the row `PENDING` and hidden until
+it expires, and a block still cannot be *bypassed*, because acceptance
+re-checks it.
 
 ## 4. Who may challenge whom
 
@@ -109,7 +109,7 @@ it. It is also `auth`'s verification window, so the platform has one "a day".
 | Where | What it does |
 | --- | --- |
 | `Challenge.is_expired_at` | refuses an answer past the window, on the read path |
-| the sweep (A64-022.6) | writes the terminal `EXPIRED` row and emits the event |
+| the sweep (A64-022.6, shipped) | writes the terminal `EXPIRED` row and emits the event |
 
 Both are needed. Without the read-time check a challenge could be answered
 between expiry and the sweep; without the sweep, `EXPIRED` would be a state
@@ -361,8 +361,9 @@ notion of blocking and BL-2 is satisfied without one.
 This is a **visibility rule, not the security boundary**. The row is still
 stored and still readable by id, and acceptance re-checks the relationship in
 A64-022.3, so a stale invitation cannot become a game even if something
-failed to hide it. Persistence cleanup stays deferred to A64-022.6, and no
-new terminal state was invented for it.
+failed to hide it. A64-022.7 audited persistence cleanup and **decided
+against** it (§28.9): the row stays hidden until it expires, and no new
+terminal state was invented for it.
 
 The filter runs in the application layer rather than the query because the
 friendship lives in another module's schema, and a join would be the
@@ -845,12 +846,275 @@ design avoids.
 
 ## 27. Deferred
 
+Corrected in A64-022.7: three rows below were stale, and two of them
+described work that has since shipped.
+
 | | Notes |
 | --- | --- |
-| `Voided-by-block` | needs a `friends.player_blocked` consumer |
+| `Voided-by-block` | **Decided against** in A64-022.7 — §28.9. Not deferred; the state does not clear the bar |
 | Open (link-shareable) challenges | §10.3 allows them; this epic is directed-only |
 | Rematch | explicitly out of scope |
 | Tournament challenge semantics | out of scope |
-| Event publication | with the first consumer |
-| Expiry sweep | A64-022.6 |
 | `friend_challenge_declined` / `_cancelled` / `_expired` notifications | Deliberately not built — §22 |
+| Challenge history | Deferred with a stated trigger — §28.10 |
+| Terminal-row retention | Deferred with a stated trigger — §28.11 |
+
+## 28. Production contract — A64-022.7
+
+The audit phase. What follows is the consolidated statement of what this
+epic guarantees; where a section above goes into more depth it is named
+rather than repeated.
+
+### 28.1 Lifecycle matrix
+
+| State | Caused by | Terminal | `responded_at` | `created_match_id` | Event | Lists | Notification |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `PENDING` | the challenger, via `POST /challenges` | no | `NULL` | `NULL` | `friend_challenge_created` | visible while unexpired and the pair may interact | `friend_challenge_received` to the recipient |
+| `ACCEPTED` | the **recipient** only | yes | set | **required** | `friend_challenge_accepted` + `game.match_created` | hidden | `friend_challenge_accepted` to the challenger |
+| `DECLINED` | the **recipient** only | yes | set | `NULL` | `friend_challenge_declined` | hidden | none, by rule (§22) |
+| `CANCELLED` | the **challenger** only | yes | set | `NULL` | `friend_challenge_cancelled` | hidden | none, by rule |
+| `EXPIRED` | the platform's sweep, no actor | yes | set | `NULL` | `friend_challenge_expired` | hidden | none, by rule |
+
+Two database `CHECK`s hold the middle columns: `responded_at IS NULL` iff
+`PENDING`, and `created_match_id` only on `ACCEPTED`.
+
+**No unreachable state remains.** Every one of the five has a producer as of
+A64-022.6 — `EXPIRED` was the last, and until the sweep shipped it was a
+member no row ever held.
+
+### 28.2 Race matrix — one valid outcome set per race
+
+| Race | Outcome | Enforced by |
+| --- | --- | --- |
+| create vs create, same direction | one challenge, one `ConflictError` | `uq_friend_challenge__live_pair` |
+| create vs create, opposite directions | the same — the index is on the **unordered** pair | the same index |
+| accept vs accept | one `ACCEPTED`, one `ConflictError` | guarded `UPDATE` on `status = 'pending'` |
+| accept vs cancel | whichever commits first; the other is refused | the same guard |
+| accept vs expire | `ACCEPTED` **with** a match, or `EXPIRED` **without** one — never mixed | row locks held claim-to-commit, plus `expire`'s `RETURNING` |
+| accept vs block | if the block commits first, acceptance is refused; if acceptance commits first, the match stands | relationship re-read inside the accept transaction |
+| accept vs unfriend | the same | the same |
+| decline vs expire | one terminal state, the first written | claim excludes non-pending; aggregate refuses a settled row |
+| cancel vs expire | the same; before a persisted expiry the challenger may still cancel an overdue row (§26.4) | the same |
+| sweep vs sweep | disjoint sets, no double transition | `SKIP LOCKED` |
+
+`ACCEPTED` without a match and `EXPIRED` with one are **structurally**
+unreachable: only `accept` writes `created_match_id`, and it does so in the
+transaction that creates the match.
+
+### 28.3 One challenge, one match
+
+`origin = CHALLENGE`, `origin_ref = challenge_id`, and
+`pairing_id = uuid5(challenge_id)` against `uq_match__pairing_id`. A retry,
+a duplicate accept, a crash between commit and response, and an outbox
+replay all converge on the same match row — the derivation is a pure
+function of the challenge id, so a second insert conflicts rather than
+duplicating.
+
+### 28.4 Measured cost
+
+Statement counts at the service layer, counted against the real driver:
+
+| Flow | Statements |
+| --- | --- |
+| create | 6 |
+| incoming page of **20** | 3 |
+| outgoing page of **20** | 2 |
+| accept (challenge + match + both events, one transaction) | 13 |
+| expiry sweep of **120** rows | 6 |
+
+No per-row query anywhere. The HTTP layer adds **one** batched profile
+composition per page (§16.5), never one per row. The expiry sweep's cost is
+flat in the batch size because settlement is a single `UPDATE`.
+
+### 28.5 Indexes
+
+Four on `matchmaking.friend_challenge`, each serving one read and all
+partial on `pending` so answered history costs nothing to scan:
+
+| Index | Serves |
+| --- | --- |
+| `uq_friend_challenge__live_pair` | the unordered-pair rule |
+| `ix_friend_challenge__recipient_pending` | the incoming list |
+| `ix_friend_challenge__challenger_pending` | the outgoing list |
+| `ix_friend_challenge__expiring` | the sweep's claim |
+
+No speculative index was added.
+
+### 28.6 Operational visibility
+
+| Question | Answered by |
+| --- | --- |
+| Is the expiry task running? | `friend_challenges_expired` log line, emitted per non-empty pass with counts only |
+| Is it failing? | `task_failed` (the dispatcher's, with the task name) and `matchmaking.challenge_expiries_total{outcome="failed"}` |
+| Is it keeping up? | `outcome="expired"` staying high tick after tick means a backlog is draining rather than drained |
+| Are races happening? | `outcome="lost_race"` — the number that would move if the ordering ever broke |
+| Are the event consumers healthy? | the relay's own per-consumer metrics, unchanged |
+
+**No live-challenge gauge was added.** It would need a periodic `COUNT` over
+a table whose interesting property — throughput — the counters already
+report. A64-022.7 judged that not a blind spot.
+
+No identifier of any kind appears in a metric label or an aggregate log
+line.
+
+### 28.7 Rate limits
+
+| Rule | Scope | Production |
+| --- | --- | --- |
+| `challenge_create_user` | user | 20 per window |
+| `challenge_respond_user` | user | 60 per window |
+
+Both resolve through `RateLimit.rules()`, which is the one place the
+environment profile is applied — so development and test scale automatically
+and **production is untouched**. There is no localhost bypass, no
+user-agent bypass, and the limiter is the real Redis one in every
+environment.
+
+### 28.8 Deliberately not built
+
+| | Decision |
+| --- | --- |
+| A fifth terminal state for block/unfriend | **No** — §28.9 |
+| Challenge history surface | **Defer** — §28.10 |
+| Terminal-row retention | **Defer, with a trigger** — §28.11 |
+| Proactive duplicate-challenge UI | **No** — §28.12 |
+| Decline/cancel/expire notifications | **No**, by rule (§22) |
+
+### 28.9 The fifth state, decided
+
+A64-022.6 left a challenge between a newly blocked or unfriended pair
+`PENDING` and hidden until it expires. A64-022.7 asked whether an
+`INVALIDATED` state should exist, against the bar §3 sets — a *real durable
+business fact* distinct from the other three.
+
+**It does not clear the bar, and the answer is no.**
+
+| Question | Answer |
+| --- | --- |
+| Is "the relationship no longer permits this" a meaningful persisted fact? | Marginally. It is already derivable — the pair's block row carries a timestamp, and the challenge's `created_at` precedes it |
+| Does product history need the distinction? | There is no history surface, and none is planned before beta (§28.10) |
+| Would support or analytics benefit? | The question they would ask is "why did this challenge not happen", and `EXPIRED` plus a block row answers it |
+| Does it simplify correctness? | **No — it adds a transition.** It needs a consumer of two events, a new terminal status, a migration, and a sixth row in the race matrix, to change a row that is already invisible and already expires within a day |
+
+The current semantics stand and are documented rather than worked around.
+Nothing about safety depends on the row: acceptance revalidates the
+relationship inside its own transaction, and both list reads exclude the
+pair.
+
+### 28.10 History — defer
+
+Not needed before public beta. The rows are kept, so the decision is
+reversible at any time; what is missing is a read, and no product surface
+asks for one. A player's question after the fact is "did we play", and
+`/games/history` answers it from the match rather than from the invitation.
+
+Revisit if support tickets ask "did my challenge arrive" often enough to
+need self-service.
+
+### 28.11 Retention — defer, with a stated trigger
+
+Terminal challenge rows accumulate and are never deleted. The growth is
+bounded by *invitations sent*, not by traffic: one row per challenge, a few
+hundred bytes, and a challenge requires an existing friendship. At ten
+thousand daily active players sending one challenge each per day that is
+~3.6M rows a year — small, and every index on the table is partial on
+`pending`, so read cost does not grow with it at all.
+
+**No retention task is built.** The trigger for building one is a product
+retention policy, not a row count: deleting a challenge deletes the record
+that an invitation happened, and `matchmaking`'s existing
+`QueueRetentionService` is the shape it would take when there is a policy to
+implement.
+
+### 28.12 Duplicate challenge — server rejection stands
+
+The challenge button does not know whether a live challenge already exists,
+and attempting a second one is refused by
+`uq_friend_challenge__live_pair` with a message that says so.
+
+Making it proactive was audited and rejected. A correct answer needs
+**both** lists — the rule is on the unordered pair, so an *incoming*
+challenge from the same friend also blocks a new one — and both are
+cursor-paginated, so a client holding page one would be right almost always
+and wrong silently otherwise. A cheap partial answer that is sometimes wrong
+is worse than an honest refusal, and the refusal already carries the correct
+sentence.
+
+### 28.13 Inactive time control — fixed in A64-022.7
+
+A challenge whose clock is retired between creation and acceptance cannot be
+accepted. That was already true; what was wrong was what the recipient was
+told.
+
+`create` raises the challenge module's `ChallengeInvalidTimeControl`;
+`accept` goes through `TimeControlCatalogue.require` and raises
+`reference`'s `UnsupportedTimeControl` — a different code, which the client
+did not map. The recipient saw *"Something went wrong. Please try again."*,
+which is untrue and is advice that cannot work: retrying accepts the same
+dead challenge.
+
+The fix is the smallest error-mapping seam — one entry in the client's code
+table, and one sentence in three languages: *"This time control is no longer
+available. Ask your friend to send a new challenge."* No match setting
+changed, and there is no fallback to another control.
+
+### 28.14 Security and privacy, restated
+
+| Property | How |
+| --- | --- |
+| Actor | the access token, never a field |
+| Recipient | a `player_id` the server previously returned |
+| Writes | `VerifiedUser` on create, accept, decline and cancel |
+| Friendship and blocking | server-owned, re-read inside the accept transaction |
+| An unrelated id | `404`, indistinguishable from a challenge that does not exist |
+| Accept | takes **no body** — every setting comes from the stored row |
+| Match authorization | independent of knowing `match_id`; `/games/{id}` authorises against the session |
+| Notification recipient | derived from the event, never from a client |
+| Expiry | server clock only; the client countdown asks a question and decides nothing |
+| The scheduler | holds no match-creation collaborator and structurally cannot create one |
+| Account switch | `queryClient.removeQueries()` on sign-out, and the global handoff's guard is keyed by match id so a stale one can never match |
+
+**Privacy difference, deliberately asymmetric:** the authenticated in-app
+row names the other player; the lock-screen push says *"You have a new game
+challenge."* and nothing else. A blocked player cannot leak through a
+delayed received notification, because the block is re-read at delivery.
+
+An accepted match stays discoverable through both paths, because acceptance
+is an authoritative completed transition rather than a request.
+
+### 28.15 The push payload's contract boundary
+
+Three keys, and this is the whole of what may travel:
+
+    n   the notification id
+    t   the notification type
+    r   the notification's own NavigationTarget ref, when it has one
+
+`r` was added by A64-022.4 for one destination and is **not a general
+extension point**. Anything added here lands in a browser's notification
+store on a device that may be shared, and shows on a lock screen. A future
+field must clear the same bar `r` did: it names a thing the recipient is
+already party to, it grants nothing, it is validated before use, and the
+worker still owns every route.
+
+The in-app notification is one tap away and is where richer detail belongs.
+
+### 28.16 Production smoke checklist
+
+Documented rather than run — the flow needs two accounts, a background tab
+and a real push service.
+
+| Step | Expected |
+| --- | --- |
+| A and B are friends; A challenges B | one `PENDING` row, one `friend_challenge_created` |
+| B, app open | in-app notification without a refresh; the row on `/challenges` |
+| B, app backgrounded | one push: *Arena64 — You have a new game challenge*; tapping opens `/challenges` |
+| B accepts | exactly one match; B lands on the board in one press |
+| A, on any authenticated page | the global offer dialog appears |
+| A accepts the seat | both reach the same board |
+| Decline | the row disappears after the call; no notification to A |
+| Cancel | the same, from the other side |
+| Expiry | after 24h the row is `EXPIRED`; the list drops it; nobody is notified |
+| Block before accept | the challenge disappears from both lists; acceptance is refused |
+| Unfriend before accept | the same |
+| Reload or reconnect at any point | the HTTP read is authoritative; nothing is held locally |

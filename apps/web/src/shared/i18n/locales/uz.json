@@ -821,6 +821,17 @@
     "types": {
       "friend_request_received": "{actor} sizga do'stlik so'rovi yubordi",
       "friend_request_accepted": "{actor} do'stlik so'rovingizni qabul qildi",
+      "tournament_registration_confirmed": "Siz {tournament} turniriga yozildingiz",
+      "tournament_round_published": "{tournament} turnirining {round}-turi uchun juftliklar tayyor",
+      "tournament_completed": "{tournament} turniri yakunlandi",
+      "tournament_completed_ranked": "{tournament} turniri yakunlandi — siz {rank}-o'rinni egalladingiz",
+      "game_completed": "Siz o'ynagan o'yin tugadi",
+      "game_completed_win": "Siz {opponent}ni yengdingiz",
+      "game_completed_loss": "Siz {opponent}ga yutqazdingiz",
+      "game_completed_draw": "{opponent} bilan o'yiningiz durrang tugadi",
+      "game_completed_win_anonymous": "Siz o'yinda g'alaba qozondingiz",
+      "game_completed_loss_anonymous": "Siz o'yinda yutqazdingiz",
+      "game_completed_draw_anonymous": "O'yiningiz durrang tugadi",
       "unknown": "Yangi bildirishnoma"
     }
   },

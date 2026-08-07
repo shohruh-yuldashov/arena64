@@ -1,3 +1,7 @@
+import { execFile } from "node:child_process";
+import { resolve } from "node:path";
+import { promisify } from "node:util";
+
 import { type APIRequestContext, expect, test } from "@playwright/test";
 
 import {
@@ -9,6 +13,28 @@ import {
   statePath,
 } from "./accounts";
 import { gotoBooted, reloadBooted } from "./session";
+
+const run = promisify(execFile);
+
+/** The API directory, from `apps/web`. */
+const API_DIR = resolve(process.cwd(), "..", "api");
+
+/**
+ * The repository's existing tournament operator command — A64-020.6 §28.
+ *
+ * The same helper `tournament.spec.ts` defines, duplicated rather than
+ * shared because the two specs create fixtures for unrelated reasons and a
+ * shared module would make either one's timeout, cwd or argument list the
+ * other's problem. Six lines is cheaper than that coupling.
+ */
+async function tournamentOperator(...args: string[]): Promise<string> {
+  const { stdout } = await run(
+    "uv",
+    ["run", "python", "-m", "app.operator.tournament", ...args],
+    { cwd: API_DIR },
+  );
+  return stdout.trim();
+}
 
 /**
  * One notification, from the fact that caused it to the page it leads to —
@@ -267,6 +293,112 @@ test("a notification reaches an open page with no refresh, and a reload agrees",
         failOnStatusCode: false,
       });
     }
+    await request.post(`${API}/api/v1/notifications/read-all`, { headers: bobAuth });
+    await saveState(context, E2E_ACCOUNTS.bob);
+    await context.close();
+  }
+});
+
+/**
+ * A tournament registration reaching the same page — A64-021.4 §31 Flow A.
+ *
+ * The one journey that proves the new event coverage end to end: a fact
+ * produced by `tournament` becomes an outbox row, the relay turns it into a
+ * durable notification through the composition root's own dispatcher, the
+ * gateway pushes it, and the page Bob already has open renders a sentence
+ * and a link to the tournament.
+ *
+ * ## Why the entry is made through the API and the reading in the browser
+ *
+ * The claim under test is the **arrival**, and it has to reach a page that
+ * is already rendered — navigating to the tournament to click "enter" would
+ * mean coming back, and a page that was re-navigated proves nothing about a
+ * push. `tournament.spec.ts` already drives the entry button through the UI,
+ * so nothing here is left uncovered; the call below is the same endpoint
+ * that button calls.
+ *
+ * Bob's bearer token beside his open browser session is the arrangement the
+ * realtime test above already uses: an access token is not the refresh chain
+ * and cannot rotate it.
+ *
+ * ## Where the tournament comes from
+ *
+ * `python -m app.operator.tournament`, the repository's existing operator
+ * entry point — the same fixture `tournament.spec.ts` creates and for the
+ * same reason: creating and opening a tournament are deliberately not HTTP.
+ * Nothing here truncates a table, flushes Redis, disables a limit or adds a
+ * backdoor.
+ */
+test("a tournament registration notifies its entrant, who follows it to the tournament", async ({
+  browser,
+  request,
+}) => {
+  test.setTimeout(120_000);
+
+  const bob = seededAccount(E2E_ACCOUNTS.bob);
+  const bobAuth = { Authorization: `Bearer ${bob.accessToken}` };
+
+  const created = await tournamentOperator(
+    "create",
+    "--name",
+    "E2E Notify Open",
+    "--capacity",
+    "8",
+    "--variant",
+    "russian_8x8",
+  );
+  const tournamentId = /created ([0-9a-f-]{36})/.exec(created)?.[1];
+  expect(tournamentId, `unexpected operator output: ${created}`).toBeTruthy();
+  await tournamentOperator("open", tournamentId as string);
+
+  const cleared = await request.post(`${API}/api/v1/notifications/read-all`, {
+    headers: bobAuth,
+  });
+  expect(cleared.status(), await cleared.text()).toBe(200);
+
+  const context = await browser.newContext({ storageState: statePath(E2E_ACCOUNTS.bob) });
+  const page = await context.newPage();
+
+  try {
+    // Open **before** anything happens, and never navigated again until the
+    // notification is followed. That ordering is the test.
+    await gotoBooted(page, "/notifications");
+    await expect(page.getByRole("link", { name: /Notifications — \d+ unread/ })).toHaveCount(0);
+
+    const entered = await request.post(
+      `${API}/api/v1/tournaments/${tournamentId}/registrations`,
+      { headers: bobAuth },
+    );
+    expect(entered.status(), await entered.text()).toBe(201);
+
+    // The badge moved with no refresh — the registration event, the relay,
+    // the dispatcher, the durable row and the gateway frame, all of it.
+    await expect(page.getByRole("link", { name: "Notifications — 1 unread" })).toBeVisible({
+      timeout: 60_000,
+    });
+
+    // A translated sentence composed from facts, never a server string.
+    const newest = page.getByRole("listitem").first();
+    await expect(newest).toContainText("E2E Notify Open");
+
+    // And the target resolves: an id on the row becomes a route here and
+    // nowhere else.
+    await newest.getByRole("link").click();
+    await expect(page).toHaveURL(new RegExp(`/tournaments/${tournamentId}$`));
+
+    // Following it marked it read, which the badge reflects once the count
+    // reconciles against the server.
+    await expect(page.getByRole("link", { name: /Notifications — \d+ unread/ })).toHaveCount(
+      0,
+      {
+        timeout: 30_000,
+      },
+    );
+  } finally {
+    await request.delete(`${API}/api/v1/tournaments/${tournamentId}/registrations/me`, {
+      headers: bobAuth,
+      failOnStatusCode: false,
+    });
     await request.post(`${API}/api/v1/notifications/read-all`, { headers: bobAuth });
     await saveState(context, E2E_ACCOUNTS.bob);
     await context.close();

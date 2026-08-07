@@ -3,10 +3,10 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-FRONTEND` |
-| **Status** | Approved through A64-021.3 — foundation, authentication, profile, social, game, tournaments, PWA and notifications |
+| **Status** | Approved through A64-021.4 — foundation, authentication, profile, social, game, tournaments, PWA, notifications and their event coverage |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-07 — A64-021.3, notification preferences |
+| **Last updated** | 2026-08-07 — A64-021.4, notification event coverage |
 | **Related ADRs** | [`ADR-002`](../docs/07-decisions/ADR-002-frontend-spa.md) |
 | **Related specs** | [`rating.md`](./rating.md), [`leaderboard.md`](./leaderboard.md), [`tournament.md`](./tournament.md) |
 | **Related** | `docs/01-architecture/architecture.md` §5, `docs/04-frontend/` |
@@ -1993,9 +1993,57 @@ merely forbidden.
 ### 21.8 Not in this phase
 
 No push subscription, no notification permission, no grouping, no search, no
-dismissal. Each is named with its seam in `specs/notifications.md` §12. (The
-realtime frame was deferred here and arrived in A64-021.2 — see §21.3; the
-preference switch arrived in A64-021.3 — see §22.)
+dismissal, no cards, no tabs and no filters — the final list redesign is
+A64-025's. Each deferred capability is named with its seam in
+`specs/notifications.md` §12.
+
+Arrived since: the realtime frame in A64-021.2 (§21.3), the preference
+switch in A64-021.3 (§22), and four more types in A64-021.4 (§21.9, §21.10).
+`tournament_match_ready` is the one type a client is ready for and the
+backend cannot yet send — the row would render as an unknown type today,
+safely, which is the degradation working.
+
+### 21.9 Extended type rendering — A64-021.4
+
+Six types now, and the row renders all of them. The decisions moved out of
+the component into `features/notifications/model/render.ts`, because six
+types made them the larger half of it and neither is a layout concern.
+
+| Type | Sentence | Avatar |
+| --- | --- | --- |
+| `friend_request_received` / `_accepted` | names the actor | the actor's |
+| `tournament_registration_confirmed` | names the tournament | the tournament's initials |
+| `tournament_round_published` | names the tournament and the round | the tournament's initials |
+| `tournament_completed` | names the tournament, and the placement when there is one | the tournament's initials |
+| `game_completed` | names the opponent and the result | the opponent's |
+
+**`game_completed` is six keys, not one.** "You won", "you lost" and "you
+drew" are different sentences in every language this product ships, and each
+has a variant that names no opponent — an account that is gone arrives as
+`null`, and *"You beat "* is a sentence no language recovers from.
+
+**`tournament_completed` is two.** A player with no recorded standing gets
+the shorter one rather than "you placed null".
+
+The mapper switches on **`type`**, not on which subject key is populated. A
+backend that adds a seventh type would otherwise silently render whichever
+branch matched its payload shape; switching on type falls through to the
+generic sentence, which is what §21.8's safe degradation means.
+
+### 21.10 Extended navigation — A64-021.4
+
+`notificationHref` gains three branches:
+
+| Target | Route |
+| --- | --- |
+| `tournament` | `/tournaments/{id}` |
+| `live_game` | `/games/{id}` |
+| `match_replay` | `/games/{id}/replay` |
+
+Every `ref` is `encodeURIComponent`-ed and every branch is a literal
+template. A missing `ref` renders a **non-navigable** row rather than a link
+to a list page: a notification about *a* tournament that could not name one
+is malformed, and quietly sending somebody to the lobby would hide that.
 
 ## 22. Notification preferences — A64-021.3
 

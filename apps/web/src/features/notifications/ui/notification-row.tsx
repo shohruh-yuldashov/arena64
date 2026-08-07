@@ -2,7 +2,11 @@ import { Link } from "@tanstack/react-router";
 
 import type { Notification } from "@/features/notifications/api";
 import { notificationHref } from "@/features/notifications/model/navigation";
-import { type TranslationKey, useTranslation } from "@/shared/i18n";
+import {
+  notificationMessage,
+  notificationSubject,
+} from "@/features/notifications/model/render";
+import { useTranslation } from "@/shared/i18n";
 import { formatDateTime } from "@/shared/lib/format";
 import { Avatar, AvatarFallback, AvatarImage } from "@/shared/ui";
 
@@ -20,6 +24,11 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/shared/ui";
  * A `type` this build does not know renders the generic sentence rather than
  * a blank row or a key. A notification that arrives from a newer backend is
  * still a notification worth seeing.
+ *
+ * A64-021.4 moved the type-to-sentence and type-to-avatar decisions into
+ * `model/render`, because six types made them the larger half of this file
+ * and neither is a rendering concern — this component now takes a message
+ * and a subject and lays them out.
  *
  * ## Unread is not a colour
  *
@@ -44,23 +53,26 @@ export function NotificationRow({
 }) {
   const { t, locale } = useTranslation();
 
-  // The same fallback `entities/user.displayNameOf` applies, spelled out
-  // because that helper takes a whole `UserRead` and an actor is a snapshot
-  // of three fields — widening the helper to accept both would make it
-  // accept anything with a `username`.
-  const actorName = notification.actor.display_name ?? notification.actor.username;
-  const message = t(messageKeyOf(notification.type), { actor: actorName });
+  // Both come from `model/render`, which is where the type-to-sentence and
+  // type-to-avatar decisions live — A64-021.4 §20. The row renders what it
+  // is handed and chooses nothing.
+  const { key, values } = notificationMessage(notification);
+  const subject = notificationSubject(notification);
+  const message = t(key, values);
   const when = formatDateTime(notification.created_at, locale) ?? "";
   const href = notificationHref(notification.target);
 
   const body = (
     <>
       <Avatar className="size-9 shrink-0">
-        {notification.actor.thumbnail_url !== null && (
-          <AvatarImage src={notification.actor.thumbnail_url} alt="" />
-        )}
+        {subject.thumbnailUrl !== null && <AvatarImage src={subject.thumbnailUrl} alt="" />}
+        {/* `aria-hidden`, because the subject's name is already in the
+            message beside it — announcing initials as well would read the
+            same person twice. A tournament has no picture at all and falls
+            back to its own initials, which is why the label is a subject
+            property rather than an actor field. */}
         <AvatarFallback aria-hidden="true">
-          {actorName.slice(0, 2).toUpperCase()}
+          {subject.label.slice(0, 2).toUpperCase()}
         </AvatarFallback>
       </Avatar>
 
@@ -113,22 +125,4 @@ export function NotificationRow({
       </Link>
     </li>
   );
-}
-
-/**
- * The message key for a type, or the generic one.
- *
- * A closed mapping rather than a template built from the type string: a
- * server that sent `types.<anything>` would otherwise choose a translation
- * key, and a missing key renders as itself.
- */
-function messageKeyOf(type: string): TranslationKey {
-  switch (type) {
-    case "friend_request_received":
-      return "notifications.types.friend_request_received";
-    case "friend_request_accepted":
-      return "notifications.types.friend_request_accepted";
-    default:
-      return "notifications.types.unknown";
-  }
 }

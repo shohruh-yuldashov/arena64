@@ -35,6 +35,19 @@ export function notificationHref(target: NotificationTarget): string | null {
       // takes. Encoded rather than interpolated raw — usernames are
       // validated on the way in, and encoding costs nothing to be certain.
       return target.ref ? `/players/${encodeURIComponent(target.ref)}` : null;
+    // A64-021.4. Three destinations, all `ref`-carrying, all encoded for the
+    // reason above. A missing `ref` renders a non-navigable row rather than
+    // a link to a list page: a notification about *a* tournament that could
+    // not name one is malformed, and sending somebody to the lobby instead
+    // would hide that.
+    case "tournament":
+      return target.ref ? `/tournaments/${encodeURIComponent(target.ref)}` : null;
+    case "live_game":
+      return target.ref ? `/games/${encodeURIComponent(target.ref)}` : null;
+    case "match_replay":
+      // The replay, never the live board — the backend chose which, because
+      // whether a game is still being played is a server fact.
+      return target.ref ? `/games/${encodeURIComponent(target.ref)}/replay` : null;
     default:
       return null;
   }

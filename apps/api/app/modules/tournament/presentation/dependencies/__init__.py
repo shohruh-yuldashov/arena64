@@ -74,6 +74,9 @@ from app.modules.tournament.application.services.start_service import (
 from app.modules.tournament.infrastructure.rating_snapshots import (
     PublishedRatingSnapshots,
 )
+from app.modules.tournament.infrastructure.repositories.notification_reader import (
+    SqlAlchemyTournamentNotificationReader,
+)
 from app.modules.tournament.infrastructure.repositories.results_repository import (
     SqlAlchemyTournamentResults,
 )
@@ -87,7 +90,7 @@ from app.modules.tournament.infrastructure.repositories.tournament_repository im
     SqlAlchemyStandingRepository,
     SqlAlchemyTournamentRepository,
 )
-from app.modules.tournament.public import TournamentAttendance
+from app.modules.tournament.public import TournamentAttendance, TournamentNotificationReader
 from app.modules.users.presentation.dependencies import UserServiceDep
 from app.modules.users.public import UserProfileService
 from app.platform.outbox import EventPublisher
@@ -417,6 +420,16 @@ def build_attendance(session: AsyncSession) -> TournamentAttendance:
     return SqlAlchemyPairingAttemptRepository(session)
 
 
+def build_notification_reader(session: AsyncSession) -> TournamentNotificationReader:
+    """The fan-out reader `notifications` holds — A64-021.4 §6.
+
+    Built per relay tick over that tick's session, like every other reader
+    this module hands out. What crosses is two reads: the consumer can learn
+    who is in a tournament and what they placed, and can change nothing.
+    """
+    return SqlAlchemyTournamentNotificationReader(session)
+
+
 def get_attendance_ws(websocket: WebSocket) -> TournamentAttendance:
     """The gateway's attendance writer, for a WebSocket route.
 
@@ -509,6 +522,7 @@ __all__ = [
     "build_deadline_service",
     "build_match_completion_consumer",
     "build_match_launcher",
+    "build_notification_reader",
     "build_no_show_service",
     "WebSocketTournamentAttendanceDep",
     "TournamentDirectoryDep",

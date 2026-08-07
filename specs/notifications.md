@@ -1,6 +1,6 @@
 # Notifications
 
-> **Status:** foundation implemented — A64-021.1; realtime in-app delivery — A64-021.2; preferences — A64-021.3
+> **Status:** foundation — A64-021.1; realtime in-app delivery — A64-021.2; preferences — A64-021.3; tournament and game coverage — A64-021.4
 > **Owner:** platform
 > **Related:** `docs/01-architecture/domain-model.md` §9.3, `docs/01-architecture/database.md` §10.2 and §10.3, `specs/friends.md`, `specs/frontend.md` §21 and §22
 
@@ -20,6 +20,12 @@ and email remain deferred, and §12 states exactly what each must add.
 A64-021.3 adds the **preferences** that govern all of it (§10). A muted
 category produces no durable row and no realtime frame — suppression at the
 point of creation, never a filter applied on read.
+
+A64-021.4 extends coverage from two types to **six**: three tournament facts
+and one game result, each from an event that already existed or — in one
+case — one added additively to a transaction that already committed the fact
+(§2). Nothing about the transport, the preferences or the exactly-once
+guarantee changed to accommodate them.
 
 ---
 
@@ -44,47 +50,66 @@ history every time somebody renamed themselves.
 
 ## 2. Supported types
 
-Two, and each has a source event that names its recipient unambiguously.
+Six, and each has a source event that names its recipients unambiguously.
 
-| Type | Category | Source event | Recipient | Target |
-| --- | --- | --- | --- | --- |
-| `friend_request_received` | `social` | `friends.friend_request_sent` | the addressee | `friend_requests` |
-| `friend_request_accepted` | `social` | `friends.friend_request_accepted` | the requester | `player_profile` |
+| Type | Category | Source event | Recipients | Target | Phase |
+| --- | --- | --- | --- | --- | --- |
+| `friend_request_received` | `social` | `friends.friend_request_sent` | the addressee | `friend_requests` | A64-021.1 |
+| `friend_request_accepted` | `social` | `friends.friend_request_accepted` | the requester | `player_profile` | A64-021.1 |
+| `tournament_registration_confirmed` | `tournament` | `tournament.player_registered` | the entrant | `tournament` | A64-021.4 |
+| `tournament_round_published` | `tournament` | `tournament.round_published` | every **live** entrant | `tournament` | A64-021.4 |
+| `tournament_completed` | `tournament` | `tournament.completed` | everybody with a **standing** | `tournament` | A64-021.4 |
+| `game_completed` | `game` | `game.match_completed` | both seats | `match_replay` | A64-021.4 |
 
-**Neither actor is told what they just did.** Sending a request notifies the
+**No actor is told what they just did.** Sending a request notifies the
 addressee; accepting one notifies the requester. A notification about your
-own action is not a notification.
+own action is not a notification — the exception is
+`tournament_registration_confirmed`, and it is deliberate: entering a
+tournament is a commitment to turn up at a time the player does not choose,
+and the receipt is the thing they look back for.
 
-`friends.friend_request_sent` is **new in A64-021.1**. The fact has existed
-since A64-013.2 and reached only a log line, so nobody was ever told they
-had a request waiting. Publishing it changes nothing about the request
-itself.
+`friends.friend_request_sent` is new in A64-021.1 and
+`tournament.player_registered` in A64-021.4. In both cases the fact existed
+already and reached only a log line. Publishing it changes nothing about the
+request or the registration itself.
 
 ### 2.1 Categories
 
-`social`, `game`, `tournament`, `system`. Only `social` has a producer
-today; the other three exist because the *category* is the unit a future
-preference will key on (`database.md` §4.9), and adding one later means
-migrating rows written without it.
+`social`, `game`, `tournament`, `system`. Three have producers as of
+A64-021.4; `system` does not, and is the only one a player may never mute
+(§10.1).
 
 `marketing` is deliberately absent: this product defines no such
 notification, and a category nothing produces is a preference that silently
 does nothing.
 
-### 2.2 Deferred producers, and why each is deferred
+### 2.2 Recipient rules, stated exactly
+
+| Type | Rule | Where it is enforced |
+| --- | --- | --- |
+| `tournament_registration_confirmed` | The one player named on the event | Nothing is read back — the event carries the player and the tournament's name |
+| `tournament_round_published` | `status = REGISTERED` at **delivery** time | The audience query's own predicate, so a withdrawal between publication and delivery excludes them without a filter anybody has to remember |
+| `tournament_completed` | Anyone with a row in `standing` | A player who withdrew before the field was fixed has no result, and telling them where they did not place is worse than silence |
+| `game_completed` | The two seats on the event | Nothing is read back |
+
+**No recipient ever comes from a client.** Every one is derived from the
+event or from a `tournament.public` read; there is no endpoint, parameter or
+payload field through which a caller can name who is notified.
+
+### 2.3 Deferred types, and the seam each is missing
 
 | Candidate | Why not yet |
 | --- | --- |
-| `tournament_registration_confirmed` | No source event. `tournament` publishes nothing when a player enters |
-| `tournament_round_published` | `tournament.round_published` carries `(tournament_id, round_number)` and **names no recipients**. Mapping it needs a bracket read and a decision about who a round concerns |
-| `tournament_completed` | Same: a `winner_id` and a count, not a participant list |
-| `match_found` | `game.match_created` has every fact needed — but a match offer expires in seconds, and a durable row for it would be a list full of dead offers. It belongs with realtime delivery, not with history |
+| `tournament_match_ready` | **No source event.** Matches are created by `TournamentMatchLauncher`, which holds no publisher, and `game.match_activated` carries no `origin` — so a consumer cannot tell a tournament fixture from a queue pairing. Adding one also needs the launcher to report whether the attempt was *newly* recorded, or a re-launch after a restart would produce a second notification. Three deliberate changes, not one |
+| `tournament_cancelled` | The event is declared and **never published**: no application service emits it. A consumer for it would be an entry point nothing reaches |
+| `rating_changed` | `rating.updated` exists, but neither the product value nor the safe payload is settled — a rating is a number a player sees on their own profile, and a row per game saying it moved would be a second copy of `game_completed` |
+| `match_found` | `game.match_created` has every fact needed, and the offer expires in seconds. A durable row for it would be a list full of dead offers; it belongs with realtime delivery |
 | `friend_online` / `friend_offline` | Genuinely transient. A row per transition would be thousands a day in a list whose value is that it is short |
+| every move, draw offers, typing | Live game state and short-lived commands, not history |
 
-The last two are the useful distinction: **not every notification is
-durable.** `notifications.application.services.durable_notification_writer`
-holds the mapping, and a kind absent from it is delivered to the transient
-sinks and stored nowhere.
+The distinction those last four draw is the one that matters: **not every
+notification is durable.** An event whose fact is wrong by the time it is
+read should never become a permanent record.
 
 ---
 
@@ -94,7 +119,9 @@ Each type has a typed payload, decoded against the row's own `type` on the
 way out. A row whose JSON does not match raises rather than reaching a
 client half-rendered.
 
-Both types today carry an **actor summary**:
+Three shapes, and `type` decides which:
+
+**`ActorSummary`** — the two social types.
 
 | Field | Note |
 | --- | --- |
@@ -103,9 +130,29 @@ Both types today carry an **actor summary**:
 | `actor_display_name` | Nullable |
 | `actor_avatar_object_key`, `actor_avatar_version` | **Not a URL** — the URL is composed at the presentation boundary by `AvatarLinkBuilder`, so no CDN hostname is frozen into a historical row |
 
+**`TournamentSummary`** — the three tournament types.
+
+| Field | Note |
+| --- | --- |
+| `tournament_id` | |
+| `tournament_name` | A **snapshot**. A renamed tournament does not rewrite a receipt somebody already has |
+| `round_number` | `null` except for `tournament_round_published` |
+| `final_rank` | **This recipient's** placement, never the winner's. `null` when they have no standing. Ranks are as recorded — ties share one, gaps are real |
+
+**`GameResultSummary`** — `game_completed`.
+
+| Field | Note |
+| --- | --- |
+| `match_id` | |
+| `outcome` | `win`, `loss` or `draw`, already resolved **from the recipient's point of view** — a client renders "you won" without knowing which seat it held |
+| `termination_reason` | `game`'s own value. "You lost" and "you lost on time" are different sentences, and an adjudicated result is the case this type exists for |
+| `opponent` | An actor summary, or `null` when that account no longer has a profile. The game was still played |
+
 **Never stored:** an email address, a private profile field, a token or
 ticket, a Redis key, an internal identifier with no public meaning, a stack
-trace, or the raw source event payload.
+trace, the raw source event payload, a bracket, a standings table, or an
+entrant list. A payload carrying a field of 128 players would put a
+tournament's whole state into every one of their inboxes.
 
 The summary is composed through `PublicProfileComposer` for the recipient's
 relationship at the moment of writing, so a field the actor withheld is not
@@ -126,6 +173,16 @@ build's routing into rows that outlive it.
 | --- | --- | --- |
 | `friend_requests` | `null` | `/friends/requests` |
 | `player_profile` | the actor's username | `/players/{username}` |
+| `tournament` | the tournament's id | `/tournaments/{id}` |
+| `live_game` | the match's id | `/games/{id}` |
+| `match_replay` | the match's id | `/games/{id}/replay` |
+
+`live_game` and `match_replay` are separate rather than one target the
+client decides between: whether a game is still being played is a **server**
+fact, and a client that guessed would send somebody to a live board that
+ended yesterday. Nothing produces `live_game` yet — it is here because
+`match_replay`'s existence made the distinction worth naming, and the client
+mapper handles both.
 
 The client maps a target onto a route it already owns and renders anything
 it does not recognise as a **non-navigable** notification. External
@@ -134,7 +191,8 @@ produce a scheme.
 
 A received request targets the list where it can be *answered* rather than
 the sender's profile; an acceptance targets the new friend, because there is
-nothing left to answer.
+nothing left to answer. A completed game targets its **replay**, because by
+the time anybody reads the row the live room has nothing to show.
 
 ---
 
@@ -160,6 +218,49 @@ There are **two** defences and they cover different failures:
 | `platform.processed_event` | The relay redelivering a batch it already handled |
 | The unique constraint | A crash between the notification write and the ledger write, and two consumer processes racing |
 
+### 5.1 Fan-out shares one source event id — A64-021.4
+
+Every recipient of one round publication carries that publication's outbox
+id. The rows differ by `recipient_id`, so the constraint holds at 128 rows
+exactly as it holds at one, and a redelivered publication inserts nothing
+for anybody.
+
+`type` stays in the key rather than being dropped as redundant. One source
+event legitimately produces different types for different consumers, and a
+narrower key would let the second one silently lose.
+
+**No synthetic ids.** A consumer that generated its own event reference per
+recipient would have no idempotency at all — the whole guarantee is that the
+reference is the *source event's*.
+
+### 5.2 Consumers are independent
+
+`social_notifications`, `tournament_notifications` and `game_notifications`
+each have their own `processed_event` partition. A redelivery one has
+handled must still reach the others, and none may mark another's work done.
+
+They also fail independently, which is the property that matters on a relay
+tick: a tournament whose standings are not yet visible must not stall a
+finished game's notification.
+
+---
+
+### 5.3 Failure behaviour — skip or retry, decided per cause
+
+A64-021.4 §13. The rule is *retry what a retry could fix, skip what it
+cannot*, and each case is named rather than left to a catch-all:
+
+| Cause | Behaviour | Why |
+| --- | --- | --- |
+| A tournament the audience read cannot find | **Skip**, with a `WARNING` | A tournament that is gone will never be found, and retrying forever holds the relay's backlog open on a fact about something deleted |
+| Standings not yet visible on completion | **Retry** | A genuine transient. Failing is the safe direction: a retry is bounded by the relay's attempt limit, where a skipped completion is a result nobody is ever told |
+| A malformed payload — a missing id, an unparseable number | **Retry**, then exhaust | A producer that changed its contract without telling the consumer. §13's "prefer failing the batch when data integrity is wrong" |
+| An outcome the game consumer does not recognise, or a match with no seats | **Skip** | An abort is a non-event and an unknown outcome is a backend that shipped ahead; neither is fixed by trying again, and both are safer as silence than as a guessed sentence |
+
+The source aggregate's transaction **never** rolls back because a
+notification failed: the event is committed with the fact that caused it and
+the relay runs afterwards, which is AD-16's whole point.
+
 ---
 
 ## 6. Transaction boundary
@@ -174,6 +275,33 @@ two redelivers the event, and the redelivery finds the row already there.
 
 **Nothing is delivered before the durable write commits.** A future realtime
 frame is an optimisation over durable state, never a substitute for it.
+
+---
+
+### 6.1 Fan-out and batching — A64-021.4
+
+A tournament event can name up to 128 recipients (`specs/tournament.md` §2).
+Everything that could have been per-recipient is not:
+
+| Step | Cost |
+| --- | --- |
+| Resolving the audience | **One** read, whatever the field size |
+| Reading preferences | **One** read for the whole batch (§10.5) |
+| Rendering opponents (`game_completed`) | **One** batch render per relay tick, not per match |
+| Writing the rows | One insert per row, because each *is* a row |
+
+**Measured: 6 `SELECT`s for a 128-recipient fan-out, and 6 for 16.** The
+count does not move with the field. A per-recipient audience or preference
+read would produce roughly 130, and
+`tests/contract/test_notification_event_coverage.py` asserts a ceiling so
+that a regression fails rather than merely getting slower.
+
+Batch size is the relay's (`OUTBOX_BATCH_SIZE`, 50 by default) and is not
+overridden here. What that bounds is *events per tick*, not recipients per
+event: one publication is one entry, and its 128 inserts happen in one unit
+of work — which is correct, because a partially-written fan-out and a
+completely-unwritten one are both recoverable by the same redelivery, and
+only the second is unambiguous.
 
 ---
 
@@ -511,17 +639,21 @@ regained focus, which is unbounded.
 
 Everything below is deliberately absent, with the seam it will use.
 
-A64-021.2's and A64-021.3's rows are gone from this table because they were
-built. The seam each used — a port satisfied at the composition root, an
-announcer and then a delivery policy — is the same one every remaining row
-names, and §11 and §10 are what it looks like when taken.
+A64-021.2's, A64-021.3's and A64-021.4's rows are gone from this table
+because they were built. The seam each used — a port satisfied at the
+composition root — is the same one every remaining row names.
+
+A64-021.4 is the clearest demonstration: two new consumers, a published
+reader on `tournament`, one additive event, and **no change** to the
+transport, the preference policy, the exactly-once key or the wire frame.
 
 | Deferred to | What it adds | Where |
 | --- | --- | --- |
 | **A64-021.6 browser push** | Permission request, `pushManager.subscribe`, a VAPID key as a `VITE_` variable, `push` and `notificationclick` handlers in **the existing** service worker, a device/subscription table | `apps/web/pwa/service-worker.ts` and `apps/api`. `shared/pwa/push-support.ts` already reports capability and asks for nothing. The `push` **preference** already exists and is refused as unavailable — flipping `CHANNEL_AVAILABILITY` is what turns it on (§10.1) |
 | **A64-021.5 email** | A provider, templates, a per-channel delivery record (`notification_delivery`, `database.md` §10.2) | A third sink, plus the delivery table NT-1 needs to record a channel failing independently. Its preference column exists already; it must consult `NotificationDeliveryPolicy` with `channel=email` before sending, exactly as the durable writer does with `in_app` |
 | **Friend challenges** | A `challenges` domain, its events, and one notification type per event | A new member of `NotificationType`, its payload, its target |
-| **Tournament notifications** | A recipient mapping for `round_published` and `completed` — a bracket read, not a payload change | A consumer that resolves participants, feeding the same durable writer |
+| **`tournament_match_ready`** | An event. `TournamentMatchLauncher` holds no publisher, `game.match_activated` carries no `origin`, and `launch()` does not report whether an attempt was newly recorded — without the third, a re-launch after a restart notifies twice | `tournament.application.services.match_launcher`, and one more member of `tournament.public`'s event re-exports |
+| **`tournament_cancelled`** | A publisher. The event is declared and no service emits it | `tournament.application.services` — wherever cancellation is eventually implemented |
 
 The worker's message contract must stay as narrow as it is: adding a `push`
 handler must not widen what a *page* may tell the service worker to do.
@@ -540,7 +672,11 @@ handler must not widen what a *page* may tell the service worker to do.
 | No arbitrary URL is stored or followed | Targets are a closed enum plus one identifier |
 | No HTML injection | No server string is rendered as markup; the client composes every sentence from translations |
 | No cross-user cache leakage | Query keys carry no player id because the endpoints take none; sign-out clears the cache |
-| A source event cannot notify an unrelated recipient | The recipient is derived from the event's own participants, re-read at delivery |
+| A source event cannot notify an unrelated recipient | The recipient is derived from the event's own participants, or from a `tournament.public` read, and never from a client |
+| A fan-out cannot reach somebody who left | The audience query filters on `status = REGISTERED` at delivery time; a completion reads `standing`, which a withdrawal never produces |
+| A consumer cannot change what it reads about | `tournament.public.TournamentNotificationReader` publishes **two reads and no write** — a compromised consumer could learn a field and could not enter, withdraw, pair or finish anybody |
+| A match id in a notification grants nothing | `/games/{id}` and `/games/{id}/replay` authorize on their own; the notification is a pointer, not a capability |
+| A preference cannot be bypassed by a new producer | Every producer goes through `DurableNotificationWriter`, and the policy is a constructor argument with no default |
 
 ---
 

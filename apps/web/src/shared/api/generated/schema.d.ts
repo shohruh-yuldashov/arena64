@@ -4150,13 +4150,40 @@ export interface components {
          *     product defines no such notification, and a category nothing produces is
          *     a preference that silently does nothing.
          *
-         *     Only `SOCIAL` has a producer today. The other three exist because the
-         *     *category* is the unit `users.notification_preference` will key on
-         *     (database.md §4.9), and adding a category later means migrating rows
-         *     that were written without one.
+         *     `SOCIAL`, `TOURNAMENT` and `GAME` all have producers as of A64-021.4.
+         *     `SYSTEM` does not, and is the one a player may never mute — see
+         *     `domain.preference.LOCKED`.
          * @enum {string}
          */
         NotificationCategory: "social" | "game" | "tournament" | "system";
+        /**
+         * NotificationGameResponse
+         * @description The finished game a notification is about — §8.
+         *
+         *     `outcome` is already resolved **from the recipient's point of view**, so
+         *     a client renders "you won" without knowing which seat it held.
+         */
+        NotificationGameResponse: {
+            /**
+             * Match Id
+             * Format: uuid
+             */
+            match_id: string;
+            /**
+             * Outcome
+             * @description `win`, `loss` or `draw`.
+             * @example win
+             */
+            outcome: string;
+            /**
+             * Termination Reason
+             * @description A `TerminationReason` value.
+             * @example resignation
+             */
+            termination_reason: string;
+            /** @description Who they played, or `null` when that account no longer has a profile. */
+            opponent: components["schemas"]["NotificationActorResponse"] | null;
+        };
         /**
          * NotificationPageResponse
          * @description One page, newest first.
@@ -4184,6 +4211,20 @@ export interface components {
         /**
          * NotificationResponse
          * @description One durable notification.
+         *
+         *     ## Three optional subject keys, exactly one of which is present
+         *
+         *     A64-021.1 shipped with `actor` required and predicted this: *"the first
+         *     type without an actor makes this optional and adds its own key beside
+         *     it."* A64-021.4 is that phase, and `actor`, `tournament` and `game` are
+         *     now three nullable keys — a social notification carries the first, a
+         *     tournament notification the second, a completed game the third.
+         *
+         *     A discriminated union on the wire was the alternative and was not taken.
+         *     It would name the payload shape twice — once as `type`, once as the
+         *     discriminator — and the two would eventually disagree; a client already
+         *     branches on `type` to choose a sentence, and reading the matching key is
+         *     the same branch.
          */
         NotificationResponse: {
             /**
@@ -4203,7 +4244,12 @@ export interface components {
              * @example social
              */
             category: string;
-            actor: components["schemas"]["NotificationActorResponse"];
+            /** @description The player a social notification is about. */
+            actor?: components["schemas"]["NotificationActorResponse"] | null;
+            /** @description The tournament a tournament notification is about. */
+            tournament?: components["schemas"]["NotificationTournamentResponse"] | null;
+            /** @description The game a completed-game notification is about. */
+            game?: components["schemas"]["NotificationGameResponse"] | null;
             target: components["schemas"]["NotificationTargetResponse"];
             /**
              * Created At
@@ -4241,6 +4287,33 @@ export interface components {
              * @example player_one
              */
             ref: string | null;
+        };
+        /**
+         * NotificationTournamentResponse
+         * @description The tournament a notification is about — A64-021.4 §8.
+         *
+         *     `round_number` and `final_rank` are `null` for the types they do not
+         *     apply to, and present rather than omitted so a client reads one shape.
+         *     `final_rank` is **this recipient's** placement, never the winner's.
+         */
+        NotificationTournamentResponse: {
+            /**
+             * Tournament Id
+             * Format: uuid
+             */
+            tournament_id: string;
+            /** Tournament Name */
+            tournament_name: string;
+            /**
+             * Round Number
+             * @description Which round was paired, or `null` when the type is not about one.
+             */
+            round_number: number | null;
+            /**
+             * Final Rank
+             * @description The recipient's finishing position, or `null` when they have no standing. Ranks are as recorded — ties share one and gaps are real.
+             */
+            final_rank: number | null;
         };
         /**
          * OpponentPreview

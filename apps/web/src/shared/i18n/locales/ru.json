@@ -821,6 +821,17 @@
     "types": {
       "friend_request_received": "{actor} отправил вам заявку в друзья",
       "friend_request_accepted": "{actor} принял вашу заявку в друзья",
+      "tournament_registration_confirmed": "Вы записаны на турнир {tournament}",
+      "tournament_round_published": "Пары {round}-го тура турнира {tournament} готовы",
+      "tournament_completed": "Турнир {tournament} завершён",
+      "tournament_completed_ranked": "Турнир {tournament} завершён — вы заняли {rank}-е место",
+      "game_completed": "Сыгранная вами партия завершена",
+      "game_completed_win": "Вы победили {opponent}",
+      "game_completed_loss": "Вы проиграли {opponent}",
+      "game_completed_draw": "Партия с {opponent} завершилась вничью",
+      "game_completed_win_anonymous": "Вы выиграли партию",
+      "game_completed_loss_anonymous": "Вы проиграли партию",
+      "game_completed_draw_anonymous": "Ваша партия завершилась вничью",
       "unknown": "Новое уведомление"
     }
   },

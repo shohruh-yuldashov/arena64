@@ -4,6 +4,9 @@ from app.modules.notifications.application.services.durable_notification_writer 
     DURABLE_TYPES,
     DurableNotificationWriter,
 )
+from app.modules.notifications.application.services.game_notification_dispatcher import (
+    GameNotificationDispatcher,
+)
 from app.modules.notifications.application.services.notification_preference_service import (
     DuplicatePreferenceChange,
     NotificationPreferenceService,
@@ -29,6 +32,9 @@ from app.modules.notifications.application.services.social_notification_dispatch
     SUBSCRIBED_EVENT_TYPES,
     SocialNotificationDispatcher,
 )
+from app.modules.notifications.application.services.tournament_notification_dispatcher import (
+    TournamentNotificationDispatcher,
+)
 
 __all__ = [
     "CONSUMER_NAME",
@@ -38,6 +44,7 @@ __all__ = [
     "SUBSCRIBED_EVENT_TYPES",
     "DuplicatePreferenceChange",
     "DurableNotificationWriter",
+    "GameNotificationDispatcher",
     "NotificationPreferenceService",
     "NotificationService",
     "PreferenceChange",
@@ -45,5 +52,6 @@ __all__ = [
     "PresenceNotificationService",
     "PresenceSweeper",
     "SocialNotificationDispatcher",
+    "TournamentNotificationDispatcher",
     "SweepResult",
 ]

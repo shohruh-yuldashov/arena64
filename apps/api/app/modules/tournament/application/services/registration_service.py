@@ -42,6 +42,7 @@ from app.modules.tournament.application.ports import (
     TournamentRepository,
 )
 from app.modules.tournament.domain.events import (
+    PlayerRegistered,
     RegistrationClosed,
     RegistrationOpened,
     TournamentCreated,
@@ -170,6 +171,19 @@ class TournamentRegistrationService:
                     registered_at=self._clock.now(),
                 ),
                 capacity=tournament.capacity,
+            )
+            # A64-021.4 §14. **In the same transaction as the row**, which
+            # is what makes the confirmation exactly as durable as the
+            # registration it confirms — AD-16. `add` raises on a duplicate,
+            # so reaching this line means a seat was actually taken and a
+            # retry cannot announce a second entry.
+            await self._events.publish(
+                PlayerRegistered(
+                    occurred_at=registration.registered_at,
+                    tournament_id=tournament_id,
+                    player_id=player_id,
+                    name=tournament.name,
+                )
             )
             await self._unit_of_work.commit()
 

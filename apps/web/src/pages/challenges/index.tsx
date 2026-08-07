@@ -1,7 +1,9 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import type { Challenge } from "@/features/challenges/api";
 import {
+  invalidateChallenges,
   useAcceptChallenge,
   useCancelChallenge,
   useDeclineChallenge,
@@ -11,11 +13,9 @@ import {
 import { useChallengeHandoff } from "@/features/challenges/model/use-challenge-handoff";
 import { useChallengePush } from "@/features/challenges/model/use-challenge-push";
 import { useTimeControls } from "@/features/matchmaking/model/queries";
-import { MatchOfferDialog } from "@/features/matchmaking/ui/match-offer-dialog";
 import { ListState } from "@/features/social/ui/list-state";
 import { useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
-import { useHoldAppUpdate } from "@/shared/pwa";
 import { Button, Spinner } from "@/shared/ui";
 import { ChallengeRow } from "@/widgets/challenge-row";
 import { SocialNav } from "@/widgets/social-nav";
@@ -41,18 +41,22 @@ import { SocialNav } from "@/widgets/social-nav";
  * challenge accept into `matchmaking`'s match accept, and if the challenger
  * is already in, the navigation happens without a second interaction.
  *
- * If they are not, the **shared** `MatchOfferDialog` takes over: the same
- * component the lobby renders, driven by the same query, saying "waiting
- * for your opponent" with the same countdown. See `useChallengeHandoff` for
- * why none of that is re-implemented here.
+ * If they are not, the **shared** `MatchOfferDialog` takes over — and
+ * since A64-022.6 §13 that dialog lives in `AppShell` rather than on this
+ * page, so the waiting half is identical whether the player stays here or
+ * navigates away. This page contributes the accept chain and nothing else.
  *
- * ## Nothing polls the lists — §20
+ * ## Nothing polls the lists — A64-022.5 §20
  *
  * `useChallengePush` invalidates both on the `notification.created` frame
  * for either challenge type, and the read decides the rest. The one thing
  * watched on this page is the pending match, by `matchmaking`'s own query
- * with `matchmaking`'s own interval — which is what it has always done for
- * an open offer, ticket or no ticket.
+ * with `matchmaking`'s own interval — and since A64-022.6 that watching
+ * happens in `AppShell` rather than here.
+ *
+ * A row whose countdown reaches zero invalidates both lists once (§11).
+ * That is a question, not a conclusion: the refetch is what removes it,
+ * because only the server knows whether the sweep has run.
  */
 type Tab = "incoming" | "outgoing";
 
@@ -69,15 +73,11 @@ export default function ChallengesPage() {
 
   useChallengePush();
   const handoff = useChallengeHandoff();
+  const client = useQueryClient();
 
   const accept = useAcceptChallenge();
   const decline = useDeclineChallenge();
   const cancel = useCancelChallenge();
-
-  // A64-020.9 §14. An acceptance window is seconds long and a reload inside
-  // it loses the offer, so the update prompt waits — the same hold the
-  // lobby applies, for the same offer.
-  useHoldAppUpdate(handoff.match !== null || handoff.state.status === "transitioning");
 
   const list = tab === "incoming" ? incoming : outgoing;
   const items: Challenge[] = list.data?.pages.flatMap((page) => page.items) ?? [];
@@ -154,6 +154,11 @@ export default function ChallengesPage() {
                   key={challenge.id}
                   challenge={challenge}
                   controls={controls.data}
+                  // A64-022.6 §11. The local countdown reaching zero
+                  // **asks** rather than concludes: the lists are
+                  // invalidated and the server decides whether the row
+                  // is still there. Nothing here marks it expired.
+                  onExpired={() => invalidateChallenges(client)}
                   actions={
                     tab === "incoming"
                       ? {
@@ -184,18 +189,6 @@ export default function ChallengesPage() {
           )}
         </div>
       </div>
-
-      {handoff.match !== null && (
-        <MatchOfferDialog
-          // Keyed by the match, so a second offer mounts a fresh dialog
-          // rather than reusing one whose countdown runs against the
-          // previous deadline.
-          key={handoff.match.match_id}
-          match={handoff.match}
-          onExpired={handoff.refetch}
-          onAccepted={handoff.goToGame}
-        />
-      )}
     </SocialNav>
   );
 }

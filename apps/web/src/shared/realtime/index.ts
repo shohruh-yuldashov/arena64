@@ -32,11 +32,14 @@ export type {
   MovePayload,
   NotificationCreatedPayload,
   PlacedPiece,
+  QuickMessage,
+  QuickMessageReceivedPayload,
   Rank,
   ResultPayload,
   Side,
   SnapshotPayload,
 } from "./protocol";
+export { isQuickMessage, QUICK_MESSAGES } from "./protocol";
 export { RealtimeError } from "./request-registry";
 export type { FrameListener } from "./socket-client";
 export { RealtimeClient } from "./socket-client";

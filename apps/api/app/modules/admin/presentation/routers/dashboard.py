@@ -19,7 +19,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, Response
 
-from app.core.constants import API_V1_PREFIX
 from app.modules.admin.application.services.dashboard_service import DashboardOverview
 from app.modules.admin.domain.audit import AuditEntry
 from app.modules.admin.presentation.dependencies import CurrentAdmin
@@ -35,7 +34,7 @@ from app.modules.admin.presentation.schemas.dashboard import (
 )
 from app.modules.users.public import AdminUserRecord
 
-admin_dashboard_router = APIRouter(prefix=f"{API_V1_PREFIX}/admin/dashboard", tags=["admin"])
+admin_dashboard_router = APIRouter(prefix="/admin/dashboard", tags=["admin"])
 
 
 @admin_dashboard_router.get(

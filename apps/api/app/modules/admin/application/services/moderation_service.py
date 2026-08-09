@@ -215,6 +215,7 @@ class ModerationService:
                     "sessions_revoked": revoked,
                 },
             )
+            await self._unit_of_work.commit()
 
         logger.info(
             "account_restricted",
@@ -263,6 +264,7 @@ class ModerationService:
                 },
                 after={"restricted": False, "lifted_at": now.isoformat()},
             )
+            await self._unit_of_work.commit()
 
         logger.info(
             "account_restored",
@@ -327,6 +329,7 @@ class ModerationService:
                 outcome=AuditOutcome.FAILED,
                 after={"refused": refusal},
             )
+            await self._unit_of_work.commit()
 
         logger.warning(
             "moderation_refused",

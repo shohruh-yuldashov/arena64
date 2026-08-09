@@ -30,7 +30,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
-from app.core.constants import API_V1_PREFIX
 from app.modules.admin.domain.exceptions import RetryUnavailable
 from app.modules.admin.presentation.dependencies import CurrentAdmin
 from app.modules.admin.presentation.dependencies.notifications import (
@@ -52,9 +51,7 @@ from app.modules.notifications.public import (
 from app.modules.notifications.public.administration import AdminNotificationDetail
 from app.modules.users.public import AdminUserRecord
 
-admin_notifications_router = APIRouter(
-    prefix=f"{API_V1_PREFIX}/admin/notifications", tags=["admin"]
-)
+admin_notifications_router = APIRouter(prefix="/admin/notifications", tags=["admin"])
 
 #: The largest page an operator may ask for — the bound every admin list on
 #: this console uses. There is no "all".

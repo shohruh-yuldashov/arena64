@@ -24,7 +24,6 @@ the admin surface is exactly where it would matter.
 
 from fastapi import APIRouter, Depends, Response
 
-from app.core.constants import API_V1_PREFIX
 from app.modules.admin.presentation.dependencies import (
     AdminRoleServiceDep,
     CurrentAdmin,
@@ -35,7 +34,7 @@ from app.modules.users.presentation.dependencies import UserServiceDep
 from app.modules.users.public import UserProfileService
 
 admin_router = APIRouter(
-    prefix=f"{API_V1_PREFIX}/admin",
+    prefix="/admin",
     tags=["admin"],
     dependencies=[Depends(require_admin)],
 )

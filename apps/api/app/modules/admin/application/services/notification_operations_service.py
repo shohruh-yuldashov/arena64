@@ -123,6 +123,7 @@ class NotificationOperationsService:
                     "attempts_already_spent": delivery.attempt_count,
                 },
             )
+            await self._unit_of_work.commit()
 
         logger.info(
             "notification_delivery_retried",
@@ -151,6 +152,7 @@ class NotificationOperationsService:
                 outcome=AuditOutcome.FAILED,
                 after={"refused": refusal},
             )
+            await self._unit_of_work.commit()
 
         logger.warning(
             "notification_retry_refused",

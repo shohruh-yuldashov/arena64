@@ -32,7 +32,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
-from app.core.constants import API_V1_PREFIX
 from app.modules.admin.domain.roles import AdminRole
 from app.modules.admin.presentation.dependencies import AdminRoleServiceDep, CurrentAdmin
 from app.modules.admin.presentation.dependencies.moderation import (
@@ -48,7 +47,7 @@ from app.modules.admin.presentation.schemas.users import (
 )
 from app.modules.users.public import AdminUserFilters, AdminUserRecord
 
-admin_users_router = APIRouter(prefix=f"{API_V1_PREFIX}/admin/users", tags=["admin"])
+admin_users_router = APIRouter(prefix="/admin/users", tags=["admin"])
 
 #: The largest page an operator may ask for — §3.
 #:

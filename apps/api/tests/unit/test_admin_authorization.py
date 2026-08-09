@@ -80,14 +80,36 @@ class InMemoryRoleAssignments:
 
 
 class NullUnitOfWork:
-    """A transaction boundary that does nothing. The service's writes are
-    asserted through the repository, not through a commit."""
+    """A transaction boundary that owns no database, and **counts**.
+
+    Models `SessionUnitOfWork` in the one respect that turned out to
+    matter: leaving the scope commits nothing. The commit is the service's
+    to call (`repositories.md` §5.1), so a fake that committed on exit
+    would reproduce a forgotten commit as a pass.
+
+    It had no `commit` at all until the A64-024 transaction regression, and
+    its docstring said the writes were "asserted through the repository,
+    not through a commit" — which is precisely how six phases of admin
+    services shipped without one. The counters are what
+    `tests/unit/test_admin_transactions.py` asserts against.
+    """
+
+    def __init__(self) -> None:
+        self.commits = 0
+        self.rollbacks = 0
 
     async def __aenter__(self) -> "NullUnitOfWork":
         return self
 
-    async def __aexit__(self, *_: object) -> None:
-        return None
+    async def __aexit__(self, *exc: object) -> None:
+        if exc[0] is not None:
+            self.rollbacks += 1
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+    async def rollback(self) -> None:
+        self.rollbacks += 1
 
 
 class StubProfiles:

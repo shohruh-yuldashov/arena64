@@ -28,6 +28,7 @@ from fastapi import APIRouter
 from app.api.v1.health import health_router
 from app.core.constants import API_V1_PREFIX
 from app.modules.admin.presentation.router import admin_router
+from app.modules.admin.presentation.routers.users import admin_users_router
 from app.modules.auth.presentation.browser_router import browser_auth_router
 from app.modules.auth.presentation.router import auth_router
 from app.modules.avatars.presentation.router import avatar_router
@@ -52,6 +53,10 @@ v1_router.include_router(health_router)
 # A64-024.1. Guarded at the router, so a handler added later is
 # administrative by existing rather than by somebody remembering.
 v1_router.include_router(admin_router)
+# A64-024.3. Its own router because it carries a prefix segment; guarded
+# by `CurrentAdmin` in every handler signature rather than at the router,
+# so the protection is visible where the route is read.
+v1_router.include_router(admin_users_router)
 
 # **Before `users_router`, and the order is load-bearing.** `GET /users/search`
 # and `GET /users/{user_id}` both match the path `/users/search`; Starlette

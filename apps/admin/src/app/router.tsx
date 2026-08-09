@@ -12,6 +12,8 @@ import { useEffect, useRef } from "react";
 import { useAdminAuth } from "@/app/use-admin-auth";
 import { LoginPage } from "@/pages/login";
 import { PlaceholderPage } from "@/pages/placeholder";
+import { UserDetailPage } from "@/pages/user-detail";
+import { UsersPage } from "@/pages/users";
 import { signOut as revokeSession } from "@/shared/api/client";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 
@@ -216,7 +218,27 @@ const dashboardRoute = createRoute({
   component: Dashboard,
 });
 
-const sectionRoutes = SECTIONS.map((section) =>
+// A64-024.3. `/users` is the first real section, so it leaves the
+// placeholder list. The rest keep their guarded routes and say plainly that
+// they are not built.
+const usersRoute = createRoute({
+  getParentRoute: () => protectedRoute,
+  path: "/users",
+  component: UsersPage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...(typeof search.q === "string" ? { q: search.q } : {}),
+    ...(typeof search.active === "string" ? { active: search.active } : {}),
+    ...(typeof search.verified === "string" ? { verified: search.verified } : {}),
+  }),
+});
+
+const userDetailRoute = createRoute({
+  getParentRoute: () => protectedRoute,
+  path: "/users/$userId",
+  component: UserDetailPage,
+});
+
+const sectionRoutes = SECTIONS.filter((section) => section.path !== "/users").map((section) =>
   createRoute({
     getParentRoute: () => protectedRoute,
     path: section.path,
@@ -226,7 +248,7 @@ const sectionRoutes = SECTIONS.map((section) =>
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  protectedRoute.addChildren([dashboardRoute, ...sectionRoutes]),
+  protectedRoute.addChildren([dashboardRoute, usersRoute, userDetailRoute, ...sectionRoutes]),
 ]);
 
 export function createAdminRouter(history?: Parameters<typeof createRouter>[0]["history"]) {

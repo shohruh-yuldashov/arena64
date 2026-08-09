@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| **Status** | **Foundation shipped** — A64-024.1 (authorization), A64-024.2 (sign-in, routing) and A64-024.2H (deployment origins, session ownership). Every operational surface is deferred; see §8. |
+| **Status** | A64-024.1 (authorization), A64-024.2 (sign-in, routing), A64-024.2H (deployment origins) and A64-024.3 (**User Management, read-only**). Remaining surfaces deferred; see §8. |
 | **Owner** | _Unassigned_ |
 | **Related ADRs** | `architecture.md` AD-04 (separate application) |
 | **Related docs** | `docs/01-architecture/database.md` §10.4, `docs/01-architecture/domain-model.md` §13 |
@@ -320,6 +320,71 @@ the check's dependencies the revocation went unnoticed.
 development database: the table and its enum are removed on downgrade and
 recreated on upgrade. The `admin` schema itself is deliberately left in place —
 `DROP SCHEMA` would take anything a later migration put beside the table.
+
+---
+
+## 6.8 User Management — A64-024.3
+
+**Read-only, and that is the decision rather than an omission.**
+
+### Why no mutations
+
+§9 of A64-024.3 requires a security-sensitive admin mutation to produce an
+audit entry. `admin.audit_entry` is specified in `database.md` §10.4 and
+**is not built** — A64-024.1 created `role_assignment` alone. An unaudited
+deactivation is exactly what §8 says to stop before, so this phase reads and
+A64-024.8 unlocks the writes.
+
+No deactivate button, no role grant control, no password action, no
+deletion. §7 is explicit that a Users page must not grow a
+privilege-escalation button merely because it exists; roles are granted by
+`python -m app.operator.admin` (§5).
+
+### API
+
+    GET /api/v1/admin/users            list and search
+    GET /api/v1/admin/users/{user_id}  one account
+
+Both name `CurrentAdmin`, so the guard is visible in each signature.
+`Cache-Control: no-store` on both.
+
+| Concern | Behaviour |
+| --- | --- |
+| Search | **Prefix** on username *or* email. Both are covered by unique btree indexes; substring on email cannot use one and would be a sequential scan per keystroke |
+| Filters | `is_active`, `is_verified`. An **admin-role filter is deliberately absent** — role lives in another schema, so filtering it means a cross-schema join (DB-03 forbids) or post-filtering that breaks the keyset. It is displayed instead |
+| Pagination | Keyset on `(created_at, id)` — `ix_user__created_at_id` exists for it, and the `id` tiebreak is what makes the ordering total. Default 25, max 50 |
+| Total count | **None.** An operator needs "are there more"; a count is a sequential scan per page |
+| Query shape | One page = **two queries**: the accounts, then one whole-set read of administrators. Never per row |
+
+### Fields exposed, and why
+
+`id`, `username`, `display_name`, `email`, `is_active`, `is_verified`,
+`created_at`, `is_admin`, and on the detail `admin_role_granted_at`.
+
+`email` is deliberate — an operator's starting point is a support request,
+and omitting it would push them to `psql`, which is a worse place for this
+data to be read.
+
+Absent, and unreachable through the port beneath: password hash, refresh and
+access tokens, OTP material, sessions, provider responses. `_to_admin_record`
+maps field by field rather than by reflection, so a new column on `UserModel`
+does not silently widen this.
+
+**Rating summaries are not included.** §6 admits them "if cheap" and they are
+not: `RatingReader` batches on `(player, key)` pairs, so a detail page would
+first have to enumerate every `variant × speed_class` the product offers —
+product knowledge this router has no business holding.
+
+### Console
+
+`/users` replaces the placeholder; `/users/$userId` is a real route rather
+than a modal. Search and filters live in the URL, so a filtered view is a
+link an operator can send and the back button works. Search is debounced and
+every superseded request is **aborted** — without that a slow first response
+can land after a fast second and repaint stale rows.
+
+A table above the breakpoint and the same rows as cards below it. Nothing is
+hidden at either width.
 
 ---
 

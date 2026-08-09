@@ -9,6 +9,7 @@ import {
   type ModerationCategory,
 } from "@/shared/api/client";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
+import { ErrorNotice } from "@/shared/ui/error-notice";
 
 /**
  * One account — A64-024.3 §13.
@@ -88,11 +89,7 @@ export function UserDetailPage() {
       </p>
 
       {state === "loading" && <p role="status">{t("users.loading")}</p>}
-      {state === "error" && (
-        <p role="alert" className="error">
-          {t("users.error")}
-        </p>
-      )}
+      {state === "error" && <ErrorNotice message={t("users.error")} />}
 
       {state === "ready" && user !== null && (
         <>
@@ -178,10 +175,15 @@ export function UserDetailPage() {
                 `/matches`'s `validateSearch` takes `participant`. No
                 guessed query strings — a link the destination ignores is a
                 filter an operator believes is applied. */}
-            <p>
+            <p className="detail-links">
               <Link to="/matches" search={{ participant: user.id }}>
                 {t("users.viewMatches")}
               </Link>
+              {/* The restrictions list, not this account's restriction —
+                  the effective one is already above. This is where an
+                  operator goes to see the whole picture, and it is the
+                  console that owns the history. */}
+              <Link to="/moderation">{t("users.viewModeration")}</Link>
             </p>
 
             <ModerationActions

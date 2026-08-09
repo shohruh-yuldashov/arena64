@@ -8,6 +8,8 @@ import {
   type ModerationCategory,
 } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
+import { ErrorNotice } from "@/shared/ui/error-notice";
+import { PageHeader } from "@/shared/ui/page-header";
 import { Pagination } from "@/shared/ui/pagination";
 import { useCursorPages } from "@/shared/ui/use-cursor-pages";
 
@@ -75,8 +77,7 @@ export function ModerationPage() {
 
   return (
     <>
-      <h2>{t("moderation.title")}</h2>
-      <p className="muted">{t("moderation.lede")}</p>
+      <PageHeader title={t("moderation.title")} description={t("moderation.lede")} />
 
       <div className="filters">
         <p className="field">
@@ -93,11 +94,7 @@ export function ModerationPage() {
       </div>
 
       {pages.state === "loading" && <p role="status">{t("moderation.loading")}</p>}
-      {pages.state === "error" && (
-        <p role="alert" className="error">
-          {t("moderation.error")}
-        </p>
-      )}
+      {pages.state === "error" && <ErrorNotice message={t("moderation.error")} />}
       {pages.state === "ready" && pages.rows.length === 0 && (
         <>
           <p role="status">{t("moderation.empty")}</p>

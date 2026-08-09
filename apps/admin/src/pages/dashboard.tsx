@@ -8,6 +8,8 @@ import {
   fetchDashboard,
 } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
+import { ErrorNotice } from "@/shared/ui/error-notice";
+import { PageHeader } from "@/shared/ui/page-header";
 
 /**
  * The operator's first screen — A64-024.9.
@@ -98,15 +100,10 @@ export function DashboardPage() {
 
   return (
     <>
-      <h2>{t("dashboard.title")}</h2>
-      <p className="muted">{t("dashboard.lede")}</p>
+      <PageHeader title={t("dashboard.title")} description={t("dashboard.lede")} />
 
       {state === "loading" && <p role="status">{t("dashboard.loading")}</p>}
-      {state === "error" && (
-        <p role="alert" className="error">
-          {t("dashboard.error")}
-        </p>
-      )}
+      {state === "error" && <ErrorNotice message={t("dashboard.error")} />}
 
       {state === "ready" && data !== null && (
         <>
@@ -124,11 +121,7 @@ export function DashboardPage() {
             </span>
           </p>
 
-          {refreshFailed && (
-            <p role="alert" className="error">
-              {t("dashboard.error")}
-            </p>
-          )}
+          {refreshFailed && <ErrorNotice message={t("dashboard.error")} />}
 
           <section>
             <h3>{t("dashboard.sectionOverview")}</h3>

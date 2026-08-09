@@ -3,6 +3,8 @@ import { useCallback, useEffect, useState } from "react";
 
 import { type AdminUserSummary, fetchUsers, type UserQuery } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
+import { ErrorNotice } from "@/shared/ui/error-notice";
+import { PageHeader } from "@/shared/ui/page-header";
 import { Pagination } from "@/shared/ui/pagination";
 import { useCursorPages } from "@/shared/ui/use-cursor-pages";
 
@@ -95,7 +97,7 @@ export function UsersPage() {
 
   return (
     <>
-      <h2>{t("users.title")}</h2>
+      <PageHeader title={t("users.title")} />
 
       <div className="filters">
         <p className="field">
@@ -141,11 +143,7 @@ export function UsersPage() {
 
       {pages.state === "loading" && <p role="status">{t("users.loading")}</p>}
 
-      {pages.state === "error" && (
-        <p role="alert" className="error">
-          {t("users.error")}
-        </p>
-      )}
+      {pages.state === "error" && <ErrorNotice message={t("users.error")} />}
 
       {pages.state === "ready" && pages.rows.length === 0 && (
         <>

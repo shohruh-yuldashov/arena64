@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import { type AdminMatchDetail, fetchMatch } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
+import { ErrorNotice } from "@/shared/ui/error-notice";
 
 /**
  * One match — A64-024.4 §14.
@@ -53,11 +54,7 @@ export function MatchDetailPage() {
       </p>
 
       {state === "loading" && <p role="status">{t("matches.loading")}</p>}
-      {state === "error" && (
-        <p role="alert" className="error">
-          {t("matches.error")}
-        </p>
-      )}
+      {state === "error" && <ErrorNotice message={t("matches.error")} />}
 
       {state === "ready" && match !== null && (
         <>

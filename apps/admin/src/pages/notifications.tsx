@@ -8,6 +8,8 @@ import {
   type NotificationQuery,
 } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
+import { ErrorNotice } from "@/shared/ui/error-notice";
+import { PageHeader } from "@/shared/ui/page-header";
 import { Pagination } from "@/shared/ui/pagination";
 import { useCursorPages } from "@/shared/ui/use-cursor-pages";
 
@@ -88,8 +90,7 @@ export function NotificationsPage() {
 
   return (
     <>
-      <h2>{t("notifications.title")}</h2>
-      <p className="muted">{t("notifications.lede")}</p>
+      <PageHeader title={t("notifications.title")} description={t("notifications.lede")} />
 
       <div className="filters">
         <p className="field">
@@ -119,11 +120,7 @@ export function NotificationsPage() {
       </div>
 
       {pages.state === "loading" && <p role="status">{t("notifications.loading")}</p>}
-      {pages.state === "error" && (
-        <p role="alert" className="error">
-          {t("notifications.error")}
-        </p>
-      )}
+      {pages.state === "error" && <ErrorNotice message={t("notifications.error")} />}
       {pages.state === "ready" && pages.rows.length === 0 && (
         <>
           <p role="status">{t("notifications.empty")}</p>

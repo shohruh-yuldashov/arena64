@@ -1494,10 +1494,63 @@ architecture was changed.
 
 ### Cross-links
 
-`/users/{id}` gains a link to that account's matches
-(`/matches?participant=…`), which is a parameter the destination's own
-`validateSearch` declares. No query string is guessed: a filter the
-destination ignores is one an operator believes is applied.
+`/users/{id}` links to that account's matches (`/matches?participant=…`)
+and to the restrictions console. Every parameter is one the destination's
+own `validateSearch` declares — no query string is guessed, because a
+filter the destination ignores is one an operator believes is applied.
+
+**A match does not link to its tournament**, and cannot yet. `origin`
+publishes *that* a match came from a tournament; the identifier beside it,
+`origin_ref`, is the **pairing** id rather than the tournament's, and
+`AdminMatchRecord` does not publish it at all. Resolving one to the other
+needs a lookup in `tournament`, so the link waits for a reason to add it.
+The reverse direction already exists: `AdminPairing.match_ids` takes an
+operator from a bracket node to the games it produced.
+
+### Operator workflow completion
+
+| Change | Why |
+| --- | --- |
+| Double-submit guard in the handler, not only on the button | A repeated click is harmless to the aggregate — its row lock refuses the second — and would still write two audit entries for one action. Creation is the sharper case: it has no natural idempotency, so two submissions are two tournaments |
+| A refusal names its command | The server answers `409` and nothing more, deliberately: the reason is a domain state rather than a message. Which of the three commands was refused is the only thing that distinguishes them, so the console says it |
+
+### Shared primitives
+
+Two, and only where the duplication was real:
+
+- **`PageHeader`** — seven pages wrote the same heading and lede by hand and
+  had drifted; one carried its description inside the first section.
+  `tournaments` uses its `actions` slot so the create control sits beside
+  the heading rather than under the filters, where a primary action reads
+  as part of the filter row.
+- **`ErrorNotice`** — thirteen copies of one `role="alert"` paragraph across
+  twelve files. They agreed, which is why it was worth removing before one
+  of them stopped: a dropped `role` is invisible in review and silent in
+  use.
+
+**No `StatusBadge`**, deliberately. The nine status renders are not one
+thing: some are localised phrases and some are deliberately raw identifiers
+that the console must not translate (an unknown enum member has to remain
+readable). A shared component would either force a translation that does
+not exist or be a `<span>` with a class. And there is no accessibility gap
+to close — every one of them is already text rather than colour.
+
+### The broadcast category — decided, not built
+
+The blocking question in this section is answered: an operator announcement
+becomes a **new muteable `NotificationCategory`**, not `SYSTEM`.
+
+`preference.LOCKED` holds one entry and its own comment says the narrowness
+is the point — `system` is for a matter the platform must be able to reach
+somebody about, "a password change, a moderation action, an essential
+service notice". An operator announcement is not that, and delivering it
+unmuteably would dilute the one category whose whole value is that a player
+cannot switch it off.
+
+The second blocker stands unchanged: there is no bounded fan-out for "all
+accounts". Single-recipient and selected-recipient announcements do not
+need one and are the smaller piece; a platform-wide broadcast needs a
+campaign projection, a worker and a progress record, which is its own task.
 
 ---
 

@@ -108,7 +108,8 @@
     "notAnAdmin": "Bu hisobda admin roli yo'q.",
     "userId": "Foydalanuvchi ID",
     "joined": "Ro'yxatdan o'tgan",
-    "viewMatches": "Bu hisobning o'yinlari"
+    "viewMatches": "Bu hisobning o'yinlari",
+    "viewModeration": "Barcha cheklovlar"
   },
   "matches": {
     "title": "O'yinlar",
@@ -392,7 +393,10 @@
     "refused": "Amal rad etildi — turnir bu holatda emas.",
     "failed": "Amalni bajarib bo'lmadi. Hech narsa o'zgarmadi.",
     "noActions": "Bu holat uchun amal yo'q.",
-    "noActionsHint": "Raund nashri o'yin natijalaridan kelib chiqadi; bekor qilish hali qo'llab-quvvatlanmaydi."
+    "noActionsHint": "Raund nashri o'yin natijalaridan kelib chiqadi; bekor qilish hali qo'llab-quvvatlanmaydi.",
+    "refusedOpen": "Ro'yxatni ochib bo'lmadi — turnir bu holatda emas.",
+    "refusedClose": "Ro'yxatni yopib bo'lmadi — turnir bu holatda emas.",
+    "refusedStart": "Turnirni boshlab bo'lmadi — ro'yxat yopilmagan yoki u allaqachon boshlangan."
   },
   "pagination": {
     "label": "Sahifalash",

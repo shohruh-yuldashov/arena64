@@ -108,7 +108,8 @@
     "notAnAdmin": "This account holds no admin role.",
     "userId": "User ID",
     "joined": "Joined",
-    "viewMatches": "Matches for this account"
+    "viewMatches": "Matches for this account",
+    "viewModeration": "All restrictions"
   },
   "matches": {
     "title": "Matches",
@@ -392,7 +393,10 @@
     "refused": "The action was refused — the tournament is not in that state.",
     "failed": "The action could not be completed. Nothing changed.",
     "noActions": "No action is available for this state.",
-    "noActionsHint": "Round publication follows from match results; cancellation is not supported yet."
+    "noActionsHint": "Round publication follows from match results; cancellation is not supported yet.",
+    "refusedOpen": "Registration could not be opened — the tournament is not in that state.",
+    "refusedClose": "Registration could not be closed — the tournament is not in that state.",
+    "refusedStart": "The tournament could not be started — registration is not closed, or it has already begun."
   },
   "pagination": {
     "label": "Pagination",

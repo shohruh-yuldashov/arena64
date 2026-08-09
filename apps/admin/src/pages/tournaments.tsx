@@ -8,6 +8,8 @@ import {
 } from "@/shared/api/client";
 import { CreateTournament } from "@/features/tournaments/create-tournament";
 import { useTranslation } from "@/shared/i18n";
+import { ErrorNotice } from "@/shared/ui/error-notice";
+import { PageHeader } from "@/shared/ui/page-header";
 import { Pagination } from "@/shared/ui/pagination";
 import { useCursorPages } from "@/shared/ui/use-cursor-pages";
 
@@ -83,12 +85,13 @@ export function TournamentsPage() {
 
   return (
     <>
-      <h2>{t("tournaments.title")}</h2>
-
-      {/* A64-024.5H. The created tournament is `draft`, which the default
-          list shows — so the page is re-read rather than having a row
-          spliced in from a response that carries two fields. */}
-      <CreateTournament onCreated={() => pages.reload()} />
+      {/* The create control sits beside the heading rather than below the
+          filters: it is what an operator came to this page to do, and a
+          primary action under a filter row reads as part of the filter. */}
+      <PageHeader
+        title={t("tournaments.title")}
+        actions={<CreateTournament onCreated={() => pages.reload()} />}
+      />
 
       <div className="filters">
         <p className="field">
@@ -122,11 +125,7 @@ export function TournamentsPage() {
       </div>
 
       {pages.state === "loading" && <p role="status">{t("tournaments.loading")}</p>}
-      {pages.state === "error" && (
-        <p role="alert" className="error">
-          {t("tournaments.error")}
-        </p>
-      )}
+      {pages.state === "error" && <ErrorNotice message={t("tournaments.error")} />}
       {pages.state === "ready" && pages.rows.length === 0 && (
         <>
           <p role="status">{t("tournaments.empty")}</p>

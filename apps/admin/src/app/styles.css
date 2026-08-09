@@ -504,3 +504,36 @@ dialog textarea {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+
+/* A64-024 hardening. One heading shape for every console page. */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 0 0 1.25rem;
+}
+
+.page-header h2 {
+  margin: 0;
+}
+
+.page-header p {
+  margin: 0.35rem 0 0;
+}
+
+.page-header-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* A64-024 hardening. The cross-console links on a detail page, together
+   rather than one per paragraph. */
+.detail-links {
+  display: flex;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  margin: 1rem 0 0;
+}

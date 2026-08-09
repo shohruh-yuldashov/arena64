@@ -4,6 +4,8 @@ import { useCallback } from "react";
 import { AUDIT_ACTION_LABELS, AUDIT_SUBJECT_ROUTES } from "@/features/audit/vocabulary";
 import { type AdminAuditEntry, type AuditQuery, fetchAuditEntries } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
+import { ErrorNotice } from "@/shared/ui/error-notice";
+import { PageHeader } from "@/shared/ui/page-header";
 import { Pagination } from "@/shared/ui/pagination";
 import { useCursorPages } from "@/shared/ui/use-cursor-pages";
 
@@ -150,8 +152,7 @@ export function AuditPage() {
 
   return (
     <>
-      <h2>{t("audit.title")}</h2>
-      <p className="muted">{t("audit.lede")}</p>
+      <PageHeader title={t("audit.title")} description={t("audit.lede")} />
 
       <div className="filters">
         <p className="field">
@@ -183,11 +184,7 @@ export function AuditPage() {
       </div>
 
       {pages.state === "loading" && <p role="status">{t("audit.loading")}</p>}
-      {pages.state === "error" && (
-        <p role="alert" className="error">
-          {t("audit.error")}
-        </p>
-      )}
+      {pages.state === "error" && <ErrorNotice message={t("audit.error")} />}
       {pages.state === "ready" && pages.rows.length === 0 && (
         <>
           <p role="status">{t("audit.empty")}</p>

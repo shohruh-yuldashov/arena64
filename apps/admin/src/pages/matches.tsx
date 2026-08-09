@@ -3,6 +3,8 @@ import { useCallback } from "react";
 
 import { type AdminMatchSummary, fetchMatches, type MatchQuery } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
+import { ErrorNotice } from "@/shared/ui/error-notice";
+import { PageHeader } from "@/shared/ui/page-header";
 import { Pagination } from "@/shared/ui/pagination";
 import { useCursorPages } from "@/shared/ui/use-cursor-pages";
 
@@ -87,7 +89,7 @@ export function MatchesPage() {
 
   return (
     <>
-      <h2>{t("matches.title")}</h2>
+      <PageHeader title={t("matches.title")} />
 
       <div className="filters">
         <p className="field">
@@ -151,11 +153,7 @@ export function MatchesPage() {
       </div>
 
       {pages.state === "loading" && <p role="status">{t("matches.loading")}</p>}
-      {pages.state === "error" && (
-        <p role="alert" className="error">
-          {t("matches.error")}
-        </p>
-      )}
+      {pages.state === "error" && <ErrorNotice message={t("matches.error")} />}
 
       {pages.state === "ready" && pages.rows.length === 0 && (
         <>

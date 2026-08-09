@@ -473,3 +473,34 @@ dialog textarea {
   gap: 0.5rem;
   margin: 0 0 1rem;
 }
+
+/* A64-024 hardening. Previous / page / Next — see `shared/ui/pagination`
+   on why there are no numbered jumps behind a keyset listing. */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin: 1.25rem 0 0;
+  flex-wrap: wrap;
+}
+
+.pagination button {
+  font: inherit;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 0.35rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.pagination button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pagination span {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}

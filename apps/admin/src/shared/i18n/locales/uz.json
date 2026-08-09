@@ -100,7 +100,6 @@
     "loading": "Foydalanuvchilar yuklanmoqda…",
     "error": "Foydalanuvchilarni yuklab bo'lmadi.",
     "retry": "Qayta urinish",
-    "more": "Ko'proq yuklash",
     "back": "Foydalanuvchilarga qaytish",
     "detailTitle": "Hisob",
     "sectionAccount": "Hisob",
@@ -108,9 +107,7 @@
     "grantedAt": "Rol berilgan",
     "notAnAdmin": "Bu hisobda admin roli yo'q.",
     "userId": "Foydalanuvchi ID",
-    "joined": "Ro'yxatdan o'tgan",
-    "loadingMore": "Yuklanmoqda…",
-    "moreError": "Ko'proq yuklab bo'lmadi. Yuqoridagi ro'yxat o'zgarmadi."
+    "joined": "Ro'yxatdan o'tgan"
   },
   "matches": {
     "title": "O'yinlar",
@@ -133,9 +130,6 @@
     "emptyHint": "Boshqa filtrlarni sinab ko'ring.",
     "loading": "O'yinlar yuklanmoqda…",
     "error": "O'yinlarni yuklab bo'lmadi.",
-    "more": "Ko'proq yuklash",
-    "loadingMore": "Yuklanmoqda…",
-    "moreError": "Ko'proq yuklab bo'lmadi. Yuqoridagi ro'yxat o'zgarmadi.",
     "back": "O'yinlarga qaytish",
     "sectionMatch": "O'yin",
     "sectionParticipants": "Ishtirokchilar",
@@ -180,9 +174,6 @@
     "emptyHint": "Boshqa filtrlarni sinang.",
     "loading": "Turnirlar yuklanmoqda…",
     "error": "Turnirlarni yuklab bo'lmadi.",
-    "more": "Ko'proq yuklash",
-    "loadingMore": "Yuklanmoqda…",
-    "moreError": "Ko'proq yuklab bo'lmadi. Yuqoridagi ro'yxat o'zgarmadi.",
     "back": "Turnirlarga qaytish",
     "overview": "Umumiy",
     "registration": "Ro'yxatdan o'tish",
@@ -237,9 +228,6 @@
     "error": "Audit jurnalini yuklab bo'lmadi.",
     "empty": "Yozuv topilmadi.",
     "emptyHint": "Filtrlarni o'zgartirib ko'ring.",
-    "more": "Ko'proq yuklash",
-    "loadingMore": "Yuklanmoqda…",
-    "moreError": "Ko'proq yuklab bo'lmadi. Yuqoridagi ro'yxat o'zgarmadi.",
     "actionRoleGrant": "admin roli berdi",
     "actionRoleRevoke": "admin rolini olib tashladi",
     "outcomeSucceeded": "Bajarildi",
@@ -260,9 +248,6 @@
     "emptyHint": "Hozircha hech kim cheklanmagan.",
     "loading": "Cheklovlar yuklanmoqda…",
     "error": "Cheklovlarni yuklab bo'lmadi.",
-    "more": "Ko'proq yuklash",
-    "loadingMore": "Yuklanmoqda…",
-    "moreError": "Ko'proq yuklab bo'lmadi. Yuqoridagi ro'yxat o'zgarmadi.",
     "showAll": "Tarixni ham ko'rsatish",
     "showEffective": "Faqat amaldagilar",
     "colAccount": "Hisob",
@@ -316,9 +301,6 @@
     "error": "Bildirishnomalarni yuklab bo'lmadi.",
     "empty": "Bildirishnoma topilmadi.",
     "emptyHint": "Filtrlarni o'zgartirib ko'ring.",
-    "more": "Ko'proq yuklash",
-    "loadingMore": "Yuklanmoqda…",
-    "moreError": "Ko'proq yuklab bo'lmadi. Yuqoridagi ro'yxat o'zgarmadi.",
     "filterRecipient": "Qabul qiluvchi",
     "recipientPlaceholder": "Hisob ID",
     "filterScope": "Ko'rinish",
@@ -410,5 +392,12 @@
     "failed": "Amalni bajarib bo'lmadi. Hech narsa o'zgarmadi.",
     "noActions": "Bu holat uchun amal yo'q.",
     "noActionsHint": "Raund nashri o'yin natijalaridan kelib chiqadi; bekor qilish hali qo'llab-quvvatlanmaydi."
+  },
+  "pagination": {
+    "label": "Sahifalash",
+    "previous": "← Oldingi",
+    "next": "Keyingi →",
+    "page": "Sahifa {page}",
+    "loading": "Yuklanmoqda…"
   }
 }

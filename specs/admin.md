@@ -866,6 +866,204 @@ reasoning, the case or the deciding administrator reaches a client.
 
 ---
 
+## 6.13 Notification Operations — A64-024.7
+
+An operational view of the notification system, and **one** privileged
+operation.
+
+### What this is not, and cannot become
+
+No composer, no broadcast, no campaign, no template, no segmentation, no
+schedule, no recipient picker, no payload field, no arbitrary URL. There is
+no endpoint on this platform that creates a notification from an
+administrative request, and the console has no control that implies one.
+
+That is not restraint for its own sake: a notification exists because a
+**source event** happened, and its recipients are named by that event
+(`specs/notifications.md`). An admin-composed notification would be a
+durable row with no source event — unexplainable to the person who received
+it and unattributable in the outbox.
+
+### The authoritative model
+
+| Record | Role |
+| --- | --- |
+| `notifications.notification` | The durable fact. Unique on `(recipient_id, source_event_id, type)` |
+| `notifications.notification_push_delivery` | One row **per device**, PK `(notification_id, subscription_id)` |
+
+The two are separate, and every property below follows from that: a retry
+touches the delivery and can never produce a second notification.
+
+### Delivery-state semantics — stated exactly
+
+There is **no `DELIVERED` meaning the person saw it**, and the console never
+says one. `domain.push_delivery` is explicit: `SENT` means a push service
+accepted the request — "the device may be asleep, the browser closed, the
+notification dismissed unread. Nothing downstream of this platform reports
+back."
+
+| Status | Meaning |
+| --- | --- |
+| `pending` | Owed. `next_attempt_at` says when |
+| `sent` | A push service **accepted** the request. Rendered "accepted by the push service" |
+| `skipped` | Deliberately not sent; the outcome says why |
+| `failed` | Abandoned — a permanent rejection or the attempt limit |
+
+Outcomes are the platform's own bounded labels, never a vendor's error text,
+which is what makes them safe to render and safe on a metric.
+
+### API
+
+    GET  /api/v1/admin/notifications
+    GET  /api/v1/admin/notifications/{notification_id}
+    POST /api/v1/admin/notifications/{notification_id}/deliveries/{subscription_id}/retry
+
+The mutation is spelled for the **delivery**. A route named
+`/notifications/{id}/resend` would describe a capability this platform
+deliberately does not have.
+
+| Concern | Behaviour |
+| --- | --- |
+| Guard | `CurrentAdmin` on every route, asserted against the route table |
+| Request body | **None on any route**, including the mutation — there is nothing to decide |
+| Filters | `recipient_id`, `failed_push_only` — both index-backed |
+| Pagination | Keyset on `(created_at, id)`, default 25, max 50, no total count |
+| Query shape | List: 3 statements — the page, one delivery batch, one account batch |
+| Caching | `Cache-Control: no-store` |
+
+**Deliberately absent filters:** type, category and a time range. None has an
+index on `notification`, so each would be a sequential scan that gets slower
+every day. An operator's starting point is a person or a failure, and both
+are offered. There is no free-text search and nothing to search — no rendered
+text is stored, and the payload is typed JSON whose shape varies by type.
+
+### Indexes added
+
+Two, no columns and no data change:
+
+| Index | Serves |
+| --- | --- |
+| `ix_notification__created_at_id` | The console's default page. `ix_notification__recipient_recent` leads with `recipient_id` and cannot order an unfiltered list |
+| `ix_notification_push_delivery__failed` | `failed_push_only`. Partial on `failed` — the exact complement of `…__due`, which is partial on `pending` |
+
+No `admin_retry` column and no new state: a retry is the existing row
+returning to `pending`, which the delivery model already represents.
+
+### The retry decision — the ten conditions
+
+Retry ships, and only because every condition held. Each is structural
+rather than checked:
+
+| # | Condition | How it holds |
+| --- | --- | --- |
+| 1 | Targets an existing authoritative row | The port takes `(notification_id, subscription_id)` — the delivery's own PK |
+| 2 | Recipient cannot change | `recipient_id` is on the row and is never written |
+| 3 | Type/payload cannot change | The payload is derived from the notification at send time; nothing stores or accepts one |
+| 4 | Target cannot change | It belongs to the notification, which is untouched |
+| 5 | Bounded | See below |
+| 6 | Permanent failures not retried | The `WHERE` admits one outcome |
+| 7 | No second durable notification | The operation cannot reach the notification table |
+| 8 | Duplicates prevented or acceptable | An exhausted delivery was never accepted by a push service, and the in-app row is untouched, so nothing duplicates in the inbox |
+| 9 | Auditable | Same transaction as the update |
+| 10 | Race-safe | A guarded `UPDATE`; terminal rows are invisible to the worker's claim |
+
+### Exactly one outcome is retryable
+
+`attempts_exhausted` — the push service was unreachable or erroring for the
+whole retry curve. An outage, and the one case where one more attempt is the
+right operator action.
+
+| Refused | Why |
+| --- | --- |
+| `permanent_failure` | "Retrying is asking the same question and being told no again" |
+| `subscription_gone` | The device is gone and that outcome revoked the subscription. Nowhere to send |
+| `skipped_preference` | **The recipient muted this category.** A retry here would be an administrator overriding somebody's stated choice |
+| every other `skipped_*` | Nothing failed |
+| `pending` | Already owed; the worker has it |
+| `sent` | Accepted. Nothing to retry |
+
+The rule lives in the `UPDATE`'s `WHERE`, so a hand-made request gets the
+same `409` the console's hidden button would have prevented.
+
+### Bounded without a new counter
+
+`attempt_count` is **not** reset. The worker's cap is applied *after* the
+attempt it grants, so a re-armed row gets exactly **one** more real attempt
+and returns to terminal by the existing mechanism.
+
+And while it is `pending` it is no longer eligible — so a second retry is
+refused until a worker has settled it. Repeated clicking is a conflict, not a
+storm, and the conflict is the database's rather than a disabled button's.
+
+### Preference interaction
+
+**A retry cannot bypass a preference, and does not need a rule saying so.**
+The worker reads the recipient's push preference at *send* time
+(`specs/notifications.md` §14), so a re-armed row goes through the same check
+as any other: a recipient who muted the category since the original attempt
+gets `skipped_preference` rather than a push. The operation does not send
+anything, so there is nothing for it to override.
+
+### Concurrency
+
+| Race | Resolution |
+| --- | --- |
+| Two administrators | The guarded `UPDATE` matches for one; the other changes nothing and gets `409` |
+| Administrator vs worker | A terminal row is invisible to `claim_due`, so nothing can be in flight when the retry runs |
+| Retry then worker | The claim spends the attempt the retry bought — asserted end to end against the real claim query |
+
+### Audit
+
+`notification.delivery.retry`, subject type `notification`, subject ref the
+notification id. Written in the **same transaction** as the guarded update:
+the re-armed delivery and its entry commit together or neither does.
+
+Metadata is small and structured — the device id, the previous status, and
+how many attempts were already spent. **No payload, no endpoint, no push
+keys, no recipient profile.**
+
+Refusals follow §6.12's policy unchanged and are not re-decided: an
+authenticated administrator refused by the eligibility rule writes a `FAILED`
+entry in its own transaction; anybody the guard rejected writes only a
+security log.
+
+### Sensitive-data boundary
+
+Never exposed, and with no field to arrive in: the push endpoint, `p256dh`,
+`auth`, any VAPID material, any provider response body, the notification
+payload, the recipient's email. A device is described by three operational
+timestamps — first seen, last seen, revoked — which answer "is this device
+still real" and could not be replayed anywhere.
+
+`source_event_id` **is** exposed, deliberately: "the event never fired" and
+"the notification was never written" are different failures, and it is the
+only field that tells them apart.
+
+### Console
+
+`/notifications` replaces its placeholder; `/notifications/{id}` shows every
+device. Table above the breakpoint, cards below, `Load more` on the cursor.
+
+The retry lives on the **detail**, beside the device it addresses, and
+confirms in the same accessible `<dialog>` §6.12 introduced. The dialog names
+the notification and the recipient and states the consequence — "the existing
+delivery is queued once more; no new notification is created". There is no
+payload field and no recipient field, because the API has neither.
+
+Status is text, never colour alone. An unknown status or outcome renders as
+its identifier rather than blank: the backend outlives the console reading
+it.
+
+### Observability
+
+None added. The delivery worker's existing metrics already carry status and
+outcome as bounded labels, and a per-notification or per-user counter would
+be exactly the high-cardinality label those metrics were designed to avoid.
+The retry is recorded where a privileged action belongs — the audit trail —
+and in one `INFO` log line.
+
+---
+
 ## 7. The audit invariant
 
 **Built by A64-024.8** — see §6.11. The rule it exists to keep:
@@ -886,9 +1084,15 @@ party being audited.
 
 ## 8. Deferred to later A64-024.x tasks
 
-Dashboard statistics, notification operations, analytics, infrastructure
-monitoring, anti-cheat surfaces, support tooling, and the final visual
-design. Reads ship in §6.8–§6.11; account restrictions ship in §6.12.
+Dashboard statistics, analytics, infrastructure monitoring, anti-cheat
+surfaces, support tooling, and the final visual design. Reads ship in
+§6.8–§6.11; account restrictions ship in §6.12; notification operations ship
+in §6.13.
+
+Within notifications specifically, deliberately unsupported and not deferred:
+administrative sending of any kind — broadcast, campaign, template,
+segmentation, scheduled or one-off. A notification exists because a source
+event named its recipients; an admin-composed one would have none.
 
 Within moderation specifically, deferred and named: player reports and a
 case queue, evidence, appeals, the `muted` and `matchmaking_restricted`

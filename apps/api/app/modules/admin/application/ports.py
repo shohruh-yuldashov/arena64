@@ -230,6 +230,20 @@ class SanctionRepository(Protocol):
         """
         ...
 
+    async def count_effective(self, *, at: datetime) -> int:
+        """How many restrictions are in force at `at` — A64-024.9.
+
+        One statement, backed by `ix_sanction__player_expiry`: the partial
+        predicate (`lifted_at IS NULL`) is the index's own, and the instant
+        comparison is a filter over the handful of rows it returns.
+
+        A count rather than a page because the dashboard needs a number and
+        the console needs the rows — asking `page` for a count would read
+        columns nothing renders, and would be bounded by the page size
+        rather than by reality.
+        """
+        ...
+
     async def page(
         self, *, effective_at: datetime | None, limit: int, cursor: str | None
     ) -> SanctionPage:

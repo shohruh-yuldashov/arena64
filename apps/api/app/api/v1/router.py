@@ -29,6 +29,7 @@ from app.api.v1.health import health_router
 from app.core.constants import API_V1_PREFIX
 from app.modules.admin.presentation.router import admin_router
 from app.modules.admin.presentation.routers.audit import admin_audit_router
+from app.modules.admin.presentation.routers.dashboard import admin_dashboard_router
 from app.modules.admin.presentation.routers.matches import admin_matches_router
 from app.modules.admin.presentation.routers.moderation import admin_moderation_router
 from app.modules.admin.presentation.routers.notifications import admin_notifications_router
@@ -83,6 +84,10 @@ v1_router.include_router(admin_moderation_router)
 # push service never accepted. There is no send: nothing on this router can
 # create a notification, choose a recipient or supply a payload.
 v1_router.include_router(admin_notifications_router)
+# A64-024.9. The operator overview — six facts and the ten most recent
+# privileged actions, composed through each module's published read port.
+# Read-only: every card links to the console that owns the action.
+v1_router.include_router(admin_dashboard_router)
 
 # **Before `users_router`, and the order is load-bearing.** `GET /users/search`
 # and `GET /users/{user_id}` both match the path `/users/search`; Starlette

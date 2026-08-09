@@ -3,10 +3,10 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-PRODUCT-EXPERIENCE` |
-| **Status** | Draft — audit complete (A64-025.1), redesign not started |
+| **Status** | Draft — audit complete (A64-025.1); shell and home rebuilt (A64-025.3) |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-08-10 — A64-025.1, the current-state audit |
+| **Last updated** | 2026-08-10 — A64-025.3, the navigation model |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -322,7 +322,7 @@ who clicks nothing — is the product telling them it does not exist yet. Nothin
 to `/play` from it.
 
 *Affected surface:* landing, first-run experience, and every share of the root URL.
-*Future task:* A64-025.3 (Navigation & App Shell), as its first change.
+**Fixed by A64-025.3** — see §9.1. `src/features/form-demo` was deleted with it.
 
 ### P1 — a primary flow is seriously degraded
 
@@ -332,7 +332,7 @@ five buttons, and `app-shell` puts them in a `h-14` row beside the brand,
 `NotificationBell` and `ThemeToggle`. The only responsive rule is
 `hidden … sm:inline` on the user's name. At 360px this is eight interactive elements
 and a wordmark in one row, with Uzbek labels ("O'ynash", "Turnirlar", "Do'stlar").
-*Future task:* A64-025.3.
+**Fixed by A64-025.3** — see §9.4, measured at 360, 768 and 1280.
 
 **P1-2 — The clock has no low-time state.**
 `ClockFace` renders identically at 60 s and at 2 s. Arena64 offers `bullet_1_0`. A
@@ -352,18 +352,18 @@ most, the clock can be off-screen.
 | P2-1 | Bracket has no visual parent-child relationship, though the relationship is authoritative and already on the wire (§3.6) | A64-025.8 |
 | P2-2 | Password-reset email is English-only and plain-text-only while the other two are trilingual HTML (§3.10) | A64-025.10 |
 | P2-3 | No shared empty/error/loading component — 74 hand-rolled live regions (§3.9) | A64-025.2 |
-| P2-4 | No `aria-current` anywhere in navigation | A64-025.3 |
+| ~~P2-4~~ | ~~No `aria-current` anywhere in navigation~~ | **Fixed** — §9.3 |
 | P2-5 | Palette has no brand colour and no game-semantic colours (§3.2) | A64-025.2 |
-| P2-6 | `/games/history`, `/challenges`, `/search` are reachable only from inside other pages or by URL | A64-025.3 |
+| ~~P2-6~~ | ~~`/games/history` had no navigation entry~~ | **Fixed** — §9.2. `/challenges` and `/search` stay inside the Social section, which is where they belong |
 
 ### P3 — polish and consistency
 
 | # | Finding | Task |
 | --- | --- | --- |
-| P3-1 | Brand wordmark is a `<span>`, not a link home | A64-025.3 |
-| P3-2 | "Skip to content" is hardcoded English | A64-025.3 |
-| P3-3 | `session-menu` is misnamed for what it does | A64-025.3 |
-| P3-4 | `apps/web/src/features/form-demo` ships in the production bundle | A64-025.3 (with P0-1) |
+| ~~P3-1~~ | ~~Brand wordmark is a `<span>`~~ | **Fixed** — §9.4 |
+| ~~P3-2~~ | ~~Hardcoded English in the shell~~ | **Fixed** — the skip link and the theme group are localised |
+| ~~P3-3~~ | ~~`session-menu` is misnamed~~ | **Fixed** — it is `AccountMenu` and holds only the account, §9.5 |
+| ~~P3-4~~ | ~~`form-demo` ships in the production bundle~~ | **Fixed** — deleted |
 | P3-5 | No `prefers-reduced-motion` handling — correct today, wrong once motion is added | A64-025.12 |
 | P3-6 | Eight primitives; Badge, Select, Tabs, Tooltip, Dropdown, Switch re-authored per feature | A64-025.2 |
 
@@ -465,7 +465,114 @@ tokens.
 
 | # | Question | Blocks |
 | --- | --- | --- |
-| OQ-1 | What does `/` show an **anonymous** visitor — a marketing landing page, or a redirect to `/login`? | A64-025.3 |
+| ~~OQ-1~~ | ~~What does `/` show an anonymous visitor?~~ | **Closed by A64-025.3** — `/` is the authenticated player's product home; the route keeps its existing lack of a guard, so an anonymous visitor gets a signed-out home offering sign-in and registration. A public marketing page is a separate surface for a separate audience and is not this epic's |
 | OQ-2 | What is Arena64's brand colour? A designer's call, not an engineer's | A64-025.2 |
 | OQ-3 | Should the mobile game room pin the clocks above the board, or overlay them on it? | A64-025.6 |
 | OQ-4 | Does the bracket keep horizontal scroll on mobile, or switch to a round-at-a-time view below `sm:`? | A64-025.8 |
+
+---
+
+## 9. The navigation model — A64-025.3
+
+### 9.1 `/` is the product home
+
+The authenticated player's home, not a marketing page. The route keeps the
+guard it always had — none — so an anonymous visitor is not redirected; they
+get a signed-out home whose only offers are sign-in and registration. That
+closes OQ-1 and leaves a public landing page as a separate future surface,
+because it is written for a different reader and nobody has written its copy.
+
+The page issues **no request**. Every word comes from the session already in
+memory and every destination is a route that already exists, so there is no
+loading and no error state to design. §3 of A64-025.3 forbids inventing a
+dashboard — an online count, a streak, a recommended tournament — and the
+reason is that a plausible number the server never sent is worse than an
+empty page.
+
+What it renders, signed in: a greeting, one large `Play` call to action, and
+four cards — Tournaments, Challenges, Friends, Match history. Signed out: the
+product name and the two authentication actions, and nothing else, because
+every other destination is behind the verified-email guard and a link that
+redirects to sign-in is a link that lies.
+
+### 9.2 Four sections
+
+| Section | Link | Owns | Answers |
+| --- | --- | --- | --- |
+| Play | `/play` | `/play`, `/games/$matchId`, `/games/$matchId/replay` | Where do I start a game? |
+| Tournaments | `/tournaments` | `/tournaments`, `/tournaments/$tournamentId` | Where are the tournaments? |
+| Social | `/friends` | `/friends`, `/friends/requests`, `/friends/blocked`, `/challenges`, `/search`, `/players/$username` | Where are my friends and challenges? |
+| History | `/games/history` | `/games/history` | Where are my past games? |
+
+Four, not twenty-five. A section owns routes its link does not point at:
+`SocialNav` already carried requests, challenges, blocked and search, so
+`/search` is not a top-level destination — it is where you look for a person,
+which is what that whole section is about.
+
+`/games/history` had no navigation entry anywhere and was reachable only from
+`/profile`. It has one now.
+
+### 9.3 Active route
+
+`useActiveSection` reads **the route ids the router matched**
+(`useRouterState(state => state.matches.map(m => m.routeId))`) and asks which
+section owns one of them. Not a pathname comparison, and not
+`matchRoute({ to: "/games/$matchId" })` — that was tried and is wrong,
+because it answers "could this pattern match" and `$matchId` swallows the
+literal `history`. The matched ids answer "what did match", which is the
+question, and the router has already ranked a static segment above a
+parameter.
+
+The ids are typed from `RouteIds<RegisteredRouter["routeTree"]>`, so a
+section claiming a route that does not exist is a compile error rather than a
+section that silently never highlights.
+
+The current link carries `aria-current="page"` and a weight change, never
+colour alone. TanStack's own automatic `aria-current` is not relied on: a
+section is current for routes its link does not point at, so the attribute is
+set from `useActiveSection` and is the only source.
+
+### 9.4 Desktop and mobile shells
+
+Desktop: wordmark, the four sections, then the bell, the account controls and
+the theme group at the far end. Three named groups — `Brand`,
+`PrimaryNav`, `AccountMenu` — because when they were one component nobody
+adding a section knew where to put it.
+
+Below `md` the sections move into a panel behind a menu trigger, and the
+header is a trigger, the wordmark, the bell, the avatar and the theme group.
+The panel is the existing Radix `Dialog` with a sheet's geometry applied as a
+`className`, which brings the focus trap, focus return, `Escape` and the
+trigger's `aria-expanded` without a new dependency. It closes on navigation.
+
+Measured in Chromium at 360, 768 and 1280: **zero horizontal overflow** on
+the page and in the header, signed in and signed out.
+
+### 9.5 The account boundary
+
+`SessionMenu` became `AccountMenu` and lost the product. What is left is the
+account: the avatar and name linking to `/profile` — from which Settings is
+reached — and sign-out. On a phone those two plus Settings live in the panel
+under their own `Account` landmark, so the panel does not present the account
+as a fifth product section.
+
+Sign-out semantics are unchanged, including that a failed call has already
+cleared the device before it throws.
+
+### 9.6 Deferred on purpose
+
+Visual-token work is A64-025.2's and none of it happened here: no brand
+colour, no new palette, no typography or radius change. The header uses the
+tokens that already existed.
+
+Two things measured here are recorded rather than fixed, because they belong
+to the primitive layer:
+
+- the theme group's three buttons are 36px tall where the rest of the shell
+  is 44px — `Button`'s `size="icon"` sets it, and resizing a primitive is
+  A64-025.2's call;
+- the English theme labels are now `Light`, `Dark`, `System` rather than
+  `Light theme` — the translations that already existed are shorter than the
+  hardcoded English they replaced. They sit inside a group named "Toggle
+  theme", which carries the context, but a longer accessible name would be
+  better and needs new keys.

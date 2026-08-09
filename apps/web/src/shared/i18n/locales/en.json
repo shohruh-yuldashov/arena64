@@ -9,7 +9,22 @@
     "title": "Arena64",
     "description": "Competitive online checkers — realtime matches, ratings, and leaderboards.",
     "openMenu": "Open menu",
-    "closeMenu": "Close menu"
+    "closeMenu": "Close menu",
+    "primaryNav": "Main",
+    "accountNav": "Account",
+    "navDescription": "Arena64 sections and your account.",
+    "home": "Arena64 — home",
+    "skipToContent": "Skip to content"
+  },
+  "home": {
+    "greeting": "Hello, {name}",
+    "subtitle": "Ready to play? Find an opponent and start.",
+    "playCta": "Play",
+    "moreTitle": "What else is here",
+    "tournamentsBody": "Open tournaments, and how to enter them.",
+    "challengesBody": "Challenge a friend to a game, or answer one.",
+    "friendsBody": "Friends, requests and player search.",
+    "historyBody": "Your past games and their replays."
   },
   "error": {
     "title": "Something went wrong",

@@ -38,7 +38,10 @@ describe("the theme", () => {
     // "system" resolves to light and the class starts absent.
     expect(document.documentElement).not.toHaveClass("dark");
 
-    await user.click(await screen.findByRole("button", { name: "Dark theme" }));
+    // Localised in A64-025.3: the control had hardcoded English labels while
+    // the translations for them already existed and went unused.
+    const darkButton = /^(Dark|Qorong'i|Тёмная)$/;
+    await user.click(await screen.findByRole("button", { name: darkButton }));
 
     expect(document.documentElement).toHaveClass("dark");
     expect(document.documentElement.style.colorScheme).toBe("dark");
@@ -46,7 +49,7 @@ describe("the theme", () => {
     // The current choice is announced, not merely coloured differently —
     // three buttons that look alike to a screen reader are three buttons
     // with no state.
-    expect(screen.getByRole("button", { name: "Dark theme" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: darkButton })).toHaveAttribute(
       "aria-pressed",
       "true",
     );

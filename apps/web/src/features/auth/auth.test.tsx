@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -82,7 +82,14 @@ describe("session bootstrap", () => {
     // --- 401: anonymous. A fact, and the commonest one. ---
     mswServer.use(http.post(REFRESH, () => noSession()));
     const anonymous = renderApp();
-    expect(await screen.findByRole("link", { name: /sign in|kirish|войти/i })).toBeVisible();
+    // Scoped to the header: A64-025.3 gave the signed-out home its own
+    // sign-in call to action, so the name is no longer unique on the page.
+    // The claim here is about the *shell* reflecting an anonymous session,
+    // which is the one this file is about.
+    const anonymousHeader = await screen.findByRole("banner");
+    expect(
+      await within(anonymousHeader).findByRole("link", { name: /sign in|kirish|войти/i }),
+    ).toBeVisible();
     anonymous.unmount();
 
     // --- network failure: **neither** ---
@@ -92,11 +99,12 @@ describe("session bootstrap", () => {
     // authenticate again for nothing.
     mswServer.use(http.post(REFRESH, () => HttpResponse.error()));
     renderApp();
+    const unavailableHeader = await screen.findByRole("banner");
     await waitFor(() => {
       expect(screen.queryByText("Player One")).not.toBeInTheDocument();
     });
     expect(
-      screen.queryByRole("link", { name: /sign in|kirish|войти/i }),
+      within(unavailableHeader).queryByRole("link", { name: /sign in|kirish|войти/i }),
     ).not.toBeInTheDocument();
   });
 });

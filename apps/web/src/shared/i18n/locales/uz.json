@@ -9,7 +9,22 @@
     "title": "Arena64",
     "description": "Onlayn shashka musobaqalari — real vaqt rejimidagi o'yinlar, reyting va liderlar jadvali.",
     "openMenu": "Menyuni ochish",
-    "closeMenu": "Menyuni yopish"
+    "closeMenu": "Menyuni yopish",
+    "primaryNav": "Asosiy menyu",
+    "accountNav": "Hisob",
+    "navDescription": "Arena64 bo'limlari va hisobingiz.",
+    "home": "Arena64 — bosh sahifa",
+    "skipToContent": "Asosiy qismga o'tish"
+  },
+  "home": {
+    "greeting": "Salom, {name}",
+    "subtitle": "O'ynashga tayyormisiz? Raqib toping va boshlang.",
+    "playCta": "O'ynash",
+    "moreTitle": "Yana nimalar bor",
+    "tournamentsBody": "Ochiq turnirlarni ko'ring va ro'yxatdan o'ting.",
+    "challengesBody": "Do'stingizni o'yinga chorlang yoki chorlovga javob bering.",
+    "friendsBody": "Do'stlaringiz, so'rovlar va o'yinchi qidiruvi.",
+    "historyBody": "Oldingi o'yinlaringiz va ularning takrorlari."
   },
   "error": {
     "title": "Nimadir xato ketdi",

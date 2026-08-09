@@ -229,7 +229,11 @@ it("reads one page per request and never a profile per row", async () => {
       "list:cursor-1",
     ]),
   );
-  expect(within(await screen.findByRole("list")).getAllByRole("listitem")).toHaveLength(3);
+  // Named, like the two assertions above it: A64-025.3 put a navigation
+  // list in the shell, so "the list" is no longer unambiguous.
+  expect(
+    within(await screen.findByRole("list", { name: "Notifications" })).getAllByRole("listitem"),
+  ).toHaveLength(3);
   expect(requests).not.toContain("profile");
 
   // The last page says so rather than offering a button that fetches nothing.

@@ -27,15 +27,18 @@ window function over every match those players have ever had.
 """
 
 import logging
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, or_, select, update
+from sqlalchemy import CursorResult, literal, or_, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import ValidationError
 from app.modules.engine import EngineVersion, PlayerSide
 from app.modules.game.domain.clock import ClockState, TimeControl
 from app.modules.game.domain.draw_agreement import DrawAgreement, DrawOffer
@@ -47,6 +50,12 @@ from app.modules.game.domain.match_record import (
 )
 from app.modules.game.domain.variants import MatchOrigin
 from app.modules.game.infrastructure.models import MatchRecordModel
+from app.modules.game.public.administration import (
+    AdminMatchFilters,
+    AdminMatchPage,
+    AdminMatchRecord,
+)
+from app.modules.game.public.matches import MatchTimeControl
 
 logger = logging.getLogger(__name__)
 
@@ -699,3 +708,156 @@ def _seat_rating(
         is_provisional=is_provisional,
         speed_class=speed_class,
     )
+
+
+class SqlAlchemyAdministrativeMatchDirectory:
+    """`game.public.AdministrativeMatchDirectory` over PostgreSQL — A64-024.4.
+
+    Read-only by construction: there is no `update`, no `delete` and no
+    session flush anywhere in this class, so a compromised admin transport
+    could enumerate matches and could change none of them.
+
+    ## Ordering is the primary key
+
+    `match` is partitioned with a primary key of `(created_at, id)`
+    (`database.md` §10), so `ORDER BY created_at DESC, id DESC` and a
+    row-value keyset over the same pair are an index seek rather than a
+    sort. `created_at` alone is not unique, and a cursor on it would
+    silently skip or repeat rows across a page boundary.
+
+    ## One page is one query
+
+    Every filter is a column on the row, so nothing here post-filters and
+    nothing loops. Participant *names* are resolved by the caller in one
+    batch — see `users.public.AdministrativeUserDirectory.accounts_by_ids`
+    — because they live in another schema and a join across one is what
+    DB-03 forbids.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list_matches(
+        self, *, filters: "AdminMatchFilters", limit: int, cursor: str | None
+    ) -> "AdminMatchPage":
+        statement = select(MatchRecordModel)
+
+        if filters.status is not None:
+            statement = statement.where(MatchRecordModel.status == filters.status)
+        if filters.rated is not None:
+            statement = statement.where(MatchRecordModel.rated.is_(filters.rated))
+        if filters.variant is not None:
+            statement = statement.where(MatchRecordModel.variant == filters.variant)
+        if filters.origin is not None:
+            statement = statement.where(MatchRecordModel.origin == filters.origin)
+        if filters.participant_id is not None:
+            # Either seat. The two partial `(player_id, created_at)` indexes
+            # cover the live case; the primary key's ordering carries the
+            # rest.
+            statement = statement.where(
+                or_(
+                    MatchRecordModel.light_player_id == filters.participant_id,
+                    MatchRecordModel.dark_player_id == filters.participant_id,
+                )
+            )
+
+        if cursor is not None:
+            after = _MatchCursor.decode(cursor)
+            statement = statement.where(
+                tuple_(MatchRecordModel.created_at, MatchRecordModel.id)
+                < tuple_(literal(after.created_at), literal(after.match_id))
+            )
+
+        rows = (
+            (
+                await self._session.execute(
+                    statement.order_by(
+                        MatchRecordModel.created_at.desc(), MatchRecordModel.id.desc()
+                    ).limit(limit + 1)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        has_more = len(rows) > limit
+        page = list(rows[:limit])
+        next_cursor = (
+            _MatchCursor(created_at=page[-1].created_at, match_id=page[-1].id).encode()
+            if has_more and page
+            else None
+        )
+        return AdminMatchPage(
+            records=[_to_admin_match(row) for row in page], next_cursor=next_cursor
+        )
+
+    async def find_match(self, match_id: UUID) -> "AdminMatchRecord | None":
+        row = (
+            await self._session.execute(
+                select(MatchRecordModel).where(MatchRecordModel.id == match_id)
+            )
+        ).scalar_one_or_none()
+        return None if row is None else _to_admin_match(row)
+
+
+def _to_admin_match(row: MatchRecordModel) -> "AdminMatchRecord":
+    """One row as the published record, field by field.
+
+    Not by reflection, deliberately: a column added to `MatchRecordModel` —
+    a queue ticket id, a clock deadline, a draw-offer ply — must not
+    silently become something the admin console publishes.
+    """
+    return AdminMatchRecord(
+        match_id=row.id,
+        status=row.status,
+        variant=row.variant,
+        rated=row.rated,
+        origin=row.origin,
+        light_player_id=row.light_player_id,
+        dark_player_id=row.dark_player_id,
+        outcome=row.outcome,
+        termination_reason=row.termination_reason,
+        winner=row.winner,
+        time_control=(
+            MatchTimeControl(
+                initial_ms=row.time_control_initial_ms,
+                increment_ms=row.time_control_increment_ms or 0,
+            )
+            if row.time_control_initial_ms is not None
+            else None
+        ),
+        speed_class=row.rating_speed_class,
+        ply_number=row.ply_number,
+        created_at=row.created_at,
+        settled_at=row.settled_at,
+        ended_at=row.ended_at,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _MatchCursor:
+    """The keyset position, opaque on the wire.
+
+    Base64 of `created_at|id`. Not security — a caller may decode it — but
+    it stops a client treating the value as an offset to do arithmetic on.
+    An unparseable cursor **raises** rather than starting from the
+    beginning: "page four quietly became page one" is the bug nobody
+    reports.
+    """
+
+    created_at: datetime
+    match_id: UUID
+
+    def encode(self) -> str:
+        raw = f"{self.created_at.isoformat()}|{self.match_id}"
+        return urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+    @classmethod
+    def decode(cls, cursor: str) -> "_MatchCursor":
+        padding = "=" * (-len(cursor) % 4)
+        try:
+            raw = urlsafe_b64decode(cursor + padding).decode()
+            moment, identifier = raw.split("|", 1)
+            return cls(created_at=datetime.fromisoformat(moment), match_id=UUID(identifier))
+        except (ValueError, TypeError) as exc:
+            raise ValidationError("That page cursor could not be read.") from exc

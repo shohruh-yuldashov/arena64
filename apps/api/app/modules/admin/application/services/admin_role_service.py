@@ -208,6 +208,7 @@ class AdminRoleService:
                     "revoked_at": revoked.revoked_at.isoformat() if revoked.revoked_at else None,
                 },
             )
+            await self._unit_of_work.commit()
 
         # The log line stays and is not the record — see `AuditRecorder`. No
         # email, no username: the account id is the platform's own opaque
@@ -242,6 +243,7 @@ class AdminRoleService:
                 before={},
                 after={"role": role.value, "granted_at": assignment.granted_at.isoformat()},
             )
+            await self._unit_of_work.commit()
 
         logger.info(
             "admin_role_granted",

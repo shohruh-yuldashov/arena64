@@ -53,6 +53,20 @@ import {
 export const QUICK_MESSAGE_TTL_MS = 4000;
 
 /**
+ * How long a refusal stays on screen — A64-023.4 §7.
+ *
+ * Longer than a bubble, because a player has to *read* it and it appears
+ * after an action they took rather than beside one they watched.
+ *
+ * It expires at all because nothing else reliably clears it. `send` resets
+ * the error, but `send` returns early when the match is terminal or the
+ * socket is down — so a player rate-limited on the last move of a game
+ * would have kept "Too quick" on screen for as long as they stayed on the
+ * page. A message about a transient condition must not outlive it.
+ */
+export const QUICK_MESSAGE_ERROR_TTL_MS = 6000;
+
+/**
  * A local guard against a double-press producing two frames — §9.
  *
  * **UX only, never security.** The gateway's Redis limiter is the authority
@@ -130,6 +144,7 @@ export function useQuickMessages({
   // re-render, and clearing a replaced message's timer is bookkeeping the
   // view has no opinion about.
   const timers = useRef(new Map<Side, ReturnType<typeof setTimeout>>());
+  const errorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Whether a send is outstanding, so a shared `rate_limited` refusal can be
   // attributed to this feature rather than to the draw commands.
   const pending = useRef(false);
@@ -144,6 +159,18 @@ export function useQuickMessages({
   const clearTimers = useCallback(() => {
     for (const timer of timers.current.values()) clearTimeout(timer);
     timers.current.clear();
+    if (errorTimer.current !== null) clearTimeout(errorTimer.current);
+    errorTimer.current = null;
+  }, []);
+
+  /** Shows a refusal, and takes it away again — A64-023.4 §7. */
+  const raise = useCallback((code: GatewayErrorCode) => {
+    if (errorTimer.current !== null) clearTimeout(errorTimer.current);
+    errorTimer.current = setTimeout(() => {
+      errorTimer.current = null;
+      setError(null);
+    }, QUICK_MESSAGE_ERROR_TTL_MS);
+    setError(code);
   }, []);
 
   // Every timer dies with the component. Without this a bubble expiring
@@ -215,10 +242,10 @@ export function useQuickMessages({
           // is outstanding — see `QUICK_MESSAGE_CODES`.
           if (!QUICK_MESSAGE_CODES.has(code) && !pending.current) return;
           pending.current = false;
-          setError(code as GatewayErrorCode);
+          raise(code as GatewayErrorCode);
         }
       },
-      [matchId, show],
+      [matchId, show, raise],
     ),
   );
 
@@ -235,6 +262,8 @@ export function useQuickMessages({
       if (now - lastSentAt.current < QUICK_MESSAGE_SEND_GUARD_MS) return;
       lastSentAt.current = now;
 
+      if (errorTimer.current !== null) clearTimeout(errorTimer.current);
+      errorTimer.current = null;
       setError(null);
       pending.current = true;
       // `send`, not `request`: the gateway answers a successful quick

@@ -84,6 +84,7 @@ export function QuickMessagePicker({
 
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
+  const muteButton = useRef<HTMLButtonElement>(null);
   const items = useRef<(HTMLButtonElement | null)[]>([]);
 
   const close = useCallback((returnFocus: boolean) => {
@@ -93,8 +94,25 @@ export function QuickMessagePicker({
 
   // A terminal match closes an open picker rather than leaving a menu whose
   // items all refuse — §10.
+  //
+  // Focus moves **only if it is inside the menu** — A64-023.4 §7. A game
+  // ending while the picker is open would otherwise unmount the focused
+  // item and drop focus to `<body>`, stranding a keyboard user at the top
+  // of the document at the exact moment the result appears. The condition
+  // matters as much as the move: a player who opened the picker and then
+  // clicked the board must not have focus yanked back.
+  //
+  // It goes to the **mute** button rather than the trigger, and that is not
+  // a preference. The trigger is `disabled` by the time this runs, and a
+  // disabled button cannot hold focus — focusing it silently does nothing
+  // and leaves the player exactly where this exists to rescue them from.
+  // Mute stays enabled on a finished match (§10), so it is the nearest
+  // control that can actually receive focus.
   useEffect(() => {
-    if (disabled) setOpen(false);
+    if (!disabled) return;
+    const inside = menu.current?.contains(document.activeElement) === true;
+    setOpen(false);
+    if (inside) muteButton.current?.focus();
   }, [disabled]);
 
   // Focus the first item when the menu opens, which is what makes the
@@ -176,6 +194,7 @@ export function QuickMessagePicker({
             a label that only changed its text would leave a screen reader
             without the state itself. */}
         <Button
+          ref={muteButton}
           type="button"
           variant="ghost"
           className="min-h-11"

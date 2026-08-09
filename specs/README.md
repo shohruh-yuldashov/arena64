@@ -41,6 +41,7 @@ before implementation begins.
 | [Spectator](./spectator.md) | Live match observation, spectator joins, and delayed or restricted viewing. | Placeholder |
 | [Admin](./admin.md) | Admin authorization, the server-authoritative boundary, and the separate console. | Foundation shipped |
 | [Settings](./settings.md) | Per-player preferences covering gameplay, notifications, privacy, and appearance. | Placeholder |
+| [Product Experience](./product-experience.md) | The player-facing experience: current-state UX audit, design principles, design-system direction, and the A64-025 redesign roadmap. | Draft — audit complete |
 
 ## TODO
 

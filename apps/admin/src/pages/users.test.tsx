@@ -81,7 +81,9 @@ it("lists accounts with their status, verification and role", async () => {
   const rootRow = within(table).getByText("root").closest("tr")!;
   expect(within(rootRow).getByText(/admin/i)).toBeInTheDocument();
   // Status is text, never colour alone — §17.
-  expect(within(rootRow).getByText(/unverified|tasdiqlanmagan|не подтверждён/i)).toBeInTheDocument();
+  expect(
+    within(rootRow).getByText(/unverified|tasdiqlanmagan|не подтверждён/i),
+  ).toBeInTheDocument();
 });
 
 it("puts the search term in the URL and asks the server for it", async () => {
@@ -111,4 +113,99 @@ it("says so plainly when there is nothing to show or the read fails", async () =
   stubApi(() => null);
   renderAt("/users");
   expect(await screen.findByRole("alert")).toBeInTheDocument();
+});
+
+// --- pagination — A64-024.3H -------------------------------------------------
+
+/** A stub whose second page continues the first, as the server's would. */
+function stubPages(pages: { items: unknown[]; next_cursor: string | null }[]) {
+  const queries: string[] = [];
+  vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/auth/browser/refresh")) {
+      return Promise.resolve(json({ data: { access_token: "t" } }));
+    }
+    if (url.endsWith("/admin/me")) return Promise.resolve(json({ data: ADMIN }));
+    if (url.includes("/admin/users")) {
+      queries.push(url);
+      const cursor = new URL(url, "http://x").searchParams.get("cursor");
+      // The first page has no cursor; any cursor asks for the next one.
+      const page = cursor === null ? pages[0] : pages[1];
+      if (page === undefined) return Promise.resolve(json({}, 500));
+      return Promise.resolve(json({ data: page }));
+    }
+    return Promise.resolve(json({}, 404));
+  });
+  return queries;
+}
+
+it("appends the next page without duplicating or replacing rows", async () => {
+  // The whole point of "Load more": the rows already on screen stay, and
+  // the new ones join them in the server's order. Deduplicated on the way
+  // in — the keyset is total, so a repeat should be impossible, and the
+  // cost of being wrong is a React key collision.
+  const queries = stubPages([
+    { items: [user("alice"), user("bob")], next_cursor: "c1" },
+    // `bob` repeated deliberately: the guard must drop it.
+    { items: [user("bob"), user("carol")], next_cursor: null },
+  ]);
+  renderAt("/users");
+  await screen.findByRole("table");
+
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: /load more|ko'proq|показать ещё/i }));
+
+  await waitFor(() => expect(screen.getAllByText(/carol/).length).toBeGreaterThan(0));
+  const table = screen.getByRole("table");
+  // Three distinct rows, not four — and the first page is still there.
+  expect(within(table).getAllByRole("row")).toHaveLength(4); // header + 3
+  expect(within(table).getByText("alice")).toBeInTheDocument();
+  expect(queries.some((url) => url.includes("cursor=c1"))).toBe(true);
+
+  // The last page carries no cursor, so the control goes rather than
+  // sitting there disabled and promising something.
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("button", { name: /load more|ko'proq|показать ещё/i }),
+    ).toBeNull(),
+  );
+});
+
+it("keeps the loaded rows when a further page fails", async () => {
+  // A transient failure must not cost an operator their place in the list.
+  stubPages([{ items: [user("alice")], next_cursor: "c1" }]);
+  renderAt("/users");
+  await screen.findByRole("table");
+
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: /load more|ko'proq|показать ещё/i }));
+
+  expect(await screen.findByRole("alert")).toBeInTheDocument();
+  expect(within(screen.getByRole("table")).getByText("alice")).toBeInTheDocument();
+});
+
+it("drops the cursor and the rows when the search changes", async () => {
+  // §4: a changed query starts a new result set. Reusing a cursor would
+  // ask the server to continue a list that no longer exists.
+  const queries = stubPages([
+    { items: [user("alice")], next_cursor: "c1" },
+    { items: [user("bob")], next_cursor: null },
+  ]);
+  renderAt("/users");
+  await screen.findByRole("table");
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: /load more|ko'proq|показать ещё/i }));
+  await waitFor(() => expect(queries.some((url) => url.includes("cursor="))).toBe(true));
+
+  queries.length = 0;
+  await userEvent.setup().type(screen.getByLabelText(/search|qidirish|поиск/i), "zz");
+
+  // The next request for the new term carries no cursor at all.
+  await waitFor(() => expect(queries.some((url) => url.includes("q=zz"))).toBe(true));
+  expect(
+    queries.filter((url) => url.includes("q=zz")).every((url) => !url.includes("cursor=")),
+  ).toBe(true);
 });

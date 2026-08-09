@@ -78,6 +78,8 @@
     "grantedAt": "Role granted",
     "notAnAdmin": "This account holds no admin role.",
     "userId": "User ID",
-    "joined": "Joined"
+    "joined": "Joined",
+    "loadingMore": "Loading more…",
+    "moreError": "Could not load more users. The list above is unchanged."
   }
 }

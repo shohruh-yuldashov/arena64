@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6 game room |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-08-10 — A64-025.6, the game room |
+| **Last updated** | 2026-08-10 — A64-025.6A, the game room's visual hardening |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -1087,3 +1087,45 @@ it because it measured 768 signed *out*, where the account cluster is one
 The display name now returns at `lg` rather than `sm`, and the account
 cluster keeps its tight gap until then. Measured signed in at 360, 768,
 1024 and 1280: zero overflow at all four.
+
+### 13.10 Visual hardening — A64-025.6A
+
+A64-025.6 fixed the *composition*: the seats and clocks moved onto the
+board and OQ-3 closed. A manual screenshot review then found the surfaces
+around them had not been designed at all, and three things were wrong.
+
+**Three blocks pretending to be a panel.** The status was a card, the
+quick-message controls were two bare buttons floating on the page
+background, and the game controls were a second card. That is what made the
+right-hand side read as leftovers. They are one bordered surface now, with
+dividers between the groups.
+
+**Two actions of very different weight, drawn identically.** Offering a draw
+and resigning were both `variant="outline"` side by side. The draw keeps the
+neutral outline; the resignation is text on `--destructive` — unmistakable
+without being a red slab a thumb finds by accident during a bullet game.
+
+**The result was a bordered box with a bold line in it.** It is the moment
+the game is about, so it now leads with the outcome set at `text-2xl` on a
+surface tinted by the outcome itself — `--success` for a win, `--destructive`
+for a loss, muted for a draw — with the reason under it, the rating
+consequence under that, and the next action primary. It stays beside the
+board rather than covering it.
+
+Also: the clock has its own bordered container with a fixed minimum width,
+so it reads as an instrument and `9:59` does not shove the name beside it;
+the idle seat recedes to `bg-muted/30` so the active one is the only lit
+thing; and the board took a heavier rounded frame so it is unambiguously
+the object the page is about.
+
+Verified on a real 1+0 game paired through the lobby, at 1280 light and
+dark, 768 light, 360 light and dark, plus the result surface at 360 and
+1280: zero page overflow everywhere, one `h1`, and nothing clipped.
+
+**Deferred to A64-025.6B, with the reason.** Seat ratings. The data exists
+and is already persisted — `game.infrastructure.models` stores
+`light_rating_value` and its pair at match creation, and `rating.public`
+publishes a `RatingReader` — so the gap is only that the realtime snapshot
+does not carry them. Closing it is a protocol extension plus generated types
+plus backend tests, which is its own task rather than a corner of a visual
+one. Nothing in this task guessed a rating or fetched one per player.

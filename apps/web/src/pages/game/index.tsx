@@ -192,29 +192,41 @@ export default function GamePage() {
         )}
       </div>
 
-      {/* The panel and the controls stack in one column: beside the board
-          on a wide screen, below it on a phone — one `lg:` breakpoint, as
-          the board already uses (A64-020.5C §14). The controls come second
-          so the clocks are never pushed off screen by an incoming offer. */}
-      <div className="flex w-full flex-col gap-4 lg:w-80 lg:shrink-0">
-        <GamePanel
-          state={state}
-          connection={connection}
-          viewerId={isAuthenticated(session) ? session.user.id : null}
-        />
+      {/* A64-025.6A §15. One surface, not three.
+          The status was a card, the quick-message controls were two bare
+          buttons floating on the page background, and the game controls
+          were a second card — three unrelated blocks in a column, which is
+          what made the right-hand side read as leftovers rather than as the
+          game's controls. They are one panel now, with a divider between
+          the two groups and a hierarchy inside each: destructive last,
+          contextual first. */}
+      <aside className="border-border bg-card flex w-full flex-col divide-y rounded-xl border shadow-sm lg:w-80 lg:shrink-0">
+        <div className="p-4">
+          <GamePanel
+            state={state}
+            connection={connection}
+            viewerId={isAuthenticated(session) ? session.user.id : null}
+          />
+        </div>
+
         {/* Only for a participant. A spectator has no seat, so there is
             nobody for a message to come from and nothing to mute. */}
         {state.side !== null && (
-          <QuickMessagePicker
-            disabled={!quickMessages.canSend}
-            muted={quickMessages.muted}
-            error={quickMessages.error}
-            onSelect={quickMessages.send}
-            onToggleMute={quickMessages.toggleMute}
-          />
+          <div className="p-4">
+            <QuickMessagePicker
+              disabled={!quickMessages.canSend}
+              muted={quickMessages.muted}
+              error={quickMessages.error}
+              onSelect={quickMessages.send}
+              onToggleMute={quickMessages.toggleMute}
+            />
+          </div>
         )}
-        <GameControls state={state} onCommand={(kind) => void command(kind)} />
-      </div>
+
+        <div className="p-4">
+          <GameControls state={state} onCommand={(kind) => void command(kind)} />
+        </div>
+      </aside>
     </section>
   );
 }

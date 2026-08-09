@@ -1201,13 +1201,24 @@ most restrictive; expiry is evaluated on read; lifting is itself an auditable ac
 
 ### 13.4 `AuditEntry` — entity
 
-Append-only record of every privileged action: actor, action, subject, before-and-after,
+Append-only record of every privileged action: actor, action, subject, outcome, before-and-after,
 instant, and the correlation id. Written by `admin` and by `platform` erasure work.
 
 **Why it is a domain entity and not a log line:** logs have a retention policy set for debugging
 and an access model set for engineers. An audit trail has a retention policy set by policy or
 regulation and an access model set by governance. Putting it in logs means it is deleted by a
 retention rule nobody reviewed, at the moment it is needed.
+
+**Built by A64-024.8** — `specs/admin.md` §6.11. Two facts the model gained in the building:
+
+- **`actor_type` answers the bootstrap problem.** The actor is an `administrator` (an account) or
+  an `operator` (a process, with no account). A deployment's first privileged action is taken from
+  a shell before any administrator exists, and recording a fabricated account there would be worse
+  than recording none — a reader could not tell it from a real action by that person. The invariant
+  is enforced in both directions, in the domain and in a check constraint.
+- **The entry is written inside the mutation's transaction.** An action with no entry and an entry
+  with no action are equally useless to somebody reconstructing what happened; sharing the unit of
+  work makes both impossible rather than unlikely.
 
 ### 13.5 `OutboxEntry` — aggregate root, platform
 

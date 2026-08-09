@@ -569,12 +569,21 @@
       "late": "Reyting yangilanishi kutilganidan uzoqroq davom etmoqda."
     },
     "quickMessages": {
+      "open": "Tezkor xabarlar",
+      "mute": "Tezkor xabarlarni o'chirish",
+      "unmute": "Tezkor xabarlarni yoqish",
       "goodLuck": "Omad!",
       "niceMove": "Zo'r yurish!",
       "wellPlayed": "Yaxshi o'ynadingiz",
       "goodGame": "Yaxshi o'yin",
       "thanks": "Rahmat",
-      "oops": "Voy!"
+      "oops": "Voy!",
+      "errors": {
+        "rateLimited": "Juda tez yubordingiz. Biroz kuting.",
+        "matchNotActive": "O'yin tugadi — xabar yuborib bo'lmaydi.",
+        "unavailable": "Bu xabar mavjud emas.",
+        "unknown": "Xabar yuborilmadi."
+      }
     }
   },
   "replay": {

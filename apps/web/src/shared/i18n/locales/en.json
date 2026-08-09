@@ -401,13 +401,16 @@
       "play": "Play"
     },
     "title": "Start a game",
+    "subtitle": "Pick a time control and start looking for an opponent.",
     "form": {
       "mode": "Mode",
       "modeHint": "A rated game moves a permanent number.",
       "timeControl": "Time control",
       "timeControlHint": "How long each side gets, and what a move gives back.",
       "submit": "Join the queue",
-      "joining": "Joining…"
+      "joining": "Joining…",
+      "chooseClock": "Choose a time control",
+      "readyToPlay": "{clock} · {mode}"
     },
     "mode": {
       "casual": "Casual",
@@ -473,6 +476,11 @@
       "unexpected": "Something went wrong.",
       "unavailable": "The queue state could not be read.",
       "catalogue_unavailable": "Games cannot be started right now. Try again later."
+    },
+    "friend": {
+      "friendTitle": "Play with a friend",
+      "friendBody": "Challenge somebody you know, or answer a challenge.",
+      "friendCta": "Go to challenges"
     }
   },
   "game": {

@@ -401,13 +401,16 @@
       "play": "O'ynash"
     },
     "title": "O'yin boshlash",
+    "subtitle": "Vaqt nazoratini tanlang va raqib qidirishni boshlang.",
     "form": {
       "mode": "Rejim",
       "modeHint": "Reytingli o'yin doimiy raqamingizni o'zgartiradi.",
       "timeControl": "Vaqt nazorati",
       "timeControlHint": "Har bir tomonga beriladigan vaqt va har yurishdan keyin qo'shiladigan vaqt.",
       "submit": "Navbatga qo'shilish",
-      "joining": "Qo'shilmoqda…"
+      "joining": "Qo'shilmoqda…",
+      "chooseClock": "Vaqt nazoratini tanlang",
+      "readyToPlay": "{clock} · {mode}"
     },
     "mode": {
       "casual": "Oddiy",
@@ -473,6 +476,11 @@
       "unexpected": "Nimadir noto'g'ri ketdi.",
       "unavailable": "Navbat holatini o'qib bo'lmadi.",
       "catalogue_unavailable": "Hozircha o'yin boshlab bo'lmaydi. Keyinroq urinib ko'ring."
+    },
+    "friend": {
+      "friendTitle": "Do'st bilan o'ynash",
+      "friendBody": "Tanish raqibni chorlang yoki chorlovga javob bering.",
+      "friendCta": "Chorlovlarga o'tish"
     }
   },
   "game": {

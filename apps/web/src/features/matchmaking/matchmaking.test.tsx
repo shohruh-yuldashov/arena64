@@ -219,7 +219,9 @@ describe("choosing a game", () => {
     // the labels are the durations rather than the identifiers.
     expect(within(controls).getAllByRole("radio")).toHaveLength(4);
     await userEvent.click(within(controls).getByRole("radio", { name: /3\+2/ }));
-    await userEvent.click(screen.getByRole("button", { name: /join the queue/i }));
+    // A64-025.5a renamed the action to what a player is doing rather than
+    // what the API is called: "Find an opponent", not "Join the queue".
+    await userEvent.click(screen.getByRole("button", { name: /find an opponent/i }));
 
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toMatchObject({ time_control_id: "blitz_3_2", queue_type: "casual" });
@@ -255,7 +257,7 @@ describe("choosing a game", () => {
 
     const controls = await screen.findByRole("group", { name: /time control/i });
     await userEvent.click(within(controls).getByRole("radio", { name: /3\+2/ }));
-    const submit = screen.getByRole("button", { name: /join the queue/i });
+    const submit = screen.getByRole("button", { name: /find an opponent/i });
     await userEvent.click(submit);
     await userEvent.click(submit);
     await userEvent.click(submit);

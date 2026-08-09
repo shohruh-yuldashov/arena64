@@ -407,8 +407,8 @@
       "modeHint": "Reytingli o'yin doimiy raqamingizni o'zgartiradi.",
       "timeControl": "Vaqt nazorati",
       "timeControlHint": "Har bir tomonga beriladigan vaqt va har yurishdan keyin qo'shiladigan vaqt.",
-      "submit": "Navbatga qo'shilish",
-      "joining": "Qo'shilmoqda…",
+      "submit": "Raqib topish",
+      "joining": "Qidirilmoqda…",
       "chooseClock": "Vaqt nazoratini tanlang",
       "readyToPlay": "{clock} · {mode}"
     },

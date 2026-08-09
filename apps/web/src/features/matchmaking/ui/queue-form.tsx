@@ -196,34 +196,52 @@ export function QueueForm({ disabled = false }: { disabled?: boolean }) {
         </p>
       )}
 
-      {/* A64-025.5 §17. The action sticks to the bottom of the viewport on a
-          phone, so it is reachable without scrolling past two fieldsets —
-          the old layout put the only thing a player came here to press
-          below everything else. On a wide screen it is an ordinary row at
-          the end of the form; `sticky` with `bottom-0` does both with one
-          rule and no second layout.
+      {/* A64-025.5a. The action, and where it lives at each width.
+          A64-025.5 shipped one rule for both and a screenshot review showed
+          why that was wrong: `bg-background` inside a `bg-card` surface is
+          *darker* than its parent in dark mode — `--background` is 0.145
+          and `--card` is 0.205 — so the sticky bar read as a black slab
+          bolted onto the bottom of the card rather than part of it.
+
+          Above `sm` there is no surface at all now: the action is the last
+          row of the form, aligned right, on the card it already sits on.
+          Below `sm` the bar stays — it is the fix that put the button in
+          reach of a thumb — and it takes `bg-card`, the colour of the thing
+          it is the bottom of.
 
           The safe-area inset is not decoration: on an iPhone the home
           indicator overlaps the last 34px of the viewport, and a submit
           button under it is one a thumb cannot reach. */}
-      <div className="bg-background sticky bottom-0 -mx-4 flex flex-col gap-3 border-t px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:mx-0 sm:flex-row sm:items-center sm:justify-between sm:rounded-b-xl sm:px-0 sm:pb-4">
-        <p className="text-muted-foreground text-sm" aria-live="polite">
-          {selected === undefined
-            ? t("play.form.chooseClock")
-            : t("play.form.readyToPlay", {
-                clock: formatTimeControl(selected, locale),
-                mode: t(mode === "ranked" ? "play.mode.ranked" : "play.mode.casual"),
-              })}
-        </p>
+      <div className="bg-card sticky bottom-0 -mx-4 -mb-4 flex flex-col gap-3 border-t px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:static sm:mx-0 sm:mb-0 sm:flex-row sm:items-center sm:justify-end sm:gap-4 sm:border-0 sm:bg-transparent sm:px-0 sm:pt-0 sm:pb-0">
+        {/* Only once there is something to summarise. Before a clock is
+            chosen the fieldset above already says what to do, and repeating
+            it here made the emptiest state the loudest thing on the page. */}
+        {selected !== undefined && (
+          <p className="text-muted-foreground text-sm" aria-live="polite">
+            {t("play.form.readyToPlay", {
+              clock: formatTimeControl(selected, locale),
+              mode: t(mode === "ranked" ? "play.mode.ranked" : "play.mode.casual"),
+            })}
+          </p>
+        )}
 
         <Button
           type="submit"
           size="lg"
-          className="w-full sm:w-auto"
+          className="w-full sm:w-auto sm:min-w-44"
           disabled={busy || form.watch("time_control_id") === ""}
+          // Why it is disabled, for somebody who cannot see that the
+          // fieldset above is untouched. Announced on demand rather than
+          // rendered as a second instruction.
+          aria-describedby={selected === undefined ? "queue-submit-hint" : undefined}
         >
           {join.isPending ? <Spinner label={t("play.form.joining")} /> : t("play.form.submit")}
         </Button>
+        {selected === undefined && (
+          <span id="queue-submit-hint" className="sr-only">
+            {t("play.form.chooseClock")}
+          </span>
+        )}
       </div>
     </form>
   );

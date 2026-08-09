@@ -880,6 +880,26 @@ says which choice is missing instead.
 Measured in Chromium: the call to action is fully visible without scrolling
 at 360px in both themes.
 
+**Post-implementation visual review (A64-025.5a).** The first version used
+one rule for both widths, and a screenshot showed why that was wrong:
+`bg-background` inside a `bg-card` surface is *darker* than its parent in
+dark mode — `--background` is 0.145 and `--card` is 0.205 — so the bar read
+as a black slab bolted onto the card rather than its last row. Above `sm`
+there is now no surface at all: the action is the final row of the form,
+aligned right, on the card it already sits on. Below `sm` the bar stays,
+because putting the button in reach of a thumb was the point, and it takes
+`bg-card` — the colour of the thing it is the bottom of.
+
+The same review removed the "choose a time control" line. The fieldset above
+already says it, and repeating it in the action area made the emptiest state
+the loudest thing on the page; the reason the button is disabled now reaches
+a screen reader through `aria-describedby` instead. The summary appears only
+once there is something to summarise.
+
+The action was also renamed. "Join the queue" is what the API is called;
+"Find an opponent" is what the player is doing, and the queue is an
+implementation detail they did not ask about.
+
 ### 12.4 Choosing a clock
 
 The time control is what decides the game, so it is what is legible: the

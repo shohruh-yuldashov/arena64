@@ -109,7 +109,9 @@ test("players queue into one pool, and the two who are paired both reach the mat
       // waits forever on something no user clicks either.
       await controls.getByText("1+0", { exact: true }).click();
       await expect(controls.getByRole("radio", { name: /^1\+0/ })).toBeChecked();
-      await page.getByRole("button", { name: /join the queue/i }).click();
+      await page
+        .getByRole("button", { name: /find an opponent|raqib topish|найти соперника/i })
+        .click();
       await expect(page.getByText(/searching for an opponent/i)).toBeVisible();
     }
 

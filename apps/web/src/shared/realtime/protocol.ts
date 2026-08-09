@@ -56,6 +56,7 @@ export type InboundType =
   | "game.completed"
   | "game.command.rejected"
   | "game.draw.state"
+  | "game.quick_message.received"
   | "matchmaking.match.offered"
   | "notification.created"
   | "error";
@@ -70,7 +71,8 @@ export type OutboundType =
   | "game.resign"
   | "game.draw.offer"
   | "game.draw.accept"
-  | "game.draw.decline";
+  | "game.draw.decline"
+  | "game.quick_message.send";
 
 /**
  * The four participant commands — A64-020.5C §4.
@@ -119,7 +121,8 @@ export type GatewayErrorCode =
   | "draw_offer_already_pending"
   | "draw_offer_not_pending"
   | "draw_offer_not_recipient"
-  | "draw_offer_not_allowed_yet";
+  | "draw_offer_not_allowed_yet"
+  | "unknown_quick_message";
 
 /** `light` moves first. The engine's `PlayerSide`. */
 export type Side = "light" | "dark";
@@ -297,6 +300,74 @@ export interface NotificationCreatedPayload {
   created_at: string;
 }
 
+/**
+ * The quick-message catalogue, as the gateway publishes it — A64-023.1 §2.
+ *
+ * A closed union rather than `string`, and it is the single most important
+ * type in this feature: it is what makes "the client cannot send arbitrary
+ * text" a **compile-time** property rather than a rule somebody has to
+ * remember. There is no code path from a text input to this type, because
+ * there is no text input and nothing here accepts one.
+ *
+ * Mirrored by hand from `app.gateway.quick_messages.QuickMessage`, like
+ * every other type in this file — the gateway has no machine-readable
+ * schema. `QUICK_MESSAGES` below is the runtime half, and the two are held
+ * together by a type assertion rather than by a comment.
+ */
+export type QuickMessage =
+  "good_luck" | "nice_move" | "well_played" | "good_game" | "thanks" | "oops";
+
+/**
+ * The same six, at runtime, in the order a picker offers them.
+ *
+ * Ordered by **when in a game they are used** — before, during, after —
+ * rather than alphabetically, so the list reads as the arc of a game and the
+ * one a player wants is near where they expect it.
+ *
+ * `satisfies` rather than a bare annotation: it keeps the literal tuple type
+ * for iteration *and* fails the build if a member drifts from
+ * `QuickMessage`. A plain `QuickMessage[]` would accept a stale value; a
+ * plain array would accept a typo.
+ */
+export const QUICK_MESSAGES = [
+  "good_luck",
+  "nice_move",
+  "well_played",
+  "good_game",
+  "thanks",
+  "oops",
+] as const satisfies readonly QuickMessage[];
+
+/** Whether a value off the wire is a catalogue member. */
+export function isQuickMessage(value: unknown): value is QuickMessage {
+  return typeof value === "string" && (QUICK_MESSAGES as readonly string[]).includes(value);
+}
+
+/**
+ * `game.quick_message.received` — one predefined message between the two
+ * players — A64-023.1 §4.
+ *
+ * `from` is a **side**, not a player id: this client knows which seat it
+ * holds, so a side is what it renders against — and it is what lets the
+ * sender recognise their own message in the fan-out.
+ *
+ * `message` is a semantic identifier the **receiving** client localises. The
+ * server never sends display text, so two players in one match read the same
+ * frame in two languages.
+ *
+ * `sent_at` is the server's receive instant. Used for nothing but ordering
+ * and diagnostics — the bubble's lifetime is measured from arrival, because
+ * a message delayed by the network should still be readable for its full
+ * duration.
+ */
+export interface QuickMessageReceivedPayload {
+  match_id: string;
+  from: Side;
+  message: QuickMessage;
+  /** ISO-8601. */
+  sent_at: string;
+}
+
 export interface CommandRejectedPayload {
   code: GatewayErrorCode;
   /** Server prose. Logged, never rendered — §13 forbids branching on it. */
@@ -453,6 +524,7 @@ const INBOUND_TYPES = new Set<string>([
   "game.completed",
   "game.command.rejected",
   "game.draw.state",
+  "game.quick_message.received",
   "matchmaking.match.offered",
   "notification.created",
   "error",

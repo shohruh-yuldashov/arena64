@@ -6,9 +6,11 @@ import { canInteract } from "@/features/game/model/state";
 import { useClock } from "@/features/game/model/use-clock";
 import { useGameRoom } from "@/features/game/model/use-game-room";
 import { useMoveSelection } from "@/features/game/model/use-move-selection";
+import { useQuickMessages } from "@/features/game/model/use-quick-messages";
 import { GameBoard } from "@/features/game/ui/board";
 import { GameControls } from "@/features/game/ui/game-controls";
 import { GamePanel } from "@/features/game/ui/game-panel";
+import { QuickMessagePicker } from "@/features/game/ui/quick-message-picker";
 import { useTranslation } from "@/shared/i18n";
 import { useHoldAppUpdate } from "@/shared/pwa";
 import { useConnectionStatus } from "@/shared/realtime";
@@ -61,6 +63,19 @@ export default function GamePage() {
   );
 
   const interactive = canInteract(state);
+
+  // A64-023.2. Its own hook and its own state, deliberately kept out of the
+  // game reducer (§17): a quick message changes no board, no clock and no
+  // ply, and a render failure here must not be able to reach one.
+  //
+  // `playable` is the same predicate the controls use — a terminal match
+  // stops accepting messages (§10), and the server refuses them regardless.
+  const quickMessages = useQuickMessages({
+    matchId,
+    viewerSide: state.side,
+    playable:
+      (state.phase === "active" || state.phase === "submitting_move") && state.result === null,
+  });
 
   // A64-020.9 §14. A service-worker activation reloads the page, and a
   // reload here is not a refresh — it is a clock still running while the
@@ -129,7 +144,19 @@ export default function GamePage() {
           clock={clock}
           connection={connection}
           viewerId={isAuthenticated(session) ? session.user.id : null}
+          quickMessages={quickMessages.visible}
         />
+        {/* Only for a participant. A spectator has no seat, so there is
+            nobody for a message to come from and nothing to mute. */}
+        {state.side !== null && (
+          <QuickMessagePicker
+            disabled={!quickMessages.canSend}
+            muted={quickMessages.muted}
+            error={quickMessages.error}
+            onSelect={quickMessages.send}
+            onToggleMute={quickMessages.toggleMute}
+          />
+        )}
         <GameControls state={state} onCommand={(kind) => void command(kind)} />
       </div>
     </section>

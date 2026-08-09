@@ -107,6 +107,16 @@ export function useGameRoom(matchId: string): GameRoom {
   const sideRef = useRef(state.side);
   sideRef.current = state.side;
 
+  // Whether a participant command is outstanding — A64-023.2.
+  //
+  // `game.command.rejected` is **shared**: since quick messages reuse it,
+  // a refusal on that frame is only this path's when this path actually
+  // sent something. Without the guard a rate-limited quick message
+  // surfaced as a draw-command error in `GameControls`, which is a
+  // refusal about a command the player never made.
+  const activeCommandRef = useRef(state.activeCommand);
+  activeCommandRef.current = state.activeCommand;
+
   // --- what a completed game changes elsewhere — A64-020.5F §25 -----------
   //
   // Statistics and match history are durable HTTP reads that the game this
@@ -255,6 +265,13 @@ export function useGameRoom(matchId: string): GameRoom {
           }
 
           case "game.command.rejected": {
+            // Not ours if no command is in flight — see `activeCommandRef`.
+            // `useQuickMessages` attributes the same frame the same way,
+            // and the two conditions are mutually exclusive by
+            // construction: a command and a quick message cannot both be
+            // outstanding on one connection without the player having sent
+            // both, in which case the server answered the newer one.
+            if (activeCommandRef.current === null) return;
             const code = payload.code;
             dispatch({
               type: "command_rejected",

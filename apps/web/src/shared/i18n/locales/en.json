@@ -569,12 +569,21 @@
       "late": "Rating update is taking longer than expected."
     },
     "quickMessages": {
+      "open": "Quick messages",
+      "mute": "Mute quick messages",
+      "unmute": "Unmute quick messages",
       "goodLuck": "Good luck!",
       "niceMove": "Nice move!",
       "wellPlayed": "Well played",
       "goodGame": "Good game",
       "thanks": "Thanks",
-      "oops": "Oops!"
+      "oops": "Oops!",
+      "errors": {
+        "rateLimited": "Too quick. Give it a moment.",
+        "matchNotActive": "The game is over — no more messages.",
+        "unavailable": "That message is not available.",
+        "unknown": "The message was not sent."
+      }
     }
   },
   "replay": {

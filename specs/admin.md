@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| **Status** | A64-024.1 (authorization), A64-024.2 (sign-in, routing), A64-024.2H (deployment origins) and A64-024.3 (**User Management, read-only**). Remaining surfaces deferred; see §8. |
+| **Status** | A64-024.1 (authorization), A64-024.2 (sign-in, routing), A64-024.2H (deployment origins), A64-024.3 (**Users, read-only**) and A64-024.4 (**Matches, read-only**). Remaining surfaces deferred; see §8. |
 | **Owner** | _Unassigned_ |
 | **Related ADRs** | `architecture.md` AD-04 (separate application) |
 | **Related docs** | `docs/01-architecture/database.md` §10.4, `docs/01-architecture/domain-model.md` §13 |
@@ -385,6 +385,63 @@ can land after a fast second and repaint stale rows.
 
 A table above the breakpoint and the same rows as cards below it. Nothing is
 hidden at either width.
+
+---
+
+## 6.9 Match Management — A64-024.4
+
+**Read-only, for the same reason Users is.** `admin.audit_entry` is unbuilt,
+so there is no `POST`, `PUT`, `PATCH` or `DELETE` on the match routes.
+Force-finish, cancel, result editing, rollback and rating adjustment all wait
+for A64-024.8 — a mutation that ends somebody's rated game without a record
+is the one this platform must not ship first. The console offers no disabled
+"coming soon" controls either: a greyed button is a promise.
+
+### API
+
+    GET /api/v1/admin/matches            list and filter
+    GET /api/v1/admin/matches/{match_id} one match
+
+Both name `CurrentAdmin`; both send `Cache-Control: no-store`.
+
+`game.public.AdministrativeMatchDirectory` is a **separate port** from
+`MatchHistoryReader`: that one is scoped to a single player and to finished
+matches because a profile renders it, while an operator starts from a status
+or a match id and often cares about the game still in progress.
+
+| Concern | Behaviour |
+| --- | --- |
+| Filters | `status`, `rated`, `variant`, `origin`, `participant_id` — every one a typed enum or boolean mapping to a column |
+| Participant *name* search | **Absent.** Names live in `users`; filtering by one means a cross-schema join (DB-03 forbids). Finding the id is the Users console's job, and `participant_id` is the port's form of the question |
+| Pagination | Keyset on `(created_at, id)` — the match table's **primary key**, so the ordering is total and the keyset is an index seek. Default 25, max 50 |
+| Query shape | **Two queries per page**: the matches, then one batch resolving every participant name |
+
+### Fields exposed
+
+Match: id, status, variant, rated, origin, ply count, outcome, winner,
+termination reason, speed class, `created_at`, `settled_at`, `ended_at`, and
+the time control on the detail.
+
+**There is no `started_at`** — the schema has none, only `clock_turn_started_at`,
+which is a clock field. `settled_at` (the acceptance handshake instant) is
+published instead rather than inventing a lifecycle name for a clock.
+
+Participants: **player id, username, display name, side — and nothing else**.
+No email, no IP, no device, no session, no token. A match page shows who
+played; anything more about the person is `/users/{id}`, which has its own
+guard and its own decision.
+
+Absent and unreachable through the port: the board, the move log, queue
+ticket ids, clock deadlines, draw-offer bookkeeping.
+
+### Replay
+
+**Not integrated.** `MatchReplayReader` applies every ply through the engine,
+so folding it into the detail would replay a game on every open — turning a
+cheap read expensive. §10 asks for replay only where the architecture
+supports it naturally, and reusing `apps/web`'s board component is ruled out
+by AD-04. Deferred with the seam named: the published replay port already
+exists when a phase has a reason.
 
 ---
 

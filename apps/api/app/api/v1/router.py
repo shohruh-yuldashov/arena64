@@ -28,6 +28,7 @@ from fastapi import APIRouter
 from app.api.v1.health import health_router
 from app.core.constants import API_V1_PREFIX
 from app.modules.admin.presentation.router import admin_router
+from app.modules.admin.presentation.routers.matches import admin_matches_router
 from app.modules.admin.presentation.routers.users import admin_users_router
 from app.modules.auth.presentation.browser_router import browser_auth_router
 from app.modules.auth.presentation.router import auth_router
@@ -57,6 +58,9 @@ v1_router.include_router(admin_router)
 # by `CurrentAdmin` in every handler signature rather than at the router,
 # so the protection is visible where the route is read.
 v1_router.include_router(admin_users_router)
+# A64-024.4. Read-only: no mutation exists on this router while
+# `admin.audit_entry` is unbuilt.
+v1_router.include_router(admin_matches_router)
 
 # **Before `users_router`, and the order is load-bearing.** `GET /users/search`
 # and `GET /users/{user_id}` both match the path `/users/search`; Starlette

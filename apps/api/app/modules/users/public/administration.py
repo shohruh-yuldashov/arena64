@@ -34,7 +34,7 @@ tokens, OTP material — is absent from this type and therefore unreachable
 through it.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -123,6 +123,23 @@ class AdministrativeUserDirectory(Protocol):
         Bounded by `limit` whatever the term. There is no unbounded form
         and no query language: a caller supplies a term, two optional
         booleans and a cursor, and can express nothing else.
+        """
+        ...
+
+    async def accounts_by_ids(self, user_ids: Sequence[UUID]) -> Mapping[UUID, AdminUserRecord]:
+        """Every named account, in **one** query — A64-024.4 §8.
+
+        The batch the Matches console needs: a page of matches names up to
+        twice as many players, and resolving each one individually is the
+        N+1 §8 exists to forbid.
+
+        **Incomplete on purpose**: an id that matches nothing is simply
+        absent from the mapping rather than raising or mapping to a
+        placeholder. A match whose participant was erased is a real state,
+        and the caller renders the id it already has.
+
+        An empty sequence returns an empty mapping without touching the
+        database.
         """
         ...
 

@@ -232,3 +232,74 @@ async function authorizedRead<T>(path: string, signal?: AbortSignal): Promise<Ou
   const value = unwrap<T>(await response.json().catch(() => null));
   return value === null ? { status: "unavailable" } : { status: "ok", value };
 }
+
+// --- admin matches — A64-024.4 -----------------------------------------------
+
+export interface AdminMatchParticipant {
+  player_id: string;
+  username: string | null;
+  display_name: string | null;
+  side: string;
+}
+
+export interface AdminMatchSummary {
+  match_id: string;
+  status: string;
+  variant: string;
+  rated: boolean;
+  origin: string;
+  light: AdminMatchParticipant;
+  dark: AdminMatchParticipant;
+  outcome: string | null;
+  winner: string | null;
+  termination_reason: string | null;
+  speed_class: string | null;
+  ply_number: number;
+  created_at: string;
+  ended_at: string | null;
+}
+
+export interface AdminMatchDetail extends AdminMatchSummary {
+  settled_at: string | null;
+  time_control: { initial_ms: number; increment_ms: number } | null;
+}
+
+export interface AdminMatchPage {
+  items: AdminMatchSummary[];
+  next_cursor: string | null;
+}
+
+export interface MatchQuery {
+  status?: string;
+  rated?: boolean;
+  origin?: string;
+  participant_id?: string;
+  cursor?: string;
+}
+
+export async function fetchMatches(
+  query: MatchQuery,
+  signal?: AbortSignal,
+): Promise<Outcome<AdminMatchPage>> {
+  const params = new URLSearchParams();
+  if (query.status) params.set("status", query.status);
+  if (query.rated !== undefined) params.set("rated", String(query.rated));
+  if (query.origin) params.set("origin", query.origin);
+  if (query.participant_id) params.set("participant_id", query.participant_id);
+  if (query.cursor) params.set("cursor", query.cursor);
+
+  return authorizedRead<AdminMatchPage>(
+    `/admin/matches${params.size > 0 ? `?${params.toString()}` : ""}`,
+    signal,
+  );
+}
+
+export async function fetchMatch(
+  matchId: string,
+  signal?: AbortSignal,
+): Promise<Outcome<AdminMatchDetail>> {
+  return authorizedRead<AdminMatchDetail>(
+    `/admin/matches/${encodeURIComponent(matchId)}`,
+    signal,
+  );
+}

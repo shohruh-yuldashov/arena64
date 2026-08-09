@@ -20,7 +20,7 @@ assigns here explicitly:
 
 import logging
 from base64 import urlsafe_b64decode, urlsafe_b64encode
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, cast
@@ -718,6 +718,9 @@ class SqlAlchemyAdministrativeUserDirectory:
             records=[_to_admin_record(row) for row in page], next_cursor=next_cursor
         )
 
+    async def accounts_by_ids(self, user_ids: Sequence[UUID]) -> "Mapping[UUID, AdminUserRecord]":
+        return await _accounts_by_ids(self._session, user_ids)
+
     async def find_account(self, user_id: UUID) -> "AdminUserRecord | None":
         row = await self._session.get(UserModel, user_id)
         return None if row is None else _to_admin_record(row)
@@ -778,3 +781,22 @@ class _AdminCursor:
             return cls(created_at=datetime.fromisoformat(moment), user_id=UUID(identifier))
         except (ValueError, TypeError) as exc:
             raise ValidationError("That page cursor could not be read.") from exc
+
+
+async def _accounts_by_ids(
+    session: AsyncSession, user_ids: Sequence[UUID]
+) -> Mapping[UUID, AdminUserRecord]:
+    """The batch behind `AdministrativeUserDirectory.accounts_by_ids`.
+
+    One `IN` over the primary key. Deduplicated by the caller's set, so a
+    match page naming the same player twice — both seats, or two matches —
+    asks for them once.
+    """
+    if not user_ids:
+        return {}
+    rows = (
+        (await session.execute(select(UserModel).where(UserModel.id.in_(set(user_ids)))))
+        .scalars()
+        .all()
+    )
+    return {row.id: _to_admin_record(row) for row in rows}

@@ -98,6 +98,12 @@ from app.modules.game.public.acceptance import (
     NotAMatchParticipant,
     PendingMatchView,
 )
+from app.modules.game.public.administration import (
+    AdministrativeMatchDirectory,
+    AdminMatchFilters,
+    AdminMatchPage,
+    AdminMatchRecord,
+)
 from app.modules.game.public.commands import (
     DrawAgreementView,
     DrawOfferAlreadyPending,
@@ -185,6 +191,10 @@ from app.modules.game.public.snapshots import (
 )
 
 __all__ = [
+    "AdminMatchFilters",
+    "AdminMatchPage",
+    "AdminMatchRecord",
+    "AdministrativeMatchDirectory",
     "PlacedPiece",
     "MatchSnapshotReader",
     "DrawOfferState",

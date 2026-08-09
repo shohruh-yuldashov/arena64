@@ -67,7 +67,9 @@ test("two players share one live board over the socket", async ({ browser, reque
       // The game itself is in no danger from it: a clock runs only for the
       // side to move, and this flow spends a few seconds on one move.
       await controls.getByText("1+0", { exact: true }).click();
-      await page.getByRole("button", { name: /join the queue/i }).click();
+      await page
+        .getByRole("button", { name: /find an opponent|raqib topish|найти соперника/i })
+        .click();
       await expect(page.getByText(/searching for an opponent/i)).toBeVisible();
     }
 

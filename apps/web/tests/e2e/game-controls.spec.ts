@@ -58,7 +58,9 @@ test("two players negotiate a draw and one resigns", async ({ browser, request }
       // leaves active flags in a minute rather than blocking its accounts
       // for ten. The negotiation below spends seconds, not minutes.
       await controls.getByText("1+0", { exact: true }).click();
-      await page.getByRole("button", { name: /join the queue/i }).click();
+      await page
+        .getByRole("button", { name: /find an opponent|raqib topish|найти соперника/i })
+        .click();
     }
 
     const paired = await twoWithAnOffer(pages);

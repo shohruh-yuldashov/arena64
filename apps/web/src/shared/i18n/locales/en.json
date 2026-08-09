@@ -407,8 +407,8 @@
       "modeHint": "A rated game moves a permanent number.",
       "timeControl": "Time control",
       "timeControlHint": "How long each side gets, and what a move gives back.",
-      "submit": "Join the queue",
-      "joining": "Joining…",
+      "submit": "Find an opponent",
+      "joining": "Searching…",
       "chooseClock": "Choose a time control",
       "readyToPlay": "{clock} · {mode}"
     },

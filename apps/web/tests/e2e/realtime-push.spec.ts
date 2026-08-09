@@ -94,7 +94,9 @@ test("a pairing arrives over the socket and the lobby stops polling", async ({
     const controls = solo.getByRole("group", { name: /time control/i });
     await expect(controls).toBeVisible();
     await controls.getByText("1+0", { exact: true }).click();
-    await solo.getByRole("button", { name: /join the queue/i }).click();
+    await solo
+      .getByRole("button", { name: /find an opponent|raqib topish|найти соперника/i })
+      .click();
     await expect(solo.getByText(/searching for an opponent/i)).toBeVisible();
 
     // Degraded-mode line is absent while the socket is healthy — §17's
@@ -116,7 +118,9 @@ test("a pairing arrives over the socket and the lobby stops polling", async ({
       const theirControls = page.getByRole("group", { name: /time control/i });
       await expect(theirControls).toBeVisible();
       await theirControls.getByText("1+0", { exact: true }).click();
-      await page.getByRole("button", { name: /join the queue/i }).click();
+      await page
+        .getByRole("button", { name: /find an opponent|raqib topish|найти соперника/i })
+        .click();
     }
 
     // The offer must arrive **within the push window**, not within the

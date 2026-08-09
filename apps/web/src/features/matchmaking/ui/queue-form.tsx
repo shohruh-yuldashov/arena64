@@ -134,6 +134,13 @@ export function QueueForm({ disabled = false }: { disabled?: boolean }) {
   // §6's "no duplicate join requests".
   const busy = join.isPending || disabled;
 
+  // The chosen control, so the action bar can say what pressing it will
+  // start. Looked up rather than stored: the catalogue is the authority and
+  // a second copy of the label is a second thing to keep in step.
+  const chosenId = form.watch("time_control_id");
+  const mode = form.watch("queue_type");
+  const selected = controls.data.find((control) => control.id === chosenId);
+
   return (
     <form onSubmit={(event) => void onSubmit(event)} className="flex flex-col gap-6" noValidate>
       <Controller
@@ -189,14 +196,35 @@ export function QueueForm({ disabled = false }: { disabled?: boolean }) {
         </p>
       )}
 
-      <Button
-        type="submit"
-        size="lg"
-        className="min-h-11"
-        disabled={busy || form.watch("time_control_id") === ""}
-      >
-        {join.isPending ? <Spinner label={t("play.form.joining")} /> : t("play.form.submit")}
-      </Button>
+      {/* A64-025.5 §17. The action sticks to the bottom of the viewport on a
+          phone, so it is reachable without scrolling past two fieldsets —
+          the old layout put the only thing a player came here to press
+          below everything else. On a wide screen it is an ordinary row at
+          the end of the form; `sticky` with `bottom-0` does both with one
+          rule and no second layout.
+
+          The safe-area inset is not decoration: on an iPhone the home
+          indicator overlaps the last 34px of the viewport, and a submit
+          button under it is one a thumb cannot reach. */}
+      <div className="bg-background sticky bottom-0 -mx-4 flex flex-col gap-3 border-t px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:mx-0 sm:flex-row sm:items-center sm:justify-between sm:rounded-b-xl sm:px-0 sm:pb-4">
+        <p className="text-muted-foreground text-sm" aria-live="polite">
+          {selected === undefined
+            ? t("play.form.chooseClock")
+            : t("play.form.readyToPlay", {
+                clock: formatTimeControl(selected, locale),
+                mode: t(mode === "ranked" ? "play.mode.ranked" : "play.mode.casual"),
+              })}
+        </p>
+
+        <Button
+          type="submit"
+          size="lg"
+          className="w-full sm:w-auto"
+          disabled={busy || form.watch("time_control_id") === ""}
+        >
+          {join.isPending ? <Spinner label={t("play.form.joining")} /> : t("play.form.submit")}
+        </Button>
+      </div>
     </form>
   );
 }
@@ -258,27 +286,43 @@ function RadioGroup({
           columns ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-1 sm:grid-cols-2",
         )}
       >
-        {options.map((option) => (
-          <label
-            key={option.value}
-            className={cn(
-              "border-border focus-within:ring-ring flex min-h-11 cursor-pointer flex-col justify-center rounded-md border px-3 py-2 focus-within:ring-2",
-              value === option.value && "border-primary bg-primary/5",
-              disabled && "cursor-not-allowed opacity-60",
-            )}
-          >
-            <input
-              type="radio"
-              className="sr-only"
-              name={legend}
-              value={option.value}
-              checked={value === option.value}
-              onChange={() => onChange(option.value)}
-            />
-            <span className="text-sm font-medium tabular-nums">{option.label}</span>
-            <span className="text-muted-foreground text-xs">{option.hint}</span>
-          </label>
-        ))}
+        {options.map((option) => {
+          const chosen = value === option.value;
+          return (
+            <label
+              key={option.value}
+              className={cn(
+                "focus-within:ring-ring relative flex min-h-11 cursor-pointer flex-col justify-center rounded-lg border px-3 py-3 transition-colors focus-within:ring-2",
+                chosen
+                  ? "border-primary bg-primary/10 ring-primary/30 ring-1"
+                  : "border-border hover:border-primary/40 hover:bg-muted/50",
+                disabled && "cursor-not-allowed opacity-60",
+              )}
+            >
+              <input
+                type="radio"
+                className="sr-only"
+                name={legend}
+                value={option.value}
+                checked={chosen}
+                onChange={() => onChange(option.value)}
+              />
+              {/* The clock is the thing being chosen, so it is the thing
+                  that is legible from across the room. `tabular-nums`
+                  because `1+0` and `10+0` must not shuffle the grid. */}
+              <span
+                className={cn(
+                  columns ? "text-lg leading-tight font-semibold" : "text-sm font-medium",
+                  "tabular-nums",
+                  chosen && "text-primary",
+                )}
+              >
+                {option.label}
+              </span>
+              <span className="text-muted-foreground text-xs">{option.hint}</span>
+            </label>
+          );
+        })}
       </div>
     </fieldset>
   );

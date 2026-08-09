@@ -7,7 +7,9 @@ import { FormError } from "@/features/auth/ui/form-status";
 import { queueErrorKey } from "@/features/matchmaking/model/error-messages";
 import { useAcceptMatch, useDeclineMatch } from "@/features/matchmaking/model/queries";
 import { useCountdown } from "@/features/matchmaking/model/use-countdown";
+import { Fact } from "@/features/matchmaking/ui/fact";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
+import { cn } from "@/shared/lib/cn";
 import { Avatar, AvatarFallback, Button, Spinner } from "@/shared/ui";
 
 /**
@@ -113,8 +115,10 @@ export function MatchOfferDialog({
             {t("play.offer.description")}
           </DialogPrimitive.Description>
 
+          {/* A64-025.5 §11. The opponent is the event, so they lead — a
+              bigger avatar and a bigger name than the rest of the sheet. */}
           <div className="flex items-center gap-3">
-            <Avatar className="size-10 shrink-0">
+            <Avatar className="size-12 shrink-0">
               <AvatarFallback aria-hidden="true">
                 {(opponent?.display_name ?? opponent?.username ?? "?")
                   .slice(0, 2)
@@ -122,7 +126,7 @@ export function MatchOfferDialog({
               </AvatarFallback>
             </Avatar>
             <div className="flex min-w-0 flex-col">
-              <span className="truncate text-sm font-medium">
+              <span className="truncate text-base font-semibold">
                 {opponent?.display_name ??
                   opponent?.username ??
                   t("play.offer.unknownOpponent")}
@@ -135,32 +139,41 @@ export function MatchOfferDialog({
             </div>
           </div>
 
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-            <dt className="text-muted-foreground">{t("play.form.mode")}</dt>
-            <dd className="font-medium">
-              {t(match.rated ? "play.mode.ranked" : "play.mode.casual")}
-            </dd>
-            <dt className="text-muted-foreground">{t("play.form.timeControl")}</dt>
-            <dd className="font-medium tabular-nums">{clock ?? "—"}</dd>
+          {/* The same labelled chips the queue uses, so a player recognises
+              the configuration they were waiting for rather than reading a
+              differently-shaped table. */}
+          <dl className="flex flex-wrap items-center gap-2">
+            <Fact label={t("play.form.timeControl")}>
+              <span className="tabular-nums">{clock ?? "—"}</span>
+            </Fact>
             {match.speed_class !== null && (
-              <>
-                <dt className="text-muted-foreground">{t("play.waiting.speed")}</dt>
-                <dd className="font-medium">
-                  {t(SPEED_LABELS[match.speed_class] ?? "play.speed.unknown")}
-                </dd>
-              </>
+              <Fact label={t("play.waiting.speed")}>
+                {t(SPEED_LABELS[match.speed_class] ?? "play.speed.unknown")}
+              </Fact>
             )}
+            <Fact label={t("play.form.mode")}>
+              {t(match.rated ? "play.mode.ranked" : "play.mode.casual")}
+            </Fact>
           </dl>
 
           {/* The countdown. `aria-live="off"` on the number itself — §15
               and §23 both forbid announcing every second — and a separate
               polite region that speaks only at 30, 20, 10 and 5. */}
-          <p className="text-sm">
-            <span aria-live="off" className="text-2xl font-semibold tabular-nums">
+          <div
+            className={cn(
+              "flex items-baseline gap-2 rounded-md border px-3 py-2",
+              // `--warning` under ten seconds. The words next to it do not
+              // change, so the colour reinforces and never carries alone.
+              countdown.secondsLeft <= 10
+                ? "border-warning/40 bg-warning/10"
+                : "border-border bg-muted/40",
+            )}
+          >
+            <span aria-live="off" className="text-3xl leading-none font-semibold tabular-nums">
               {new Intl.NumberFormat(locale).format(countdown.secondsLeft)}
-            </span>{" "}
-            <span className="text-muted-foreground">{t("play.offer.secondsLeft")}</span>
-          </p>
+            </span>
+            <span className="text-muted-foreground text-sm">{t("play.offer.secondsLeft")}</span>
+          </div>
           <p aria-live="polite" className="sr-only">
             {countdown.announcement === null
               ? ""
@@ -178,7 +191,7 @@ export function MatchOfferDialog({
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <Button
               variant="outline"
-              className="min-h-11"
+              className="w-full sm:w-auto"
               disabled={busy}
               // Named with the opponent, so a screen reader hears "Decline,
               // Ali" rather than a bare verb with no object.
@@ -194,7 +207,7 @@ export function MatchOfferDialog({
               )}
             </Button>
             <Button
-              className="min-h-11"
+              className="w-full sm:w-auto"
               disabled={busy || match.you_accepted}
               aria-label={t("play.offer.acceptLabel", {
                 name: opponent?.username ?? t("play.offer.unknownOpponent"),

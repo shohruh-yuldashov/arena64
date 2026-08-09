@@ -1,4 +1,4 @@
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef } from "react";
 
 import { matchOf } from "@/entities/queue";
@@ -114,7 +114,10 @@ export default function PlayPage() {
     // offer dialog closes — §23. Without it Radix returns focus to `body`
     // and a keyboard user restarts from the top of the document.
     <section tabIndex={-1} className="mx-auto flex w-full max-w-2xl flex-col gap-6">
-      <h1 className="text-2xl font-semibold tracking-tight">{t("play.title")}</h1>
+      <div className="flex flex-col gap-1">
+        <h1 className="text-2xl font-semibold tracking-tight">{t("play.title")}</h1>
+        <p className="text-muted-foreground text-sm">{t("play.subtitle")}</p>
+      </div>
 
       {lobby.state.status === "unavailable" ? (
         <Unavailable onRetry={lobby.refetch} />
@@ -128,7 +131,30 @@ export default function PlayPage() {
         // reflow the moment an offer arrives — and §6's "hidden or disabled
         // while the player has a live ticket or pending match" is satisfied
         // by a control that cannot be submitted.
-        <QueueForm disabled={match !== null} />
+        // The setup sits on its own surface so the sticky action bar has
+        // something to sit *on*, and so the page reads as one object rather
+        // than two fieldsets floating on the background.
+        <div className="border-border bg-card rounded-xl border p-4 shadow-sm sm:p-6">
+          <QueueForm disabled={match !== null} />
+        </div>
+      )}
+
+      {/* A64-025.5 §14. The second way to start a game, named and linked
+          rather than rebuilt. Challenge creation lives at `/challenges` and
+          this is a deep link to it — a lobby that reimplemented the flow
+          would be a second implementation of a shared surface, which §23
+          rules out. Below the queue, because a random opponent is the
+          faster path and the one this page is for. */}
+      {lobby.state.status !== "queued" && lobby.state.status !== "unavailable" && (
+        <div className="border-border flex flex-col gap-3 rounded-xl border border-dashed p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-0.5">
+            <p className="text-sm font-medium">{t("play.friend.friendTitle")}</p>
+            <p className="text-muted-foreground text-sm">{t("play.friend.friendBody")}</p>
+          </div>
+          <Button asChild variant="outline" className="w-full sm:w-auto">
+            <Link to="/challenges">{t("play.friend.friendCta")}</Link>
+          </Button>
+        </div>
       )}
 
       {/* The offer dialog is **not** rendered here — A64-022.6 §13.

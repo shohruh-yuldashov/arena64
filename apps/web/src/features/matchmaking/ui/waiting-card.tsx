@@ -5,6 +5,7 @@ import { formatMillis } from "@/entities/time-control";
 import { FormError } from "@/features/auth/ui/form-status";
 import { queueErrorKey } from "@/features/matchmaking/model/error-messages";
 import { useLeaveQueue } from "@/features/matchmaking/model/queries";
+import { Fact } from "@/features/matchmaking/ui/fact";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { type DeliveryMode, deliveryMode, useConnectionStatus } from "@/shared/realtime";
 import { Button, Card, CardContent, Spinner } from "@/shared/ui";
@@ -72,23 +73,42 @@ export function WaitingCard({
 
   return (
     <Card>
-      <CardContent className="flex flex-col gap-4 pt-6">
-        <div className="flex items-center gap-3" role="status">
-          <Spinner label={t("play.waiting.searching")} />
-          <span className="text-sm font-medium">{t("play.waiting.searching")}</span>
+      <CardContent className="flex flex-col gap-6 pt-6">
+        {/* A64-025.5 §9. The searching state is the page now, not a line at
+            the top of a table, because it is the only thing happening.
+
+            The pulse is two rings on the brand at low opacity — CSS only,
+            no library, and `motion-reduce:animate-none` so it stops for
+            anybody who asked their system to stop things moving. It carries
+            no information: the words beside it do, and the `role="status"`
+            is what announces them. */}
+        <div className="flex items-center gap-4" role="status">
+          <span className="relative flex size-3 shrink-0" aria-hidden="true">
+            <span className="bg-primary/40 absolute inline-flex size-full animate-ping rounded-full motion-reduce:animate-none" />
+            <span className="bg-primary relative inline-flex size-3 rounded-full" />
+          </span>
+          <div className="flex min-w-0 flex-col">
+            <span className="font-medium">{t("play.waiting.searching")}</span>
+            <span className="text-muted-foreground text-sm tabular-nums">
+              {t("play.waiting.elapsed", { duration: formatElapsed(elapsed, locale) })}
+            </span>
+          </div>
         </div>
 
-        <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-          <Row label={t("play.form.mode")}>
-            {t(ticket.queue_type === "ranked" ? "play.mode.ranked" : "play.mode.casual")}
-          </Row>
-          <Row label={t("play.form.timeControl")}>
+        {/* What they are queued for, as three facts rather than a form they
+            can no longer change. The clock leads because it is the choice
+            that decides the game. */}
+        <dl className="flex flex-wrap items-center gap-2">
+          <Fact label={t("play.form.timeControl")}>
             <span className="tabular-nums">{clock ?? "—"}</span>
-          </Row>
-          <Row label={t("play.waiting.speed")}>
+          </Fact>
+          <Fact label={t("play.waiting.speed")}>
             {t(SPEED_LABELS[ticket.speed_class] ?? "play.speed.unknown")}
-          </Row>
-          <Row label={t("play.waiting.since")}>
+          </Fact>
+          <Fact label={t("play.form.mode")}>
+            {t(ticket.queue_type === "ranked" ? "play.mode.ranked" : "play.mode.casual")}
+          </Fact>
+          <Fact label={t("play.waiting.since")}>
             {/* Semantic `<time>`: the machine-readable instant is the
                 server's, and the visible text is the reader's locale. */}
             <time dateTime={ticket.entered_at} className="tabular-nums">
@@ -96,12 +116,8 @@ export function WaitingCard({
                 new Date(ticket.entered_at),
               )}
             </time>
-          </Row>
+          </Fact>
         </dl>
-
-        <p className="text-muted-foreground text-sm">
-          {t("play.waiting.elapsed", { duration: formatElapsed(elapsed, locale) })}
-        </p>
 
         {/* A64-020.5D §17. Shown **only when degraded** — a "connected"
             banner during normal operation is noise, and this line exists to
@@ -115,9 +131,13 @@ export function WaitingCard({
 
         {failure !== null && <FormError messageKey={failure} />}
 
+        {/* Secondary, and no confirmation: leaving a queue costs nothing
+            and is instantly repeatable, so a dialog would be a second click
+            protecting against no consequence. The guard that matters is
+            `disabled` while the request is in flight. */}
         <Button
           variant="outline"
-          className="min-h-11"
+          className="w-full sm:w-auto sm:self-start"
           disabled={leave.isPending || disabled}
           onClick={() => void onCancel()}
         >
@@ -129,15 +149,6 @@ export function WaitingCard({
         </Button>
       </CardContent>
     </Card>
-  );
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <>
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="font-medium">{children}</dd>
-    </>
   );
 }
 

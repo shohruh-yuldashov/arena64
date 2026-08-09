@@ -44,6 +44,7 @@ from app.modules.users.application.services.user_credential_service import UserC
 from app.modules.users.domain.entities import User
 from app.modules.users.domain.validators import _known_timezones, validate_timezone
 from app.modules.users.domain.value_objects import Email, Timezone, Username
+from tests.fakes.moderation import UnrestrictedAccounts
 from tests.fakes.user_repository import FakeUserRepository
 
 _NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -124,7 +125,10 @@ async def service(
     # (once per process, ever) but not the one under test here.
     await hasher.dummy_hash()
     return AuthenticationService(
-        credentials=credentials, password_hasher=hasher, clock=_FixedClock()
+        restrictions=UnrestrictedAccounts(),
+        credentials=credentials,
+        password_hasher=hasher,
+        clock=_FixedClock(),
     )
 
 

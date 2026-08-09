@@ -30,6 +30,7 @@ from app.modules.auth.domain.exceptions import (
     SessionNotFound,
 )
 from app.modules.auth.domain.sessions import RevocationReason, SessionDevice, UserSession
+from tests.fakes.moderation import UnrestrictedAccounts
 from tests.fakes.session_repository import FakeSessionRepository
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
@@ -95,6 +96,7 @@ def service(
     settings: SessionSettings,
 ) -> SessionService:
     return SessionService(
+        restrictions=UnrestrictedAccounts(),
         sessions=repository,
         tokens=RefreshTokenService(settings),
         unit_of_work=unit_of_work,

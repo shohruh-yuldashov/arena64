@@ -37,6 +37,7 @@ from app.modules.users.application.services import UserService
 from app.modules.users.application.services.user_credential_service import UserCredentialService
 from app.modules.users.domain.entities import User
 from app.modules.users.domain.value_objects import Email, Timezone, Username
+from tests.fakes.moderation import UnrestrictedAccounts
 from tests.fakes.session_repository import FakeSessionRepository
 from tests.fakes.user_repository import FakeUserRepository
 
@@ -119,6 +120,7 @@ def client(user: User) -> Iterator[TestClient]:
             clock=_FixedClock(),
         )
         return AuthenticationService(
+            restrictions=UnrestrictedAccounts(),
             credentials=UserCredentialService(users),
             password_hasher=_StubHasher(),
             clock=_FixedClock(),
@@ -126,6 +128,7 @@ def client(user: User) -> Iterator[TestClient]:
 
     def _session_service() -> SessionService:
         return SessionService(
+            restrictions=UnrestrictedAccounts(),
             sessions=FakeSessionRepository(),
             tokens=RefreshTokenService(SessionSettings()),
             unit_of_work=_NullUnitOfWork(),

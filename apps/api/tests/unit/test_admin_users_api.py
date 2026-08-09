@@ -17,7 +17,11 @@ from uuid import UUID
 import pytest
 
 from app.core.identifiers import generate_uuid7
-from app.modules.admin.application.services import AdminRoleService, AuditRecorder
+from app.modules.admin.application.services import (
+    AdminRoleService,
+    AuditRecorder,
+    ModerationService,
+)
 from app.modules.admin.domain.roles import AdminRole
 from app.modules.admin.presentation.routers.users import (
     MAX_PAGE_SIZE,
@@ -28,6 +32,11 @@ from app.modules.admin.presentation.routers.users import (
 from app.modules.admin.presentation.schemas.users import AdminUserDetail, AdminUserSummary
 from app.modules.users.public import AdminUserFilters, AdminUserPage, AdminUserRecord
 from tests.fakes.admin_audit import InMemoryAuditEntries
+from tests.fakes.moderation import (
+    InMemoryModerationCases,
+    InMemorySanctions,
+    RecordingSessionRevoker,
+)
 from tests.fakes.presence_redis import MovableClock
 from tests.unit.test_admin_authorization import InMemoryRoleAssignments, NullUnitOfWork
 
@@ -77,6 +86,23 @@ class Headers:
 
     def __init__(self) -> None:
         self.headers: dict[str, str] = {}
+
+
+def _moderation(cases: InMemoryModerationCases, sanctions: InMemorySanctions) -> ModerationService:
+    """The **real** service over in-memory storage — A64-024.6.
+
+    Named here because the Users detail page now composes an account's
+    moderation standing, and stubbing that composition would leave the one
+    thing this page newly does untested.
+    """
+    return ModerationService(
+        cases=cases,
+        sanctions=sanctions,
+        sessions=RecordingSessionRevoker(),
+        audit=AuditRecorder(entries=InMemoryAuditEntries(), clock=MovableClock(NOW)),
+        unit_of_work=NullUnitOfWork(),  # type: ignore[arg-type]
+        clock=MovableClock(NOW),
+    )
 
 
 def _record(username: str, *, active: bool = True, verified: bool = True) -> AdminUserRecord:
@@ -236,15 +262,22 @@ class TestWhatLeavesTheServer:
         roles = _roles(assignments)
         await roles.bootstrap(account_id=subject.id, role=AdminRole.ADMIN)
 
+        cases, sanctions = InMemoryModerationCases(), InMemorySanctions()
         detail = await read_user(
             subject.id,
             _Identity(generate_uuid7()),  # type: ignore[arg-type]
             directory,  # type: ignore[arg-type]
             roles,
+            _moderation(cases, sanctions),
+            cases,
             Headers(),  # type: ignore[arg-type]
         )
         assert detail.is_admin is True
         assert detail.admin_role_granted_at == NOW
+        # A64-024.6 — an unrestricted account says so, rather than omitting
+        # the fact and leaving the console to guess.
+        assert detail.moderation.is_restricted is False
+        assert detail.moderation.restriction is None
 
         with pytest.raises(HTTPException) as missing:
             await read_user(
@@ -252,6 +285,8 @@ class TestWhatLeavesTheServer:
                 _Identity(generate_uuid7()),  # type: ignore[arg-type]
                 directory,  # type: ignore[arg-type]
                 roles,
+                _moderation(cases, sanctions),
+                cases,
                 Headers(),  # type: ignore[arg-type]
             )
         assert missing.value.status_code == 404

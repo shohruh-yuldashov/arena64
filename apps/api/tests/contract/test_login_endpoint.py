@@ -44,6 +44,7 @@ from app.modules.users.application.services import UserService
 from app.modules.users.application.services.user_account_service import UserAccountService
 from app.modules.users.application.services.user_credential_service import UserCredentialService
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
+from tests.fakes.moderation import UnrestrictedAccounts
 
 EMAIL = "player.one@example.com"
 PASSWORD = "CorrectHorse1!"
@@ -79,6 +80,7 @@ def service(contract_session: AsyncSession) -> AuthenticationService:
     """The production object graph, with a real session and a real hasher
     — only the session's transaction is the test's (rolled back after)."""
     return AuthenticationService(
+        restrictions=UnrestrictedAccounts(),
         credentials=UserCredentialService(_users(contract_session)),
         password_hasher=Argon2idPasswordHasher(AuthSettings()),
         clock=SystemClock(),

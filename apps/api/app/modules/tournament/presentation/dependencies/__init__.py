@@ -31,6 +31,7 @@ from app.api.deps import ClockDep, DbSessionDep
 from app.api.outbox_deps import EventPublisherDep
 from app.config.settings import TournamentSettings
 from app.core.clock import Clock
+from app.core.unit_of_work import UnitOfWork
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.game.public import MatchCreationUseCase
 from app.modules.game.public.reconciliation import OriginMatchReader
@@ -102,6 +103,7 @@ def build_registration_service(
     players: PlayerDirectory,
     events: EventPublisher,
     clock: Clock,
+    unit_of_work: UnitOfWork | None = None,
 ) -> TournamentRegistrationService:
     """The registration use cases, over a session the caller opened.
 
@@ -119,7 +121,11 @@ def build_registration_service(
         registrations=SqlAlchemyRegistrationRepository(session),
         players=players,
         events=events,
-        unit_of_work=SessionUnitOfWork(session),
+        # A64-024.5H: a caller that must add its own write to this
+        # transaction — the admin console's audit entry — hands over a
+        # `ParticipatingUnitOfWork`, which stages and leaves the commit to
+        # it. Every other caller gets the default and is unchanged.
+        unit_of_work=unit_of_work or SessionUnitOfWork(session),
         clock=clock,
     )
 
@@ -263,6 +269,7 @@ def build_start_service(
     settings: TournamentSettings,
     events: EventPublisher,
     clock: Clock,
+    unit_of_work: UnitOfWork | None = None,
 ) -> TournamentStartService:
     """Starting a tournament — A64-019.5 §8.
 
@@ -278,7 +285,11 @@ def build_start_service(
         attempts=SqlAlchemyPairingAttemptRepository(session),
         launcher=build_match_launcher(session, matches=matches, clock=clock, settings=settings),
         events=events,
-        unit_of_work=SessionUnitOfWork(session),
+        # A64-024.5H — see `build_registration_service`. Note that
+        # `build_bracket_service` above keeps its own: materialisation is a
+        # separate, idempotent transaction **by design** (see the start
+        # service's docstring), and staging it would undo that.
+        unit_of_work=unit_of_work or SessionUnitOfWork(session),
         clock=clock,
     )
 

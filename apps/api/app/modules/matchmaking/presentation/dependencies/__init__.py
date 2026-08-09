@@ -95,6 +95,7 @@ from app.api.deps import ClockDep, DbSessionDep, PresenceSettingsDep, RedisPools
 from app.api.outbox_deps import EventPublisherDep
 from app.config.settings import MatchmakingSettings
 from app.core.clock import Clock
+from app.core.unit_of_work import UnitOfWork
 from app.database.unit_of_work import ParticipatingUnitOfWork, SessionUnitOfWork
 from app.modules.friends.application.ports import SocialGraphCache
 from app.modules.friends.application.services import (
@@ -360,7 +361,11 @@ def build_pairing_exclusions(session: AsyncSession) -> PairingExclusions:
 
 
 def build_match_creation(
-    session: AsyncSession, *, events: EventPublisher, clock: Clock
+    session: AsyncSession,
+    *,
+    events: EventPublisher,
+    clock: Clock,
+    unit_of_work: UnitOfWork | None = None,
 ) -> MatchCreationUseCase:
     """`game`'s side of the pairing handshake — A64-015.4.
 
@@ -381,7 +386,12 @@ def build_match_creation(
     return PersistentMatchCreation(
         matches=SqlAlchemyMatchRecordRepository(session),
         events=events,
-        unit_of_work=SessionUnitOfWork(session),
+        # A64-024.5H, and `specs/friend-challenges.md` already names the
+        # shape: a caller composing this into a larger atomic operation
+        # hands over a `ParticipatingUnitOfWork`. Committing per match is
+        # right for the pairing path and wrong for a caller that has more
+        # to land with it.
+        unit_of_work=unit_of_work or SessionUnitOfWork(session),
         clock=clock,
     )
 

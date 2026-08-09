@@ -41,4 +41,47 @@ class LastAdministrator(ConflictError):
     """
 
 
-__all__ = ["AlreadyGranted", "LastAdministrator", "NotGranted", "SelfGrant"]
+class SelfSanction(ValidationError):
+    """An administrator tried to restrict their own account — A64-024.6.
+
+    Refused for the same reason `SelfGrant` is, inverted: an administrator
+    who can withhold their own access can lock the console's operator out
+    of the surface they are operating, and §13.2 already forbids acting on
+    a case involving oneself.
+    """
+
+
+class ProtectedAdministrator(ConflictError):
+    """Restricting this account would leave the platform unadministrable.
+
+    The moderation counterpart of `LastAdministrator`. A suspension is not
+    a role revocation, but a suspended administrator cannot sign in — so
+    suspending the last one removes every route back into the console just
+    as surely, and with no `bootstrap` to recover through.
+    """
+
+
+class AlreadySanctioned(ConflictError):
+    """An effective sanction of this kind already exists for this account.
+
+    A conflict rather than a silent success: the second call would
+    otherwise write a second case and a second audit row for a state
+    transition that did not happen, and a trail that records transitions
+    which never occurred is worse than one that records too few.
+    """
+
+
+class NotSanctioned(ConflictError):
+    """There is no effective sanction of this kind to lift."""
+
+
+__all__ = [
+    "AlreadyGranted",
+    "AlreadySanctioned",
+    "LastAdministrator",
+    "NotGranted",
+    "NotSanctioned",
+    "ProtectedAdministrator",
+    "SelfGrant",
+    "SelfSanction",
+]

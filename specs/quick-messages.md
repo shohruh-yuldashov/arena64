@@ -3,7 +3,7 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-023` |
-| **Status** | Implemented — A64-023.1 (domain, contracts, architecture), A64-023.2 (picker, presentation, mute), A64-023.3 (block suppression and abuse hardening). |
+| **Status** | **Complete** — A64-023.1 (domain, contracts, architecture), A64-023.2 (picker, presentation, mute), A64-023.3 (block suppression, abuse hardening), A64-023.4 (final scope audit and polish). Scope matrix in §0. |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-09 |
 | **Last updated** | 2026-08-09 |
@@ -11,6 +11,75 @@
 | **Related specs** | [`chat.md`](./chat.md) (deferred), [`spectator.md`](./spectator.md), [`frontend.md`](./frontend.md) |
 | **Related docs** | [`websocket.md`](../docs/01-architecture/websocket.md) §20 |
 | **Code** | `apps/api/app/gateway/quick_messages.py`, `quick_message_handler.py`, `quick_message_limits.py`; `apps/web/src/features/game/model/quick-messages.ts`, `use-quick-messages.ts`, `ui/quick-message-picker.tsx`, `ui/quick-message-bubble.tsx` |
+
+---
+
+## 0. Final scope matrix — A64-023.4
+
+The epic's original roadmap named six items. Each is recorded here with its final
+disposition, so the question *"is everything accounted for?"* is answerable without
+reconstructing history from commits.
+
+| Scope item | Disposition | Evidence |
+| --- | --- | --- |
+| **Predefined Messages** | **Complete** | Catalogue `app/gateway/quick_messages.py`; transport §11; picker `ui/quick-message-picker.tsx`; 7 gateway tests + 14 client tests |
+| **Emoji Reactions** | **Complete as one concept with predefined messages** — see §0.1 | `specs/quick-messages.md` §5, [ADR-004](../docs/07-decisions/ADR-004-quick-messages-not-free-text-chat.md); glyphs in `model/quick-messages.ts` |
+| **In-game Realtime Delivery** | **Complete** | `QuickMessageHandler` → `RoomBroadcaster`; §10a "Duplicate delivery and multi-tab"; 3 hardening tests |
+| **Rate Limits** | **Complete** | §8; `quick_message_limits.py`; burst 3/10s + sustained 6/60s, one atomic acquisition |
+| **Notification Integration** | **Intentionally not applicable** — see §0.2 | `specs/notifications.md` §1 and §12; `NotificationType`'s admission bar |
+| **UX Polish** | **Complete** | §10a; A64-023.4 fixed two defects — an expiring refusal and focus restoration on auto-close |
+
+### 0.1 Emoji Reactions — the final semantics
+
+**Emoji reactions and quick messages are one protocol concept on Arena64, and that is a
+decision rather than an omission.**
+
+The two things a reader might mean are worth separating:
+
+| | Status |
+| --- | --- |
+| (A) Predefined messages carrying emoji | **Shipped.** Every catalogue entry has a glyph — 🤝 👏 👍 🙂 😅 — rendered beside its localised text |
+| (B) A reaction anchored to a specific move or ply | **Not built, and never specified.** No document in this repository has ever described it |
+
+The reasoning for (A) rather than a second concept is in §5 and is unchanged: a reaction
+and a quick message are identical on the wire — a closed identifier, from a participant,
+about one live match, rendered by the receiver — so two concepts would be two handlers,
+two rate limits and two authorization paths that must not diverge.
+
+**Why (B) was not added by this audit.** It is a new product feature, not a missing
+piece of an existing one. It would need a ply reference on the wire, a board-anchored
+surface, and — the part that actually decides it — **its own abuse model**: a reaction
+attached to the move a player just blundered is a taunt in a way a message sent into the
+match is not. The catalogue's whole safety property is that no entry is capable of one
+(§5), and anchoring changes that even with the same six entries.
+
+The glyphs remain **presentation only**. The protocol value is the identifier; a client
+may render any entry as text alone, and adding a glyph never adds a catalogue entry.
+
+### 0.2 Notification Integration — the final semantics
+
+**Quick messages generate no notification of any kind — no in-app row, no push, no
+email — and this is the correct integration rather than a gap.**
+
+It follows from the notification architecture's own published bar, not from a preference
+of this epic:
+
+| Notification rule | Why a quick message fails it |
+| --- | --- |
+| `specs/notifications.md` §1: *"a projection of a source event"* | A quick message emits **no event**. ADR-004 gives it no persistence and no outbox entry, so there is no source to project |
+| `NotificationType`: *"a type whose fact expires in seconds would be an inbox entry that is already wrong when it is read"* | "Nice move!" is exactly that fact |
+| §1: *"a record of what was true when it was written"* | The feature's design is at-most-once and ephemeral (§12) — there is nothing to record |
+
+A notification would therefore have to **reintroduce persistence** for a feature whose
+central decision was not to have any, and would produce an inbox entry per courtesy —
+the spam §6 of A64-023.4 warns against, at up to six per player per minute.
+
+**Realtime presentation while the player is in the match is the whole delivery model.** A
+player who is not in the match does not receive the message at all, by design (§12), and
+that is not a delivery failure to compensate for.
+
+`specs/notifications.md` §12's extension-point table lists three deferred producers and
+quick messages are deliberately not among them. Nothing needs adding there.
 
 ---
 
@@ -325,6 +394,11 @@ cannot refuse anything the server would allow and is not a client-side limiter.
 A refusal is a small localized sentence beside the picker, never the generic transport
 failure text. The server's own English prose is logged, never rendered.
 
+**It expires after six seconds** (A64-023.4). `send` resets it, and `send` returns early
+once the match is terminal or the socket is down — so a player rate-limited on the last
+move of a game kept "Too quick" on screen for as long as they stayed on the page. A
+message about a transient condition must not outlive it.
+
 `game.command.rejected` is shared with resign and the draw commands, so a refusal is
 **attributed before it is rendered**: the game reducer applies one only while a command
 is outstanding, and the quick-message hook claims `unknown_quick_message` outright and
@@ -338,6 +412,12 @@ Once the match is terminal the picker's trigger is disabled and an open menu clo
 The **mute control stays enabled** — a player must still be able to silence a bubble
 that is on screen. The backend refuses terminal sends regardless; the frontend reflects
 that state rather than replacing the enforcement.
+
+**Focus moves to the mute button when the close happens under a keyboard** (A64-023.4),
+and only when focus was inside the menu. Closing unmounts whichever item held it, so
+without this a player whose game ended mid-picker was dropped to `<body>` at the exact
+moment the result appeared. It cannot go to the trigger: that is `disabled` by then, and
+a disabled button cannot hold focus — focusing it silently does nothing.
 
 ### Duplicate delivery and multi-tab — A64-023.3
 
@@ -465,7 +545,7 @@ distinct, which is the whole point of the no-oracle rule.
 | --- | --- |
 | `tests/unit/test_gateway_connection.py::TestQuickMessages` (7) | AC-1 … AC-7 |
 | `tests/contract/test_quick_message_localisation.py` (3, one per locale) | AC-8 |
-| `apps/web/src/features/game/quick-messages.test.tsx` (12) | The client experience — §10a; subscription and repeat hardening |
+| `apps/web/src/features/game/quick-messages.test.tsx` (14) | The client experience — §10a; subscription, repeat and polish hardening |
 | `tests/unit/test_gateway_connection.py::TestQuickMessageHardening` (3) | Blocks, fail-closed reads, multi-connection fan-out |
 
 ## 16. Open questions

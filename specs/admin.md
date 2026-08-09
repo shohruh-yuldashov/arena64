@@ -1064,6 +1064,180 @@ and in one `INFO` log line.
 
 ---
 
+## 6.14 Dashboard & System Overview — A64-024.9
+
+The console's home page: six facts, the things waiting for a person, and the
+ten most recent privileged actions.
+
+### What it is not, and the correction that matters
+
+**Not a metrics system, and not a Grafana replacement — because there is no
+Grafana to replace.** This repository has no Prometheus, StatsD or
+OpenTelemetry collector; `specs/live-game/audit.md` §8 and
+`specs/matchmaking/audit.md` §4 both state it plainly: *"Metrics are emitted
+as structured log records."* They are consumed by whatever log pipeline a
+deployment runs.
+
+That makes the boundary sharper rather than softer. Recomputing a metric here
+as a SQL aggregate would create a **second answer** to a question the log
+pipeline already answers, and the two would disagree exactly when somebody
+was relying on them. So this page reports facts the log stream does not: what
+is true *right now* in the database, and what is waiting.
+
+Also not built: charts, trends, percentages, date-range analytics, CPU or
+memory, a logs viewer, an export.
+
+### The facts, and why each one
+
+| Card | Fact | Owner | Backed by |
+| --- | --- | --- | --- |
+| Accounts | Registrations in the last 24h and 7d | `users` | `ix_user__created_at_id` — a range scan bounded by the window |
+| Matches | In play, awaiting acceptance | `game` | `ix_match__current_light`/`__current_dark`, partial on exactly those two statuses |
+| Tournaments | Registration open, in progress | `tournament` | **No index** — see below |
+| Attention | Restrictions in force | `admin` | `ix_sanction__player_expiry`, partial on `lifted_at IS NULL` |
+| Attention | Push deliveries out of retries | `notifications` | `ix_notification_push_delivery__failed`, partial on `failed` |
+| Activity | The ten most recent audit entries | `admin` | `ix_audit_entry__created_at_id` |
+
+Every number is produced by the module that owns the data, through that
+module's published administrative port. `admin` composes; it queries no other
+module's tables.
+
+### Deliberately omitted
+
+| Tempting metric | Why not |
+| --- | --- |
+| **Users online** | Presence is one Redis key per player with a TTL (`presence:v1:<id>`) and no counter. Counting means a keyspace scan, and the published port deliberately offers per-player reads only. An inferred figure — active sessions, recent requests — would be a number an operator trusts and cannot check |
+| **Total accounts** | An unbounded `COUNT(*)` that gets more expensive every day and answers nothing anybody acts on |
+| Verified / unverified split | No index; a full scan for a figure with no action behind it |
+| **Matches completed today** | The most interesting product signal and the most expensive: `game.match` is the platform's largest table and a partition candidate, and there is no index for it. Adding one to the hottest table so a dashboard can show a number is the trade `database.md` §12.2 exists to prevent |
+| Health / readiness card | `/health/ready` pings PostgreSQL and **every** Redis pool. One operator opening a tab must not become a probe across every dependency; liveness belongs to the orchestrator that already asks |
+| Trends, deltas, percentages | Nothing stores a prior period. A "+12%" composed from two numbers the platform never recorded together is a figure an operator acts on and cannot reproduce |
+
+### Query budget
+
+    accounts        1   two windows, one range scan with a FILTER
+    matches         1   grouped, over a partial index
+    tournaments     1   grouped
+    restrictions    1   over a partial index
+    push deliveries 1   over a partial index
+    recent audit    1   bounded LIMIT 10
+    actor names     1   one batch over users.public
+
+**Seven reads, and the count does not move** — not with the account count,
+not with the match history, not with the length of the audit trail. Asserted
+by counting in `tests/unit/test_admin_dashboard.py`, including against ten
+times the activity by ten times as many administrators.
+
+The plans are asserted against a real database in
+`tests/contract/test_admin_dashboard.py`, with `enable_seqscan = off` as a
+penalty rather than a prohibition — a plan that still falls back to a scan is
+one with no index behind it, whatever the row count.
+
+### The one accepted scan
+
+`tournaments.tournament` has no index on `status`, and none was added.
+
+The table holds one row per tournament ever created, and tournaments are
+created by operators rather than by traffic: it grows by a handful of rows a
+day, not by thousands. The scan is measured in microseconds and stays that
+way for years.
+
+**The threshold is written down rather than left to be discovered:** at
+roughly a hundred thousand rows the scan is no longer free, and the fix is
+one partial index on the two live statuses — the same shape
+`ix_match__current_*` already uses. Adding it now would be an index guessed
+at rather than measured, which §11 of this task rules out. A contract test
+asserts that this is the *only* scan, so a second one cannot arrive quietly.
+
+**No migration was needed for A64-024.9.** Every other read rides an index
+that already existed for its own reason.
+
+### Time windows
+
+A day and a week for registrations — "is it happening today" and "is today
+unusual". Both are computed from the service's clock and passed into the
+port, so the answer is reproducible in a test and explicable to an operator;
+neither `now()` in SQL nor the browser's clock is involved.
+
+The activity list has **no window**. It is the newest ten whenever they
+happened, because a quiet week must not empty it — an operator glancing at
+the page wants to know what the last thing that happened *was*.
+
+### Attention items
+
+Two, and both are states the product itself defines as actionable rather than
+thresholds invented here:
+
+- **Restrictions in force** — somebody currently unable to sign in (§6.12).
+- **Push deliveries out of retries** — `attempts_exhausted`, the one push
+  state A64-024.7 built an operator action for. `permanent_failure` and every
+  `skipped_*` are deliberately **not** summed in: a combined "failures"
+  figure would invite action on a number most of which needs none.
+
+When both are zero the section still renders and says so. A section that
+vanished would leave an operator unable to tell "nothing to do" from "that
+part did not load".
+
+### Freshness
+
+Fetched on mount and on an explicit **Refresh**. No polling: a page that
+reissued six aggregate reads every few seconds would cost more than
+everything it reports on, and nothing here changes fast enough to warrant it.
+
+The server sends `generated_at` and the page shows it, because a figure with
+no age invites trust it has not earned.
+
+**A failed refresh keeps the numbers already on screen** and says the refresh
+failed. Replacing known-good data with zeros would invent an all-clear.
+
+### Partial failure
+
+The endpoint is **atomic**. All seven reads share the request's session; if
+one fails the request fails and the console shows an error.
+
+`0` on this page always means zero. It never means "that query did not
+answer" — a typed partial-success shape would have to be rendered and
+reasoned about everywhere, and the honest failure is cheaper than a page an
+operator learns to distrust.
+
+### Drill-down
+
+Every figure is a link, and no card carries an action — §15. A retry beside a
+failure count is one clicked without reading which failure it was.
+
+| From | To |
+| --- | --- |
+| Matches | `/matches?status=active` |
+| Tournaments | `/tournaments?status=in_progress` |
+| Restrictions | `/moderation` |
+| Push deliveries | `/notifications?failed=true` |
+| Activity | `/audit` |
+
+Each parameter is one the destination's own `validateSearch` declares. The
+notifications link is asserted by navigating rather than by reading its
+`href`: the router quotes a search value that would otherwise parse back as a
+boolean, so the URL reads `failed=%22true%22` while the page receives the
+string it declared.
+
+### Privacy
+
+The dashboard shows **less** than the pages it links to. No email, no
+session, no token, no push endpoint, no notification payload — and no audit
+`before`/`after` metadata, because a glance surface has no business carrying
+what a reviewer opens `/audit` for. `CurrentAdmin` on the route,
+`Cache-Control: no-store` on the response.
+
+### Audit vocabulary
+
+The activity list reuses the audit console's action labels rather than
+duplicating them (`features/audit/vocabulary.ts`, extracted for this
+purpose). Extracting it closed a gap: A64-024.6's and A64-024.7's actions had
+never been added to the map and were rendering as raw identifiers on `/audit`
+— readable, by the fallback that exists for exactly that reason, but not
+localised. They are now.
+
+---
+
 ## 7. The audit invariant
 
 **Built by A64-024.8** — see §6.11. The rule it exists to keep:
@@ -1084,10 +1258,10 @@ party being audited.
 
 ## 8. Deferred to later A64-024.x tasks
 
-Dashboard statistics, analytics, infrastructure monitoring, anti-cheat
-surfaces, support tooling, and the final visual design. Reads ship in
-§6.8–§6.11; account restrictions ship in §6.12; notification operations ship
-in §6.13.
+Analytics, infrastructure monitoring, anti-cheat surfaces, support tooling,
+and the final visual design. Reads ship in §6.8–§6.11; account restrictions
+ship in §6.12; notification operations ship in §6.13; the operator overview
+ships in §6.14.
 
 Within notifications specifically, deliberately unsupported and not deferred:
 administrative sending of any kind — broadcast, campaign, template,

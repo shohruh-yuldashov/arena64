@@ -505,25 +505,152 @@ nodes link to `/matches/{id}`.
 
 ---
 
-## 7. The audit invariant — for A64-024.8
+## 6.11 Audit Log — A64-024.8
 
-A64-024.8 builds `admin.audit_entry`. Until then, one rule holds:
+**Read-only, permanently.** Not "read-only until a later phase" like §6.8
+through §6.10: entries are written by the privileged service performing the
+action, and there is no endpoint that accepts one. A `POST /admin/audit`
+would let anything holding an admin session write history — including
+history of things that never happened — which is the one failure an audit
+trail cannot survive.
+
+This is the phase that **unblocks** the mutations §6.8–§6.10 deferred.
+
+### Storage
+
+`admin.audit_entry`, exactly as `database.md` §10.4 specifies it, plus
+`outcome`. Created by `b2d5f8a41c70`, verified up → down → up.
+
+| Concern | Behaviour |
+| --- | --- |
+| Append-only | A trigger raises `restrict_violation` on `UPDATE`, `DELETE` **and** `TRUNCATE` |
+| Why a trigger | The guarantee must survive a repository bug, a migration, and an operator with `psql`. A rule only the application keeps is a rule the application can forget |
+| Why `TRUNCATE` separately | It fires no row trigger, so a row-level guard alone leaves the single statement that empties the whole trail unguarded |
+| Where it is declared | On the model as `after_create` DDL **and** in the migration — so it exists in every database the table exists in, including the ones the contract suite builds with `create_all` |
+| Indexes | `(created_at, id)` for the keyset; `(actor_id, created_at)`, `(action, created_at)`, `(subject_type, subject_ref, created_at)` for the three filters |
+| Check | `ck_audit_entry__actor_matches_type` — `actor_id` is present exactly when `actor_type` is `administrator` |
+| Foreign keys | **None.** `users` is another schema and DB-03 forbids the reference; the trail must outlive the accounts it names |
+
+### The actor, and the bootstrap answer
+
+`actor_type` distinguishes an `administrator` (an account the guard
+resolved) from an `operator` (a process, `actor_id` NULL). A deployment's
+first grant is made from a shell before any administrator exists, and
+recording a fabricated account there would be the one lie an audit trail
+cannot afford — a reader could not tell it from a real grant by that person.
+What authorised the action is the process boundary, which is a stronger
+control than anything the trail could record about it.
+
+**The actor never comes from a client payload.** `AuditRecorder` cannot see
+a request; it takes an account id its caller resolved.
+
+### What an entry may and may not carry
+
+`before` and `after` are typed slices written by the use case that knows
+what changed — `{"role": "admin"}`, never `request.json()`.
+
+**Forbidden, and enforced at the writing end** because a response model
+cannot redact what was already stored: passwords and hashes, access and
+refresh tokens, OTP material, session secrets and identifiers, raw
+`Authorization` headers, cookies, arbitrary request bodies, raw provider
+responses, whole user objects, and email addresses. There is no
+`record(**anything)` — every writer is a named method with named fields.
+
+`correlation_id` is present and is a *request* identifier, not a person's.
+
+### Atomicity
+
+The recorder joins the caller's transaction and never commits:
+
+    async with unit_of_work:
+        revoked = await assignments.revoke(...)
+        await audit.record_administrator(...)
+
+so the mutation and its entry commit together or roll back together. An
+action with no entry and an entry with no action are equally useless to
+somebody reconstructing what happened; atomicity makes both impossible
+rather than unlikely. A refused action — `LastAdministrator`, `SelfGrant`,
+`AlreadyGranted` — raises before anything is written and leaves no entry.
+
+### Actions recorded today
+
+| Action | Written by | Actor |
+| --- | --- | --- |
+| `admin.role.grant` | `AdminRoleService.grant` | the granting administrator |
+| `admin.role.grant` | `AdminRoleService.bootstrap` | operator, no account |
+| `admin.role.revoke` | `AdminRoleService.revoke` | the administrator named by `--by`, or operator |
+
+`revoke` therefore takes `revoked_by` — required, and nullable only as the
+explicit claim "an operator process". `python -m app.operator.admin revoke`
+gained `--by`, verified to hold `ADMIN` for the same reason `grant`'s is.
+
+`AuditOutcome.FAILED` exists and is deliberately unwritten in this phase: it
+is the seam for auditing refused attempts, which is a policy decision
+moderation will make rather than one to guess at now.
+
+### API
+
+    GET /api/v1/admin/audit
+
+| Concern | Behaviour |
+| --- | --- |
+| Filters | `action`, `actor_id`, `subject_type` + `subject_ref` — every one index-backed |
+| `subject_ref` alone | **`400`.** The index leads with `subject_type`, and a filter that quietly did nothing would show an operator the whole trail while they believed they were reading one account's history |
+| Free-text search | **Absent.** The JSON columns vary in shape by action; a search over them would be unindexable and the first thing to become slow |
+| Pagination | Keyset on `(created_at, id)`, default 25, max 50, no total count |
+| Query shape | 2 statements per page — the page, then **one** batch resolving every account it names, actors and subjects together |
+| Caching | `Cache-Control: no-store` |
+
+### Console
+
+`/audit` replaces its placeholder. Table above the breakpoint, cards below,
+`Load more` on the cursor — the same shape as §6.8–§6.10.
+
+**The server sends facts; the console composes the sentence.** "Sanjar
+granted the admin role to Aziza" is assembled from `action`, `actor` and
+`subject` in the operator's own language (uz/ru/en). A server returning the
+sentence would put the platform's languages in the API — the same decision
+A64-023 made for quick messages.
+
+| Case | Rendering |
+| --- | --- |
+| Operator action | The word "operator", never a name |
+| Erased account | The id it recorded, `username` absent — the trail outlives what it describes |
+| Known subject type | A link: `account` → `/users/{ref}`, `match` → `/matches/{ref}`, `tournament` → `/tournaments/{ref}` |
+| Unknown subject type | Plain text. A link built from an unrecognised type is a route that does not exist, and a dead link in an incident review is worse than none |
+| Unknown action | Its raw identifier. The trail is older than the console reading it |
+
+---
+
+## 7. The audit invariant
+
+**Built by A64-024.8** — see §6.11. The rule it exists to keep:
 
 > **Every security-sensitive admin mutation must be attributable to an
 > authenticated admin actor.**
 
-A64-024.1 keeps it without a framework. `granted_by` is a column, `grant`
-refuses without one, `bootstrap` is a separate method so the unattributed path
-cannot be reached by code that merely forgot, and both writes log at `INFO`
-with the account id and the role. No fake audit events were invented to check a
-box.
+A64-024.1 kept it without a framework: `granted_by` is a column, `grant`
+refuses without one, `bootstrap` is a separate method so the unattributed
+path cannot be reached by code that merely forgot, and both writes log at
+`INFO`. No fake audit events were invented to check a box.
+
+A64-024.8 makes it a record rather than a convention. `admin.audit_entry`
+is append-only in the database, the entry is written in the same
+transaction as the mutation, and the actor is the identity the guard
+resolved — so attribution cannot be forgotten, edited or supplied by the
+party being audited.
 
 ## 8. Deferred to later A64-024.x tasks
 
-Dashboard statistics, user management and suspension, match management,
-tournament management, moderation workflows, notification operations, the audit
-log viewer, analytics, infrastructure monitoring, anti-cheat surfaces, support
-tooling, and the final visual design. None is started.
+Dashboard statistics, user suspension and other account mutations,
+moderation workflows, notification operations, analytics, infrastructure
+monitoring, anti-cheat surfaces, support tooling, and the final visual
+design. User, match and tournament **reads** ship in §6.8–§6.10; the audit
+log ships in §6.11.
+
+The mutations are no longer blocked on `admin.audit_entry` — it exists.
+What each still needs is its own decision about *what* to record, which is
+`AuditAction`'s to extend.
 
 Their **routes exist and are guarded**; only their content is deferred, so
 adding a real section later changes a page body and not the boundary.

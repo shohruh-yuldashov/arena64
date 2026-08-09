@@ -17,7 +17,7 @@ from uuid import UUID
 import pytest
 
 from app.core.identifiers import generate_uuid7
-from app.modules.admin.application.services import AdminRoleService
+from app.modules.admin.application.services import AdminRoleService, AuditRecorder
 from app.modules.admin.domain.roles import AdminRole
 from app.modules.admin.presentation.routers.users import (
     MAX_PAGE_SIZE,
@@ -27,6 +27,7 @@ from app.modules.admin.presentation.routers.users import (
 )
 from app.modules.admin.presentation.schemas.users import AdminUserDetail, AdminUserSummary
 from app.modules.users.public import AdminUserFilters, AdminUserPage, AdminUserRecord
+from tests.fakes.admin_audit import InMemoryAuditEntries
 from tests.fakes.presence_redis import MovableClock
 from tests.unit.test_admin_authorization import InMemoryRoleAssignments, NullUnitOfWork
 
@@ -93,6 +94,7 @@ def _record(username: str, *, active: bool = True, verified: bool = True) -> Adm
 def _roles(assignments: InMemoryRoleAssignments) -> AdminRoleService:
     return AdminRoleService(
         assignments=assignments,
+        audit=AuditRecorder(entries=InMemoryAuditEntries(), clock=MovableClock(NOW)),
         unit_of_work=NullUnitOfWork(),  # type: ignore[arg-type]
         clock=MovableClock(NOW),
     )

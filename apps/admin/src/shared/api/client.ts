@@ -423,3 +423,69 @@ export async function fetchTournament(
     signal,
   );
 }
+
+// --- admin audit — A64-024.8 -------------------------------------------------
+
+export interface AdminAuditActor {
+  type: string;
+  account_id: string | null;
+  username: string | null;
+}
+
+export interface AdminAuditSubject {
+  type: string;
+  ref: string;
+  username: string | null;
+}
+
+export interface AdminAuditEntry {
+  id: string;
+  action: string;
+  outcome: string;
+  actor: AdminAuditActor;
+  subject: AdminAuditSubject;
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  correlation_id: string | null;
+  created_at: string;
+}
+
+export interface AdminAuditPage {
+  items: AdminAuditEntry[];
+  next_cursor: string | null;
+}
+
+export interface AuditQuery {
+  action?: string;
+  actor_id?: string;
+  subject_type?: string;
+  subject_ref?: string;
+  cursor?: string;
+}
+
+/**
+ * One page of the audit trail.
+ *
+ * `subject_ref` travels only with `subject_type` — the server refuses the
+ * pair apart, because a filter that quietly did nothing would show an
+ * operator the whole trail while they believed they were reading one
+ * account's history.
+ */
+export async function fetchAuditEntries(
+  query: AuditQuery,
+  signal?: AbortSignal,
+): Promise<Outcome<AdminAuditPage>> {
+  const params = new URLSearchParams();
+  if (query.action) params.set("action", query.action);
+  if (query.actor_id) params.set("actor_id", query.actor_id);
+  if (query.subject_type && query.subject_ref) {
+    params.set("subject_type", query.subject_type);
+    params.set("subject_ref", query.subject_ref);
+  }
+  if (query.cursor) params.set("cursor", query.cursor);
+
+  return authorizedRead<AdminAuditPage>(
+    `/admin/audit${params.size > 0 ? `?${params.toString()}` : ""}`,
+    signal,
+  );
+}

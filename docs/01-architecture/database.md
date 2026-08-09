@@ -1484,7 +1484,19 @@ Retained even when dismissed (IS-3); never exposed to players (IS-4).
 | `moderation_case` | `id`, `subject_player_id`, `category`, `status`, `opened_by`, `opened_at`, `closed_at`, `decision`, `reasoning`, `reverses_case_id` | Immutable once closed; a reversal is a new case |
 | `case_evidence` | PK `(case_id, evidence_type, evidence_ref)` | Polymorphic references across schemas — no FK by construction (DB-03) |
 | `sanction` | `id`, `player_id`, `case_id` (FK), `kind`, `starts_at`, `expires_at`, `lifted_at`, `lifted_by`, `created_at` | The hot authorization read (DM-12) |
-| `audit_entry` | `id`, `actor_type`, `actor_id`, `action`, `subject_type`, `subject_ref`, `before jsonb`, `after jsonb`, `correlation_id`, `created_at` | Append-only; future partition candidate |
+| `audit_entry` | `id`, `actor_type`, `actor_id`, `action`, `subject_type`, `subject_ref`, `outcome`, `before jsonb`, `after jsonb`, `correlation_id`, `created_at` | **Built** (A64-024.8). Append-only, enforced by a trigger on `UPDATE`, `DELETE` and `TRUNCATE`; `actor_id` NULL exactly when `actor_type = 'operator'`; future partition candidate |
+
+**`audit_entry` is append-only in the database, not by convention.** A
+trigger raises `restrict_violation` on `UPDATE`, `DELETE` and `TRUNCATE` —
+`TRUNCATE` needs its own statement-level trigger because it fires no row
+trigger, and it is the one statement that would empty the whole trail. The
+guarantee has to survive a repository bug, a migration and an operator with
+`psql`; a rule only the application keeps is a rule the application can
+forget, and an audit trail the audited party can edit is not one.
+
+`outcome` extends §10.4's original column list: an attempt that was refused
+is a different fact from one that succeeded, and a trail that recorded only
+successes would be silent about exactly the events an incident is about.
 
 **Sanction expiry is evaluated on read, never by a job.** A scheduled "expire sanctions" job that
 fails leaves players banned past their sentence — a failure mode where the safe direction is

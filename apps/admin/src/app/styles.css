@@ -287,3 +287,23 @@ body {
 .load-more {
   margin: 1rem 0 0;
 }
+
+/* A64-024.8. The `before`/`after` slice of one audit entry, folded away by
+   default: it is what somebody reconstructing an incident opens, not what
+   somebody scanning the trail reads. */
+.audit-details {
+  display: grid;
+  grid-template-columns: minmax(6rem, max-content) 1fr;
+  gap: 0.2rem 0.75rem;
+  margin: 0.4rem 0 0;
+  font-size: 0.85rem;
+}
+
+.audit-details dt {
+  color: var(--muted);
+}
+
+.audit-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}

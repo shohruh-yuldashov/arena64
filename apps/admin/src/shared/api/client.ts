@@ -759,3 +759,53 @@ export interface AdminDashboard {
 export async function fetchDashboard(signal?: AbortSignal): Promise<Outcome<AdminDashboard>> {
   return authorizedRead<AdminDashboard>("/admin/dashboard", signal);
 }
+
+// --- admin tournament actions — A64-024.5H -----------------------------------
+
+export interface AdminTournamentAction {
+  tournament_id: string;
+  status: string;
+  matches_launched: number;
+}
+
+export interface CreateTournamentInput {
+  name: string;
+  variant: string;
+  speed_class: string;
+  capacity: number;
+  rated: boolean;
+  registration_deadline?: string | null;
+}
+
+/**
+ * Creates a tournament in `draft`.
+ *
+ * **No id, no status, no creator.** All three are the server's — the
+ * creator in particular, because a nullable `created_by` distinguishes "the
+ * platform made this" from "a named administrator did", and a value from
+ * here would erase that.
+ */
+export async function createTournament(
+  input: CreateTournamentInput,
+): Promise<Outcome<AdminTournamentAction>> {
+  return authorizedWrite<AdminTournamentAction>("/admin/tournaments", input);
+}
+
+/**
+ * The three lifecycle transitions an administrator may drive.
+ *
+ * Each is a **named command** with no body: the transition is the route, so
+ * there is nothing to send and no way to ask for a state the aggregate's
+ * table forbids.
+ */
+export type TournamentCommand = "registration/open" | "registration/close" | "start";
+
+export async function commandTournament(
+  tournamentId: string,
+  command: TournamentCommand,
+): Promise<Outcome<AdminTournamentAction>> {
+  return authorizedWrite<AdminTournamentAction>(
+    `/admin/tournaments/${encodeURIComponent(tournamentId)}/${command}`,
+    {},
+  );
+}

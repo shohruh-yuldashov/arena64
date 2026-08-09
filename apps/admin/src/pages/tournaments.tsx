@@ -1,18 +1,21 @@
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   type AdminTournamentSummary,
   fetchTournaments,
   type TournamentQuery,
 } from "@/shared/api/client";
+import { CreateTournament } from "@/features/tournaments/create-tournament";
 import { useTranslation } from "@/shared/i18n";
 
 /**
- * The Tournaments console — A64-024.5 §16.
+ * The Tournaments console — A64-024.5 §16, A64-024.5H.
  *
- * Read-only, and it offers nothing it cannot do: no create, no cancel, no
- * publish-round, and no disabled "coming soon" control either.
+ * It offers nothing it cannot do. Creation arrived in A64-024.5H because
+ * `tournament` has a canonical use case for it; cancel and publish-round
+ * did not, and there is no disabled "coming soon" control for either — a
+ * greyed button implies the platform has an answer it is withholding.
  *
  * Filters are typed values in the URL. There is **no name search box** —
  * `tournament.name` carries no index, so a substring match would be a
@@ -55,7 +58,7 @@ export function TournamentsPage() {
   const key = JSON.stringify(query);
 
   const controller = useRef<AbortController | null>(null);
-  useEffect(() => {
+  const reload = useCallback(() => {
     controller.current?.abort();
     const next = new AbortController();
     controller.current = next;
@@ -64,7 +67,7 @@ export function TournamentsPage() {
     setCursor(null);
     setMoreFailed(false);
 
-    void fetchTournaments(query, next.signal).then((outcome) => {
+    return fetchTournaments(JSON.parse(key) as TournamentQuery, next.signal).then((outcome) => {
       if (next.signal.aborted) return;
       if (outcome.status === "ok") {
         setRows(outcome.value.items);
@@ -74,9 +77,12 @@ export function TournamentsPage() {
       }
       setState("error");
     });
-
-    return () => next.abort();
   }, [key]);
+
+  useEffect(() => {
+    void reload();
+    return () => controller.current?.abort();
+  }, [reload]);
 
   const loadMore = async () => {
     if (cursor === null || loadingMore) return;
@@ -109,6 +115,11 @@ export function TournamentsPage() {
   return (
     <>
       <h2>{t("tournaments.title")}</h2>
+
+      {/* A64-024.5H. The created tournament is `draft`, which the default
+          list shows — so the page is re-read rather than having a row
+          spliced in from a response that carries two fields. */}
+      <CreateTournament onCreated={() => void reload()} />
 
       <div className="filters">
         <p className="field">

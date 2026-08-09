@@ -118,6 +118,15 @@ class NotificationModel(UUIDPrimaryKeyMixin, Base):
             text("created_at DESC"),
             text("id DESC"),
         ),
+        # A64-024.7. The admin console's default page is every notification,
+        # newest first — an ordering the index above cannot serve, because it
+        # leads with `recipient_id`. Without this the first page of the
+        # operations console sorts the whole relation.
+        Index(
+            "ix_notification__created_at_id",
+            text("created_at DESC"),
+            text("id DESC"),
+        ),
         # database.md §12.7's Q9. Partial, so it holds only what is unread
         # and shrinks as a player catches up — which is what makes the badge
         # count cheap for the player who checks it most often.
@@ -481,6 +490,15 @@ class NotificationPushDeliveryModel(Base):
             "ix_notification_push_delivery__due",
             "next_attempt_at",
             postgresql_where=text("status = 'pending'"),
+        ),
+        # A64-024.7. "Which pushes are failing" — the question the operations
+        # console exists to answer, and the exact complement of the index
+        # above. Partial on `failed`, so it holds only what an operator looks
+        # for and stays small while delivered history accumulates.
+        Index(
+            "ix_notification_push_delivery__failed",
+            "notification_id",
+            postgresql_where=text("status = 'failed'"),
         ),
         {"schema": NOTIFICATIONS_SCHEMA},
     )

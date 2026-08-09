@@ -162,3 +162,40 @@ def test_no_migration_declares_a_label_the_code_cannot_decode() -> None:
         f"`AuditAction`. A row carrying one cannot be decoded, and "
         f"`admin.audit_entry` is append-only — it cannot be corrected later."
     )
+
+
+#: The console's action-label map, which is the only other place every
+#: `AuditAction` value has to appear.
+#: `parents[3]` is `apps/` — this file is `apps/api/tests/contract/…`.
+CONSOLE_VOCABULARY = (
+    Path(__file__).resolve().parents[3] / "admin" / "src" / "features" / "audit" / "vocabulary.ts"
+)
+
+
+def test_every_action_has_a_label_in_the_admin_console() -> None:
+    """The third place an action must reach, and the third to drift.
+
+    An action with no entry in `AUDIT_ACTION_LABELS` renders as its raw
+    identifier — `tournament.create` rather than a sentence. That is the
+    fallback working as designed and is not a failure, which is exactly why
+    it went unnoticed for a whole phase: five tournament actions shipped
+    with no label and the console showed identifiers to operators.
+
+    It is also not only cosmetic. The audit console builds its action filter
+    from this map, so an action with no label is one nobody can filter by.
+
+    This test reaches across the workspace, which is unusual and deliberate:
+    the two facts live in two languages and there is no third place that
+    holds both. A generated contract would be a fourth thing to keep in
+    step.
+    """
+    if not CONSOLE_VOCABULARY.exists():  # pragma: no cover — backend-only checkout
+        pytest.skip("apps/admin is not present in this checkout")
+
+    labelled = set(re.findall(r'"([a-z][a-z0-9_.]*)":\s*"audit\.', CONSOLE_VOCABULARY.read_text()))
+    missing = {member.value for member in AuditAction} - labelled
+
+    assert not missing, (
+        f"{sorted(missing)} have no entry in AUDIT_ACTION_LABELS. They render as raw "
+        f"identifiers and cannot be filtered by in the audit console."
+    )

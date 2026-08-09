@@ -1552,6 +1552,71 @@ accounts". Single-recipient and selected-recipient announcements do not
 need one and are the smaller piece; a platform-wide broadcast needs a
 campaign projection, a worker and a progress record, which is its own task.
 
+## 6.17 Epic closure — A64-024.10
+
+The audit that closes the epic. It built no feature: its output is evidence,
+two defects fixed, and this matrix.
+
+### What shipped
+
+| # | Capability | Where | Audited |
+| --- | --- | --- | --- |
+| .1 | Role model, `require_admin`, first-admin bootstrap | §2–§5 | Yes |
+| .2 | Console shell, its own sign-in, own origin | §6.1–§6.7 | Yes |
+| .3 | User management (read) | §6.8 | Yes |
+| .4 | Match management (read) | §6.9 | Yes |
+| .5 | Tournament management (read) | §6.10 | Yes |
+| .5H | Tournament lifecycle commands | §6.15 | Yes |
+| .6 | Moderation — suspend, restore, enforcement | §6.12 | Yes |
+| .7 | Notification operations — read, one retry | §6.13 | Yes |
+| .8 | Audit log — append-only, and its viewer | §6.11 | Yes |
+| .9 | Dashboard | §6.14 | Yes |
+| — | Completion & hardening | §6.16 | Yes |
+
+### What the audit established
+
+| Property | Evidence |
+| --- | --- |
+| Every admin route is guarded | 19 routes in the built OpenAPI, 0 without `require_admin` |
+| No admin response is cacheable | `_no_store` present in all eight routers |
+| The access token carries no role | `TokenClaims` has no role or scope field; nothing sets `custom=` for access tokens, so authority is re-read per request |
+| Every admin mutation commits and audits | 10 transactional service methods, each with an explicit `commit()` and an audit write in the same transaction |
+| The audit table cannot be rewritten | `UPDATE`, `DELETE` and `TRUNCATE` each refused against real rows |
+| No admin response leaks a secret | 36 response models scanned; `email` appears only on the two user models §6.8 declares |
+| The migration chain is linear | single head, no branch |
+| Admin listings are bounded | every listing is keyset with `limit + 1`; no `OFFSET`, no `COUNT(*)` outside one dashboard card |
+| Backend and console agree on paths | all 19 routes are reachable from `client.ts`, and it calls nothing else |
+
+### What the audit fixed
+
+| # | Defect | Severity |
+| --- | --- | --- |
+| 1 | Five tournament `AuditAction` values had no console label. They rendered as raw identifiers **and were absent from the action filter**, so an operator could not filter for a tournament action at all | P3 |
+| 2 | `PlaceholderPage` and its route were unreachable — every section in `SECTIONS` is built. CLAUDE.md §2.7 | P3 |
+
+Fix 1 is now guarded by a test. The Python enum and the console's label map
+are the only two places every action must appear, they are written in two
+languages, and there is no third place holding both — so
+`test_admin_audit_enums.py` reads the console's `vocabulary.ts` directly.
+Cross-workspace reads are unusual and this one is deliberate: generating a
+shared contract would add a fourth artefact to keep in step, which is the
+problem rather than the fix.
+
+### Enhancements after the epic
+
+Each is a decision this epic deliberately did not make, not an omission.
+Recorded here so the next task starts from why rather than from what.
+
+| Enhancement | Blocked on |
+| --- | --- |
+| Admin broadcast / announcements | a muteable `NotificationCategory` (the user chose a new one over `SYSTEM`, which is the sole `preference.LOCKED` entry), plus bounded fan-out — `DurableNotificationWriter.store()` writes one batch in one transaction |
+| Tournament cancellation | the domain event exists; nothing produces or consumes it, and what happens to entrants and rated results is a product decision |
+| Entrant disqualification, forced results, manual brackets | no domain action exists; each changes a rated outcome |
+| A `moderator` role narrower than `admin` | OQ-1 — no surface yet distinguishes them |
+| `muted` and `matchmaking_restricted` sanctions | enforcement seams, per §6.12 |
+| Match mutations | `AuditAction` extends easily; *what* to record does not |
+| Online-user counts, infrastructure charts | metrics here are structured log records; there is no collector in this repository |
+
 ---
 
 ## 7. The audit invariant
@@ -1598,8 +1663,11 @@ publication and entrant removal are named there as refused rather than
 pending: each needs a product or domain decision this epic is not the place
 to make.
 
-Their **routes exist and are guarded**; only their content is deferred, so
-adding a real section later changes a page body and not the boundary.
+Every section the console's navigation offers is now built. A64-024.10
+removed the placeholder route and its page: while sections were still
+outstanding the console rendered a guarded "not implemented yet" page for
+each, and once the last one shipped that route became unreachable code.
+A future section adds its own route rather than filling in a placeholder.
 
 ## 9. Open questions
 

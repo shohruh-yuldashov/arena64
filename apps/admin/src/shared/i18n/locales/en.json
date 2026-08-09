@@ -73,9 +73,7 @@
   "route": {
     "notFound": "Page not found",
     "notFoundHint": "That address is not part of the admin console.",
-    "backToDashboard": "Back to the dashboard",
-    "placeholder": "Not implemented yet",
-    "placeholderHint": "This section arrives in a later A64-024 task."
+    "backToDashboard": "Back to the dashboard"
   },
   "users": {
     "title": "Users",
@@ -241,7 +239,12 @@
     "none": "—",
     "actionSanctionApply": "restricted the account",
     "actionSanctionLift": "removed the restriction",
-    "actionDeliveryRetry": "queued the push delivery again"
+    "actionDeliveryRetry": "queued the push delivery again",
+    "actionTournamentCreate": "created a tournament",
+    "actionTournamentOpen": "opened tournament registration",
+    "actionTournamentClose": "closed tournament registration",
+    "actionTournamentStart": "started the tournament",
+    "actionTournamentRefused": "could not change the tournament's state"
   },
   "moderation": {
     "title": "Restrictions",

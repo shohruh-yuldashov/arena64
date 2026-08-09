@@ -73,9 +73,7 @@
   "route": {
     "notFound": "Страница не найдена",
     "notFoundHint": "Такого адреса в админ-панели нет.",
-    "backToDashboard": "Вернуться на панель",
-    "placeholder": "Ещё не реализовано",
-    "placeholderHint": "Этот раздел появится в одной из следующих задач A64-024."
+    "backToDashboard": "Вернуться на панель"
   },
   "users": {
     "title": "Пользователи",
@@ -241,7 +239,12 @@
     "none": "—",
     "actionSanctionApply": "ограничил аккаунт",
     "actionSanctionLift": "снял ограничение",
-    "actionDeliveryRetry": "поставил push-доставку в очередь заново"
+    "actionDeliveryRetry": "поставил push-доставку в очередь заново",
+    "actionTournamentCreate": "создал турнир",
+    "actionTournamentOpen": "открыл регистрацию на турнир",
+    "actionTournamentClose": "закрыл регистрацию на турнир",
+    "actionTournamentStart": "начал турнир",
+    "actionTournamentRefused": "не смог изменить состояние турнира"
   },
   "moderation": {
     "title": "Ограничения",

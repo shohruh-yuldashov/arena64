@@ -73,9 +73,7 @@
   "route": {
     "notFound": "Sahifa topilmadi",
     "notFoundHint": "Bu manzil admin panelining qismi emas.",
-    "backToDashboard": "Boshqaruv paneliga qaytish",
-    "placeholder": "Hali amalga oshirilmagan",
-    "placeholderHint": "Bu bo'lim keyingi A64-024 vazifalarida qo'shiladi."
+    "backToDashboard": "Boshqaruv paneliga qaytish"
   },
   "users": {
     "title": "Foydalanuvchilar",
@@ -241,7 +239,12 @@
     "none": "—",
     "actionSanctionApply": "hisobni chekladi",
     "actionSanctionLift": "cheklovni olib tashladi",
-    "actionDeliveryRetry": "push yetkazishni qayta navbatga qo'ydi"
+    "actionDeliveryRetry": "push yetkazishni qayta navbatga qo'ydi",
+    "actionTournamentCreate": "turnir yaratdi",
+    "actionTournamentOpen": "turnir ro'yxatini ochdi",
+    "actionTournamentClose": "turnir ro'yxatini yopdi",
+    "actionTournamentStart": "turnirni boshladi",
+    "actionTournamentRefused": "turnir holatini o'zgartira olmadi"
   },
   "moderation": {
     "title": "Cheklovlar",

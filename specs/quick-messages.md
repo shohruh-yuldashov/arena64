@@ -3,14 +3,14 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-023` |
-| **Status** | Implemented — A64-023.1 (domain, contracts and architecture). The picker and incoming-message UI are A64-023.2's. |
+| **Status** | Implemented — A64-023.1 (domain, contracts, architecture) and A64-023.2 (picker, incoming presentation, match-scoped mute). |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-09 |
 | **Last updated** | 2026-08-09 |
 | **Related ADRs** | [`ADR-004`](../docs/07-decisions/ADR-004-quick-messages-not-free-text-chat.md) |
 | **Related specs** | [`chat.md`](./chat.md) (deferred), [`spectator.md`](./spectator.md), [`frontend.md`](./frontend.md) |
 | **Related docs** | [`websocket.md`](../docs/01-architecture/websocket.md) §20 |
-| **Code** | `apps/api/app/gateway/quick_messages.py`, `quick_message_handler.py`, `quick_message_limits.py` |
+| **Code** | `apps/api/app/gateway/quick_messages.py`, `quick_message_handler.py`, `quick_message_limits.py`; `apps/web/src/features/game/model/quick-messages.ts`, `use-quick-messages.ts`, `ui/quick-message-picker.tsx`, `ui/quick-message-bubble.tsx` |
 
 ---
 
@@ -168,26 +168,46 @@ minute the repetition it would prevent is already bounded to something a recipie
 ignore, and the enforcement point is a per-connection last-sent key in Redis, never a
 database write.
 
-## 9. Mute and preferences — the extension point
+## 9. Mute — as built in A64-023.2
 
-A64-023.2 adds suppression. It is **not** built here, and this section exists so that it
-lands in the right place rather than being rediscovered.
+A player may silence their **opponent's** quick messages for the current match.
 
-| Kind | Where it belongs | Why |
+| Property | Behaviour | Why |
 | --- | --- | --- |
-| **Mute** — "do not show me quick messages" | **Client** | It changes nothing the server must guarantee, needs no round trip, and a server-side per-recipient filter would put a preference read on every fan-out |
-| **Block** — BL-1's unilateral refusal of contact | **Server** | BL-1 requires the sender not be told. Only the server can drop a message while telling the sender it was sent |
+| Scope | This match, this tab, this session | Nothing is persisted and no preference row exists. A mute is a reaction to one opponent in one game, not a standing setting |
+| What it affects | The **presentation** of the opponent's messages, and nothing else | Moves, clocks, resign, draw offers, the result and the socket are untouched — §17 |
+| Own messages | Still shown, through the server echo | A player muting an opponent has not asked to stop seeing what they themselves sent |
+| On enabling | The opponent's visible bubble is cleared immediately | Otherwise the mute appears not to have worked until the next message |
+| On disabling | Nothing replays | Suppressed messages are dropped on arrival, never queued. Mute applies **prospectively** |
+| Control | A toggle beside the picker, carrying `aria-pressed` | The state, not only the label, is available to assistive technology |
 
-The server-side seam is `QuickMessageHandler._recipients_of` — the single function where a
-recipient list exists. A filter applied there suppresses a message without touching game
-state, the sender's experience, or the fan-out beneath it.
+**Deliberately client-side.** The suppression changes nothing the server must
+guarantee, needs no round trip, and a server-side per-recipient filter would put a
+preference read on every fan-out. Nothing about this choice is load-bearing: the
+server-side seam below remains where it was.
 
-A block between two live opponents is rare (BL-2 excludes blocked pairs from pairing) but
-reachable: a block placed mid-match. `friends.public.PairingExclusions` already answers the
-question and is already consumed by the gateway for spectating.
+### 9.1 Blocks — the seam, still unimplemented
 
-**Whatever is built must not affect game state.** A suppressed message changes no board, no
-clock, no turn and no ply.
+`ADR-004` and §7 of the original design split the two: an ordinary **mute** is the
+client's, a **BL-1 block** must be the server's, because BL-1 requires the sender not
+be told.
+
+**Server-side block suppression is not built.** `QuickMessageHandler` holds
+`MatchRosterReader`, `GameRoomService`, `RoomBroadcaster`, a limiter and metrics — and
+no `friends.public.PairingExclusions`. The seam is exactly one function,
+`QuickMessageHandler._recipients_of`, which is the only place a recipient list exists.
+
+It is left unbuilt deliberately rather than by oversight:
+
+- **BL-2 already prevents the case.** Blocked pairs are excluded from pairing, so the
+  only way two live opponents can have a block between them is one placed *mid-match*.
+- **It would put a social-graph read on the hot path** of every quick message, for that
+  case alone.
+- Building it means wiring `friends` into a handler that currently reaches exactly one
+  module, which is a decision worth making on purpose rather than as a side effect of a
+  UI phase.
+
+Recorded as OQ-3.
 
 ## 10. Localization
 
@@ -213,6 +233,85 @@ supported locale.
 
 Refusal *reasons* are server-authored English, as they already are for moves and commands.
 Clients branch on `code`; the sentence is a fallback. The **message** is never prose.
+
+## 10a. The client experience — A64-023.2
+
+### Picker
+
+A compact **non-modal menu** beside the game controls: a trigger, the six catalogue
+entries, and nothing else. There is no text input, textarea or editable element
+anywhere in it, which is what makes free text unsendable from the UI as well as from
+the protocol.
+
+Hand-written rather than taken from a library: this repository has no popover or menu
+primitive, and the only alternative was a new dependency. A *dialog* was available and
+deliberately not used — `ResignDialog` is modal, which is right for a destructive
+confirmation and wrong for saying "nice move" while a clock runs.
+
+Each entry carries a restrained glyph which is **presentation only**: the protocol
+value is the identifier, the glyph is `aria-hidden`, and no entry is capable of a
+taunt. Adding a glyph never adds a catalogue entry.
+
+### Incoming presentation
+
+A small bubble rendered **inside the panel, adjacent to the seat that sent it** — the
+opponent's above their clock, the viewer's own below theirs. Not an overlay and not a
+global toast: the panel already orders the two seats, so adjacency needs no positioning
+maths and nothing can cover a board square or a clock at any width.
+
+`role="status"` (polite), so a message is read when a screen reader pauses rather than
+interrupting a move.
+
+### Lifetime and replacement
+
+| Rule | Value |
+| --- | --- |
+| Display lifetime | 4 seconds, measured from **arrival** |
+| Two messages from the same seat | The newer **replaces** the older and restarts the timer |
+| Maximum on screen | One per seat — at most two |
+
+Keyed by side, so stacking is impossible by construction rather than by a cap. The
+bubble is remounted on replacement, which is what makes a repeated message announce
+again instead of appearing unchanged.
+
+### Send flow
+
+Selecting an item sends `game.quick_message.send` and shows **nothing**. The sender's
+own bubble appears when the server's fan-out arrives, exactly as the opponent's does —
+so one code path renders both, and there is no window in which an optimistic bubble and
+a server echo are both on screen. The server is also authoritative about whether the
+message was sent at all: a rate-limited or terminal-match send produces no bubble,
+which an optimistic render would have got wrong.
+
+A local ~600ms guard prevents a double-press producing two frames. **UX only** — it
+cannot refuse anything the server would allow and is not a client-side limiter.
+
+### Rate-limit and refusal feedback
+
+A refusal is a small localized sentence beside the picker, never the generic transport
+failure text. The server's own English prose is logged, never rendered.
+
+`game.command.rejected` is shared with resign and the draw commands, so a refusal is
+**attributed before it is rendered**: the game reducer applies one only while a command
+is outstanding, and the quick-message hook claims `unknown_quick_message` outright and
+`rate_limited` only while a send of its own is in flight. Before A64-023.2 the reducer
+applied every such frame unconditionally, which would have shown a rate-limited quick
+message as a refused draw offer.
+
+### Terminal match
+
+Once the match is terminal the picker's trigger is disabled and an open menu closes.
+The **mute control stays enabled** — a player must still be able to silence a bubble
+that is on screen. The backend refuses terminal sends regardless; the frontend reflects
+that state rather than replacing the enforcement.
+
+### Reconnect
+
+Nothing reappears. Quick messages are never buffered by the gateway (§12), the client
+holds no history, and bubbles live in component state that a remount starts empty. No
+replay semantics were added for UI convenience.
+
+---
 
 ## 11. Wire contract
 
@@ -299,6 +398,7 @@ the free-text archive this feature exists not to have.
 | --- | --- |
 | `tests/unit/test_gateway_connection.py::TestQuickMessages` (7) | AC-1 … AC-7 |
 | `tests/contract/test_quick_message_localisation.py` (3, one per locale) | AC-8 |
+| `apps/web/src/features/game/quick-messages.test.tsx` (10) | The client experience — §10a |
 
 ## 16. Open questions
 
@@ -306,4 +406,4 @@ the free-text archive this feature exists not to have.
 | --- | --- | --- |
 | OQ-1 | Do the six entries match real usage? | Telemetry after A64-023.2 ships the picker |
 | OQ-2 | Should a rematch request be a catalogue entry or its own command? | It changes state, so probably a command — needs a product decision |
-| OQ-3 | Is server-side block suppression needed, given BL-2 makes blocked pairings rare? | A64-023.2 |
+| OQ-3 | Is server-side block suppression needed, given BL-2 makes blocked pairings rare? | **Still open after A64-023.2** — the seam is `QuickMessageHandler._recipients_of` and was deliberately not wired; see §9.1 |

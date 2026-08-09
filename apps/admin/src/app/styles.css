@@ -203,3 +203,83 @@ body {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   font-weight: 600;
 }
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-end;
+}
+
+.filters .field {
+  min-width: 12rem;
+  flex: 1 1 12rem;
+}
+
+.filters select {
+  min-height: 2.75rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.users-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9375rem;
+}
+
+.users-table th,
+.users-table td {
+  padding: 0.6rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.users-cards {
+  display: none;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.users-cards li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+/* One table above the breakpoint, the same rows as cards below it. Six
+   columns at 360px is either a horizontal scroll nobody finds or a font
+   nobody reads. */
+@media (max-width: 47.99rem) {
+  .users-table {
+    display: none;
+  }
+
+  .users-cards {
+    display: block;
+  }
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0 0 1.5rem;
+}
+
+.facts dt {
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}

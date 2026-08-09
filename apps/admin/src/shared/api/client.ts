@@ -151,3 +151,84 @@ export async function fetchAdminSession(): Promise<Outcome<AdminSession>> {
   }
   return { status: "ok", value: session };
 }
+
+// --- admin users — A64-024.3 -------------------------------------------------
+
+export interface AdminUserSummary {
+  id: string;
+  username: string;
+  display_name: string | null;
+  email: string;
+  is_active: boolean;
+  is_verified: boolean;
+  created_at: string;
+  is_admin: boolean;
+}
+
+export interface AdminUserDetail extends AdminUserSummary {
+  admin_role_granted_at: string | null;
+}
+
+export interface AdminUserPage {
+  items: AdminUserSummary[];
+  next_cursor: string | null;
+}
+
+export interface UserQuery {
+  q?: string;
+  is_active?: boolean;
+  is_verified?: boolean;
+  cursor?: string;
+}
+
+/**
+ * One page of accounts.
+ *
+ * Bearer-authenticated like every admin read, so a revoked administrator is
+ * refused here on their next request — the server re-reads the role rather
+ * than trusting a token claim.
+ *
+ * `signal` is threaded through so a superseded search can be abandoned:
+ * without it a slow first request can resolve after a faster second and
+ * repaint stale rows over fresh ones.
+ */
+export async function fetchUsers(
+  query: UserQuery,
+  signal?: AbortSignal,
+): Promise<Outcome<AdminUserPage>> {
+  const params = new URLSearchParams();
+  if (query.q) params.set("q", query.q);
+  if (query.is_active !== undefined) params.set("is_active", String(query.is_active));
+  if (query.is_verified !== undefined) params.set("is_verified", String(query.is_verified));
+  if (query.cursor) params.set("cursor", query.cursor);
+
+  return authorizedRead<AdminUserPage>(
+    `/admin/users${params.size > 0 ? `?${params.toString()}` : ""}`,
+    signal,
+  );
+}
+
+export async function fetchUser(
+  userId: string,
+  signal?: AbortSignal,
+): Promise<Outcome<AdminUserDetail>> {
+  return authorizedRead<AdminUserDetail>(`/admin/users/${encodeURIComponent(userId)}`, signal);
+}
+
+/** One authenticated admin read, with every outcome as a value. */
+async function authorizedRead<T>(path: string, signal?: AbortSignal): Promise<Outcome<T>> {
+  const token = accessToken.get();
+  if (token === null) return { status: "unauthenticated" };
+
+  const response = await send(path, {
+    headers: { Authorization: `Bearer ${token}` },
+    ...(signal ? { signal } : {}),
+  });
+  if (response === null) return { status: "unavailable" };
+  if (response.status === 401) return { status: "unauthenticated" };
+  if (response.status === 403) return { status: "forbidden" };
+  if (!response.ok) return { status: "unavailable" };
+
+  const value = unwrap<T>(await response.json().catch(() => null));
+  return value === null ? { status: "unavailable" } : { status: "ok", value };
+}

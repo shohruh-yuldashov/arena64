@@ -8,7 +8,7 @@
 | **Created** | 2026-08-05 |
 | **Last updated** | 2026-08-07 — A64-022.6, expiry reconciliation and the global match handoff |
 | **Related ADRs** | [`ADR-002`](../docs/07-decisions/ADR-002-frontend-spa.md) |
-| **Related specs** | [`rating.md`](./rating.md), [`leaderboard.md`](./leaderboard.md), [`tournament.md`](./tournament.md) |
+| **Related specs** | [`rating.md`](./rating.md), [`leaderboard.md`](./leaderboard.md), [`tournament.md`](./tournament.md), [`product-experience.md`](./product-experience.md) — the UX/design counterpart to this document |
 | **Related** | `docs/01-architecture/architecture.md` §5, `docs/04-frontend/` |
 
 ---

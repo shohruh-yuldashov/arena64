@@ -1,0 +1,471 @@
+# Feature Specification — Product Experience
+
+| Field | Value |
+| --- | --- |
+| **Spec ID** | `SPEC-PRODUCT-EXPERIENCE` |
+| **Status** | Draft — audit complete (A64-025.1), redesign not started |
+| **Owner** | _Unassigned_ |
+| **Created** | 2026-08-10 |
+| **Last updated** | 2026-08-10 — A64-025.1, the current-state audit |
+| **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
+| **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
+
+---
+
+## 1. Summary
+
+This document holds the **player-facing experience** of Arena64: what the product
+currently looks and feels like, the principles the redesign is held to, and the plan
+that gets it there.
+
+It is deliberately separate from [`frontend.md`](./frontend.md), which specifies the
+*technical* frontend — stack, layers, routing, providers, per-phase implementation.
+That document answers "how is it built"; this one answers "what is the experience, and
+is it good enough". Neither restates the other.
+
+**A64-025.1 was an audit.** Nothing was redesigned. The findings below are evidence
+from the repository at commit `235bf28`, not impressions.
+
+## 2. Non-goals
+
+Stated first, because the temptation in a redesign epic is to widen.
+
+- **No new product features.** The redesign changes how the built product is presented,
+  not what it does.
+- **No domain or business-logic change.** The state machines, the rules, the rating
+  arithmetic and the tournament model stay exactly as they are.
+- **No API expansion for decoration.** Where the UI wants a field the API does not
+  offer, the answer is to redesign around what exists or to raise it as a separate,
+  justified contract change — never to widen a contract because a card looked empty.
+- **No new dependency without a demonstrated gap** in the current stack (§3.11).
+- **`apps/admin` is out of scope.** It is a separate application with a separate
+  audience and its own plain-CSS design language; unifying the two is not a goal of
+  this epic.
+- **No weakening of security or privacy semantics** for visual convenience. The
+  HttpOnly refresh-cookie model, the verified-email gate and the privacy field rules
+  are inputs to the design, not obstacles to it.
+
+---
+
+## 3. Current-state audit — A64-025.1
+
+### 3.1 Surface inventory
+
+Twenty-five routes, from `apps/web/src/app/router/routes.tsx`. Nineteen are behind
+`protectedPage` (authenticated **and** verified); the rest are deliberately open.
+
+| Surface | Route | Guard | State |
+| --- | --- | --- | --- |
+| Landing | `/` | none | **Developer exhibit — see P0-1** |
+| Login | `/login` | anonymous-only | Built |
+| Register | `/register` | anonymous-only | Built |
+| Email verification | `/verify-email` | none (two modes) | Built |
+| Forgot password | `/forgot-password` | none | Built |
+| Reset password | `/reset-password` | none | Built |
+| Own profile | `/profile` | protected | Built |
+| Public profile | `/players/$username` | none | Built |
+| Settings — profile | `/settings/profile` | protected | Built |
+| Settings — preferences | `/settings/preferences` | protected | Built |
+| Settings — privacy | `/settings/privacy` | protected | Built |
+| Settings — notifications | `/settings/notifications` | protected | Built |
+| Settings — sessions | `/settings/sessions` | protected | Built |
+| Friends | `/friends` | protected | Built |
+| Friend requests | `/friends/requests` | protected | Built |
+| Blocked | `/friends/blocked` | protected | Built |
+| Challenges | `/challenges` | protected | Built |
+| Player search | `/search` | protected | Built |
+| Lobby | `/play` | protected | Built |
+| Live game | `/games/$matchId` | protected | Built |
+| Replay | `/games/$matchId/replay` | protected | Built |
+| Match history | `/games/history` | protected | Built |
+| Notifications | `/notifications` | protected | Built |
+| Tournament list | `/tournaments` | protected | Built |
+| Tournament detail | `/tournaments/$tournamentId` | protected | Built |
+| Not found / error | fallback | none | Built |
+
+PWA install, update and offline notices are not routes: they are mounted globally by
+`AppShell` via `widgets/pwa`.
+
+### 3.2 Design language — better than expected, and incomplete
+
+The questions A64-025.1 was asked, answered with evidence.
+
+| Question | Answer | Evidence |
+| --- | --- | --- |
+| Design token system? | **Yes** | `apps/web/src/app/styles/globals.css` — a complete shadcn/ui "New York" neutral theme in OKLCH, light and dark, mapped to Tailwind v4 utilities via `@theme inline` |
+| Primitive component layer? | **Yes, partial** | `apps/web/src/shared/ui/` — Button, Input, Card, Dialog, Avatar, Skeleton, Spinner, ErrorBoundary. Eight primitives |
+| Components duplicated? | **Yes, for states** | No shared empty/error/loading component: `role="alert"` is written out 34 times across 24 files, `role="status"` 40 times across 23 |
+| Arbitrary Tailwind values? | **No** | Whole-tree scan finds only justified ones: `focus-visible:ring-[3px]`, `max-h-[90dvh]`, `lg:max-w-[min(70vh,42rem)]`, `pb-[max(1.5rem,env(safe-area-inset-bottom))]` |
+| Visual hierarchy consistent? | **Mostly** | Only three colour utilities appear across the tree — `text-muted-foreground` (132), `text-primary` (14), `text-destructive` (14). No raw palette colours anywhere |
+| Dark/light theme? | **Yes** | `.dark` class on `<html>`, written before first paint by an inline script in `index.html`, kept in step by `apps/web/src/shared/theme/theme-context.tsx` |
+| Responsive strategy consistent? | **Yes, and narrow** | One breakpoint does nearly all the work — `sm:` and `lg:`. Simple, but see §3.7 |
+
+The discipline here is real and should be preserved. What is missing is not rigour but
+**range**:
+
+- **No brand.** Every colour in the palette has chroma `0` except `--destructive` and
+  the five unused chart colours. `--primary` is near-black in light and near-white in
+  dark. Arena64 currently has no colour of its own.
+- **No game-semantic colour.** There is no token for win, loss, draw, your-turn,
+  low-time or live. `text-primary` is doing all of that work, at whatever contrast a
+  neutral primary happens to give.
+- **Eight primitives is not a system.** No Badge, Select, Tabs, Tooltip, Dropdown,
+  Switch, Notice or EmptyState — each of which is currently re-authored per feature.
+
+### 3.3 Navigation and information architecture
+
+Primary navigation lives in `widgets/session-menu`, rendered in the header by
+`widgets/app-shell`. Despite the name it is not a menu: it is a flat row of buttons —
+Play, Tournaments, Friends, Profile, Sign out — beside `NotificationBell` and
+`ThemeToggle`.
+
+Findings:
+
+- **The name is wrong and the structure follows it.** A "session menu" that is
+  actually the product's main navigation is a component nobody will look in when they
+  need to add a nav item — which is likely why `/games/history`, `/challenges` and
+  `/search` never reached it.
+- **No `aria-current`.** Nothing in the header says which section is open.
+- **No mobile treatment.** Only the user's *name* is hidden below `sm:`
+  (`hidden … sm:inline`). All three nav buttons, the avatar, sign-out, the bell and the
+  theme toggle stay in one 56px row at 360px, beside the brand.
+- **The brand is not a link.** `<span>Arena64</span>` — there is no home affordance.
+- **Anonymous visitors get no navigation at all** — only a Sign in button.
+
+**Does the UI answer "where do I start a game?"** For a signed-in player, yes: Play is
+the first button and the only `default`-variant one. For a first-time visitor landing
+on `/`, **no** — see P0-1.
+
+### 3.4 Authentication
+
+Solid and not the redesign's problem. `RequireAnonymous`, `RequireAuth` and
+`RequireVerifiedEmail` are composed in `apps/web/src/app/router/guards.tsx`; `/verify-email` is deliberately
+unguarded because it serves both a mailed link and an in-session code form, and
+guarding it would be a loop. `?next=` is carried as a string and validated only at use.
+
+The security model is an input to the redesign, not a target: the refresh cookie is
+HttpOnly and host-only, and no visual requirement may move it into JavaScript's reach.
+
+### 3.5 Lobby and game room
+
+The lobby (`/play`) is a single `max-w-2xl` column: queue form, waiting card, and the
+match offer surface which is global (`AppShell` mounts `MatchOfferSurface` on every
+authenticated page, so an accepted challenge reaches a player wherever they are).
+
+The **game room** is the strongest surface in the app and still the one that needs the
+most design work.
+
+What is already right, and must not be lost:
+
+- **The board is genuinely accessible.** `role="grid"` with `role="gridcell"` buttons,
+  arrow-key movement over a roving `tabIndex`, `aria-pressed` for selection, and an
+  `aria-label` per square naming the square, the piece and its rank. This is better
+  than most board games on the web and it is a hard thing to rebuild — the redesign
+  changes its skin, not its semantics.
+- **Board first in the DOM**, one `lg:` breakpoint moves the panel beside it.
+- **Status is textual, not colour-only.** `StatusLine` is a `role="status"` live region
+  carrying whose turn it is, connection state and rejections.
+- **Clocks use `tabular-nums`** so digits do not shift the layout.
+- **App updates are held** while a game is live (`useHoldAppUpdate`), because a
+  service-worker reload mid-game is a running clock with no board.
+
+What is missing:
+
+- **No low-time state.** `ClockFace` has exactly two renderings — active
+  (`border-primary bg-primary/5`) and inactive. A `bullet_1_0` game is sixty seconds
+  long and nothing changes as it runs out.
+- **The active-clock signal is very weak.** A 5%-opacity tint of a neutral primary is
+  close to invisible; whose turn it is is carried mostly by the status text.
+- **On a phone the clocks are below the board.** Board is full-width first, panel
+  follows — so in a timed game the clock can be below the fold on the surface where it
+  matters most.
+- **No move animation, no result reveal.** Motion across the whole app is one
+  `transition-colors`, one `animate-spin`, one `animate-pulse` and Radix's dialog
+  `animate-in`/`animate-out`.
+
+### 3.6 Tournaments and the bracket
+
+The bracket (`apps/web/src/features/tournament/ui/bracket-view.tsx`) renders **rounds as columns of
+equal cards in a horizontal scroller**. It has no connectors, and that is documented as
+a deliberate trade: connectors imply absolute positioning and fixed row heights, and
+fixed heights are what stop a bracket reflowing at 360px. The relationship is carried
+by the round heading and the seed number instead, which is also the only form a screen
+reader can use.
+
+The trade is defensible and the result is still not a bracket: a reader cannot see
+which two nodes feed the one above them.
+
+**The decisive finding is that the relationship is already authoritative and already on
+the wire.** `apps/api/app/modules/tournament/domain/bracket_plan.py` states it:
+
+- a node is `(round_number, slot)`;
+- its parent is `(round_number + 1, slot // 2)` — `BracketSlot.parent()`;
+- its children are `(round_number - 1, slot * 2)` and `(…, slot * 2 + 1)`;
+- **even slots feed the parent's light seat, odd ones the dark** —
+  `BracketSlot.takes_light_seat_of_parent()`.
+
+`BracketNodeResponse` already carries `round_number` and `slot` on every node. So a
+future bracket can draw every edge as a function of the domain relationship, with
+**no backend contract change and no CSS guesswork**. That is the requirement A64-025.8
+inherits: the visual edge is derived from `parent()`, or it is not drawn.
+
+### 3.7 Responsive and mobile
+
+The strategy is consistent and thin: `sm:` and `lg:`, no `md:` cascade, no fixed pixel
+widths. Real safe-area handling exists
+(`pb-[max(1.5rem,env(safe-area-inset-bottom))]`). The page body never scrolls
+sideways — the bracket's scroller is the only horizontal scroll in the app, and it is
+labelled and focusable.
+
+The gap is that **nothing has been designed *for* a phone**; it has been made to fit
+one. The header row (§3.3) and the game room's clock placement (§3.5) are the two
+places where that shows.
+
+### 3.8 Accessibility
+
+Strong foundations, unevenly finished.
+
+| Present | Evidence |
+| --- | --- |
+| Landmarks and skip link | `AppShell` — `<header>`, `<main id="main" tabIndex={-1}>`, `<footer>`, skip link as first focusable element |
+| Board keyboard/SR support | §3.5 |
+| Live regions | `role="status"` in 23 files, `role="alert"` in 24 — present everywhere they are needed |
+| Focusable scroll region | Bracket scroller has `tabIndex={0}` and `role="region"` |
+| Dialog semantics | Radix Dialog — focus trap and focus return come with it |
+
+| Missing | Consequence |
+| --- | --- |
+| `aria-current` in navigation | Nothing announces which section is open |
+| `prefers-reduced-motion` handling | Only a comment saying there is nothing to reduce — true today, false the moment the redesign adds motion |
+| A shared status/empty/error component | seventy-four hand-rolled live regions is seventy-four chances to omit one |
+
+### 3.9 Loading, error, empty and success states
+
+All four exist across the app and none is shared. There is no `EmptyState`, no
+`Notice`, no `ErrorNotice` in `shared/ui` — every page writes its own, seventy-four
+times over. `apps/admin`
+*does* have `ErrorNotice` and `PageHeader`; `apps/web`, the larger app, does not.
+
+### 3.10 Email
+
+Three senders, three different levels of finish, no shared layout.
+
+| Email | Trigger | HTML | Text | uz/ru/en | CTA |
+| --- | --- | --- | --- | --- | --- |
+| Verification code | Registration, resend | Yes | Yes | **Yes** | Code, not a link |
+| Notification digest | `notifications` email delivery | Yes | Yes | **Yes** | Yes, styled button |
+| Password reset | Forgot-password | **No** | Yes | **No — English only** | Bare URL |
+
+Every message is hand-built as an inline-styled string at its call site. Inline styles
+are correct for email — a `<style>` block is stripped by several major clients — but
+there is no shared layout, no header or logo, no footer, and the brand values
+(`color:#111`, `background:#111`) are duplicated literals in two files. The
+password-reset message, which is the one a worried person reads, is the least finished
+of the three.
+
+A single Arena64 email layout is worth building (A64-025.10). It is a small, contained
+piece of work with an obvious shared shape.
+
+### 3.11 Dependencies
+
+The stack is already the right one and the redesign needs nothing new.
+
+| Need | Already present |
+| --- | --- |
+| Styling | Tailwind v4 (CSS-first, `@theme inline`) |
+| Primitives | Radix — `react-dialog`, `react-avatar`, `react-slot` |
+| Variants | `class-variance-authority`, `clsx`, `tailwind-merge` |
+| Icons | `lucide-react` |
+| Forms | `react-hook-form` + `zod` + `@hookform/resolvers` |
+| Routing | `@tanstack/react-router` |
+| Data | `@tanstack/react-query`, `axios` |
+| Animation | `tw-animate-css` |
+
+`apps/web/components.json` is configured for shadcn/ui with `@/shared/ui` as the component
+alias, so the missing primitives (§3.2) can be **generated into the existing theme**
+rather than hand-written or imported from a new library. Every primitive the design
+system needs is reachable with zero new dependencies.
+
+### 3.12 UX-affecting performance
+
+Only findings a player could feel are recorded; micro-optimisation is out of scope.
+
+- **Route-level code splitting is already in place** — every route is a
+  `lazyRouteComponent`.
+- **`apps/web/src/features/auth/model/session-provider.tsx` is 362 lines** and sits above every route. It is the single
+  largest component in the app and the one whose re-renders reach everything.
+- **`apps/web/src/features/game/ui/game-panel.tsx` (314 lines) and `…/ui/board.tsx` (266)** re-render on every clock tick
+  (250 ms). The clock is `tabular-nums` text, so this is cheap today; it is the place
+  to look first if the game room ever feels slow.
+- No duplicated fetches or waterfalls were found at the query layer — React Query keys
+  are centralised per feature in `apps/web/src/features/*/api/keys.ts`.
+
+---
+
+## 4. Findings by priority
+
+### P0 — the product is not usable as presented
+
+**P0-1 — `/` is a developer exhibit.**
+`apps/web/src/pages/home/index.tsx` is the landing route. It renders a heading, the sentence
+*"Application shell. No gameplay surface is built yet."*, a card demonstrating
+`Skeleton` and `Spinner`, and a `FormDemo` from `apps/web/src/features/form-demo`. It is
+untranslated — the only page in the app that is, because every other string in the
+product goes through `t()` and there are 775 keys in each of uz, ru and en.
+
+Its own docstring records the intent: *"The lobby that eventually lives at `/` is
+A64-020.5's, and replacing this file is that phase's first commit."* A64-020.5 built
+`/play` and never replaced it.
+
+The consequence is that the first thing any visitor sees — including a signed-in player
+who clicks nothing — is the product telling them it does not exist yet. Nothing links
+to `/play` from it.
+
+*Affected surface:* landing, first-run experience, and every share of the root URL.
+*Future task:* A64-025.3 (Navigation & App Shell), as its first change.
+
+### P1 — a primary flow is seriously degraded
+
+**P1-1 — The header does not fit a phone.**
+`session-menu` renders Play, Tournaments, Friends, Profile-with-avatar and Sign out as
+five buttons, and `app-shell` puts them in a `h-14` row beside the brand,
+`NotificationBell` and `ThemeToggle`. The only responsive rule is
+`hidden … sm:inline` on the user's name. At 360px this is eight interactive elements
+and a wordmark in one row, with Uzbek labels ("O'ynash", "Turnirlar", "Do'stlar").
+*Future task:* A64-025.3.
+
+**P1-2 — The clock has no low-time state.**
+`ClockFace` renders identically at 60 s and at 2 s. Arena64 offers `bullet_1_0`. A
+player's most time-critical information has no escalation, and the active-clock cue is
+a 5 % tint of a neutral primary.
+*Future task:* A64-025.6.
+
+**P1-3 — On a phone the clocks sit below the board.**
+The game page stacks board-then-panel until `lg:`. On the surface where time matters
+most, the clock can be off-screen.
+*Future task:* A64-025.6.
+
+### P2 — a noticeable UX problem
+
+| # | Finding | Task |
+| --- | --- | --- |
+| P2-1 | Bracket has no visual parent-child relationship, though the relationship is authoritative and already on the wire (§3.6) | A64-025.8 |
+| P2-2 | Password-reset email is English-only and plain-text-only while the other two are trilingual HTML (§3.10) | A64-025.10 |
+| P2-3 | No shared empty/error/loading component — 74 hand-rolled live regions (§3.9) | A64-025.2 |
+| P2-4 | No `aria-current` anywhere in navigation | A64-025.3 |
+| P2-5 | Palette has no brand colour and no game-semantic colours (§3.2) | A64-025.2 |
+| P2-6 | `/games/history`, `/challenges`, `/search` are reachable only from inside other pages or by URL | A64-025.3 |
+
+### P3 — polish and consistency
+
+| # | Finding | Task |
+| --- | --- | --- |
+| P3-1 | Brand wordmark is a `<span>`, not a link home | A64-025.3 |
+| P3-2 | "Skip to content" is hardcoded English | A64-025.3 |
+| P3-3 | `session-menu` is misnamed for what it does | A64-025.3 |
+| P3-4 | `apps/web/src/features/form-demo` ships in the production bundle | A64-025.3 (with P0-1) |
+| P3-5 | No `prefers-reduced-motion` handling — correct today, wrong once motion is added | A64-025.12 |
+| P3-6 | Eight primitives; Badge, Select, Tabs, Tooltip, Dropdown, Switch re-authored per feature | A64-025.2 |
+
+**Nothing was fixed in A64-025.1.** P0-1 is a one-line route change to make and a
+product decision to get right — what the landing page *should* be for an anonymous
+visitor is A64-025.3's subject, and shipping a guess here would be the scope creep this
+task's brief forbids.
+
+---
+
+## 5. Design principles
+
+Twelve principles, each argued from something in §3 rather than from taste.
+
+1. **The board is the product.** Every layout decision in the game room is judged by
+   what it does to the board's size and clarity first. Nothing decorative may take
+   space from it.
+2. **State is text before it is colour.** The existing `StatusLine` and the bracket's
+   worded node states are right, and they are why the app is usable without colour
+   today. Colour reinforces; it never carries alone.
+3. **Time is loud.** A clock running out is the most urgent thing the product ever has
+   to say. It must change appearance, not merely value (P1-2).
+4. **Mobile is a design target, not a fallback.** Nothing ships as "it fits at 360px";
+   surfaces are designed at 360px and allowed to expand.
+5. **Accessibility is a property of the component, not a mode.** The board's
+   `role="grid"` and roving tabindex are the standard the rest of the app is held to —
+   no separate accessible variant, ever.
+6. **One way to say each thing.** An error looks the same everywhere, a status looks
+   the same everywhere, an empty list looks the same everywhere — enforced by a shared
+   component, not by discipline (P2-3).
+7. **A relationship the domain knows is a relationship the UI draws.** The bracket's
+   edges come from `BracketSlot.parent()`. No CSS approximation of a data structure.
+8. **Motion earns its place.** Fast, functional, interruptible, and disabled under
+   `prefers-reduced-motion`. Nothing animates because it can.
+9. **Brand is a colour, not a texture.** Arena64 needs one identity colour and a small
+   set of semantic ones. It does not need gradients, glass or illustration.
+10. **Never trade a security or privacy semantic for a visual one.** The HttpOnly
+    session, the verified-email gate and the privacy field rules constrain the design
+    and are not negotiable by it.
+11. **Extend the stack before adding to it.** `apps/web/components.json` already points shadcn
+    at `@/shared/ui`. A new dependency needs a demonstrated gap, not a redesign as its
+    justification.
+12. **Density without noise.** Arena64 shows ratings, clocks, seeds and standings.
+    Numbers get `tabular-nums` and hierarchy; they do not get boxes around every one.
+
+---
+
+## 6. Design-system direction
+
+Blueprint only — nothing below is built.
+
+**Foundations.** Keep the existing OKLCH token file and extend it rather than replace
+it: adding a brand hue and semantic game tokens (`--win`, `--loss`, `--draw`,
+`--turn`, `--time-low`, `--live`) to `:root` and `.dark`, exposed through
+`@theme inline` exactly as the current tokens are. Radius, spacing, breakpoints and
+typography stay as they are — none of them was found wanting.
+
+**Primitives to add** (`apps/web/src/shared/ui/`), all generatable via shadcn into the existing
+theme: Badge, Select, Switch, Tabs, Tooltip, DropdownMenu, Notice, EmptyState,
+IconButton. Existing: Button, Input, Card, Dialog, Avatar, Skeleton, Spinner,
+ErrorBoundary.
+
+**Product components**, each replacing something currently inline: `PlayerCard`,
+`RatingDisplay`, `GameClock` (absorbing `ClockFace` and owning the low-time state),
+`MatchResult`, `TournamentCard`, `BracketMatch` (owning the derived edge),
+`NotificationItem`, `EmptyState`.
+
+Overlap to respect rather than rebuild: `widgets/player-row`, `widgets/rating-cards`,
+`widgets/profile-header`, `widgets/match-offer`, `widgets/statistics-panel` already
+exist and largely hold the right shapes.
+
+---
+
+## 7. Roadmap
+
+Ordered by dependency, not by surface importance. The audit moved the app shell ahead
+of the design system: P0-1 and P1-1 both live there, and neither should wait for
+tokens.
+
+| Task | Objective | Depends on | Non-goals |
+| --- | --- | --- | --- |
+| **A64-025.1** | Audit and foundation — this document | — | Any implementation |
+| **A64-025.3** | App shell, landing page, navigation. Fixes P0-1, P1-1, P2-4, P2-6, P3-1…P3-4 | .1 | New features; visual restyle beyond what the fixes need |
+| **A64-025.2** | Design-system foundation: brand and semantic tokens, missing primitives, shared state components | .1 | Rewriting surfaces; new dependencies |
+| **A64-025.4** | Authentication UX | .2 | Changing the session or verification model |
+| **A64-025.5** | Lobby and matchmaking | .2 | Changing the queue state machine |
+| **A64-025.6** | Game room. Fixes P1-2, P1-3 | .2 | Changing board semantics or the protocol |
+| **A64-025.7** | Profile and social | .2 | Changing privacy rules |
+| **A64-025.8** | Tournament and bracket, edges derived from `BracketSlot.parent()` | .2 | Backend contract changes; canvas, zoom or drag |
+| **A64-025.9** | Notifications | .2 | Admin notification surfaces |
+| **A64-025.10** | Email design system. Fixes P2-2 | .2 (tokens only) | New email types |
+| **A64-025.11** | Responsive and mobile polish | .3–.9 | Re-architecting layouts already designed mobile-first |
+| **A64-025.12** | Accessibility and motion. Fixes P3-5 | .3–.9 | Adding motion for its own sake |
+| **A64-025.13** | Closing audit | all | New work |
+
+---
+
+## 8. Open questions
+
+| # | Question | Blocks |
+| --- | --- | --- |
+| OQ-1 | What does `/` show an **anonymous** visitor — a marketing landing page, or a redirect to `/login`? | A64-025.3 |
+| OQ-2 | What is Arena64's brand colour? A designer's call, not an engineer's | A64-025.2 |
+| OQ-3 | Should the mobile game room pin the clocks above the board, or overlay them on it? | A64-025.6 |
+| OQ-4 | Does the bracket keep horizontal scroll on mobile, or switch to a round-at-a-time view below `sm:`? | A64-025.8 |

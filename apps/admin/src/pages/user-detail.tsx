@@ -173,6 +173,17 @@ export function UserDetailPage() {
               )}
             </dl>
 
+            {/* A64-024 hardening §7. The one deep link this page was
+                missing, and the destination declares the parameter:
+                `/matches`'s `validateSearch` takes `participant`. No
+                guessed query strings — a link the destination ignores is a
+                filter an operator believes is applied. */}
+            <p>
+              <Link to="/matches" search={{ participant: user.id }}>
+                {t("users.viewMatches")}
+              </Link>
+            </p>
+
             <ModerationActions
               userId={user.id}
               displayName={user.display_name ?? user.username}

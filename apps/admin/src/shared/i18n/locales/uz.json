@@ -107,7 +107,8 @@
     "grantedAt": "Rol berilgan",
     "notAnAdmin": "Bu hisobda admin roli yo'q.",
     "userId": "Foydalanuvchi ID",
-    "joined": "Ro'yxatdan o'tgan"
+    "joined": "Ro'yxatdan o'tgan",
+    "viewMatches": "Bu hisobning o'yinlari"
   },
   "matches": {
     "title": "O'yinlar",

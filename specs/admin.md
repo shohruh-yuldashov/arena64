@@ -1397,6 +1397,110 @@ first. A refused command leaves the page showing the state it was in.
 
 ---
 
+## 6.16 Completion & hardening — A64-024
+
+Three findings and one refusal, after the epic's features were exercised
+against a real deployment rather than a test schema.
+
+### The audit enum drift, and why the suite could not see it
+
+`admin.audit_action` was created by `b2d5f8a41c70` with two labels.
+A64-024.6, A64-024.7 and A64-024.5H each added members to the Python enum
+and **none added a migration**, so against a migrated database every
+audited mutation added since died at `flush()`:
+
+    invalid input value for enum admin.audit_action: "tournament.create"
+
+The reported symptom was tournament creation. The same call is made by
+moderation's restrict/restore and by the push-delivery retry, so all three
+features were dead in any deployment built from the migration chain — ten
+labels missing across `audit_action` and `audit_subject_type`.
+
+Two things hid it, and both will hide the next one:
+
+| Cause | Consequence |
+| --- | --- |
+| `alembic revision --autogenerate` does not detect enum **value** additions | The generated revision is an empty `pass`, and `alembic check` reports no drift |
+| The contract fixture builds its schema with `Base.metadata.create_all` | The type is created from the *current* Python enum, so the suite always ran against a database that had every value |
+
+`tests/contract/test_admin_audit_enums.py` closes it by reading the
+**migrations** rather than a schema — the chain is what a deployment
+applies, and asking a `create_all` database compares the code to itself. A
+sweep of all 44 native enums the platform declares found these two and
+nothing else.
+
+`e5a1c94f27d8` adds the missing labels. Its `downgrade` is a **no-op**, and
+says so: PostgreSQL cannot drop a label, and `7989d2c17008`'s convention —
+remap the rows to a surviving meaning — cannot apply here because
+`admin.audit_entry` refuses `UPDATE` by trigger. A downgrade that remapped
+history would have to disable the guarantee A64-024.8 built to survive
+migrations.
+
+### Pagination
+
+Every listing pages by keyset — cursor forward, no `offset`, no total — and
+the console rendered that as **Load more**. Correct, and unusable: an
+operator nine pages into a trail had eight pages above the row they were
+reading and no way back to page three.
+
+The six listings now walk one page at a time. The client holds the cursor
+that produced each page it has seen, so `Previous` is a re-fetch with a
+cursor already in hand: one request, **no backend change, no `COUNT(*)`,
+and no route touched**.
+
+**No numbered jumps.** There is no cursor for page 57 until page 56 has
+been fetched, and the only way to invent one is `OFFSET` — a different page
+57 depending on what was written since, and a scan of every row before it.
+The control is Previous / page / Next, and the number means how many pages
+have been walked rather than a position in a total nobody counted.
+
+A changed filter discards the history and restarts at page one: a cursor
+from one query names a row the other may not contain.
+
+| Console | Control |
+| --- | --- |
+| Users, Matches, Tournaments, Moderation, Notifications, Audit | Previous / page / Next |
+
+### Administrative broadcast — **not built**
+
+An operator announcement surface was in scope and is **deliberately not
+shipped**. Two things it needs are product decisions rather than
+engineering ones, and inventing either inside an admin service would put
+the decision in the wrong place.
+
+**1. Which category an announcement is.** `NotificationCategory.SYSTEM`
+exists, has no producer, and is the one entry in `preference.LOCKED` —
+in-app system notifications **cannot be muted**, documented for "security
+and account matters… a password change, a moderation action, an essential
+service notice". So calling an operator announcement `system` makes it
+unmuteable by every player, and calling it anything else means adding a
+category the preference surface must then offer. Which one an announcement
+is is a product and arguably a legal question.
+
+**2. There is no bounded fan-out.** `DurableNotificationWriter.store()`
+writes a batch in one transaction, and the largest audience the platform
+produces today is a tournament's entrants — bounded by `capacity ≤ 128`. A
+broadcast to every account is one transaction of N rows with no batching,
+no resumability and no progress record. Building that is a campaign
+projection, a worker and a progress table: its own task, not a side effect
+of an admin button.
+
+Single-recipient and selected-recipient announcements share the first
+problem and not the second, so they are the smaller decision — but they
+still need the category answered first.
+
+Recorded here rather than half-built. Nothing about the notification
+architecture was changed.
+
+### Cross-links
+
+`/users/{id}` gains a link to that account's matches
+(`/matches?participant=…`), which is a parameter the destination's own
+`validateSearch` declares. No query string is guessed: a filter the
+destination ignores is one an operator believes is applied.
+
+---
+
 ## 7. The audit invariant
 
 **Built by A64-024.8** — see §6.11. The rule it exists to keep:

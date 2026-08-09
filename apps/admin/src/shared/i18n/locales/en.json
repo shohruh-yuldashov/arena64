@@ -107,7 +107,8 @@
     "grantedAt": "Role granted",
     "notAnAdmin": "This account holds no admin role.",
     "userId": "User ID",
-    "joined": "Joined"
+    "joined": "Joined",
+    "viewMatches": "Matches for this account"
   },
   "matches": {
     "title": "Matches",

@@ -180,7 +180,9 @@ describe("the login form", () => {
     renderApp({ path: "/login" });
 
     const email = await screen.findByLabelText(/email|pochta|почта/i);
-    const password = screen.getByLabelText(/password|parol|пароль/i);
+    // `selector` because A64-025.4 put a "Show password" button beside the
+    // input, and its accessible name matches the same words the label does.
+    const password = screen.getByLabelText(/password|parol|пароль/i, { selector: "input" });
 
     // --- the rejection ---
     await user.type(email, "player@example.com");

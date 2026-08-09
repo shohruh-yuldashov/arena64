@@ -35,6 +35,15 @@ export type Outcome<T> =
   | { status: "forbidden" }
   | { status: "invalid_credentials" }
   | { status: "rate_limited" }
+  /**
+   * The server's safety rules said no — A64-024.6.
+   *
+   * Distinct from `unavailable` because they mean opposite things to an
+   * operator: one is "the platform decided", the other is "we could not
+   * ask". Folding them together would show a network error for a refusal
+   * the console should explain.
+   */
+  | { status: "refused" }
   | { status: "unavailable" };
 
 export interface AdminSession {
@@ -167,6 +176,8 @@ export interface AdminUserSummary {
 
 export interface AdminUserDetail extends AdminUserSummary {
   admin_role_granted_at: string | null;
+  /** A64-024.6 — the account's **effective** standing, not its history. */
+  moderation: AccountModerationState;
 }
 
 export interface AdminUserPage {
@@ -488,4 +499,129 @@ export async function fetchAuditEntries(
     `/admin/audit${params.size > 0 ? `?${params.toString()}` : ""}`,
     signal,
   );
+}
+
+// --- admin moderation — A64-024.6 --------------------------------------------
+
+export interface AdminModerationCase {
+  id: string;
+  category: string;
+  decision: string;
+  reasoning: string;
+  opened_by: string;
+  opened_by_username: string | null;
+  opened_at: string;
+}
+
+export interface AdminSanction {
+  id: string;
+  player_id: string;
+  username: string | null;
+  kind: string;
+  is_effective: boolean;
+  starts_at: string;
+  expires_at: string | null;
+  lifted_at: string | null;
+  lifted_by: string | null;
+  case: AdminModerationCase;
+}
+
+export interface AccountModerationState {
+  is_restricted: boolean;
+  restriction: AdminSanction | null;
+}
+
+export interface AdminSanctionPage {
+  items: AdminSanction[];
+  next_cursor: string | null;
+}
+
+/** The bounded reason vocabulary the server accepts. Localised here. */
+export const MODERATION_CATEGORIES = [
+  "cheating",
+  "abuse",
+  "account_compromise",
+  "policy_violation",
+  "other",
+] as const;
+
+export type ModerationCategory = (typeof MODERATION_CATEGORIES)[number];
+
+export interface RestrictionQuery {
+  effective_only?: boolean;
+  cursor?: string;
+}
+
+export async function fetchRestrictions(
+  query: RestrictionQuery,
+  signal?: AbortSignal,
+): Promise<Outcome<AdminSanctionPage>> {
+  const params = new URLSearchParams();
+  if (query.effective_only === false) params.set("effective_only", "false");
+  if (query.cursor) params.set("cursor", query.cursor);
+
+  return authorizedRead<AdminSanctionPage>(
+    `/admin/moderation${params.size > 0 ? `?${params.toString()}` : ""}`,
+    signal,
+  );
+}
+
+export interface RestrictAccountInput {
+  category: ModerationCategory;
+  reasoning: string;
+  /** Omitted for an indefinite restriction. The server computes the expiry. */
+  duration_hours?: number;
+}
+
+/**
+ * Withholds access from an account.
+ *
+ * **No actor field.** The server takes it from the admin session, so there
+ * is nothing this client could send that changes who is recorded as having
+ * decided — and nothing it could get wrong.
+ */
+export async function restrictAccount(
+  userId: string,
+  input: RestrictAccountInput,
+): Promise<Outcome<AdminSanction>> {
+  return authorizedWrite<AdminSanction>(
+    `/admin/users/${encodeURIComponent(userId)}/restrict`,
+    input,
+  );
+}
+
+/** Lifts the live restriction. No body: there is nothing to decide. */
+export async function restoreAccount(userId: string): Promise<Outcome<AdminSanction>> {
+  return authorizedWrite<AdminSanction>(
+    `/admin/users/${encodeURIComponent(userId)}/restore`,
+    {},
+  );
+}
+
+/**
+ * One authenticated admin write, with every outcome as a value.
+ *
+ * `409` and `422` are reported as `refused` rather than folded into
+ * `unavailable`: they are the platform's safety rules answering — already
+ * restricted, the last administrator, a restriction of oneself — and the
+ * console must show the operator that the system decided, not that the
+ * network failed.
+ */
+async function authorizedWrite<T>(path: string, body: unknown): Promise<Outcome<T>> {
+  const token = accessToken.get();
+  if (token === null) return { status: "unauthenticated" };
+
+  const response = await send(path, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (response === null) return { status: "unavailable" };
+  if (response.status === 401) return { status: "unauthenticated" };
+  if (response.status === 403) return { status: "forbidden" };
+  if (response.status === 409 || response.status === 422) return { status: "refused" };
+  if (!response.ok) return { status: "unavailable" };
+
+  const value = unwrap<T>(await response.json().catch(() => null));
+  return value === null ? { status: "unavailable" } : { status: "ok", value };
 }

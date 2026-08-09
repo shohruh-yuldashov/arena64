@@ -307,3 +307,59 @@ body {
   margin: 0;
   overflow-wrap: anywhere;
 }
+
+/* A64-024.6. The confirmation modal. Native `<dialog>`, so the backdrop,
+   the focus trap and Escape are the browser's — this is only its look. */
+dialog {
+  max-width: min(32rem, calc(100vw - 2rem));
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface, #fff);
+  color: inherit;
+}
+
+dialog::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+
+dialog h3 {
+  margin: 0 0 0.5rem;
+}
+
+dialog .field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.75rem 0 0;
+}
+
+dialog textarea {
+  width: 100%;
+  font: inherit;
+  resize: vertical;
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin: 1.25rem 0 0;
+}
+
+/* A destructive action reads as one. Named as well as coloured — hue alone
+   carries nothing for an operator who cannot see it. */
+.action.danger {
+  background: var(--danger, #a4243b);
+  border-color: var(--danger, #a4243b);
+  color: #fff;
+}
+
+.moderation-actions {
+  margin: 1rem 0 0;
+}
+
+.notice {
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+}

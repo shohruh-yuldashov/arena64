@@ -1,8 +1,9 @@
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
+import { AUDIT_ACTION_LABELS, AUDIT_SUBJECT_ROUTES } from "@/features/audit/vocabulary";
 import { type AdminAuditEntry, type AuditQuery, fetchAuditEntries } from "@/shared/api/client";
-import { type TranslationKey, useTranslation } from "@/shared/i18n";
+import { useTranslation } from "@/shared/i18n";
 
 /**
  * The Audit console — A64-024.8.
@@ -24,25 +25,6 @@ import { type TranslationKey, useTranslation } from "@/shared/i18n";
  * than as a blank cell. The trail is older than the console reading it, and
  * an entry nobody can read is worse than an ugly one.
  */
-
-/** The actions this build can phrase. Anything else falls back to its id. */
-const ACTION_LABELS: Record<string, TranslationKey> = {
-  "admin.role.grant": "audit.actionRoleGrant",
-  "admin.role.revoke": "audit.actionRoleRevoke",
-};
-
-/**
- * Subject types this console can link to — a **closed** map on purpose.
- *
- * An unknown subject type renders as plain text. Building a link from an
- * unrecognised type would produce a route that does not exist, and a
- * broken link in an incident review is worse than no link at all.
- */
-const SUBJECT_ROUTES: Record<string, string> = {
-  account: "/users",
-  match: "/matches",
-  tournament: "/tournaments",
-};
 
 type Search = { action?: string; actor?: string; subject?: string };
 
@@ -118,7 +100,7 @@ export function AuditPage() {
   const when = (value: string) => new Date(value).toLocaleString(locale);
 
   const actionOf = (entry: AdminAuditEntry) => {
-    const label = ACTION_LABELS[entry.action];
+    const label = AUDIT_ACTION_LABELS[entry.action];
     return label === undefined ? entry.action : t(label);
   };
 
@@ -136,7 +118,7 @@ export function AuditPage() {
   };
 
   const subjectOf = (entry: AdminAuditEntry) => {
-    const route = SUBJECT_ROUTES[entry.subject.type];
+    const route = AUDIT_SUBJECT_ROUTES[entry.subject.type];
     const label = entry.subject.username ?? entry.subject.ref;
     if (route === undefined) {
       return (
@@ -155,6 +137,16 @@ export function AuditPage() {
     if (route === "/matches") {
       return (
         <Link to="/matches/$matchId" params={{ matchId: entry.subject.ref }}>
+          {label}
+        </Link>
+      );
+    }
+    if (route === "/notifications") {
+      return (
+        <Link
+          to="/notifications/$notificationId"
+          params={{ notificationId: entry.subject.ref }}
+        >
           {label}
         </Link>
       );
@@ -197,7 +189,7 @@ export function AuditPage() {
             onChange={(event) => setFilter("action", event.target.value)}
           >
             <option value="">{t("audit.any")}</option>
-            {Object.keys(ACTION_LABELS).map((value) => (
+            {Object.keys(AUDIT_ACTION_LABELS).map((value) => (
               <option key={value} value={value}>
                 {value}
               </option>

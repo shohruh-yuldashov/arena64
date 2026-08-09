@@ -11,6 +11,7 @@ import { useEffect, useRef } from "react";
 
 import { useAdminAuth } from "@/app/use-admin-auth";
 import { AuditPage } from "@/pages/audit";
+import { DashboardPage } from "@/pages/dashboard";
 import { LoginPage } from "@/pages/login";
 import { PlaceholderPage } from "@/pages/placeholder";
 import { MatchDetailPage } from "@/pages/match-detail";
@@ -209,21 +210,13 @@ const protectedRoute = createRoute({
   component: ProtectedLayout,
 });
 
-function Dashboard() {
-  const { t } = useTranslation();
-  return (
-    <>
-      <h2>{t("dashboard.title")}</h2>
-      <p>{t("dashboard.empty")}</p>
-      <p className="muted">{t("dashboard.emptyHint")}</p>
-    </>
-  );
-}
-
+// A64-024.9. The home route stops being a placeholder: six facts, the
+// attention list, and the ten most recent privileged actions — every one of
+// them a link into the console that owns the work.
 const dashboardRoute = createRoute({
   getParentRoute: () => protectedRoute,
   path: "/",
-  component: Dashboard,
+  component: DashboardPage,
 });
 
 // A64-024.3. `/users` is the first real section, so it leaves the

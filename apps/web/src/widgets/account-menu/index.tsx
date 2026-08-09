@@ -66,7 +66,13 @@ export function AccountMenu() {
           <Avatar className="size-6">
             <AvatarFallback aria-hidden="true">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
           </Avatar>
-          <span className="hidden text-sm font-medium sm:inline">{name}</span>
+          {/* A64-025.6: `lg`, not `sm`. At 768 the header carries the
+              wordmark, four nav sections, the bell, the avatar, the name and
+              a sign-out button — measured at 110px of horizontal overflow on
+              a signed-in game room, which A64-025.3 missed because it
+              measured 768 signed *out*. The avatar is the identity there;
+              the name returns when there is room for it. */}
+          <span className="hidden text-sm font-medium lg:inline">{name}</span>
         </Link>
       </Button>
 

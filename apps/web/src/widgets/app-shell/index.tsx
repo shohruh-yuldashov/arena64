@@ -97,7 +97,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               `ml-auto` rather than `justify-between` on the row: the
               navigation must sit beside the wordmark, not float between
               the two ends. */}
-          <div className="ml-auto flex items-center gap-1 sm:gap-2">
+          <div className="ml-auto flex items-center gap-1 lg:gap-2">
             {/* A64-021.1. The one entry point to `/notifications`, and the
                 unread badge. Beside the account controls rather than inside
                 them, because a badge a player has to open a menu to see is

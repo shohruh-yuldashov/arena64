@@ -515,11 +515,14 @@
     },
     "clock": {
       "label": "{side} vaqti",
-      "awaitingServer": "Vaqt tugadi — server javobi kutilmoqda"
+      "awaitingServer": "Vaqt tugadi — server javobi kutilmoqda",
+      "low": "Vaqt tugayapti",
+      "running": "Yurmoqda"
     },
     "players": {
       "you": "Siz",
-      "opponent": "Raqib"
+      "opponent": "Raqib",
+      "unknown": "Noma'lum o'yinchi"
     },
     "result": {
       "title": "O'yin tugadi",

@@ -3,10 +3,10 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-PRODUCT-EXPERIENCE` |
-| **Status** | Draft — audit (.1); shell (.3); foundation (.2); authentication (.4); lobby (.5) |
+| **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6 game room |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-08-10 — A64-025.5, the lobby and play experience |
+| **Last updated** | 2026-08-10 — A64-025.6, the game room |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -467,7 +467,7 @@ tokens.
 | --- | --- | --- |
 | ~~OQ-1~~ | ~~What does `/` show an anonymous visitor?~~ | **Closed by A64-025.3** — `/` is the authenticated player's product home; the route keeps its existing lack of a guard, so an anonymous visitor gets a signed-out home offering sign-in and registration. A public marketing page is a separate surface for a separate audience and is not this epic's |
 | ~~OQ-2~~ | ~~What is Arena64's brand colour?~~ | **Closed by A64-025.2** — indigo, `oklch(0.5 0.19 275)` light and `oklch(0.68 0.16 275)` dark. The reasoning is in §10.1 and it is reversible in two token values |
-| OQ-3 | Should the mobile game room pin the clocks above the board, or overlay them on it? | A64-025.6 |
+| ~~OQ-3~~ | ~~Where do the clocks go on a phone?~~ | **Closed by A64-025.6** — neither. Each clock lives in its player's seat, and the seats sit directly above and below the board at every width. §13.3 |
 | OQ-4 | Does the bracket keep horizontal scroll on mobile, or switch to a round-at-a-time view below `sm:`? | A64-025.8 |
 
 ---
@@ -972,3 +972,118 @@ two real players into one pool, through the redesigned dialog, to the board.
 The board, the clocks, the player cards and the result screen are
 A64-025.6's. Nothing here reaches past the handoff — `transitioning` still
 navigates exactly as A64-022's hardening left it.
+
+---
+
+## 13. The game room — A64-025.6
+
+### 13.1 What was wrong
+
+Not the engine, the protocol or the board. `specs/product-experience.md`
+§3.5 already recorded that the board is one of the better things in the
+product — `role="grid"`, arrow-key movement over a roving tabindex, a real
+`<button>` per square, an `aria-label` naming the piece — and none of that
+was touched.
+
+What was wrong was that everything *around* the board lived in a side panel:
+two clocks, the status line, and no player identity at all beyond the words
+"Opponent" and "You". On a phone that panel is below the board, so in a
+timed game the clock could be under the fold. That was OQ-3.
+
+### 13.2 Players are real people now
+
+`GET /api/v1/users/{user_id}` resolves a `player_id` to a name and a
+picture. It is documented in the schema as existing precisely because "a
+match card or a leaderboard row holds an id and needs a handle to render",
+and it carries no email, no account state and no storage key. So the seats
+show who is playing with **no contract change**.
+
+Ratings are not shown, and that is a deferral rather than an oversight: they
+live on `GET /profiles/{username}`, which takes a different key and is
+governed by viewer-relative privacy settings. Two privacy-governed round
+trips per player during a bullet game is the wrong trade; a snapshot that
+carried the seat ratings would be the right fix and is a contract change
+nobody has asked for yet.
+
+### 13.3 Clock placement — OQ-3, closed
+
+Each clock lives in its player's seat, and the seats are part of the board
+column:
+
+    opponent seat + clock
+    BOARD
+    own seat + clock
+
+At every width. On a phone there is no side panel to lose a clock in; on a
+desktop the seats stay attached to the board rather than sitting across the
+page. The viewer is always the near seat, matching the board's orientation.
+
+### 13.4 Active turn, in three signals
+
+The active seat takes a brand border and tint, its digits go
+`text-primary`, and the turn is stated in words underneath. Colour is
+reinforcement; the sentence is the signal. The status line above the
+controls still says whose move it is as a `role="status"` live region, so a
+screen reader hears the change without the clock announcing every tick.
+
+### 13.5 Low time — a presentation rule, and only that
+
+Under **ten seconds** the active clock takes `--warning` and gains the words
+"low on time". Ten because this product already uses it: A64-025.5 tinted
+the match offer's countdown at the same threshold, and two definitions of
+"nearly out of time" in one product is worse than an imperfect one.
+
+Nothing about the game changes — the server is still the only thing that
+flags a clock. A threshold relative to the control (the last tenth of the
+base time) would be better and is **not possible today**: `ClockPayload`
+carries only the remaining milliseconds and `SnapshotPayload` does not carry
+the time control. Closing that gap is a contract change and is recorded here
+rather than guessed at.
+
+The warning is suppressed when the clock is not running, so a finished game
+does not shout about the loser's last two seconds.
+
+### 13.6 What did not change
+
+The board's semantics and interaction model, the reducer, the realtime
+protocol, the draw agreement state, the resign confirmation, the rating
+result poll, the completion surface and the replay link. The quick-message
+infrastructure already existed and was not rebuilt — the bubbles simply
+moved to sit beside the seat that sent them, which is where A64-023.2 §6
+always wanted them and is now literally true.
+
+### 13.7 Deferred, with the reason
+
+| Gap | Why |
+| --- | --- |
+| Seat ratings | Needs either a second privacy-governed request per player mid-game, or the snapshot to carry them. A contract change nobody has asked for |
+| Captured / material summary | The client holds a position, not a capture history. Deriving "captured so far" from the opening position and the current one is arithmetic the domain does not publish, and a second truth source next to an authoritative board is exactly what §2 forbids |
+| Control-relative low-time threshold | §13.5 — needs the time control on the snapshot |
+
+### 13.8 Measured
+
+A real two-player game, paired through the lobby in Chromium:
+
+| Width | Theme | Page overflow | Board | `h1` |
+| --- | --- | --- | --- | --- |
+| 1280 | dark | 0 | 630px | 1 |
+| 768 | light | 0 (after §13.9) | 736px | 1 |
+| 360 | light | 0 | 328px | 1 |
+| 360 | dark | 0 | 328px | 1 |
+
+A board square is 41px at 360 — below the 44px control floor and bounded by
+arithmetic rather than by choice: eight squares plus the page's own padding
+do not fit 44px each in 360. The board is the one control whose size is the
+viewport's to decide.
+
+### 13.9 A defect this task found in the shell
+
+Measuring the game room at 768 signed *in* found 110px of horizontal
+overflow in the **header** — the wordmark, four nav sections, the bell, the
+avatar, the display name and a sign-out button do not fit. A64-025.3 missed
+it because it measured 768 signed *out*, where the account cluster is one
+"Sign in" link.
+
+The display name now returns at `lg` rather than `sm`, and the account
+cluster keeps its tight gap until then. Measured signed in at 360, 768,
+1024 and 1280: zero overflow at all four.

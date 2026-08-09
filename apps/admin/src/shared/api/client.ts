@@ -303,3 +303,123 @@ export async function fetchMatch(
     signal,
   );
 }
+
+// --- admin tournaments — A64-024.5 -------------------------------------------
+
+export interface AdminTournamentSummary {
+  tournament_id: string;
+  name: string;
+  format: string;
+  variant: string;
+  speed_class: string;
+  status: string;
+  rated: boolean;
+  capacity: number;
+  entrant_count: number;
+  registration_deadline: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface AdminEntrantView {
+  player_id: string;
+  username: string | null;
+  display_name: string | null;
+  status: string;
+  seed_number: number | null;
+  registered_at: string;
+  withdrawn_at: string | null;
+}
+
+export interface AdminRoundView {
+  round_number: number;
+  status: string;
+  pairing_count: number;
+  published_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+/**
+ * One bracket node.
+ *
+ * `round_number` and `slot` are its identity, and the tree follows from
+ * them: the parent is `(round_number + 1, slot >> 1)`. The backend
+ * publishes the coordinates rather than the edges, so a view derives the
+ * structure from the same arithmetic the domain uses instead of trusting a
+ * second description of it.
+ */
+export interface AdminPairingView {
+  round_number: number;
+  slot: number;
+  light_player_id: string | null;
+  dark_player_id: string | null;
+  light_seed: number | null;
+  dark_seed: number | null;
+  winner_id: string | null;
+  advancement_reason: string | null;
+  match_ids: string[];
+}
+
+export interface AdminStandingView {
+  player_id: string;
+  username: string | null;
+  display_name: string | null;
+  final_rank: number;
+  seed_number: number;
+  elimination_round: number | null;
+  eliminated_by_player_id: string | null;
+  wins: number;
+  losses: number;
+  draws: number;
+  final_status: string;
+}
+
+export interface AdminTournamentDetail {
+  tournament: AdminTournamentSummary;
+  entrants: AdminEntrantView[];
+  rounds: AdminRoundView[];
+  pairings: AdminPairingView[];
+  standings: AdminStandingView[];
+}
+
+export interface AdminTournamentPage {
+  items: AdminTournamentSummary[];
+  next_cursor: string | null;
+}
+
+export interface TournamentQuery {
+  status?: string;
+  format?: string;
+  variant?: string;
+  rated?: boolean;
+  cursor?: string;
+}
+
+export async function fetchTournaments(
+  query: TournamentQuery,
+  signal?: AbortSignal,
+): Promise<Outcome<AdminTournamentPage>> {
+  const params = new URLSearchParams();
+  if (query.status) params.set("status", query.status);
+  if (query.format) params.set("format", query.format);
+  if (query.variant) params.set("variant", query.variant);
+  if (query.rated !== undefined) params.set("rated", String(query.rated));
+  if (query.cursor) params.set("cursor", query.cursor);
+
+  return authorizedRead<AdminTournamentPage>(
+    `/admin/tournaments${params.size > 0 ? `?${params.toString()}` : ""}`,
+    signal,
+  );
+}
+
+export async function fetchTournament(
+  tournamentId: string,
+  signal?: AbortSignal,
+): Promise<Outcome<AdminTournamentDetail>> {
+  return authorizedRead<AdminTournamentDetail>(
+    `/admin/tournaments/${encodeURIComponent(tournamentId)}`,
+    signal,
+  );
+}

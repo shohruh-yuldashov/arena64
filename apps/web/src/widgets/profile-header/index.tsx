@@ -69,7 +69,7 @@ export function ProfileHeader({
                 aria-hidden="true"
                 className={
                   profile.is_online
-                    ? "size-2 rounded-full bg-emerald-500"
+                    ? "size-2 rounded-full bg-success"
                     : "bg-muted-foreground/50 size-2 rounded-full"
                 }
               />

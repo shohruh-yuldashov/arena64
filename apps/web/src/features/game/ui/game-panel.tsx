@@ -163,7 +163,7 @@ function RatingResultBlock({
           <span aria-hidden="true"> → </span>
           <span className="sr-only">{t("game.rating.becomes")}</span>
           <span className="font-medium">{number(rating.change.after)}</span>{" "}
-          <span className={rating.change.delta < 0 ? "text-destructive" : "text-emerald-600"}>
+          <span className={rating.change.delta < 0 ? "text-destructive" : "text-success"}>
             {/* The sign is part of the number, formatted rather than
                 concatenated: a minus typed as a hyphen is the wrong glyph
                 in every locale this product ships. */}

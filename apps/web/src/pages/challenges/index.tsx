@@ -13,9 +13,9 @@ import {
 import { useChallengeHandoff } from "@/features/challenges/model/use-challenge-handoff";
 import { useChallengePush } from "@/features/challenges/model/use-challenge-push";
 import { useTimeControls } from "@/features/matchmaking/model/queries";
-import { ListState } from "@/features/social/ui/list-state";
 import { useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
+import { ListState } from "@/shared/ui";
 import { Button, Spinner } from "@/shared/ui";
 import { ChallengeRow } from "@/widgets/challenge-row";
 import { SocialNav } from "@/widgets/social-nav";
@@ -181,7 +181,7 @@ export default function ChallengesPage() {
               onClick={() => void list.fetchNextPage()}
             >
               {list.isFetchingNextPage ? (
-                <Spinner label={t("social.state.loading")} />
+                <Spinner label={t("state.loading")} />
               ) : (
                 t("challenges.loadMore")
               )}

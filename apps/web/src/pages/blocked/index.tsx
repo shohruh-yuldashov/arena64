@@ -1,8 +1,8 @@
 import { useBlockedPlayers } from "@/features/social/model/queries";
-import { ListState } from "@/features/social/ui/list-state";
 import { RelationshipActions } from "@/features/social/ui/relationship-actions";
 import { useTranslation } from "@/shared/i18n";
 import { formatDate } from "@/shared/lib/format";
+import { ListState } from "@/shared/ui";
 import { Button, Spinner } from "@/shared/ui";
 import { PlayerRow } from "@/widgets/player-row";
 import { SocialNav } from "@/widgets/social-nav";
@@ -71,7 +71,7 @@ export default function BlockedPage() {
             onClick={() => void blocked.fetchNextPage()}
           >
             {blocked.isFetchingNextPage ? (
-              <Spinner label={t("social.state.loading")} />
+              <Spinner label={t("state.loading")} />
             ) : (
               t("social.blocked.loadMore")
             )}

@@ -1,8 +1,8 @@
 import { useIncomingRequests, useOutgoingRequests } from "@/features/social/model/queries";
-import { ListState } from "@/features/social/ui/list-state";
 import { RelationshipActions } from "@/features/social/ui/relationship-actions";
 import { useTranslation } from "@/shared/i18n";
 import { formatDate } from "@/shared/lib/format";
+import { ListState } from "@/shared/ui";
 import { Button, Spinner } from "@/shared/ui";
 import { PlayerRow } from "@/widgets/player-row";
 import { SocialNav } from "@/widgets/social-nav";
@@ -87,7 +87,7 @@ export default function FriendRequestsPage() {
               onClick={() => void incoming.fetchNextPage()}
             >
               {incoming.isFetchingNextPage ? (
-                <Spinner label={t("social.state.loading")} />
+                <Spinner label={t("state.loading")} />
               ) : (
                 t("social.requests.loadMore")
               )}
@@ -136,7 +136,7 @@ export default function FriendRequestsPage() {
               onClick={() => void outgoing.fetchNextPage()}
             >
               {outgoing.isFetchingNextPage ? (
-                <Spinner label={t("social.state.loading")} />
+                <Spinner label={t("state.loading")} />
               ) : (
                 t("social.requests.loadMore")
               )}

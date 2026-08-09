@@ -22,6 +22,7 @@ first table, is a cost of exactly one line.
 
 # Each import is load-bearing: it registers that module's tables onto
 # `app.database.base.Base.metadata` as a side effect of class definition.
+from app.modules.admin.infrastructure import models as _admin_models  # noqa: F401
 from app.modules.auth.infrastructure import models as _auth_models  # noqa: F401
 from app.modules.friends.infrastructure import models as _friends_models  # noqa: F401
 from app.modules.game.infrastructure import models as _game_models  # noqa: F401

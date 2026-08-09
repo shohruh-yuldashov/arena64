@@ -1,0 +1,32 @@
+{
+  "app": {
+    "title": "Arena64 Admin",
+    "subtitle": "Platform administration"
+  },
+  "auth": {
+    "checking": "Checking your access…",
+    "denied": "You do not have access to the admin console.",
+    "deniedHint": "This account is signed in, but it does not hold an administrative role.",
+    "signedInAs": "Signed in as {name}",
+    "signOut": "Sign out",
+    "signIn": "Sign in",
+    "required": "Sign in to continue.",
+    "failed": "Could not reach the server. Try again."
+  },
+  "nav": {
+    "label": "Admin sections",
+    "dashboard": "Dashboard",
+    "users": "Users",
+    "matches": "Matches",
+    "tournaments": "Tournaments",
+    "moderation": "Moderation",
+    "notifications": "Notifications",
+    "audit": "Audit log",
+    "comingSoon": "Not built yet"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "empty": "Nothing here yet.",
+    "emptyHint": "A64-024.1 established the admin boundary. Sections arrive in later tasks."
+  }
+}

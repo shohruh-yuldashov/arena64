@@ -236,7 +236,7 @@ persistence at all.
 | --- | --- | --- |
 | `apps/api` | The entire backend — HTTP, WebSocket, and workers under the three profiles of AD-02 | One artifact, three entrypoints |
 | `apps/web` | Player-facing client: play, spectate, social, profile, leaderboards | Public SEO surface |
-| `apps/admin` | Moderation, account actions, platform operations | Separate deployment; never shares a session with `apps/web` |
+| `apps/admin` | Moderation, account actions, platform operations | Separate deployment; never shares a session with `apps/web`. **Scaffolded A64-024.1** — the authorization gate and shell exist; every operational surface is deferred (`specs/admin.md` §8) |
 
 ### AD-04 — The admin console is a separate application, not a route in the player client
 

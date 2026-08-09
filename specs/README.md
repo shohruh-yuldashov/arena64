@@ -39,7 +39,7 @@ before implementation begins.
 | [Leaderboard](./leaderboard.md) | Ranked player listings, leaderboard scopes, and refresh cadence. | Placeholder |
 | [Statistics](./statistics.md) | Aggregated player and match statistics, history, and analytical breakdowns. | Placeholder |
 | [Spectator](./spectator.md) | Live match observation, spectator joins, and delayed or restricted viewing. | Placeholder |
-| [Admin](./admin.md) | Administrative tooling for moderation, account actions, and platform operations. | Placeholder |
+| [Admin](./admin.md) | Admin authorization, the server-authoritative boundary, and the separate console. | Foundation shipped |
 | [Settings](./settings.md) | Per-player preferences covering gameplay, notifications, privacy, and appearance. | Placeholder |
 
 ## TODO

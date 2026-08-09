@@ -1,0 +1,32 @@
+{
+  "app": {
+    "title": "Arena64 Admin",
+    "subtitle": "Platforma boshqaruvi"
+  },
+  "auth": {
+    "checking": "Ruxsat tekshirilmoqda…",
+    "denied": "Sizda admin paneliga ruxsat yo'q.",
+    "deniedHint": "Hisob tizimga kirgan, lekin administrator roli yo'q.",
+    "signedInAs": "{name} sifatida kirdingiz",
+    "signOut": "Chiqish",
+    "signIn": "Kirish",
+    "required": "Davom etish uchun tizimga kiring.",
+    "failed": "Serverga ulanib bo'lmadi. Qayta urinib ko'ring."
+  },
+  "nav": {
+    "label": "Admin bo'limlari",
+    "dashboard": "Boshqaruv paneli",
+    "users": "Foydalanuvchilar",
+    "matches": "O'yinlar",
+    "tournaments": "Turnirlar",
+    "moderation": "Moderatsiya",
+    "notifications": "Bildirishnomalar",
+    "audit": "Audit jurnali",
+    "comingSoon": "Hali tayyor emas"
+  },
+  "dashboard": {
+    "title": "Boshqaruv paneli",
+    "empty": "Hozircha bo'sh.",
+    "emptyHint": "A64-024.1 admin chegarasini o'rnatdi. Bo'limlar keyingi vazifalarda qo'shiladi."
+  }
+}

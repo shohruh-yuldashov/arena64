@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| **Status** | **Foundation shipped** — A64-024.1 (authorization, boundary, scaffold) and A64-024.2 (sign-in, routing, session isolation). Every operational surface is deferred; see §8. |
+| **Status** | **Foundation shipped** — A64-024.1 (authorization), A64-024.2 (sign-in, routing) and A64-024.2H (deployment origins, session ownership). Every operational surface is deferred; see §8. |
 | **Owner** | _Unassigned_ |
 | **Related ADRs** | `architecture.md` AD-04 (separate application) |
 | **Related docs** | `docs/01-architecture/database.md` §10.4, `docs/01-architecture/domain-model.md` §13 |
@@ -158,52 +158,116 @@ valid non-administrator gets a session and then a refusal.
 > `/api/v1/admin/me`, and `CurrentUser` authenticates from an `Authorization`
 > header. The console would have returned `401` to everybody.
 
-### 6.2 Session separation — the invariant
+### 6.2 Production origins and session ownership — A64-024.2H
 
-**Separation is a property of the origin, not a flag.** The refresh cookie is
-`HttpOnly`, `SameSite=Lax` and carries **no `Domain` attribute**, so it is
-host-only: a cookie set for one host is never sent to another.
+| Application | Canonical origin |
+| --- | --- |
+| `apps/web` | `https://arena64.gg` |
+| `apps/admin` | `https://admin.arena64.gg` |
 
-The invariant, stated so a deployment can be checked against it:
+**The console is never `arena64.gg/admin`.** AD-04 makes it a separate
+application, and a path on the player origin would put it in the player's
+cookie jar, in the player's bundle and behind the player's session.
+
+#### Each front end is same-origin with its own `/api`
+
+This is the decision that makes isolation real, and it was reached by
+rejecting the obvious alternative.
+
+```
+browser ──/api/*──> arena64.gg        ──reverse proxy──> FastAPI
+browser ──/api/*──> admin.arena64.gg  ──reverse proxy──> FastAPI
+```
+
+`specs/frontend.md` §11 already required this for the player client — *"the
+page and the API must share an origin… a cross-origin API would either never
+receive [the cookie] or would need `SameSite=None`, which is precisely the
+CSRF exposure the cookie exists to close."* A64-024.2H extends the same
+contract to the console rather than making an exception for it.
+
+**A shared `api.arena64.gg` for browser sessions was considered and
+rejected.** The refresh cookie is host-only and belongs to **whichever host
+answered the login**. Had both front ends posted to one API host, that host
+would own one cookie, both apps would send it, and the player session and
+the administrator's would be the same credential — with CORS and
+`Allow-Credentials` needed to reach it. That is not session isolation, and
+calling it one would have been the dishonest outcome A64-024.2H existed to
+avoid.
+
+`api.arena64.gg` may still exist for **token-bearing, non-browser clients**
+(a mobile app authenticating with `Authorization`). It is not the canonical
+endpoint of the browser refresh-session contract.
+
+#### Cookie ownership, stated exactly
+
+| Property | Value | Consequence |
+| --- | --- | --- |
+| `Domain` | **absent** | Host-only. Never `.arena64.gg` — that single attribute would merge the two sessions |
+| `Path` | `/api/v1/auth/browser` | Sent only to the auth endpoints; `/admin/me` uses a bearer token instead |
+| `SameSite` | `Lax` | |
+| `Secure` | true in every deployed tier, not configurable off | |
+| `HttpOnly` | true | The console cannot read it, and neither can an injected script |
+| Owner | The **front-end host that answered the login** | `arena64.gg` and `admin.arena64.gg` hold different cookies of the same name |
+
+The cookie **name** is the same in both; the **host** differs, and that is
+what separates them. No second cookie namespace was introduced — host
+isolation already achieves it, and a parallel admin cookie would have been
+complexity added to match wording rather than to close a gap.
+
+#### The invariants a deployment must satisfy
 
 | # | Requirement |
 | --- | --- |
 | SI-1 | `apps/admin` is served from a **distinct host** from `apps/web` |
-| SI-2 | No cookie in this system sets a `Domain` attribute — host-only, always |
-| SI-3 | `apps/admin` is deployed separately, and shares no session storage |
-| SI-4 | The admin origin is listed in `BROWSER_SESSION_TRUSTED_ORIGINS`, and the player origin is not sufficient for it |
+| SI-2 | **No cookie in this system sets a `Domain` attribute** |
+| SI-3 | `apps/admin` is deployed separately and shares no session storage |
+| SI-4 | Each front-end origin routes `/api/*` to FastAPI itself; browser sessions never cross to a separate API host |
+| SI-5 | `BROWSER_SESSION_TRUSTED_ORIGINS` lists **both browser page origins** and nothing else |
 
-**SI-4 is the one that is easy to miss.** `enforce_trusted_origin` refuses a
-cookie-authenticated call whose `Origin` is not on the list, and the list is
-required in production. An admin console deployed to a new host without being
-added to it fails at login with `403`, not with a security hole — the failure
-direction is correct, and it is worth knowing in advance.
+**SI-5 is the one that fails loudly.** `enforce_trusted_origin` refuses a
+cookie-authenticated call whose `Origin` is not listed, so a console
+deployed without being added fails at login with `403`. That is the correct
+direction to fail, and worth knowing before the first administrator tries.
 
-Hostnames are **not** chosen here: no repository document names one, and
-inventing production DNS in a spec is how a guess becomes a fact. What is
-fixed is SI-1 … SI-4; which hosts satisfy them is the remaining infrastructure
-decision (OQ-2).
+    BROWSER_SESSION_TRUSTED_ORIGINS=["https://arena64.gg","https://admin.arena64.gg"]
 
-### 6.3 Local development — the honest caveat
+Note these are **page** origins. Listing `https://api.arena64.gg` would allow
+nothing, because no browser ever claims to be an API host.
 
-`apps/web` runs on `localhost:5173` and `apps/admin` on `localhost:5174`.
-**Cookies ignore the port**, so on those two URLs the browser treats them as
-one host and the two apps *do* share the refresh cookie.
+#### CORS
 
-That is a development artefact and it **proves nothing about production**. It
-also does not weaken production: the isolation there comes from SI-1, which
-distinct ports do not satisfy.
+**None, deliberately.** The backend registers no CORS middleware and needs
+none: every browser request is same-origin through its own front end's
+reverse proxy. Adding permissive CORS to reach a shared API host is exactly
+the change SI-4 exists to prevent.
 
-For work that depends on the separation being real, use distinct local
-hostnames — every modern browser resolves `*.localhost` to the loopback
-address with no `/etc/hosts` entry:
+### 6.3 Local development
 
-    apps/web     http://app.localhost:5173
-    apps/admin   http://admin.localhost:5174
+`app.localhost:5173` for the player client, `admin.localhost:5174` for the
+console. Both are in each app's `allowedHosts`, and `*.localhost` resolves to
+the loopback address in every current browser with no `/etc/hosts` entry.
 
-Both proxy `/api` to the API, so each app remains same-origin with its own
-API path and each receives its own host-only cookie. No cookie attribute is
-relaxed to make development convenient.
+**Bare `localhost:5173` and `localhost:5174` share a cookie**, because
+cookies ignore the port — the two are one host to the cookie jar. That is a
+development artefact which proves nothing about production and hides the
+isolation the console depends on, so work that touches sessions should use
+the hostnames above. Nothing about the cookie is relaxed to make either
+convenient.
+
+### 6.3a Network boundary — a recommendation, not a requirement
+
+**Not required now.** The console already has a separate application, a
+separate origin, server-side role authorization checked on every protected
+navigation, a host-only session, and a login that refuses untrusted origins.
+Nothing in this repository's security documentation requires network-level
+restriction on top of that, and inventing a VPN dependency would add an
+operational failure mode without closing a demonstrated gap.
+
+**Recommended for production hardening**: an IP allowlist or a VPN in front
+of `admin.arena64.gg`. It converts a stolen administrator credential from
+sufficient into merely necessary. That belongs to a production-hardening
+epic together with CSP and other security headers, which are reverse-proxy
+concerns this task deliberately does not build.
 
 ### 6.4 Routes
 
@@ -287,5 +351,5 @@ adding a real section later changes a page body and not the boundary.
 | # | Question | Status |
 | --- | --- | --- |
 | OQ-1 | Does a narrower `moderator` role exist, and what does it exclude? | **Open** — waiting on the first surface that distinguishes them |
-| OQ-2 | Where does `apps/admin` deploy, and behind what network boundary? | **Narrowed by A64-024.2.** The security invariants are fixed (§6.2, SI-1 … SI-4) and no longer depend on the answer. What remains is infrastructure: which hostnames satisfy SI-1, whether the console sits behind a VPN or an IP allowlist, and adding the chosen origin to `BROWSER_SESSION_TRUSTED_ORIGINS` |
+| ~~OQ-2~~ | ~~Where does `apps/admin` deploy?~~ | **Closed by A64-024.2H.** `https://admin.arena64.gg`, same-origin with its own `/api` reverse proxy, listed in `BROWSER_SESSION_TRUSTED_ORIGINS`, no shared `Domain` cookie, no CORS. Network allowlisting is recorded as a production-hardening recommendation rather than a requirement (§6.3a) |
 | ~~OQ-3~~ | ~~Does the console need its own sign-in?~~ | **Closed by A64-024.2.** It has its own `/login`, posting ordinary credentials to the shared auth endpoints from its own origin — so the session is the console's without a second credential system |

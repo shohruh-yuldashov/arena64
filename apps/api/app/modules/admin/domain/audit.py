@@ -83,6 +83,13 @@ class AuditAction(StrEnum):
     """A64-024.6 — a restriction was ended by a named administrator, which
     §13.3 requires to be auditable in its own right."""
 
+    NOTIFICATION_DELIVERY_RETRIED = "notification.delivery.retry"
+    """A64-024.7 — an exhausted push delivery was re-armed.
+
+    Named for the delivery rather than for the notification: nothing about
+    the notification changes, and an action called `notification.resend`
+    would describe a capability this platform deliberately does not have."""
+
 
 class AuditSubjectType(StrEnum):
     """What the action was performed on.
@@ -94,15 +101,22 @@ class AuditSubjectType(StrEnum):
 
     ACCOUNT = "account"
 
+    NOTIFICATION = "notification"
+    """A64-024.7. `subject_ref` is the notification's id; the device the
+    action addressed is in the entry's metadata, because a subject with two
+    identifiers would make the subject filter useless."""
+
 
 class AuditOutcome(StrEnum):
     """How it ended.
 
-    `SUCCEEDED` is the only value A64-024.8 writes, because a success entry
-    is written inside the mutation's own transaction and a rolled-back
-    mutation therefore leaves none. `FAILED` exists for the failed-attempt
-    seam `specs/admin.md` documents — it is deliberately unused rather than
-    absent, so a later phase records a refusal without a schema change.
+    `SUCCEEDED` is written inside the mutation's own transaction, so a
+    rolled-back mutation leaves no entry claiming it happened.
+
+    `FAILED` is written by A64-024.6's policy and continued by A64-024.7,
+    unchanged: an **authenticated administrator** whose action a domain
+    safety rule refused leaves a record; anybody the guard rejected leaves
+    only a security log. See `specs/admin.md` §6.12.
     """
 
     SUCCEEDED = "succeeded"

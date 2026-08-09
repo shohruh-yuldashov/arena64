@@ -75,6 +75,18 @@ class NotSanctioned(ConflictError):
     """There is no effective sanction of this kind to lift."""
 
 
+class RetryUnavailable(ConflictError):
+    """This push delivery cannot be re-armed — A64-024.6's shape, A64-024.7.
+
+    One exception for every reason, deliberately. The row may have been
+    retried already, settled by the worker a moment ago, permanently
+    failed, skipped by preference, or never eligible — and an operator's
+    next step is the same in all five. Distinguishing them in the response
+    would also tell a caller what state a row is in without them reading it,
+    which is a read the guarded `UPDATE` exists to avoid.
+    """
+
+
 __all__ = [
     "AlreadyGranted",
     "AlreadySanctioned",
@@ -82,6 +94,7 @@ __all__ = [
     "NotGranted",
     "NotSanctioned",
     "ProtectedAdministrator",
+    "RetryUnavailable",
     "SelfGrant",
     "SelfSanction",
 ]

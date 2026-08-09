@@ -40,5 +40,24 @@ from app.modules.notifications.domain.record import (
     NotificationAnnouncement,
     NotificationType,
 )
+from app.modules.notifications.public.administration import (
+    AdministrativeNotificationDirectory,
+    AdminNotificationDetail,
+    AdminNotificationFilters,
+    AdminNotificationPage,
+    AdminNotificationRecord,
+    AdminPushDelivery,
+    NotificationDeliveryOperations,
+)
 
-__all__ = ["NotificationAnnouncement", "NotificationType"]
+__all__ = [
+    "AdminNotificationDetail",
+    "AdminNotificationFilters",
+    "AdminNotificationPage",
+    "AdminNotificationRecord",
+    "AdminPushDelivery",
+    "AdministrativeNotificationDirectory",
+    "NotificationAnnouncement",
+    "NotificationDeliveryOperations",
+    "NotificationType",
+]

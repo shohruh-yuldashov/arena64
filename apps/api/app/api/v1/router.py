@@ -31,6 +31,7 @@ from app.modules.admin.presentation.router import admin_router
 from app.modules.admin.presentation.routers.audit import admin_audit_router
 from app.modules.admin.presentation.routers.matches import admin_matches_router
 from app.modules.admin.presentation.routers.moderation import admin_moderation_router
+from app.modules.admin.presentation.routers.notifications import admin_notifications_router
 from app.modules.admin.presentation.routers.tournaments import admin_tournaments_router
 from app.modules.admin.presentation.routers.users import admin_users_router
 from app.modules.auth.presentation.browser_router import browser_auth_router
@@ -78,6 +79,10 @@ v1_router.include_router(admin_audit_router)
 # paths — Starlette resolves in registration order, and both are literal
 # segments after the parameter, so neither shadows the other.
 v1_router.include_router(admin_moderation_router)
+# A64-024.7. Reads plus **one** mutation — re-arming a push delivery that a
+# push service never accepted. There is no send: nothing on this router can
+# create a notification, choose a recipient or supply a payload.
+v1_router.include_router(admin_notifications_router)
 
 # **Before `users_router`, and the order is load-bearing.** `GET /users/search`
 # and `GET /users/{user_id}` both match the path `/users/search`; Starlette

@@ -1418,6 +1418,38 @@ cannot name a recipient, an address or an endpoint —
 grepping the output, because a command that *fetched* a recipient and chose
 not to print it would pass the latter.
 
+### 16.5a The admin console — A64-024.7
+
+`specs/admin.md` §6.13 builds an operational read surface and one mutation on
+top of the model above. Two operational semantics this document owns are
+restated there and clarified here, because the console is the first consumer
+that had to render them for a human:
+
+**"Sent" is provider acceptance, and the console says so.** §16.4's terminal
+states are surfaced verbatim; the admin UI renders `sent` as "accepted by the
+push service" and has no "Delivered" badge, because §16.3 is explicit that
+nothing downstream reports back.
+
+**One outcome is operator-retryable: `attempts_exhausted`.** It is the only
+member of `PushDeliveryOutcome` that means "the request never got through and
+nothing about it was wrong" — an outage. `permanent_failure` and
+`subscription_gone` describe a subscription that will not accept another
+message, and every `skipped_*` describes a delivery that was correctly not
+attempted. `skipped_preference` in particular is never retryable: the
+preference is read at delivery time (§14), so a retry would go through the
+same check anyway, and offering the action would imply an override exists.
+
+An operator retry moves the row back to `pending` **without resetting
+`attempt_count`**, so the cap in `_resolve` — applied after the attempt it
+grants — turns it into exactly one more try. That is why no new state, column
+or scheduler was needed: the delivery model already represents "owed", and the
+existing cap already bounds it.
+
+Unlike §16.5's aggregate-only commands, the console names a recipient — it is
+behind `CurrentAdmin` on an isolated origin, and `specs/admin.md` §6.13 states
+what it may and may not carry. The push endpoint and the encryption keys
+remain unreachable from either surface.
+
 ### 16.6 What the audit found
 
 | # | Finding | Severity | Resolution |

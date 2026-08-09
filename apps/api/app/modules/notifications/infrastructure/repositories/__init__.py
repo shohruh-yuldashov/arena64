@@ -1,5 +1,8 @@
 """SQLAlchemy adapters for `notifications`' ports."""
 
+from app.modules.notifications.infrastructure.repositories.administration import (
+    SqlAlchemyAdministrativeNotificationDirectory,
+)
 from app.modules.notifications.infrastructure.repositories.email_delivery_repository import (
     SqlAlchemyEmailDeliveryRepository,
 )
@@ -17,6 +20,7 @@ from app.modules.notifications.infrastructure.repositories.push_subscription_rep
 )
 
 __all__ = [
+    "SqlAlchemyAdministrativeNotificationDirectory",
     "SqlAlchemyEmailDeliveryRepository",
     "SqlAlchemyNotificationPreferenceRepository",
     "SqlAlchemyNotificationRepository",

@@ -69,6 +69,7 @@ Proposed ──▶ Accepted ──▶ Superseded
 | [ADR-001](./ADR-001-glicko2-incremental.md) | Glicko-2, applied incrementally, with lazy RD inflation | Accepted | 2026-08-04 |
 | [ADR-002](./ADR-002-frontend-spa.md) | `apps/web` is a Vite single-page application, not Next.js | Accepted | 2026-08-05 |
 | [ADR-003](./ADR-003-pwa-service-worker.md) | Arena64 owns its service worker; Workbox is not adopted | Accepted | 2026-08-06 |
+| [ADR-004](./ADR-004-quick-messages-not-free-text-chat.md) | Arena64 has no free-text chat; in-match communication is a predefined catalogue | Accepted | 2026-08-09 |
 
 ## TODO
 

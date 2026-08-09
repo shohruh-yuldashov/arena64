@@ -257,8 +257,8 @@ precisely the token every newly-registered account is holding.
 | tournament: enter, withdraw | | |
 
 The line is **outward-facing writes**. Everything in the gated column either
-reaches another player (friend requests, chat by way of a game, tournament
-entry) or attaches content to an identity the platform has not confirmed.
+reaches another player (friend requests, quick messages by way of a game,
+tournament entry) or attaches content to an identity the platform has not confirmed.
 
 ### The frontend flow
 

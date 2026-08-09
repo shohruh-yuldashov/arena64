@@ -247,7 +247,6 @@ One repository per aggregate root. The exception is documented in RP-02.
 | `game` | *(none — read port)* | `MatchHistory` (published, BE-04) | PostgreSQL |
 | `game` | *(none)* | `ClockDeadlineStore` | **Redis** |
 | `spectator` | *(none)* | Reads `game` ports only | — |
-| `chat` | `ChatThread` | `ChatThreadRepository` | PostgreSQL |
 | `notifications` | `Notification` | `NotificationRepository` | PostgreSQL |
 | `rating` | `PlayerRating` | `PlayerRatingRepository` | PostgreSQL |
 | `leaderboard` | *(none)* | `LeaderboardProjectionStore` | **Redis**, rebuildable |

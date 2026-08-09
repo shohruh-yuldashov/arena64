@@ -36,8 +36,11 @@ one. A64-016.1 built the connection; everything a connection *carries* arrives l
 | Durable move log (AD-18's second half) | **Built** — A64-016.4, §18 |
 | Terminal detection and match settlement | **Built** — A64-016.4, §18.4 |
 | Remote transport bus seam | **Built** — A64-016.4, §18.6. Single-node adapter only |
-| Clocks, spectators, chat | **Deferred** — §9, and A64-016.5 for clocks |
-| Reconnection replay (AD-12) | **Deferred** — §9 |
+| Clocks | **Built** — A64-016.5, §19 |
+| Spectating | **Built** — A64-016.7, §21 |
+| Reconnection replay (AD-12) | **Built** — A64-016.6, §20 |
+| Quick messages | **Built** — A64-023.1, §24 |
+| Free-text chat | **Not built, and not planned** — [ADR-004](../07-decisions/ADR-004-quick-messages-not-free-text-chat.md). §24 is what replaced it |
 
 ---
 
@@ -481,9 +484,13 @@ position is "broken" is not a switch — turning the gateway off is a deploy dec
 
 AD-11: **one socket per client, multiplexed by channel.** Two reasons, and the second is the one
 that matters for a board game — browsers limit concurrent connections per origin and mobile
-clients pay a battery cost per socket, but more importantly separate sockets for moves and chat
-would make cross-stream ordering undefined, and a resignation and a chat message sent in that
-order must arrive in that order.
+clients pay a battery cost per socket, but more importantly separate sockets for moves and
+messages would make cross-stream ordering undefined, and a resignation and a "good game" sent in
+that order must arrive in that order.
+
+That example was hypothetical when AD-11 was written — it named chat, which this platform
+decided not to build (ADR-004). It is now the shipped case: §24's quick messages ride this
+socket rather than opening a second one, for exactly this reason.
 
 So the channel is a **field**, not a connection.
 
@@ -1203,7 +1210,7 @@ application service, five columns.
 ### 22.1 Why the socket and not HTTP
 
 AD-11 multiplexes one socket precisely so that cross-stream ordering is defined, and §13's
-opening example is *"a resignation and a chat message sent in that order must arrive in that
+opening example is *"a resignation and a 'good game' sent in that order must arrive in that
 order"*. A resignation on HTTP and a move on the socket would be two transports racing for the
 same match, and the loser's meaning would depend on network timing.
 
@@ -1489,6 +1496,128 @@ lasts at most the acceptance window. Closing it means a
 
 ---
 
+## 24. Quick messages — A64-023.1
+
+Predefined communication between the two players of a live match. **Not chat**, and the
+distinction is enforced by the wire format rather than by policy: there is no field on any
+frame that can carry user-authored text. See
+[`ADR-004`](../07-decisions/ADR-004-quick-messages-not-free-text-chat.md) for the decision and
+[`specs/quick-messages.md`](../../specs/quick-messages.md) for the full behaviour.
+
+### 24.1 The frames
+
+Two message types, both on the `game` channel, added without a `PROTOCOL_VERSION` bump — an
+older client never asks for a type it does not know, and a server that receives one it does not
+know refuses it (§8).
+
+| Direction | Type | Payload |
+| --- | --- | --- |
+| Client → server | `game.quick_message.send` | `match_id`, `message` |
+| Server → **both participants** | `game.quick_message.received` | `match_id`, `from`, `message`, `sent_at` |
+
+`message` is a member of a **server-owned catalogue** (`app/gateway/quick_messages.py`) —
+`good_luck`, `nice_move`, `well_played`, `good_game`, `thanks`, `oops`. Anything else is
+refused with `unknown_quick_message`. That single check is the whole of the "arbitrary text
+cannot be injected" guarantee: a body of any length, in any encoding, containing anything at
+all, reaches it and is rejected.
+
+`from` is a **side**, never a player id — a client already knows which seat it holds, and a
+side is the value it renders against, the same reasoning `game.draw.offered` uses.
+
+`sent_at` is the **gateway's receive instant**, the same authority a move is stamped with, so a
+message and the move beside it cannot disagree about order. A client-supplied timestamp is
+ignored.
+
+**Refusals reuse `game.command.rejected`**, correlated by `request_id`, with a code from
+`unknown_quick_message`, `not_in_room`, `not_a_participant`, `match_not_active`, `rate_limited`
+or `internal_error`.
+
+**There is no success acknowledgement.** The sender receives their own message through the same
+fan-out, so one client code path renders it whoever sent it — and an acknowledgement *plus* a
+broadcast would deliver the sender two frames for one message. This is the first use of
+`MessageHandler`'s `None` return, which §17 named as the seam a fire-and-forget frame would use.
+
+### 24.2 Authorization
+
+Cheapest first, and every step is a refusal a client can branch on:
+
+    rate limit  ->  catalogue  ->  room membership  ->  roster: participation and liveness
+
+**Room membership is not sufficient**, and this is the subtlety worth recording. `ROOMABLE_STATES`
+is evaluated when a connection *joins*; a room then outlives the match that made it, until its
+members leave or its TTL lapses. A handler that stopped at `is_attached` would carry
+conversation into a finished game. So the roster is read, and it answers both remaining
+questions at once — `includes` is participation, `status` is liveness.
+
+That read is also the **only** `game` capability this path holds. R-7 stays true: the gateway
+cannot advance, settle or alter a match here.
+
+**Recipients are derived from the roster, never supplied.** Cross-match delivery is impossible
+because the only match reachable is the one whose room the sender was proven to be in, and the
+frame has no field naming anyone else.
+
+### 24.3 Spectators receive nothing
+
+Two independent mechanisms, either sufficient on its own:
+
+1. `game.quick_message.received` is absent from `SPECTATOR_SAFE_EVENTS` (§21).
+2. The handler passes **no audience** to the fan-out at all, so the allowlist never has to
+   withhold it.
+
+A spectator also cannot send: they are in the audience, never in the room, so `is_attached`
+refuses them before `game` is asked anything.
+
+### 24.4 Delivery — deliberately weaker than a move
+
+| Property | Value | Why |
+| --- | --- | --- |
+| Sequence number | **No** | It advances no ply, and there is nothing to order against |
+| Written to the replay buffer | **No** | The buffer is keyed by match sequence; a non-ply entry would sit at a sequence a move owns and break the contiguity check a resume proves its gap with — the constraint §23's `game.draw.state` records |
+| Replayed on reconnect | **No** | Follows from the above. A client that was away did not hear it |
+| Persisted | **No** | Nothing reads it. Storage would grow with spam |
+| Acknowledged or retried | **No** | A late "nice move" is worse than none |
+
+**At most once, best effort.** A failed fan-out is counted and logged, never raised. Correct
+game state never depends on any of it, and a quick-message failure cannot fail a move: the two
+share no store, and the rate limits are separate budgets.
+
+### 24.5 Rate limits
+
+Per **connection**, in its own budget rather than the move handler's — sharing would let a
+player who spams messages consume the allowance their moves need, so the punishment for being
+annoying would be losing on time.
+
+| Rule | Default |
+| --- | --- |
+| Burst | 3 per 10 seconds |
+| Sustained | 6 per 60 seconds |
+
+Both are spent in **one atomic acquisition**, so the burst bucket is never charged for a send
+the sustained rule then refuses.
+
+### 24.6 Localization
+
+The server sends an identifier; the **receiving** client renders it in its own locale. Two
+players in one match may be reading the same frame in two languages, which is the point —
+Arena64 supports Uzbek, Russian and English, and its primary audience reads Uzbek.
+
+`tests/contract/test_quick_message_localisation.py` holds the two halves together: every
+catalogue member must have a non-empty label in every supported locale, or the identifier would
+reach players as its own translation key.
+
+### 24.7 Observability
+
+One counter, `gateway.quick_messages_total`, labelled by a bounded `outcome`: `sent`,
+`rejected_invalid`, `rejected_not_in_room`, `rejected_not_participant`, `rejected_terminal`,
+`rate_limited`, `internal`.
+
+No player, match, connection or **message** label — the first three are unbounded, and the
+fourth is bounded and still absent because nothing operational needs it. The payload is never
+logged: it is untrusted input, and a log of rejected bodies would be the free-text archive this
+feature exists not to have.
+
+---
+
 ## Related Documents
 
 | Document | Relationship |
@@ -1497,3 +1626,5 @@ lasts at most the acceptance window. Closing it means a
 | [`caching.md`](./caching.md) | The `wsticket:v1:` and `gwconn:v1:` keyspaces in the namespace registry |
 | [`security.md`](./security.md) | Credential handling; the ticket is a DB-24 opaque value |
 | [`specs/matchmaking.md`](../../specs/matchmaking.md) | §11.4's pending-match delivery, whose sink this tier eventually becomes |
+| [`specs/quick-messages.md`](../../specs/quick-messages.md) | §24's catalogue, semantics and acceptance criteria |
+| [`ADR-004`](../07-decisions/ADR-004-quick-messages-not-free-text-chat.md) | Why there is no free-text chat, and what would reopen it |

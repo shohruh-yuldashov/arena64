@@ -3,10 +3,10 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-PRODUCT-EXPERIENCE` |
-| **Status** | Draft — audit (A64-025.1); shell and home (A64-025.3); design foundation (A64-025.2) |
+| **Status** | Draft — audit (.1); shell and home (.3); design foundation (.2); authentication (.4) |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-08-10 — A64-025.2, the design system |
+| **Last updated** | 2026-08-10 — A64-025.4, the authentication experience |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -737,3 +737,97 @@ Still absent and still unearned until a second caller appears: Select,
 Switch, Tabs, Tooltip, DropdownMenu, Badge, Sheet. Each is a `shadcn add`
 away into this theme when the caller exists — `apps/web/components.json`
 already points at `@/shared/ui`.
+
+---
+
+## 11. Authentication — A64-025.4
+
+### 11.1 What was already right
+
+The audit found the *semantics* of authentication in better shape than any
+other surface, and none of it was rewritten: `autoComplete="email"` and
+`current-password`/`new-password` in the right places, `noValidate` with a
+zod resolver so the messages are translatable, `disabled={isSubmitting}` on
+every submit, one bounded message for a rejected credential so the client
+cannot reintroduce the enumeration oracle the API avoids, `safeRedirect`
+between `?next=` and a navigation, and `FormField`/`FormError` already
+generating the four ids that have to agree.
+
+What was wrong was the composition. A `max-w-sm` card in the middle of a
+very wide page — the generic starter form, saying nothing about a
+competitive board game.
+
+### 11.2 The shell
+
+One composed surface instead of a floating card. Above `lg` it splits into
+an identity panel and the form; below `lg` the panel is gone and the form is
+the page, with the wordmark above it. The same DOM, one breakpoint, no
+second layout.
+
+The panel sits on `--primary` with an 8×8 grid over it — one
+`repeating-conic-gradient` of white at seven per cent, so it follows the
+brand into dark mode with no second value to keep in step. No image, no
+illustration, no dependency, and `aria-hidden`, because the sentence beside
+it already says what it means. §17's list of things not to build — hero,
+carousel, particles, counter — is respected; an eight-by-eight grid is not
+decoration on a draughts product, it is the subject.
+
+### 11.3 Password visibility
+
+Four of the five auth forms ask for a password and none let you check it.
+`PasswordField` wraps `FormField` rather than replacing it, so the label,
+the description and the error stay wired to one control and the id
+generation stays in one place.
+
+The toggle is `type="button"` (a bare button in a form submits it), changes
+only the input's `type` so the value and the caret survive, carries
+`aria-pressed` and a name that says what pressing it will do, and leaves
+`autoComplete` to the caller — `current-password` and `new-password` are a
+distinction password managers act on.
+
+### 11.4 Feedback
+
+`FormError` and `FormStatus` predate A64-025.2's `Notice` and had their own
+class strings for the same four tones. They now render `Notice`, so a
+failure looks the same in a form as anywhere else. `FormError` keeps the one
+thing `Notice` does not do — moving focus to the message, which is what
+makes WCAG 2.1 §3.3.1's "identify the error" actually reach a screen-reader
+user.
+
+`FormStatus` gained a `success` tone. A verified address and a changed
+password are the end of a journey; "we sent the link" is a step. They looked
+identical, and a person stops reading a signal that never varies.
+
+### 11.5 Control size, corrected
+
+A64-025.2 put the 44px floor on `Button` and left `Input` at 36 — the taller
+half of the pair a person actually taps on a phone. Measured at 36px on
+`/login` at 360px, now `h-11`. The standalone "Forgot your password?" link
+got the same floor; "Create one" did not, because it is a link inside a
+sentence and WCAG 2.5.8 exempts those.
+
+### 11.6 Measured
+
+Chromium, all four auth routes:
+
+| Route | 360 light | 360 dark | 1280 light | 1280 dark |
+| --- | --- | --- | --- | --- |
+| `/login` | 0 overflow, 44px | 0, 44px | 0, 44px | 0, 44px |
+| `/register` | 0, 44px | — | — | 0, 44px |
+| `/verify-email` | 0, 44px | — | — | 0, 44px |
+| `/forgot-password` | 0, 44px | — | — | 0, 44px |
+| `/reset-password` | 0 overflow | — | — | 0 overflow |
+
+Exactly one `h1` per route in every combination, and no clipped content.
+
+### 11.7 Unchanged on purpose
+
+Nothing in the security model moved: the HttpOnly refresh cookie, token
+storage, refresh and revocation semantics, the verified-email guard,
+`safeRedirect`'s open-redirect protection, the single message for a rejected
+credential, and the route guards. `/`'s semantics from A64-025.3 are
+untouched, and no backend contract was read differently or extended.
+
+`/verify-email` keeps its two-mode behaviour — a mailed `?token=` and an
+in-session code form behind one path — and its lack of a guard, which is
+deliberate and documented in the route tree.

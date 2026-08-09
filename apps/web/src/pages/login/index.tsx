@@ -9,6 +9,7 @@ import { useSession } from "@/features/auth/model/session-provider";
 import { loginSchema, type LoginValues } from "@/features/auth/schemas";
 import { FormField } from "@/features/auth/ui/form-field";
 import { FormError } from "@/features/auth/ui/form-status";
+import { PasswordField } from "@/features/auth/ui/password-field";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { Button, Spinner } from "@/shared/ui";
 import { AuthShell } from "@/widgets/auth-shell";
@@ -92,9 +93,8 @@ export default function LoginPage() {
           {...register("email")}
         />
 
-        <FormField
+        <PasswordField
           label={t("auth.common.password")}
-          type="password"
           autoComplete="current-password"
           error={errors.password ? t(errors.password.message as TranslationKey) : undefined}
           {...register("password")}
@@ -108,9 +108,11 @@ export default function LoginPage() {
           )}
         </Button>
 
+        {/* A standalone action rather than a link inside a sentence, so it
+            gets the same 44px floor every other control has (§7). */}
         <Link
           to="/forgot-password"
-          className="text-muted-foreground hover:text-foreground self-start text-sm underline underline-offset-4"
+          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring -ml-1 inline-flex min-h-11 items-center self-start rounded-md px-1 text-sm underline underline-offset-4 focus-visible:ring-2 focus-visible:outline-none"
         >
           {t("auth.login.forgot")}
         </Link>

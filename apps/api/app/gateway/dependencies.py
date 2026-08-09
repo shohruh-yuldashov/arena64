@@ -80,7 +80,10 @@ from app.gateway.spectator_store import RedisSpectatorStore
 from app.gateway.spectators import BlockAwareSpectatorPolicy, SpectatorStore
 from app.gateway.stream_bus import RedisStreamGatewayBus
 from app.modules.auth.presentation.dependencies import WebSocketTicketServiceDep
-from app.modules.friends.presentation.dependencies import WebSocketPairingExclusionsDep
+from app.modules.friends.presentation.dependencies import (
+    WebSocketPairingExclusionsDep,
+    WebSocketSocialGraphReaderDep,
+)
 from app.modules.game.presentation.dependencies import (
     WebSocketGameCommandsDep,
     WebSocketLiveMovesDep,
@@ -560,6 +563,7 @@ def get_quick_message_handler(
     rooms: RoomServiceDep,
     broadcaster: Annotated[RoomBroadcaster, Depends(get_broadcaster)],
     limiter: Annotated[QuickMessageRateLimiter, Depends(get_quick_message_limiter)],
+    social_graph: WebSocketSocialGraphReaderDep,
 ) -> QuickMessageHandler:
     """The `game.quick_message.send` handler — A64-023.1 §3, §4.
 
@@ -580,6 +584,10 @@ def get_quick_message_handler(
         rooms=rooms,
         broadcaster=broadcaster,
         limiter=limiter,
+        # The **cached** reader — A64-023.3 §7. `WebSocketPairingExclusionsDep`
+        # answers the same question and is uncached by design, which on a
+        # per-message path would be one indexed query per courtesy.
+        social_graph=social_graph,
         metrics=get_gateway_metrics(),
     )
 

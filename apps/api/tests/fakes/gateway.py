@@ -694,6 +694,40 @@ class StubSpectatorPolicy:
         return self.refusal
 
 
+class StubSocialGraph:
+    """A `friends.public.SocialGraphReader` a test dictates the answer of.
+
+    Only `blocked_ids_for` is meaningful: it is the one method the
+    quick-message path calls, and the set it returns is **symmetric** the
+    way the real port's is — a test states "these two cannot interact"
+    without saying which of them placed the block, because the production
+    code cannot tell either.
+
+    `fails` is what makes the fail-closed posture testable: a social graph
+    that cannot be read must suppress rather than deliver, and a stub that
+    could only succeed would leave that branch unexercised.
+    """
+
+    def __init__(self, *, blocked: dict[UUID, frozenset[UUID]] | None = None) -> None:
+        self.blocked = blocked or {}
+        self.fails = False
+        self.reads: list[UUID] = []
+
+    def block(self, one: UUID, other: UUID) -> None:
+        """Records a block between two players, in both directions."""
+        self.blocked[one] = self.blocked.get(one, frozenset()) | {other}
+        self.blocked[other] = self.blocked.get(other, frozenset()) | {one}
+
+    async def friend_ids_among(self, player_id: UUID, others: Sequence[UUID]) -> set[UUID]:
+        return set()
+
+    async def blocked_ids_for(self, player_id: UUID) -> frozenset[UUID]:
+        self.reads.append(player_id)
+        if self.fails:
+            raise RuntimeError("the social graph is unreachable")
+        return self.blocked.get(player_id, frozenset())
+
+
 class StubPairingExclusions:
     """A `friends.public.PairingExclusions` over a set of blocked pairs.
 

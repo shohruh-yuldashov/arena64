@@ -98,6 +98,7 @@ from tests.fakes.gateway import (
     StubMatchRosters,
     StubMatchSnapshots,
     StubPairingExclusions,
+    StubSocialGraph,
     StubSpectatorPolicy,
 )
 from tests.fakes.metrics import RecordingMetrics
@@ -269,6 +270,7 @@ def _quick_messages(
     limiter: CountingMoveLimiter | None = None,
     sockets: InMemoryLocalSockets | None = None,
     registry: FakeConnectionRegistry | None = None,
+    social_graph: StubSocialGraph | None = None,
 ) -> QuickMessageHandler:
     """The real quick-message handler over in-memory collaborators.
 
@@ -295,6 +297,7 @@ def _quick_messages(
             metrics=RecordingMetrics(),
         ),
         limiter=limiter if limiter is not None else CountingMoveLimiter(allowance=100),
+        social_graph=social_graph if social_graph is not None else StubSocialGraph(),
         metrics=RecordingMetrics(),
     )
 
@@ -3127,3 +3130,250 @@ class TestQuickMessages:
             for _, frame in sorted(buffer.events.get(match_id, {}).items())
         ]
         assert [message.type for message in buffered] == [MessageType.MOVE_APPLIED]
+
+
+class TestQuickMessageHardening:
+    """A64-023.3 — blocks, fail-closed reads and multi-connection fan-out.
+
+    Three tests, all about the **recipient set**, because that is the one
+    thing this phase changes. The catalogue, the authorization order and the
+    terminal rule are `TestQuickMessages`' and are unchanged.
+    """
+
+    @staticmethod
+    def _received(socket: FakeGatewaySocket) -> list[dict[str, object]]:
+        return [
+            message.payload
+            for message in socket.sent
+            if message.type is MessageType.QUICK_MESSAGE_RECEIVED
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_block_placed_mid_match_silences_the_message_and_tells_nobody(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§6, §8 — the case BL-2 does not cover.
+
+        `BlockingService.block` checks self-blocking and duplication and
+        nothing else, so two people who are already playing *can* become
+        blocked at move twenty. This is that: the same connection sends one
+        message before the block and one after, and only the first reaches
+        the opponent.
+
+        The three assertions that matter are what the **sender** sees:
+
+            both sends are accepted        no refusal frame either time
+            both echo back to the sender   their own screen is unchanged
+            only the opponent stops        which the sender cannot observe
+
+        Together they are §8's "an accepted send must not become a block
+        oracle" — from the sender's side the two messages are
+        indistinguishable.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters, members)
+
+        opponent_connection = uuid4()
+        opponent_socket = FakeGatewaySocket(holds_open=True)
+        sockets = InMemoryLocalSockets()
+        sockets.attach(opponent_connection, opponent_socket)
+        await members.join(
+            match_id,
+            RoomMember(player_id=opponent_id, connection_id=opponent_connection),
+            ttl_seconds=3600,
+        )
+        await registry.register(opponent_id, opponent_connection, node_id=NODE_ID, ttl_seconds=90)
+
+        # The block lands between the two sends. `FakeGatewaySocket` replays
+        # its script without pausing, so the graph is what changes: the
+        # second read returns the block.
+        class _BlockingAfterFirst(StubSocialGraph):
+            async def blocked_ids_for(self, requested: UUID) -> frozenset[UUID]:
+                answer = await super().blocked_ids_for(requested)
+                if len(self.reads) == 1:
+                    self.block(player_id, opponent_id)
+                return answer
+
+        social = _BlockingAfterFirst()
+        tickets.add(VALID_TICKET, player_id)
+        send = _frame(
+            "game.quick_message.send",
+            channel="game",
+            payload={"match_id": str(match_id), "message": "nice_move"},
+        )
+        socket = FakeGatewaySocket(
+            [
+                _frame("room.join", channel="game", payload={"match_id": str(match_id)}),
+                send,
+                send,
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            sockets=sockets,
+            quick_messages=_quick_messages(
+                rooms,
+                rosters=rosters,
+                sockets=sockets,
+                registry=registry,
+                social_graph=social,
+            ),
+        ).run(socket, ticket=VALID_TICKET)
+
+        # The opponent heard the first and not the second.
+        assert len(self._received(opponent_socket)) == 1
+        # The sender heard both of their own, and was refused neither.
+        assert len(self._received(socket)) == 2
+        assert [
+            message for message in socket.sent if message.type is MessageType.COMMAND_REJECTED
+        ] == []
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_social_graph_suppresses_rather_than_delivers(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§6, §16 — fail **closed**.
+
+        A block that cannot be checked is one that might exist, so a Redis
+        or database blip must not become a privacy bypass. The same posture
+        `BlockAwareSpectatorPolicy` takes, and the direction matters more
+        than the availability: losing a courtesy during an incident is
+        already an accepted outcome, and delivering to somebody who blocked
+        the sender is not.
+
+        The sender still sees their own message, which is what keeps the
+        failure indistinguishable from a block — and keeps it from being an
+        outage the player can see.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters, members)
+
+        social = StubSocialGraph()
+        social.fails = True
+
+        opponent_connection = uuid4()
+        opponent_socket = FakeGatewaySocket(holds_open=True)
+        sockets = InMemoryLocalSockets()
+        sockets.attach(opponent_connection, opponent_socket)
+        await members.join(
+            match_id,
+            RoomMember(player_id=opponent_id, connection_id=opponent_connection),
+            ttl_seconds=3600,
+        )
+        await registry.register(opponent_id, opponent_connection, node_id=NODE_ID, ttl_seconds=90)
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [
+                _frame("room.join", channel="game", payload={"match_id": str(match_id)}),
+                _frame(
+                    "game.quick_message.send",
+                    channel="game",
+                    payload={"match_id": str(match_id), "message": "good_luck"},
+                ),
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            sockets=sockets,
+            quick_messages=_quick_messages(
+                rooms,
+                rosters=rosters,
+                sockets=sockets,
+                registry=registry,
+                social_graph=social,
+            ),
+        ).run(socket, ticket=VALID_TICKET)
+
+        assert self._received(opponent_socket) == []
+        assert len(self._received(socket)) == 1
+
+    @pytest.mark.asyncio
+    async def test_every_connection_of_both_players_receives_the_message_exactly_once(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§4, §14 — the multi-tab contract, stated as a test.
+
+        A room member is a `(player, connection)` pair, so a player with two
+        tabs in one match is two members and the fan-out reaches both. That
+        is the documented behaviour rather than an accident, and this is
+        what makes it checkable: **one accepted message, one delivery per
+        attached connection, and no connection served twice**.
+
+        The sender's second tab is the interesting one — it never sent
+        anything, and it must still show the message, because the bubble
+        comes from the server's echo rather than from a local render.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters, members)
+        sockets = InMemoryLocalSockets()
+
+        # A second tab for the sender, and two for the opponent.
+        extra: dict[str, FakeGatewaySocket] = {}
+        for label, owner in (
+            ("sender-2", player_id),
+            ("opp-1", opponent_id),
+            ("opp-2", opponent_id),
+        ):
+            connection = uuid4()
+            held = FakeGatewaySocket(holds_open=True)
+            extra[label] = held
+            sockets.attach(connection, held)
+            await members.join(
+                match_id,
+                RoomMember(player_id=owner, connection_id=connection),
+                ttl_seconds=3600,
+            )
+            await registry.register(owner, connection, node_id=NODE_ID, ttl_seconds=90)
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [
+                _frame("room.join", channel="game", payload={"match_id": str(match_id)}),
+                _frame(
+                    "game.quick_message.send",
+                    channel="game",
+                    payload={"match_id": str(match_id), "message": "good_game"},
+                ),
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            sockets=sockets,
+            quick_messages=_quick_messages(
+                rooms, rosters=rosters, sockets=sockets, registry=registry
+            ),
+        ).run(socket, ticket=VALID_TICKET)
+
+        # Exactly one copy each — the sending tab, the sender's other tab,
+        # and both of the opponent's.
+        assert len(self._received(socket)) == 1
+        for label, held in extra.items():
+            assert len(self._received(held)) == 1, label

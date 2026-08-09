@@ -1238,6 +1238,165 @@ localised. They are now.
 
 ---
 
+## 6.15 Tournament Administration Actions — A64-024.5H
+
+§6.10 shipped the tournament console read-only because `admin.audit_entry`
+was unbuilt. It exists, and this adds the lifecycle commands the tournament
+domain already had — and only those.
+
+### What ships, and what does not
+
+| Action | Verdict | Why |
+| --- | --- | --- |
+| Create | **Shipped** | `TournamentRegistrationService.create` is the canonical use case; `created_by` is nullable and the admin is a legitimate value for it |
+| Open registration | **Shipped** | `open_registration()`, `draft → registration_open` |
+| Close registration | **Shipped** | `close_registration()`, converges with `TournamentDeadlineTask` |
+| Start | **Shipped** | `start_tournament()` — idempotent, materialises the bracket, launches round one |
+| Seed | **Not exposed** | `start` does it. A separate button would be a second path to one outcome |
+| **Publish round** | **Not supported** | Round publication is *match-driven*: `TournamentAdvancementService` publishes the next round when the current one completes, from real results. There is no manual use case, and a route here would be an administrator injecting bracket progression the domain derives |
+| **Cancel** | **Product decision, deferred** | See below |
+| **Remove / disqualify an entrant** | **Not supported** | `withdraw()` is the *player's* action. No administrative removal or disqualification exists in the domain, and deleting a registration row to fake one would leave a bracket that references a player who is no longer an entrant |
+| Force winner, edit pairings, advance a slot | **Never** | The bracket is `(round, slot)` arithmetic over seeded entrants and match results. Nothing here writes one |
+
+### Why cancellation is deferred rather than built
+
+The aggregate permits it — `_ALLOWED` moves to `cancelled` from four states
+— and `TournamentCancelled` exists as an event type. **Nothing publishes it
+and nothing consumes it**, and there is no service method.
+
+So the transition is one line and the semantics are not. What happens to
+matches already in flight, to registrations, to standings, to the ratings
+those matches would have moved, and to the people who were told the
+tournament was starting: none has an answer in this repository. Writing
+those answers inside an admin service would put tournament policy in the
+wrong module as a side effect of a button.
+
+`domain-model.md` and `specs/tournament` are where that decision belongs.
+Until it is made, the console offers no cancel and says so rather than
+showing a disabled control.
+
+### The lifecycle, and who enforces it
+
+    draft ──▶ registration_open ──▶ registration_closed ──▶ in_progress ──▶ completed
+
+`admin` holds **no copy of this table**. Every command calls
+`tournament`'s own service, which locks the row (`SELECT … FOR UPDATE`) and
+asks the aggregate. A precondition checked in the admin handler would be a
+second copy of the rule and the copy that races.
+
+The console derives which button to show from the server's status, and that
+is a courtesy rather than a guarantee: a button rendered from a stale state
+still cannot do anything, because the aggregate refuses.
+
+### API
+
+    POST /api/v1/admin/tournaments
+    POST /api/v1/admin/tournaments/{id}/registration/open
+    POST /api/v1/admin/tournaments/{id}/registration/close
+    POST /api/v1/admin/tournaments/{id}/start
+
+**Semantic commands, never a status write.** There is no `PATCH` and no
+`status` field anywhere in this surface, so a caller cannot ask for
+`completed`, cannot ask for `cancelled`, and cannot name a transition the
+table forbids — the transition *is* the route.
+
+The three transitions take **no body at all**. Creation takes six fields
+and none of them is an id, a status, a creator or a format: the first two
+are the server's, the third is the administrator the guard resolved, and
+v0.x runs one format so a parameter would have one legal value.
+
+| Concern | Behaviour |
+| --- | --- |
+| Guard | `CurrentAdmin` on every route, asserted against the route table |
+| Actor | The session's. `created_by` is set from it and has no request field |
+| Caching | `Cache-Control: no-store` |
+| Capacity bounds | The aggregate's `MIN_CAPACITY`/`MAX_CAPACITY`, restated on the schema for a readable `422` and enforced by `Tournament.__post_init__` regardless |
+
+### Atomicity across a module boundary
+
+The lifecycle services **commit by contract** — correct for
+`app/operator/tournament.py`, which has nothing to add to their
+transaction. The console has the audit entry, and A64-024.8's invariant is
+that the two land together.
+
+`ParticipatingUnitOfWork` (A64-022.3 §10) is the repository's existing
+answer, and the composition root hands one to `tournament`'s services: they
+stage, `TournamentAdministrationService` commits, and the transition and
+its entry are one transaction. Three composition helpers gained an optional
+`unit_of_work` parameter to make that injectable —
+`build_registration_service`, `build_start_service` and
+`build_match_creation`. **No service changed**, and every other caller gets
+the default.
+
+**One exception, and it is the domain's own:** `start` materialises the
+bracket in a *separate, prior* transaction. The start service's docstring
+explains why — both halves are idempotent, so a worker that dies between
+them leaves a materialised bracket the retry reuses rather than a partial
+one nothing can repair. Staging that too would undo a deliberate design.
+What is atomic with the audit entry is the transition, the round and the
+matches it launched.
+
+`tests/contract/test_admin_tournament_actions.py` proves it against a real
+database: an audit write that fails leaves **no tournament row**. Verified
+by removing the staging and watching the test fail — without it, the inner
+service commits and the row survives.
+
+### Audit
+
+| Action | Written when |
+| --- | --- |
+| `tournament.create` | A tournament is created, with capacity, variant, speed class and rated as chosen facts |
+| `tournament.registration_open` | `draft → registration_open` |
+| `tournament.registration_close` | `registration_open → registration_closed` |
+| `tournament.start` | `registration_closed → in_progress`, with `matches_launched` |
+| `tournament.transition_refused` | **`FAILED`** — an authenticated administrator asked for a move the aggregate refused |
+
+Subject type `tournament`, subject ref the id. Metadata is the transition
+and its configuration — never the aggregate, never the entrant list, never
+a request body.
+
+`matches_launched` is written only where it is non-zero: a field that is
+always zero on three entries is one a reader learns to ignore on the fourth,
+and it is the fourth that matters — a tournament that reached `in_progress`
+and launched nothing is a bracket that did not materialise.
+
+**One refusal action for all three transitions**, not a refused twin of
+each. The fact worth recording is that an administrator asked for a move the
+tournament could not make; `expected_from` says which.
+
+Failed-attempt policy is §6.12's, applied unchanged and not re-decided.
+
+### Idempotency and concurrency
+
+| Case | Behaviour |
+| --- | --- |
+| Two administrators start at once | The aggregate's `FOR UPDATE` lock serialises them; the loser finds it already `in_progress` |
+| Start twice | Idempotent by `TournamentStartService` — it launches only what is missing, which is how a worker that died mid-launch is repaired |
+| Close vs `TournamentDeadlineTask` | Both end in the same state; whichever arrives first wins and the aggregate refuses the second |
+| Any illegal transition | `InvalidTournamentTransition`, a `FAILED` audit entry, and nothing changed |
+
+None of this is new machinery — every guarantee above already existed for
+the operator command line, and this surface inherits it by calling the same
+services.
+
+### Console
+
+`/tournaments` gains **Create tournament**; the detail page gains the
+command its current state allows. Both use the `<dialog>` primitive §6.12
+introduced.
+
+**Start confirms; open and close do not.** Starting freezes the field,
+builds the bracket and creates real games for real people. Opening and
+closing registration are reachable again from the other side, and a dialog
+on each would be friction that teaches an operator to click through
+dialogs.
+
+After a command the detail is **re-read** rather than patched from the
+response, so the next set of actions comes from the same authority as the
+first. A refused command leaves the page showing the state it was in.
+
+---
+
 ## 7. The audit invariant
 
 **Built by A64-024.8** — see §6.11. The rule it exists to keep:
@@ -1273,10 +1432,14 @@ case queue, evidence, appeals, the `muted` and `matchmaking_restricted`
 kinds and their enforcement seams, bans tied to erasure, bulk actions, and
 IP or device restrictions.
 
-Match and tournament mutations are no longer blocked on `admin.audit_entry`
-— it exists, and §6.12 demonstrates the pattern. What each still needs is
-its own decision about *what* to record, which is `AuditAction`'s to
-extend.
+Match mutations are no longer blocked on `admin.audit_entry` — it exists,
+and §6.12 and §6.15 both demonstrate the pattern. What they still need is a
+decision about *what* to record, which is `AuditAction`'s to extend.
+
+Tournament lifecycle commands ship in §6.15. Cancellation, round
+publication and entrant removal are named there as refused rather than
+pending: each needs a product or domain decision this epic is not the place
+to make.
 
 Their **routes exist and are guarded**; only their content is deferred, so
 adding a real section later changes a page body and not the boundary.

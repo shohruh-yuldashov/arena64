@@ -227,6 +227,12 @@ class TestAppWiring:
             "/api/v1/auth/password/reset",
             "/api/v1/auth/email/verify",
             "/api/v1/auth/email/resend",
+            # The code flow that replaced the link at registration —
+            # A64-021.5H. Added here in A64-024's closing sweep, having
+            # shipped without it: the set was red from that phase on, which
+            # is the exact failure this docstring already describes.
+            "/api/v1/auth/email/verify-code",
+            "/api/v1/auth/email/resend-code",
             # AD-09's credential, minted over HTTP because a browser cannot
             # set headers on a WebSocket handshake — A64-016.1.
             "/api/v1/auth/ws-ticket",

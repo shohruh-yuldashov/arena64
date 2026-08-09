@@ -278,7 +278,7 @@ class TestTheApiIsReachable:
         The rated match appears; the casual one is **absent** rather than
         redacted, because a placeholder would confirm it exists.
         """
-        stranger = await register(client)
+        stranger = await register(client, contract_session)
         owner = _id(700)
         await _finished(
             contract_session,
@@ -313,7 +313,7 @@ class TestTheApiIsReachable:
         personal history readable and is meaningless when a stranger reads
         somebody else's record.
         """
-        player = await register(client)
+        player = await register(client, contract_session)
         await _finished(
             contract_session,
             match_id=_id(410),
@@ -341,7 +341,7 @@ class TestTheApiIsReachable:
         first would confirm it exists, which is enough to enumerate match
         ids and learn who plays casually with whom.
         """
-        stranger = await register(client)
+        stranger = await register(client, contract_session)
         await _finished(
             contract_session,
             match_id=_id(420),
@@ -368,7 +368,7 @@ class TestTheApiIsReachable:
         be specific. A client shows the game and hides the replay control,
         which a bare `conflict` could not tell it to do.
         """
-        player = await register(client)
+        player = await register(client, contract_session)
         await _finished(
             contract_session,
             match_id=_id(430),
@@ -405,7 +405,7 @@ class TestTheAuditScenarios:
         still answers `unsupported_engine_version`. If the log were read and
         replayed, this would surface as a hash mismatch instead.
         """
-        player = await register(client)
+        player = await register(client, contract_session)
         match_id = _id(500)
         await _finished(
             contract_session,
@@ -460,7 +460,7 @@ class TestTheAuditScenarios:
         visible match exactly once, which is the property that actually
         matters.
         """
-        stranger = await register(client)
+        stranger = await register(client, contract_session)
         owner = _id(800)
         for index in range(6):
             await _finished(
@@ -584,7 +584,7 @@ class TestRatingResult:
         self, client: AsyncClient, contract_session: AsyncSession
     ) -> None:
         """§14.1. Integers, and `delta` served rather than left to the client."""
-        me = await register(client)
+        me = await register(client, contract_session)
         await _finished(
             contract_session,
             match_id=_id(420),
@@ -612,7 +612,7 @@ class TestRatingResult:
     ) -> None:
         """§14.2. `null`, never a fabricated zero — a casual game moved
         nothing and saying `+0` would claim it was rated."""
-        me = await register(client)
+        me = await register(client, contract_session)
         await _finished(
             contract_session,
             match_id=_id(421),
@@ -639,7 +639,7 @@ class TestRatingResult:
         client tells this apart from a casual game by `rated`, which is why
         both are on the row.
         """
-        me = await register(client)
+        me = await register(client, contract_session)
         await _finished(
             contract_session,
             match_id=_id(422),
@@ -667,7 +667,7 @@ class TestRatingResult:
         nothing about whether one exists.
         """
         owner = _id(701)
-        stranger = await register(client)
+        stranger = await register(client, contract_session)
         await _finished(
             contract_session,
             match_id=_id(423),

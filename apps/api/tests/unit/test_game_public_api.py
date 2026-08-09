@@ -317,6 +317,22 @@ class TestTheSurfaceIsDeliberate:
         # else — no variant, no engine version, no ply count.
         "CompletedMatchRecord",
         "CompletedMatchScanner",
+        # A64-024.4 — the operator's view of matches, for `admin`.
+        #
+        # Published because the admin console reads every match rather than
+        # one player's, which no existing port offers and none should gain:
+        # `MatchHistoryReader` is *a player's* history, and widening it with
+        # a nullable player id is exactly the door this file exists to keep
+        # shut. A separate directory keeps the unrestricted read a caller
+        # has to ask for by name.
+        #
+        # These shipped without being listed here, so this assertion was red
+        # from A64-024.4 onward — the decision was made and only its record
+        # was missing.
+        "AdminMatchFilters",
+        "AdminMatchPage",
+        "AdminMatchRecord",
+        "AdministrativeMatchDirectory",
     }
 
     def test_nothing_is_published_by_accident(self) -> None:

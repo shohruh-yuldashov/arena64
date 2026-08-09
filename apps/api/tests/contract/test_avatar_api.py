@@ -25,13 +25,14 @@ import io
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import AsyncClient
 from PIL import Image
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.app_factory import create_app
@@ -117,8 +118,8 @@ async def client(app: FastAPI, contract_session: AsyncSession) -> AsyncIterator[
 
 
 @pytest_asyncio.fixture
-async def auth(client: AsyncClient) -> dict[str, str]:
-    """A registered, signed-in account's bearer header."""
+async def auth(client: AsyncClient, contract_session: AsyncSession) -> dict[str, str]:
+    """A registered, verified, signed-in account's bearer header."""
     suffix = uuid4().hex[:10]
     account = {
         "username": f"player{suffix}",
@@ -127,6 +128,15 @@ async def auth(client: AsyncClient) -> dict[str, str]:
     }
     registered = await client.post(REGISTER_URL, json=account)
     assert registered.status_code == 201, registered.text
+
+    # **Verified**, because A64-021.5H put every profile write behind a
+    # verified address, and an avatar is a profile write. The same thing
+    # `app.operator.accounts verify` does; the OTP flow itself belongs to
+    # `test_otp_verification.py`.
+    await contract_session.execute(
+        text("UPDATE users.user SET is_verified = true WHERE id = :id"),
+        {"id": UUID(registered.json()["data"]["id"])},
+    )
 
     signed_in = await client.post(LOGIN_URL, json={"email": account["email"], "password": PASSWORD})
     assert signed_in.status_code == 200, signed_in.text

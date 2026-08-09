@@ -153,7 +153,7 @@ class TestOrdering:
         `created_by` — which every row here has — cannot appear because
         somebody added a column to the summary.
         """
-        viewer = await register_account(client)
+        viewer = await register_account(client, contract_session)
         newest = await _tournament(
             contract_session,
             name="Newest",
@@ -200,7 +200,7 @@ class TestOrdering:
         buys — a count alone would send a reader back for an empty page
         whenever the lobby's length is a multiple of the limit.
         """
-        viewer = await register_account(client)
+        viewer = await register_account(client, contract_session)
         instants = (
             NOW,
             NOW - timedelta(minutes=1),
@@ -236,7 +236,7 @@ class TestOrdering:
         assert cursor is None
 
     async def test_a_forged_cursor_is_refused_without_describing_the_encoding(
-        self, client: AsyncClient
+        self, client: AsyncClient, contract_session: AsyncSession
     ) -> None:
         """§9 — one error for every way a cursor can be wrong.
 
@@ -245,7 +245,7 @@ class TestOrdering:
         — and distinguishing them would narrate the encoding to whoever is
         probing it. No class name, no stack and no SQL in the response.
         """
-        viewer = await register_account(client)
+        viewer = await register_account(client, contract_session)
 
         response = await client.get(
             LOBBY_URL, params={"after": "not-a-cursor"}, headers=viewer.auth
@@ -269,7 +269,7 @@ class TestFilters:
         state nobody is in. Silently ignoring it is the failure this rules
         out.
         """
-        viewer = await register_account(client)
+        viewer = await register_account(client, contract_session)
         open_now = await _tournament(
             contract_session,
             name="Open",
@@ -312,7 +312,7 @@ class TestCost:
         meaningful and stating it is what makes a regression legible rather
         than merely detected.
         """
-        viewer = await register_account(client)
+        viewer = await register_account(client, contract_session)
         for index in range(40):
             await _tournament(
                 contract_session,

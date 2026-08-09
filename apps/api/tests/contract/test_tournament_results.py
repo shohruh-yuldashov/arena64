@@ -487,7 +487,7 @@ class TestPublicReads:
         clock = MovableClock(NOW)
         tournament, _ = await _seeded_tournament(contract_session, clock, entrants=8, capacity=8)
         await _play_out(contract_session, clock, tournament.id)
-        viewer = await register(client)
+        viewer = await register(client, contract_session)
 
         response = await client.get(
             f"/api/v1/tournaments/{tournament.id}/standings", headers=viewer.auth
@@ -519,7 +519,7 @@ class TestPublicReads:
         clock = MovableClock(NOW)
         tournament, _ = await _seeded_tournament(contract_session, clock, entrants=4, capacity=4)
         await _play_out(contract_session, clock, tournament.id)
-        viewer = await register(client)
+        viewer = await register(client, contract_session)
 
         response = await client.get(
             f"/api/v1/tournaments/{tournament.id}/bracket", headers=viewer.auth
@@ -563,7 +563,7 @@ class TestPublicReads:
             contract_session, clock, entrants=4, capacity=4, players=players
         )
         await _play_out(contract_session, clock, tournament.id)
-        viewer = await register(client)
+        viewer = await register(client, contract_session)
 
         detail = await client.get(f"/api/v1/tournaments/{tournament.id}", headers=viewer.auth)
         assert detail.status_code == 200, detail.text
@@ -632,7 +632,7 @@ class TestBracketByeReporting:
             )
         )
 
-        viewer = await register(client)
+        viewer = await register(client, contract_session)
         response = await client.get(
             f"/api/v1/tournaments/{tournament.id}/bracket", headers=viewer.auth
         )
@@ -662,7 +662,7 @@ class TestBracketByeReporting:
         """
         clock = MovableClock(NOW)
         tournament, _ = await _seeded_tournament(contract_session, clock, entrants=3, capacity=4)
-        viewer = await register(client)
+        viewer = await register(client, contract_session)
 
         response = await client.get(
             f"/api/v1/tournaments/{tournament.id}/bracket", headers=viewer.auth
@@ -700,7 +700,7 @@ class TestParticipantFacingReads:
         than an embedding.
         """
         clock = MovableClock(NOW)
-        entrants = [await register(client) for _ in range(4)]
+        entrants = [await register(client, contract_session) for _ in range(4)]
         field = [player.id for player in entrants]
         tournament, _ = await _seeded_tournament(
             contract_session, clock, entrants=4, capacity=4, players=field
@@ -748,7 +748,7 @@ class TestParticipantFacingReads:
         "you left" is a different fact from "you never entered".
         """
         clock = MovableClock(NOW)
-        entrant = await register(client)
+        entrant = await register(client, contract_session)
         registration = _registration(contract_session, _KnownPlayers(entrant.id), clock)
         tournament = await registration.create(
             name="Open Entry",
@@ -783,5 +783,5 @@ class TestParticipantFacingReads:
 
         # Somebody else's session reads their own absence, never this
         # player's entry — the endpoint has no shape that could name one.
-        stranger = await register(client)
+        stranger = await register(client, contract_session)
         assert (await client.get(url, headers=stranger.auth)).status_code == 404

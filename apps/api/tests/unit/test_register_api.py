@@ -89,15 +89,22 @@ class _RecordingVerification:
 
     A64-011.6 made registration send a verification link, so this
     endpoint's graph gained a collaborator. Recording rather than
-    no-op'ing, so the tests below can assert the link *was* requested —
+    no-op'ing, so the tests below can assert the code *was* requested —
     a registration that silently stopped sending would otherwise leave
     every new account unverifiable with nothing failing.
+
+    A64-021.5H moved registration from the link to `send_verification_code`
+    and this double was not moved with it, so every test in this file that
+    reached the endpoint failed on `AttributeError` from that phase onward.
+    Which is the failure mode a hand-written double has and a `Protocol`
+    does not: the double satisfied nothing, so nothing told it it had
+    stopped matching.
     """
 
     def __init__(self) -> None:
         self.sent_to: list[str] = []
 
-    async def send_verification(self, account: UserRead) -> None:
+    async def send_verification_code(self, account: UserRead) -> None:
         self.sent_to.append(account.email)
 
 
@@ -352,9 +359,10 @@ class TestRequestShape:
 
 
 class TestVerificationEmail:
-    """A64-011.6 made registration the trigger for the first link."""
+    """A64-011.6 made registration the trigger for the first send;
+    A64-021.5H made what it sends a code rather than a link."""
 
-    def test_a_verification_link_is_requested(
+    def test_a_verification_code_is_requested(
         self, client: TestClient, verification: _RecordingVerification
     ) -> None:
         client.post("/api/v1/auth/register", json=VALID_BODY)
@@ -362,7 +370,7 @@ class TestVerificationEmail:
         assert verification.sent_to == ["player.one@example.com"]
 
     def test_the_account_starts_unverified(self, client: TestClient) -> None:
-        """The link is sent; nothing is verified until it is redeemed."""
+        """The code is sent; nothing is verified until it is redeemed."""
         body = client.post("/api/v1/auth/register", json=VALID_BODY).json()
 
         assert body["data"]["is_verified"] is False
@@ -371,7 +379,7 @@ class TestVerificationEmail:
         self, client: TestClient, verification: _RecordingVerification
     ) -> None:
         """Otherwise a duplicate sign-up would mail the existing account
-        holder a verification link they did not ask for — a spam vector
+        holder a verification code they did not ask for — a spam vector
         keyed on any address an attacker knows."""
         client.post("/api/v1/auth/register", json=VALID_BODY)
         verification.sent_to.clear()

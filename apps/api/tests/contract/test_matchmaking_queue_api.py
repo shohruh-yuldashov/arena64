@@ -24,7 +24,7 @@ from uuid import UUID, uuid4
 
 import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.matchmaking.domain.queue_ticket import PROVISIONAL_RATING
@@ -50,7 +50,7 @@ class Player:
         self.auth = auth
 
 
-async def register(client: AsyncClient) -> Player:
+async def register(client: AsyncClient, session: AsyncSession) -> Player:
     suffix = uuid4().hex[:8]
     created = await client.post(
         REGISTER_URL,
@@ -61,6 +61,14 @@ async def register(client: AsyncClient) -> Player:
         },
     )
     assert created.status_code == 201, created.text
+
+    # **Verified**, because A64-021.5H put this write behind a verified
+    # address. The same thing `app.operator.accounts verify` does; the OTP
+    # flow itself belongs to `test_otp_verification.py`.
+    await session.execute(
+        text("UPDATE users.user SET is_verified = true WHERE id = :id"),
+        {"id": UUID(created.json()["data"]["id"])},
+    )
 
     signed_in = await client.post(
         LOGIN_URL, json={"email": f"{suffix}@example.com", "password": PASSWORD}
@@ -73,13 +81,13 @@ async def register(client: AsyncClient) -> Player:
 
 
 @pytest_asyncio.fixture
-async def alice(client: AsyncClient) -> Player:
-    return await register(client)
+async def alice(client: AsyncClient, contract_session: AsyncSession) -> Player:
+    return await register(client, contract_session)
 
 
 @pytest_asyncio.fixture
-async def bob(client: AsyncClient) -> Player:
-    return await register(client)
+async def bob(client: AsyncClient, contract_session: AsyncSession) -> Player:
+    return await register(client, contract_session)
 
 
 class TestJoin:

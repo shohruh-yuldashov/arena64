@@ -26,6 +26,7 @@ from uuid import UUID, uuid4
 
 import pytest_asyncio
 from httpx import AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import get_settings
@@ -72,7 +73,7 @@ class Player:
         self.auth = auth
 
 
-async def register(client: AsyncClient) -> Player:
+async def register(client: AsyncClient, session: AsyncSession) -> Player:
     suffix = uuid4().hex[:8]
     created = await client.post(
         REGISTER_URL,
@@ -83,6 +84,14 @@ async def register(client: AsyncClient) -> Player:
         },
     )
     assert created.status_code == 201, created.text
+
+    # **Verified**, because A64-021.5H put this write behind a verified
+    # address. The same thing `app.operator.accounts verify` does; the OTP
+    # flow itself belongs to `test_otp_verification.py`.
+    await session.execute(
+        text("UPDATE users.user SET is_verified = true WHERE id = :id"),
+        {"id": UUID(created.json()["data"]["id"])},
+    )
 
     signed_in = await client.post(
         LOGIN_URL, json={"email": f"{suffix}@example.com", "password": PASSWORD}
@@ -144,7 +153,7 @@ class TestTheCatalogue:
 
 class TestTheCatalogueOverHttp:
     async def test_it_publishes_what_a_picker_needs_and_nothing_else(
-        self, client: AsyncClient
+        self, client: AsyncClient, contract_session: AsyncSession
     ) -> None:
         """A64-020.5A §3 and §4. The endpoint exists so a lobby never has to
         hardcode the four controls or parse a duration out of an identifier
@@ -168,7 +177,7 @@ class TestTheCatalogueOverHttp:
         anonymous = await client.get(CATALOGUE_URL)
         assert anonymous.status_code == 401, anonymous.text
 
-        alice = await register(client)
+        alice = await register(client, contract_session)
         response = await client.get(CATALOGUE_URL, headers=alice.auth)
 
         assert response.status_code == 200, response.text
@@ -185,7 +194,7 @@ class TestTheCatalogueOverHttp:
         }
 
     async def test_an_identifier_it_publishes_is_one_the_queue_accepts(
-        self, client: AsyncClient
+        self, client: AsyncClient, contract_session: AsyncSession
     ) -> None:
         """The property that makes the catalogue *usable* rather than merely
         readable, and the one no single-endpoint test can see: every `id`
@@ -196,7 +205,7 @@ class TestTheCatalogueOverHttp:
         them would fail. Asserted by joining and leaving with each in turn,
         because QT-1 allows one live ticket at a time.
         """
-        alice = await register(client)
+        alice = await register(client, contract_session)
         offered = (await client.get(CATALOGUE_URL, headers=alice.auth)).json()["data"]
 
         for entry in offered:
@@ -213,7 +222,7 @@ class TestTheCatalogueOverHttp:
 
 class TestJoiningNamesAControl:
     async def test_a_control_the_platform_does_not_offer_is_refused(
-        self, client: AsyncClient
+        self, client: AsyncClient, contract_session: AsyncSession
     ) -> None:
         """A64-020.5A-pre §8 and §22. `deactivated_1_0` is not a
         `TimeControlId`, so this is the shape a stale client sends after a
@@ -223,7 +232,7 @@ class TestJoiningNamesAControl:
         `422`, because a body naming something the platform does not offer
         is a malformed request, not a rule the player broke.
         """
-        alice = await register(client)
+        alice = await register(client, contract_session)
 
         response = await client.post(
             QUEUE_URL,
@@ -235,7 +244,7 @@ class TestJoiningNamesAControl:
         assert "time_control_id" in response.json()["message"]
 
     async def test_a_recovered_ticket_reports_the_control_it_was_entered_with(
-        self, client: AsyncClient
+        self, client: AsyncClient, contract_session: AsyncSession
     ) -> None:
         """§17. A client that refreshed the page has lost everything it
         knew; `GET /queue/me` is the whole of its memory, so the response
@@ -246,7 +255,7 @@ class TestJoiningNamesAControl:
         could echo its own request body and prove nothing about what was
         stored.
         """
-        alice = await register(client)
+        alice = await register(client, contract_session)
         joined = await client.post(
             QUEUE_URL,
             headers=alice.auth,
@@ -284,8 +293,8 @@ class TestAPairingCarriesTheControlThroughToTheClock:
         contract_session: AsyncSession,
         deadlines: RecordingClockDeadlines,
     ) -> None:
-        alice = await register(client)
-        bob = await register(client)
+        alice = await register(client, contract_session)
+        bob = await register(client, contract_session)
         for player in (alice, bob):
             joined = await client.post(
                 QUEUE_URL,
@@ -351,8 +360,8 @@ class TestTwoControlsAreNeverPaired:
         pair a bullet player into a classical game and neither would learn
         why until the clock started.
         """
-        alice = await register(client)
-        bob = await register(client)
+        alice = await register(client, contract_session)
+        bob = await register(client, contract_session)
         for player, control in ((alice, "bullet_1_0"), (bob, "classical_30_0")):
             joined = await client.post(
                 QUEUE_URL,

@@ -18,7 +18,7 @@ from uuid import UUID, uuid4
 
 import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.contract.contract_app import build_contract_app, contract_client
@@ -44,7 +44,7 @@ async def client(contract_session: AsyncSession):  # type: ignore[no-untyped-def
         yield http
 
 
-async def register(client: AsyncClient) -> Player:
+async def register(client: AsyncClient, session: AsyncSession) -> Player:
     suffix = uuid4().hex[:10]
     username = f"rel{suffix}"
     created = await client.post(
@@ -52,6 +52,15 @@ async def register(client: AsyncClient) -> Player:
         json={"username": username, "email": f"{suffix}@example.com", "password": PASSWORD},
     )
     assert created.status_code == 201, created.text
+
+    # **Verified**, because A64-021.5H made every friend-graph write require
+    # it. The same thing `app.operator.accounts verify` does; the OTP flow
+    # belongs to `test_otp_verification.py`.
+    await session.execute(
+        text("UPDATE users.user SET is_verified = true WHERE id = :id"),
+        {"id": UUID(created.json()["data"]["id"])},
+    )
+
     signed_in = await client.post(
         LOGIN_URL, json={"email": f"{suffix}@example.com", "password": PASSWORD}
     )
@@ -93,10 +102,10 @@ class TestEveryState:
         batched provider, a split query — should not fail this while an
         introduced per-row read must.
         """
-        viewer = await register(client)
-        friend = await register(client)
-        asked_me = await register(client)
-        i_asked = await register(client)
+        viewer = await register(client, contract_session)
+        friend = await register(client, contract_session)
+        asked_me = await register(client, contract_session)
+        i_asked = await register(client, contract_session)
 
         # friend
         request_id = await send_request(client, viewer, friend)
@@ -142,7 +151,9 @@ class TestEveryState:
         assert states[asked_me.username] == "incoming_request"
         assert states[i_asked.username] == "outgoing_request"
 
-    async def test_it_follows_every_transition(self, client: AsyncClient) -> None:
+    async def test_it_follows_every_transition(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
         """§10 — the state after send, cancel, accept, remove, block, unblock.
 
         One player pair driven through the whole lifecycle, because the
@@ -150,8 +161,8 @@ class TestEveryState:
         **tracks** — a value that were right once and stale afterwards would
         render a button that does the wrong thing.
         """
-        viewer = await register(client)
-        other = await register(client)
+        viewer = await register(client, contract_session)
+        other = await register(client, contract_session)
 
         assert (await profile_of(client, other, viewer))["relationship"] == "none"
 
@@ -191,7 +202,7 @@ class TestEveryState:
 
 class TestWhatItNeverSays:
     async def test_it_is_absent_for_anonymous_and_for_your_own_profile(
-        self, client: AsyncClient
+        self, client: AsyncClient, contract_session: AsyncSession
     ) -> None:
         """§2, §3 — `null`, and specifically not `none`.
 
@@ -200,7 +211,7 @@ class TestWhatItNeverSays:
         `Add friend` button, while `null` is "there is nobody to have a
         relationship with", which is no social controls at all.
         """
-        viewer = await register(client)
+        viewer = await register(client, contract_session)
 
         anonymous = await profile_of(client, viewer, None)
         assert anonymous["relationship"] is None
@@ -208,7 +219,9 @@ class TestWhatItNeverSays:
         own = await profile_of(client, viewer, viewer)
         assert own["relationship"] is None
 
-    async def test_being_blocked_is_never_disclosed(self, client: AsyncClient) -> None:
+    async def test_being_blocked_is_never_disclosed(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
         """§1, §9 — BL-1, asserted from the blocked player's side.
 
         The blocker sees `blocked`. The blocked player must see nothing
@@ -219,8 +232,8 @@ class TestWhatItNeverSays:
         the blocker simply does not find them, which is indistinguishable
         from the account not existing.
         """
-        blocker = await register(client)
-        target = await register(client)
+        blocker = await register(client, contract_session)
+        target = await register(client, contract_session)
 
         placed = await client.post(
             BLOCKS_URL, headers=blocker.auth, json={"player_id": str(target.id)}

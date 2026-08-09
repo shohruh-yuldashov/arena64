@@ -32,7 +32,7 @@ from uuid import UUID, uuid4
 
 import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import PresenceSettings
@@ -118,7 +118,7 @@ async def stack(contract_session: AsyncSession) -> AsyncIterator[tuple[AsyncClie
         yield http, fixtures
 
 
-async def register(client: AsyncClient) -> Player:
+async def register(client: AsyncClient, session: AsyncSession) -> Player:
     suffix = uuid4().hex[:8]
     username = f"player{suffix}"
     assert len(username) <= 20, f"test username {username!r} exceeds the platform limit"
@@ -128,6 +128,14 @@ async def register(client: AsyncClient) -> Player:
         json={"username": username, "email": f"{suffix}@example.com", "password": PASSWORD},
     )
     assert created.status_code == 201, created.text
+
+    # **Verified**, because A64-021.5H put this write behind a verified
+    # address. The same thing `app.operator.accounts verify` does; the OTP
+    # flow itself belongs to `test_otp_verification.py`.
+    await session.execute(
+        text("UPDATE users.user SET is_verified = true WHERE id = :id"),
+        {"id": UUID(created.json()["data"]["id"])},
+    )
 
     signed_in = await client.post(
         LOGIN_URL, json={"email": f"{suffix}@example.com", "password": PASSWORD}
@@ -146,7 +154,9 @@ async def befriend(client: AsyncClient, a: Player, b: Player) -> None:
 
 
 class TestThePresenceProducer:
-    async def test_signing_in_records_presence(self, stack: tuple[AsyncClient, _Fixtures]) -> None:
+    async def test_signing_in_records_presence(
+        self, stack: tuple[AsyncClient, _Fixtures], contract_session: AsyncSession
+    ) -> None:
         """The missing infrastructure, present.
 
         `register` signs in, so by the time it returns the player must be
@@ -154,14 +164,14 @@ class TestThePresenceProducer:
         """
         client, fixtures = stack
 
-        player = await register(client)
+        player = await register(client, contract_session)
 
         recorded = await fixtures.presence.presence_for(player.id)
         assert recorded is not None
         assert recorded.is_online is True
 
     async def test_a_player_who_never_signed_in_has_no_presence(
-        self, stack: tuple[AsyncClient, _Fixtures]
+        self, stack: tuple[AsyncClient, _Fixtures], contract_session: AsyncSession
     ) -> None:
         """Nothing else on the platform writes presence, so an account that
         exists and has not signed in is absent rather than offline."""
@@ -179,7 +189,7 @@ class TestThePresenceProducer:
         assert await fixtures.presence.presence_for(UUID(created.json()["data"]["id"])) is None
 
     async def test_refreshing_a_token_keeps_the_player_online(
-        self, stack: tuple[AsyncClient, _Fixtures]
+        self, stack: tuple[AsyncClient, _Fixtures], contract_session: AsyncSession
     ) -> None:
         """The liveness protocol through the API.
 
@@ -189,7 +199,7 @@ class TestThePresenceProducer:
         socket.
         """
         client, fixtures = stack
-        player = await register(client)
+        player = await register(client, contract_session)
 
         fixtures.clock.advance(59)
         refreshed = await client.post(REFRESH_URL, json={"refresh_token": player.refresh_token})
@@ -201,25 +211,25 @@ class TestThePresenceProducer:
         assert still_here.is_online is True
 
     async def test_presence_lapses_when_nothing_refreshes_it(
-        self, stack: tuple[AsyncClient, _Fixtures]
+        self, stack: tuple[AsyncClient, _Fixtures], contract_session: AsyncSession
     ) -> None:
         """A player who closes the tab stops being online without anything
         observing that they left. Nothing else could: there is no
         connection to drop."""
         client, fixtures = stack
-        player = await register(client)
+        player = await register(client, contract_session)
 
         fixtures.clock.advance(61)
 
         assert await fixtures.presence.presence_for(player.id) is None
 
     async def test_signing_out_everywhere_records_absence(
-        self, stack: tuple[AsyncClient, _Fixtures]
+        self, stack: tuple[AsyncClient, _Fixtures], contract_session: AsyncSession
     ) -> None:
         """`POST /auth/logout-all` revokes every session, so there is no
         device left that could be present."""
         client, fixtures = stack
-        player = await register(client)
+        player = await register(client, contract_session)
 
         signed_out = await client.post(LOGOUT_ALL_URL, headers=player.auth)
         assert signed_out.status_code == 204, signed_out.text
@@ -229,7 +239,7 @@ class TestThePresenceProducer:
         assert recorded.is_online is False
 
     async def test_signing_out_of_one_device_does_not_record_absence(
-        self, stack: tuple[AsyncClient, _Fixtures]
+        self, stack: tuple[AsyncClient, _Fixtures], contract_session: AsyncSession
     ) -> None:
         """Presence is per **player**, not per session.
 
@@ -239,7 +249,7 @@ class TestThePresenceProducer:
         cannot be "fixed" by accident.
         """
         client, fixtures = stack
-        player = await register(client)
+        player = await register(client, contract_session)
 
         signed_out = await client.post(LOGOUT_URL, json={"refresh_token": player.refresh_token})
         assert signed_out.status_code == 204, signed_out.text
@@ -265,7 +275,7 @@ class TestThePresenceProducer:
         )
         app = build_contract_app(contract_session, presence=broken, presence_recorder=broken)
         async with contract_client(app) as http:
-            player = await register(http)
+            player = await register(http, contract_session)
 
             assert await broken.presence_for(player.id) is None
 
@@ -280,7 +290,7 @@ class TestCacheInvalidation:
     """
 
     async def test_accepting_a_request_invalidates_both_players(
-        self, stack: tuple[AsyncClient, _Fixtures]
+        self, stack: tuple[AsyncClient, _Fixtures], contract_session: AsyncSession
     ) -> None:
         """Acceptance is the only way a friendship comes into existence, so
         it is the only friend-request transition that touches the cache.
@@ -294,7 +304,10 @@ class TestCacheInvalidation:
         it (see `FriendRequestService._transition`).
         """
         client, fixtures = stack
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         fixtures.cache.entries[(alice.id, SocialGraphEntry.FRIENDS)] = frozenset()
         fixtures.cache.entries[(bob.id, SocialGraphEntry.FRIENDS)] = frozenset()
 
@@ -311,7 +324,7 @@ class TestCacheInvalidation:
         )
 
     async def test_sending_a_request_invalidates_nothing(
-        self, stack: tuple[AsyncClient, _Fixtures]
+        self, stack: tuple[AsyncClient, _Fixtures], contract_session: AsyncSession
     ) -> None:
         """Only *acceptance* changes the graph.
 
@@ -320,7 +333,10 @@ class TestCacheInvalidation:
         every unanswered request would cost two players their cache.
         """
         client, fixtures = stack
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         fixtures.cache.invalidations.clear()
 
         sent = await client.post(REQUESTS_URL, headers=alice.auth, json={"player_id": str(bob.id)})
@@ -329,11 +345,14 @@ class TestCacheInvalidation:
         assert fixtures.cache.invalidations == []
 
     async def test_declining_a_request_invalidates_nothing(
-        self, stack: tuple[AsyncClient, _Fixtures]
+        self, stack: tuple[AsyncClient, _Fixtures], contract_session: AsyncSession
     ) -> None:
         """A declined request leaves the graph exactly as it was."""
         client, fixtures = stack
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         sent = await client.post(REQUESTS_URL, headers=alice.auth, json={"player_id": str(bob.id)})
         assert sent.status_code == 201, sent.text
         fixtures.cache.invalidations.clear()
@@ -346,10 +365,13 @@ class TestCacheInvalidation:
         assert fixtures.cache.invalidations == []
 
     async def test_removing_a_friend_invalidates_both_players(
-        self, stack: tuple[AsyncClient, _Fixtures]
+        self, stack: tuple[AsyncClient, _Fixtures], contract_session: AsyncSession
     ) -> None:
         client, fixtures = stack
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         await befriend(client, alice, bob)
         fixtures.cache.entries[(alice.id, SocialGraphEntry.FRIENDS)] = frozenset({bob.id})
         fixtures.cache.entries[(bob.id, SocialGraphEntry.FRIENDS)] = frozenset({alice.id})
@@ -361,12 +383,15 @@ class TestCacheInvalidation:
         assert (bob.id, SocialGraphEntry.FRIENDS) not in fixtures.cache.entries
 
     async def test_blocking_invalidates_both_players(
-        self, stack: tuple[AsyncClient, _Fixtures]
+        self, stack: tuple[AsyncClient, _Fixtures], contract_session: AsyncSession
     ) -> None:
         """Blocking touches both entries of both players: the block sets
         change, and the cascade ends any friendship (FS-3)."""
         client, fixtures = stack
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         await befriend(client, alice, bob)
         for player in (alice, bob):
             fixtures.cache.entries[(player.id, SocialGraphEntry.FRIENDS)] = frozenset()
@@ -378,13 +403,16 @@ class TestCacheInvalidation:
         assert fixtures.cache.entries == {}
 
     async def test_unblocking_invalidates_both_players(
-        self, stack: tuple[AsyncClient, _Fixtures]
+        self, stack: tuple[AsyncClient, _Fixtures], contract_session: AsyncSession
     ) -> None:
         """The trigger that would be *silently* wrong if it were missing:
         a lifted block that stayed cached is a player still invisible to
         somebody who deliberately unblocked them."""
         client, fixtures = stack
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         blocked = await client.post(BLOCKS_URL, headers=alice.auth, json={"player_id": str(bob.id)})
         assert blocked.status_code == 201, blocked.text
         fixtures.cache.entries[(alice.id, SocialGraphEntry.BLOCKED)] = frozenset({bob.id})
@@ -397,7 +425,7 @@ class TestCacheInvalidation:
         assert (bob.id, SocialGraphEntry.BLOCKED) not in fixtures.cache.entries
 
     async def test_a_stale_block_set_cannot_outlive_the_unblock(
-        self, stack: tuple[AsyncClient, _Fixtures]
+        self, stack: tuple[AsyncClient, _Fixtures], contract_session: AsyncSession
     ) -> None:
         """The end-to-end version of the rule: never leave stale
         friendship state.
@@ -407,7 +435,10 @@ class TestCacheInvalidation:
         Redis was holding.
         """
         client, fixtures = stack
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         await client.post(BLOCKS_URL, headers=alice.auth, json={"player_id": str(bob.id)})
 
         # A search warms `blocked_ids_for` through the composition path.
@@ -432,7 +463,10 @@ class TestCachedReads:
         assertion made on the response.
         """
         client, fixtures = stack
-        alice, bob = await register(client), await register(client)
+        alice, bob = (
+            await register(client, contract_session),
+            await register(client, contract_session),
+        )
         await client.post(BLOCKS_URL, headers=alice.auth, json={"player_id": str(bob.id)})
 
         statements: list[str] = []
@@ -471,9 +505,9 @@ class TestCachedReads:
         tempting fix being to raise it rather than ask what produced it.
         """
         client, fixtures = stack
-        alice = await register(client)
+        alice = await register(client, contract_session)
         for _ in range(3):
-            await befriend(client, alice, await register(client))
+            await befriend(client, alice, await register(client, contract_session))
 
         statements: list[str] = []
 

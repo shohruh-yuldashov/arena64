@@ -33,7 +33,7 @@ from uuid import UUID, uuid4
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.contract.contract_app import build_contract_app, contract_client
@@ -66,7 +66,7 @@ async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
         yield http
 
 
-async def register(client: AsyncClient) -> Player:
+async def register(client: AsyncClient, session: AsyncSession) -> Player:
     suffix = uuid4().hex[:8]
     username = f"player{suffix}"
     assert len(username) <= 20, f"test username {username!r} exceeds the platform limit"
@@ -76,6 +76,14 @@ async def register(client: AsyncClient) -> Player:
         json={"username": username, "email": f"{suffix}@example.com", "password": PASSWORD},
     )
     assert created.status_code == 201, created.text
+
+    # **Verified**, because A64-021.5H made every friend-graph write require
+    # it. The same thing `app.operator.accounts verify` does; the OTP flow
+    # belongs to `test_otp_verification.py`.
+    await session.execute(
+        text("UPDATE users.user SET is_verified = true WHERE id = :id"),
+        {"id": UUID(created.json()["data"]["id"])},
+    )
 
     signed_in = await client.post(
         LOGIN_URL, json={"email": f"{suffix}@example.com", "password": PASSWORD}
@@ -129,15 +137,15 @@ async def page_costs(
     costs: dict[str, dict[int, int]] = {}
 
     for size in PAGE_SIZES:
-        viewer = await register(client)
+        viewer = await register(client, contract_session)
         for _ in range(size):
-            await befriend(client, viewer, await register(client))
-            requester = await register(client)
+            await befriend(client, viewer, await register(client, contract_session))
+            requester = await register(client, contract_session)
             sent = await client.post(
                 REQUESTS_URL, headers=requester.auth, json={"player_id": str(viewer.id)}
             )
             assert sent.status_code == 201, sent.text
-            blocked = await register(client)
+            blocked = await register(client, contract_session)
             placed = await client.post(
                 BLOCKS_URL, headers=viewer.auth, json={"player_id": str(blocked.id)}
             )

@@ -26,11 +26,12 @@ Skipped, not failed, when PostgreSQL is unreachable (see `conftest.py`).
 
 from collections.abc import AsyncIterator
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.users.domain.validators import BIO_MAX_LENGTH, DISPLAY_NAME_MAX_LENGTH
@@ -55,7 +56,7 @@ async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
 
 
 @pytest_asyncio.fixture
-async def auth(client: AsyncClient) -> dict[str, str]:
+async def auth(client: AsyncClient, contract_session: AsyncSession) -> dict[str, str]:
     suffix = uuid4().hex[:10]
     account = {
         "username": f"player{suffix}",
@@ -64,6 +65,14 @@ async def auth(client: AsyncClient) -> dict[str, str]:
     }
     registered = await client.post(REGISTER_URL, json=account)
     assert registered.status_code == 201, registered.text
+
+    # **Verified**, because A64-021.5H put every profile write behind a
+    # verified address. The same thing `app.operator.accounts verify` does;
+    # the OTP flow itself belongs to `test_otp_verification.py`.
+    await contract_session.execute(
+        text("UPDATE users.user SET is_verified = true WHERE id = :id"),
+        {"id": UUID(registered.json()["data"]["id"])},
+    )
 
     signed_in = await client.post(LOGIN_URL, json={"email": account["email"], "password": PASSWORD})
     assert signed_in.status_code == 200, signed_in.text
@@ -348,7 +357,9 @@ class TestOnlyYourOwnProfile:
 
         assert response.status_code == 401
 
-    async def test_one_account_cannot_edit_another(self, client: AsyncClient) -> None:
+    async def test_one_account_cannot_edit_another(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
         """Two real accounts; each edit lands on the token's own profile."""
         suffixes = [uuid4().hex[:10] for _ in range(2)]
         tokens = []
@@ -358,7 +369,13 @@ class TestOnlyYourOwnProfile:
                 "email": f"{suffix}@example.com",
                 "password": PASSWORD,
             }
-            await client.post(REGISTER_URL, json=account)
+            created = await client.post(REGISTER_URL, json=account)
+            # Verified for the same reason the `auth` fixture is — a profile
+            # write is behind it since A64-021.5H.
+            await contract_session.execute(
+                text("UPDATE users.user SET is_verified = true WHERE id = :id"),
+                {"id": UUID(created.json()["data"]["id"])},
+            )
             signed_in = await client.post(
                 LOGIN_URL, json={"email": account["email"], "password": PASSWORD}
             )

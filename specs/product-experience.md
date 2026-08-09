@@ -3,10 +3,10 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-PRODUCT-EXPERIENCE` |
-| **Status** | Draft — audit (.1); shell and home (.3); design foundation (.2); authentication (.4) |
+| **Status** | Draft — audit (.1); shell (.3); foundation (.2); authentication (.4); lobby (.5) |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-08-10 — A64-025.4, the authentication experience |
+| **Last updated** | 2026-08-10 — A64-025.5, the lobby and play experience |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -831,3 +831,124 @@ untouched, and no backend contract was read differently or extended.
 `/verify-email` keeps its two-mode behaviour — a mailed `?token=` and an
 in-session code form behind one path — and its lack of a guard, which is
 deliberate and documented in the route tree.
+
+---
+
+## 12. Lobby and play — A64-025.5
+
+### 12.1 The state machine, unchanged
+
+`useLobbyState` derives everything from two authoritative reads and stores
+nothing:
+
+    bootstrapping → idle → queued → match_offer → awaiting_opponent
+                                  ↘ transitioning → the board
+                    unavailable (both reads failed)
+
+Four *busy* states — joining, accepting, declining, transitioning — are the
+page's, because they describe a request the cache cannot see. A pending
+match outranks a ticket, always, and the precedence is applied in one place.
+None of that moved: this task changed how the states look, not what they
+are.
+
+Two decisions start a game: mode and time control. Variant is not offered
+because `ProductVariant` has one member, and region is not offered because
+every non-default value shrinks the pool on a single-region deployment.
+Mode defaults to casual; the clock deliberately has no default, because
+every control is a different game.
+
+### 12.2 What was weak
+
+Not the semantics — the composition. A single `max-w-2xl` column with two
+fieldsets and, below both of them, the only button a player came to press.
+On a phone that button was under a fold. Selection was a one-pixel border
+and a five-per-cent tint of a colour that had no hue until A64-025.2. The
+queued state replaced the whole page with a spinner over a four-row table.
+
+### 12.3 The action follows the viewport
+
+The submit is now a **sticky bar** at the bottom of the form: an ordinary
+row at the end on a wide screen, pinned to the viewport on a phone, with
+`env(safe-area-inset-bottom)` so an iPhone's home indicator does not cover
+it. One rule, no second layout.
+
+It also says what it will do — `3+2 · Casual` — read from the catalogue
+rather than stored, because the catalogue is the authority and a second copy
+of the label is a second thing to keep in step. Before a clock is chosen it
+says which choice is missing instead.
+
+Measured in Chromium: the call to action is fully visible without scrolling
+at 360px in both themes.
+
+### 12.4 Choosing a clock
+
+The time control is what decides the game, so it is what is legible: the
+clock is set large and `tabular-nums` (so `1+0` and `10+0` do not shuffle
+the grid) with the speed class beneath it. The chosen card takes a brand
+border, a brand tint and a brand ring; unchosen cards respond to hover.
+
+The control is still a native `input type="radio"` inside a
+`fieldset`/`legend` — the browser's arrow-key behaviour and the screen
+reader's "3+2, radio button 2 of 4" are exactly right and were not
+re-implemented. The visual change is entirely on the label around it.
+
+### 12.5 Queueing
+
+The searching state is now the page rather than a line above a table: a
+pulse on the brand, the status in words, the elapsed time under it, and the
+configuration as four labelled chips. The pulse is two CSS rings with
+`motion-reduce:animate-none`; it carries no information, because the words
+beside it do and `role="status"` is what announces them.
+
+Cancel is secondary and has no confirmation — leaving a queue costs nothing
+and is instantly repeatable, so a dialog would protect against no
+consequence. The guard that matters is `disabled` while the request is in
+flight, which was already there.
+
+### 12.6 The offer
+
+Same shared surface, redesigned rather than duplicated — `AppShell` still
+owns the one instance so a player paired while reading a profile still sees
+it. The opponent leads now, with a larger avatar and name; the configuration
+uses the same chips the queue does, so a player recognises what they were
+waiting for; and the countdown is its own bordered strip with the number at
+`text-3xl`, tinted with `--warning` under ten seconds while the words beside
+it stay the same.
+
+Everything that made it correct is untouched: `role="alertdialog"`, escape
+and outside-click prevented, `aria-live="off"` on the number with a separate
+polite region that speaks only at 30, 20, 10 and 5, and both buttons named
+with the opponent.
+
+### 12.7 Playing a friend
+
+A named, linked second path to `/challenges` — a deep link, not a second
+implementation of challenge creation. Below the queue, because a random
+opponent is the faster path and the one this page is for. Hidden while
+queued, where it would be a way to leave a search a player just started.
+
+### 12.8 No invented data
+
+There is no wait estimate, no queue position, no online count, no opponent
+preview and no recommended mode. The backend publishes none of them, and a
+plausible number the server never sent is worse than an empty space. What
+the queue shows — mode, clock, speed class, entry time, elapsed — is all
+from the ticket.
+
+### 12.9 Verified
+
+Chromium, signed in, one account per measurement:
+
+| State | 360 light | 360 dark | 1280 light | 1280 dark |
+| --- | --- | --- | --- | --- |
+| Idle | 0 overflow, 44px, CTA in view | same | same | same |
+| Queued | 0 overflow, 44px, `role="status"` | — | — | 0 overflow, 44px |
+
+The offer was exercised end to end rather than measured: `play.spec.ts` runs
+two real players into one pool, through the redesigned dialog, to the board.
+
+### 12.10 Deferred on purpose
+
+The board, the clocks, the player cards and the result screen are
+A64-025.6's. Nothing here reaches past the handoff — `transitioning` still
+navigates exactly as A64-022's hardening left it.

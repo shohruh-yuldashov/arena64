@@ -50,6 +50,9 @@ class InMemoryRoleAssignments:
 
     def __init__(self) -> None:
         self.rows: list[RoleAssignment] = []
+        self.reads_of_holders: list[AdminRole] = []
+        """Every whole-set read, so a caller that looped one per row is
+        visible as a count rather than only as a slow test — A64-024.3 §10."""
 
     async def live_roles_for(self, account_id: UUID) -> frozenset[AdminRole]:
         return frozenset(
@@ -71,6 +74,7 @@ class InMemoryRoleAssignments:
         return assignment
 
     async def live_holders_of(self, role: AdminRole) -> list[UUID]:
+        self.reads_of_holders.append(role)
         return [row.account_id for row in self.rows if row.role == role and row.is_live]
 
 

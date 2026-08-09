@@ -3,7 +3,7 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-023` |
-| **Status** | Implemented — A64-023.1 (domain, contracts, architecture) and A64-023.2 (picker, incoming presentation, match-scoped mute). |
+| **Status** | Implemented — A64-023.1 (domain, contracts, architecture), A64-023.2 (picker, presentation, mute), A64-023.3 (block suppression and abuse hardening). |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-09 |
 | **Last updated** | 2026-08-09 |
@@ -186,28 +186,62 @@ guarantee, needs no round trip, and a server-side per-recipient filter would put
 preference read on every fan-out. Nothing about this choice is load-bearing: the
 server-side seam below remains where it was.
 
-### 9.1 Blocks — the seam, still unimplemented
+### 9.1 Blocks — implemented in A64-023.3
 
-`ADR-004` and §7 of the original design split the two: an ordinary **mute** is the
-client's, a **BL-1 block** must be the server's, because BL-1 requires the sender not
-be told.
+**A block can be placed while a match is being played.** `BlockingService.block`
+checks self-blocking and duplication and nothing else, so BL-2's "blocked pairs are
+never paired" does not cover a block placed at move twenty. That case is now handled.
 
-**Server-side block suppression is not built.** `QuickMessageHandler` holds
-`MatchRosterReader`, `GameRoomService`, `RoomBroadcaster`, a limiter and metrics — and
-no `friends.public.PairingExclusions`. The seam is exactly one function,
-`QuickMessageHandler._recipients_of`, which is the only place a recipient list exists.
+| Property | Behaviour |
+| --- | --- |
+| Where | `QuickMessageHandler._permitted`, the one place a recipient list exists |
+| Direction | **Symmetric** — `blocked_ids_for` returns both directions, so neither party can tell which of them placed it |
+| What the sender sees | Nothing. The send is accepted, counted as `sent`, and echoed back to them |
+| What the game does | Continues normally. Moves, clocks, draw offers and the result never consult this |
+| On an unreadable graph | **Suppress** — fail closed |
 
-It is left unbuilt deliberately rather than by oversight:
+**The sender is never removed from the recipient list**, whatever the read returns.
+They are not blocked from themselves, and dropping them would make their own message
+vanish from their own screen — a visible signal where §8 of A64-023.3 requires none.
 
-- **BL-2 already prevents the case.** Blocked pairs are excluded from pairing, so the
-  only way two live opponents can have a block between them is one placed *mid-match*.
-- **It would put a social-graph read on the hot path** of every quick message, for that
-  case alone.
-- Building it means wiring `friends` into a handler that currently reaches exactly one
-  module, which is a decision worth making on purpose rather than as a side effect of a
-  UI phase.
+#### Why it is not a block oracle
 
-Recorded as OQ-3.
+An accepted send and a suppressed one are byte-identical from the sender's side: same
+absence of a refusal, same echo, same timing. There is no `blocked_by_recipient` code,
+and the suppression is not reflected in any frame. The only record is
+`gateway.quick_messages_suppressed_total`, which is unlabelled and operator-facing.
+
+#### Cost
+
+**One Redis `GET` per message on a cache hit**, and no database work at all. The read
+is `friends:v1:blocked:<sender_id>` through `CachedSocialGraphReader`, wired for
+WebSockets by `SessionScopedSocialGraphReader` — the session it opens acquires no
+connection unless the cache misses.
+
+On a miss: that `GET`, one indexed query, one `SET`. The entry then serves every later
+read until `BlockingService` invalidates it, which it does on both writes that can
+change the answer.
+
+`PairingExclusions` was the obvious port and was **rejected**: it is uncached by
+design — its own docstring says so, because its caller is a background pairing scan —
+and on a per-message path it would be one indexed query per courtesy.
+
+The whole path is bounded by the rate limit at six messages a minute per connection.
+
+### 9.2 Repeated identical messages — no new mechanism
+
+A player can send `nice_move` six times a minute within the existing limits. A
+repeated-identical cooldown was considered and **not added**:
+
+- **Mute already answers it.** It is one click, it is already built, and it works
+  whether or not the messages are identical.
+- **It is trivially evaded.** Alternating `nice_move` / `good_game` defeats an
+  identity rule completely while remaining just as repetitive.
+- **It penalises honest use.** A double-tap of genuine enthusiasm is the same input as
+  the first press of a spam run.
+
+The burst and sustained windows remain the primary control, and they are deliberately
+low. Recorded so a future task does not rediscover the question.
 
 ## 10. Localization
 
@@ -305,6 +339,30 @@ The **mute control stays enabled** — a player must still be able to silence a 
 that is on screen. The backend refuses terminal sends regardless; the frontend reflects
 that state rather than replacing the enforcement.
 
+### Duplicate delivery and multi-tab — A64-023.3
+
+**One accepted message produces one delivery attempt per attached connection.** A room
+member is a `(player, connection)` pair, so a player with two tabs in one match is two
+members and both receive it.
+
+| Question | Answer |
+| --- | --- |
+| Does the sender's echo reach both of their own tabs? | **Yes** — both are room members |
+| Does a message reach all of the opponent's tabs? | **Yes** |
+| Is any connection served twice? | **No** — `RoutingPlan` partitions local and remote with no overlap |
+| Does client mute apply across tabs? | **No — tab-local.** Mute is component state and there is no cross-tab synchronisation on this platform. Documented rather than changed |
+
+**No client-side deduplication exists, and none is needed.** `useFrames` installs its
+listener in an effect that returns the unsubscribe, so React's development
+double-invoke nets one subscription, a remount replaces rather than stacks, and a
+reconnect does not touch the listener set at all. A dedupe keyed on the message
+identifier would additionally have been *wrong*: a player sending `nice_move` twice is
+two intentional messages, not one frame observed twice.
+
+The protocol carries no frame identity — no sequence, no message id — and A64-023.3
+deliberately did not add one. Inventing durable identity to suppress duplicates that do
+not occur would have contradicted §12's at-most-once design.
+
 ### Reconnect
 
 Nothing reappears. Quick messages are never buffered by the gateway (§12), the client
@@ -370,6 +428,15 @@ multiplies every series by six and nothing operational needs it.
 The payload is **never logged**. It is untrusted input, and a log of rejected bodies would be
 the free-text archive this feature exists not to have.
 
+A64-023.3 adds one counter, `gateway.quick_messages_suppressed_total` — recipients dropped
+because a block stands between them and the sender. **Unlabelled**: how often the rule fires is
+operational, and *who* it fired between is the relationship state BL-1 keeps private.
+
+A separate counter rather than an outcome on `quick_messages_total`, because a suppressed
+message was still accepted — it counts as `sent` there, and folding the two would make "how many
+sends succeeded" disagree with itself. It also keeps the sender's view and the operator's view
+distinct, which is the whole point of the no-oracle rule.
+
 ## 14. Acceptance criteria
 
 - [x] **AC-1** — Given two participants in an `active` match, when one sends a catalogue
@@ -398,7 +465,8 @@ the free-text archive this feature exists not to have.
 | --- | --- |
 | `tests/unit/test_gateway_connection.py::TestQuickMessages` (7) | AC-1 … AC-7 |
 | `tests/contract/test_quick_message_localisation.py` (3, one per locale) | AC-8 |
-| `apps/web/src/features/game/quick-messages.test.tsx` (10) | The client experience — §10a |
+| `apps/web/src/features/game/quick-messages.test.tsx` (12) | The client experience — §10a; subscription and repeat hardening |
+| `tests/unit/test_gateway_connection.py::TestQuickMessageHardening` (3) | Blocks, fail-closed reads, multi-connection fan-out |
 
 ## 16. Open questions
 
@@ -406,4 +474,4 @@ the free-text archive this feature exists not to have.
 | --- | --- | --- |
 | OQ-1 | Do the six entries match real usage? | Telemetry after A64-023.2 ships the picker |
 | OQ-2 | Should a rematch request be a catalogue entry or its own command? | It changes state, so probably a command — needs a product decision |
-| OQ-3 | Is server-side block suppression needed, given BL-2 makes blocked pairings rare? | **Still open after A64-023.2** — the seam is `QuickMessageHandler._recipients_of` and was deliberately not wired; see §9.1 |
+| ~~OQ-3~~ | ~~Is server-side block suppression needed?~~ — **closed by A64-023.3.** Yes: a block can be placed mid-match, and it is now enforced server-side at one cached Redis read per message. See §9.1 |

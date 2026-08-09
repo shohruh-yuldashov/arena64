@@ -1,13 +1,14 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { useState } from "react";
+import { StrictMode, useState } from "react";
 import { beforeEach, expect, it, vi } from "vitest";
 
+import { useQuickMessages } from "@/features/game/model/use-quick-messages";
 import { QuickMessagePicker } from "@/features/game/ui/quick-message-picker";
 import { httpClient } from "@/shared/api/client";
 import { env } from "@/shared/config/env";
-import { QUICK_MESSAGES, RealtimeClient } from "@/shared/realtime";
+import { QUICK_MESSAGES, RealtimeClient, RealtimeContextProvider } from "@/shared/realtime";
 import { mswServer } from "@/shared/test/msw/server";
 import { renderApp, renderWithProviders } from "@/shared/test/render";
 
@@ -461,4 +462,96 @@ it("refuses to send once the match is terminal, and replays nothing on reconnect
   });
   const before = socket.sent.filter((raw) => raw.includes("quick_message")).length;
   expect(before).toBe(0);
+});
+
+// --- hardening — A64-023.3 ---------------------------------------------------
+
+it("registers exactly one frame handler per mounted surface, even under StrictMode", () => {
+  // §3, §19.2. The audit found no duplicate-render defect and this is what
+  // keeps it that way: `useFrames` installs its listener in an effect and
+  // returns the unsubscribe, so React's development double-invoke
+  // subscribes, unsubscribes and subscribes again — netting one.
+  //
+  // Asserted by **counting live subscriptions** rather than by counting
+  // rendered bubbles, because a bubble count would pass for the wrong
+  // reason: two listeners both calling `setVisible` with the same seat key
+  // produce one bubble and two renders. The defect this guards against is
+  // invisible in the DOM.
+  const client = new RealtimeClient();
+  let live = 0;
+  const subscribe = client.onFrame.bind(client);
+  vi.spyOn(client, "onFrame").mockImplementation((listener) => {
+    live += 1;
+    const unsubscribe = subscribe(listener);
+    return () => {
+      live -= 1;
+      unsubscribe();
+    };
+  });
+
+  function Harness() {
+    const quick = useQuickMessages({ matchId: MATCH, viewerSide: "light", playable: true });
+    return <output>{quick.visible.size}</output>;
+  }
+
+  const { unmount } = render(
+    <StrictMode>
+      <RealtimeContextProvider client={client}>
+        <Harness />
+      </RealtimeContextProvider>
+    </StrictMode>,
+  );
+
+  expect(live).toBe(1);
+  // And it is genuinely released, rather than merely balanced at mount —
+  // a listener that outlived its surface would fire into a dead component
+  // on the next reconnect.
+  unmount();
+  expect(live).toBe(0);
+});
+
+it("treats an intentionally repeated message as new rather than as a duplicate", async () => {
+  // §2, §19.3. The distinction this phase had to preserve: a player sending
+  // `nice_move` twice is **two intentional messages**, and only a frame
+  // observed twice by accident is a duplicate. A dedupe keyed on the
+  // identifier would have collapsed the first case into the second.
+  //
+  // Proven through the timer rather than through a count, because a
+  // replacement is not visible as a second element: the second message
+  // restarts the four-second lifetime, so a bubble that was dropped as a
+  // duplicate would disappear on the original schedule and one that was
+  // accepted survives past it.
+  vi.useFakeTimers();
+  try {
+    const sockets = stubWebSocket();
+    renderApp({ path: `/games/${MATCH}`, realtimeClient: new RealtimeClient() });
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: /^quick messages$/i })).toBeTruthy(),
+    );
+    const socket = sockets[sockets.length - 1]!;
+
+    receive(socket, "dark", "nice_move");
+    await vi.waitFor(() => expect(screen.getAllByText(/nice move/i)).toHaveLength(1));
+
+    // Three seconds in — still inside the first lifetime.
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+    receive(socket, "dark", "nice_move");
+
+    // Two more seconds: past the *first* message's four, inside the
+    // second's. A duplicate-suppressing client would show nothing here.
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(screen.getAllByText(/nice move/i)).toHaveLength(1);
+
+    // And it does eventually go — the timer restarted, it did not vanish.
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(screen.queryAllByText(/nice move/i)).toHaveLength(0);
+  } finally {
+    vi.useRealTimers();
+  }
 });

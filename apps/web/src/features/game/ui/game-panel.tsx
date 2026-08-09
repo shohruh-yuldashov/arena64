@@ -3,8 +3,9 @@ import { Link } from "@tanstack/react-router";
 import type { GameState } from "@/features/game/model/state";
 import { useRatingResult } from "@/features/game/model/use-rating-result";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
+import { cn } from "@/shared/lib/cn";
 import type { ConnectionStatus } from "@/shared/realtime";
-import { Button, Card, CardContent } from "@/shared/ui";
+import { Button } from "@/shared/ui";
 
 /**
  * Everything beside the board — A64-020.5B §19, §20, §21, §23.
@@ -137,6 +138,16 @@ function Result({ state, viewerId }: { state: GameState; viewerId: string | null
   const { t } = useTranslation();
   if (state.result === null) return null;
 
+  // The tone is the outcome, from this seat. A spectator has no seat, so
+  // `side` is `null` and every decisive result reads as a loss — which is
+  // why the neutral tone is used when there is nobody to have won.
+  const outcomeTone: "win" | "loss" | "draw" =
+    state.result.outcome === "draw" || state.side === null
+      ? "draw"
+      : state.result.winner === state.side
+        ? "win"
+        : "loss";
+
   const outcome =
     state.result.outcome === "draw"
       ? "game.result.draw"
@@ -166,27 +177,51 @@ function Result({ state, viewerId }: { state: GameState; viewerId: string | null
   return (
     // `alert`, not `status`: the game ending is an interruption, and it is
     // the one moment on this screen that earns one.
-    <div role="alert" className="border-border flex flex-col gap-3 rounded-md border p-4">
-      <p className="text-lg font-semibold">{t(outcome)}</p>
-      <p className="text-muted-foreground text-sm">
-        {t("game.result.reason", {
-          reason: t(reasons[state.result.termination_reason] ?? "game.reason.unknown"),
-        })}
-      </p>
+    // A64-025.6A §20. The result was a bordered box with a bold line in it.
+    // It is the moment the game is *about*, so it now leads with the outcome
+    // set large on a tinted surface whose tone is the outcome — win on
+    // `--success`, loss on `--destructive`, draw on the neutral muted — with
+    // the reason under it and the rating consequence under that. §20's
+    // hierarchy, in that order.
+    //
+    // It stays beside the board rather than covering it: a player wants to
+    // see the final position, and a modal over it is the one thing §19
+    // forbids.
+    <div
+      role="alert"
+      className={cn(
+        "flex flex-col gap-3 rounded-lg border p-4",
+        outcomeTone === "win" && "border-success/40 bg-success/10",
+        outcomeTone === "loss" && "border-destructive/40 bg-destructive/10",
+        outcomeTone === "draw" && "border-border bg-muted/50",
+      )}
+    >
+      <div className="flex flex-col gap-1">
+        <p className="text-2xl leading-tight font-semibold tracking-tight">{t(outcome)}</p>
+        <p className="text-muted-foreground text-sm">
+          {t("game.result.reason", {
+            reason: t(reasons[state.result.termination_reason] ?? "game.reason.unknown"),
+          })}
+        </p>
+      </div>
+
       <RatingResultBlock matchId={state.matchId} viewerId={viewerId} />
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-col gap-2">
         {/* A64-020.5E §22. The one existing surface with a real match id —
             there is no match-history UI yet, so this is where a replay is
             reachable from. The board this panel sits beside is already the
             finished position; the link is for looking at how it got there. */}
-        <Button asChild variant="outline" className="min-h-11">
+        {/* The primary next action is another game — that is what a player
+            who just finished one wants. The replay is secondary and the
+            board beside it is already the final position. */}
+        <Button asChild className="w-full">
+          <Link to="/play">{t("game.result.backToLobby")}</Link>
+        </Button>
+        <Button asChild variant="outline" className="w-full">
           <Link to="/games/$matchId/replay" params={{ matchId: state.matchId }}>
             {t("replay.openReplay")}
           </Link>
-        </Button>
-        <Button asChild variant="outline" className="min-h-11">
-          <Link to="/play">{t("game.result.backToLobby")}</Link>
         </Button>
       </div>
     </div>
@@ -213,11 +248,9 @@ export function GamePanel({
   viewerId: string | null;
 }) {
   return (
-    <Card>
-      <CardContent className="flex flex-col gap-3 pt-6">
-        <StatusLine state={state} connection={connection} />
-        <Result state={state} viewerId={viewerId} />
-      </CardContent>
-    </Card>
+    <div className="flex flex-col gap-3">
+      <StatusLine state={state} connection={connection} />
+      <Result state={state} viewerId={viewerId} />
+    </div>
   );
 }

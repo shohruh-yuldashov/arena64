@@ -138,7 +138,7 @@ export function GameBoard({
       // `aspect-square` and a percentage width: the board is whatever the
       // column gives it and stays square at every size — §27's "board uses
       // available width" without a resize observer.
-      className="border-border grid aspect-square w-full grid-cols-8 overflow-hidden rounded-md border"
+      className="border-border grid aspect-square w-full grid-cols-8 overflow-hidden rounded-xl border-2 shadow-sm"
     >
       {ranks.map((rank) => (
         <div key={rank} role="row" className="contents">

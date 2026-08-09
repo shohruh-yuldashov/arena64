@@ -77,8 +77,10 @@ export function PlayerSeat({
   return (
     <div
       className={cn(
-        "flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors",
-        active ? "border-primary bg-primary/10" : "border-border bg-card",
+        "flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-colors",
+        // The active seat is the brand; the idle one recedes into the page
+        // rather than competing with the board it frames.
+        active ? "border-primary bg-primary/10 shadow-sm" : "border-border bg-muted/30",
       )}
     >
       <Avatar className="size-9 shrink-0">
@@ -95,7 +97,19 @@ export function PlayerSeat({
         </span>
       </div>
 
-      <div className="ml-auto flex flex-col items-end">
+      {/* The clock has its own container, so it reads as an instrument
+          rather than as one more line of text in the row. Fixed minimum
+          width, so `9:59` and `10:00` do not move the name beside them. */}
+      <div
+        className={cn(
+          "ml-auto flex min-w-[5.5rem] flex-col items-end rounded-lg border px-2.5 py-1",
+          low
+            ? "border-warning/50 bg-warning/10"
+            : active
+              ? "border-primary/40 bg-primary/5"
+              : "border-transparent",
+        )}
+      >
         <span
           // The digits are not a live region: they change four times a
           // second and announcing that is unusable. The accessible name

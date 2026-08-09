@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { ActiveCommand, GameState } from "@/features/game/model/state";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
-import { Button, Card, CardContent } from "@/shared/ui";
+import { Button, Notice } from "@/shared/ui";
 
 /**
  * The participant control surface — A64-020.5C §1, §5 through §9, §14.
@@ -89,7 +89,11 @@ function ResignDialog({ busy, onConfirm }: { busy: boolean; onConfirm: () => voi
   return (
     <DialogPrimitive.Root open={open} onOpenChange={setOpen}>
       <DialogPrimitive.Trigger asChild>
-        <Button variant="outline" className="min-h-11 w-full" disabled={busy}>
+        <Button
+          variant="ghost"
+          className="text-destructive hover:bg-destructive/10 hover:text-destructive w-full"
+          disabled={busy}
+        >
           {t("game.controls.resign")}
         </Button>
       </DialogPrimitive.Trigger>
@@ -211,63 +215,65 @@ export function GameControls({
   const isOurs = draw.offer !== null && !draw.mayAccept;
 
   return (
-    <Card>
-      <CardContent className="flex flex-col gap-3 pt-6">
-        <h2 className="text-muted-foreground text-xs font-medium">
-          {t("game.controls.heading")}
-        </h2>
+    <div className="flex flex-col gap-3">
+      <h2 className="text-muted-foreground text-xs font-medium">
+        {t("game.controls.heading")}
+      </h2>
 
-        {draw.mayAccept && draw.mayDecline && (
-          <IncomingOffer
-            busy={busy}
-            onAccept={() => onCommand("accept")}
-            onDecline={() => onCommand("decline")}
-          />
-        )}
+      {draw.mayAccept && draw.mayDecline && (
+        <IncomingOffer
+          busy={busy}
+          onAccept={() => onCommand("accept")}
+          onDecline={() => onCommand("decline")}
+        />
+      )}
 
-        {isOurs && (
-          // §6 and §16: the durable "sent" state, in the panel rather than
-          // in a toast. The offerer is told the opponent may answer *or
-          // move*, because a move is what silently ends the offer (§10) and
-          // a player who did not know that would read it as the offer being
-          // lost.
-          <p role="status" className="text-muted-foreground text-sm">
-            {t("game.controls.offerSent")}
-          </p>
-        )}
+      {isOurs && (
+        // §6 and §16: the durable "sent" state, in the panel rather than
+        // in a toast. The offerer is told the opponent may answer *or
+        // move*, because a move is what silently ends the offer (§10) and
+        // a player who did not know that would read it as the offer being
+        // lost.
+        <p role="status" className="text-muted-foreground text-sm">
+          {t("game.controls.offerSent")}
+        </p>
+      )}
 
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <Button
-            variant="outline"
-            className="min-h-11 flex-1"
-            // §6: the button exists only when the server says it may be
-            // used. Not disabled-and-visible, because "may I offer" is a
-            // rule with a reason the player cannot see, and a permanently
-            // greyed control invites clicking.
-            disabled={!draw.mayOffer || busy}
-            onClick={() => onCommand("offer")}
-          >
-            {t("game.controls.offerDraw")}
-          </Button>
-          <div className="flex-1">
-            <ResignDialog busy={busy} onConfirm={() => onCommand("resign")} />
-          </div>
-        </div>
+      {/* A64-025.6A §14. Two actions of very different weight, and they
+            used to look identical. Offering a draw is ordinary and
+            reversible; resigning ends the game. The draw keeps the neutral
+            outline; the resignation is text on the destructive token —
+            unmistakable without being a red slab a thumb finds by accident
+            during a bullet game. */}
+      <div className="flex flex-col gap-2">
+        <Button
+          variant="outline"
+          className="w-full"
+          // §6: the button exists only when the server says it may be
+          // used. Not disabled-and-visible, because "may I offer" is a
+          // rule with a reason the player cannot see, and a permanently
+          // greyed control invites clicking.
+          disabled={!draw.mayOffer || busy}
+          onClick={() => onCommand("offer")}
+        >
+          {t("game.controls.offerDraw")}
+        </Button>
+        <ResignDialog busy={busy} onConfirm={() => onCommand("resign")} />
+      </div>
 
-        {/* §18: the pending state is announced, and it is text rather than
+      {/* §18: the pending state is announced, and it is text rather than
             a spinner alone — colour and motion are never the only signal. */}
-        {busy && (
-          <p role="status" className="text-muted-foreground text-sm">
-            {t("game.controls.pending")}
-          </p>
-        )}
+      {busy && (
+        <p role="status" className="text-muted-foreground text-sm">
+          {t("game.controls.pending")}
+        </p>
+      )}
 
-        {commandError !== null && (
-          <p role="alert" className="text-destructive text-sm">
-            {t(commandErrorKey(commandError))}
-          </p>
-        )}
-      </CardContent>
-    </Card>
+      {commandError !== null && (
+        // A64-025.6A §16: the shared failure surface, so a refused command
+        // looks like every other failure in the product.
+        <Notice tone="error">{t(commandErrorKey(commandError))}</Notice>
+      )}
+    </div>
   );
 }

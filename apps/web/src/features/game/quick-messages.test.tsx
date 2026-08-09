@@ -4,7 +4,10 @@ import { http, HttpResponse } from "msw";
 import { StrictMode, useState } from "react";
 import { beforeEach, expect, it, vi } from "vitest";
 
-import { useQuickMessages } from "@/features/game/model/use-quick-messages";
+import {
+  QUICK_MESSAGE_ERROR_TTL_MS,
+  useQuickMessages,
+} from "@/features/game/model/use-quick-messages";
 import { QuickMessagePicker } from "@/features/game/ui/quick-message-picker";
 import { httpClient } from "@/shared/api/client";
 import { env } from "@/shared/config/env";
@@ -554,4 +557,86 @@ it("treats an intentionally repeated message as new rather than as a duplicate",
   } finally {
     vi.useRealTimers();
   }
+});
+
+// --- polish — A64-023.4 ------------------------------------------------------
+
+it("takes a refusal away again instead of leaving it on a finished game", async () => {
+  // §7. `send` resets the error, and `send` returns early once the match is
+  // terminal — so a player rate-limited on the last move kept "Too quick"
+  // on screen for as long as they stayed on the page. A message about a
+  // transient condition must not outlive it.
+  vi.useFakeTimers();
+  try {
+    const sockets = stubWebSocket();
+    renderApp({ path: `/games/${MATCH}`, realtimeClient: new RealtimeClient() });
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: /^quick messages$/i })).toBeTruthy(),
+    );
+    const socket = sockets[sockets.length - 1]!;
+
+    socket.onmessage?.({
+      data: JSON.stringify({
+        v: 1,
+        type: "game.command.rejected",
+        request_id: null,
+        channel: "game",
+        payload: { code: "unknown_quick_message", reason: "That message is not available." },
+      }),
+    });
+
+    await vi.waitFor(() => expect(screen.getByText(/not available/i)).toBeTruthy());
+
+    act(() => {
+      vi.advanceTimersByTime(QUICK_MESSAGE_ERROR_TTL_MS + 100);
+    });
+    expect(screen.queryByText(/not available/i)).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("returns focus to the trigger when a finishing game closes an open picker", async () => {
+  // §7. Closing the menu unmounts whichever item held focus. Without the
+  // restoration below, focus falls to `<body>` at the exact moment the
+  // result appears — a keyboard user is stranded at the top of the
+  // document and has to tab back through the whole page.
+  //
+  // The flag is flipped through captured state rather than by clicking
+  // anything, because a click would move focus itself and the restoration
+  // is deliberately conditional on focus still being *inside the menu*.
+  let finish = () => {};
+  function Harness() {
+    const [disabled, setDisabled] = useState(false);
+    finish = () => setDisabled(true);
+    return (
+      <QuickMessagePicker
+        disabled={disabled}
+        muted={false}
+        error={null}
+        onSelect={() => {}}
+        onToggleMute={() => {}}
+      />
+    );
+  }
+
+  renderWithProviders(<Harness />);
+  const user = userEvent.setup();
+  const trigger = screen.getByRole("button", { name: /^quick messages$/i });
+  const mute = screen.getByRole("button", { name: /^mute quick messages$/i });
+
+  await user.click(trigger);
+  expect(document.activeElement).toBe(screen.getAllByRole("menuitem")[0]);
+
+  // The match completes while the menu is open and focus is inside it.
+  act(() => {
+    finish();
+  });
+
+  expect(screen.queryByRole("menu")).toBeNull();
+  // The **mute** button, not the trigger: the trigger is disabled by now
+  // and a disabled button cannot hold focus, so focusing it would silently
+  // leave the player on `<body>` — the exact failure this prevents.
+  expect(document.activeElement).toBe(mute);
+  expect(trigger.hasAttribute("disabled")).toBe(true);
 });

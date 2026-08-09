@@ -28,5 +28,23 @@
     "title": "Boshqaruv paneli",
     "empty": "Hozircha bo'sh.",
     "emptyHint": "A64-024.1 admin chegarasini o'rnatdi. Bo'limlar keyingi vazifalarda qo'shiladi."
+  },
+  "login": {
+    "title": "Kirish",
+    "subtitle": "Arena64 boshqaruvi",
+    "email": "Elektron pochta",
+    "password": "Parol",
+    "submit": "Kirish",
+    "submitting": "Kirilmoqda…",
+    "invalid": "Bu ma'lumotlar qabul qilinmadi.",
+    "rateLimited": "Urinishlar juda ko'p. Biroz kutib, qayta urinib ko'ring.",
+    "refused": "Bu hisob bu yerga kira olmaydi."
+  },
+  "route": {
+    "notFound": "Sahifa topilmadi",
+    "notFoundHint": "Bu manzil admin panelining qismi emas.",
+    "backToDashboard": "Boshqaruv paneliga qaytish",
+    "placeholder": "Hali amalga oshirilmagan",
+    "placeholderHint": "Bu bo'lim keyingi A64-024 vazifalarida qo'shiladi."
   }
 }

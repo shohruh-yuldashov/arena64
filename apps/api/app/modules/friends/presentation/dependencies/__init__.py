@@ -47,10 +47,12 @@ from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.friends.application.ports import SocialGraphCache
 from app.modules.friends.application.services import (
     BlockingService,
+    CachedSocialGraphReader,
     FriendRequestService,
     FriendshipService,
     PairingExclusionService,
     PresenceAudienceService,
+    SocialGraphReaderService,
 )
 from app.modules.friends.application.validators import FriendRequestValidator
 from app.modules.friends.infrastructure.cache import (
@@ -62,7 +64,7 @@ from app.modules.friends.infrastructure.repositories import (
     SqlAlchemyFriendRequestRepository,
     SqlAlchemyFriendshipRepository,
 )
-from app.modules.friends.public import PairingExclusions
+from app.modules.friends.public import PairingExclusions, SocialGraphReader
 from app.modules.users.application.services import UserService
 from app.modules.users.application.services.public_profile_service import PublicProfileService
 from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
@@ -266,6 +268,84 @@ class SessionScopedPairingExclusions:
             ).blocked_pairs_among(player_ids)
 
 
+class SessionScopedSocialGraphReader:
+    """`SocialGraphReader` over `friends:v1:`, for a WebSocket — A64-023.3 §7.
+
+    The cached sibling of `SessionScopedPairingExclusions` above, and the
+    difference is the whole reason it exists. That one answers a *batch*
+    question and is deliberately uncached — `PairingExclusionService` says
+    so, because its caller is a background pairing scan whose frequency an
+    operator sets. This one answers a **per-player** question on a live
+    socket, which is the shape `friends:v1:blocked:<player_id>` was built
+    for and the one A64-013.5 already calls a hot path.
+
+    ## What a read actually costs
+
+    On a hit: **one Redis `GET`** and no database work at all. The session
+    below is opened and never used — `AsyncSession` acquires a connection on
+    the first statement, not on construction, so a hit borrows nothing from
+    the pool.
+
+    On a miss: that `GET`, one indexed query, and one `SET`. The entry then
+    serves every later read until `BlockingService` invalidates it, which it
+    does on both of the two writes that can change the answer.
+
+    The alternative — `PairingExclusions` on the message path — is one
+    indexed query *per message*, which §17 of A64-023.3 refuses without
+    justification and which nothing here needs: the question a quick message
+    asks is about one pair, and the per-player set already answers it.
+    """
+
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        cache: SocialGraphCache,
+    ) -> None:
+        self._session_factory = session_factory
+        # Process-wide and not session-scoped: a Redis client is a pool, not
+        # a transaction, and rebuilding one per read would be the cost this
+        # class exists to avoid.
+        self._cache = cache
+
+    def _reader(self, session: AsyncSession) -> CachedSocialGraphReader:
+        return CachedSocialGraphReader(
+            SocialGraphReaderService(
+                friendships=SqlAlchemyFriendshipRepository(session),
+                blocks=SqlAlchemyBlockedPlayerRepository(session),
+            ),
+            self._cache,
+        )
+
+    async def friend_ids_among(self, player_id: UUID, others: Sequence[UUID]) -> set[UUID]:
+        async with open_session(self._session_factory) as session:
+            return await self._reader(session).friend_ids_among(player_id, others)
+
+    async def blocked_ids_for(self, player_id: UUID) -> frozenset[UUID]:
+        """Everyone this player cannot interact with, in **either** direction.
+
+        Symmetric, as the port documents: BL-1 makes a block one-directional
+        and invisible, but its visibility consequence runs both ways. A
+        caller therefore cannot tell *which* side placed it, which is what
+        keeps this from becoming a relationship oracle.
+        """
+        async with open_session(self._session_factory) as session:
+            return await self._reader(session).blocked_ids_for(player_id)
+
+
+def get_social_graph_reader_ws(
+    websocket: WebSocket, cache: Annotated[SocialGraphCache, Depends(get_social_graph_cache)]
+) -> SocialGraphReader:
+    """`friends`' cached block read, for a WebSocket route — A64-023.3 §7.
+
+    Typed as the published port, so the caller holds two read methods and
+    cannot place a block, lift one, or list who blocked whom.
+    """
+    return SessionScopedSocialGraphReader(websocket.app.state.db.session_factory, cache)
+
+
+WebSocketSocialGraphReaderDep = Annotated[SocialGraphReader, Depends(get_social_graph_reader_ws)]
+
+
 def get_pairing_exclusions_ws(websocket: WebSocket) -> PairingExclusions:
     """`friends`' BL-2 read, for a WebSocket route.
 
@@ -282,6 +362,9 @@ WebSocketPairingExclusionsDep = Annotated[PairingExclusions, Depends(get_pairing
 __all__ = [
     "BlockingServiceDep",
     "SessionScopedPairingExclusions",
+    "SessionScopedSocialGraphReader",
+    "WebSocketSocialGraphReaderDep",
+    "get_social_graph_reader_ws",
     "WebSocketPairingExclusionsDep",
     "get_pairing_exclusions_ws",
     "PresenceAudienceServiceDep",

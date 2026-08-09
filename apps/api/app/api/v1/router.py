@@ -30,6 +30,7 @@ from app.core.constants import API_V1_PREFIX
 from app.modules.admin.presentation.router import admin_router
 from app.modules.admin.presentation.routers.audit import admin_audit_router
 from app.modules.admin.presentation.routers.matches import admin_matches_router
+from app.modules.admin.presentation.routers.moderation import admin_moderation_router
 from app.modules.admin.presentation.routers.tournaments import admin_tournaments_router
 from app.modules.admin.presentation.routers.users import admin_users_router
 from app.modules.auth.presentation.browser_router import browser_auth_router
@@ -69,6 +70,14 @@ v1_router.include_router(admin_tournaments_router)
 # A64-024.8. Read-only **by design and permanently**: entries are written by
 # the service performing the action, never by a request asking for one.
 v1_router.include_router(admin_audit_router)
+# A64-024.6. The first admin router that **writes**, and it only became
+# safe to add once the audit trail above existed: every mutation on it
+# commits with its audit entry or not at all.
+#
+# Registered after `admin_users_router` and carrying its own `/users/...`
+# paths — Starlette resolves in registration order, and both are literal
+# segments after the parameter, so neither shadows the other.
+v1_router.include_router(admin_moderation_router)
 
 # **Before `users_router`, and the order is load-bearing.** `GET /users/search`
 # and `GET /users/{user_id}` both match the path `/users/search`; Starlette

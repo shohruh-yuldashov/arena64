@@ -89,10 +89,12 @@ which is the correct state until there is a throttle to write it.
 import logging
 
 from app.core.clock import Clock
+from app.modules.admin.public import AccountRestrictionGate
 from app.modules.auth.application.commands import AuthenticateUser
 from app.modules.auth.application.ports import PasswordHasher
 from app.modules.auth.domain.exceptions import (
     AccountLocked,
+    AccountRestricted,
     InactiveAccount,
     InvalidCredentials,
 )
@@ -112,10 +114,12 @@ class AuthenticationService:
         *,
         credentials: UserCredentialStore,
         password_hasher: PasswordHasher,
+        restrictions: AccountRestrictionGate,
         clock: Clock,
     ) -> None:
         self._credentials = credentials
         self._hasher = password_hasher
+        self._restrictions = restrictions
         self._clock = clock
 
     async def authenticate(self, command: AuthenticateUser) -> UserRead:
@@ -158,7 +162,7 @@ class AuthenticationService:
         # locals an error reporter would capture from everything below.
         del plaintext
 
-        self._ensure_usable(stored)
+        await self._ensure_usable(stored)
 
         # The user id only — never the address. A sign-in log line is a
         # permanent record in a system with broader read access and
@@ -183,8 +187,14 @@ class AuthenticationService:
             # This is the guard for every other caller.
             return None
 
-    def _ensure_usable(self, stored: UserCredentials) -> None:
-        """Both checks happen only after a successful verification."""
+    async def _ensure_usable(self, stored: UserCredentials) -> None:
+        """Every check happens only after a successful verification.
+
+        Ordering is deliberate: the two cheap in-memory checks first, and
+        the restriction read last, so the one query this method can make is
+        made only for a caller who has already proved the password. An
+        enumeration probe never reaches it.
+        """
         if not stored.account.is_active:
             logger.info(
                 "login_rejected",
@@ -201,6 +211,22 @@ class AuthenticationService:
                 extra={"user_id": str(stored.account.id), "reason": "account_locked"},
             )
             raise AccountLocked("This account is temporarily locked. Try again later.")
+
+        # A64-024.6, and `domain-model.md` §6's "sanctions gate" arrow: the
+        # restriction lives in `admin`, and `auth` asks a published port
+        # whether it applies. Read here rather than carried in a token
+        # claim, because a restriction baked into a fifteen-minute access
+        # token is one that outlives its own lifting.
+        #
+        # One indexed lookup, on a path that already costs an Argon2
+        # verification — three orders of magnitude more expensive. Nothing
+        # on a hot path calls this.
+        if await self._restrictions.restriction_for(stored.account.id, at=self._clock.now()):
+            logger.info(
+                "login_rejected",
+                extra={"user_id": str(stored.account.id), "reason": "restricted_account"},
+            )
+            raise AccountRestricted("This account is currently unavailable.")
 
     async def _rehash_if_stale(
         self,

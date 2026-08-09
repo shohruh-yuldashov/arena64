@@ -56,6 +56,7 @@ from typing import Annotated
 from fastapi import Depends
 
 from app.api.deps import ClockDep, DbSessionDep, RedisPoolsDep, SettingsDep
+from app.api.restriction_deps import AccountRestrictionGateDep
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.auth.application.ports import PasswordHasher
@@ -171,11 +172,16 @@ UserCredentialStoreDep = Annotated[UserCredentialStore, Depends(get_user_credent
 def get_authentication_service(
     credentials: UserCredentialStoreDep,
     password_hasher: PasswordHasherDep,
+    restrictions: AccountRestrictionGateDep,
     clock: ClockDep,
 ) -> AuthenticationService:
     return AuthenticationService(
         credentials=credentials,
         password_hasher=password_hasher,
+        # A64-024.6 — `domain-model.md` §6's sanctions gate. Resolved in
+        # `app/api/` because `auth` may name the published port and may not
+        # build `admin`'s adapter; see that module's docstring.
+        restrictions=restrictions,
         clock=clock,
     )
 
@@ -247,6 +253,7 @@ WebSocketTicketServiceDep = Annotated[WebSocketTicketService, Depends(get_websoc
 def get_session_service(
     session: DbSessionDep,
     tokens: RefreshTokenServiceDep,
+    restrictions: AccountRestrictionGateDep,
     clock: ClockDep,
     settings: SettingsDep,
 ) -> SessionService:
@@ -267,6 +274,7 @@ def get_session_service(
     return SessionService(
         sessions=SqlAlchemySessionRepository(session),
         tokens=tokens,
+        restrictions=restrictions,
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
         settings=settings.session,

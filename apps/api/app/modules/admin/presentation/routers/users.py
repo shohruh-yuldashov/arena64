@@ -35,7 +35,12 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 from app.core.constants import API_V1_PREFIX
 from app.modules.admin.domain.roles import AdminRole
 from app.modules.admin.presentation.dependencies import AdminRoleServiceDep, CurrentAdmin
+from app.modules.admin.presentation.dependencies.moderation import (
+    ModerationCaseReaderDep,
+    ModerationServiceDep,
+)
 from app.modules.admin.presentation.dependencies.users import AdminUserDirectoryDep
+from app.modules.admin.presentation.routers.moderation import moderation_state_for
 from app.modules.admin.presentation.schemas.users import (
     AdminUserDetail,
     AdminUserPageResponse,
@@ -108,6 +113,8 @@ async def read_user(
     admin: CurrentAdmin,
     directory: AdminUserDirectoryDep,
     roles: AdminRoleServiceDep,
+    moderation: ModerationServiceDep,
+    cases: ModerationCaseReaderDep,
     response: Response,
 ) -> AdminUserDetail:
     """One account, composed from published ports only."""
@@ -121,6 +128,12 @@ async def read_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such account.")
 
     grant = await roles.live_grant(account_id=user_id, role=AdminRole.ADMIN)
+    # A64-024.6. One more read on the detail page, not on the list: an
+    # operator opening one account wants to know whether they can sign in,
+    # and a page of fifty does not.
+    moderation_state = await moderation_state_for(
+        user_id, moderation=moderation, cases=cases, accounts=directory
+    )
 
     return AdminUserDetail(
         id=record.id,
@@ -132,6 +145,7 @@ async def read_user(
         created_at=record.created_at,
         is_admin=grant is not None,
         admin_role_granted_at=grant.granted_at if grant is not None else None,
+        moderation=moderation_state,
     )
 
 

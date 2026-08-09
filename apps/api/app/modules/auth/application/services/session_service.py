@@ -64,9 +64,11 @@ from uuid import UUID
 from app.config.settings import SessionSettings
 from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork
+from app.modules.admin.public import AccountRestrictionGate
 from app.modules.auth.application.ports import SessionRepository
 from app.modules.auth.application.services.refresh_token_service import RefreshTokenService
 from app.modules.auth.domain.exceptions import (
+    AccountRestricted,
     ExpiredRefreshToken,
     RevokedSession,
     SessionNotFound,
@@ -104,12 +106,14 @@ class SessionService:
         *,
         sessions: SessionRepository,
         tokens: RefreshTokenService,
+        restrictions: AccountRestrictionGate,
         unit_of_work: UnitOfWork,
         clock: Clock,
         settings: SessionSettings,
     ) -> None:
         self._sessions = sessions
         self._tokens = tokens
+        self._restrictions = restrictions
         self._uow = unit_of_work
         self._clock = clock
         self._settings = settings
@@ -294,10 +298,36 @@ class SessionService:
         — the rollback leaves the original session live rather than
         leaving the caller with no usable token. Failing closed here would
         sign a legitimate user out for an infrastructure hiccup.
+
+        ## Why an administrative restriction is checked here
+
+        A64-024.6. Suspension revokes every live session (SE-3), so a
+        restricted account normally has no token to present. This closes
+        the narrow race that remains: a rotation already in flight when the
+        revocation commits inserts a successor the revoking `UPDATE` never
+        saw, because the row did not exist in its snapshot.
+
+        Checking here makes the successor useless the moment it is asked to
+        rotate again — and, more importantly, makes this path agree with
+        sign-in, which is the same question asked at the same kind of
+        boundary. `domain-model.md` DM-12 names both: the sanction is read
+        "on every sign-in".
         """
         session = await self.validate_refresh_token(refresh_token)
 
         now = self._clock.now()
+
+        if await self._restrictions.restriction_for(session.user_id, at=now):
+            # Revoked rather than merely refused: a browser holding a
+            # credential this server will never accept again should stop
+            # holding it, and leaving the chain live would make every
+            # subsequent attempt a fresh reuse-detection puzzle.
+            await self.revoke_session(session.id, reason=RevocationReason.SUSPENSION)
+            logger.info(
+                "refresh_rejected",
+                extra={"user_id": str(session.user_id), "reason": "restricted_account"},
+            )
+            raise AccountRestricted("This account is currently unavailable.")
         raw_token = self._tokens.generate_refresh_token()
         successor = UserSession.start(
             user_id=session.user_id,

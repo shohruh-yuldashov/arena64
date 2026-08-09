@@ -981,6 +981,24 @@ forbidden_modules =
     app.modules.admin.application
     app.modules.admin.infrastructure
     app.modules.admin.presentation
+# `allow_indirect_imports` for the reason every other privacy contract in this
+# file sets it, and here it is not merely conventional — without it the
+# contract is unsatisfiable by any correct consumer.
+#
+# `admin/public/__init__.py` re-exports `AdminRole` from `admin.domain.roles`,
+# which is what makes it a surface rather than a duplicate set of DTOs. So
+# `auth.application -> admin.public -> admin.domain` is a chain the rules
+# *require*, and counting it would flag the first module to use the published
+# port for doing exactly what the port is for.
+#
+# It passed until A64-024.6 only because nothing consumed `admin.public` yet.
+#
+# What stays forbidden is the **direct** import: a service naming
+# `admin.domain.moderation` or building `SqlAlchemySanctionRepository` itself.
+# That crossing happens in exactly one place — `app/api/restriction_deps.py`,
+# a composition root outside every bounded context and therefore outside this
+# contract's source list, which is the whole reason it lives there.
+allow_indirect_imports = True
 
 
 [importlinter:contract:layers-admin]

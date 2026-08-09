@@ -83,7 +83,24 @@ export default defineConfig({
   // while development works fine.
   server: {
     proxy: API_PROXY,
-    allowedHosts: ["beatles-share-iowa-attached.trycloudflare.com"],
+    /**
+     * `app.localhost` beside the tunnel host — A64-024.2H §8.
+     *
+     * **Ports do not separate cookies.** `localhost:5173` and
+     * `localhost:5174` are one host to the cookie jar, so developing the
+     * player client and the admin console on bare `localhost` makes them
+     * share a session — which proves nothing about production and hides
+     * the isolation the console depends on.
+     *
+     * Production keeps them apart by host (`arena64.gg` and
+     * `admin.arena64.gg`), and `*.localhost` reproduces that locally with
+     * no `/etc/hosts` entry.
+     */
+    allowedHosts: [
+      "app.localhost",
+      "localhost",
+      "beatles-share-iowa-attached.trycloudflare.com",
+    ],
   },
   preview: { proxy: API_PROXY },
   resolve: {

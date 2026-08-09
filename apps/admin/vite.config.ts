@@ -37,7 +37,28 @@ export default defineConfig({
     // Deliberately not `apps/web`'s port. Two apps on one port is one app,
     // and the separation this whole file is about would be a lie.
     port: 5174,
+    /**
+     * Reachable as `admin.localhost` as well as `localhost` — A64-024.2H §8.
+     *
+     * **Ports do not separate cookies.** `localhost:5173` and
+     * `localhost:5174` are one host as far as the cookie jar is concerned,
+     * so developing on them makes the two apps share a session — which
+     * proves nothing about production and hides the very isolation this
+     * console depends on.
+     *
+     * `*.localhost` resolves to the loopback address in every current
+     * browser with no `/etc/hosts` entry, so `http://admin.localhost:5174`
+     * beside `http://app.localhost:5173` reproduces production's host
+     * separation locally. Nothing about the cookie is relaxed to achieve
+     * it.
+     */
+    allowedHosts: ["admin.localhost", "localhost"],
     proxy: {
+      // Same-origin with its own API path, exactly as production is
+      // (`specs/frontend.md` §11). The console never calls a separate API
+      // host for a cookie-authenticated request: the cookie belongs to
+      // whichever host answered, and an API host shared with the player
+      // client would be one cookie jar for both.
       "/api": { target: API_TARGET, changeOrigin: false, ws: false },
     },
   },

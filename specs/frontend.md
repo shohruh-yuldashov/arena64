@@ -369,6 +369,13 @@ browser  ──/api/*──>  reverse proxy  ──>  FastAPI
 | E2E | `vite preview` uses the **same** proxy config; `preview.proxy` does not inherit `server.proxy`, so both are declared |
 | Production | A reverse proxy (nginx, Caddy, a CDN rule) must route `/api` to FastAPI **and `/ws` with WebSocket upgrade**. **This is a deployment requirement, not a default** |
 
+**The admin console follows the same rule on its own host** — A64-024.2H.
+`admin.arena64.gg` routes its own `/api/*` to FastAPI rather than calling a
+separate API origin, so its refresh cookie is host-only to it and is a
+different credential from `arena64.gg`'s. That is what keeps AD-04's "never
+shares a session with `apps/web`" true rather than aspirational; the full
+contract is `specs/admin.md` §6.2.
+
 **`/ws` is a second rule, not a sub-path of `/api`** — A64-020.5A §20. The
 gateway is mounted at the application root and is unversioned
 (`app/app_factory.py`), so an `/api` rule does not reach it. Two properties

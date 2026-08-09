@@ -277,8 +277,19 @@ class TestTheBoundary:
         ):
             assert not set(model.model_fields) & forbidden, model.__name__
 
-    def test_the_router_is_read_only_and_guarded(self) -> None:
-        """§4, §23 — no mutation exists, and every route names the guard."""
+    def test_every_route_is_guarded_and_no_route_writes_a_status(self) -> None:
+        """§4, §23 — every route names the guard, and the shape is still safe.
+
+        This asserted `GET` only until A64-024.5H, and it was right to: the
+        console was read-only because `admin.audit_entry` was unbuilt. It
+        exists, and §6.15 added four **named commands**.
+
+        What still must hold is the property the original assertion was
+        standing in for. There is no `PATCH` and no `PUT` here — a route
+        that took a state would be one a caller could use to name
+        `completed` or `cancelled`, and the whole design of that surface is
+        that the transition is the route rather than a field.
+        """
         from app.modules.admin.presentation.dependencies import require_admin
 
         methods: set[str] = set()
@@ -288,4 +299,4 @@ class TestTheBoundary:
             assert dependant is not None
             assert require_admin in {sub.call for sub in dependant.dependencies}
 
-        assert methods <= {"GET", "HEAD"}, methods
+        assert methods <= {"GET", "HEAD", "POST"}, methods

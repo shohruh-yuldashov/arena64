@@ -1,11 +1,12 @@
 import { Link, useParams } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   type AdminPairingView,
   type AdminTournamentDetail,
   fetchTournament,
 } from "@/shared/api/client";
+import { TournamentActions } from "@/features/tournaments/tournament-actions";
 import { useTranslation } from "@/shared/i18n";
 
 /**
@@ -52,20 +53,26 @@ export function TournamentDetailPage() {
   const [detail, setDetail] = useState<AdminTournamentDetail | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
 
+  const load = useCallback(
+    (signal?: AbortSignal) =>
+      fetchTournament(tournamentId, signal).then((outcome) => {
+        if (signal?.aborted) return;
+        if (outcome.status === "ok") {
+          setDetail(outcome.value);
+          setState("ready");
+          return;
+        }
+        setState("error");
+      }),
+    [tournamentId],
+  );
+
   useEffect(() => {
     const controller = new AbortController();
     setState("loading");
-    void fetchTournament(tournamentId, controller.signal).then((outcome) => {
-      if (controller.signal.aborted) return;
-      if (outcome.status === "ok") {
-        setDetail(outcome.value);
-        setState("ready");
-        return;
-      }
-      setState("error");
-    });
+    void load(controller.signal);
     return () => controller.abort();
-  }, [tournamentId]);
+  }, [load]);
 
   const moment = (value: string | null) =>
     value === null ? t("tournaments.unknown") : new Date(value).toLocaleString(locale);
@@ -93,6 +100,22 @@ export function TournamentDetailPage() {
       {state === "ready" && detail !== null && (
         <>
           <h2>{detail.tournament.name}</h2>
+
+          <section>
+            <h3>{t("tournamentActions.actions")}</h3>
+            {/* The server's status decides what is offered, and the
+                aggregate decides what is allowed — a button rendered from a
+                stale state still cannot do anything. After a transition the
+                detail is **re-read** rather than patched locally, so the
+                next set of actions comes from the same authority as the
+                first. */}
+            <TournamentActions
+              tournamentId={detail.tournament.tournament_id}
+              name={detail.tournament.name}
+              status={detail.tournament.status}
+              onChanged={() => void load()}
+            />
+          </section>
 
           <section>
             <h3>{t("tournaments.overview")}</h3>

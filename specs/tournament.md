@@ -669,6 +669,39 @@ the aggregate refuses the second.
 When the Administration epic ships a role, these commands become the thing its
 routes call. The use cases do not change; only who may reach them.
 
+### Administrators, over HTTP — A64-024.5H
+
+That prediction held exactly. `specs/admin.md` §6.15 puts four of these
+commands behind `CurrentAdmin`:
+
+```
+POST /api/v1/admin/tournaments
+POST /api/v1/admin/tournaments/{id}/registration/open
+POST /api/v1/admin/tournaments/{id}/registration/close
+POST /api/v1/admin/tournaments/{id}/start
+```
+
+**No use case changed.** The routes call `TournamentRegistrationService` and
+`TournamentStartService`, the transition table is still `_ALLOWED`'s, the
+row lock is still the repository's, and `start` is still idempotent for the
+reason it always was. What is new is who may reach them and that every call
+is written to `admin.audit_entry` in the same transaction.
+
+Three composition helpers gained an optional `unit_of_work` parameter so the
+admin console can hand them a `ParticipatingUnitOfWork` and add its audit
+entry to their transaction. The default is unchanged, so the operator
+commands above behave exactly as before.
+
+`seed` is deliberately **not** exposed: `start` materialises the bracket
+itself, and a second route to one outcome is a second thing to keep
+correct. `run` is not exposed either — a composite of commands is a
+convenience for a shell, not a button.
+
+Round publication and cancellation are **not** exposed, and §6.15 records
+why: the first follows from match results and has no manual use case, and
+the second has a transition but no semantics for the matches, registrations
+and standings it would strand.
+
 ## 6i. The lobby — A64-020.0B
 
 `GET /api/v1/tournaments`. The only tournament read a client reaches **without already knowing

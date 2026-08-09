@@ -25,11 +25,19 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
+from app.modules.admin.application.ports import TournamentLifecycleResult
 from app.modules.admin.presentation.dependencies import CurrentAdmin
+from app.modules.admin.presentation.dependencies.tournament_actions import (
+    TournamentAdministrationDep,
+)
 from app.modules.admin.presentation.dependencies.tournaments import (
     AdminTournamentDirectoryDep,
 )
 from app.modules.admin.presentation.dependencies.users import AdminUserDirectoryDep
+from app.modules.admin.presentation.schemas.tournament_actions import (
+    CreateTournamentRequest,
+    TournamentActionResponse,
+)
 from app.modules.admin.presentation.schemas.tournaments import (
     AdminEntrantView,
     AdminPairingView,
@@ -220,4 +228,141 @@ def _no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store"
 
 
-__all__ = ["MAX_PAGE_SIZE", "admin_tournaments_router"]
+# --------------------------------------------------------------------------
+# Lifecycle commands — A64-024.5H
+#
+# Four, and each is a transition `tournament`'s aggregate already defines.
+# The route **is** the command: there is no `PATCH` and no `status` field,
+# so a caller cannot ask for a move the transition table forbids or name a
+# state the domain never reaches this way.
+#
+# Deliberately absent, and `specs/admin.md` §6.15 says why for each: round
+# publication (match-driven, no manual use case), cancellation (the event
+# exists and nothing produces or consumes it), entrant removal (withdrawal
+# is the player's action and no administrative removal exists).
+# --------------------------------------------------------------------------
+
+
+@admin_tournaments_router.post(
+    "",
+    response_model=TournamentActionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a tournament",
+)
+async def create_tournament(
+    payload: CreateTournamentRequest,
+    admin: CurrentAdmin,
+    administration: TournamentAdministrationDep,
+    response: Response,
+) -> TournamentActionResponse:
+    """Creates a tournament in `draft`, attributed to the signed-in admin.
+
+    The id, the created-at instant and the state are the server's. So is
+    `created_by`: the column is nullable and `None` means "the platform
+    created it", which is a distinction a client-supplied value would
+    destroy.
+    """
+    _no_store(response)
+    created = await administration.create(
+        name=payload.name,
+        variant=payload.variant,
+        speed_class=payload.speed_class,
+        capacity=payload.capacity,
+        rated=payload.rated,
+        registration_deadline=payload.registration_deadline,
+        actor_id=admin.id,
+    )
+    return _action(created)
+
+
+@admin_tournaments_router.post(
+    "/{tournament_id}/registration/open",
+    response_model=TournamentActionResponse,
+    summary="Open registration",
+    responses={409: {"description": "The tournament is not in a state to open."}},
+)
+async def open_registration(
+    tournament_id: UUID,
+    admin: CurrentAdmin,
+    administration: TournamentAdministrationDep,
+    response: Response,
+) -> TournamentActionResponse:
+    """`draft` → `registration_open`.
+
+    The precondition is checked by the aggregate under a row lock, not
+    here: a check in this handler would be a second copy of the transition
+    table and the copy that races.
+    """
+    _no_store(response)
+    return _action(
+        await administration.open_registration(tournament_id=tournament_id, actor_id=admin.id)
+    )
+
+
+@admin_tournaments_router.post(
+    "/{tournament_id}/registration/close",
+    response_model=TournamentActionResponse,
+    summary="Close registration",
+    responses={409: {"description": "The tournament is not in a state to close."}},
+)
+async def close_registration(
+    tournament_id: UUID,
+    admin: CurrentAdmin,
+    administration: TournamentAdministrationDep,
+    response: Response,
+) -> TournamentActionResponse:
+    """`registration_open` → `registration_closed`.
+
+    Converges with `TournamentDeadlineTask`, which closes overdue
+    tournaments on its own: whichever arrives first wins, and the aggregate
+    refuses the second.
+    """
+    _no_store(response)
+    return _action(
+        await administration.close_registration(tournament_id=tournament_id, actor_id=admin.id)
+    )
+
+
+@admin_tournaments_router.post(
+    "/{tournament_id}/start",
+    response_model=TournamentActionResponse,
+    summary="Start the tournament",
+    responses={409: {"description": "The tournament is not in a state to start."}},
+)
+async def start_tournament(
+    tournament_id: UUID,
+    admin: CurrentAdmin,
+    administration: TournamentAdministrationDep,
+    response: Response,
+) -> TournamentActionResponse:
+    """`registration_closed` → `in_progress`, seeding and launching.
+
+    **Idempotent**, by the underlying service: a second call finds the
+    tournament already in progress and launches only what is missing. Two
+    administrators pressing it at once resolve through the aggregate's
+    `FOR UPDATE` lock.
+
+    No body, and there is nothing one could carry — the field is frozen at
+    close, the seeding is the seeding service's, and the bracket is
+    arithmetic over it.
+    """
+    _no_store(response)
+    return _action(await administration.start(tournament_id=tournament_id, actor_id=admin.id))
+
+
+def _action(result: TournamentLifecycleResult) -> TournamentActionResponse:
+    return TournamentActionResponse(
+        tournament_id=result.tournament_id,
+        status=result.status,
+        matches_launched=result.matches_launched,
+    )
+
+
+__all__ = [
+    "MAX_PAGE_SIZE",
+    "admin_tournaments_router",
+    "close_registration",
+    "create_tournament",
+    "open_registration",
+    "start_tournament",
+]

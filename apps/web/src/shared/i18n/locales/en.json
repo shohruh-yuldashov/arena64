@@ -5,6 +5,11 @@
     "goHome": "Go home",
     "cancel": "Cancel"
   },
+  "state": {
+    "loading": "Loading…",
+    "retry": "Try again",
+    "failed": "We could not load this"
+  },
   "layout": {
     "title": "Arena64",
     "description": "Competitive online checkers — realtime matches, ratings, and leaderboards.",
@@ -389,11 +394,6 @@
       "rate_limited": "Too many attempts. Try again shortly.",
       "network": "We could not reach the server.",
       "unexpected": "Something went wrong. Try again."
-    },
-    "state": {
-      "loading": "Loading…",
-      "retry": "Try again",
-      "failed": "We could not load this"
     }
   },
   "play": {

@@ -5,6 +5,11 @@
     "goHome": "Bosh sahifaga",
     "cancel": "Bekor qilish"
   },
+  "state": {
+    "loading": "Yuklanmoqda…",
+    "retry": "Qayta urinish",
+    "failed": "Ma'lumotni yuklab bo'lmadi"
+  },
   "layout": {
     "title": "Arena64",
     "description": "Onlayn shashka musobaqalari — real vaqt rejimidagi o'yinlar, reyting va liderlar jadvali.",
@@ -389,11 +394,6 @@
       "rate_limited": "Juda ko'p urinish. Birozdan so'ng qayta urining.",
       "network": "Serverga ulanib bo'lmadi.",
       "unexpected": "Kutilmagan xatolik. Qayta urinib ko'ring."
-    },
-    "state": {
-      "loading": "Yuklanmoqda…",
-      "retry": "Qayta urinish",
-      "failed": "Ma'lumotni yuklab bo'lmadi"
     }
   },
   "play": {

@@ -15,6 +15,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.modules.admin.presentation.schemas.moderation import AccountModerationState
+
 
 class AdminUserSummary(BaseModel):
     """One account in the list."""
@@ -71,6 +73,11 @@ class AdminUserDetail(BaseModel):
     admin_role_granted_at: datetime | None = Field(
         default=None,
         description="When the live admin grant was made. Absent when the account holds none.",
+    )
+    moderation: AccountModerationState = Field(
+        description="The account's **effective** moderation standing — A64-024.6. "
+        "History lives at `/admin/moderation`; this answers whether the person "
+        "can sign in right now."
     )
 
 

@@ -63,6 +63,25 @@ class InvalidCredentials(AuthenticationFailed):
     default_code: ClassVar[ErrorCode] = ErrorCode.INVALID_CREDENTIALS
 
 
+class AccountRestricted(PermissionDeniedError):
+    """The account is under an administrative restriction — 403. A64-024.6.
+
+    403 for `InactiveAccount`'s reason: the caller proved who they are, and
+    re-authenticating would change nothing.
+
+    **Distinct from `InactiveAccount`**, which the account's own owner
+    caused. `domain-model.md` §6 draws the two transitions separately —
+    "Active → Suspended: sanction applied" against "Active → Deactivated:
+    player-initiated" — and collapsing them here would make the platform
+    unable to tell a departure from a removal at the one moment it matters.
+
+    The **message** is deliberately the same shape for both: what a
+    restricted person is told is a product decision recorded in
+    `specs/admin.md`, and nothing about the category, the reasoning, the
+    case or the administrator who decided may reach a client from here.
+    """
+
+
 class InactiveAccount(PermissionDeniedError):
     """The credentials were correct, but the account is deactivated — 403.
 
@@ -449,6 +468,7 @@ class InvalidResetToken(ValidationError):
 
 __all__ = [
     "AccountLocked",
+    "AccountRestricted",
     "EmailAlreadyVerified",
     "EmailVerificationRequired",
     "InvalidVerificationCode",

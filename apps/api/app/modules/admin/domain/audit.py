@@ -75,6 +75,14 @@ class AuditAction(StrEnum):
     ROLE_GRANTED = "admin.role.grant"
     ROLE_REVOKED = "admin.role.revoke"
 
+    SANCTION_APPLIED = "admin.sanction.apply"
+    """A64-024.6 — an account was restricted, with the case that authorised
+    it named in `after`."""
+
+    SANCTION_LIFTED = "admin.sanction.lift"
+    """A64-024.6 — a restriction was ended by a named administrator, which
+    §13.3 requires to be auditable in its own right."""
+
 
 class AuditSubjectType(StrEnum):
     """What the action was performed on.

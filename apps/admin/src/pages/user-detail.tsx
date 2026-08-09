@@ -1,8 +1,14 @@
 import { Link, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
-import { type AdminUserDetail, fetchUser } from "@/shared/api/client";
-import { useTranslation } from "@/shared/i18n";
+import { CATEGORY_LABELS, ModerationActions } from "@/features/moderation/moderation-actions";
+import {
+  type AdminSanction,
+  type AdminUserDetail,
+  fetchUser,
+  type ModerationCategory,
+} from "@/shared/api/client";
+import { type TranslationKey, useTranslation } from "@/shared/i18n";
 
 /**
  * One account — A64-024.3 §13.
@@ -16,8 +22,10 @@ import { useTranslation } from "@/shared/i18n";
  * answer it is withholding, when in fact the field is not on the response
  * at all (see the router on why rating summaries wait).
  *
- * Read-only, like the list: no action exists here while `admin.audit_entry`
- * is unbuilt.
+ * **The one page with actions** — A64-024.6. Restricting an account belongs
+ * here rather than on a list, because an operator should have read who
+ * somebody is before withholding their access. Both actions confirm, and
+ * both state their consequence.
  */
 export function UserDetailPage() {
   const { t, locale } = useTranslation();
@@ -25,6 +33,29 @@ export function UserDetailPage() {
 
   const [user, setUser] = useState<AdminUserDetail | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [notice, setNotice] = useState<TranslationKey | null>(null);
+
+  /**
+   * Folds the server's answer back into the page.
+   *
+   * The response **is** the new state — it carries `is_effective` computed
+   * against the server's clock — so nothing is guessed locally and no
+   * second request is needed. A refetch here would show a stale page for
+   * as long as it took, which is exactly when an operator looks.
+   */
+  const applyChange = (sanction: AdminSanction) => {
+    setUser((current) =>
+      current === null
+        ? current
+        : {
+            ...current,
+            moderation: sanction.is_effective
+              ? { is_restricted: true, restriction: sanction }
+              : { is_restricted: false, restriction: null },
+          },
+    );
+    setNotice(sanction.is_effective ? "moderation.doneRestricted" : "moderation.doneRestored");
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -42,6 +73,13 @@ export function UserDetailPage() {
 
     return () => controller.abort();
   }, [userId]);
+
+  const restriction = user?.moderation.restriction ?? null;
+
+  const reasonOf = (sanction: AdminSanction) => {
+    const label = CATEGORY_LABELS[sanction.case.category as ModerationCategory];
+    return label === undefined ? sanction.case.category : t(label);
+  };
 
   return (
     <>
@@ -100,6 +138,52 @@ export function UserDetailPage() {
               // privilege-escalation button existing merely because a
               // Users page does. Roles are granted by operator command.
               <p className="muted">{t("users.notAnAdmin")}</p>
+            )}
+          </section>
+
+          <section>
+            <h3>{t("moderation.section")}</h3>
+            {/* Status as text, never colour alone — §27. */}
+            <dl className="facts">
+              <dt>{t("moderation.colStatus")}</dt>
+              <dd>
+                {t(
+                  user.moderation.is_restricted
+                    ? "moderation.restricted"
+                    : "moderation.notRestricted",
+                )}
+              </dd>
+              {restriction !== null && (
+                <>
+                  <dt>{t("moderation.reason")}</dt>
+                  <dd>{reasonOf(restriction)}</dd>
+                  <dt>{t("moderation.since")}</dt>
+                  <dd>{new Date(restriction.starts_at).toLocaleString(locale)}</dd>
+                  <dt>{t("moderation.expires")}</dt>
+                  <dd>
+                    {restriction.expires_at === null
+                      ? t("moderation.indefinite")
+                      : new Date(restriction.expires_at).toLocaleString(locale)}
+                  </dd>
+                  <dt>{t("moderation.decidedBy")}</dt>
+                  <dd>{restriction.case.opened_by_username ?? restriction.case.opened_by}</dd>
+                  <dt>{t("moderation.note")}</dt>
+                  <dd>{restriction.case.reasoning}</dd>
+                </>
+              )}
+            </dl>
+
+            <ModerationActions
+              userId={user.id}
+              displayName={user.display_name ?? user.username}
+              isRestricted={user.moderation.is_restricted}
+              onChanged={applyChange}
+            />
+
+            {notice !== null && (
+              <p role="status" className="notice">
+                {t(notice)}
+              </p>
             )}
           </section>
         </>

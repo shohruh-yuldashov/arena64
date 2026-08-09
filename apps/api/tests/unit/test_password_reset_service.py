@@ -48,6 +48,7 @@ from app.modules.auth.domain.password_reset import PasswordResetToken
 from app.modules.auth.domain.sessions import RevocationReason, SessionDevice
 from app.modules.users.public import AvatarReference, UserNotFound, UserRead
 from app.platform.email import EmailMessage
+from tests.fakes.moderation import UnrestrictedAccounts
 from tests.fakes.password_reset_token_repository import FakePasswordResetTokenRepository
 from tests.fakes.session_repository import FakeSessionRepository
 
@@ -241,6 +242,7 @@ def sessions(
     """The **real** `SessionService` — see this module's docstring."""
     session_settings = SessionSettings()
     return SessionService(
+        restrictions=UnrestrictedAccounts(),
         sessions=sessions_repository,
         tokens=RefreshTokenService(session_settings),
         unit_of_work=unit_of_work,

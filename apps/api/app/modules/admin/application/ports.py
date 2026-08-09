@@ -1,15 +1,18 @@
-"""What `admin` needs from storage — repositories.md §2.
+"""What `admin` needs from storage and from its collaborators —
+repositories.md §2.
 
-Two ports, and every method on them is a question the authorization path,
-the operator command or the audit viewer actually asks. There is
+Every method on every port here is a question the authorization path, the
+operator command, the audit viewer or the moderation console actually
+asks. There is
 deliberately no `list_all` and no update on either: a grant is written once
 and revoked once, and an audit entry is written once and never again — a
 repository that could edit one would be a repository that can rewrite who
 held authority when, or what they did with it.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -17,6 +20,11 @@ from app.modules.admin.domain.audit import (
     AuditAction,
     AuditEntry,
     AuditSubjectType,
+)
+from app.modules.admin.domain.moderation import (
+    ModerationCase,
+    Sanction,
+    SanctionKind,
 )
 from app.modules.admin.domain.roles import AdminRole, RoleAssignment
 
@@ -147,9 +155,123 @@ class AuditEntryRepository(Protocol):
         ...
 
 
+@dataclass(frozen=True, slots=True)
+class SanctionPage:
+    """One page of restrictions, and the cursor that continues it."""
+
+    sanctions: Sequence[Sanction]
+    next_cursor: str | None
+
+
+class ModerationCaseRepository(Protocol):
+    """Writes and reads decision records. **There is no update.**
+
+    §13.2: a case is immutable once closed and a reversal is a new case
+    that references the original — "an editable moderation record cannot be
+    trusted in an appeal, which is the only situation in which anybody
+    reads it". The absence of an update method is where that is kept.
+    """
+
+    async def add(self, case: ModerationCase) -> ModerationCase:
+        """Records one decision **in the caller's transaction**.
+
+        Flushes, never commits: the case, the sanction it authorises, the
+        session revocation and the audit entry are one unit of work.
+        """
+        ...
+
+    async def cases_by_ids(self, case_ids: Sequence[UUID]) -> Mapping[UUID, ModerationCase]:
+        """Every named case, in one query — the batch the console needs so
+        a page of restrictions does not read a case per row.
+
+        Incomplete on purpose: an id that matches nothing is absent rather
+        than raising.
+        """
+        ...
+
+
+class SanctionRepository(Protocol):
+    """Writes and reads enforced restrictions."""
+
+    async def add(self, sanction: Sanction) -> Sanction:
+        """Records one restriction in the caller's transaction.
+
+        Raises on a second **unlifted** sanction of the same kind for one
+        account: `uq_sanction__live_kind` is what enforces it, so two
+        administrators acting at once produce an integrity error rather
+        than two live restrictions that disagree (BE-06).
+        """
+        ...
+
+    async def lift(self, sanction: Sanction) -> Sanction:
+        """Stores an already-lifted restriction. The only update this port
+        offers, and it writes `lifted_at`/`lifted_by` and nothing else —
+        the decision it enforced cannot be rewritten through here."""
+        ...
+
+    async def effective_for(self, player_id: UUID, *, at: datetime) -> Sequence[Sanction]:
+        """Every restriction in force on this account at `at` — Q6.
+
+        The hot authorization read (DM-12). Backed by
+        `ix_sanction__player_expiry`: the index carries the immutable half
+        of the predicate (`lifted_at IS NULL`) and the instant comparison
+        is a filter on the handful of rows it returns, because a partial
+        index predicate cannot contain `now()` (database.md §12.6).
+        """
+        ...
+
+    async def live_of_kind(self, player_id: UUID, kind: SanctionKind) -> Sanction | None:
+        """The unlifted sanction of one kind, or `None`.
+
+        Distinct from `effective_for` because lifting needs the sanction
+        *itself* — its id and its case — and because an **expired but
+        unlifted** row is still the row a repeat restriction would collide
+        with under `uq_sanction__live_kind`.
+        """
+        ...
+
+    async def page(
+        self, *, effective_at: datetime | None, limit: int, cursor: str | None
+    ) -> SanctionPage:
+        """One page, newest first, keyed on `(created_at, id)`.
+
+        `effective_at` narrows to restrictions in force at that instant;
+        `None` lists every restriction ever recorded, because history is
+        what makes a lifted sanction auditable rather than deleted.
+        """
+        ...
+
+
+class SessionRevoker(Protocol):
+    """Ending every live session for an account — SE-3.
+
+    Declared here rather than imported from `auth` because it states what
+    **`admin` needs**, which is one method: *"a suspension that lets an
+    existing socket keep playing is not a suspension"*. The adapter is
+    `auth`'s own session repository, wired at the composition root, so the
+    revocation happens inside the moderation transaction rather than in a
+    second one that could commit alone.
+    """
+
+    async def revoke_all_for(self, user_id: UUID, *, at: datetime) -> int:
+        """Revokes every unrevoked session; returns how many. Idempotent.
+
+        **No `reason` parameter.** `auth` owns the vocabulary of why a
+        session ended (`RevocationReason.SUSPENSION` exists for exactly
+        this), and an `admin` port that named it would make this module
+        import another's domain enum to describe a value it only passes
+        through. The adapter binds the reason at the composition root.
+        """
+        ...
+
+
 __all__ = [
     "AuditEntryFilters",
     "AuditEntryPage",
     "AuditEntryRepository",
+    "ModerationCaseRepository",
     "RoleAssignmentRepository",
+    "SanctionPage",
+    "SanctionRepository",
+    "SessionRevoker",
 ]

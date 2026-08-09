@@ -62,6 +62,7 @@ from app.modules.users.application.services.user_profile_service import UserProf
 from app.modules.users.domain.entities import User
 from app.modules.users.domain.value_objects import Email, Timezone, Username
 from app.platform.email import EmailMessage
+from tests.fakes.moderation import UnrestrictedAccounts
 from tests.fakes.password_reset_token_repository import FakePasswordResetTokenRepository
 from tests.fakes.session_repository import FakeSessionRepository
 from tests.fakes.user_repository import FakeUserRepository
@@ -186,6 +187,7 @@ def client(
 
     def _sessions() -> SessionService:
         return SessionService(
+            restrictions=UnrestrictedAccounts(),
             sessions=sessions_repository,
             tokens=RefreshTokenService(session_settings),
             unit_of_work=_NullUnitOfWork(),
@@ -527,6 +529,7 @@ class TestSessionInvalidation:
     def _sessions(sessions_repository: FakeSessionRepository) -> SessionService:
         settings = SessionSettings()
         return SessionService(
+            restrictions=UnrestrictedAccounts(),
             sessions=sessions_repository,
             tokens=RefreshTokenService(settings),
             unit_of_work=_NullUnitOfWork(),

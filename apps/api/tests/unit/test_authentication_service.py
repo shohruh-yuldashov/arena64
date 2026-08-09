@@ -27,6 +27,7 @@ from app.modules.auth.application.commands import AuthenticateUser
 from app.modules.auth.application.services import AuthenticationService
 from app.modules.auth.domain.exceptions import (
     AccountLocked,
+    AccountRestricted,
     InactiveAccount,
     InvalidCredentials,
 )
@@ -35,6 +36,7 @@ from app.modules.users.application.services.user_credential_service import UserC
 from app.modules.users.domain.entities import User
 from app.modules.users.domain.value_objects import Email, Timezone, Username
 from app.modules.users.public import UserCredentials
+from tests.fakes.moderation import RestrictedAccounts, UnrestrictedAccounts
 from tests.fakes.user_repository import FakeUserRepository
 
 _NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -167,7 +169,10 @@ def credentials(
 @pytest.fixture
 def service(credentials: UserCredentialService, hasher: _StubHasher) -> AuthenticationService:
     return AuthenticationService(
-        credentials=credentials, password_hasher=hasher, clock=_FixedClock()
+        restrictions=UnrestrictedAccounts(),
+        credentials=credentials,
+        password_hasher=hasher,
+        clock=_FixedClock(),
     )
 
 
@@ -399,6 +404,7 @@ class TestRehashOnLogin:
         repository = FakeUserRepository([account()])
         users = UserService(users=repository, unit_of_work=_NullUnitOfWork(), clock=_FixedClock())
         service = AuthenticationService(
+            restrictions=UnrestrictedAccounts(),
             credentials=UserCredentialService(users),
             password_hasher=hasher,
             clock=_FixedClock(),
@@ -417,7 +423,10 @@ class TestRehashOnLogin:
         into an outage."""
         store = _ExplodingCredentialStore(credentials)
         service = AuthenticationService(
-            credentials=store, password_hasher=hasher, clock=_FixedClock()
+            restrictions=UnrestrictedAccounts(),
+            credentials=store,
+            password_hasher=hasher,
+            clock=_FixedClock(),
         )
 
         assert (await service.authenticate(attempt())).email == EMAIL
@@ -432,6 +441,7 @@ class TestRehashOnLogin:
         """Swallowed for the request, not swallowed for operators: a rehash
         that never succeeds is a real problem, just not this caller's."""
         service = AuthenticationService(
+            restrictions=UnrestrictedAccounts(),
             credentials=_ExplodingCredentialStore(credentials),
             password_hasher=hasher,
             clock=_FixedClock(),
@@ -505,3 +515,56 @@ class TestLogging:
             await service.authenticate(attempt(email="somebody@example.com"))
 
         assert "somebody@example.com" not in caplog.text
+
+
+class TestAnAdministrativeRestriction:
+    """A64-024.6 — `domain-model.md` §6's sanctions gate, at the credential
+    boundary."""
+
+    async def test_a_restricted_account_is_refused_with_the_correct_password(
+        self, credentials: UserCredentialService, hasher: _StubHasher
+    ) -> None:
+        """`AccountRestricted`, not `InvalidCredentials`.
+
+        403 rather than 401 for `InactiveAccount`'s reason: the caller
+        proved who they are, and prompting for the password again is
+        exactly the wrong instruction to give somebody whose password was
+        right.
+        """
+        stored = await credentials.find_credentials_by_email(EMAIL)
+        assert stored is not None
+        gate = RestrictedAccounts(stored.account.id)
+        service = AuthenticationService(
+            restrictions=gate,
+            credentials=credentials,
+            password_hasher=hasher,
+            clock=_FixedClock(),
+        )
+
+        with pytest.raises(AccountRestricted):
+            await service.authenticate(attempt())
+
+        assert gate.asked == [stored.account.id]
+
+    async def test_the_gate_is_never_consulted_for_a_wrong_password(
+        self, credentials: UserCredentialService, hasher: _StubHasher
+    ) -> None:
+        """So it cannot become an enumeration oracle.
+
+        The restriction read happens only after a successful verification,
+        alongside the `is_active` and lock checks it joins. A probe with a
+        wrong password costs the same work whether or not the account is
+        restricted, and learns nothing either way.
+        """
+        gate = RestrictedAccounts()
+        service = AuthenticationService(
+            restrictions=gate,
+            credentials=credentials,
+            password_hasher=hasher,
+            clock=_FixedClock(),
+        )
+
+        with pytest.raises(InvalidCredentials):
+            await service.authenticate(attempt(password=WRONG_PASSWORD))
+
+        assert gate.asked == []

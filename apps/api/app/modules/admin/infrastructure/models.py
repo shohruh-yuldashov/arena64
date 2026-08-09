@@ -1,4 +1,5 @@
-"""The `admin` schema — `role_assignment` and `audit_entry`. database.md §10.4, DB-03.
+"""The `admin` schema — `role_assignment`, `audit_entry`, `moderation_case`
+and `sanction`. database.md §10.4, DB-03.
 
 The only place in this module that knows SQLAlchemy exists. Nothing above
 `infrastructure/` imports this file, and what the repository returns is a
@@ -28,7 +29,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DDL, CheckConstraint, Index, Text, Uuid, event
+from sqlalchemy import DDL, CheckConstraint, ForeignKey, Index, Text, Uuid, event
 from sqlalchemy.dialects.postgresql import ENUM as PgEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -40,6 +41,11 @@ from app.modules.admin.domain.audit import (
     AuditActorType,
     AuditOutcome,
     AuditSubjectType,
+)
+from app.modules.admin.domain.moderation import (
+    CaseStatus,
+    ModerationCategory,
+    SanctionKind,
 )
 from app.modules.admin.domain.roles import AdminRole
 
@@ -233,4 +239,160 @@ for _statement in _APPEND_ONLY_GUARD:
     )
 
 
-__all__ = ["ADMIN_SCHEMA", "AuditEntryModel", "RoleAssignmentModel"]
+class ModerationCaseModel(Base):
+    """`admin.moderation_case` — database.md §10.4, domain-model.md §13.2.
+
+    The decision record. Written once, never updated: §13.2 says an
+    editable moderation record cannot be trusted in an appeal, which is the
+    only situation in which anybody reads it, and a reversal is a new case
+    rather than an edit. The repository offers no update, which is where
+    that rule is kept — no trigger here, because unlike `audit_entry` this
+    table is not the platform's evidence of its own behaviour, it is one
+    input to it.
+
+    `reverses_case_id` is the self-reference §13.2 names. Nothing writes it
+    yet — reversal is a workflow this task does not build — and it exists
+    now because adding a self-FK to a populated table later is a migration
+    over live moderation history.
+    """
+
+    __tablename__ = "moderation_case"
+    __table_args__ = (
+        # "Every case about this account" — the read behind a user's
+        # moderation history, and the only non-key access this table has.
+        Index("ix_moderation_case__subject", "subject_player_id", "opened_at"),
+        # §13.2: "a moderator may not act on a case involving themselves."
+        # The domain refuses it and the service refuses it; this is the copy
+        # for a row that arrived some other way.
+        CheckConstraint(
+            "opened_by <> subject_player_id",
+            name="ck_moderation_case__not_self_opened",
+        ),
+        CheckConstraint(
+            "closed_at >= opened_at",
+            name="ck_moderation_case__closed_after_opened",
+        ),
+        {"schema": ADMIN_SCHEMA},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+
+    subject_player_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    """DM-06's opaque `player_id`. **No foreign key** — `users` is another
+    schema and DB-03 forbids the reference. A case outlives the account it
+    is about, which is the point of keeping it."""
+
+    category: Mapped[ModerationCategory] = mapped_column(
+        _enum(ModerationCategory, "moderation_category"), nullable=False
+    )
+    status: Mapped[CaseStatus] = mapped_column(
+        _enum(CaseStatus, "moderation_case_status"), nullable=False
+    )
+
+    opened_by: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    """The administrator who decided — resolved by the guard, never sent by
+    a client."""
+
+    opened_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    closed_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+    decision: Mapped[str] = mapped_column(Text, nullable=False)
+    reasoning: Mapped[str] = mapped_column(Text, nullable=False)
+    """Bounded at the boundary, not by the column: `MAX_REASONING_LENGTH`
+    is the domain's rule and a `varchar(n)` would put the same number in a
+    second place that can disagree with it."""
+
+    reverses_case_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(f"{ADMIN_SCHEMA}.moderation_case.id", name="fk_moderation_case__reverses"),
+        nullable=True,
+    )
+
+
+class SanctionModel(Base):
+    """`admin.sanction` — database.md §10.4, domain-model.md §13.3, DM-12.
+
+    **Separate from the case that produced it**, and DM-12 is the reason:
+    this row is read on every sign-in, and the case is a document written
+    for humans. Merging them would make every sign-in read a moderation
+    case with its reasoning.
+
+    `case_id` is `NOT NULL` because §13.3 says "a sanction names the case
+    that authorised it" — an enforced restriction nobody can trace back to
+    a decision is the thing an appeal cannot answer.
+    """
+
+    __tablename__ = "sanction"
+    __table_args__ = (
+        # database.md §12.6, verbatim: the natural index would be "active
+        # sanctions for this player", but a partial index predicate must be
+        # immutable, so `now()` cannot appear in it. The partial predicate
+        # is therefore `lifted_at IS NULL` — the immutable half — and the
+        # expiry comparison is a cheap filter on the handful of rows
+        # returned. Lifted sanctions, which accumulate forever, never enter
+        # the index.
+        Index(
+            "ix_sanction__player_expiry",
+            "player_id",
+            "expires_at",
+            postgresql_where="lifted_at IS NULL",
+        ),
+        # The console's list ordering and its keyset.
+        Index("ix_sanction__created_at_id", "created_at", "id"),
+        # At most one **unlifted** sanction of a kind per account.
+        #
+        # Not an exclusion constraint over the validity range, which is
+        # what `ex_sanction__one_active_per_kind` (§2.1's naming example)
+        # anticipated: that would forbid recording a fresh suspension while
+        # an expired one still sits unlifted, which is ordinary history
+        # rather than a conflict. A partial unique index expresses the
+        # invariant that actually matters — two live restrictions of one
+        # kind cannot disagree — and it is what makes two administrators
+        # acting at once end in an integrity error rather than in two rows.
+        Index(
+            "uq_sanction__live_kind",
+            "player_id",
+            "kind",
+            unique=True,
+            postgresql_where="lifted_at IS NULL",
+        ),
+        CheckConstraint(
+            "expires_at IS NULL OR expires_at > starts_at",
+            name="ck_sanction__expires_after_start",
+        ),
+        # Half a lift is not a state — see `Sanction.__post_init__`.
+        CheckConstraint(
+            "(lifted_at IS NULL) = (lifted_by IS NULL)",
+            name="ck_sanction__lift_is_attributed",
+        ),
+        {"schema": ADMIN_SCHEMA},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+
+    player_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    """DM-06's opaque reference. No FK to `users` — DB-03."""
+
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{ADMIN_SCHEMA}.moderation_case.id", name="fk_sanction__case_id"),
+        nullable=False,
+    )
+
+    kind: Mapped[SanctionKind] = mapped_column(_enum(SanctionKind, "sanction_kind"), nullable=False)
+
+    starts_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    """Null means indefinite. Expiry is evaluated on read (§13.3) — no job
+    removes anything, because a job that fails leaves players restricted."""
+
+    lifted_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    lifted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
+__all__ = [
+    "ADMIN_SCHEMA",
+    "AuditEntryModel",
+    "ModerationCaseModel",
+    "RoleAssignmentModel",
+    "SanctionModel",
+]

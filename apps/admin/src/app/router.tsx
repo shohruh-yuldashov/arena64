@@ -15,6 +15,7 @@ import { LoginPage } from "@/pages/login";
 import { PlaceholderPage } from "@/pages/placeholder";
 import { MatchDetailPage } from "@/pages/match-detail";
 import { MatchesPage } from "@/pages/matches";
+import { ModerationPage } from "@/pages/moderation";
 import { TournamentDetailPage } from "@/pages/tournament-detail";
 import { TournamentsPage } from "@/pages/tournaments";
 import { UserDetailPage } from "@/pages/user-detail";
@@ -293,7 +294,16 @@ const auditRoute = createRoute({
   }),
 });
 
-const BUILT_SECTIONS = ["/users", "/matches", "/tournaments", "/audit"];
+// A64-024.6. `/moderation` becomes the fifth real section — and the first
+// with a write behind it. The actions live on the account's own page; this
+// route answers "who is restricted right now".
+const moderationRoute = createRoute({
+  getParentRoute: () => protectedRoute,
+  path: "/moderation",
+  component: ModerationPage,
+});
+
+const BUILT_SECTIONS = ["/users", "/matches", "/tournaments", "/audit", "/moderation"];
 
 const sectionRoutes = SECTIONS.filter((section) => !BUILT_SECTIONS.includes(section.path)).map(
   (section) =>
@@ -315,6 +325,7 @@ const routeTree = rootRoute.addChildren([
     tournamentsRoute,
     tournamentDetailRoute,
     auditRoute,
+    moderationRoute,
     ...sectionRoutes,
   ]),
 ]);

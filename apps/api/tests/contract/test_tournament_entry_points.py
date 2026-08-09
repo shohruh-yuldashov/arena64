@@ -202,23 +202,33 @@ class TestParticipantEndpoints:
     async def test_an_ordinary_user_cannot_reach_any_operator_command(
         self, contract_session: AsyncSession, client: AsyncClient
     ) -> None:
-        """§6 — the operator surface is not on the HTTP router at all.
+        """§6 — the tournament lifecycle commands are not on the HTTP router.
 
-        This platform has no administrator: no role, no scope claim, no
-        permission primitive. Rather than guess one, the lifecycle commands
-        are a **process** entry point (`app/operator/`), so the strongest
-        possible statement holds — there is no request an authenticated
-        player can send that reaches them.
+        Seeding, starting and closing registration are a **process** entry
+        point (`app/operator/`), so the strongest possible statement holds:
+        there is no request an authenticated player can send that reaches
+        them. A route that does not exist is the only authorization that
+        cannot be misconfigured.
 
-        Asserted as `404` on the shapes a client would try, because a route
-        that does not exist is the only authorization that cannot be
-        misconfigured.
+        ## Why `/admin/tournaments` is asserted differently now
+
+        When this test was written the admin console did not exist and
+        nothing answered under `/admin`. A64-024.5 added a **read-only**
+        console there, and until the prefix defect was fixed its routes were
+        mounted at `/api/v1/v1/admin/...` — so this assertion kept passing
+        for the wrong reason.
+
+        The listing now exists at `/api/v1/admin/tournaments`, `GET`-only and
+        behind `CurrentAdmin`. A player's `POST` is therefore refused by the
+        router before any handler runs, which is `405` rather than `404`.
+        Both mean the same thing here — nothing took the request — and the
+        stronger claim is asserted separately below: the method that *does*
+        exist refuses a player outright.
         """
         tournament = await _open_tournament(contract_session)
         player = await register_account(client)
 
         for path in (
-            "/api/v1/admin/tournaments",
             f"/api/v1/admin/tournaments/{tournament.id}/start",
             f"/api/v1/tournaments/{tournament.id}/seed",
             f"/api/v1/tournaments/{tournament.id}/start",
@@ -226,6 +236,19 @@ class TestParticipantEndpoints:
         ):
             answered = await client.post(path, headers=player.auth)
             assert answered.status_code == 404, f"{path} answered {answered.status_code}"
+
+        # No handler takes a `POST` here either — the console's listing is a
+        # read, and the router refuses the method before authorization is
+        # even consulted.
+        assert (
+            await client.post("/api/v1/admin/tournaments", headers=player.auth)
+        ).status_code == 405
+
+        # And the read that does exist is not a player's to make. This is
+        # the assertion the `404`s above were standing in for.
+        assert (
+            await client.get("/api/v1/admin/tournaments", headers=player.auth)
+        ).status_code == 403
 
 
 class TestOperatorEntryPoint:

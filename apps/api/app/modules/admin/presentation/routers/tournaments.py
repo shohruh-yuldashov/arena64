@@ -25,7 +25,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
-from app.core.constants import API_V1_PREFIX
 from app.modules.admin.presentation.dependencies import CurrentAdmin
 from app.modules.admin.presentation.dependencies.tournaments import (
     AdminTournamentDirectoryDep,
@@ -49,7 +48,7 @@ from app.modules.tournament.public.administration import (
 )
 from app.modules.users.public import AdminUserRecord
 
-admin_tournaments_router = APIRouter(prefix=f"{API_V1_PREFIX}/admin/tournaments", tags=["admin"])
+admin_tournaments_router = APIRouter(prefix="/admin/tournaments", tags=["admin"])
 
 MAX_PAGE_SIZE = 50
 DEFAULT_PAGE_SIZE = 25

@@ -32,7 +32,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
-from app.core.constants import API_V1_PREFIX
 from app.modules.admin.domain.moderation import ModerationCase, Sanction
 from app.modules.admin.domain.roles import AdminRole
 from app.modules.admin.presentation.dependencies import AdminRoleServiceDep, CurrentAdmin
@@ -50,7 +49,7 @@ from app.modules.admin.presentation.schemas.moderation import (
 )
 from app.modules.users.public import AdminUserRecord
 
-admin_moderation_router = APIRouter(prefix=f"{API_V1_PREFIX}/admin", tags=["admin"])
+admin_moderation_router = APIRouter(prefix="/admin", tags=["admin"])
 
 #: The largest page an operator may ask for — the bound every admin list
 #: on this console uses. There is no "all".

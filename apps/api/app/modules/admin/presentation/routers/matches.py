@@ -32,7 +32,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
-from app.core.constants import API_V1_PREFIX
 from app.modules.admin.presentation.dependencies import CurrentAdmin
 from app.modules.admin.presentation.dependencies.matches import AdminMatchDirectoryDep
 from app.modules.admin.presentation.dependencies.users import AdminUserDirectoryDep
@@ -48,7 +47,7 @@ from app.modules.game.domain.variants import MatchOrigin, ProductVariant
 from app.modules.game.public import AdminMatchFilters, AdminMatchRecord
 from app.modules.users.public import AdminUserRecord
 
-admin_matches_router = APIRouter(prefix=f"{API_V1_PREFIX}/admin/matches", tags=["admin"])
+admin_matches_router = APIRouter(prefix="/admin/matches", tags=["admin"])
 
 MAX_PAGE_SIZE = 50
 DEFAULT_PAGE_SIZE = 25

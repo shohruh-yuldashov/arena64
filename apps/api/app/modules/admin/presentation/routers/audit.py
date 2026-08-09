@@ -32,7 +32,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
-from app.core.constants import API_V1_PREFIX
 from app.modules.admin.application.ports import AuditEntryFilters
 from app.modules.admin.domain.audit import AuditAction, AuditEntry, AuditSubjectType
 from app.modules.admin.presentation.dependencies import CurrentAdmin
@@ -46,7 +45,7 @@ from app.modules.admin.presentation.schemas.audit import (
 )
 from app.modules.users.public import AdminUserRecord
 
-admin_audit_router = APIRouter(prefix=f"{API_V1_PREFIX}/admin/audit", tags=["admin"])
+admin_audit_router = APIRouter(prefix="/admin/audit", tags=["admin"])
 
 #: The largest page an operator may ask for — the same bound the other
 #: admin lists use, for the same reason: there is no "all", because an

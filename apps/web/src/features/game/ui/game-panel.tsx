@@ -1,13 +1,8 @@
 import { Link } from "@tanstack/react-router";
 
-import type { Side } from "@/entities/board";
 import type { GameState } from "@/features/game/model/state";
-import { type ClockReading, formatClock } from "@/features/game/model/use-clock";
-import type { VisibleQuickMessage } from "@/features/game/model/use-quick-messages";
 import { useRatingResult } from "@/features/game/model/use-rating-result";
-import { QuickMessageBubble } from "@/features/game/ui/quick-message-bubble";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
-import { cn } from "@/shared/lib/cn";
 import type { ConnectionStatus } from "@/shared/realtime";
 import { Button, Card, CardContent } from "@/shared/ui";
 
@@ -18,50 +13,6 @@ import { Button, Card, CardContent } from "@/shared/ui";
  * line and a result. Splitting them would be four components that only ever
  * appear together and each of which needs the same three props.
  */
-
-/**
- * One side's clock.
- *
- * `tabular-nums` so the digits do not shift the layout as they change —
- * a clock that jitters horizontally is the most distracting thing that can
- * be next to a board.
- *
- * **Not announced.** §19 and §21 both forbid announcing every tick; there
- * is no live region here, and the accessible name carries the side so a
- * screen-reader user can read it on demand.
- */
-function ClockFace({
-  side,
-  ms,
-  active,
-  awaiting,
-}: {
-  side: Side;
-  ms: number;
-  active: boolean;
-  awaiting: boolean;
-}) {
-  const { t, locale } = useTranslation();
-  const label = t(side === "light" ? "game.side.light" : "game.side.dark");
-
-  return (
-    <div
-      className={cn(
-        "border-border flex items-baseline justify-between rounded-md border px-3 py-2",
-        active && "border-primary bg-primary/5",
-      )}
-    >
-      <span className="text-muted-foreground text-xs">{label}</span>
-      <span
-        aria-label={t("game.clock.label", { side: label })}
-        className="text-xl font-semibold tabular-nums"
-      >
-        {formatClock(ms, locale)}
-      </span>
-      {awaiting && active && <span className="sr-only">{t("game.clock.awaitingServer")}</span>}
-    </div>
-  );
-}
 
 /**
  * The status line.
@@ -242,71 +193,29 @@ function Result({ state, viewerId }: { state: GameState; viewerId: string | null
   );
 }
 
+/**
+ * What the game is doing, and how it ended.
+ *
+ * A64-025.6 moved the clocks and the seats out of here and onto the board,
+ * where a player can read them without looking away — see `PlayerSeat`. The
+ * transient quick messages went with their seats for the same reason. What
+ * is left is the pair of things that are *about* the match rather than about
+ * a player: the status line and, once there is one, the result.
+ */
 export function GamePanel({
   state,
-  clock,
   connection,
   viewerId,
-  quickMessages,
 }: {
   state: GameState;
-  clock: ClockReading;
   connection: ConnectionStatus;
   /** Whose rating the result block reports. `null` for a spectator. */
   viewerId: string | null;
-  /**
-   * At most one transient message per seat — A64-023.2 §6.
-   *
-   * Passed in rather than subscribed to here, so this component stays a
-   * pure rendering of what it is given and the panel has no socket of its
-   * own. Defaulted, so every existing call site and test is unchanged.
-   */
-  quickMessages?: ReadonlyMap<Side, VisibleQuickMessage>;
 }) {
-  const { t } = useTranslation();
-  // The viewer's own clock at the bottom, matching the board's orientation:
-  // a player looks at one corner of the screen for their own time.
-  const near = state.side ?? "light";
-  const far = near === "light" ? "dark" : "light";
-
-  const msOf = (side: Side) => (side === "light" ? clock.lightMs : clock.darkMs);
-
-  // Adjacent to the seat that sent it, which is the whole of §6's
-  // positioning rule — the panel already orders the two seats, so there is
-  // no overlay and nothing can cover a board square or a clock.
-  const bubbleOf = (side: Side) => quickMessages?.get(side);
-  const farBubble = bubbleOf(far);
-  const nearBubble = bubbleOf(near);
-
   return (
     <Card>
       <CardContent className="flex flex-col gap-3 pt-6">
-        <p className="text-muted-foreground text-xs">{t("game.players.opponent")}</p>
-        {farBubble !== undefined && (
-          // Keyed, so a replacing message remounts the live region and is
-          // announced even when it repeats the previous one — §7.
-          <QuickMessageBubble key={farBubble.key} bubble={farBubble} align="far" />
-        )}
-        <ClockFace
-          side={far}
-          ms={msOf(far)}
-          active={clock.activeSide === far}
-          awaiting={clock.awaitingServer}
-        />
-
         <StatusLine state={state} connection={connection} />
-
-        <ClockFace
-          side={near}
-          ms={msOf(near)}
-          active={clock.activeSide === near}
-          awaiting={clock.awaitingServer}
-        />
-        {nearBubble !== undefined && (
-          <QuickMessageBubble key={nearBubble.key} bubble={nearBubble} align="near" />
-        )}
-        <p className="text-muted-foreground text-xs">{t("game.players.you")}</p>
-
         <Result state={state} viewerId={viewerId} />
       </CardContent>
     </Card>

@@ -6,10 +6,13 @@ import { canInteract } from "@/features/game/model/state";
 import { useClock } from "@/features/game/model/use-clock";
 import { useGameRoom } from "@/features/game/model/use-game-room";
 import { useMoveSelection } from "@/features/game/model/use-move-selection";
+import { usePlayerIdentities } from "@/features/game/model/use-player-identity";
 import { useQuickMessages } from "@/features/game/model/use-quick-messages";
 import { GameBoard } from "@/features/game/ui/board";
 import { GameControls } from "@/features/game/ui/game-controls";
 import { GamePanel } from "@/features/game/ui/game-panel";
+import { PlayerSeat } from "@/features/game/ui/player-seat";
+import { QuickMessageBubble } from "@/features/game/ui/quick-message-bubble";
 import { QuickMessagePicker } from "@/features/game/ui/quick-message-picker";
 import { useTranslation } from "@/shared/i18n";
 import { useHoldAppUpdate } from "@/shared/pwa";
@@ -64,6 +67,18 @@ export default function GamePage() {
 
   const interactive = canInteract(state);
 
+  // A64-025.6 §5. The two seats, oriented the way the board is: the viewer
+  // is always the near side. A spectator has no seat, so `light` is the
+  // fallback and the labels below say which colour each is rather than
+  // claiming one of them is "you".
+  const near = state.side ?? "light";
+  const far = near === "light" ? "dark" : "light";
+  const identities = usePlayerIdentities([
+    state.participants?.light ?? null,
+    state.participants?.dark ?? null,
+  ]);
+  const running = state.phase === "active" || state.phase === "submitting_move";
+
   // A64-023.2. Its own hook and its own state, deliberately kept out of the
   // game reducer (§17): a quick message changes no board, no clock and no
   // ply, and a render failure here must not be able to reach one.
@@ -76,6 +91,9 @@ export default function GamePage() {
     playable:
       (state.phase === "active" || state.phase === "submitting_move") && state.result === null,
   });
+
+  const farBubble = quickMessages.visible.get(far);
+  const nearBubble = quickMessages.visible.get(near);
 
   // A64-020.9 §14. A service-worker activation reloads the page, and a
   // reload here is not a refresh — it is a clock still running while the
@@ -116,7 +134,31 @@ export default function GamePage() {
     <section className="mx-auto flex w-full max-w-5xl flex-col gap-4 lg:flex-row lg:items-start">
       <h1 className="sr-only">{t("game.title")}</h1>
 
-      <div className="w-full min-w-0 lg:max-w-[min(70vh,42rem)] lg:flex-1">
+      {/* A64-025.6 §4, §6. The board column carries the two seats, so a
+          clock is adjacent to the board at **every** width — that is the
+          answer to OQ-3, and it is why the seats are here rather than in
+          the panel beside it. On a phone there is no panel to hide them in;
+          on a desktop they stay with the thing they are about. */}
+      <div className="flex w-full min-w-0 flex-col gap-2 lg:max-w-[min(70vh,42rem)] lg:flex-1">
+        {/* A64-023.2 §6, kept: the message sits beside the seat that sent
+            it, so nothing overlays a board square or a clock. It moved here
+            with the seats rather than staying in the panel. */}
+        {farBubble !== undefined && (
+          <QuickMessageBubble key={farBubble.key} bubble={farBubble} align="far" />
+        )}
+
+        {state.side !== null && (
+          <PlayerSeat
+            side={far}
+            identity={identities.get(state.participants?.[far] ?? "")}
+            ms={far === "light" ? clock.lightMs : clock.darkMs}
+            active={clock.activeSide === far}
+            awaiting={clock.awaitingServer}
+            isViewer={false}
+            running={running}
+          />
+        )}
+
         {state.side === null ? (
           <Skeleton className="aspect-square w-full" aria-label={t("game.loading")} />
         ) : (
@@ -132,6 +174,22 @@ export default function GamePage() {
             onSelect={onSelect}
           />
         )}
+
+        {state.side !== null && (
+          <PlayerSeat
+            side={near}
+            identity={identities.get(state.participants?.[near] ?? "")}
+            ms={near === "light" ? clock.lightMs : clock.darkMs}
+            active={clock.activeSide === near}
+            awaiting={clock.awaitingServer}
+            isViewer
+            running={running}
+          />
+        )}
+
+        {nearBubble !== undefined && (
+          <QuickMessageBubble key={nearBubble.key} bubble={nearBubble} align="near" />
+        )}
       </div>
 
       {/* The panel and the controls stack in one column: beside the board
@@ -141,10 +199,8 @@ export default function GamePage() {
       <div className="flex w-full flex-col gap-4 lg:w-80 lg:shrink-0">
         <GamePanel
           state={state}
-          clock={clock}
           connection={connection}
           viewerId={isAuthenticated(session) ? session.user.id : null}
-          quickMessages={quickMessages.visible}
         />
         {/* Only for a participant. A spectator has no seat, so there is
             nobody for a message to come from and nothing to mute. */}

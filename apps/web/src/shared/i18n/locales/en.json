@@ -515,11 +515,14 @@
     },
     "clock": {
       "label": "{side} clock",
-      "awaitingServer": "Time is up — waiting for the server"
+      "awaitingServer": "Time is up — waiting for the server",
+      "low": "Low on time",
+      "running": "On the move"
     },
     "players": {
       "you": "You",
-      "opponent": "Opponent"
+      "opponent": "Opponent",
+      "unknown": "Unknown player"
     },
     "result": {
       "title": "Game over",

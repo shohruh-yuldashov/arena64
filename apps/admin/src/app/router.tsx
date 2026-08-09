@@ -10,6 +10,7 @@ import {
 import { useEffect, useRef } from "react";
 
 import { useAdminAuth } from "@/app/use-admin-auth";
+import { AuditPage } from "@/pages/audit";
 import { LoginPage } from "@/pages/login";
 import { PlaceholderPage } from "@/pages/placeholder";
 import { MatchDetailPage } from "@/pages/match-detail";
@@ -278,15 +279,29 @@ const tournamentDetailRoute = createRoute({
   component: TournamentDetailPage,
 });
 
-const sectionRoutes = SECTIONS.filter(
-  (section) =>
-    section.path !== "/users" && section.path !== "/matches" && section.path !== "/tournaments",
-).map((section) =>
-  createRoute({
-    getParentRoute: () => protectedRoute,
-    path: section.path,
-    component: () => <PlaceholderPage titleKey={section.label as TranslationKey} />,
+// A64-024.8. `/audit` is the fourth real section — and the one that
+// unblocks moderation, because a mutation the console cannot record is a
+// mutation the console must not offer.
+const auditRoute = createRoute({
+  getParentRoute: () => protectedRoute,
+  path: "/audit",
+  component: AuditPage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...(typeof search.action === "string" ? { action: search.action } : {}),
+    ...(typeof search.actor === "string" ? { actor: search.actor } : {}),
+    ...(typeof search.subject === "string" ? { subject: search.subject } : {}),
   }),
+});
+
+const BUILT_SECTIONS = ["/users", "/matches", "/tournaments", "/audit"];
+
+const sectionRoutes = SECTIONS.filter((section) => !BUILT_SECTIONS.includes(section.path)).map(
+  (section) =>
+    createRoute({
+      getParentRoute: () => protectedRoute,
+      path: section.path,
+      component: () => <PlaceholderPage titleKey={section.label as TranslationKey} />,
+    }),
 );
 
 const routeTree = rootRoute.addChildren([
@@ -299,6 +314,7 @@ const routeTree = rootRoute.addChildren([
     matchDetailRoute,
     tournamentsRoute,
     tournamentDetailRoute,
+    auditRoute,
     ...sectionRoutes,
   ]),
 ]);

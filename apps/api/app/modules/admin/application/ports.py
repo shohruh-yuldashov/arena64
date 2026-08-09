@@ -13,7 +13,7 @@ held authority when, or what they did with it.
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from app.modules.admin.domain.audit import (
@@ -27,6 +27,15 @@ from app.modules.admin.domain.moderation import (
     SanctionKind,
 )
 from app.modules.admin.domain.roles import AdminRole, RoleAssignment
+from app.modules.tournament.domain.tournament import TournamentStatus
+
+if TYPE_CHECKING:
+    # Typing-only: both are other modules' published vocabulary, named so a
+    # caller cannot pass a string where an enum is meant. Importing them at
+    # runtime would make this port drag `game` and `rating` into every
+    # module that reads it.
+    from app.modules.game.public.variants import ProductVariant
+    from app.modules.rating.public import SpeedClass
 
 
 class RoleAssignmentRepository(Protocol):
@@ -256,6 +265,97 @@ class SanctionRepository(Protocol):
         ...
 
 
+@dataclass(frozen=True, slots=True)
+class TournamentLifecycleResult:
+    """What a lifecycle command changed — A64-024.5H.
+
+    Deliberately two fields. The console re-reads the tournament to render
+    it, and the audit entry records the transition rather than the object,
+    so nothing here needs the aggregate. A richer result would be a second
+    place for a tournament's shape to live.
+    """
+
+    tournament_id: UUID
+    status: TournamentStatus
+    matches_launched: int = 0
+    """Non-zero only for `start`, where it is the fact an operator watches
+    for: a tournament that moved to `in_progress` and launched nothing is a
+    bracket that did not materialise."""
+
+
+class TournamentLifecycle(Protocol):
+    """The tournament commands an administrator may drive — A64-024.5H.
+
+    **Declared here rather than imported from `tournament`** for the reason
+    `SessionRevoker` is: this states what `admin` needs, which is four
+    operations out of a module that has many more. The adapter is
+    `tournament`'s own application services, composed at the composition
+    root — so `admin` never reimplements a transition, a bracket or a
+    seeding rule, and cannot reach one it was not given.
+
+    Every method is a **semantic command**, never a status assignment.
+    There is no `set_status`, and a caller therefore cannot ask for
+    `completed` or invent a transition the aggregate's table forbids.
+
+    ## What is deliberately absent
+
+    `publish_round` — round progression is driven by match completions
+    (`TournamentAdvancementService`), and there is no manual use case to
+    call. `cancel` — the transition exists in the aggregate and nothing
+    produces or consumes `TournamentCancelled`; see `specs/admin.md` §6.15.
+    `remove_entrant` — withdrawal is the player's action and no
+    administrative removal exists. Each is recorded rather than stubbed,
+    because a method here would be one somebody wires a button to.
+    """
+
+    async def create(
+        self,
+        *,
+        name: str,
+        variant: "ProductVariant",
+        speed_class: "SpeedClass",
+        capacity: int,
+        rated: bool,
+        registration_deadline: datetime | None,
+        created_by: UUID,
+    ) -> TournamentLifecycleResult:
+        """Creates a tournament in `DRAFT`.
+
+        `created_by` is the administrator the guard resolved. The column is
+        nullable and `None` means "the platform created it" — an honest
+        distinction that a client-supplied value would destroy.
+
+        The **format is not a parameter**: v0.x runs one, and the aggregate
+        would refuse anything else. Accepting it would be a field whose only
+        valid value is the default.
+        """
+        ...
+
+    async def open_registration(self, tournament_id: UUID) -> TournamentLifecycleResult:
+        """`DRAFT` → `REGISTRATION_OPEN`. Refuses any other origin."""
+        ...
+
+    async def close_registration(self, tournament_id: UUID) -> TournamentLifecycleResult:
+        """`REGISTRATION_OPEN` → `REGISTRATION_CLOSED`.
+
+        Converges with `TournamentDeadlineTask`, which closes overdue
+        tournaments on its own: whichever arrives first wins and the
+        aggregate refuses the second.
+        """
+        ...
+
+    async def start(self, tournament_id: UUID) -> TournamentLifecycleResult:
+        """`REGISTRATION_CLOSED` → `IN_PROGRESS`, seeding and launching.
+
+        **Idempotent by the underlying service**: a second call finds the
+        tournament already in progress and launches only what is missing,
+        which is how a worker that died mid-launch is repaired. Two
+        administrators pressing it at once resolve through the aggregate's
+        `FOR UPDATE` lock, and the bracket's own keys refuse a duplicate.
+        """
+        ...
+
+
 class SessionRevoker(Protocol):
     """Ending every live session for an account — SE-3.
 
@@ -288,4 +388,6 @@ __all__ = [
     "SanctionPage",
     "SanctionRepository",
     "SessionRevoker",
+    "TournamentLifecycle",
+    "TournamentLifecycleResult",
 ]

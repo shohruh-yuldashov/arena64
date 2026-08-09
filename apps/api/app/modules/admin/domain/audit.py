@@ -83,6 +83,24 @@ class AuditAction(StrEnum):
     """A64-024.6 — a restriction was ended by a named administrator, which
     §13.3 requires to be auditable in its own right."""
 
+    TOURNAMENT_CREATED = "tournament.create"
+    """A64-024.5H — an administrator created a tournament."""
+
+    TOURNAMENT_REGISTRATION_OPENED = "tournament.registration_open"
+    TOURNAMENT_REGISTRATION_CLOSED = "tournament.registration_close"
+    TOURNAMENT_STARTED = "tournament.start"
+    """The three lifecycle transitions an administrator may drive. Each names
+    the transition rather than the button, so an entry reads the same
+    whether the command came from the console or the operator shell."""
+
+    TOURNAMENT_TRANSITION_REFUSED = "tournament.transition_refused"
+    """A64-024.5H — a transition the aggregate refused.
+
+    One action for all three commands rather than a refused twin of each:
+    the fact worth recording is that an administrator asked for a move the
+    tournament was not in a state to make, and `expected_from` says which.
+    Three near-identical members would be three filters nobody uses."""
+
     NOTIFICATION_DELIVERY_RETRIED = "notification.delivery.retry"
     """A64-024.7 — an exhausted push delivery was re-armed.
 
@@ -102,6 +120,10 @@ class AuditSubjectType(StrEnum):
     ACCOUNT = "account"
 
     NOTIFICATION = "notification"
+
+    TOURNAMENT = "tournament"
+    """A64-024.5H. `subject_ref` is the tournament's id — the identifier its
+    admin console route already takes."""
     """A64-024.7. `subject_ref` is the notification's id; the device the
     action addressed is in the entry's metadata, because a subject with two
     identifiers would make the subject filter useless."""

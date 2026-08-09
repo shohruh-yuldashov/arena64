@@ -315,6 +315,35 @@ class MessageType(StrEnum):
     game, so it is never buffered into the ply-sequenced replay buffer —
     doing so would break the contiguity check a resume depends on (§12)."""
 
+    QUICK_MESSAGE_SEND = "game.quick_message.send"
+    """Client to server, on the `game` channel — A64-023.1 §4.
+
+    Carries `match_id` and a **member of `QuickMessage`** — a stable
+    semantic identifier from a server-owned catalog, never text. There is
+    no field for a body, no field for a sender and no field for a
+    recipient, which is what makes "this cannot become free-text chat" a
+    property of the wire format rather than a rule somebody has to keep:
+    the sender is the socket's authenticated identity and the recipients
+    are the match's seats."""
+
+    QUICK_MESSAGE_RECEIVED = "game.quick_message.received"
+    """Server to **participants only** — A64-023.1 §4.
+
+    One frame to both seats, carrying the sender's *side*, the identifier
+    and the server's receive instant. The receiving client renders the
+    identifier in its own locale; the server never sends prose (§8).
+
+    Deliberately absent from `SPECTATOR_SAFE_EVENTS`, for the reason
+    `game.draw.offered` is: what two players say to each other is not the
+    audience's. CT-2 said the same thing about match chat before this
+    platform decided not to have any.
+
+    **Carries no ply and no sequence**, so it is never written to the
+    ply-sequenced replay buffer — the identical constraint `game.draw.state`
+    records. A quick message is not a state change of the game, and two
+    entries at one sequence would break the contiguity check a resume
+    depends on."""
+
     NOTIFICATION_CREATED = "notification.created"
     """Server to **one recipient**, on the `notifications` channel —
     A64-021.2 §2.
@@ -455,6 +484,22 @@ class GatewayErrorCode(StrEnum):
     about how fast the client is asking: the answer changes when the
     opponent moves, not when a window elapses, so a client is told to wait
     for a move rather than to slow down."""
+
+    UNKNOWN_QUICK_MESSAGE = "unknown_quick_message"
+    """The frame named something that is not in the quick-message catalog —
+    A64-023.1 §2.
+
+    Its own code rather than `malformed_message`, and the distinction is
+    the client's recourse: a malformed frame is a client that cannot speak
+    the protocol, where this is a client whose catalog is **older or newer
+    than the server's**. That is an ordinary consequence of adding or
+    removing an entry, and a client that can tell the two apart can log a
+    version skew rather than a parser bug.
+
+    It is also the one refusal that must stay loud. Every attempt to put
+    arbitrary text on this channel arrives here, because anything that is
+    not a catalog member is refused by the same check — see
+    `app/gateway/quick_messages.py`."""
 
     RATE_LIMITED = "rate_limited"
     """Too many moves from this connection. The connection **stays open**
@@ -894,6 +939,51 @@ def draw_state(
     )
 
 
+def quick_message_received(
+    *, match_id: UUID, sender_side: str, message: str, sent_at: datetime
+) -> GatewayMessage:
+    """One predefined message between the two players — A64-023.1 §4.
+
+    Four fields, and the argument for each is what keeps this from growing
+    into a chat frame:
+
+        match_id     which game, because a client may hold more than one
+                     socket-scoped context and the `game` channel is not
+                     per-match (see `Channel`)
+        from         the **side**, not a player id. A client already knows
+                     which seat it holds, so a side is the value it renders
+                     against — the identical reasoning `draw_offered` gives
+                     for `offered_by`, and it keeps an identifier off a
+                     frame that does not need one
+        message      a `QuickMessage` value. A *semantic identifier*, which
+                     the receiving client renders in **its own** locale
+                     (§8). The server never sends display text, so a
+                     Russian player and an Uzbek player reading the same
+                     frame read their own language, and no user-controlled
+                     string is ever transported
+        sent_at      the server's receive instant, ISO-8601. A client
+                     timestamp is not trusted (§4) and would let one player
+                     order their message ahead of the other's
+
+    **No `request_id`.** The sender receives this through the ordinary
+    participant fan-out rather than as a correlated answer, so one client
+    code path renders a bubble whoever sent it — the same argument
+    `move_applied` makes for not merging the broadcast into the
+    acknowledgement. What a sender *does* get correlated is a refusal, and
+    that is `game.command.rejected`.
+    """
+    return GatewayMessage(
+        type=MessageType.QUICK_MESSAGE_RECEIVED,
+        payload={
+            "match_id": str(match_id),
+            "from": sender_side,
+            "message": message,
+            "sent_at": sent_at.isoformat(),
+        },
+        channel=Channel.GAME,
+    )
+
+
 def match_snapshot(payload: dict[str, Any], *, request_id: str | None) -> GatewayMessage:
     """The authoritative state, as the new synchronisation baseline — §6.
 
@@ -1119,6 +1209,7 @@ __all__ = [
     "move_rejected",
     "notification_created",
     "pong",
+    "quick_message_received",
     "resumed",
     "spectator_joined",
     "spectator_left",

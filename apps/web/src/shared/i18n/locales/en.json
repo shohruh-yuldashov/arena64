@@ -567,6 +567,14 @@
       "becomes": "becomes",
       "updating": "Rating is being updated…",
       "late": "Rating update is taking longer than expected."
+    },
+    "quickMessages": {
+      "goodLuck": "Good luck!",
+      "niceMove": "Nice move!",
+      "wellPlayed": "Well played",
+      "goodGame": "Good game",
+      "thanks": "Thanks",
+      "oops": "Oops!"
     }
   },
   "replay": {

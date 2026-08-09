@@ -54,7 +54,7 @@ into bounded contexts with enforced boundaries.
 
 Nearly every domain in `specs/` orbits a single aggregate — the **Match**. Matchmaking
 creates it, the game engine governs it, rating consumes its result, statistics and
-leaderboards aggregate it, spectating observes it, chat is scoped to it. A microservice
+leaderboards aggregate it, spectating observes it, in-match communication is scoped to it. A microservice
 decomposition would place a network hop in the middle of the move loop, which is the one
 path where latency *is* the product: a player who waits 300ms to see their own move
 perceives the platform as broken, regardless of how elegant the service topology is.
@@ -240,8 +240,7 @@ persistence at all.
 
 ### AD-04 — The admin console is a separate application, not a route in the player client
 
-**Why:** moderation tooling can read chat transcripts, suspend accounts, and adjudicate
-matches. Shipping that code to every player's browser means the privileged surface is one
+**Why:** moderation tooling can suspend accounts and adjudicate matches. Shipping that code to every player's browser means the privileged surface is one
 authorization bug away from exposure, and it inflates the bundle that gates time-to-first-move
 for ordinary players. A separate origin, separate session, and separate deploy keeps
 privileged capability off the public client entirely.
@@ -266,7 +265,6 @@ flowchart TB
         AUTH["auth — credentials, sessions, tickets"]
         USERS["users — profile and preferences"]
         FRIENDS["friends — requests, friendships, blocks"]
-        CHAT["chat — messaging and moderation"]
         NOTIF["notifications — delivery"]
     end
 
@@ -297,7 +295,6 @@ flowchart TB
 | `auth` | Who a player is, and proof of it | `specs/authentication.md` | `Account`, `Session` |
 | `users` | Public identity and preferences | `specs/profile.md`, `specs/settings.md` | `UserProfile` |
 | `friends` | Relationships between players | `specs/friends.md` | `FriendRequest`, `Friendship`, `Block` |
-| `chat` | Conversation | `specs/chat.md` | `ChatThread` |
 | `notifications` | Reaching a player out-of-band | `specs/notifications.md` | `Notification` |
 | `rating` | Measured skill | `specs/rating.md` | `PlayerRating` |
 | `leaderboard` | Ranked standing | `specs/leaderboard.md` | *(none — projection)* |
@@ -344,7 +341,6 @@ flowchart TB
     AUTH["auth"]
     USERS["users"]
     FRIENDS["friends"]
-    CHAT["chat"]
     NOTIF["notifications"]
     RATE["rating"]
     LEAD["leaderboard"]
@@ -356,7 +352,6 @@ flowchart TB
     BUS(["Event bus — outbox to Celery"])
 
     GW -->|"commands"| GAME
-    GW -->|"commands"| CHAT
     GW -->|"subscribe"| SPEC
     HTTP --> MM
     HTTP --> AUTH
@@ -387,7 +382,6 @@ flowchart TB
     BUS -.-> LEAD
 
     GAME -.-> AUTH
-    CHAT -.-> FRIENDS
 ```
 
 Solid arrows are **synchronous in-process calls through a published port**. Dashed arrows
@@ -419,7 +413,7 @@ one.
 **R-2 — Only `game`, `replay`, and `fairplay` may import `engine`, and only `game` may use
 it to mutate state.**
 The other two replay finished games; they never write. *Why:* see §11. The engine's
-guarantee is that it is pure. If `chat` or `statistics` could import it, someone would
+guarantee is that it is pure. If `notifications` or `statistics` could import it, someone would
 eventually add a database lookup to a rules function to satisfy a reporting requirement, and
 the engine's testability — the thing protecting competitive integrity — would be gone. The
 two read-only exceptions are the whole reason the engine is a peer module rather than a
@@ -586,7 +580,7 @@ flowchart LR
 | Connection lifecycle, heartbeat, liveness detection | Move legality |
 | Handshake authentication and session binding | Clock adjudication |
 | Channel subscription and authorization to subscribe | Match state |
-| Inbound envelope validation and rate limiting | Rating, chat moderation policy |
+| Inbound envelope validation and rate limiting | Rating, and every decision about a match |
 | Outbound fan-out and per-channel sequencing | Any persistence to PostgreSQL |
 | Reconnection and message replay | Any business decision whatsoever |
 
@@ -619,10 +613,13 @@ the two channels can carry different rate limits, different QoS, and different p
 ### AD-11 — One socket per client, multiplexed by channel
 
 **Why:** browsers limit concurrent connections per origin, and mobile clients pay a battery
-and handshake cost per socket. More importantly, separate sockets for moves and chat would
-make cross-stream ordering undefined — a resignation and a chat message sent in that order
+and handshake cost per socket. More importantly, separate sockets for moves and messages would
+make cross-stream ordering undefined — a resignation and a "good game" sent in that order
 could arrive reversed, producing a confusing and occasionally accusatory user experience.
 One ordered stream with channel-tagged envelopes makes ordering a solved problem.
+
+This is the reason `game.quick_message.send` shares the socket rather than opening a second
+one (ADR-004). The example was hypothetical when this was written and is now the shipped case.
 
 ### AD-12 — Every match message carries a per-match sequence number
 
@@ -942,7 +939,6 @@ Event catalogue, envelope schema, and versioning are delegated to [`events.md`](
 | **Completed matches and their full move logs** | The permanent competitive record; append-only, audited, replayable |
 | Rating history per rating period | Permanent; must reconcile exactly with match history |
 | Friendships, blocks | Relational by nature; joins are the access pattern |
-| Chat archive | Required for moderation and dispute resolution |
 | Moderation cases, audit log | Legally and operationally significant |
 | **Outbox** | Must be transactional with the state change (AD-16) |
 
@@ -1009,7 +1005,7 @@ because there is nothing to recover from.
 | **Notification dispatcher** | Various | Seconds | Talks to third parties that fail and rate-limit |
 | **Fair-play analyzer** | `match.completed` | **Minutes to hours** | CPU-bound game replay and search |
 | **Abandonment reaper** | Schedule | Minutes | Resolves matches both players abandoned |
-| **Retention and erasure** | Schedule | Hours | Chat pruning, account deletion, export generation |
+| **Retention and erasure** | Schedule | Hours | Account deletion, export generation, abandoned-match and queue pruning |
 
 **Why separate queues rather than one shared pool:** the clock worker's budget is
 sub-second; the fair-play analyzer may take minutes on a single game. Share a queue and a
@@ -1117,9 +1113,10 @@ pre-cut. A module becomes a candidate for extraction when **all four** hold:
 3. It owns data no other module writes
 4. Its failure is tolerable without stopping gameplay
 
-Measured against those criteria today: `fairplay` qualifies on all four, `statistics` on
-three, `chat` on three. `game` fails all four by design and must never be extracted — it
-*is* the core.
+Measured against those criteria today: `fairplay` qualifies on all four and `statistics` on
+three. `game` fails all four by design and must never be extracted — it *is* the core.
+`chat` was previously scored here and is no longer a module: ADR-004 replaced it with quick
+messages, which own no data and are part of the gateway.
 
 ```mermaid
 flowchart LR

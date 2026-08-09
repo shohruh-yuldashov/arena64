@@ -21,6 +21,7 @@ before implementation begins.
 | Review | Awaiting sign-off |
 | Approved | Agreed and ready for implementation |
 | Implemented | Shipped; spec reflects live behaviour |
+| Deferred | Deliberately not built; the record explains why and what would reopen it |
 
 ## Index
 
@@ -29,7 +30,8 @@ before implementation begins.
 | [Authentication](./authentication.md) | Account registration, sign-in, session issuance, and credential recovery for Arena64 players. | Placeholder |
 | [Player Profile](./profile.md) | Public and private player profile data, avatars, display identity, and profile visibility. | Placeholder |
 | [Friends](./friends.md) | Friend requests, friend lists, blocking, and presence visibility between players. | Placeholder |
-| [Chat](./chat.md) | In-match and out-of-match messaging, moderation, and message delivery guarantees. | Placeholder |
+| [Quick Messages](./quick-messages.md) | Predefined, server-owned courtesies between the two players of a live match. No free text. | Implemented |
+| [Chat](./chat.md) | Free-text messaging. **Deferred and superseded** by Quick Messages — see [ADR-004](../docs/07-decisions/ADR-004-quick-messages-not-free-text-chat.md). | Deferred |
 | [Notifications](./notifications.md) | Delivery of in-app and push notifications for invites, turns, and social events. | Placeholder |
 | [Game Engine](./game-engine.md) | Checkers rules enforcement, move validation, board state, and game termination conditions. | Placeholder |
 | [Matchmaking](./matchmaking.md) | Queueing, opponent selection, match creation, and direct challenge flows. | Placeholder |

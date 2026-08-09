@@ -57,7 +57,6 @@ apps/api/
 │       │   ├── auth/
 │       │   ├── users/
 │       │   ├── friends/
-│       │   ├── chat/
 │       │   ├── notifications/
 │       │   ├── rating/
 │       │   ├── leaderboard/
@@ -168,7 +167,7 @@ over-constrained CRUD modules or under-constrained gameplay modules.
 | Class | Modules | Transaction model | Entry path | Allowed to be slow? |
 | --- | --- | --- | --- | --- |
 | **Gameplay core** | `game`, `engine`, `matchmaking`, `spectator` | Redis CAS, write-behind to PostgreSQL | Gateway commands | **No** — CP-1 budget |
-| **Player domain** | `auth`, `users`, `friends`, `chat`, `notifications` | One PostgreSQL transaction per use case | HTTP requests | Within normal request budgets |
+| **Player domain** | `auth`, `users`, `friends`, `notifications` | One PostgreSQL transaction per use case | HTTP requests | Within normal request budgets |
 | **Projections** | `rating`, `leaderboard`, `statistics`, `achievements` | PostgreSQL transaction inside a Celery task | Event subscription only | Yes — eventually consistent |
 | **Read side** | `replay` | Read-only, no transaction | HTTP requests | Yes |
 | **Operations** | `admin`, `fairplay` | PostgreSQL transaction; `fairplay` is long-running | HTTP / event subscription | `admin` no, `fairplay` yes |
@@ -203,7 +202,6 @@ flowchart TB
     AUTH["auth"]
     USERS["users"]
     FRIENDS["friends"]
-    CHAT["chat"]
     NOTIF["notifications"]
     RATE["rating"]
     LEAD["leaderboard"]
@@ -225,7 +223,6 @@ flowchart TB
     HTTP --> REP
     HTTP --> ADMIN
     GW --> GAME
-    GW --> CHAT
     GW --> SPEC
     CLK --> GAME
     CEL --> RATE
@@ -244,7 +241,6 @@ flowchart TB
     FAIR -->|"MatchHistory port"| GAME
     ADMIN -->|"Adjudication port"| GAME
     GAME -->|"identity resolution"| AUTH
-    CHAT -->|"visibility port"| FRIENDS
 
     GAME -.-> OUT
     FRIENDS -.-> OUT
@@ -758,13 +754,19 @@ than five thousand.
 ### 8.5 Never logged
 
 Session tokens, WebSocket tickets, password material of any kind, password reset tokens, full
-email addresses in gameplay logs, and **chat message bodies**.
+email addresses in gameplay logs, and **rejected quick-message payloads**.
 
-**Why chat bodies specifically:** chat is archived in PostgreSQL for moderation and dispute
-resolution, where it is access-controlled, auditable, and subject to retention and erasure
-policy. Copying it into the log pipeline puts the same personal data in a system with
-different retention, broader read access, and no erasure path — converting a moderation
-feature into a privacy liability. Moderation reads the archive; it never reads logs.
+**Why rejected payloads specifically:** Arena64 carries no free-text communication
+([ADR-004](../07-decisions/ADR-004-quick-messages-not-free-text-chat.md)) — a quick message is
+a semantic identifier from a closed catalogue, and anything else is refused at the boundary.
+The refusal path is therefore the *only* place a user-authored string ever reaches the server,
+and logging it would rebuild, inside the log pipeline, exactly the free-text archive the
+product decided not to have — in a system with broader read access, different retention and no
+erasure path. So the payload is never logged; only the bounded outcome is counted.
+
+This replaces an earlier rule about chat message bodies, which assumed a moderation archive
+that was never built. The conclusion is the same and the reasoning inverted: there is no
+access-controlled archive to copy *from*, which makes the log the only copy that could exist.
 
 ---
 

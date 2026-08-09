@@ -172,7 +172,7 @@ flowchart TB
 
     subgraph social["Social"]
         FRIENDS["friends<br/>FriendRequest · Friendship · Block"]
-        CHAT["chat<br/>ChatThread · Message"]
+        QM["quick messages<br/>gateway-owned · no aggregate, no rows"]
         NOTIF["notifications<br/>Notification · DeviceRegistration"]
     end
 
@@ -200,7 +200,7 @@ flowchart TB
 
     AUTH -->|"an account has exactly one profile"| USERS
     USERS -->|"players relate to players"| FRIENDS
-    FRIENDS -->|"blocks constrain visibility"| CHAT
+    FRIENDS -->|"blocks constrain visibility"| QM
     MM -->|"pairing creates a match"| GAME
     GAME -->|"governed by"| ENGINE
     GAME -->|"observed by"| SPEC
@@ -212,9 +212,7 @@ flowchart TB
     RATE -.->|"rating.updated"| LEAD
     STAT -.->|"statistics.updated"| ACH
     FAIR -->|"escalates to"| ADMIN
-    CHAT -->|"reported into"| ADMIN
     ADMIN -->|"sanctions gate"| AUTH
-    ADMIN -->|"sanctions gate"| CHAT
     ADMIN -->|"adjudicates"| GAME
     GAME -.-> PLAT
     AUTH -.-> PLAT
@@ -263,9 +261,9 @@ The complete inventory. **Kind** follows §3. **Store** follows AD-18/AD-19.
 | 8 | `HandleAssignment` | users | Entity (in `UserProfile`) | PostgreSQL | A released handle must not be immediately reusable, or impersonation becomes trivial |
 | 9 | `FriendRequest` | friends | **Aggregate root** | PostgreSQL | Consent to a relationship is itself a fact that is accepted, declined, or withdrawn |
 | 10 | `Friendship` | friends | **Aggregate root** | PostgreSQL | Mutual consent, once reached, is a durable relationship with its own start date |
-| 11 | `Block` | friends | **Aggregate root** | PostgreSQL | A unilateral refusal of contact that must hold across chat, challenges, and pairing |
-| 12 | `ChatThread` | chat | **Aggregate root** | PostgreSQL | Conversation is scoped, and its scope decides who may read it and how long it is kept |
-| 13 | `Message` | chat | Entity (in `ChatThread`) | PostgreSQL | The unit moderation acts on, and the unit a dispute quotes |
+| 11 | `Block` | friends | **Aggregate root** | PostgreSQL | A unilateral refusal of contact that must hold across quick messages, challenges, spectating, and pairing |
+| ~~12~~ | ~~`ChatThread`~~ | — | **Not built — superseded** | — | Free-text chat was ruled out by [ADR-004](../07-decisions/ADR-004-quick-messages-not-free-text-chat.md); in-match communication is §9.0's quick messages, which introduce no aggregate. Numbering is preserved so existing cross-references stay valid |
+| ~~13~~ | ~~`Message`~~ | — | **Not built — superseded** | — | Same. A quick message is a frame, not a record |
 | 14 | `Notification` | notifications | **Aggregate root** | PostgreSQL | A player must see what they missed while away, on whatever device they return on |
 | 15 | `NotificationDelivery` | notifications | Entity (in `Notification`) | PostgreSQL | One notification, several channels, each failing independently against third parties |
 | 16 | `DeviceRegistration` | notifications | **Aggregate root** | PostgreSQL | Push targets a device, not a player, and devices are revoked independently of accounts |
@@ -519,9 +517,57 @@ the list invites a second write path that maintains it, and then two sources of 
 
 ---
 
-## 9. Communication — `chat` and `notifications`
+## 9. Communication — quick messages and `notifications`
 
-### 9.1 `ChatThread` — aggregate root
+### 9.0 In-match communication as built — quick messages
+
+**Purpose.** Let the two players of a live match exchange a small, fixed set of courtesies
+without giving them a way to write to each other.
+
+**There is no `chat` module and no free-text chat on Arena64.** A quick message is a
+**semantic identifier from a server-owned catalogue** — `good_luck`, `nice_move`,
+`well_played`, `good_game`, `thanks`, `oops` — carried over the existing realtime socket,
+delivered only between the two seats of one `active` match, rendered by the *receiving*
+client in its own locale, and **stored nowhere**.
+
+**It introduces no aggregate, no entity and no table.** That is the point rather than an
+omission: nothing about a quick message survives the frame that carries it, so there is
+nothing for this document to model. The catalogue is an enum
+(`app/gateway/quick_messages.py`); the authorization is one read of `game.public.MatchRoster`;
+the transport is the gateway.
+
+**Business rules.**
+
+| # | Rule | Why |
+| --- | --- | --- |
+| QM-1 | Only a catalogue member may be sent; anything else is refused | Abuse is prevented by construction — no harmful message exists to send — rather than moderated after the fact |
+| QM-2 | Every catalogue entry is positive or neutral | Same. This is the property that makes the feature shippable without a moderation capability |
+| QM-3 | A match that has reached a terminal state accepts no further messages | Inherited unchanged from CT-1 below: post-game abuse is the largest source of reports on competitive platforms |
+| QM-4 | Spectators may neither send nor receive | Inherited from CT-2: players say things to each other; spectators are an audience |
+| QM-5 | Nothing is persisted, replayed on reconnect, or entered into match history | There is no reader. Persistence would create a retention obligation and storage proportional to spam |
+| QM-6 | Correct game state never depends on a quick message | A social channel must not be able to affect a competitive one |
+| QM-7 | The wire carries an identifier, never display text | The receiving client localises it — Arena64's players do not share one language |
+
+**Owner:** the gateway, as transport-scope policy — the same category as
+`SPECTATOR_SAFE_EVENTS` and `SPECTATABLE_STATES`. Full behaviour in
+[`specs/quick-messages.md`](../../specs/quick-messages.md); the decision and its revisit
+criteria in [`ADR-004`](../07-decisions/ADR-004-quick-messages-not-free-text-chat.md).
+
+---
+
+### 9.1 `ChatThread` — aggregate root · **SUPERSEDED, NOT BUILT**
+
+> **Status: superseded by [`ADR-004`](../07-decisions/ADR-004-quick-messages-not-free-text-chat.md) (2026-08-09).**
+> This section described the free-text chat design Arena64 assumed before A64-023. **It is
+> not the current architecture and none of it was built** — there is no `ChatThread`, no
+> `Message`, no `chat` module and no table. In-match communication is §9.0.
+>
+> It is retained rather than deleted because the reasoning is the reason the decision went
+> the other way: CT-1 and CT-2 are still enforced (as QM-3 and QM-4), and CT-5's permanent
+> retention obligation is one of the four constraints that ruled free text out while
+> Arena64 has no moderation capability. Read it as the design to revisit **if and when**
+> ADR-004's revisit criteria are met — principally, once `admin` ships with a reports
+> queue and reviewers.
 
 **Purpose.** A conversation with a **scope**, and the scope decides everything: who may read it,
 how long it lives, and whether it is moderated.
@@ -548,7 +594,10 @@ port.
 | CT-5 | Redaction removes the body and retains the fact | Moderation must be able to prove that a message existed and was removed |
 | CT-6 | Message bodies are never written to logs | `services.md §8.5` — it converts a moderation feature into a privacy liability |
 
-### 9.2 `Message` — entity within `ChatThread`
+### 9.2 `Message` — entity within `ChatThread` · **SUPERSEDED, NOT BUILT**
+
+> Superseded with §9.1 by [`ADR-004`](../07-decisions/ADR-004-quick-messages-not-free-text-chat.md).
+> No `Message` entity exists. A quick message is a frame, not a record.
 
 Immutable once sent; redactable, never edited. **Why not editable:** an editable message in a
 competitive context lets a player retroactively rewrite an accusation, and moderation would be
@@ -764,7 +813,6 @@ flowchart TB
     end
 
     EXT1["PlayerId — auth"]
-    EXT2["ChatThread — chat, by reference"]
     EXT3["ClockDeadline — Redis, outside the aggregate"]
 
     M --> P1
@@ -1113,7 +1161,13 @@ credibility history, which only exists if the report is an entity.
 ### 13.2 `ModerationCase` — aggregate root
 
 **Purpose.** The decision record: subject, category, linked evidence (reports, integrity signals,
-chat messages, matches), the moderator, the decision, the reasoning, and the outcome.
+matches), the moderator, the decision, the reasoning, and the outcome.
+
+**Not chat messages**, unlike earlier drafts of this section: there are none. Arena64 carries no
+free-text communication ([ADR-004](../07-decisions/ADR-004-quick-messages-not-free-text-chat.md)),
+and a quick message is a frame that is never recorded — so there is nothing for a case to quote.
+That is a deliberate narrowing of what moderation can adjudicate, and it is the trade named in
+the ADR's negative consequences.
 
 **Business rules.** Every case names a human decision-maker; evidence is referenced, never copied;
 a case is immutable once closed, and a reversal is a new case that references the original; a
@@ -1124,8 +1178,11 @@ trusted in an appeal, which is the only situation in which anybody reads it.
 
 ### 13.3 `Sanction` — aggregate root
 
-**Purpose.** The *enforced* restriction: muted, chat-restricted, matchmaking-restricted,
-suspended, or banned, with a scope and an expiry.
+**Purpose.** The *enforced* restriction: muted, matchmaking-restricted, suspended, or banned,
+with a scope and an expiry.
+
+`muted` here means **quick messages withheld** (§9.0), which is the only communication surface
+this platform has. The `chat-restricted` kind an earlier draft listed has no referent.
 
 ### DM-12 — The sanction is separate from the case that produced it
 
@@ -1199,7 +1256,8 @@ retryable, and auditable — and it is the thing an auditor asks to see.
 ### DM-13 — Erasure anonymises the person and preserves the competitive record
 
 An erased account keeps its `PlayerId` and its match participation; it loses handle, email,
-avatar, biography, country, chat bodies, device registrations, and IP-derived data. The profile
+avatar, biography, country, device registrations, and IP-derived data — there are no message
+bodies to erase, because none are ever written (§9.0). The profile
 renders as a tombstone.
 
 **Why this and not deletion:** every rated match has two participants, and a rating is only
@@ -1226,7 +1284,6 @@ a policy position and must be reviewed — see §18 Q-16.**
 | `QueueTicket` | — | One live ticket per player (QT-1); atomic claim (QT-4) |
 | `Challenge` | — | Acceptance is exactly-once |
 | **`Match`** | `MatchParticipant` ×2, `Move` log, `Offer` | **The move log is exactly the sequence that produced the recorded result.** Nothing else in the platform has an invariant this large |
-| `ChatThread` | `Message` | Total, stable ordering within a thread (CT-3) |
 | `Notification` | `NotificationDelivery` | The notification exists independently of delivery (NT-1) |
 | `DeviceRegistration` | — | Provider-driven lifecycle |
 | `PlayerRating` | `RatingAdjustment` | Current rating equals the fold of its adjustments — the reconciliation A-4 demands |
@@ -1396,7 +1453,7 @@ the decision is explicit rather than emergent.
 | `GuestSession` | Q-13 (anonymous play) | An unauthenticated, unrated, non-persistent player context | Registration is required to play at all |
 | `HandleReservation` | Q-8 (handle policy) | Reserved and cooldown handles are entities | UP-3 is enforced by retaining `HandleAssignment` history |
 | `PlayerTitle` / `Badge` | Q-12 | Awarded display markers, distinct from achievements | Achievements cover it |
-| `ChatFilterRule` | Q-11 (automated moderation) | Reference data driving pre-send filtering | All moderation is reactive |
+| ~~`ChatFilterRule`~~ | ~~Q-11~~ — **not needed** (ADR-004): nothing user-authored is transportable, so there is no text to filter | — | — |
 
 ---
 
@@ -1425,7 +1482,6 @@ erDiagram
     MATCH ||--|| MATCH_PARTICIPANT : "seat B"
     MATCH ||--o{ MOVE : "ordered log"
     MATCH ||--o{ OFFER : "negotiations"
-    MATCH ||--o| CHAT_THREAD : "scoped conversation"
     MATCH_PARTICIPANT }o--|| USER_PROFILE : "played by"
 
     MATCH ||--o{ RATING_ADJUSTMENT : "causes exactly once"
@@ -1439,8 +1495,6 @@ erDiagram
     ACHIEVEMENT_DEFINITION ||--o{ PLAYER_ACHIEVEMENT : "awarded as"
     USER_PROFILE ||--o{ PLAYER_ACHIEVEMENT : "earns"
 
-    CHAT_THREAD ||--o{ MESSAGE : "contains"
-    MESSAGE ||--o{ REPORT : "reported by"
     USER_PROFILE ||--o{ REPORT : "submits"
     REPORT }o--o| MODERATION_CASE : "evidence for"
     INTEGRITY_SIGNAL }o--o| MODERATION_CASE : "evidence for"
@@ -1471,7 +1525,6 @@ flowchart LR
     subgraph long["Years"]
         J["Account · UserProfile"]
         K["Friendship · Block"]
-        L["ChatThread — direct"]
         M["PlayerRating"]
     end
     subgraph forever["Permanent — never rewritten"]
@@ -1539,12 +1592,12 @@ guess at any of them. Ordered by how much damage a wrong assumption does.
 | **Q-7** | **What is the abort window, the disconnect grace, and the abandonment threshold — per time control?** | `Match` state transitions, the reaper | `system-design.md` TODO already flags this. A bullet game's grace cannot be a correspondence game's |
 | **Q-8** | **Handle policy: change frequency, cooldown length, reservation, reuse of released handles?** | `HandleAssignment`, UP-2, UP-3 | Directly enables or prevents impersonation |
 | **Q-9** | **Does a block prevent matchmaking pairing, and is the block list bounded?** | BL-2, BL-4, QT-3 | An unbounded block list that filters pairing makes the pairing scan unbounded, and lets a player curate their opponent pool — a rating-manipulation vector |
-| **Q-10** | **Chat scope: is there any chat outside a match and outside direct messages?** | `ChatThread` scopes, moderation volume, retention | Global or lobby chat is an order-of-magnitude different moderation problem |
-| **Q-11** | **Is chat filtered automatically before send, or moderated reactively?** | Optional `ChatFilterRule`; whether a send is on a synchronous filtering path | A pre-send filter puts a policy lookup inside the message path |
+| ~~Q-10~~ | ~~Chat scope~~ — **closed 2026-08-09 by [ADR-004](../07-decisions/ADR-004-quick-messages-not-free-text-chat.md).** There is no chat, in any scope. In-match communication is §9.0's fixed catalogue; direct, lobby and global conversation are not built | — | — |
+| ~~Q-11~~ | ~~Automated filtering versus reactive moderation~~ — **closed by ADR-004.** Neither: there is nothing to filter, because nothing user-authored is transportable. `ChatFilterRule` is not needed | — | — |
 | **Q-12** | **Do achievements confer anything (titles, badges, cosmetics), or are they purely a record?** | Optional `PlayerTitle`; whether awards are display state | Determines whether an award is inert or entitling |
 | **Q-13** | **Can anyone play without an account?** | Optional `GuestSession`; whether `PlayerId` always implies an `Account` | DM-06 assumes it does. If guests exist, every context's identity assumption changes |
 | **Q-14** | **Can a player face themselves (two devices), and are such matches rated?** | MT-1, PR-2 | This is the simplest rating-manipulation attack and the model currently forbids it by assumption, not by decision |
-| **Q-15** | **Retention: how long are chat messages, in-app notifications, integrity signals, and aborted matches kept?** | The retention worker's scope, and what `ErasureRequest` must reach | Retention that is not specified becomes "forever", which is a liability |
+| **Q-15** | **Retention: how long are in-app notifications, integrity signals, and aborted matches kept?** *(chat messages removed — none exist; ADR-004)* | The retention worker's scope, and what `ErasureRequest` must reach | Retention that is not specified becomes "forever", which is a liability |
 | **Q-16** | **Is DM-13's anonymise-don't-delete position acceptable to the platform's legal posture?** | Whether the competitive record survives erasure at all | If full deletion is required, ratings and statistics of *other* players become reconstructible-only-approximately, and A-4 is compromised |
 | **Q-17** | **Are moderation outcomes and fair-play sanctions published, and are appeals offered?** | Future `Appeal`; whether `Sanction` has a public face | Publication is a product and legal decision, not a technical one |
 | **Q-18** | **Leaderboard scopes and eligibility — global only, or country and friends; minimum games; seasonal reset?** | `LeaderboardScope`, future `Season` | Determines whether the leaderboard projection is one ordering or dozens |
@@ -1605,7 +1658,7 @@ are the invariants where that matters most.
 | **R-21** | Carry an optimistic version on every aggregate that §8.4 names — the live match and `FriendRequest` at minimum | RP §8.4 |
 | **R-22** | Design erasure as **field-level anonymisation of the identity aggregates**, leaving participation intact — and make the reachable-personal-data set explicit and testable | DM-13, Q-16. "We think we got it all" is not a compliance position |
 | **R-23** | Give every retained-but-derived store an explicit rebuild path from PostgreSQL | AD-19, DM-03. A projection with no rebuild procedure is not a projection; it is an undeclared system of record |
-| **R-24** | Define retention per entity, not globally, and record the decision beside the entity | Q-15. Chat, notifications, integrity signals, aborted matches, and audit entries have five different correct answers |
+| **R-24** | Define retention per entity, not globally, and record the decision beside the entity | Q-15. Notifications, integrity signals, aborted matches, and audit entries have four different correct answers |
 | **R-25** | Leave room for one optional originating-context reference on `Match` — tournament, series, or challenge — without `game` knowing what those are | §16.2. Tournaments require no new mechanism *only* if this reference exists |
 
 ### 19.5 What A64-005 should decide that this document deliberately did not

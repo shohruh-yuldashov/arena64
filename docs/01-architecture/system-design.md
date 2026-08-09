@@ -185,7 +185,7 @@ sequenceDiagram
             G->>B: instruct the other node to close the older socket
         end
         G-->>C: connected, session established
-        C->>G: subscribe to channels - own match, chat threads, presence
+        C->>G: subscribe to channels - own match, notifications, presence
         G->>G: authorize each subscription
         G->>B: subscribe this node to the underlying channels
         G-->>C: subscription acknowledged with current sequence numbers
@@ -624,7 +624,7 @@ strategy's weakness — cost under high contention — does not apply here.
 | Leaderboard | Eventually consistent | < 60s | Nobody is harmed by a rank being a minute old |
 | Statistics | Eventually consistent | < 5 min | Aggregates by nature |
 | Presence | Best-effort, TTL-decayed | Seconds | A stale "online" indicator is a cosmetic defect |
-| Chat | Ordered within a thread, at-least-once delivery | Seconds | Ordering matters, duplicates are recoverable by client de-duplication |
+| Quick messages | **Best-effort, at most once** | Seconds | Ephemeral courtesies. Losing one is acceptable; correct game state never depends on delivery ([ADR-004](../07-decisions/ADR-004-quick-messages-not-free-text-chat.md)) |
 | Spectator view | Eventually consistent, monotonic | < 2s, optionally delayed by policy | Must never go backwards; may lag deliberately |
 | Fair-play signals | Eventually consistent | Hours | Deliberately offline |
 
@@ -698,7 +698,7 @@ longest:
 1. **Moves and clocks in live matches** — never shed
 2. **Match completion and result persistence** — never shed
 3. **Reconnection and resume** — never shed
-4. Chat in live matches
+4. Quick messages in live matches
 5. New match creation and matchmaking
 6. Spectator admission
 7. Leaderboard, statistics, and profile reads

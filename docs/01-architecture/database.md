@@ -56,7 +56,7 @@ Restated from `architecture.md §13`, because everything below depends on it:
 
 | Store | Authoritative for |
 | --- | --- |
-| **PostgreSQL** | Accounts, profiles, the social graph, chat, the **completed match record and its move log**, ratings and adjustments, achievements, moderation, audit, the outbox |
+| **PostgreSQL** | Accounts, profiles, the social graph, the **completed match record and its move log**, ratings and adjustments, achievements, moderation, audit, the outbox |
 | **Redis** | Live match position and clocks, clock deadlines, queue tickets, connection registry, presence, pub/sub, the reconnection replay window, leaderboard orderings, coordination primitives |
 
 **Nothing designed below has a Redis counterpart that is authoritative for the same fact.** Where
@@ -226,7 +226,7 @@ variant were governed by different rules — the exact class of corruption AD-15
 | `rating` | `rating` | `player_rating`, `rating_adjustment`, `rating_period` | Holds the platform's hardest invariant |
 | `achievements` | `achievements` | `achievement_definition`, `achievement_definition_text`, `player_achievement`, `achievement_progress` | |
 | `statistics` | `statistics` | `player_statistics`, `player_statistics_termination`, `head_to_head` | Entirely rebuildable |
-| `chat` | `chat` | `chat_thread`, `chat_thread_participant`, `chat_message` | |
+| ~~`chat`~~ | — | **Not created — superseded** | Free-text chat was ruled out ([ADR-004](../07-decisions/ADR-004-quick-messages-not-free-text-chat.md)); quick messages persist nothing. See §10.1 |
 | `notifications` | `notifications` | `notification` (built, A64-021.1), `notification_preference` (built, A64-021.3 — moved here from `users`, see §4.9); `notification_delivery`, `device_registration` (specified, not created — §10.2) | |
 | `fairplay` | `fairplay` | `analysis_run`, `integrity_signal` | |
 | `admin` | `admin` | `role_assignment`, `report`, `moderation_case`, `case_evidence`, `sanction`, `audit_entry` | |
@@ -248,7 +248,6 @@ flowchart TB
     RATE["rating"]
     ACH["achievements"]
     STAT["statistics"]
-    CHAT["chat"]
     NOTIF["notifications"]
     FAIR["fairplay"]
     ADMIN["admin"]
@@ -267,7 +266,6 @@ flowchart TB
     RATE -.->|"player_id, match_id, no FK"| GAME
     ACH -.->|"player_id, match_id, no FK"| GAME
     STAT -.->|"player_id, match_id, no FK"| GAME
-    CHAT -.->|"player_id, no FK"| USERS
     NOTIF -.->|"player_id, no FK"| USERS
     FAIR -.->|"player_id, match_id, no FK"| GAME
     ADMIN -.->|"opaque refs, no FK"| PLAT
@@ -534,14 +532,14 @@ can be terse.
 | --- | --- | --- | --- |
 | **1:1** | Shared primary key, or a unique FK | `player_preference.player_id` is both PK and FK | The child cannot exist twice and cannot exist without the parent; a surrogate key on the child would permit both |
 | **1:N** | FK on the many side | `move.match_id` → `match` | Conventional |
-| **N:M** | An association relation with a composite PK | `chat_thread_participant(thread_id, player_id)` | The pair *is* the identity; a surrogate key would allow the same player to join a thread twice |
+| **N:M** | An association relation with a composite PK | `notification_preference(user_id, category, channel)` | The triple *is* the identity; a surrogate key would allow the same user to hold two conflicting settings for one channel |
 | **N:M, self-referential, symmetric** | One row per unordered pair, with a canonical ordering check | `friendship(player_low_id, player_high_id)` | §7.3 |
 
 ### DB-11 — Association relations use composite primary keys, not surrogate keys
 
-**Why:** a surrogate `id` on `chat_thread_participant` makes duplicate membership *representable*.
-The uniqueness would then be an additional constraint someone can forget, rather than the table's
-shape. The exception is an association that is itself an entity with its own lifecycle —
+**Why:** a surrogate `id` on `notification_preference` makes a duplicate `(user, category, channel)`
+*representable*. The uniqueness would then be an additional constraint someone can forget, rather
+than the table's shape. The exception is an association that is itself an entity with its own lifecycle —
 `friendship` has a start date, an end, and a source request, so it carries a surrogate key and
 uniqueness is a separate constraint.
 
@@ -934,7 +932,6 @@ identifiers they hold are internal ones a player has no use for and an attacker 
 | `ply_count` | `integer` | no | Default 0; the authoritative length |
 | `final_position_hash` | `bytea` | yes | |
 | `sequence_high` | `integer` | no | Highest per-match sequence issued (AD-12) |
-| `chat_thread_id` | `uuid` | yes | Opaque — `chat` owns the thread |
 | `updated_at` | `timestamptz` | no | |
 
 **Primary key: `(created_at, id)`.**
@@ -1345,7 +1342,19 @@ rebuild is all-or-nothing over the platform's entire match history.
 
 ## 10. Communication, Integrity, Operations
 
-### 10.1 `chat`
+### 10.1 `chat` · **SUPERSEDED — no such schema exists**
+
+> **Superseded by [ADR-004](../07-decisions/ADR-004-quick-messages-not-free-text-chat.md) (2026-08-09).** Arena64 has no free-text chat, so **none of the tables
+> below were created and none will be**. In-match communication is a fixed catalogue of
+> identifiers carried over the socket and **persisted nowhere** — see
+> [`specs/quick-messages.md`](../../specs/quick-messages.md). There is no `chat` schema, no
+> migration, and no ORM model.
+>
+> Retained because DB-17's reasoning is worth keeping: it is a worked example of why a
+> per-thread sequence beats a timestamp for a total order, and of when a row lock is and is not
+> affordable. Read the tables as a design to revisit if ADR-004 is ever reopened, not as
+> anything that exists.
+
 
 **`chat_thread`** — `id`, `scope` (`match`, `direct`, `system`), `scope_ref uuid` (the match id, the
 canonical pair key, or null), `status` (`open`, `closed`, `frozen`), `message_seq bigint`
@@ -1633,7 +1642,7 @@ columns and the role grants.
 | Class | `created_at` | `updated_at` | `deleted_at` | `created_by` | Runtime grants |
 | --- | --- | --- | --- | --- | --- |
 | **C1** — `match`*, `move`, `match_participant`, `rating_adjustment`, `player_achievement`, `audit_entry`, `integrity_signal`, `handle_assignment` | **Yes** | **No** | **No** | Only where the actor is not otherwise identified | `SELECT`, `INSERT` |
-| **C2** — `account`, `player_profile`, `friendship`, `player_rating`, `sanction`, `chat_thread`, `notification` | Yes | Yes | **No** — see §11.2 | Where an actor other than the subject can act | `SELECT`, `INSERT`, `UPDATE` |
+| **C2** — `account`, `player_profile`, `friendship`, `player_rating`, `sanction`, `notification` | Yes | Yes | **No** — see §11.2 | Where an actor other than the subject can act | `SELECT`, `INSERT`, `UPDATE` |
 | **C3** — `outbox`, `processed_event` | Yes (`occurred_at`) | No | No | No | `SELECT`, `INSERT`, `UPDATE` on the publication columns; `DELETE` only via partition detach |
 | **C5** — `achievement_progress`, `player_statistics`, `head_to_head` | No | `updated_at` + `source_watermark` | No | No | Full DML including `TRUNCATE` — they are rebuilt |
 
@@ -1685,8 +1694,6 @@ is what keeps its semantics enforceable.
 | A "deleted" session | `revoked_at` + `revoked_reason` | Why a session ended is a security signal. `deleted_at` discards it |
 | A "deleted" friendship | `ended_at` + `ended_reason` | A friendship that ended is a fact with a date; the row is history, not debris |
 | A "deleted" sanction | `lifted_at` / `expires_at` | Expiry and lifting are different — one is time, one is a decision by a named person |
-| A "deleted" chat message | `redacted_at` | CT-5: moderation must prove the message existed and was removed |
-| A "deleted" conversation | `chat_thread_participant.hidden_at` | It is per-participant visibility, not deletion. The other party's copy is untouched — modelling it as deletion would let one participant destroy the other's evidence |
 | A "deleted" notification | `dismissed_at` | Dismissal is a read-state, and the record still feeds NT-2's idempotency |
 
 **Where soft delete is actively forbidden:** every C1 relation. A `deleted_at` on `match` would
@@ -1708,7 +1715,7 @@ three.
 
 Present only where the acting party is not already identifiable from the row:
 `admin.audit_entry.actor_id`, `admin.moderation_case.opened_by`, `admin.sanction.lifted_by`,
-`admin.role_assignment.granted_by`, `chat_message.redacted_by_case_id`.
+`admin.role_assignment.granted_by`.
 
 **Deliberately absent** from `match` (the participants are the actors), `move` (`seat` is the
 actor), `friend_request` (`requester_id`), and every C5 projection (a worker is not an actor). A
@@ -1733,7 +1740,6 @@ speculative, and a speculative index on the move log is a permanent write tax.
 | Q5 | Claim the next unpublished outbox rows in order | `OutboxRelayStore` | Continuous |
 | Q6 | Is this player sanctioned right now? | `admin` port | Every sign-in, message, queue entry |
 | Q7 | Friends of a player / blocks of a player / pending requests | `friends` repositories | Every social page, every pairing tick |
-| Q8 | Messages in a thread, newest-first, keyset | `ChatThreadRepository` | Every match |
 | Q9 | Undelivered notifications for a recipient | `NotificationRepository` | Every connect |
 | Q10 | Handle lookup, exact and prefix | `UserProfileRepository` | Search box, sign-up |
 
@@ -1808,11 +1814,10 @@ partial on rows where `lifted_at` is null — the immutable part of the predicat
 comparison happens as a cheap filter on the handful of rows returned. Lifted sanctions, which
 accumulate forever, never enter the index.
 
-### 12.7 `chat`, `notifications`, `users`
+### 12.7 `notifications`, `users`
 
 | Index | Serves | Note |
 | --- | --- | --- |
-| `uq_chat_message__thread_seq` on `(thread_id, seq)` | Q8 | The ordering guarantee and the pagination key are one object (DB-17) |
 | `ix_notification__recipient_undelivered`, partial on rows where `read_at` and `dismissed_at` are null | Q9 | Shrinks as players read; the badge count is a small index-only scan |
 | `uq_player_profile__handle_folded` | Q10 exact | Case-insensitive by construction |
 | `gin_player_profile__handle_trgm`, GIN with `pg_trgm` | Q10 prefix and fuzzy | §15.6 explains why trigram rather than a text-search configuration |
@@ -1840,7 +1845,7 @@ displayable exactly as chosen, and leaves both columns fully indexable.
 match creation instant, **monthly**.
 
 **Partitioned when volume warrants (designed for, not created yet):** `platform.outbox`,
-`chat.chat_message`, `notifications.notification`, `admin.audit_entry`, and eventually
+`notifications.notification`, `admin.audit_entry`, and eventually
 `rating.rating_adjustment` — each already carries the timestamp column its future partition key
 would use, so attaching partitioning does not alter a primary key.
 
@@ -1975,7 +1980,7 @@ by minutes.
 | --- | --- | --- |
 | **Secret** | Password material, refresh tokens, reset and verification tokens, WebSocket tickets | Never stored in recoverable form (§14.2, §14.3). Never logged, never exported |
 | **Credential-adjacent** | Push device tokens | Stored in full because they must be *sent*, protected by restriction (§10.2) |
-| **Personal** | Email, IP addresses, user-agent, device labels, chat bodies, biography, country | Minimised, retention-bounded, in scope for erasure (§14.7) |
+| **Personal** | Email, IP addresses, user-agent, device labels, biography, country | Minimised, retention-bounded, in scope for erasure (§14.7). **No message bodies** — none are ever written (§10.1) |
 | **Public** | Handle, avatar, ratings, match records, achievements | The product |
 
 ### 14.2 Password storage
@@ -2043,7 +2048,7 @@ never do here.
 - User-agent strings are stored **hashed**, with a human-readable `device_label` derived at capture
   time. The label is what a player needs in order to recognise a session; the raw string is a
   fingerprint.
-- Chat bodies are stored once, in `chat.chat_message`, and **never copied to logs**
+- No message bodies exist to store or log: the wire carries catalogue identifiers only (§10.1)
   (`services.md §8.5`).
 - Email appears only in `auth.account`. No other schema stores it (DM-06).
 
@@ -2070,7 +2075,6 @@ Per DM-13, erasure **anonymises the person and preserves the competitive record*
 | --- | --- |
 | `auth` | `email`, `email_normalized` nulled; credentials deleted; sessions revoked; tokens deleted; `erased_at` set |
 | `users` | `handle`, `display_name`, `avatar_object_key`, `country_code`, `bio` nulled; `anonymised_at` set; handle released to cooldown |
-| `chat` | Message bodies redacted where the erased player is the sender |
 | `notifications` | Device registrations deleted; notifications deleted |
 | `friends` | Rows deleted — a relationship is personal data about both parties |
 | `game`, `rating`, `achievements`, `statistics`, `admin`, `fairplay` | **Untouched.** `player_id` remains as a tombstone |
@@ -2097,9 +2101,9 @@ three of them wrong.
 | Category | Examples | Where it lives | Why |
 | --- | --- | --- | --- |
 | **1. Static interface text** | Buttons, labels, error copy, board tooltips | **Client bundles.** Not in the database at all | It changes with the frontend release, not with data. Putting it in the database means a copy fix requires a database write and a cache bust, and the text is unversioned against the UI that renders it |
-| **2. Server-generated messages** | Notifications, system chat, transactional email | **Template key + parameters** (§15.2) | Rendered at read time in the reader's *current* locale |
+| **2. Server-generated messages** | Notifications, transactional email | **Template key + parameters** (§15.2) | Rendered at read time in the reader's *current* locale |
 | **3. Operator-authored catalogue** | Achievement names and descriptions, moderation reason text, announcements | **Side translation relations** (§15.3) | Editable by operations without a deploy; coverage must be measurable |
-| **4. User-authored content** | Chat messages, biographies, display names, reports | **Stored verbatim, never translated** | It is the user's own words. Translating them would misrepresent what was said — in a moderation context, dangerously so |
+| **4. User-authored content** | Biographies, display names, reports | **Stored verbatim, never translated** | It is the user's own words. Translating them would misrepresent what was said — in a moderation context, dangerously so |
 
 ### 15.2 Server-generated messages: store the key, not the sentence
 
@@ -2183,17 +2187,14 @@ pattern matching platform-wide.
 | --- | --- | --- |
 | Handle exact match | `handle_folded` unique index | §12.7 |
 | Handle prefix and fuzzy search | **`pg_trgm` GIN index** | A handle is not natural language. Stemming it is meaningless, and trigram search handles prefixes, typos and mixed scripts uniformly |
-| Moderation search over chat | Per-locale text search configuration where one exists | PostgreSQL ships configurations for English and Russian |
-| Moderation search over **Uzbek** chat | **`simple` configuration plus trigram** | **PostgreSQL ships no Uzbek text-search configuration.** Stemming is unavailable, so Uzbek search falls back to unstemmed tokens plus trigram similarity |
 
-This last row is a genuine capability gap, not an oversight: moderation search quality in Uzbek will
-be measurably worse than in English or Russian until a stemmer or dictionary is sourced. It is
+This last row is a genuine capability gap, not an oversight: text search quality in Uzbek will be
+measurably worse than in English or Russian until a stemmer or dictionary is sourced. It is
 recorded as §19 RK-8 so that it is a known limitation rather than a support mystery.
 
-**A related operational point:** `chat.chat_message` carries no `locale` column at launch, but
-routing an Uzbek-language report to a moderator who reads Uzbek is a real need. If it becomes one,
-the column stores a *detected* locale used **only for moderator routing** — never for translation
-and never displayed, because a detection error must not misrepresent what a player wrote.
+It applies to the user-authored text this platform *does* store — biographies, display names,
+reports. It no longer applies to messages: there are none, because in-match communication carries
+catalogue identifiers rather than prose (§10.1), and an identifier needs no stemmer.
 
 ---
 
@@ -2292,7 +2293,6 @@ Defined per relation, not globally.
 | Matches, moves, participants, rating adjustments, achievements | **Indefinite**, cold partitions archived | The competitive record is the product |
 | Moderation cases, sanctions, audit entries | Long, policy-driven | Appeals and accountability |
 | Integrity signals | Long, retained even when dismissed | Patterns over time *are* the detection mechanism (IS-3) |
-| Chat messages | Bounded — **duration open** (Q-15) | Moderation value decays; privacy liability does not |
 | Notifications | Short | Nobody reads a three-month-old "your turn" |
 | Sessions, tokens, device registrations | Expiry-driven, then hard-deleted | §11.2 |
 | Outbox | Retained past publication as the rebuild source, then partition-dropped | AD-17 |

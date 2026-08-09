@@ -30,6 +30,7 @@ from sqlalchemy import func, literal, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ValidationError
+from app.modules.tournament.domain.tournament import TournamentStatus
 from app.modules.tournament.infrastructure.models import (
     PairingAttemptModel,
     PairingModel,
@@ -40,6 +41,7 @@ from app.modules.tournament.infrastructure.models import (
 )
 from app.modules.tournament.public.administration import (
     AdminEntrant,
+    AdminLiveTournamentSummary,
     AdminPairing,
     AdminRound,
     AdminStanding,
@@ -101,6 +103,31 @@ class SqlAlchemyAdministrativeTournamentDirectory:
         return AdminTournamentPage(
             records=[_to_record(row, counts.get(row.id, 0)) for row in page],
             next_cursor=next_cursor,
+        )
+
+    async def live_tournament_summary(self) -> "AdminLiveTournamentSummary":
+        """The two live counts — A64-024.9. One grouped statement.
+
+        **The one dashboard read without an index**, deliberately: the
+        table holds one row per tournament ever created and grows by
+        operator action rather than by traffic, so the scan is measured in
+        microseconds and stays that way. `AdminLiveTournamentSummary`
+        records the threshold at which that stops being true and what the
+        fix is.
+        """
+        rows = await self._session.execute(
+            select(TournamentModel.status, func.count())
+            .where(
+                TournamentModel.status.in_(
+                    (TournamentStatus.REGISTRATION_OPEN, TournamentStatus.IN_PROGRESS)
+                )
+            )
+            .group_by(TournamentModel.status)
+        )
+        counts = {status: total for status, total in rows}
+        return AdminLiveTournamentSummary(
+            registration_open=counts.get(TournamentStatus.REGISTRATION_OPEN, 0),
+            in_progress=counts.get(TournamentStatus.IN_PROGRESS, 0),
         )
 
     async def find_tournament(self, tournament_id: UUID) -> AdminTournamentDetail | None:

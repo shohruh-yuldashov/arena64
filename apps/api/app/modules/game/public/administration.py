@@ -85,6 +85,31 @@ class AdminMatchRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class AdminLiveMatchSummary:
+    """How many games are in flight right now — A64-024.9.
+
+    **Live states only, and that is what makes it cheap.**
+    `ix_match__current_light` and `ix_match__current_dark` are partial on
+    exactly `('pending_acceptance', 'active')`, so a count over those two
+    statuses reads an index that holds only the games in flight — bounded by
+    concurrent play rather than by the match table, which is this platform's
+    largest and a future partition candidate.
+
+    **No "matches completed today".** There is no index for it, and adding
+    one to the hottest table on the platform so a dashboard can show a
+    number nobody acts on is the trade `database.md` §12.2 exists to
+    prevent. The operational question a dashboard answers is "is anything
+    happening now", and that is these two fields.
+    """
+
+    active: int
+    """Games being played."""
+
+    awaiting_acceptance: int
+    """Pairings offered and not yet taken up by both players."""
+
+
+@dataclass(frozen=True, slots=True)
 class AdminMatchFilters:
     """What an operator may narrow by.
 
@@ -140,12 +165,22 @@ class AdministrativeMatchDirectory(Protocol):
         """
         ...
 
+    async def live_match_summary(self) -> AdminLiveMatchSummary:
+        """The two live counts, in **one** grouped statement.
+
+        Index-backed — see `AdminLiveMatchSummary`. Takes no window and no
+        filter: "right now" is the only question, and a parameter would be
+        an invitation to ask a more expensive one.
+        """
+        ...
+
     async def find_match(self, match_id: UUID) -> AdminMatchRecord | None:
         """One match, or `None`. Every status, not only finished ones."""
         ...
 
 
 __all__ = [
+    "AdminLiveMatchSummary",
     "AdminMatchFilters",
     "AdminMatchPage",
     "AdminMatchRecord",

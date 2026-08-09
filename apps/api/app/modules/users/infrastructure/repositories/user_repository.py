@@ -71,6 +71,7 @@ from app.modules.users.domain.value_objects import (
 from app.modules.users.infrastructure.models import UserModel
 from app.modules.users.infrastructure.search_cursor import SearchCursor
 from app.modules.users.public.administration import (
+    AdminAccountSummary,
     AdminUserFilters,
     AdminUserPage,
     AdminUserRecord,
@@ -717,6 +718,27 @@ class SqlAlchemyAdministrativeUserDirectory:
         return AdminUserPage(
             records=[_to_admin_record(row) for row in page], next_cursor=next_cursor
         )
+
+    async def account_summary(
+        self, *, since_day: datetime, since_week: datetime
+    ) -> "AdminAccountSummary":
+        """Both windows from one range scan — A64-024.9.
+
+        `created_at >= since_week` is the only predicate, so the planner
+        walks `ix_user__created_at_id` from that instant forward and stops;
+        the shorter window is a `FILTER` over rows already in hand. Two
+        statements would scan the same index twice for a subset of the same
+        rows.
+        """
+        row = (
+            await self._session.execute(
+                select(
+                    func.count().filter(UserModel.created_at >= since_day),
+                    func.count(),
+                ).where(UserModel.created_at >= since_week)
+            )
+        ).one()
+        return AdminAccountSummary(registered_last_day=row[0], registered_last_week=row[1])
 
     async def accounts_by_ids(self, user_ids: Sequence[UUID]) -> "Mapping[UUID, AdminUserRecord]":
         return await _accounts_by_ids(self._session, user_ids)

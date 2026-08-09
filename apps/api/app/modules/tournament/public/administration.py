@@ -64,6 +64,33 @@ class AdminTournamentRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class AdminLiveTournamentSummary:
+    """The two tournament states an operator can act on — A64-024.9.
+
+    A tournament taking entries has a deadline somebody may need to extend;
+    one in progress has rounds that must be published. Everything else —
+    draft, closed, completed, cancelled — is either not started or finished,
+    and neither is an operational item.
+
+    **This is the one dashboard read without an index behind it**, and it is
+    deliberate rather than overlooked. `tournaments.tournament` holds one row
+    per tournament ever created, and tournaments are created by operators
+    rather than by traffic: the table grows by a handful of rows a day, not
+    by a thousand. A sequential scan of it is measured in microseconds and
+    stays that way for years.
+
+    The threshold at which that stops being true is worth writing down: at
+    roughly a hundred thousand rows the scan is no longer free, and the fix
+    is one partial index on the two live statuses — the same shape
+    `ix_match__current_*` already uses. Adding it now would be an index
+    guessed at rather than measured, which `specs/admin.md` §6.14 records.
+    """
+
+    registration_open: int
+    in_progress: int
+
+
+@dataclass(frozen=True, slots=True)
 class AdminTournamentFilters:
     """What an operator may narrow by — every member a column.
 
@@ -194,6 +221,10 @@ class AdministrativeTournamentDirectory(Protocol):
         """
         ...
 
+    async def live_tournament_summary(self) -> AdminLiveTournamentSummary:
+        """The two live counts, in **one** grouped statement."""
+        ...
+
     async def find_tournament(self, tournament_id: UUID) -> AdminTournamentDetail | None:
         """One tournament and everything bounded by its capacity, or `None`."""
         ...
@@ -201,6 +232,7 @@ class AdministrativeTournamentDirectory(Protocol):
 
 __all__ = [
     "AdminEntrant",
+    "AdminLiveTournamentSummary",
     "AdminPairing",
     "AdminRound",
     "AdminStanding",

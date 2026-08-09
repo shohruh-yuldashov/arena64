@@ -157,6 +157,30 @@ class AdminNotificationDetail:
 
 
 @dataclass(frozen=True, slots=True)
+class AdminDeliveryHealth:
+    """Push deliveries that need somebody — A64-024.9.
+
+    **One number, and it is the actionable one.** `attempts_exhausted` means
+    a push service was unreachable for a whole retry curve and the platform
+    gave up: it is the single state an operator can do something about, and
+    A64-024.7 built the retry that does it.
+
+    Everything else is deliberately not counted here. `permanent_failure`
+    and `subscription_gone` are finished — retrying is asking the same
+    question again — and every `skipped_*` describes a delivery that was
+    correctly not attempted, `skipped_preference` most of all. A dashboard
+    that summed them into one "failures" figure would invite an operator to
+    act on a number three quarters of which needs no action.
+
+    Backed by `ix_notification_push_delivery__failed`, which is partial on
+    `failed` — so this reads an index holding only failures, not the
+    delivery history.
+    """
+
+    retry_exhausted: int
+
+
+@dataclass(frozen=True, slots=True)
 class AdminNotificationFilters:
     """What an operator may narrow by — **index-backed filters only**.
 
@@ -214,6 +238,10 @@ class AdministrativeNotificationDirectory(Protocol):
         """
         ...
 
+    async def delivery_health(self) -> AdminDeliveryHealth:
+        """How many pushes are waiting for an operator — one statement."""
+        ...
+
     async def deliveries_for(
         self, notification_ids: Sequence[UUID]
     ) -> dict[UUID, Sequence[AdminPushDelivery]]:
@@ -259,6 +287,7 @@ class NotificationDeliveryOperations(Protocol):
 
 
 __all__ = [
+    "AdminDeliveryHealth",
     "AdminNotificationDetail",
     "AdminNotificationFilters",
     "AdminNotificationPage",

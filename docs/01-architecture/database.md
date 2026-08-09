@@ -1481,9 +1481,9 @@ Retained even when dismissed (IS-3); never exposed to players (IS-4).
 | --- | --- | --- |
 | `role_assignment` | `account_id`, `role`, `granted_by`, `granted_at`, `revoked_at` | Moderator authority is data, and its grant is auditable |
 | `report` | `id`, `reporter_id`, `subject_player_id`, `category`, `context_type`, `context_ref`, `body`, `status`, `case_id`, `created_at`, `triaged_at` | A reporter's accusation, with its own lifecycle |
-| `moderation_case` | `id`, `subject_player_id`, `category`, `status`, `opened_by`, `opened_at`, `closed_at`, `decision`, `reasoning`, `reverses_case_id` | Immutable once closed; a reversal is a new case |
+| `moderation_case` | `id`, `subject_player_id`, `category`, `status`, `opened_by`, `opened_at`, `closed_at`, `decision`, `reasoning`, `reverses_case_id` | **Built** (A64-024.6). Immutable once closed; a reversal is a new case. `ck_moderation_case__not_self_opened` keeps §13.2's "a moderator may not act on a case involving themselves" |
 | `case_evidence` | PK `(case_id, evidence_type, evidence_ref)` | Polymorphic references across schemas — no FK by construction (DB-03) |
-| `sanction` | `id`, `player_id`, `case_id` (FK), `kind`, `starts_at`, `expires_at`, `lifted_at`, `lifted_by`, `created_at` | The hot authorization read (DM-12) |
+| `sanction` | `id`, `player_id`, `case_id` (FK), `kind`, `starts_at`, `expires_at`, `lifted_at`, `lifted_by`, `created_at` | **Built** (A64-024.6). The hot authorization read (DM-12). `kind` ships `suspended` alone — see `specs/admin.md` §6.12 |
 | `audit_entry` | `id`, `actor_type`, `actor_id`, `action`, `subject_type`, `subject_ref`, `outcome`, `before jsonb`, `after jsonb`, `correlation_id`, `created_at` | **Built** (A64-024.8). Append-only, enforced by a trigger on `UPDATE`, `DELETE` and `TRUNCATE`; `actor_id` NULL exactly when `actor_type = 'operator'`; future partition candidate |
 
 **`audit_entry` is append-only in the database, not by convention.** A
@@ -1497,6 +1497,19 @@ forget, and an audit trail the audited party can edit is not one.
 `outcome` extends §10.4's original column list: an attempt that was refused
 is a different fact from one that succeeded, and a trail that recorded only
 successes would be silent about exactly the events an incident is about.
+
+**Uniqueness on `sanction` is a partial unique index, not an exclusion constraint.** §2.1 names
+`ex_sanction__one_active_per_kind` as its example of the naming convention; the implementation is
+`uq_sanction__live_kind`, unique on `(player_id, kind)` where `lifted_at IS NULL`. An exclusion
+constraint over the validity range would forbid recording a fresh suspension while an expired one
+still sits unlifted — which is ordinary history rather than a conflict. What must not happen is two
+*live* restrictions of one kind disagreeing about when they end, and that is exactly what the
+partial index forbids. It is also what makes two administrators acting at the same instant end in
+an integrity error rather than in two rows (BE-06).
+
+**`moderation_case` and `sanction` carry no foreign key to `users.user`.** DB-03 forbids the
+cross-schema reference, and it is the right answer here for a second reason: both records must
+outlive the account they describe, because an appeal is read after the fact.
 
 **Sanction expiry is evaluated on read, never by a job.** A scheduled "expire sanctions" job that
 fails leaves players banned past their sentence — a failure mode where the safe direction is

@@ -622,6 +622,250 @@ A64-023 made for quick messages.
 
 ---
 
+## 6.12 Moderation & Safety — A64-024.6
+
+**The first admin surface that writes.** Every phase before it was read-only
+because `admin.audit_entry` was unbuilt (§7); §6.11 built it, and these two
+mutations are what it unblocked.
+
+### The model, and why it is not `is_active`
+
+`domain-model.md` §6 draws the two transitions separately —
+
+    Active --> Suspended:    sanction applied
+    Active --> Deactivated:  player-initiated
+
+— and states the ownership rule outright: *"`admin` may request suspension
+through a published port; **it never writes account rows**."* So moderation
+does not touch `users.User.is_active`. Overloading it would make "did they
+leave or were they removed" unanswerable, and would let a player's own
+reactivation silently undo a moderator's decision.
+
+What ships instead is what §13.2 and §13.3 specified and `database.md` §10.4
+already had columns for:
+
+| Table | Role | Notes |
+| --- | --- | --- |
+| `admin.moderation_case` | The decision | Written once, never updated. §13.2: an editable moderation record cannot be trusted in an appeal |
+| `admin.sanction` | The enforcement | `case_id` **NOT NULL** — §13.3's "a sanction names the case that authorised it" |
+
+Two tables rather than one because DM-12 keeps them apart: the sanction is a
+hot authorization input read at every credential boundary, and the case is a
+document written for humans.
+
+**A case is created closed, by the action itself.** An administrator acting
+directly is a decision-maker, so the case names them, their category and
+their reasoning. What is deliberately **not** built: reports, evidence, a
+case inbox, assignment, review, appeals, automated moderation. The table
+exists now so that when reports arrive they attach to it — rather than to a
+`NOT NULL` column that would need backfilling with fabricated rows.
+
+### Kinds
+
+`SanctionKind` has **one member**, `suspended`, and that is the honest count.
+§13.3 names four; only one has an enforcement seam today.
+
+| Kind | Status | Why |
+| --- | --- | --- |
+| `suspended` | **Shipped** | Authentication is withheld; the seams exist |
+| `muted` | Deferred | Would need a guard on the quick-message surface, which has none. A kind nothing enforces is a restriction the console reports and the player never experiences |
+| `matchmaking_restricted` | Deferred | Same — no queue-entry guard exists yet |
+| `banned` | Deferred | §6 ties a permanent ban to erasure, which is DM-13's obligation and not this task's |
+
+An **indefinite** suspension is already expressible: `expires_at` is null.
+Indefinite is not permanent — a restore ends it.
+
+### Reason taxonomy
+
+Machine-readable identifiers; the console localises them (uz/ru/en).
+
+| Category | Justified by |
+| --- | --- |
+| `cheating` | `fairplay` integrity signals (§13.1); IS-1 forbids automatic sanctions, so a human deciding on that evidence is exactly this |
+| `abuse` | The quick-message surface (ADR-004) and the block graph |
+| `account_compromise` | `auth` already has lockout and password reset; withholding access to a stolen account is protective |
+| `policy_violation` | The bounded catch-all |
+| `other` | The honest escape hatch — `reasoning` is required on every case, so it is not a hole |
+
+**`harassment` and `spam` are deliberately absent.** There is no free-text
+channel to distinguish them on and quick messages are already rate-limited;
+three categories no evidence can tell apart would be three filled in at
+random.
+
+`reasoning` is **required**, plain text, bounded at 500 characters, stored on
+the case and **never shown to the restricted account**. It is admin-private
+operational context. The console's field says so, and the bound exists
+because an unbounded administrative textarea is where pasted logs and tokens
+end up.
+
+### Temporary and indefinite
+
+Both. The client sends a **duration**, never an instant — an absolute expiry
+from a browser is subject to the operator's device clock, and a skewed one
+silently ends a restriction at the wrong time. The server computes
+`expires_at` against its own clock. Durations are bounded at one year; a
+longer restriction is a second deliberate action.
+
+**No scheduler, and none is needed.** §13.3: *"expiry is by instant,
+evaluated at read time, never by a job that 'removes' sanctions — because a
+job that fails leaves players banned."* Effectiveness is:
+
+    lifted_at IS NULL AND starts_at <= now AND (expires_at IS NULL OR expires_at > now)
+
+An expired sanction stops applying with no job having run, and its row stays:
+history, not a deletion.
+
+### Enforcement, and the bounded window
+
+| Boundary | Behaviour |
+| --- | --- |
+| `POST /auth/login` (and browser login) | Refused with `AccountRestricted` → **403**, after a successful password verification |
+| `POST /auth/browser/refresh`, `POST /auth/refresh` | Refused, and the presented session is revoked |
+| Applying a restriction | `revoke_all_sessions(reason=SUSPENSION)` — SE-3 — **in the same transaction** |
+| Every other authenticated request | **No new query.** No sanction lookup was added to `CurrentUser`, to game commands, or to any gateway frame |
+
+**This is not "immediate enforcement", and calling it that would be wrong.**
+Stated precisely:
+
+- For refresh and session credentials, enforcement is **immediate**: every
+  live session is revoked in the restricting transaction, and a rotation
+  already in flight is refused at the next attempt.
+- For an **already-issued access token**, enforcement is bounded by the
+  access-token TTL. A token minted seconds before the restriction stays
+  syntactically valid until it expires.
+
+The alternative — a live sanction read on every authenticated request —
+would put an indexed query on every game move and every gateway frame, which
+§25 rules out and DM-12 does not ask for ("every sign-in, every message
+send, every queue entry", not every request).
+
+**Deferred and recorded as risk:** enforcement at the matchmaking-queue and
+quick-message seams, which is where `muted` and `matchmaking_restricted`
+will land.
+
+### `is_active` and the deactivation gap
+
+The audit for this phase found that `is_active=false` blocks **login only** —
+no product surface and not the refresh path check it, so a deactivated
+account could refresh indefinitely. That is a pre-existing gap in a
+*different* concept and A64-024.6 did not merge the two semantics to close
+it. It is recorded here as a known risk for a `users`/`auth` task; the
+credential-boundary shape used for restrictions is the model for fixing it.
+
+### Safety
+
+| Rule | Behaviour |
+| --- | --- |
+| Self-restriction | **Refused** (`SelfSanction` → 422). §13.2 already forbids acting on a case involving oneself, and an administrator who can withhold their own access can lock out the operator |
+| Last administrator | **Refused** (`ProtectedAdministrator` → 409). A suspended administrator cannot sign in, and unlike a role revocation there is no `bootstrap` to recover through |
+| Target holds `admin` | Allowed **while another administrator exists**. The restriction does not revoke the role — a suspended administrator simply cannot authenticate, and their grant is still there when restored |
+| Moderator role | **Not invented.** OQ-1 stays open; nothing here required a second role |
+| Client-supplied actor | Impossible: the request models have no actor field and `extra="forbid"` |
+
+### Idempotency and concurrency
+
+| Case | Behaviour |
+| --- | --- |
+| Restrict an already-restricted account | **409**, not a silent success. A second `SUCCEEDED` audit row for a transition that did not happen would be worse than a missing one |
+| Restore an unrestricted account | **409**, for the same reason |
+| Two administrators restricting at once | `uq_sanction__live_kind` (partial unique on `lifted_at IS NULL`) resolves it to one row; the loser gets an integrity error, not a second live restriction |
+| Restrict → restore → restrict | Allowed. The partial predicate frees the slot on lift, because that is ordinary history |
+
+### Audit
+
+Every successful mutation writes an `admin.audit_entry` **in the same
+transaction** as the case, the sanction and the session revocation. All four
+commit together or none does — asserted against a real database in
+`tests/contract/test_admin_moderation.py`.
+
+    admin.sanction.apply    before {restricted:false}
+                            after  {restricted, kind, category, case_id,
+                                    expires_at, sessions_revoked}
+    admin.sanction.lift     before {restricted, kind, case_id, since}
+                            after  {restricted:false, lifted_at}
+
+**No `reasoning` in the trail**, deliberately: the entry records that a
+decision was taken and *where it is written down* (`case_id`), not a second
+copy of the prose in a table nobody may delete from. No `User` object, no
+request body, no address.
+
+### Failed-attempt audit policy — closing A64-024.8's open question
+
+§6.11 shipped `AuditOutcome.FAILED` with no producers. The line is **who is
+asking**:
+
+| Category | Where it goes | Why |
+| --- | --- | --- |
+| Authenticated administrator refused by a domain safety rule (`self_restriction`, `last_administrator`, `already_restricted`, `not_restricted`) | **`FAILED` audit row** | Somebody trusted tried something the platform stopped — the fact an incident review needs. Bounded in volume: each requires a live admin session |
+| Unauthenticated / non-admin / revoked-role request | **Application log only** | Attacker-controlled in volume; letting it append to an append-only table nobody may delete from is a denial-of-service disguised as diligence |
+| Infrastructure failure | **Logs and metrics** | The transaction that would carry the entry is the one that failed |
+
+The `FAILED` entry is written in its own transaction — correctly, because
+there is no mutation for it to be atomic with. `refused` is a closed
+identifier chosen server-side, never a message and never anything the
+request supplied.
+
+### API
+
+    GET  /api/v1/admin/moderation?effective_only=&limit=&cursor=
+    POST /api/v1/admin/users/{user_id}/restrict
+    POST /api/v1/admin/users/{user_id}/restore
+
+The mutations sit on the user's path because the target is an account and a
+body field naming the subject would be one a caller could change
+independently of the URL they were authorised against.
+
+| Concern | Behaviour |
+| --- | --- |
+| Guard | `CurrentAdmin` on every route, asserted against the route table |
+| Actor | The session's, never the payload's |
+| Request models | Explicit, `extra="forbid"`, closed reason enum, bounded reasoning, bounded duration |
+| Restore body | **None.** A restore ends the one live restriction; a second taxonomy for ending one would be read by nobody |
+| Pagination | Keyset on `(created_at, id)`, default 25, max 50, no total count |
+| Query shape | List: 3 statements — the page, one batch of cases, one batch of accounts |
+| Caching | `Cache-Control: no-store` |
+| Unknown account | `404` **before** anything is written — a moderation case about nobody is one nobody can review |
+
+### Runtime cost
+
+| Path | Added cost |
+| --- | --- |
+| Sign-in | +1 indexed read, after Argon2 verification — three orders of magnitude cheaper than the work already done, and never reached by a wrong password, so it is not an enumeration oracle |
+| Refresh | +1 indexed read |
+| Every other authenticated request | **0** |
+| Game move, gateway frame, queue entry | **0** |
+
+Backed by `ix_sanction__player_expiry` — `database.md` §12.6's design,
+partial on `lifted_at IS NULL` because a partial index predicate must be
+immutable and `now()` cannot appear in one.
+
+### Console
+
+`/moderation` replaces its placeholder: active restrictions, with an
+"include history" toggle, links to each account, and the deciding
+administrator. **No case queue** — Arena64 has no player reports, and an
+inbox for a stream that does not exist would be empty by construction.
+
+**The actions are on the account's page, not on the list.** An operator
+should have read who somebody is before withholding their access; a control
+on a list row is one applied to whichever row was under the cursor. No bulk
+action exists.
+
+Both actions confirm in a native `<dialog>` (`showModal`), which gives the
+focus trap, `Escape` and page inertness from the browser rather than from a
+dependency. The dialog names the target, states the consequence, and stays
+open on refusal holding what was typed.
+
+### Notification to the restricted account
+
+**Deferred.** No product policy exists for it, and inventing one would mean
+choosing what a restricted person is told — a product and legal decision
+(`domain-model.md` Q-17 keeps it open). What they see today is the generic
+403 message `AccountRestricted` carries. Nothing about the category, the
+reasoning, the case or the deciding administrator reaches a client.
+
+---
+
 ## 7. The audit invariant
 
 **Built by A64-024.8** — see §6.11. The rule it exists to keep:
@@ -642,15 +886,19 @@ party being audited.
 
 ## 8. Deferred to later A64-024.x tasks
 
-Dashboard statistics, user suspension and other account mutations,
-moderation workflows, notification operations, analytics, infrastructure
+Dashboard statistics, notification operations, analytics, infrastructure
 monitoring, anti-cheat surfaces, support tooling, and the final visual
-design. User, match and tournament **reads** ship in §6.8–§6.10; the audit
-log ships in §6.11.
+design. Reads ship in §6.8–§6.11; account restrictions ship in §6.12.
 
-The mutations are no longer blocked on `admin.audit_entry` — it exists.
-What each still needs is its own decision about *what* to record, which is
-`AuditAction`'s to extend.
+Within moderation specifically, deferred and named: player reports and a
+case queue, evidence, appeals, the `muted` and `matchmaking_restricted`
+kinds and their enforcement seams, bans tied to erasure, bulk actions, and
+IP or device restrictions.
+
+Match and tournament mutations are no longer blocked on `admin.audit_entry`
+— it exists, and §6.12 demonstrates the pattern. What each still needs is
+its own decision about *what* to record, which is `AuditAction`'s to
+extend.
 
 Their **routes exist and are guarded**; only their content is deferred, so
 adding a real section later changes a page body and not the boundary.

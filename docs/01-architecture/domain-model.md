@@ -1199,6 +1199,22 @@ time, never by a job that "removes" sanctions — because a job that fails leave
 **Business rules.** A sanction names the case that authorised it; overlapping sanctions apply the
 most restrictive; expiry is evaluated on read; lifting is itself an auditable action.
 
+**Built by A64-024.6** — `specs/admin.md` §6.12. Four things the model gained in the building:
+
+- **One kind ships**, `suspended`. `muted` and `matchmaking_restricted` have no enforcement seam on
+  this platform yet, and a kind an administrator can apply while nothing enforces it is a
+  restriction the console reports and the player never experiences. `banned` waits on the erasure
+  interaction §6's lifecycle draws.
+- **The case is created by the action**, closed, naming the administrator who decided. There is no
+  report queue to open one, and `sanction.case_id` is `NOT NULL` — so a direct administrative
+  decision is a real case rather than a null.
+- **Enforcement is at the credential boundary**, not on every request: sign-in and refresh read the
+  sanction, and applying one revokes every live session in the same transaction (SE-3). An
+  already-issued access token remains valid for the rest of its TTL, and that window is stated
+  rather than glossed as "immediate".
+- **`Account.is_active` is untouched.** §6's ownership rule — `admin` never writes account rows —
+  is kept structurally: the moderation service holds no `users` write port at all.
+
 ### 13.4 `AuditEntry` — entity
 
 Append-only record of every privileged action: actor, action, subject, outcome, before-and-after,

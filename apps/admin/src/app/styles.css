@@ -283,3 +283,7 @@ body {
   margin: 0;
   overflow-wrap: anywhere;
 }
+
+.load-more {
+  margin: 1rem 0 0;
+}

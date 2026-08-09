@@ -1,12 +1,7 @@
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
-import {
-  type AdminUserPage,
-  type AdminUserSummary,
-  fetchUsers,
-  type UserQuery,
-} from "@/shared/api/client";
+import { type AdminUserSummary, fetchUsers, type UserQuery } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
 
 /**
@@ -50,8 +45,27 @@ export function UsersPage() {
   const search = useSearch({ strict: false }) as Search;
 
   const [term, setTerm] = useState(search.q ?? "");
-  const [page, setPage] = useState<AdminUserPage | null>(null);
+  /**
+   * Every row loaded so far, oldest page first — A64-024.3H.
+   *
+   * Accumulated rather than replaced, because "Load more" is the UX: a
+   * page that swapped its rows would lose the ones an operator had already
+   * scrolled to. The server's ordering is deterministic and each cursor
+   * continues where the last page ended, so appending preserves it.
+   */
+  const [rows, setRows] = useState<AdminUserSummary[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  /**
+   * Kept apart from `state`, deliberately.
+   *
+   * A failed *first* page has nothing to show and becomes the error
+   * screen; a failed *next* page must leave the rows already on screen
+   * exactly where they are. Folding the two into one state is how a
+   * transient network blip erases an operator's place in a list.
+   */
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreFailed, setMoreFailed] = useState(false);
 
   // Keeps the input responsive while the URL — the thing that actually
   // drives the query — updates only once typing settles.
@@ -80,11 +94,19 @@ export function UsersPage() {
     const next = new AbortController();
     controller.current = next;
     setState("loading");
+    // **The reset.** A changed search or filter starts a new result set,
+    // so the accumulated rows and the cursor both go — reusing a cursor
+    // from the previous query would ask the server to continue a list that
+    // no longer exists, and it would answer with rows that do not match.
+    setRows([]);
+    setCursor(null);
+    setMoreFailed(false);
 
     void fetchUsers(query, next.signal).then((outcome) => {
       if (next.signal.aborted) return;
       if (outcome.status === "ok") {
-        setPage(outcome.value);
+        setRows(outcome.value.items);
+        setCursor(outcome.value.next_cursor);
         setState("ready");
         return;
       }
@@ -97,6 +119,39 @@ export function UsersPage() {
     // state change, which is how a search box ends up cancelling itself.
   }, [key]);
 
+  /**
+   * Fetches the page after the one on screen and **appends** it.
+   *
+   * Deduplicated by id on the way in. The keyset is total — `(created_at,
+   * id)` with a unique tiebreak — so a duplicate should be impossible; the
+   * guard is here because the cost of being wrong is a React key collision
+   * and a row rendered twice, and the cost of the guard is a `Set`.
+   *
+   * Uses its own request rather than the effect's controller, so a
+   * superseded search still aborts the *first* page without this one
+   * cancelling itself mid-append.
+   */
+  const loadMore = async () => {
+    if (cursor === null || loadingMore) return;
+    setLoadingMore(true);
+    setMoreFailed(false);
+
+    const outcome = await fetchUsers({ ...query, cursor });
+    setLoadingMore(false);
+
+    if (outcome.status !== "ok") {
+      // The rows already on screen are untouched — §6.
+      setMoreFailed(true);
+      return;
+    }
+
+    setRows((current) => {
+      const seen = new Set(current.map((row) => row.id));
+      return [...current, ...outcome.value.items.filter((row) => !seen.has(row.id))];
+    });
+    setCursor(outcome.value.next_cursor);
+  };
+
   const setFilter = (name: "active" | "verified", value: string) => {
     void navigate({
       to: "/users",
@@ -104,8 +159,6 @@ export function UsersPage() {
       replace: true,
     });
   };
-
-  const rows = page?.items ?? [];
 
   return (
     <>
@@ -221,6 +274,30 @@ export function UsersPage() {
               </li>
             ))}
           </ul>
+
+          {/* §6: gone entirely when the server sent no cursor. A disabled
+              "Load more" on the last page is a control that says there is
+              something else and then refuses to fetch it. */}
+          {cursor !== null && (
+            <p className="load-more">
+              <button
+                type="button"
+                className="action"
+                disabled={loadingMore}
+                onClick={() => void loadMore()}
+              >
+                {t(loadingMore ? "users.loadingMore" : "users.more")}
+              </button>
+            </p>
+          )}
+
+          {/* The rows above are still on screen — a failed next page must
+              not cost an operator the ones they already had. */}
+          {moreFailed && (
+            <p role="alert" className="error">
+              {t("users.moreError")}
+            </p>
+          )}
         </>
       )}
     </>

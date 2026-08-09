@@ -354,6 +354,71 @@ class GameCommandRejection(StrEnum):
     INTERNAL = "internal"
 
 
+#: Quick messages received from clients, by what became of them —
+#: A64-023.1 §10.
+#:
+#: **One counter with a bounded `outcome` label**, not one per outcome: the
+#: only question anybody asks of these is comparative — what share of sends
+#: are refused, and which refusal dominates. Seven series in total, which is
+#: the whole observability budget this feature gets.
+#:
+#: **No message identifier, no player, no match** (§10). The catalogue is
+#: closed and small, so a `message` label would be *technically* bounded —
+#: and it is still absent, because "which quick messages get used" is a
+#: product question that multiplies every series here by six to answer, and
+#: nothing operational needs it. If it is ever wanted it is a product
+#: analytics event, not a gateway counter.
+QUICK_MESSAGES: Final = "gateway.quick_messages_total"
+
+
+class QuickMessageOutcome(StrEnum):
+    """What happened to one quick-message frame.
+
+    A category per *failure mode* rather than per exception type, the same
+    rule `MoveRejection` and `GameCommandRejection` keep.
+    """
+
+    SENT = "sent"
+    """Accepted and handed to the fan-out. **Not** "delivered" — delivery
+    is best effort by design (§5), and counting it as success here would
+    make this counter disagree with `LOCAL_DELIVERIES` for a reason that is
+    not a defect."""
+
+    REJECTED_INVALID = "rejected_invalid"
+    """The frame named no match, or named something that is not in the
+    catalogue. One label for both, because both mean the same thing to an
+    operator: a client sending frames this server cannot use. A rising rate
+    against a release is a **catalogue skew** — a client built for a
+    different set of entries — which is the one thing this series is
+    actually watched for."""
+
+    REJECTED_NOT_IN_ROOM = "rejected_not_in_room"
+    """The connection had not joined the match's room. The client's own
+    sequencing mistake, and the label a spectator's send lands in — a
+    viewer is in the audience, never in the room."""
+
+    REJECTED_NOT_PARTICIPANT = "rejected_not_participant"
+    """No such match, or this player is not in it. **One label for both**,
+    for the reason `RoomRejectionReason` gives: a metric that separated
+    them would let anybody with a dashboard confirm that a match id
+    exists."""
+
+    REJECTED_TERMINAL = "rejected_terminal"
+    """The match is not being played. Overwhelmingly a player pressing a
+    button on a game that has just ended, which is why it is worth
+    distinguishing from the refusals that indicate a defect."""
+
+    RATE_LIMITED = "rate_limited"
+    """The connection's burst or sustained window is full. A rising rate is
+    a **product** signal before it is an abuse one: it may mean the limits
+    are tighter than ordinary play, and the two are told apart by whether
+    it concentrates on few connections or spreads across many."""
+
+    INTERNAL = "internal"
+    """Something failed that the client cannot act on. Always accompanied
+    by an `ERROR` log carrying the exception."""
+
+
 #: Match offers this node attempted to put on a socket — A64-020.5D §4.
 #:
 #: One counter with a bounded `outcome` label rather than four names,
@@ -433,7 +498,9 @@ __all__ = [
     "CONNECTION_DURATION",
     "GAME_COMMANDS",
     "GAME_COMMANDS_REJECTED",
+    "QUICK_MESSAGES",
     "CloseReason",
     "GameCommandRejection",
+    "QuickMessageOutcome",
     "RejectionReason",
 ]

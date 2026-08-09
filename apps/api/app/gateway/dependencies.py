@@ -64,6 +64,12 @@ from app.gateway.ports import (
     RemoteNodePublisher,
     RoomMemberStore,
 )
+from app.gateway.quick_message_handler import QuickMessageHandler
+from app.gateway.quick_message_limits import (
+    ConnectionQuickMessageLimiter,
+    QuickMessageRateLimiter,
+    UnlimitedQuickMessages,
+)
 from app.gateway.registry import RedisConnectionRegistry
 from app.gateway.resume import ResumeHandler
 from app.gateway.room_service import GameRoomService
@@ -516,6 +522,71 @@ def get_game_command_handler(
 GameCommandHandlerDep = Annotated[GameCommandHandler, Depends(get_game_command_handler)]
 
 
+def get_quick_message_limiter(
+    request_limiter: RateLimiterDep, settings: GatewaySettingsDep
+) -> QuickMessageRateLimiter:
+    """The per-connection quick-message budget — A64-023.1 §6.
+
+    Over the platform's limiter rather than beside it, like every other
+    limit here. **Its own two rules**, not the move handler's: sharing the
+    move budget would let a player who spams messages starve the moves they
+    need, which is the one direction this trade must not fail in.
+    """
+    if not settings.quick_message_rate_limit_enabled:
+        logger.warning(
+            "gateway_quick_message_rate_limit_disabled", extra={"reason": "configuration"}
+        )
+        return UnlimitedQuickMessages()
+
+    return ConnectionQuickMessageLimiter(
+        limiter=request_limiter,
+        burst=RateLimitRule(
+            name="gateway_quick_message_burst",
+            scope=RateLimitScope.CONNECTION,
+            limit=settings.quick_message_burst_limit,
+            window=timedelta(seconds=settings.quick_message_burst_window_seconds),
+        ),
+        sustained=RateLimitRule(
+            name="gateway_quick_message",
+            scope=RateLimitScope.CONNECTION,
+            limit=settings.quick_message_rate_limit,
+            window=timedelta(seconds=settings.quick_message_rate_limit_window_seconds),
+        ),
+    )
+
+
+def get_quick_message_handler(
+    rosters: WebSocketMatchRosterReaderDep,
+    rooms: RoomServiceDep,
+    broadcaster: Annotated[RoomBroadcaster, Depends(get_broadcaster)],
+    limiter: Annotated[QuickMessageRateLimiter, Depends(get_quick_message_limiter)],
+) -> QuickMessageHandler:
+    """The `game.quick_message.send` handler — A64-023.1 §3, §4.
+
+    Four collaborators, and the two that are *absent* are the design: no
+    repository and no event buffer, because a quick message is never stored
+    and never replayed (ADR-004). There is no spectator store either — the
+    audience is not a recipient, so this handler has no way to reach one
+    even if a future call site asked it to.
+
+    `game`'s roster reader is the **only** capability it holds over a match:
+    one read, answering participation and liveness together, with no ability
+    to change anything. The **WebSocket** variant for the reason
+    `get_room_service` uses it — a session per read rather than one held
+    open for the length of a game.
+    """
+    return QuickMessageHandler(
+        rosters=rosters,
+        rooms=rooms,
+        broadcaster=broadcaster,
+        limiter=limiter,
+        metrics=get_gateway_metrics(),
+    )
+
+
+QuickMessageHandlerDep = Annotated[QuickMessageHandler, Depends(get_quick_message_handler)]
+
+
 def get_gateway_metrics() -> MetricsRecorder:
     """The process-wide recorder — A64-015.6 §10.
 
@@ -536,6 +607,7 @@ def build_gateway_service(
     commands: GameCommandHandler,
     resumes: ResumeHandler,
     spectators: SpectatorHandler,
+    quick_messages: QuickMessageHandler,
     sockets: LocalSocketRegistry,
     presence: PresenceRecorderDep,
     clock: Clock,
@@ -559,6 +631,7 @@ def build_gateway_service(
         commands=commands,
         resumes=resumes,
         spectators=spectators,
+        quick_messages=quick_messages,
         sockets=sockets,
         presence=presence,
         metrics=get_gateway_metrics(),
@@ -580,6 +653,7 @@ def get_gateway_service(
     commands: GameCommandHandlerDep,
     resumes: ResumeHandlerDep,
     spectators: SpectatorHandlerDep,
+    quick_messages: QuickMessageHandlerDep,
     sockets: LocalSocketsDep,
     presence: PresenceRecorderDep,
     clock: ClockDep,
@@ -595,6 +669,7 @@ def get_gateway_service(
         commands=commands,
         resumes=resumes,
         spectators=spectators,
+        quick_messages=quick_messages,
         sockets=sockets,
         presence=presence,
         clock=clock,
@@ -608,6 +683,7 @@ GatewayServiceDep = Annotated[GatewayConnectionService, Depends(get_gateway_serv
 
 __all__ = [
     "ConnectionRegistryDep",
+    "QuickMessageHandlerDep",
     "SpectatorHandlerDep",
     "SpectatorStoreDep",
     "get_spectator_handler",
@@ -627,6 +703,8 @@ __all__ = [
     "get_gateway_service",
     "get_gateway_settings",
     "get_node_id",
+    "get_quick_message_handler",
+    "get_quick_message_limiter",
     "get_room_service",
     "get_room_store",
 ]

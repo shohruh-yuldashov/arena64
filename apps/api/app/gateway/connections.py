@@ -101,6 +101,7 @@ from app.gateway.protocol import (
     room_joined,
     room_left,
 )
+from app.gateway.quick_message_handler import QuickMessageHandler
 from app.gateway.resume import ResumeHandler
 from app.gateway.room_service import GameRoomService, RoomJoinRefused
 from app.gateway.spectator_handler import SpectatorHandler
@@ -164,6 +165,7 @@ class GatewayConnectionService:
         commands: GameCommandHandler,
         resumes: ResumeHandler,
         spectators: SpectatorHandler,
+        quick_messages: QuickMessageHandler,
         sockets: LocalSocketRegistry,
         presence: PresenceRecorder,
         metrics: MetricsRecorder,
@@ -177,6 +179,7 @@ class GatewayConnectionService:
         self._commands = commands
         self._resumes = resumes
         self._spectators = spectators
+        self._quick_messages = quick_messages
         self._sockets = sockets
         self._presence = presence
         self._metrics = metrics
@@ -426,6 +429,15 @@ class GatewayConnectionService:
                 ),
                 MessageType.SPECTATOR_LEAVE: lambda message: self._spectators.leave(
                     message, player_id=player_id, connection_id=connection_id
+                ),
+                # A64-023.1. The one entry whose handler answers `None` on
+                # success — see `QuickMessageHandler` on why a predefined
+                # message is fire-and-forget where a move is acknowledged.
+                MessageType.QUICK_MESSAGE_SEND: lambda message: self._quick_messages.handle(
+                    message,
+                    player_id=player_id,
+                    connection_id=connection_id,
+                    received_at=received_at,
                 ),
             }
         )

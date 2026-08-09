@@ -146,6 +146,7 @@ CLIENT_SENDABLE: frozenset[MessageType] = frozenset(
         MessageType.DRAW_DECLINE,
         MessageType.SPECTATOR_JOIN,
         MessageType.SPECTATOR_LEAVE,
+        MessageType.QUICK_MESSAGE_SEND,
     }
 )
 
@@ -169,6 +170,7 @@ CLIENT_CHANNELS: Mapping[MessageType, Channel] = {
     MessageType.DRAW_DECLINE: Channel.GAME,
     MessageType.SPECTATOR_JOIN: Channel.GAME,
     MessageType.SPECTATOR_LEAVE: Channel.GAME,
+    MessageType.QUICK_MESSAGE_SEND: Channel.GAME,
 }
 
 

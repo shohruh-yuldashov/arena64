@@ -64,6 +64,7 @@ from app.gateway.protocol import (
     move_applied,
     resumed,
 )
+from app.gateway.quick_message_handler import QuickMessageHandler
 from app.gateway.resume import ResumeHandler
 from app.gateway.room_service import GameRoomService
 from app.gateway.rooms import RoomMember
@@ -77,6 +78,7 @@ from app.modules.game.public import (
     IllegalMoveSubmitted,
     MatchNotActive,
     MatchRecordStatus,
+    MatchRoster,
     NotYourTurn,
     StaleMatchState,
 )
@@ -260,6 +262,43 @@ def _commands(
     )
 
 
+def _quick_messages(
+    rooms: GameRoomService,
+    *,
+    rosters: StubMatchRosters | None = None,
+    limiter: CountingMoveLimiter | None = None,
+    sockets: InMemoryLocalSockets | None = None,
+    registry: FakeConnectionRegistry | None = None,
+) -> QuickMessageHandler:
+    """The real quick-message handler over in-memory collaborators.
+
+    Real for the reason `_commands` is real: what these tests assert is the
+    handler's own ordering, its refusal mapping and who its fan-out reaches.
+    Nothing about a quick message is decided anywhere else — there is no
+    `game` use case behind it to stub, which is itself the design (ADR-004).
+
+    `CountingMoveLimiter` satisfies `QuickMessageRateLimiter` structurally;
+    the two ports have the same shape and different budgets, which is
+    exactly what production wires.
+    """
+    return QuickMessageHandler(
+        rosters=rosters if rosters is not None else StubMatchRosters(),
+        rooms=rooms,
+        broadcaster=RoomBroadcaster(
+            router=FleetConnectionRouter(
+                registry=registry if registry is not None else FakeConnectionRegistry(),
+                node_id=NODE_ID,
+                metrics=RecordingMetrics(),
+            ),
+            sockets=sockets if sockets is not None else InMemoryLocalSockets(),
+            publisher=RecordingRemotePublisher(),
+            metrics=RecordingMetrics(),
+        ),
+        limiter=limiter if limiter is not None else CountingMoveLimiter(allowance=100),
+        metrics=RecordingMetrics(),
+    )
+
+
 def _resumes(
     rooms: GameRoomService,
     *,
@@ -301,6 +340,7 @@ def _service(
     resumes: ResumeHandler | None = None,
     spectators: SpectatorHandler | None = None,
     commands: GameCommandHandler | None = None,
+    quick_messages: QuickMessageHandler | None = None,
 ) -> GatewayConnectionService:
     resolved_rooms = rooms if rooms is not None else _rooms()
     return GatewayConnectionService(
@@ -311,6 +351,9 @@ def _service(
         commands=commands if commands is not None else _commands(resolved_rooms),
         resumes=resumes if resumes is not None else _resumes(resolved_rooms),
         spectators=spectators if spectators is not None else _spectators(),
+        quick_messages=(
+            quick_messages if quick_messages is not None else _quick_messages(resolved_rooms)
+        ),
         sockets=sockets if sockets is not None else InMemoryLocalSockets(),
         presence=presence,
         metrics=RecordingMetrics(),
@@ -595,6 +638,7 @@ class TestCleanup:
             commands=_commands(_rooms()),
             resumes=_resumes(_rooms()),
             spectators=_spectators(),
+            quick_messages=_quick_messages(_rooms()),
             sockets=InMemoryLocalSockets(),
             presence=presence,
             metrics=RecordingMetrics(),
@@ -2509,3 +2553,577 @@ class TestTheMoveFrameCarriesTheClock:
         )
 
         assert "clock" not in sent.payload
+
+
+class TestQuickMessages:
+    """A64-023.1 — predefined in-match communication.
+
+    Seven tests, and every one of them is a **boundary** rather than an
+    example: §12 caps this task at ten and asks for invariants over
+    serialisation, so nothing here asserts that a well-formed frame
+    round-trips (`decode`/`to_json` already have that) and everything here
+    asserts something that, if it broke, would turn a curated courtesy
+    channel into something else.
+
+    They run through the **real dispatch table**, so each is also a
+    reachability proof: a handler wired into `dependencies.py` but missing
+    from `_dispatch_for` would answer `malformed_message` here.
+
+    The localisation half of the contract is
+    `tests/contract/test_quick_message_localisation.py`, which is where it
+    has to live — the catalogue is Python and the labels are the client's
+    JSON, and nothing in this file can see both.
+    """
+
+    @staticmethod
+    def _received(socket: FakeGatewaySocket) -> list[dict[str, object]]:
+        """Every quick message this socket was sent, as payloads."""
+        return [
+            message.payload
+            for message in socket.sent
+            if message.type is MessageType.QUICK_MESSAGE_RECEIVED
+        ]
+
+    @staticmethod
+    def _rejections(socket: FakeGatewaySocket) -> list[str]:
+        """Every refusal code this socket was sent, in order."""
+        return [
+            str(message.payload["code"])
+            for message in socket.sent
+            if message.type is MessageType.COMMAND_REJECTED
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_participants_message_reaches_both_seats_named_by_side(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """The happy path, and the four properties of the frame — §4.
+
+        Asserted together because they are one decision:
+
+            both seats        the sender receives it too, through the same
+                              fan-out, which is what lets one client code
+                              path render a bubble whoever sent it
+            named by side     `from` is a seat, never a player id — nothing
+                              identifying goes on a frame that does not
+                              need it
+            server-stamped    `sent_at` is the gateway's receive instant,
+                              not anything the client sent
+            no acknowledgement  no correlated answer, and specifically
+                              **not** a second copy to the sender
+
+        The client's `sent_at` is deliberately a lie here, so "the server
+        does not trust a client timestamp" is asserted rather than assumed.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters, members)
+
+        opponent_connection = uuid4()
+        opponent_socket = FakeGatewaySocket(holds_open=True)
+        sockets = InMemoryLocalSockets()
+        sockets.attach(opponent_connection, opponent_socket)
+        await members.join(
+            match_id,
+            RoomMember(player_id=opponent_id, connection_id=opponent_connection),
+            ttl_seconds=3600,
+        )
+        await registry.register(opponent_id, opponent_connection, node_id=NODE_ID, ttl_seconds=90)
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [
+                _frame("room.join", channel="game", payload={"match_id": str(match_id)}),
+                _frame(
+                    "game.quick_message.send",
+                    channel="game",
+                    request_id="r-1",
+                    payload={
+                        "match_id": str(match_id),
+                        "message": "good_luck",
+                        # Ignored. A client that could stamp its own
+                        # message could order it ahead of its opponent's.
+                        "sent_at": "1999-01-01T00:00:00+00:00",
+                    },
+                ),
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            sockets=sockets,
+            quick_messages=_quick_messages(
+                rooms, rosters=rosters, sockets=sockets, registry=registry
+            ),
+        ).run(socket, ticket=VALID_TICKET)
+
+        # The opponent, and the sender, each exactly once.
+        assert len(self._received(opponent_socket)) == 1
+        delivered = self._received(socket)
+        assert len(delivered) == 1
+
+        payload = delivered[0]
+        assert payload == {
+            "match_id": str(match_id),
+            "from": "light",
+            "message": "good_luck",
+            "sent_at": NOW.isoformat(),
+        }
+        # Fire and forget: the frame carries no correlation, and nothing
+        # correlated came back either.
+        assert [message.request_id for message in socket.sent if message.request_id == "r-1"] == []
+
+    @pytest.mark.asyncio
+    async def test_arbitrary_text_and_unknown_identifiers_are_refused(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§9 — arbitrary text cannot be injected, in every shape it comes in.
+
+        Five payloads that a client could construct, and the point is that
+        they all reach the *same* answer: there is no length at which text
+        becomes acceptable, no casing that matches, no near-miss that is
+        rounded to a member, and no non-string that is coerced into one.
+
+        Nothing is delivered to the room for any of them, which is the
+        assertion that matters — a refusal that still fanned something out
+        would be the leak this catalogue exists to prevent.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters, members)
+
+        opponent_connection = uuid4()
+        opponent_socket = FakeGatewaySocket(holds_open=True)
+        sockets = InMemoryLocalSockets()
+        sockets.attach(opponent_connection, opponent_socket)
+        await members.join(
+            match_id,
+            RoomMember(player_id=opponent_id, connection_id=opponent_connection),
+            ttl_seconds=3600,
+        )
+        await registry.register(opponent_id, opponent_connection, node_id=NODE_ID, ttl_seconds=90)
+
+        rejected: list[object] = [
+            "you are terrible at this game",  # free text
+            "GOOD_GAME",  # the right member, the wrong case
+            "good_game ",  # a near miss
+            "",  # empty
+            {"body": "hello"},  # not a string at all
+        ]
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [
+                _frame("room.join", channel="game", payload={"match_id": str(match_id)}),
+                *[
+                    _frame(
+                        "game.quick_message.send",
+                        channel="game",
+                        request_id=f"r-{index}",
+                        payload={"match_id": str(match_id), "message": candidate},
+                    )
+                    for index, candidate in enumerate(rejected)
+                ],
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            sockets=sockets,
+            quick_messages=_quick_messages(
+                rooms, rosters=rosters, sockets=sockets, registry=registry
+            ),
+        ).run(socket, ticket=VALID_TICKET)
+
+        assert self._rejections(socket) == [GatewayErrorCode.UNKNOWN_QUICK_MESSAGE.value] * len(
+            rejected
+        )
+        assert self._received(opponent_socket) == []
+        assert self._received(socket) == []
+
+    @pytest.mark.asyncio
+    async def test_a_sender_cannot_reach_a_match_they_have_not_joined(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§3, §9 — cross-match delivery is impossible.
+
+        The sender is a legitimate participant of match A **and** of match
+        B, is joined to A's room, and names B. That is the interesting case
+        rather than "a stranger names a match": a client that could send
+        into any match it happens to be a participant of, from a connection
+        attached to a different one, would be a client whose frames escape
+        the room they were authorised for.
+
+        Nobody in B hears it, which is what "impossible" has to mean.
+        """
+        player_id, opponent_id = generate_uuid7(), generate_uuid7()
+        joined_match, other_match = generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(joined_match, light=player_id, dark=opponent_id)
+        rosters.add(other_match, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters, members)
+
+        # The opponent is in **the other match's** room, listening.
+        opponent_connection = uuid4()
+        opponent_socket = FakeGatewaySocket(holds_open=True)
+        sockets = InMemoryLocalSockets()
+        sockets.attach(opponent_connection, opponent_socket)
+        await members.join(
+            other_match,
+            RoomMember(player_id=opponent_id, connection_id=opponent_connection),
+            ttl_seconds=3600,
+        )
+        await registry.register(opponent_id, opponent_connection, node_id=NODE_ID, ttl_seconds=90)
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [
+                _frame("room.join", channel="game", payload={"match_id": str(joined_match)}),
+                _frame(
+                    "game.quick_message.send",
+                    channel="game",
+                    payload={"match_id": str(other_match), "message": "nice_move"},
+                ),
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            sockets=sockets,
+            quick_messages=_quick_messages(
+                rooms, rosters=rosters, sockets=sockets, registry=registry
+            ),
+        ).run(socket, ticket=VALID_TICKET)
+
+        assert self._rejections(socket) == [GatewayErrorCode.NOT_IN_ROOM.value]
+        assert self._received(opponent_socket) == []
+
+    @pytest.mark.asyncio
+    async def test_a_finished_match_accepts_no_further_messages(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§1(G) — the terminal rule, and why room membership is not enough.
+
+        The connection joins while the match is `active` and is **still a
+        room member** when the match completes: a room outlives the match
+        that made it, until its members leave or its TTL lapses. So this is
+        precisely the case a handler that stopped at `is_attached` would get
+        wrong, and it would get it wrong silently — carrying conversation
+        into a finished game, which is the post-game abuse surface
+        domain-model.md CT-1 closed.
+
+        The identical frame is sent twice against unchanged room
+        membership; the only thing that moves between them is the roster's
+        status, which is what a match ending actually looks like from here.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        members = FakeRoomMemberStore()
+
+        class _CompletingRosters(StubMatchRosters):
+            """Reports the match as finished from the second read onward.
+
+            A subclass rather than a mutated stub, because the transition
+            has to happen *between* two scripted frames and the script is
+            replayed without a pause the test could act in.
+            """
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.reads = 0
+
+            async def roster_of(self, requested: UUID) -> MatchRoster | None:
+                self.reads += 1
+                if self.reads > 2:
+                    self.add(
+                        match_id,
+                        light=player_id,
+                        dark=opponent_id,
+                        status=MatchRecordStatus.COMPLETED,
+                    )
+                return await super().roster_of(requested)
+
+        rosters = _CompletingRosters()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters, members)
+        # The sender's own socket is the fan-out's only recipient here, so
+        # the broadcaster must share this connection's registry and socket
+        # map — the arrangement production has, where both are per process.
+        sockets = InMemoryLocalSockets()
+
+        send = _frame(
+            "game.quick_message.send",
+            channel="game",
+            payload={"match_id": str(match_id), "message": "good_game"},
+        )
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [
+                _frame("room.join", channel="game", payload={"match_id": str(match_id)}),
+                send,
+                send,
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            sockets=sockets,
+            quick_messages=_quick_messages(
+                rooms, rosters=rosters, sockets=sockets, registry=registry
+            ),
+        ).run(socket, ticket=VALID_TICKET)
+
+        # The first was carried; the second was refused, and nothing about
+        # the room changed in between.
+        assert len(self._received(socket)) == 1
+        assert self._rejections(socket) == [GatewayErrorCode.MATCH_NOT_ACTIVE.value]
+
+    @pytest.mark.asyncio
+    async def test_a_spectator_can_neither_send_nor_receive(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§3, §9 — the audience is not a party to the conversation.
+
+        Two independent guarantees, asserted together because either alone
+        would be a false comfort:
+
+            cannot send     a viewer is in the *audience*, never in the
+                            room, so `is_attached` refuses them before
+                            `game` is asked anything
+            cannot receive  `game.quick_message.received` is absent from
+                            `SPECTATOR_SAFE_EVENTS`, and the handler passes
+                            no audience to the fan-out at all
+
+        The second is asserted through a real subscription and a real
+        broadcast, not by reading the allowlist — a test that read the
+        constant would pass if the constant were consulted nowhere.
+        """
+        player_id, opponent_id, viewer_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        match_id = generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters, members)
+
+        # A real spectator, subscribed and connected.
+        spectator_store = InMemorySpectatorStore()
+        viewer_connection = uuid4()
+        viewer_socket = FakeGatewaySocket(holds_open=True)
+        sockets = InMemoryLocalSockets()
+        sockets.attach(viewer_connection, viewer_socket)
+        await spectator_store.subscribe(
+            match_id,
+            SpectatorSubscription(player_id=viewer_id, connection_id=viewer_connection),
+            ttl_seconds=900,
+        )
+        await registry.register(viewer_id, viewer_connection, node_id=NODE_ID, ttl_seconds=90)
+
+        handler = _quick_messages(rooms, rosters=rosters, sockets=sockets, registry=registry)
+
+        # The participant joins and speaks.
+        tickets.add(VALID_TICKET, player_id)
+        player_socket = FakeGatewaySocket(
+            [
+                _frame("room.join", channel="game", payload={"match_id": str(match_id)}),
+                _frame(
+                    "game.quick_message.send",
+                    channel="game",
+                    payload={"match_id": str(match_id), "message": "nice_move"},
+                ),
+            ]
+        )
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            sockets=sockets,
+            quick_messages=handler,
+        ).run(player_socket, ticket=VALID_TICKET)
+
+        # The viewer tries to speak, on their own connection.
+        viewer_ticket = "a-viewers-ticket"
+        tickets.add(viewer_ticket, viewer_id)
+        sending_viewer = FakeGatewaySocket(
+            [
+                _frame(
+                    "game.quick_message.send",
+                    channel="game",
+                    payload={"match_id": str(match_id), "message": "oops"},
+                )
+            ]
+        )
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            sockets=sockets,
+            quick_messages=handler,
+        ).run(sending_viewer, ticket=viewer_ticket)
+
+        assert self._received(player_socket) == [
+            {
+                "match_id": str(match_id),
+                "from": "light",
+                "message": "nice_move",
+                "sent_at": NOW.isoformat(),
+            }
+        ]
+        assert self._received(viewer_socket) == []
+        assert self._rejections(sending_viewer) == [GatewayErrorCode.NOT_IN_ROOM.value]
+
+    @pytest.mark.asyncio
+    async def test_a_refused_message_costs_the_connection_neither_its_socket_nor_its_move(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§5, §9 — correct game state never depends on a quick message.
+
+        The strongest property this feature has to hold, so it is asserted
+        against the two ways it could fail at once: a quick message is
+        refused by its **own** rate limiter, and then a legal move is
+        submitted on the same connection and must be applied.
+
+        That the limiter is separate is the point. If the two shared a
+        budget, a player who exhausted it on courtesy would be unable to
+        move — losing a game to their own chat — and this test would fail
+        on the move rather than on the message.
+
+        The connection also stays open through the refusal, which every
+        other gateway limit already promises.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters, members)
+
+        submissions = FakeSubmitMoves()
+        # Exhausted before the frame arrives, so the very first send is
+        # refused — and the move limiter is a different object entirely.
+        message_limiter = CountingMoveLimiter(allowance=0)
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [
+                _frame("room.join", channel="game", payload={"match_id": str(match_id)}),
+                _frame(
+                    "game.quick_message.send",
+                    channel="game",
+                    payload={"match_id": str(match_id), "message": "thanks"},
+                ),
+                _frame(
+                    "game.move.submit",
+                    channel="game",
+                    request_id="r-move",
+                    payload={"match_id": str(match_id), "path": ["a3", "b4"]},
+                ),
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            moves=_moves(rooms, submissions=submissions),
+            quick_messages=_quick_messages(rooms, rosters=rosters, limiter=message_limiter),
+        ).run(socket, ticket=VALID_TICKET)
+
+        assert self._rejections(socket) == [GatewayErrorCode.RATE_LIMITED.value]
+        # The socket survived the refusal and the move went through.
+        assert len(submissions.submissions) == 1
+        assert [message.type for message in socket.sent if message.request_id == "r-move"] == [
+            MessageType.MOVE_ACCEPTED
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_quick_message_is_never_written_to_the_replay_buffer(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """§5 — ephemeral, and specifically not resumable.
+
+        The replay buffer is keyed by the match **sequence**, and nothing a
+        quick message does advances the ply. An entry here would therefore
+        sit at a sequence a move already owns, which breaks the contiguity
+        check a resume proves its gap with — the identical constraint
+        `game.draw.state` records and `GameCommandHandler` keeps.
+
+        So a client that was away does not hear what it missed, and this
+        asserts that as a deliberate outcome: one move is submitted beside
+        the messages, and the buffer holds exactly that move.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters, members = StubMatchRosters(), FakeRoomMemberStore()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters, members)
+        buffer = InMemoryEventBuffer()
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [
+                _frame("room.join", channel="game", payload={"match_id": str(match_id)}),
+                _frame(
+                    "game.quick_message.send",
+                    channel="game",
+                    payload={"match_id": str(match_id), "message": "good_luck"},
+                ),
+                _frame(
+                    "game.move.submit",
+                    channel="game",
+                    payload={"match_id": str(match_id), "path": ["a3", "b4"]},
+                ),
+                _frame(
+                    "game.quick_message.send",
+                    channel="game",
+                    payload={"match_id": str(match_id), "message": "nice_move"},
+                ),
+            ]
+        )
+
+        await _service(
+            tickets,
+            registry,
+            presence,
+            rooms,
+            moves=_moves(rooms, buffer=buffer),
+            quick_messages=_quick_messages(rooms, rosters=rosters),
+        ).run(socket, ticket=VALID_TICKET)
+
+        buffered = [
+            decode(frame, max_bytes=8 * 1024)
+            for _, frame in sorted(buffer.events.get(match_id, {}).items())
+        ]
+        assert [message.type for message in buffered] == [MessageType.MOVE_APPLIED]

@@ -567,6 +567,14 @@
       "becomes": "bo'ladi",
       "updating": "Reyting yangilanmoqda…",
       "late": "Reyting yangilanishi kutilganidan uzoqroq davom etmoqda."
+    },
+    "quickMessages": {
+      "goodLuck": "Omad!",
+      "niceMove": "Zo'r yurish!",
+      "wellPlayed": "Yaxshi o'ynadingiz",
+      "goodGame": "Yaxshi o'yin",
+      "thanks": "Rahmat",
+      "oops": "Voy!"
     }
   },
   "replay": {

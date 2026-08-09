@@ -2792,6 +2792,50 @@ class GatewaySettings(SectionSettings):
     A violation refuses the frame and **keeps the connection open** (§13).
     """
 
+    quick_message_rate_limit_enabled: bool = True
+    """Whether `game.quick_message.send` is rate limited — A64-023.1 §6.
+
+    `False` wires `UnlimitedQuickMessages`, which is production code rather
+    than a double — the same argument `move_rate_limit_enabled` makes.
+    Turning it off means an unbounded quick-message rate, which is the one
+    way this feature can be used to harass somebody: the catalogue makes
+    every individual message harmless, and **repetition** is the abuse the
+    limits exist against.
+    """
+
+    quick_message_burst_limit: int = Field(default=3, ge=1, le=60)
+    quick_message_burst_window_seconds: int = Field(default=10, ge=1, le=60)
+    """How many quick messages one **connection** may send in a burst.
+
+    Three in ten seconds: what a player pressing a couple of buttons during
+    a scramble looks like, and what a loop does not. Per connection rather
+    than per player, for the reason `move_rate_limit` is — a player with two
+    tabs is two clients.
+
+    Spent together with the sustained rule in one atomic acquisition, so the
+    burst bucket is never charged for a send the sustained rule then
+    refuses. See `app/gateway/quick_message_limits.py`.
+    """
+
+    quick_message_rate_limit: int = Field(default=6, ge=1, le=240)
+    quick_message_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
+    """How many quick messages one connection may send per sustained window.
+
+    Six a minute, which is a whole game's worth of courtesy — "good luck",
+    a couple of "nice move", "good game", "thanks" — inside sixty seconds.
+    The burst rule alone would permit one message every three seconds
+    indefinitely, which is somebody typing at their opponent for an hour;
+    this is the rule that bounds the hour.
+
+    Deliberately **not** shared with the move budget. A player who spams
+    quick messages must not consume the allowance their moves need, because
+    the punishment for being annoying would then be losing on time — a
+    social channel must never be able to starve the gameplay one.
+
+    A violation refuses the frame and **keeps the connection open**, the
+    posture every other gateway limit takes.
+    """
+
     bus_max_stream_length: int = Field(default=1024, ge=16, le=100_000)
     """How many entries one node's cross-node stream holds — §9.
 

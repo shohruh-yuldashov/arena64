@@ -1,8 +1,12 @@
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback } from "react";
 
 import { type AdminMatchSummary, fetchMatches, type MatchQuery } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
+import { ErrorNotice } from "@/shared/ui/error-notice";
+import { PageHeader } from "@/shared/ui/page-header";
+import { Pagination } from "@/shared/ui/pagination";
+import { useCursorPages } from "@/shared/ui/use-cursor-pages";
 
 /**
  * The Matches console — A64-024.4 §13.
@@ -40,12 +44,6 @@ export function MatchesPage() {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Search;
 
-  const [rows, setRows] = useState<AdminMatchSummary[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [moreFailed, setMoreFailed] = useState(false);
-
   const query: MatchQuery = {
     ...(search.status ? { status: search.status } : {}),
     ...(tri(search.rated) !== undefined ? { rated: tri(search.rated) } : {}),
@@ -54,49 +52,22 @@ export function MatchesPage() {
   };
   const key = JSON.stringify(query);
 
-  const controller = useRef<AbortController | null>(null);
-  useEffect(() => {
-    controller.current?.abort();
-    const next = new AbortController();
-    controller.current = next;
-    setState("loading");
-    // A changed filter starts a new result set — an old cursor would ask
-    // the server to continue a list that no longer exists.
-    setRows([]);
-    setCursor(null);
-    setMoreFailed(false);
-
-    void fetchMatches(query, next.signal).then((outcome) => {
-      if (next.signal.aborted) return;
-      if (outcome.status === "ok") {
-        setRows(outcome.value.items);
-        setCursor(outcome.value.next_cursor);
-        setState("ready");
-        return;
-      }
-      setState("error");
-    });
-
-    return () => next.abort();
-  }, [key]);
-
-  const loadMore = async () => {
-    if (cursor === null || loadingMore) return;
-    setLoadingMore(true);
-    setMoreFailed(false);
-
-    const outcome = await fetchMatches({ ...query, cursor });
-    setLoadingMore(false);
-    if (outcome.status !== "ok") {
-      setMoreFailed(true);
-      return;
-    }
-    setRows((current) => {
-      const seen = new Set(current.map((row) => row.match_id));
-      return [...current, ...outcome.value.items.filter((row) => !seen.has(row.match_id))];
-    });
-    setCursor(outcome.value.next_cursor);
-  };
+  /**
+   * One page at a time, walked by cursor — A64-024 hardening.
+   *
+   * Replaces the accumulating "Load more": an operator nine pages
+   * into a listing had eight pages of rows above the one they were
+   * reading and no way back. The hook holds the cursor that produced
+   * each page, so `Previous` is a re-fetch with a cursor already in
+   * hand and the keyset the server offers is unchanged.
+   */
+  const pages = useCursorPages<AdminMatchSummary>(
+    useCallback(
+      (cursor, signal) => fetchMatches({ ...query, ...(cursor ? { cursor } : {}) }, signal),
+      [key],
+    ),
+    key,
+  );
 
   const setFilter = (name: keyof Search, value: string) => {
     void navigate({
@@ -118,7 +89,7 @@ export function MatchesPage() {
 
   return (
     <>
-      <h2>{t("matches.title")}</h2>
+      <PageHeader title={t("matches.title")} />
 
       <div className="filters">
         <p className="field">
@@ -181,21 +152,17 @@ export function MatchesPage() {
         </p>
       </div>
 
-      {state === "loading" && <p role="status">{t("matches.loading")}</p>}
-      {state === "error" && (
-        <p role="alert" className="error">
-          {t("matches.error")}
-        </p>
-      )}
+      {pages.state === "loading" && <p role="status">{t("matches.loading")}</p>}
+      {pages.state === "error" && <ErrorNotice message={t("matches.error")} />}
 
-      {state === "ready" && rows.length === 0 && (
+      {pages.state === "ready" && pages.rows.length === 0 && (
         <>
           <p role="status">{t("matches.empty")}</p>
           <p className="muted">{t("matches.emptyHint")}</p>
         </>
       )}
 
-      {state === "ready" && rows.length > 0 && (
+      {pages.state === "ready" && pages.rows.length > 0 && (
         <>
           <table className="users-table">
             <thead>
@@ -209,7 +176,7 @@ export function MatchesPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((match) => (
+              {pages.rows.map((match) => (
                 <tr key={match.match_id}>
                   <td>
                     <Link to="/matches/$matchId" params={{ matchId: match.match_id }}>
@@ -228,7 +195,7 @@ export function MatchesPage() {
 
           {/* Narrow: the same rows as cards, nothing dropped. */}
           <ul className="users-cards">
-            {rows.map((match) => (
+            {pages.rows.map((match) => (
               <li key={match.match_id}>
                 <Link to="/matches/$matchId" params={{ matchId: match.match_id }}>
                   {seat(match.light)} — {seat(match.dark)}
@@ -244,24 +211,14 @@ export function MatchesPage() {
             ))}
           </ul>
 
-          {cursor !== null && (
-            <p className="load-more">
-              <button
-                type="button"
-                className="action"
-                disabled={loadingMore}
-                onClick={() => void loadMore()}
-              >
-                {t(loadingMore ? "matches.loadingMore" : "matches.more")}
-              </button>
-            </p>
-          )}
-
-          {moreFailed && (
-            <p role="alert" className="error">
-              {t("matches.moreError")}
-            </p>
-          )}
+          <Pagination
+            page={pages.page}
+            hasPrevious={pages.hasPrevious}
+            hasNext={pages.hasNext}
+            busy={pages.busy}
+            onPrevious={pages.previous}
+            onNext={pages.next}
+          />
         </>
       )}
     </>

@@ -57,6 +57,10 @@ export function CreateTournament({
   };
 
   const submit = async () => {
+    // See `TournamentActions.run` — the disabled attribute is UX and this
+    // is the guard. Creation is the one command with no natural idempotency:
+    // two submissions are two tournaments.
+    if (busy) return;
     setBusy(true);
     setError(null);
     const outcome = await createTournament({

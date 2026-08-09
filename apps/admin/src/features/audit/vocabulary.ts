@@ -26,6 +26,11 @@ export const AUDIT_ACTION_LABELS: Record<string, TranslationKey> = {
   "admin.sanction.apply": "audit.actionSanctionApply",
   "admin.sanction.lift": "audit.actionSanctionLift",
   "notification.delivery.retry": "audit.actionDeliveryRetry",
+  "tournament.create": "audit.actionTournamentCreate",
+  "tournament.registration_open": "audit.actionTournamentOpen",
+  "tournament.registration_close": "audit.actionTournamentClose",
+  "tournament.start": "audit.actionTournamentStart",
+  "tournament.transition_refused": "audit.actionTournamentRefused",
 };
 
 /**

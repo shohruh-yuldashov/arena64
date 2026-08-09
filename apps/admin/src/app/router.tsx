@@ -13,7 +13,6 @@ import { useAdminAuth } from "@/app/use-admin-auth";
 import { AuditPage } from "@/pages/audit";
 import { DashboardPage } from "@/pages/dashboard";
 import { LoginPage } from "@/pages/login";
-import { PlaceholderPage } from "@/pages/placeholder";
 import { MatchDetailPage } from "@/pages/match-detail";
 import { MatchesPage } from "@/pages/matches";
 import { ModerationPage } from "@/pages/moderation";
@@ -219,9 +218,9 @@ const dashboardRoute = createRoute({
   component: DashboardPage,
 });
 
-// A64-024.3. `/users` is the first real section, so it leaves the
-// placeholder list. The rest keep their guarded routes and say plainly that
-// they are not built.
+// A64-024.3. `/users` was the first real section. Every section in
+// `SECTIONS` is now built — A64-024.10 removed the placeholder route and
+// its page, which had become unreachable.
 const usersRoute = createRoute({
   getParentRoute: () => protectedRoute,
   path: "/users",
@@ -317,24 +316,6 @@ const notificationDetailRoute = createRoute({
   component: NotificationDetailPage,
 });
 
-const BUILT_SECTIONS = [
-  "/users",
-  "/matches",
-  "/tournaments",
-  "/audit",
-  "/moderation",
-  "/notifications",
-];
-
-const sectionRoutes = SECTIONS.filter((section) => !BUILT_SECTIONS.includes(section.path)).map(
-  (section) =>
-    createRoute({
-      getParentRoute: () => protectedRoute,
-      path: section.path,
-      component: () => <PlaceholderPage titleKey={section.label as TranslationKey} />,
-    }),
-);
-
 const routeTree = rootRoute.addChildren([
   loginRoute,
   protectedRoute.addChildren([
@@ -349,7 +330,6 @@ const routeTree = rootRoute.addChildren([
     moderationRoute,
     notificationsRoute,
     notificationDetailRoute,
-    ...sectionRoutes,
   ]),
 ]);
 

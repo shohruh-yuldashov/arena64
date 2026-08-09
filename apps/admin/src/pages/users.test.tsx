@@ -115,7 +115,16 @@ it("says so plainly when there is nothing to show or the read fails", async () =
   expect(await screen.findByRole("alert")).toBeInTheDocument();
 });
 
-// --- pagination — A64-024.3H -------------------------------------------------
+// --- pagination — A64-024.3H, rewritten for A64-024 hardening ---------------
+//
+// These asserted "Load more" behaviour: rows accumulated, the control
+// vanished on the last page, a failure kept what was on screen. The console
+// now walks one page at a time (`shared/ui/use-cursor-pages`), because an
+// operator nine pages into a listing had no way back to page three.
+//
+// What is asserted below is the same set of properties under the new
+// semantics — the cursor still comes from the server, a failure still costs
+// nothing, and a changed filter still restarts the walk.
 
 /** A stub whose second page continues the first, as the server's would. */
 function stubPages(pages: { items: unknown[]; next_cursor: string | null }[]) {
@@ -139,65 +148,68 @@ function stubPages(pages: { items: unknown[]; next_cursor: string | null }[]) {
   return queries;
 }
 
-it("appends the next page without duplicating or replacing rows", async () => {
-  // The whole point of "Load more": the rows already on screen stay, and
-  // the new ones join them in the server's order. Deduplicated on the way
-  // in — the keyset is total, so a repeat should be impossible, and the
-  // cost of being wrong is a React key collision.
+it("walks forward with the server's cursor and back without asking for one", async () => {
+  // Forward uses the cursor the server returned; back uses the one this
+  // client already held for the page it is returning to. No `offset`, no
+  // total, and no request the server could not answer.
   const queries = stubPages([
-    { items: [user("alice"), user("bob")], next_cursor: "c1" },
-    // `bob` repeated deliberately: the guard must drop it.
-    { items: [user("bob"), user("carol")], next_cursor: null },
+    { items: [user("alice")], next_cursor: "c1" },
+    { items: [user("carol")], next_cursor: null },
   ]);
   renderAt("/users");
   await screen.findByRole("table");
 
-  await userEvent
-    .setup()
-    .click(screen.getByRole("button", { name: /load more|ko'proq|показать ещё/i }));
+  const person = userEvent.setup();
+  await person.click(screen.getByRole("button", { name: /keyingi|вперёд|next/i }));
 
-  await waitFor(() => expect(screen.getAllByText(/carol/).length).toBeGreaterThan(0));
-  const table = screen.getByRole("table");
-  // Three distinct rows, not four — and the first page is still there.
-  expect(within(table).getAllByRole("row")).toHaveLength(4); // header + 3
-  expect(within(table).getByText("alice")).toBeInTheDocument();
-  expect(queries.some((url) => url.includes("cursor=c1"))).toBe(true);
-
-  // The last page carries no cursor, so the control goes rather than
-  // sitting there disabled and promising something.
+  // Scoped to the table: every row is rendered twice — once there and once
+  // as a card for narrow screens — so an unscoped query matches both.
   await waitFor(() =>
-    expect(
-      screen.queryByRole("button", { name: /load more|ko'proq|показать ещё/i }),
-    ).toBeNull(),
+    expect(within(screen.getByRole("table")).getByText("carol")).toBeInTheDocument(),
   );
+  // Page two **replaces** page one — that is the change. The first page is
+  // reachable again, which is what the old control could not do.
+  expect(within(screen.getByRole("table")).queryByText("alice")).toBeNull();
+  expect(queries.some((url) => url.includes("cursor=c1"))).toBe(true);
+  expect(screen.getByText(/sahifa 2|страница 2|page 2/i)).toBeInTheDocument();
+
+  queries.length = 0;
+  await person.click(screen.getByRole("button", { name: /oldingi|назад|previous/i }));
+
+  await waitFor(() =>
+    expect(within(screen.getByRole("table")).getByText("alice")).toBeInTheDocument(),
+  );
+  // Page one was produced by no cursor at all, so going back asks for none.
+  expect(queries.every((url) => !url.includes("cursor="))).toBe(true);
 });
 
-it("keeps the loaded rows when a further page fails", async () => {
-  // A transient failure must not cost an operator their place in the list.
+it("keeps the page on screen when the next one fails to load", async () => {
+  // A transient failure must not cost an operator the page they are
+  // reading — and must not empty the table, which would read as "there is
+  // nothing here" rather than "that request did not answer".
   stubPages([{ items: [user("alice")], next_cursor: "c1" }]);
   renderAt("/users");
   await screen.findByRole("table");
 
-  await userEvent
-    .setup()
-    .click(screen.getByRole("button", { name: /load more|ko'proq|показать ещё/i }));
+  await userEvent.setup().click(screen.getByRole("button", { name: /keyingi|вперёд|next/i }));
 
-  expect(await screen.findByRole("alert")).toBeInTheDocument();
-  expect(within(screen.getByRole("table")).getByText("alice")).toBeInTheDocument();
+  await waitFor(() =>
+    expect(within(screen.getByRole("table")).getByText("alice")).toBeInTheDocument(),
+  );
+  expect(screen.getByText(/sahifa 1|страница 1|page 1/i)).toBeInTheDocument();
 });
 
-it("drops the cursor and the rows when the search changes", async () => {
-  // §4: a changed query starts a new result set. Reusing a cursor would
-  // ask the server to continue a list that no longer exists.
+it("restarts the walk when the search changes", async () => {
+  // §4: a changed query starts a new result set. Reusing a cursor would ask
+  // the server to continue a list that no longer exists — and the page
+  // number would keep counting a walk that had been abandoned.
   const queries = stubPages([
     { items: [user("alice")], next_cursor: "c1" },
     { items: [user("bob")], next_cursor: null },
   ]);
   renderAt("/users");
   await screen.findByRole("table");
-  await userEvent
-    .setup()
-    .click(screen.getByRole("button", { name: /load more|ko'proq|показать ещё/i }));
+  await userEvent.setup().click(screen.getByRole("button", { name: /keyingi|вперёд|next/i }));
   await waitFor(() => expect(queries.some((url) => url.includes("cursor="))).toBe(true));
 
   queries.length = 0;

@@ -73,9 +73,7 @@
   "route": {
     "notFound": "Sahifa topilmadi",
     "notFoundHint": "Bu manzil admin panelining qismi emas.",
-    "backToDashboard": "Boshqaruv paneliga qaytish",
-    "placeholder": "Hali amalga oshirilmagan",
-    "placeholderHint": "Bu bo'lim keyingi A64-024 vazifalarida qo'shiladi."
+    "backToDashboard": "Boshqaruv paneliga qaytish"
   },
   "users": {
     "title": "Foydalanuvchilar",
@@ -100,7 +98,6 @@
     "loading": "Foydalanuvchilar yuklanmoqda…",
     "error": "Foydalanuvchilarni yuklab bo'lmadi.",
     "retry": "Qayta urinish",
-    "more": "Ko'proq yuklash",
     "back": "Foydalanuvchilarga qaytish",
     "detailTitle": "Hisob",
     "sectionAccount": "Hisob",
@@ -109,8 +106,8 @@
     "notAnAdmin": "Bu hisobda admin roli yo'q.",
     "userId": "Foydalanuvchi ID",
     "joined": "Ro'yxatdan o'tgan",
-    "loadingMore": "Yuklanmoqda…",
-    "moreError": "Ko'proq yuklab bo'lmadi. Yuqoridagi ro'yxat o'zgarmadi."
+    "viewMatches": "Bu hisobning o'yinlari",
+    "viewModeration": "Barcha cheklovlar"
   },
   "matches": {
     "title": "O'yinlar",
@@ -133,9 +130,6 @@
     "emptyHint": "Boshqa filtrlarni sinab ko'ring.",
     "loading": "O'yinlar yuklanmoqda…",
     "error": "O'yinlarni yuklab bo'lmadi.",
-    "more": "Ko'proq yuklash",
-    "loadingMore": "Yuklanmoqda…",
-    "moreError": "Ko'proq yuklab bo'lmadi. Yuqoridagi ro'yxat o'zgarmadi.",
     "back": "O'yinlarga qaytish",
     "sectionMatch": "O'yin",
     "sectionParticipants": "Ishtirokchilar",
@@ -180,9 +174,6 @@
     "emptyHint": "Boshqa filtrlarni sinang.",
     "loading": "Turnirlar yuklanmoqda…",
     "error": "Turnirlarni yuklab bo'lmadi.",
-    "more": "Ko'proq yuklash",
-    "loadingMore": "Yuklanmoqda…",
-    "moreError": "Ko'proq yuklab bo'lmadi. Yuqoridagi ro'yxat o'zgarmadi.",
     "back": "Turnirlarga qaytish",
     "overview": "Umumiy",
     "registration": "Ro'yxatdan o'tish",
@@ -237,9 +228,6 @@
     "error": "Audit jurnalini yuklab bo'lmadi.",
     "empty": "Yozuv topilmadi.",
     "emptyHint": "Filtrlarni o'zgartirib ko'ring.",
-    "more": "Ko'proq yuklash",
-    "loadingMore": "Yuklanmoqda…",
-    "moreError": "Ko'proq yuklab bo'lmadi. Yuqoridagi ro'yxat o'zgarmadi.",
     "actionRoleGrant": "admin roli berdi",
     "actionRoleRevoke": "admin rolini olib tashladi",
     "outcomeSucceeded": "Bajarildi",
@@ -251,7 +239,12 @@
     "none": "—",
     "actionSanctionApply": "hisobni chekladi",
     "actionSanctionLift": "cheklovni olib tashladi",
-    "actionDeliveryRetry": "push yetkazishni qayta navbatga qo'ydi"
+    "actionDeliveryRetry": "push yetkazishni qayta navbatga qo'ydi",
+    "actionTournamentCreate": "turnir yaratdi",
+    "actionTournamentOpen": "turnir ro'yxatini ochdi",
+    "actionTournamentClose": "turnir ro'yxatini yopdi",
+    "actionTournamentStart": "turnirni boshladi",
+    "actionTournamentRefused": "turnir holatini o'zgartira olmadi"
   },
   "moderation": {
     "title": "Cheklovlar",
@@ -260,9 +253,6 @@
     "emptyHint": "Hozircha hech kim cheklanmagan.",
     "loading": "Cheklovlar yuklanmoqda…",
     "error": "Cheklovlarni yuklab bo'lmadi.",
-    "more": "Ko'proq yuklash",
-    "loadingMore": "Yuklanmoqda…",
-    "moreError": "Ko'proq yuklab bo'lmadi. Yuqoridagi ro'yxat o'zgarmadi.",
     "showAll": "Tarixni ham ko'rsatish",
     "showEffective": "Faqat amaldagilar",
     "colAccount": "Hisob",
@@ -316,9 +306,6 @@
     "error": "Bildirishnomalarni yuklab bo'lmadi.",
     "empty": "Bildirishnoma topilmadi.",
     "emptyHint": "Filtrlarni o'zgartirib ko'ring.",
-    "more": "Ko'proq yuklash",
-    "loadingMore": "Yuklanmoqda…",
-    "moreError": "Ko'proq yuklab bo'lmadi. Yuqoridagi ro'yxat o'zgarmadi.",
     "filterRecipient": "Qabul qiluvchi",
     "recipientPlaceholder": "Hisob ID",
     "filterScope": "Ko'rinish",
@@ -409,6 +396,16 @@
     "refused": "Amal rad etildi — turnir bu holatda emas.",
     "failed": "Amalni bajarib bo'lmadi. Hech narsa o'zgarmadi.",
     "noActions": "Bu holat uchun amal yo'q.",
-    "noActionsHint": "Raund nashri o'yin natijalaridan kelib chiqadi; bekor qilish hali qo'llab-quvvatlanmaydi."
+    "noActionsHint": "Raund nashri o'yin natijalaridan kelib chiqadi; bekor qilish hali qo'llab-quvvatlanmaydi.",
+    "refusedOpen": "Ro'yxatni ochib bo'lmadi — turnir bu holatda emas.",
+    "refusedClose": "Ro'yxatni yopib bo'lmadi — turnir bu holatda emas.",
+    "refusedStart": "Turnirni boshlab bo'lmadi — ro'yxat yopilmagan yoki u allaqachon boshlangan."
+  },
+  "pagination": {
+    "label": "Sahifalash",
+    "previous": "← Oldingi",
+    "next": "Keyingi →",
+    "page": "Sahifa {page}",
+    "loading": "Yuklanmoqda…"
   }
 }

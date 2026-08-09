@@ -1397,6 +1397,228 @@ first. A refused command leaves the page showing the state it was in.
 
 ---
 
+## 6.16 Completion & hardening — A64-024
+
+Three findings and one refusal, after the epic's features were exercised
+against a real deployment rather than a test schema.
+
+### The audit enum drift, and why the suite could not see it
+
+`admin.audit_action` was created by `b2d5f8a41c70` with two labels.
+A64-024.6, A64-024.7 and A64-024.5H each added members to the Python enum
+and **none added a migration**, so against a migrated database every
+audited mutation added since died at `flush()`:
+
+    invalid input value for enum admin.audit_action: "tournament.create"
+
+The reported symptom was tournament creation. The same call is made by
+moderation's restrict/restore and by the push-delivery retry, so all three
+features were dead in any deployment built from the migration chain — ten
+labels missing across `audit_action` and `audit_subject_type`.
+
+Two things hid it, and both will hide the next one:
+
+| Cause | Consequence |
+| --- | --- |
+| `alembic revision --autogenerate` does not detect enum **value** additions | The generated revision is an empty `pass`, and `alembic check` reports no drift |
+| The contract fixture builds its schema with `Base.metadata.create_all` | The type is created from the *current* Python enum, so the suite always ran against a database that had every value |
+
+`tests/contract/test_admin_audit_enums.py` closes it by reading the
+**migrations** rather than a schema — the chain is what a deployment
+applies, and asking a `create_all` database compares the code to itself. A
+sweep of all 44 native enums the platform declares found these two and
+nothing else.
+
+`e5a1c94f27d8` adds the missing labels. Its `downgrade` is a **no-op**, and
+says so: PostgreSQL cannot drop a label, and `7989d2c17008`'s convention —
+remap the rows to a surviving meaning — cannot apply here because
+`admin.audit_entry` refuses `UPDATE` by trigger. A downgrade that remapped
+history would have to disable the guarantee A64-024.8 built to survive
+migrations.
+
+### Pagination
+
+Every listing pages by keyset — cursor forward, no `offset`, no total — and
+the console rendered that as **Load more**. Correct, and unusable: an
+operator nine pages into a trail had eight pages above the row they were
+reading and no way back to page three.
+
+The six listings now walk one page at a time. The client holds the cursor
+that produced each page it has seen, so `Previous` is a re-fetch with a
+cursor already in hand: one request, **no backend change, no `COUNT(*)`,
+and no route touched**.
+
+**No numbered jumps.** There is no cursor for page 57 until page 56 has
+been fetched, and the only way to invent one is `OFFSET` — a different page
+57 depending on what was written since, and a scan of every row before it.
+The control is Previous / page / Next, and the number means how many pages
+have been walked rather than a position in a total nobody counted.
+
+A changed filter discards the history and restarts at page one: a cursor
+from one query names a row the other may not contain.
+
+| Console | Control |
+| --- | --- |
+| Users, Matches, Tournaments, Moderation, Notifications, Audit | Previous / page / Next |
+
+### Administrative broadcast — **not built**
+
+An operator announcement surface was in scope and is **deliberately not
+shipped**. Two things it needs are product decisions rather than
+engineering ones, and inventing either inside an admin service would put
+the decision in the wrong place.
+
+**1. Which category an announcement is.** `NotificationCategory.SYSTEM`
+exists, has no producer, and is the one entry in `preference.LOCKED` —
+in-app system notifications **cannot be muted**, documented for "security
+and account matters… a password change, a moderation action, an essential
+service notice". So calling an operator announcement `system` makes it
+unmuteable by every player, and calling it anything else means adding a
+category the preference surface must then offer. Which one an announcement
+is is a product and arguably a legal question.
+
+**2. There is no bounded fan-out.** `DurableNotificationWriter.store()`
+writes a batch in one transaction, and the largest audience the platform
+produces today is a tournament's entrants — bounded by `capacity ≤ 128`. A
+broadcast to every account is one transaction of N rows with no batching,
+no resumability and no progress record. Building that is a campaign
+projection, a worker and a progress table: its own task, not a side effect
+of an admin button.
+
+Single-recipient and selected-recipient announcements share the first
+problem and not the second, so they are the smaller decision — but they
+still need the category answered first.
+
+Recorded here rather than half-built. Nothing about the notification
+architecture was changed.
+
+### Cross-links
+
+`/users/{id}` links to that account's matches (`/matches?participant=…`)
+and to the restrictions console. Every parameter is one the destination's
+own `validateSearch` declares — no query string is guessed, because a
+filter the destination ignores is one an operator believes is applied.
+
+**A match does not link to its tournament**, and cannot yet. `origin`
+publishes *that* a match came from a tournament; the identifier beside it,
+`origin_ref`, is the **pairing** id rather than the tournament's, and
+`AdminMatchRecord` does not publish it at all. Resolving one to the other
+needs a lookup in `tournament`, so the link waits for a reason to add it.
+The reverse direction already exists: `AdminPairing.match_ids` takes an
+operator from a bracket node to the games it produced.
+
+### Operator workflow completion
+
+| Change | Why |
+| --- | --- |
+| Double-submit guard in the handler, not only on the button | A repeated click is harmless to the aggregate — its row lock refuses the second — and would still write two audit entries for one action. Creation is the sharper case: it has no natural idempotency, so two submissions are two tournaments |
+| A refusal names its command | The server answers `409` and nothing more, deliberately: the reason is a domain state rather than a message. Which of the three commands was refused is the only thing that distinguishes them, so the console says it |
+
+### Shared primitives
+
+Two, and only where the duplication was real:
+
+- **`PageHeader`** — seven pages wrote the same heading and lede by hand and
+  had drifted; one carried its description inside the first section.
+  `tournaments` uses its `actions` slot so the create control sits beside
+  the heading rather than under the filters, where a primary action reads
+  as part of the filter row.
+- **`ErrorNotice`** — thirteen copies of one `role="alert"` paragraph across
+  twelve files. They agreed, which is why it was worth removing before one
+  of them stopped: a dropped `role` is invisible in review and silent in
+  use.
+
+**No `StatusBadge`**, deliberately. The nine status renders are not one
+thing: some are localised phrases and some are deliberately raw identifiers
+that the console must not translate (an unknown enum member has to remain
+readable). A shared component would either force a translation that does
+not exist or be a `<span>` with a class. And there is no accessibility gap
+to close — every one of them is already text rather than colour.
+
+### The broadcast category — decided, not built
+
+The blocking question in this section is answered: an operator announcement
+becomes a **new muteable `NotificationCategory`**, not `SYSTEM`.
+
+`preference.LOCKED` holds one entry and its own comment says the narrowness
+is the point — `system` is for a matter the platform must be able to reach
+somebody about, "a password change, a moderation action, an essential
+service notice". An operator announcement is not that, and delivering it
+unmuteably would dilute the one category whose whole value is that a player
+cannot switch it off.
+
+The second blocker stands unchanged: there is no bounded fan-out for "all
+accounts". Single-recipient and selected-recipient announcements do not
+need one and are the smaller piece; a platform-wide broadcast needs a
+campaign projection, a worker and a progress record, which is its own task.
+
+## 6.17 Epic closure — A64-024.10
+
+The audit that closes the epic. It built no feature: its output is evidence,
+two defects fixed, and this matrix.
+
+### What shipped
+
+| # | Capability | Where | Audited |
+| --- | --- | --- | --- |
+| .1 | Role model, `require_admin`, first-admin bootstrap | §2–§5 | Yes |
+| .2 | Console shell, its own sign-in, own origin | §6.1–§6.7 | Yes |
+| .3 | User management (read) | §6.8 | Yes |
+| .4 | Match management (read) | §6.9 | Yes |
+| .5 | Tournament management (read) | §6.10 | Yes |
+| .5H | Tournament lifecycle commands | §6.15 | Yes |
+| .6 | Moderation — suspend, restore, enforcement | §6.12 | Yes |
+| .7 | Notification operations — read, one retry | §6.13 | Yes |
+| .8 | Audit log — append-only, and its viewer | §6.11 | Yes |
+| .9 | Dashboard | §6.14 | Yes |
+| — | Completion & hardening | §6.16 | Yes |
+
+### What the audit established
+
+| Property | Evidence |
+| --- | --- |
+| Every admin route is guarded | 19 routes in the built OpenAPI, 0 without `require_admin` |
+| No admin response is cacheable | `_no_store` present in all eight routers |
+| The access token carries no role | `TokenClaims` has no role or scope field; nothing sets `custom=` for access tokens, so authority is re-read per request |
+| Every admin mutation commits and audits | 10 transactional service methods, each with an explicit `commit()` and an audit write in the same transaction |
+| The audit table cannot be rewritten | `UPDATE`, `DELETE` and `TRUNCATE` each refused against real rows |
+| No admin response leaks a secret | 36 response models scanned; `email` appears only on the two user models §6.8 declares |
+| The migration chain is linear | single head, no branch |
+| Admin listings are bounded | every listing is keyset with `limit + 1`; no `OFFSET`, no `COUNT(*)` outside one dashboard card |
+| Backend and console agree on paths | all 19 routes are reachable from `client.ts`, and it calls nothing else |
+
+### What the audit fixed
+
+| # | Defect | Severity |
+| --- | --- | --- |
+| 1 | Five tournament `AuditAction` values had no console label. They rendered as raw identifiers **and were absent from the action filter**, so an operator could not filter for a tournament action at all | P3 |
+| 2 | `PlaceholderPage` and its route were unreachable — every section in `SECTIONS` is built. CLAUDE.md §2.7 | P3 |
+
+Fix 1 is now guarded by a test. The Python enum and the console's label map
+are the only two places every action must appear, they are written in two
+languages, and there is no third place holding both — so
+`test_admin_audit_enums.py` reads the console's `vocabulary.ts` directly.
+Cross-workspace reads are unusual and this one is deliberate: generating a
+shared contract would add a fourth artefact to keep in step, which is the
+problem rather than the fix.
+
+### Enhancements after the epic
+
+Each is a decision this epic deliberately did not make, not an omission.
+Recorded here so the next task starts from why rather than from what.
+
+| Enhancement | Blocked on |
+| --- | --- |
+| Admin broadcast / announcements | a muteable `NotificationCategory` (the user chose a new one over `SYSTEM`, which is the sole `preference.LOCKED` entry), plus bounded fan-out — `DurableNotificationWriter.store()` writes one batch in one transaction |
+| Tournament cancellation | the domain event exists; nothing produces or consumes it, and what happens to entrants and rated results is a product decision |
+| Entrant disqualification, forced results, manual brackets | no domain action exists; each changes a rated outcome |
+| A `moderator` role narrower than `admin` | OQ-1 — no surface yet distinguishes them |
+| `muted` and `matchmaking_restricted` sanctions | enforcement seams, per §6.12 |
+| Match mutations | `AuditAction` extends easily; *what* to record does not |
+| Online-user counts, infrastructure charts | metrics here are structured log records; there is no collector in this repository |
+
+---
+
 ## 7. The audit invariant
 
 **Built by A64-024.8** — see §6.11. The rule it exists to keep:
@@ -1441,8 +1663,11 @@ publication and entrant removal are named there as refused rather than
 pending: each needs a product or domain decision this epic is not the place
 to make.
 
-Their **routes exist and are guarded**; only their content is deferred, so
-adding a real section later changes a page body and not the boundary.
+Every section the console's navigation offers is now built. A64-024.10
+removed the placeholder route and its page: while sections were still
+outstanding the console rendered a guarded "not implemented yet" page for
+each, and once the last one shipped that route became unreachable code.
+A future section adds its own route rather than filling in a placeholder.
 
 ## 9. Open questions
 

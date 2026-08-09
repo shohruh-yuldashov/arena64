@@ -12,6 +12,7 @@ import {
   retryNotificationDelivery,
 } from "@/shared/api/client";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
+import { ErrorNotice } from "@/shared/ui/error-notice";
 import { ConfirmDialog } from "@/shared/ui/confirm-dialog";
 
 /**
@@ -123,11 +124,7 @@ export function NotificationDetailPage() {
       </p>
 
       {state === "loading" && <p role="status">{t("notifications.loading")}</p>}
-      {state === "error" && (
-        <p role="alert" className="error">
-          {t("notifications.error")}
-        </p>
-      )}
+      {state === "error" && <ErrorNotice message={t("notifications.error")} />}
 
       {state === "ready" && detail !== null && (
         <>

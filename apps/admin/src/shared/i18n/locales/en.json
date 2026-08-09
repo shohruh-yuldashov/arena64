@@ -73,9 +73,7 @@
   "route": {
     "notFound": "Page not found",
     "notFoundHint": "That address is not part of the admin console.",
-    "backToDashboard": "Back to the dashboard",
-    "placeholder": "Not implemented yet",
-    "placeholderHint": "This section arrives in a later A64-024 task."
+    "backToDashboard": "Back to the dashboard"
   },
   "users": {
     "title": "Users",
@@ -100,7 +98,6 @@
     "loading": "Loading users…",
     "error": "Could not load users.",
     "retry": "Try again",
-    "more": "Load more",
     "back": "Back to users",
     "detailTitle": "Account",
     "sectionAccount": "Account",
@@ -109,8 +106,8 @@
     "notAnAdmin": "This account holds no admin role.",
     "userId": "User ID",
     "joined": "Joined",
-    "loadingMore": "Loading more…",
-    "moreError": "Could not load more users. The list above is unchanged."
+    "viewMatches": "Matches for this account",
+    "viewModeration": "All restrictions"
   },
   "matches": {
     "title": "Matches",
@@ -133,9 +130,6 @@
     "emptyHint": "Try different filters.",
     "loading": "Loading matches…",
     "error": "Could not load matches.",
-    "more": "Load more",
-    "loadingMore": "Loading more…",
-    "moreError": "Could not load more matches. The list above is unchanged.",
     "back": "Back to matches",
     "sectionMatch": "Match",
     "sectionParticipants": "Participants",
@@ -180,9 +174,6 @@
     "emptyHint": "Try different filters.",
     "loading": "Loading tournaments…",
     "error": "Could not load tournaments.",
-    "more": "Load more",
-    "loadingMore": "Loading more…",
-    "moreError": "Could not load more. The list above is unchanged.",
     "back": "Back to tournaments",
     "overview": "Overview",
     "registration": "Registration",
@@ -237,9 +228,6 @@
     "error": "Could not load the audit log.",
     "empty": "No entries found.",
     "emptyHint": "Try different filters.",
-    "more": "Load more",
-    "loadingMore": "Loading more…",
-    "moreError": "Could not load more. The list above is unchanged.",
     "actionRoleGrant": "granted the admin role",
     "actionRoleRevoke": "revoked the admin role",
     "outcomeSucceeded": "Succeeded",
@@ -251,7 +239,12 @@
     "none": "—",
     "actionSanctionApply": "restricted the account",
     "actionSanctionLift": "removed the restriction",
-    "actionDeliveryRetry": "queued the push delivery again"
+    "actionDeliveryRetry": "queued the push delivery again",
+    "actionTournamentCreate": "created a tournament",
+    "actionTournamentOpen": "opened tournament registration",
+    "actionTournamentClose": "closed tournament registration",
+    "actionTournamentStart": "started the tournament",
+    "actionTournamentRefused": "could not change the tournament's state"
   },
   "moderation": {
     "title": "Restrictions",
@@ -260,9 +253,6 @@
     "emptyHint": "Nobody is restricted right now.",
     "loading": "Loading restrictions…",
     "error": "Could not load restrictions.",
-    "more": "Load more",
-    "loadingMore": "Loading more…",
-    "moreError": "Could not load more. The list above is unchanged.",
     "showAll": "Include history",
     "showEffective": "Effective only",
     "colAccount": "Account",
@@ -316,9 +306,6 @@
     "error": "Could not load notifications.",
     "empty": "No notifications found.",
     "emptyHint": "Try different filters.",
-    "more": "Load more",
-    "loadingMore": "Loading more…",
-    "moreError": "Could not load more. The list above is unchanged.",
     "filterRecipient": "Recipient",
     "recipientPlaceholder": "Account id",
     "filterScope": "View",
@@ -409,6 +396,16 @@
     "refused": "The action was refused — the tournament is not in that state.",
     "failed": "The action could not be completed. Nothing changed.",
     "noActions": "No action is available for this state.",
-    "noActionsHint": "Round publication follows from match results; cancellation is not supported yet."
+    "noActionsHint": "Round publication follows from match results; cancellation is not supported yet.",
+    "refusedOpen": "Registration could not be opened — the tournament is not in that state.",
+    "refusedClose": "Registration could not be closed — the tournament is not in that state.",
+    "refusedStart": "The tournament could not be started — registration is not closed, or it has already begun."
+  },
+  "pagination": {
+    "label": "Pagination",
+    "previous": "← Previous",
+    "next": "Next →",
+    "page": "Page {page}",
+    "loading": "Loading…"
   }
 }

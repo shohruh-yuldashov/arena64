@@ -8,6 +8,7 @@ import {
 } from "@/shared/api/client";
 import { TournamentActions } from "@/features/tournaments/tournament-actions";
 import { useTranslation } from "@/shared/i18n";
+import { ErrorNotice } from "@/shared/ui/error-notice";
 
 /**
  * One tournament — A64-024.5 §17, §18.
@@ -91,11 +92,7 @@ export function TournamentDetailPage() {
       </p>
 
       {state === "loading" && <p role="status">{t("tournaments.loading")}</p>}
-      {state === "error" && (
-        <p role="alert" className="error">
-          {t("tournaments.error")}
-        </p>
-      )}
+      {state === "error" && <ErrorNotice message={t("tournaments.error")} />}
 
       {state === "ready" && detail !== null && (
         <>

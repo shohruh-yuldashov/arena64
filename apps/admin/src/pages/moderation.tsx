@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { CATEGORY_LABELS } from "@/features/moderation/moderation-actions";
 import {
@@ -8,6 +8,10 @@ import {
   type ModerationCategory,
 } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
+import { ErrorNotice } from "@/shared/ui/error-notice";
+import { PageHeader } from "@/shared/ui/page-header";
+import { Pagination } from "@/shared/ui/pagination";
+import { useCursorPages } from "@/shared/ui/use-cursor-pages";
 
 /**
  * The Moderation console — A64-024.6 §20.
@@ -27,53 +31,27 @@ import { useTranslation } from "@/shared/i18n";
 export function ModerationPage() {
   const { t, locale } = useTranslation();
 
-  const [rows, setRows] = useState<AdminSanction[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
   const [effectiveOnly, setEffectiveOnly] = useState(true);
-  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [moreFailed, setMoreFailed] = useState(false);
 
-  const controller = useRef<AbortController | null>(null);
-  useEffect(() => {
-    controller.current?.abort();
-    const next = new AbortController();
-    controller.current = next;
-    setState("loading");
-    setRows([]);
-    setCursor(null);
-    setMoreFailed(false);
-
-    void fetchRestrictions({ effective_only: effectiveOnly }, next.signal).then((outcome) => {
-      if (next.signal.aborted) return;
-      if (outcome.status === "ok") {
-        setRows(outcome.value.items);
-        setCursor(outcome.value.next_cursor);
-        setState("ready");
-        return;
-      }
-      setState("error");
-    });
-
-    return () => next.abort();
-  }, [effectiveOnly]);
-
-  const loadMore = async () => {
-    if (cursor === null || loadingMore) return;
-    setLoadingMore(true);
-    setMoreFailed(false);
-    const outcome = await fetchRestrictions({ effective_only: effectiveOnly, cursor });
-    setLoadingMore(false);
-    if (outcome.status !== "ok") {
-      setMoreFailed(true);
-      return;
-    }
-    setRows((current) => {
-      const seen = new Set(current.map((row) => row.id));
-      return [...current, ...outcome.value.items.filter((row) => !seen.has(row.id))];
-    });
-    setCursor(outcome.value.next_cursor);
-  };
+  /**
+   * One page at a time, walked by cursor — A64-024 hardening.
+   *
+   * The scope toggle is the query here, so it is the key: switching it
+   * discards the cursor history and restarts at page one, because a cursor
+   * from the effective-only walk names a row the full history may order
+   * differently.
+   */
+  const pages = useCursorPages<AdminSanction>(
+    useCallback(
+      (cursor, signal) =>
+        fetchRestrictions(
+          { effective_only: effectiveOnly, ...(cursor ? { cursor } : {}) },
+          signal,
+        ),
+      [effectiveOnly],
+    ),
+    String(effectiveOnly),
+  );
 
   const when = (value: string) => new Date(value).toLocaleString(locale);
 
@@ -99,8 +77,7 @@ export function ModerationPage() {
 
   return (
     <>
-      <h2>{t("moderation.title")}</h2>
-      <p className="muted">{t("moderation.lede")}</p>
+      <PageHeader title={t("moderation.title")} description={t("moderation.lede")} />
 
       <div className="filters">
         <p className="field">
@@ -116,20 +93,16 @@ export function ModerationPage() {
         </p>
       </div>
 
-      {state === "loading" && <p role="status">{t("moderation.loading")}</p>}
-      {state === "error" && (
-        <p role="alert" className="error">
-          {t("moderation.error")}
-        </p>
-      )}
-      {state === "ready" && rows.length === 0 && (
+      {pages.state === "loading" && <p role="status">{t("moderation.loading")}</p>}
+      {pages.state === "error" && <ErrorNotice message={t("moderation.error")} />}
+      {pages.state === "ready" && pages.rows.length === 0 && (
         <>
           <p role="status">{t("moderation.empty")}</p>
           <p className="muted">{t("moderation.emptyHint")}</p>
         </>
       )}
 
-      {state === "ready" && rows.length > 0 && (
+      {pages.state === "ready" && pages.rows.length > 0 && (
         <>
           <table className="users-table">
             <thead>
@@ -143,7 +116,7 @@ export function ModerationPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
+              {pages.rows.map((row) => (
                 <tr key={row.id}>
                   <td>{accountOf(row)}</td>
                   <td>{reasonOf(row)}</td>
@@ -157,7 +130,7 @@ export function ModerationPage() {
           </table>
 
           <ul className="users-cards">
-            {rows.map((row) => (
+            {pages.rows.map((row) => (
               <li key={row.id}>
                 <span>{accountOf(row)}</span>
                 <span>
@@ -173,24 +146,14 @@ export function ModerationPage() {
             ))}
           </ul>
 
-          {cursor !== null && (
-            <p className="load-more">
-              <button
-                type="button"
-                className="action"
-                disabled={loadingMore}
-                onClick={() => void loadMore()}
-              >
-                {t(loadingMore ? "moderation.loadingMore" : "moderation.more")}
-              </button>
-            </p>
-          )}
-
-          {moreFailed && (
-            <p role="alert" className="error">
-              {t("moderation.moreError")}
-            </p>
-          )}
+          <Pagination
+            page={pages.page}
+            hasPrevious={pages.hasPrevious}
+            hasNext={pages.hasNext}
+            busy={pages.busy}
+            onPrevious={pages.previous}
+            onNext={pages.next}
+          />
         </>
       )}
     </>

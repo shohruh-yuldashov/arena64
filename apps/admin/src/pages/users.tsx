@@ -1,8 +1,12 @@
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { type AdminUserSummary, fetchUsers, type UserQuery } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
+import { ErrorNotice } from "@/shared/ui/error-notice";
+import { PageHeader } from "@/shared/ui/page-header";
+import { Pagination } from "@/shared/ui/pagination";
+import { useCursorPages } from "@/shared/ui/use-cursor-pages";
 
 /**
  * The Users console — A64-024.3 §11, §12, §14.
@@ -45,28 +49,6 @@ export function UsersPage() {
   const search = useSearch({ strict: false }) as Search;
 
   const [term, setTerm] = useState(search.q ?? "");
-  /**
-   * Every row loaded so far, oldest page first — A64-024.3H.
-   *
-   * Accumulated rather than replaced, because "Load more" is the UX: a
-   * page that swapped its rows would lose the ones an operator had already
-   * scrolled to. The server's ordering is deterministic and each cursor
-   * continues where the last page ended, so appending preserves it.
-   */
-  const [rows, setRows] = useState<AdminUserSummary[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
-  /**
-   * Kept apart from `state`, deliberately.
-   *
-   * A failed *first* page has nothing to show and becomes the error
-   * screen; a failed *next* page must leave the rows already on screen
-   * exactly where they are. Folding the two into one state is how a
-   * transient network blip erases an operator's place in a list.
-   */
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [moreFailed, setMoreFailed] = useState(false);
-
   // Keeps the input responsive while the URL — the thing that actually
   // drives the query — updates only once typing settles.
   useEffect(() => {
@@ -88,69 +70,22 @@ export function UsersPage() {
   };
   const key = JSON.stringify(query);
 
-  const controller = useRef<AbortController | null>(null);
-  useEffect(() => {
-    controller.current?.abort();
-    const next = new AbortController();
-    controller.current = next;
-    setState("loading");
-    // **The reset.** A changed search or filter starts a new result set,
-    // so the accumulated rows and the cursor both go — reusing a cursor
-    // from the previous query would ask the server to continue a list that
-    // no longer exists, and it would answer with rows that do not match.
-    setRows([]);
-    setCursor(null);
-    setMoreFailed(false);
-
-    void fetchUsers(query, next.signal).then((outcome) => {
-      if (next.signal.aborted) return;
-      if (outcome.status === "ok") {
-        setRows(outcome.value.items);
-        setCursor(outcome.value.next_cursor);
-        setState("ready");
-        return;
-      }
-      setState("error");
-    });
-
-    return () => next.abort();
-    // Keyed on the serialised query rather than on the object: a fresh
-    // object each render would restart the request on every unrelated
-    // state change, which is how a search box ends up cancelling itself.
-  }, [key]);
-
   /**
-   * Fetches the page after the one on screen and **appends** it.
+   * One page at a time, walked by cursor — A64-024 hardening.
    *
-   * Deduplicated by id on the way in. The keyset is total — `(created_at,
-   * id)` with a unique tiebreak — so a duplicate should be impossible; the
-   * guard is here because the cost of being wrong is a React key collision
-   * and a row rendered twice, and the cost of the guard is a `Set`.
-   *
-   * Uses its own request rather than the effect's controller, so a
-   * superseded search still aborts the *first* page without this one
-   * cancelling itself mid-append.
+   * Replaces the accumulating "Load more": an operator nine pages into a
+   * listing had eight pages of rows above the one they were reading and no
+   * way back. The hook holds the cursor that produced each page, so
+   * `Previous` is a re-fetch with a cursor already in hand and the keyset
+   * the server offers is unchanged.
    */
-  const loadMore = async () => {
-    if (cursor === null || loadingMore) return;
-    setLoadingMore(true);
-    setMoreFailed(false);
-
-    const outcome = await fetchUsers({ ...query, cursor });
-    setLoadingMore(false);
-
-    if (outcome.status !== "ok") {
-      // The rows already on screen are untouched — §6.
-      setMoreFailed(true);
-      return;
-    }
-
-    setRows((current) => {
-      const seen = new Set(current.map((row) => row.id));
-      return [...current, ...outcome.value.items.filter((row) => !seen.has(row.id))];
-    });
-    setCursor(outcome.value.next_cursor);
-  };
+  const pages = useCursorPages<AdminUserSummary>(
+    useCallback(
+      (cursor, signal) => fetchUsers({ ...query, ...(cursor ? { cursor } : {}) }, signal),
+      [key],
+    ),
+    key,
+  );
 
   const setFilter = (name: "active" | "verified", value: string) => {
     void navigate({
@@ -162,7 +97,7 @@ export function UsersPage() {
 
   return (
     <>
-      <h2>{t("users.title")}</h2>
+      <PageHeader title={t("users.title")} />
 
       <div className="filters">
         <p className="field">
@@ -206,22 +141,18 @@ export function UsersPage() {
         </p>
       </div>
 
-      {state === "loading" && <p role="status">{t("users.loading")}</p>}
+      {pages.state === "loading" && <p role="status">{t("users.loading")}</p>}
 
-      {state === "error" && (
-        <p role="alert" className="error">
-          {t("users.error")}
-        </p>
-      )}
+      {pages.state === "error" && <ErrorNotice message={t("users.error")} />}
 
-      {state === "ready" && rows.length === 0 && (
+      {pages.state === "ready" && pages.rows.length === 0 && (
         <>
           <p role="status">{t("users.empty")}</p>
           <p className="muted">{t("users.emptyHint")}</p>
         </>
       )}
 
-      {state === "ready" && rows.length > 0 && (
+      {pages.state === "ready" && pages.rows.length > 0 && (
         <>
           {/* Wide: a table with real headers, so a screen reader can
               announce the column a cell belongs to. */}
@@ -237,7 +168,7 @@ export function UsersPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((user) => (
+              {pages.rows.map((user) => (
                 <tr key={user.id}>
                   <td>
                     <Link to="/users/$userId" params={{ userId: user.id }}>
@@ -257,7 +188,7 @@ export function UsersPage() {
           {/* Narrow: the same rows as cards. Nothing is dropped — every
               column above appears here as a labelled line. */}
           <ul className="users-cards">
-            {rows.map((user) => (
+            {pages.rows.map((user) => (
               <li key={user.id}>
                 <Link to="/users/$userId" params={{ userId: user.id }}>
                   {user.display_name ?? user.username}
@@ -278,26 +209,14 @@ export function UsersPage() {
           {/* §6: gone entirely when the server sent no cursor. A disabled
               "Load more" on the last page is a control that says there is
               something else and then refuses to fetch it. */}
-          {cursor !== null && (
-            <p className="load-more">
-              <button
-                type="button"
-                className="action"
-                disabled={loadingMore}
-                onClick={() => void loadMore()}
-              >
-                {t(loadingMore ? "users.loadingMore" : "users.more")}
-              </button>
-            </p>
-          )}
-
-          {/* The rows above are still on screen — a failed next page must
-              not cost an operator the ones they already had. */}
-          {moreFailed && (
-            <p role="alert" className="error">
-              {t("users.moreError")}
-            </p>
-          )}
+          <Pagination
+            page={pages.page}
+            hasPrevious={pages.hasPrevious}
+            hasNext={pages.hasNext}
+            busy={pages.busy}
+            onPrevious={pages.previous}
+            onNext={pages.next}
+          />
         </>
       )}
     </>

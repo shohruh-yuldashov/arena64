@@ -1,9 +1,13 @@
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback } from "react";
 
 import { AUDIT_ACTION_LABELS, AUDIT_SUBJECT_ROUTES } from "@/features/audit/vocabulary";
 import { type AdminAuditEntry, type AuditQuery, fetchAuditEntries } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
+import { ErrorNotice } from "@/shared/ui/error-notice";
+import { PageHeader } from "@/shared/ui/page-header";
+import { Pagination } from "@/shared/ui/pagination";
+import { useCursorPages } from "@/shared/ui/use-cursor-pages";
 
 /**
  * The Audit console — A64-024.8.
@@ -33,12 +37,6 @@ export function AuditPage() {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Search;
 
-  const [rows, setRows] = useState<AdminAuditEntry[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [moreFailed, setMoreFailed] = useState(false);
-
   const query: AuditQuery = {
     ...(search.action ? { action: search.action } : {}),
     ...(search.actor ? { actor_id: search.actor } : {}),
@@ -48,46 +46,23 @@ export function AuditPage() {
   };
   const key = JSON.stringify(query);
 
-  const controller = useRef<AbortController | null>(null);
-  useEffect(() => {
-    controller.current?.abort();
-    const next = new AbortController();
-    controller.current = next;
-    setState("loading");
-    setRows([]);
-    setCursor(null);
-    setMoreFailed(false);
-
-    void fetchAuditEntries(query, next.signal).then((outcome) => {
-      if (next.signal.aborted) return;
-      if (outcome.status === "ok") {
-        setRows(outcome.value.items);
-        setCursor(outcome.value.next_cursor);
-        setState("ready");
-        return;
-      }
-      setState("error");
-    });
-
-    return () => next.abort();
-  }, [key]);
-
-  const loadMore = async () => {
-    if (cursor === null || loadingMore) return;
-    setLoadingMore(true);
-    setMoreFailed(false);
-    const outcome = await fetchAuditEntries({ ...query, cursor });
-    setLoadingMore(false);
-    if (outcome.status !== "ok") {
-      setMoreFailed(true);
-      return;
-    }
-    setRows((current) => {
-      const seen = new Set(current.map((row) => row.id));
-      return [...current, ...outcome.value.items.filter((row) => !seen.has(row.id))];
-    });
-    setCursor(outcome.value.next_cursor);
-  };
+  /**
+   * One page at a time, walked by cursor — A64-024 hardening.
+   *
+   * Replaces the accumulating "Load more": an operator nine pages
+   * into a listing had eight pages of rows above the one they were
+   * reading and no way back. The hook holds the cursor that produced
+   * each page, so `Previous` is a re-fetch with a cursor already in
+   * hand and the keyset the server offers is unchanged.
+   */
+  const pages = useCursorPages<AdminAuditEntry>(
+    useCallback(
+      (cursor, signal) =>
+        fetchAuditEntries({ ...query, ...(cursor ? { cursor } : {}) }, signal),
+      [key],
+    ),
+    key,
+  );
 
   const setFilter = (name: keyof Search, value: string) => {
     void navigate({
@@ -177,8 +152,7 @@ export function AuditPage() {
 
   return (
     <>
-      <h2>{t("audit.title")}</h2>
-      <p className="muted">{t("audit.lede")}</p>
+      <PageHeader title={t("audit.title")} description={t("audit.lede")} />
 
       <div className="filters">
         <p className="field">
@@ -209,20 +183,16 @@ export function AuditPage() {
         </p>
       </div>
 
-      {state === "loading" && <p role="status">{t("audit.loading")}</p>}
-      {state === "error" && (
-        <p role="alert" className="error">
-          {t("audit.error")}
-        </p>
-      )}
-      {state === "ready" && rows.length === 0 && (
+      {pages.state === "loading" && <p role="status">{t("audit.loading")}</p>}
+      {pages.state === "error" && <ErrorNotice message={t("audit.error")} />}
+      {pages.state === "ready" && pages.rows.length === 0 && (
         <>
           <p role="status">{t("audit.empty")}</p>
           <p className="muted">{t("audit.emptyHint")}</p>
         </>
       )}
 
-      {state === "ready" && rows.length > 0 && (
+      {pages.state === "ready" && pages.rows.length > 0 && (
         <>
           <table className="users-table">
             <thead>
@@ -235,7 +205,7 @@ export function AuditPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((entry) => (
+              {pages.rows.map((entry) => (
                 <tr key={entry.id}>
                   <td>{when(entry.created_at)}</td>
                   <td>{actorOf(entry)}</td>
@@ -251,7 +221,7 @@ export function AuditPage() {
           </table>
 
           <ul className="users-cards">
-            {rows.map((entry) => (
+            {pages.rows.map((entry) => (
               <li key={entry.id}>
                 <span>
                   {actorOf(entry)} {actionOf(entry)}
@@ -265,24 +235,14 @@ export function AuditPage() {
             ))}
           </ul>
 
-          {cursor !== null && (
-            <p className="load-more">
-              <button
-                type="button"
-                className="action"
-                disabled={loadingMore}
-                onClick={() => void loadMore()}
-              >
-                {t(loadingMore ? "audit.loadingMore" : "audit.more")}
-              </button>
-            </p>
-          )}
-
-          {moreFailed && (
-            <p role="alert" className="error">
-              {t("audit.moreError")}
-            </p>
-          )}
+          <Pagination
+            page={pages.page}
+            hasPrevious={pages.hasPrevious}
+            hasNext={pages.hasNext}
+            busy={pages.busy}
+            onPrevious={pages.previous}
+            onNext={pages.next}
+          />
         </>
       )}
     </>

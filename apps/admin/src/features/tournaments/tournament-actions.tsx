@@ -50,6 +50,22 @@ const DONE: Record<TournamentCommand, TranslationKey> = {
   start: "tournamentActions.doneStarted",
 };
 
+/**
+ * What a `409` means, per command.
+ *
+ * The aggregate refuses a transition it is not in a state to make, and
+ * which transition was asked for is the whole of what an operator needs to
+ * know — "the action was refused" leaves them to work out which of the
+ * three buttons they pressed. The server does not say more, deliberately
+ * (the reason is a domain state, not a message), so the command is the only
+ * thing that can distinguish them and it is on this side.
+ */
+const REFUSED: Record<TournamentCommand, TranslationKey> = {
+  "registration/open": "tournamentActions.refusedOpen",
+  "registration/close": "tournamentActions.refusedClose",
+  start: "tournamentActions.refusedStart",
+};
+
 export function TournamentActions({
   tournamentId,
   name,
@@ -71,6 +87,12 @@ export function TournamentActions({
   const available = COMMANDS[status] ?? [];
 
   const run = async (command: TournamentCommand) => {
+    // The disabled attribute is UX; this is the guard. A double click, a
+    // held `Enter`, or a click landing between the request and the re-read
+    // would otherwise send the command twice — harmless against the
+    // aggregate's row lock, and still two audit entries where one action
+    // happened.
+    if (busy) return;
     setBusy(true);
     setError(null);
     const outcome = await commandTournament(tournamentId, command);
@@ -82,11 +104,7 @@ export function TournamentActions({
       setPending(null);
       return;
     }
-    setError(
-      t(
-        outcome.status === "refused" ? "tournamentActions.refused" : "tournamentActions.failed",
-      ),
-    );
+    setError(t(outcome.status === "refused" ? REFUSED[command] : "tournamentActions.failed"));
   };
 
   if (available.length === 0) {
@@ -107,6 +125,7 @@ export function TournamentActions({
               key={command}
               type="button"
               className="action danger"
+              disabled={busy}
               onClick={() => {
                 setError(null);
                 setPending(command);

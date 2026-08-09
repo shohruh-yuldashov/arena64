@@ -12,6 +12,8 @@ import { useEffect, useRef } from "react";
 import { useAdminAuth } from "@/app/use-admin-auth";
 import { LoginPage } from "@/pages/login";
 import { PlaceholderPage } from "@/pages/placeholder";
+import { MatchDetailPage } from "@/pages/match-detail";
+import { MatchesPage } from "@/pages/matches";
 import { UserDetailPage } from "@/pages/user-detail";
 import { UsersPage } from "@/pages/users";
 import { signOut as revokeSession } from "@/shared/api/client";
@@ -238,7 +240,28 @@ const userDetailRoute = createRoute({
   component: UserDetailPage,
 });
 
-const sectionRoutes = SECTIONS.filter((section) => section.path !== "/users").map((section) =>
+// A64-024.4. `/matches` is the second real section.
+const matchesRoute = createRoute({
+  getParentRoute: () => protectedRoute,
+  path: "/matches",
+  component: MatchesPage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...(typeof search.status === "string" ? { status: search.status } : {}),
+    ...(typeof search.rated === "string" ? { rated: search.rated } : {}),
+    ...(typeof search.origin === "string" ? { origin: search.origin } : {}),
+    ...(typeof search.participant === "string" ? { participant: search.participant } : {}),
+  }),
+});
+
+const matchDetailRoute = createRoute({
+  getParentRoute: () => protectedRoute,
+  path: "/matches/$matchId",
+  component: MatchDetailPage,
+});
+
+const sectionRoutes = SECTIONS.filter(
+  (section) => section.path !== "/users" && section.path !== "/matches",
+).map((section) =>
   createRoute({
     getParentRoute: () => protectedRoute,
     path: section.path,
@@ -248,7 +271,14 @@ const sectionRoutes = SECTIONS.filter((section) => section.path !== "/users").ma
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  protectedRoute.addChildren([dashboardRoute, usersRoute, userDetailRoute, ...sectionRoutes]),
+  protectedRoute.addChildren([
+    dashboardRoute,
+    usersRoute,
+    userDetailRoute,
+    matchesRoute,
+    matchDetailRoute,
+    ...sectionRoutes,
+  ]),
 ]);
 
 export function createAdminRouter(history?: Parameters<typeof createRouter>[0]["history"]) {

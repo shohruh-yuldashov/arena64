@@ -942,3 +942,52 @@ layers =
     app.modules.reference.presentation
     app.modules.reference.infrastructure
     app.modules.reference.domain
+
+
+# ---------------------------------------------------------------------------
+# admin — A64-024.2 §11
+# ---------------------------------------------------------------------------
+# The module gained enough layering in A64-024.1 to be worth holding to the
+# same two rules every other module keeps. Added now rather than then because
+# a contract over a package with one file is a rule with nothing to break;
+# `admin` now has a domain, an application service, a repository, a guard and
+# a router, which is exactly the shape these two contracts police.
+#
+# `app.operator` is outside the first contract's source list for the reason
+# every composition root is: `app/operator/admin.py` constructs
+# `AdminRoleService` and `SqlAlchemyRoleAssignmentRepository` by hand because
+# it runs as its own process and has no `Depends` to resolve them from. That
+# is what an operator entrypoint is for — see `app/operator/__init__.py`.
+
+[importlinter:contract:admin-internals-are-private]
+name = admin internals are reachable only through admin.public
+type = forbidden
+source_modules =
+    app.gateway
+    app.modules.auth
+    app.modules.avatars
+    app.modules.friends
+    app.modules.game
+    app.modules.matchmaking
+    app.modules.notifications
+    app.modules.profiles
+    app.modules.rating
+    app.modules.reference
+    app.modules.statistics
+    app.modules.tournament
+    app.modules.users
+forbidden_modules =
+    app.modules.admin.domain
+    app.modules.admin.application
+    app.modules.admin.infrastructure
+    app.modules.admin.presentation
+
+
+[importlinter:contract:layers-admin]
+name = admin layers point inward
+type = layers
+layers =
+    app.modules.admin.presentation
+    app.modules.admin.infrastructure
+    app.modules.admin.application
+    app.modules.admin.domain

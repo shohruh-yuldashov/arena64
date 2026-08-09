@@ -28,5 +28,23 @@
     "title": "Dashboard",
     "empty": "Nothing here yet.",
     "emptyHint": "A64-024.1 established the admin boundary. Sections arrive in later tasks."
+  },
+  "login": {
+    "title": "Sign in",
+    "subtitle": "Arena64 administration",
+    "email": "Email",
+    "password": "Password",
+    "submit": "Sign in",
+    "submitting": "Signing in…",
+    "invalid": "Those credentials were not accepted.",
+    "rateLimited": "Too many attempts. Wait a moment and try again.",
+    "refused": "This account may not sign in here."
+  },
+  "route": {
+    "notFound": "Page not found",
+    "notFoundHint": "That address is not part of the admin console.",
+    "backToDashboard": "Back to the dashboard",
+    "placeholder": "Not implemented yet",
+    "placeholderHint": "This section arrives in a later A64-024 task."
   }
 }

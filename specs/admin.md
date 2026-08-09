@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| **Status** | **Foundation shipped** — A64-024.1 (authorization, boundary, console scaffold). Every operational surface is deferred; see §8. |
+| **Status** | **Foundation shipped** — A64-024.1 (authorization, boundary, scaffold) and A64-024.2 (sign-in, routing, session isolation). Every operational surface is deferred; see §8. |
 | **Owner** | _Unassigned_ |
 | **Related ADRs** | `architecture.md` AD-04 (separate application) |
 | **Related docs** | `docs/01-architecture/database.md` §10.4, `docs/01-architecture/domain-model.md` §13 |
@@ -130,23 +130,134 @@ permanently.
 `apps/admin` is a **separate application**: its own origin, its own deploy, its
 own `package.json`, and no dependency on `apps/web`.
 
-**Session separation is a property of the origin, not a flag.** `apps/web`'s
-refresh cookie is `HttpOnly`, `SameSite=Lax` and carries no `Domain`
-attribute — so it is host-only. Serving the console from its own origin gives
-it its own cookie jar entry by construction.
+### 6.1 Sign-in
 
-| Requirement | How |
+**Ordinary Arena64 credentials.** There is no admin username, no admin
+password and no admin registration — an administrator is a normal account
+holding a live role, so the console posts to the *same* endpoints the player
+client uses.
+
+    POST /auth/browser/login     credentials -> host-only refresh cookie
+                                 + an access token in the body
+    POST /auth/browser/refresh   the cookie -> a fresh access token
+    GET  /admin/me               Authorization: Bearer <access token>
+    POST /auth/browser/logout    revokes the session, clears the cookie
+
+**The access token lives in memory only** — a closure variable, never
+`localStorage`, never `sessionStorage`, never a cookie this app writes. The
+refresh half is in an `HttpOnly` cookie the app cannot read at all.
+
+**Signing in is not being authorized.** A successful login stores a token and
+navigates; it renders nothing privileged. Whether the account may administer
+anything is `/admin/me`'s answer, asked by the route guard afterwards — so a
+valid non-administrator gets a session and then a refusal.
+
+> **A64-024.1 defect, fixed here.** Its client called `/admin/me` with
+> `credentials: "include"` and nothing else. That could never have worked: the
+> refresh cookie is scoped to `path=/api/v1/auth/browser`, so it is not sent to
+> `/api/v1/admin/me`, and `CurrentUser` authenticates from an `Authorization`
+> header. The console would have returned `401` to everybody.
+
+### 6.2 Session separation — the invariant
+
+**Separation is a property of the origin, not a flag.** The refresh cookie is
+`HttpOnly`, `SameSite=Lax` and carries **no `Domain` attribute**, so it is
+host-only: a cookie set for one host is never sent to another.
+
+The invariant, stated so a deployment can be checked against it:
+
+| # | Requirement |
 | --- | --- |
-| No privileged flash | The gate starts in `checking` and has no optimistic branch. There is no cached decision and no stored role anywhere in the app |
-| Direct navigation and refresh behave alike | Mounting the app *is* the check — there is no other path |
-| Authorization is server-authoritative | One `GET /api/v1/admin/me`; the shell renders from its `200` and from nothing else |
-| Hiding is not the boundary | Every admin API independently enforces `CurrentAdmin`. A player who reached the bundle and edited its state would still be refused by every request the shell makes |
-| Unbuilt sections | Disabled buttons carrying a localized "not built yet", never links |
-| Localization | `uz`, `ru`, `en` — the platform's three, in the console's own message tree |
+| SI-1 | `apps/admin` is served from a **distinct host** from `apps/web` |
+| SI-2 | No cookie in this system sets a `Domain` attribute — host-only, always |
+| SI-3 | `apps/admin` is deployed separately, and shares no session storage |
+| SI-4 | The admin origin is listed in `BROWSER_SESSION_TRUSTED_ORIGINS`, and the player origin is not sufficient for it |
 
-**No admin entry point was added to `apps/web`.** AD-04 keeps the two apps
-separate, and a link in the player client would be the beginning of the
-coupling it forbids.
+**SI-4 is the one that is easy to miss.** `enforce_trusted_origin` refuses a
+cookie-authenticated call whose `Origin` is not on the list, and the list is
+required in production. An admin console deployed to a new host without being
+added to it fails at login with `403`, not with a security hole — the failure
+direction is correct, and it is worth knowing in advance.
+
+Hostnames are **not** chosen here: no repository document names one, and
+inventing production DNS in a spec is how a guess becomes a fact. What is
+fixed is SI-1 … SI-4; which hosts satisfy them is the remaining infrastructure
+decision (OQ-2).
+
+### 6.3 Local development — the honest caveat
+
+`apps/web` runs on `localhost:5173` and `apps/admin` on `localhost:5174`.
+**Cookies ignore the port**, so on those two URLs the browser treats them as
+one host and the two apps *do* share the refresh cookie.
+
+That is a development artefact and it **proves nothing about production**. It
+also does not weaken production: the isolation there comes from SI-1, which
+distinct ports do not satisfy.
+
+For work that depends on the separation being real, use distinct local
+hostnames — every modern browser resolves `*.localhost` to the loopback
+address with no `/etc/hosts` entry:
+
+    apps/web     http://app.localhost:5173
+    apps/admin   http://admin.localhost:5174
+
+Both proxy `/api` to the API, so each app remains same-origin with its own
+API path and each receives its own host-only cookie. No cookie attribute is
+relaxed to make development convenient.
+
+### 6.4 Routes
+
+`@tanstack/react-router` — the router `apps/web` already uses (ADR-002), so
+there is one routing vocabulary in this repository. It replaces A64-024.1's
+`useState` navigation, which could not survive a refresh and had no URL.
+
+| Route | Access | Content |
+| --- | --- | --- |
+| `/login` | public | The sign-in form |
+| `/` | protected | Dashboard |
+| `/users`, `/matches`, `/tournaments`, `/moderation`, `/notifications`, `/audit` | protected | Localized "not implemented yet" |
+| anything else | — | An intentional not-found page |
+
+**Authorization lives in one place.** `ProtectedLayout` is the parent route of
+every admin page, so a section added later is protected *by being a child*
+rather than by its author remembering a guard.
+
+Five states are handled explicitly, and the shell is reached from exactly one:
+`checking`, `unauthenticated`, `forbidden`, `unavailable`, `authorized`. There
+is no optimistic branch and no cached role, so privileged chrome cannot flash
+before the server answers.
+
+### 6.5 Intended destination
+
+An unauthenticated visitor to `/users` is sent to `/login?next=/users` and
+returns there after signing in.
+
+`safeRedirect` is an **allowlist of shapes**: a single leading `/`, no scheme,
+not protocol-relative, not a loop back to the form. Everything else becomes the
+dashboard. `//evil.example` is the case that matters — a browser reads it as an
+absolute URL with the current scheme, so a "starts with `/`" check alone lets an
+external host through.
+
+### 6.6 Role revocation while the console is open
+
+The guard re-asks `/admin/me` on **every protected navigation**. A role revoked
+mid-session is therefore refused the next time the administrator moves within
+the console — not after a reload.
+
+That is A64-024.1's zero-staleness property observed from the client, and it is
+why the role is in the database rather than in the token. Caching the answer in
+client state would have thrown it away, which is what A64-024.2 found and
+fixed: the layout stays mounted across sections, so without the route key in
+the check's dependencies the revocation went unnoticed.
+
+## 6.7 Migration
+
+`a1c4e7b92f30` was exercised **up → down → up** in A64-024.2 against the
+development database: the table and its enum are removed on downgrade and
+recreated on upgrade. The `admin` schema itself is deliberately left in place —
+`DROP SCHEMA` would take anything a later migration put beside the table.
+
+---
 
 ## 7. The audit invariant — for A64-024.8
 
@@ -168,13 +279,13 @@ tournament management, moderation workflows, notification operations, the audit
 log viewer, analytics, infrastructure monitoring, anti-cheat surfaces, support
 tooling, and the final visual design. None is started.
 
-Routing in `apps/admin` is a `useState` over one reachable section: a router
-earns its place when there is a second destination and a URL worth sharing.
+Their **routes exist and are guarded**; only their content is deferred, so
+adding a real section later changes a page body and not the boundary.
 
 ## 9. Open questions
 
-| # | Question | Blocked on |
+| # | Question | Status |
 | --- | --- | --- |
-| OQ-1 | Does a narrower `moderator` role exist, and what does it exclude? | The first surface that distinguishes them |
-| OQ-2 | Where does `apps/admin` deploy, and behind what network boundary? | Deployment work outside this epic |
-| OQ-3 | Does the console need its own sign-in, or does it keep redirecting to the player client's? | A64-024.2 — today it links to `/login` on its own origin |
+| OQ-1 | Does a narrower `moderator` role exist, and what does it exclude? | **Open** — waiting on the first surface that distinguishes them |
+| OQ-2 | Where does `apps/admin` deploy, and behind what network boundary? | **Narrowed by A64-024.2.** The security invariants are fixed (§6.2, SI-1 … SI-4) and no longer depend on the answer. What remains is infrastructure: which hostnames satisfy SI-1, whether the console sits behind a VPN or an IP allowlist, and adding the chosen origin to `BROWSER_SESSION_TRUSTED_ORIGINS` |
+| ~~OQ-3~~ | ~~Does the console need its own sign-in?~~ | **Closed by A64-024.2.** It has its own `/login`, posting ordinary credentials to the shared auth endpoints from its own origin — so the session is the console's without a second credential system |

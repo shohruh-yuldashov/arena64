@@ -156,6 +156,12 @@ from app.modules.users.domain.visibility import (
     ViewerRelationship,
     VisibilityLevel,
 )
+from app.modules.users.public.administration import (
+    AdministrativeUserDirectory,
+    AdminUserFilters,
+    AdminUserPage,
+    AdminUserRecord,
+)
 from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import (
     AvatarReference,
@@ -256,6 +262,10 @@ __all__ = [
     "SearchTerm",
     "PublicProfileSearcher",
     "PublicUserProfile",
+    "AdminUserFilters",
+    "AdminUserPage",
+    "AdminUserRecord",
+    "AdministrativeUserDirectory",
     "UserSearchPage",
     "UserSearchQuery",
     "UserAccountCreator",

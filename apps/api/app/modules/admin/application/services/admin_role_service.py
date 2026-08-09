@@ -44,6 +44,7 @@ enough to acquire the role.
 """
 
 import logging
+from collections.abc import Sequence
 from uuid import UUID
 
 from app.core.clock import Clock
@@ -78,6 +79,25 @@ class AdminRoleService:
     async def roles_for(self, account_id: UUID) -> frozenset[AdminRole]:
         """Every role this account holds **right now** — the guard's read."""
         return await self._assignments.live_roles_for(account_id)
+
+    async def holders_of(self, role: AdminRole) -> Sequence[UUID]:
+        """Every account currently holding `role` — A64-024.3 §10.
+
+        Published so the Users console can annotate a page with **one**
+        read instead of one per row. Cheap by construction: administrators
+        are a handful of accounts, so this set is smaller than any page it
+        annotates.
+        """
+        return await self._assignments.live_holders_of(role)
+
+    async def live_grant(self, *, account_id: UUID, role: AdminRole) -> RoleAssignment | None:
+        """One account's live grant, or `None`.
+
+        The read behind a detail page, where `granted_at` is worth showing
+        and a boolean is not enough. Read-only: nothing on this path can
+        create or end a grant.
+        """
+        return await self._assignments.live_for(account_id, role)
 
     async def grant(self, *, account_id: UUID, role: AdminRole, granted_by: UUID) -> RoleAssignment:
         """Grants `role` to `account_id`, on behalf of `granted_by`.

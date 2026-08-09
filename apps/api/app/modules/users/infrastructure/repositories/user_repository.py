@@ -19,7 +19,10 @@ assigns here explicitly:
 """
 
 import logging
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
@@ -42,6 +45,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import ValidationError
 from app.core.pagination import CursorPageInfo, CursorPageParams
 from app.modules.users.domain.entities import User
 from app.modules.users.domain.exceptions import (
@@ -66,6 +70,11 @@ from app.modules.users.domain.value_objects import (
 )
 from app.modules.users.infrastructure.models import UserModel
 from app.modules.users.infrastructure.search_cursor import SearchCursor
+from app.modules.users.public.administration import (
+    AdminUserFilters,
+    AdminUserPage,
+    AdminUserRecord,
+)
 from app.modules.users.public.search import UserSearchQuery
 from app.repositories.pagination import paginate_cursor
 
@@ -611,3 +620,161 @@ class SqlAlchemyUserRepository:
         await self._session.delete(row)
         await self._session.flush()
         return True
+
+
+class SqlAlchemyAdministrativeUserDirectory:
+    """`users.public.AdministrativeUserDirectory` over PostgreSQL — A64-024.3.
+
+    A **separate adapter** from `SqlAlchemyUserRepository.search`, which
+    answers a player's question with privacy applied and blocked players
+    removed. This answers an operator's: every account, found by the two
+    identifiers an operator actually has.
+
+    ## Every query is index-backed and bounded
+
+        no term    ORDER BY (created_at, id) DESC   ix_user__created_at_id
+        term       username_folded LIKE 'x%'        uq_user__username_folded
+                OR email            LIKE 'x%'       uq_user__email
+
+    Prefix, not substring. `%term%` on either column cannot use a btree and
+    would be a sequential scan on every keystroke — §3 rules that out, and
+    an operator searching for an account has a prefix rather than a
+    fragment. Username *substring* search already exists for players
+    through the trigram indexes; it is not reused here because it does not
+    cover email and this port's whole reason to exist is that it does.
+
+    ## The keyset, and why it is `(created_at, id)`
+
+    `created_at` alone is not unique, so a cursor on it silently skips or
+    repeats rows under concurrent registration. The composite index exists
+    for exactly this and the `id` tiebreak is what makes the ordering total.
+
+    One page is **one query**. There is no count — see `AdminUserPage`.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list_accounts(
+        self,
+        *,
+        term: str | None,
+        filters: "AdminUserFilters",
+        limit: int,
+        cursor: str | None,
+    ) -> "AdminUserPage":
+        statement = select(UserModel)
+
+        if term is not None:
+            # Normalised by the same SQL function the username index is
+            # built on, so the two sides cannot drift — see `_search_normalise`
+            # on why this is not done in Python. The email half is compared
+            # against the stored, already-normalised address.
+            pattern = f"{_escape_like(term.strip().lower())}%"
+            statement = statement.where(
+                or_(
+                    UserModel.username_folded.like(pattern, escape="\\"),
+                    UserModel.email.like(pattern, escape="\\"),
+                )
+            )
+
+        if filters.is_active is not None:
+            statement = statement.where(UserModel.is_active.is_(filters.is_active))
+        if filters.is_verified is not None:
+            statement = statement.where(UserModel.is_verified.is_(filters.is_verified))
+
+        if cursor is not None:
+            after = _AdminCursor.decode(cursor)
+            statement = statement.where(
+                # A row-value comparison, so the keyset is one index seek
+                # rather than the `(a < x) OR (a = x AND b < y)` expansion a
+                # planner cannot always fold back into one.
+                tuple_(UserModel.created_at, UserModel.id)
+                < tuple_(literal(after.created_at), literal(after.user_id))
+            )
+
+        # Over-fetch by one to learn whether a further page exists, rather
+        # than issuing a `COUNT(*)` that would scan the table per page.
+        rows = (
+            (
+                await self._session.execute(
+                    statement.order_by(UserModel.created_at.desc(), UserModel.id.desc()).limit(
+                        limit + 1
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        has_more = len(rows) > limit
+        page = list(rows[:limit])
+        next_cursor = (
+            _AdminCursor(created_at=page[-1].created_at, user_id=page[-1].id).encode()
+            if has_more and page
+            else None
+        )
+        return AdminUserPage(
+            records=[_to_admin_record(row) for row in page], next_cursor=next_cursor
+        )
+
+    async def find_account(self, user_id: UUID) -> "AdminUserRecord | None":
+        row = await self._session.get(UserModel, user_id)
+        return None if row is None else _to_admin_record(row)
+
+
+def _to_admin_record(row: UserModel) -> "AdminUserRecord":
+    """One row as the published record.
+
+    Field by field rather than by reflection, so adding a column to
+    `UserModel` — a credential, a token, anything — does **not** silently
+    widen what the admin console can read.
+    """
+    return AdminUserRecord(
+        id=row.id,
+        username=row.username,
+        email=row.email,
+        display_name=row.display_name,
+        is_active=row.is_active,
+        is_verified=row.is_verified,
+        created_at=row.created_at,
+    )
+
+
+def _escape_like(value: str) -> str:
+    """Neutralises `LIKE` metacharacters in operator input.
+
+    Without it an operator typing `%` matches every account and one typing
+    `_` matches every account of that length — not an injection, but a
+    search that silently answers a different question than the one asked.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+@dataclass(frozen=True, slots=True)
+class _AdminCursor:
+    """The keyset position, as an opaque string.
+
+    Base64 of `created_at|id`, which is not security — a caller may decode
+    it — but is what stops a client treating it as an offset it may
+    arithmetic on. An unparseable cursor raises rather than silently
+    starting from the beginning, because "page 4 quietly became page 1" is
+    the bug nobody reports.
+    """
+
+    created_at: datetime
+    user_id: UUID
+
+    def encode(self) -> str:
+        raw = f"{self.created_at.isoformat()}|{self.user_id}"
+        return urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+    @classmethod
+    def decode(cls, cursor: str) -> "_AdminCursor":
+        padding = "=" * (-len(cursor) % 4)
+        try:
+            raw = urlsafe_b64decode(cursor + padding).decode()
+            moment, identifier = raw.split("|", 1)
+            return cls(created_at=datetime.fromisoformat(moment), user_id=UUID(identifier))
+        except (ValueError, TypeError) as exc:
+            raise ValidationError("That page cursor could not be read.") from exc

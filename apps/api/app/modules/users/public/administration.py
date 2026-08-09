@@ -61,6 +61,21 @@ class AdminUserRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class AdminAccountSummary:
+    """How many accounts arrived recently — A64-024.9.
+
+    **Two windows and no total.** A platform's account count is an
+    unbounded `COUNT(*)` that answers nothing an operator acts on, and it
+    grows more expensive every day precisely because it never shrinks. What
+    is worth knowing is whether registration is happening at the rate it
+    was, which is a bounded range scan over `ix_user__created_at_id`.
+    """
+
+    registered_last_day: int
+    registered_last_week: int
+
+
+@dataclass(frozen=True, slots=True)
 class AdminUserFilters:
     """The two filters the current schema supports without inventing indexes.
 
@@ -143,6 +158,22 @@ class AdministrativeUserDirectory(Protocol):
         """
         ...
 
+    async def account_summary(
+        self, *, since_day: datetime, since_week: datetime
+    ) -> AdminAccountSummary:
+        """Registrations in two windows, in **one** statement.
+
+        Both counts come from a single range scan from `since_week` with a
+        `FILTER` for the shorter window — two statements would scan the same
+        index twice for the same rows, and the shorter window is a subset of
+        the longer one by construction.
+
+        The instants are passed in rather than read here: this port has no
+        clock, and a reader that took `now()` from the database would give
+        an answer the caller cannot reproduce in a test.
+        """
+        ...
+
     async def find_account(self, user_id: UUID) -> AdminUserRecord | None:
         """One account, or `None` if no such id exists.
 
@@ -155,6 +186,7 @@ class AdministrativeUserDirectory(Protocol):
 
 
 __all__ = [
+    "AdminAccountSummary",
     "AdminUserFilters",
     "AdminUserPage",
     "AdminUserRecord",

@@ -41,6 +41,7 @@ from app.modules.notifications.domain.record import (
     NotificationType,
 )
 from app.modules.notifications.public.administration import (
+    AdminDeliveryHealth,
     AdministrativeNotificationDirectory,
     AdminNotificationDetail,
     AdminNotificationFilters,
@@ -51,6 +52,7 @@ from app.modules.notifications.public.administration import (
 )
 
 __all__ = [
+    "AdminDeliveryHealth",
     "AdminNotificationDetail",
     "AdminNotificationFilters",
     "AdminNotificationPage",

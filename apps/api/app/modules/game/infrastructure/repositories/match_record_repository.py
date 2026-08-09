@@ -34,7 +34,7 @@ from datetime import datetime
 from typing import Any, Final, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, literal, or_, select, tuple_, update
+from sqlalchemy import CursorResult, func, literal, or_, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,6 +51,7 @@ from app.modules.game.domain.match_record import (
 from app.modules.game.domain.variants import MatchOrigin
 from app.modules.game.infrastructure.models import MatchRecordModel
 from app.modules.game.public.administration import (
+    AdminLiveMatchSummary,
     AdminMatchFilters,
     AdminMatchPage,
     AdminMatchRecord,
@@ -798,6 +799,34 @@ class SqlAlchemyAdministrativeMatchDirectory:
             )
         ).scalar_one_or_none()
         return None if row is None else _to_admin_match(row)
+
+    async def live_match_summary(self) -> "AdminLiveMatchSummary":
+        """The two live counts — A64-024.9. One grouped statement.
+
+        The `IN` matches `ix_match__current_light`/`__current_dark`'s partial
+        predicate exactly, so the planner reads an index holding only the
+        games in flight rather than scanning a partitioned history. Verified
+        on a real database: `Bitmap Index Scan on ix_match__current_dark`.
+
+        A status absent from the result means zero, which is why the counts
+        are read out of a mapping rather than positionally — a grouped query
+        returns no row for a state nothing is in.
+        """
+        rows = await self._session.execute(
+            select(MatchRecordModel.status, func.count())
+            .where(
+                # The module's own definition of "in flight", which is also
+                # the partial index's predicate — restating the pair here
+                # would be a second copy that can drift from the index.
+                MatchRecordModel.status.in_(_CURRENT_STATUSES)
+            )
+            .group_by(MatchRecordModel.status)
+        )
+        counts = {status: total for status, total in rows}
+        return AdminLiveMatchSummary(
+            active=counts.get(MatchRecordStatus.ACTIVE, 0),
+            awaiting_acceptance=counts.get(MatchRecordStatus.PENDING_ACCEPTANCE, 0),
+        )
 
 
 def _to_admin_match(row: MatchRecordModel) -> "AdminMatchRecord":

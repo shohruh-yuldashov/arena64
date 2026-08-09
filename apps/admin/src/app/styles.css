@@ -382,3 +382,86 @@ dialog textarea {
   gap: 0.6rem;
   flex-wrap: wrap;
 }
+
+/* A64-024.9. The operator overview. A grid that collapses to one column
+   rather than a table that scrolls sideways — six numbers do not need a
+   table, and a table of them is unusable at 360px. */
+.dashboard-freshness {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0 0 1.5rem;
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kpi-grid li {
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+}
+
+.kpi-grid dl {
+  display: grid;
+  grid-template-columns: 1fr max-content;
+  align-items: baseline;
+  gap: 0.2rem 0.75rem;
+  margin: 0.6rem 0 0;
+}
+
+.kpi-grid dt {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.kpi-grid dd {
+  margin: 0;
+  text-align: right;
+}
+
+/* The number carries weight, not colour — a figure an operator cannot read
+   at a glance is one they misread (§23). */
+.kpi-value {
+  font-size: 1.35rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.attention-list,
+.activity-list,
+.shortcut-list {
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.attention-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.activity-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.shortcut-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+}

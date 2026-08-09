@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import literal, select, tuple_
+from sqlalchemy import func, literal, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ValidationError
@@ -144,6 +144,18 @@ class SqlAlchemySanctionRepository:
             )
         )
         return None if row is None else _sanction_to_domain(row)
+
+    async def count_effective(self, *, at: datetime) -> int:
+        total = await self._session.scalar(
+            select(func.count())
+            .select_from(SanctionModel)
+            .where(
+                SanctionModel.lifted_at.is_(None),
+                SanctionModel.starts_at <= at,
+                (SanctionModel.expires_at.is_(None)) | (SanctionModel.expires_at > at),
+            )
+        )
+        return total or 0
 
     async def page(
         self, *, effective_at: datetime | None, limit: int, cursor: str | None

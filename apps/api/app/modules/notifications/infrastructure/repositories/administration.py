@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import and_, exists, or_, select, update
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ValidationError
@@ -48,6 +48,7 @@ from app.modules.notifications.infrastructure.models import (
     PushSubscriptionModel,
 )
 from app.modules.notifications.public.administration import (
+    AdminDeliveryHealth,
     AdminNotificationDetail,
     AdminNotificationFilters,
     AdminNotificationPage,
@@ -142,6 +143,27 @@ class SqlAlchemyAdministrativeNotificationDirectory:
         return AdminNotificationDetail(
             notification=_to_record(row), deliveries=deliveries.get(notification_id, [])
         )
+
+    async def delivery_health(self) -> AdminDeliveryHealth:
+        """How many pushes are waiting for an operator — A64-024.9.
+
+        `status = 'failed'` matches `ix_notification_push_delivery__failed`'s
+        partial predicate exactly, so this reads an index holding only
+        failures. The `outcome` narrowing is a filter over the handful of
+        rows that index returns — and it is what keeps the number
+        *actionable*: `permanent_failure` and `subscription_gone` are
+        finished, and summing them in would invite an operator to act on a
+        figure most of which needs no action.
+        """
+        total = await self._session.scalar(
+            select(func.count())
+            .select_from(NotificationPushDeliveryModel)
+            .where(
+                NotificationPushDeliveryModel.status == _RETRYABLE_STATUS,
+                NotificationPushDeliveryModel.outcome == _RETRYABLE_OUTCOME,
+            )
+        )
+        return AdminDeliveryHealth(retry_exhausted=total or 0)
 
     async def deliveries_for(
         self, notification_ids: Sequence[UUID]

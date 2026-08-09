@@ -725,3 +725,37 @@ export async function retryNotificationDelivery(
     {},
   );
 }
+
+// --- admin dashboard — A64-024.9 ---------------------------------------------
+
+export interface AdminDashboardActivity {
+  id: string;
+  action: string;
+  outcome: string;
+  actor_type: string;
+  actor_id: string | null;
+  actor_username: string | null;
+  subject_type: string;
+  subject_ref: string;
+  created_at: string;
+}
+
+export interface AdminDashboard {
+  accounts: { registered_last_day: number; registered_last_week: number };
+  matches: { active: number; awaiting_acceptance: number };
+  tournaments: { registration_open: number; in_progress: number };
+  attention: { restrictions_in_force: number; push_deliveries_retry_exhausted: number };
+  recent_activity: AdminDashboardActivity[];
+  generated_at: string;
+}
+
+/**
+ * The operator overview — **one** request.
+ *
+ * Six counts and the ten most recent privileged actions, composed on the
+ * server. Six separate list calls would be six round trips, and each would
+ * return a page rather than a count.
+ */
+export async function fetchDashboard(signal?: AbortSignal): Promise<Outcome<AdminDashboard>> {
+  return authorizedRead<AdminDashboard>("/admin/dashboard", signal);
+}

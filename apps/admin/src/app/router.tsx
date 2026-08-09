@@ -14,6 +14,8 @@ import { LoginPage } from "@/pages/login";
 import { PlaceholderPage } from "@/pages/placeholder";
 import { MatchDetailPage } from "@/pages/match-detail";
 import { MatchesPage } from "@/pages/matches";
+import { TournamentDetailPage } from "@/pages/tournament-detail";
+import { TournamentsPage } from "@/pages/tournaments";
 import { UserDetailPage } from "@/pages/user-detail";
 import { UsersPage } from "@/pages/users";
 import { signOut as revokeSession } from "@/shared/api/client";
@@ -259,8 +261,26 @@ const matchDetailRoute = createRoute({
   component: MatchDetailPage,
 });
 
+// A64-024.5. `/tournaments` is the third real section.
+const tournamentsRoute = createRoute({
+  getParentRoute: () => protectedRoute,
+  path: "/tournaments",
+  component: TournamentsPage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...(typeof search.status === "string" ? { status: search.status } : {}),
+    ...(typeof search.rated === "string" ? { rated: search.rated } : {}),
+  }),
+});
+
+const tournamentDetailRoute = createRoute({
+  getParentRoute: () => protectedRoute,
+  path: "/tournaments/$tournamentId",
+  component: TournamentDetailPage,
+});
+
 const sectionRoutes = SECTIONS.filter(
-  (section) => section.path !== "/users" && section.path !== "/matches",
+  (section) =>
+    section.path !== "/users" && section.path !== "/matches" && section.path !== "/tournaments",
 ).map((section) =>
   createRoute({
     getParentRoute: () => protectedRoute,
@@ -277,6 +297,8 @@ const routeTree = rootRoute.addChildren([
     userDetailRoute,
     matchesRoute,
     matchDetailRoute,
+    tournamentsRoute,
+    tournamentDetailRoute,
     ...sectionRoutes,
   ]),
 ]);

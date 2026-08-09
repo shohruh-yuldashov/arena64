@@ -29,6 +29,7 @@ from app.api.v1.health import health_router
 from app.core.constants import API_V1_PREFIX
 from app.modules.admin.presentation.router import admin_router
 from app.modules.admin.presentation.routers.matches import admin_matches_router
+from app.modules.admin.presentation.routers.tournaments import admin_tournaments_router
 from app.modules.admin.presentation.routers.users import admin_users_router
 from app.modules.auth.presentation.browser_router import browser_auth_router
 from app.modules.auth.presentation.router import auth_router
@@ -61,6 +62,9 @@ v1_router.include_router(admin_users_router)
 # A64-024.4. Read-only: no mutation exists on this router while
 # `admin.audit_entry` is unbuilt.
 v1_router.include_router(admin_matches_router)
+# A64-024.5. Read-only, for the same reason: a tournament mutation moves
+# brackets, and brackets move ratings.
+v1_router.include_router(admin_tournaments_router)
 
 # **Before `users_router`, and the order is load-bearing.** `GET /users/search`
 # and `GET /users/{user_id}` both match the path `/users/search`; Starlette

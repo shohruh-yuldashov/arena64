@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| **Status** | A64-024.1 (authorization), A64-024.2 (sign-in, routing), A64-024.2H (deployment origins), A64-024.3 (**Users, read-only**) and A64-024.4 (**Matches, read-only**). Remaining surfaces deferred; see §8. |
+| **Status** | A64-024.1 (authorization), A64-024.2 (sign-in, routing), A64-024.2H (deployment origins), A64-024.3 (**Users**), A64-024.4 (**Matches**) and A64-024.5 (**Tournaments**) — all read-only. Remaining surfaces deferred; see §8. |
 | **Owner** | _Unassigned_ |
 | **Related ADRs** | `architecture.md` AD-04 (separate application) |
 | **Related docs** | `docs/01-architecture/database.md` §10.4, `docs/01-architecture/domain-model.md` §13 |
@@ -442,6 +442,66 @@ cheap read expensive. §10 asks for replay only where the architecture
 supports it naturally, and reusing `apps/web`'s board component is ruled out
 by AD-04. Deferred with the seam named: the published replay port already
 exists when a phase has a reason.
+
+---
+
+## 6.10 Tournament Management — A64-024.5
+
+**Read-only.** No `POST`, `PUT`, `PATCH` or `DELETE`. A tournament mutation
+is the most consequential unaudited write this platform could offer:
+publishing a round or advancing a player moves brackets, and brackets move
+ratings. Everything waits for `admin.audit_entry` (A64-024.8).
+
+### API
+
+    GET /api/v1/admin/tournaments
+    GET /api/v1/admin/tournaments/{tournament_id}
+
+**One detail response rather than four endpoints.** A tournament is bounded
+by its `capacity`, so entrants, rounds, pairings and standings are all
+O(capacity) and cost a fixed number of statements together — splitting them
+would make the console issue four round trips for one page.
+
+| Concern | Behaviour |
+| --- | --- |
+| Filters | `status`, `format`, `variant`, `rated` — typed enums and a boolean |
+| Name search | **Absent.** `tournament.name` carries no index; a substring match would be a sequential scan. Deferred rather than added expensively |
+| Entrant filter | **Absent.** Registrations are another table; filtering by one breaks the keyset |
+| Pagination | Keyset on `(created_at, id)`, default 25, max 50 |
+| Query shape | List: 2 statements. Detail: 6 — one per collection plus one batch resolving every player named |
+
+### The bracket
+
+`pairing` is keyed `(tournament_id, round_number, slot)` and the tree is
+arithmetic: the parent is `(round_number + 1, slot // 2)`, even slots feeding
+the light seat. `domain.bracket_plan` states it.
+
+**The API publishes the coordinates, not the edges.** Shipping a second
+description of the tree would be a description that can disagree with the
+domain's; publishing coordinates means a console cannot draw a bracket the
+backend does not have. `AdminPairingView` deliberately has no `parent_id`,
+`next_slot` or `feeds_into` field.
+
+**The console renders it round by round, stating in text where each node
+feeds** — derived from the same arithmetic. There are no connector lines,
+and that is the decision rather than a shortcut: a line is a claim about
+structure, and a claim drawn in CSS can be wrong where the data is not. It
+is also the accessible representation, and it is what makes a large bracket
+usable at 360px. Graphical connectors are A64-025's polish over data that
+already supports them.
+
+### Standings
+
+Read from `standing`, **never recomputed**. The module owns that authority
+and a console deriving placements from matches would be a second source of
+truth for who won.
+
+### Entrant privacy
+
+Player id, username, display name, registration status, seed and timestamps.
+**No email, no profile, no block state, no registration token.** The console
+links to `/users/{id}` for anything the person's own page owns, and bracket
+nodes link to `/matches/{id}`.
 
 ---
 

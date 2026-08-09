@@ -137,7 +137,11 @@ it("announces offline and update status, and guides an iOS install, accessibly",
 
   signedIn();
   renderApp({ path: "/" });
-  expect(await screen.findByRole("heading", { level: 1, name: "Arena64" })).toBeVisible();
+  // The shell, not the page: A64-025.3 made `/`'s heading greet the signed-in
+  // player by name, and this test's subject is the notices the *layout*
+  // renders — waiting on a page heading was only ever a way to wait for the
+  // tree to settle.
+  expect(await screen.findByRole("banner")).toBeVisible();
 
   // §23: both are changes the user did not cause, so both are announced —
   // politely, in live regions, rather than by stealing focus.

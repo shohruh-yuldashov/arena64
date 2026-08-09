@@ -1,5 +1,6 @@
 import { LaptopIcon, MoonIcon, SunIcon } from "lucide-react";
 
+import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { type ThemeMode, THEMES, useTheme } from "@/shared/theme/theme-context";
 import { Button } from "@/shared/ui";
 
@@ -9,10 +10,12 @@ const ICONS: Record<ThemeMode, typeof SunIcon> = {
   system: LaptopIcon,
 };
 
-const LABELS: Record<ThemeMode, string> = {
-  light: "Light theme",
-  dark: "Dark theme",
-  system: "Follow system theme",
+// The keys existed from A64-020.1 and nothing used them: the control was
+// the last hardcoded English in the shell (A64-025.3 §13).
+const LABELS: Record<ThemeMode, TranslationKey> = {
+  light: "theme.light",
+  dark: "theme.dark",
+  system: "theme.system",
 };
 
 /**
@@ -28,10 +31,11 @@ const LABELS: Record<ThemeMode, string> = {
  * keyboard-reachable in DOM order.
  */
 export function ThemeToggle() {
+  const { t } = useTranslation();
   const { mode, setMode } = useTheme();
 
   return (
-    <div className="flex items-center gap-1" role="group" aria-label="Theme">
+    <div className="flex items-center gap-1" role="group" aria-label={t("theme.toggle")}>
       {THEMES.map((candidate) => {
         const Icon = ICONS[candidate];
         return (
@@ -41,7 +45,7 @@ export function ThemeToggle() {
             size="icon"
             variant={mode === candidate ? "secondary" : "ghost"}
             aria-pressed={mode === candidate}
-            aria-label={LABELS[candidate]}
+            aria-label={t(LABELS[candidate])}
             onClick={() => setMode(candidate)}
           >
             <Icon aria-hidden="true" />

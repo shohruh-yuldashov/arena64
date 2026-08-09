@@ -73,7 +73,7 @@ from typing import Final
 from uuid import UUID
 
 from app.gateway.delivery import RoomBroadcaster
-from app.gateway.metrics import QUICK_MESSAGES, QuickMessageOutcome
+from app.gateway.metrics import QUICK_MESSAGES, QUICK_MESSAGES_SUPPRESSED, QuickMessageOutcome
 from app.gateway.protocol import (
     GatewayErrorCode,
     GatewayMessage,
@@ -83,6 +83,7 @@ from app.gateway.protocol import (
 from app.gateway.quick_message_limits import QuickMessageRateLimiter
 from app.gateway.quick_messages import SENDABLE_STATES, QuickMessage, parse_quick_message
 from app.gateway.room_service import GameRoomService
+from app.modules.friends.public import SocialGraphReader
 from app.modules.game.public import MatchRoster, MatchRosterReader
 from app.platform.metrics import MetricsRecorder
 
@@ -139,12 +140,14 @@ class QuickMessageHandler:
         rooms: GameRoomService,
         broadcaster: RoomBroadcaster,
         limiter: QuickMessageRateLimiter,
+        social_graph: SocialGraphReader,
         metrics: MetricsRecorder,
     ) -> None:
         self._rosters = rosters
         self._rooms = rooms
         self._broadcaster = broadcaster
         self._limiter = limiter
+        self._social_graph = social_graph
         self._metrics = metrics
 
     async def handle(
@@ -248,14 +251,24 @@ class QuickMessageHandler:
         no recipient field to read, and the only match this can reach is the
         one whose room the sender was already proven to be in.
 
-        ## This one function is the mute extension point — §7
+        ## Blocks are filtered here — A64-023.3 §6, §8
 
-        Recipient-side suppression, when A64-023.2 adds it, belongs here:
-        it is the single place a recipient list exists, and a filter applied
-        to `_recipients_of` suppresses a message without touching game
-        state, the sender's experience or the fan-out below it. See
-        `specs/quick-messages.md` §7 on why an ordinary *mute* is expected
-        to be the client's and a *block* the server's.
+        A block can be placed **while a match is being played**:
+        `BlockingService.block` checks self-blocking and duplication and
+        nothing else, so BL-2's "blocked pairs are never paired" does not
+        cover a block placed at move twenty. This is where that case is
+        answered, and it is the only place a recipient list exists.
+
+        The suppression is **invisible to the sender** (§8). Their frame is
+        accepted, counted as sent, and echoed back to them exactly as any
+        other; what changes is that one recipient is not in the list. A
+        refusal code, or an outcome the sender could observe, would turn an
+        accepted send into a block oracle — which is precisely what BL-1
+        withholds.
+
+        The *game* is untouched. Moves, clocks, draw offers and the result
+        run through paths that never consult this, so a block silences a
+        courtesy and finishes the game normally.
 
         Never raises and never buffered. Not buffered for the reason
         `GameCommandHandler._broadcast` gives: `RedisMatchEventBuffer` is
@@ -270,10 +283,14 @@ class QuickMessageHandler:
             sent_at=sent_at,
         )
 
+        recipients = await self._permitted(_recipients_of(roster), sender_id=sender_id)
+        if not recipients:  # pragma: no cover — the sender is always permitted
+            return
+
         try:
             report = await self._broadcaster.deliver(
                 frame,
-                recipients=_recipients_of(roster),
+                recipients=recipients,
                 # No `spectators` argument at all, so `SPECTATOR_SAFE_EVENTS`
                 # never even has to withhold this frame. Two independent
                 # reasons an audience cannot receive it — the allowlist, and
@@ -298,6 +315,50 @@ class QuickMessageHandler:
                 "failures": report.failures,
             },
         )
+
+    async def _permitted(self, recipients: Sequence[UUID], *, sender_id: UUID) -> Sequence[UUID]:
+        """`recipients`, minus anyone a block stands between — §6.
+
+        One read of `friends:v1:blocked:<sender>`, which is a Redis `GET` on
+        a hit and touches no database at all. The set is **symmetric**, so
+        this suppresses in both directions with one lookup and the caller
+        cannot tell which side placed the block.
+
+        **Fails closed.** A social graph that cannot be read leaves the
+        opponent out, which is the same posture `BlockAwareSpectatorPolicy`
+        takes and for the same reason: a block that could not be checked is
+        one that might exist, and admitting on a read error would make a
+        Redis blip a privacy bypass. The cost of being wrong in this
+        direction is a lost courtesy, which §12 of `specs/quick-messages.md`
+        already says is acceptable; the cost in the other direction is
+        delivering a message to somebody who blocked the sender.
+
+        The **sender is never removed**, whatever the read returns. They are
+        not blocked from themselves, and dropping them would make their own
+        message vanish from their own screen — a visible signal where §8
+        requires none.
+        """
+        try:
+            blocked = await self._social_graph.blocked_ids_for(sender_id)
+        except Exception as exc:  # noqa: BLE001 — suppress rather than deliver
+            logger.warning(
+                "gateway_quick_message_block_check_failed",
+                extra={"error": type(exc).__name__},
+            )
+            blocked = frozenset(recipients) - {sender_id}
+
+        permitted = tuple(
+            player_id
+            for player_id in recipients
+            if player_id == sender_id or player_id not in blocked
+        )
+        suppressed = len(recipients) - len(permitted)
+        if suppressed:
+            # Counted, never logged with an identifier: how often the rule
+            # fires is operational, and *who* it fired between is the
+            # relationship state BL-1 keeps private.
+            self._metrics.increment(QUICK_MESSAGES_SUPPRESSED, by=suppressed)
+        return permitted
 
     def _refuse(self, outcome: QuickMessageOutcome, *, request_id: str | None) -> GatewayMessage:
         """One refusal, counted and rendered from the fixed table."""

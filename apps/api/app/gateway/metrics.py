@@ -371,6 +371,22 @@ class GameCommandRejection(StrEnum):
 QUICK_MESSAGES: Final = "gateway.quick_messages_total"
 
 
+#: Recipients dropped from a quick-message fan-out because a block stands
+#: between them and the sender — A64-023.3 §13.
+#:
+#: **Unlabelled**, deliberately. The operational question is whether the rule
+#: fires at all and how often; *who* it fired between is exactly the
+#: relationship state BL-1 keeps private, and a label carrying either party
+#: would put it in a system with broader read access than the block table.
+#:
+#: Separate from `QUICK_MESSAGES` rather than an outcome on it, because a
+#: suppressed message was still **accepted**: it counts as `sent` there, and
+#: folding the two would make "how many sends succeeded" disagree with
+#: itself. It also keeps the sender's view and the operator's view distinct,
+#: which is the whole point of §8 — the sender must not be able to tell.
+QUICK_MESSAGES_SUPPRESSED: Final = "gateway.quick_messages_suppressed_total"
+
+
 class QuickMessageOutcome(StrEnum):
     """What happened to one quick-message frame.
 
@@ -499,6 +515,7 @@ __all__ = [
     "GAME_COMMANDS",
     "GAME_COMMANDS_REJECTED",
     "QUICK_MESSAGES",
+    "QUICK_MESSAGES_SUPPRESSED",
     "CloseReason",
     "GameCommandRejection",
     "QuickMessageOutcome",

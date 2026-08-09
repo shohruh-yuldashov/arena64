@@ -1,9 +1,9 @@
 import { ChallengeButton } from "@/features/challenges/ui/challenge-button";
 import { useFriendCount, useFriends } from "@/features/social/model/queries";
-import { ListState } from "@/features/social/ui/list-state";
 import { RelationshipActions } from "@/features/social/ui/relationship-actions";
 import { useTranslation } from "@/shared/i18n";
 import { formatDate, formatNumber } from "@/shared/lib/format";
+import { ListState } from "@/shared/ui";
 import { Button, Spinner } from "@/shared/ui";
 import { PlayerRow } from "@/widgets/player-row";
 import { SocialNav } from "@/widgets/social-nav";
@@ -92,7 +92,7 @@ export default function FriendsPage() {
             onClick={() => void friends.fetchNextPage()}
           >
             {friends.isFetchingNextPage ? (
-              <Spinner label={t("social.state.loading")} />
+              <Spinner label={t("state.loading")} />
             ) : (
               t("social.friends.loadMore")
             )}

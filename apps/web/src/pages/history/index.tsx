@@ -5,7 +5,7 @@ import { useSession } from "@/features/auth/model/session-provider";
 import { useMatchHistory } from "@/features/match-history/model/queries";
 import { MatchRow } from "@/features/match-history/ui/match-row";
 import { useTranslation } from "@/shared/i18n";
-import { Button, Skeleton } from "@/shared/ui";
+import { Button, Notice, Skeleton } from "@/shared/ui";
 
 /**
  * The player's finished matches — A64-020.5F §15, §21, §24.
@@ -58,12 +58,15 @@ export default function HistoryPage() {
       )}
 
       {isError && (
-        <div role="alert" className="flex flex-col items-start gap-3">
-          <p className="text-sm">{t("history.error")}</p>
-          <Button variant="outline" className="min-h-11" onClick={() => void refetch()}>
+        // A64-025.2 §10: the first surface on the shared `Notice`. The role
+        // comes from the tone — `error` is assertive — so this no longer
+        // states it, and the tint is the one every other failure will use.
+        <Notice tone="error" className="flex flex-col items-start gap-3">
+          <p>{t("history.error")}</p>
+          <Button variant="outline" onClick={() => void refetch()}>
             {t("common.retry")}
           </Button>
-        </div>
+        </Notice>
       )}
 
       {!isPending && !isError && entries.length === 0 && (

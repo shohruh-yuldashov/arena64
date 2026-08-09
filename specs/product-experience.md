@@ -3,10 +3,10 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-PRODUCT-EXPERIENCE` |
-| **Status** | Draft — audit complete (A64-025.1); shell and home rebuilt (A64-025.3) |
+| **Status** | Draft — audit (A64-025.1); shell and home (A64-025.3); design foundation (A64-025.2) |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-08-10 — A64-025.3, the navigation model |
+| **Last updated** | 2026-08-10 — A64-025.2, the design system |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -351,9 +351,9 @@ most, the clock can be off-screen.
 | --- | --- | --- |
 | P2-1 | Bracket has no visual parent-child relationship, though the relationship is authoritative and already on the wire (§3.6) | A64-025.8 |
 | P2-2 | Password-reset email is English-only and plain-text-only while the other two are trilingual HTML (§3.10) | A64-025.10 |
-| P2-3 | No shared empty/error/loading component — 74 hand-rolled live regions (§3.9) | A64-025.2 |
+| P2-3 | No shared empty/error/loading component — 74 hand-rolled live regions (§3.9) | **Foundation laid** — `ListState` promoted and `Notice` added (§10.7); the sweep across surfaces is A64-025.11/.12 |
 | ~~P2-4~~ | ~~No `aria-current` anywhere in navigation~~ | **Fixed** — §9.3 |
-| P2-5 | Palette has no brand colour and no game-semantic colours (§3.2) | A64-025.2 |
+| ~~P2-5~~ | ~~No brand colour, no semantic colours~~ | **Fixed** — §10.1, §10.3 |
 | ~~P2-6~~ | ~~`/games/history` had no navigation entry~~ | **Fixed** — §9.2. `/challenges` and `/search` stay inside the Social section, which is where they belong |
 
 ### P3 — polish and consistency
@@ -466,7 +466,7 @@ tokens.
 | # | Question | Blocks |
 | --- | --- | --- |
 | ~~OQ-1~~ | ~~What does `/` show an anonymous visitor?~~ | **Closed by A64-025.3** — `/` is the authenticated player's product home; the route keeps its existing lack of a guard, so an anonymous visitor gets a signed-out home offering sign-in and registration. A public marketing page is a separate surface for a separate audience and is not this epic's |
-| OQ-2 | What is Arena64's brand colour? A designer's call, not an engineer's | A64-025.2 |
+| ~~OQ-2~~ | ~~What is Arena64's brand colour?~~ | **Closed by A64-025.2** — indigo, `oklch(0.5 0.19 275)` light and `oklch(0.68 0.16 275)` dark. The reasoning is in §10.1 and it is reversible in two token values |
 | OQ-3 | Should the mobile game room pin the clocks above the board, or overlay them on it? | A64-025.6 |
 | OQ-4 | Does the bracket keep horizontal scroll on mobile, or switch to a round-at-a-time view below `sm:`? | A64-025.8 |
 
@@ -568,11 +568,172 @@ tokens that already existed.
 Two things measured here are recorded rather than fixed, because they belong
 to the primitive layer:
 
-- the theme group's three buttons are 36px tall where the rest of the shell
-  is 44px — `Button`'s `size="icon"` sets it, and resizing a primitive is
-  A64-025.2's call;
+- ~~the theme group's three buttons are 36px tall~~ — **fixed by A64-025.2**,
+  §10.5: the floor moved into the primitive;
 - the English theme labels are now `Light`, `Dark`, `System` rather than
   `Light theme` — the translations that already existed are shorter than the
   hardcoded English they replaced. They sit inside a group named "Toggle
   theme", which carries the context, but a longer accessible name would be
   better and needs new keys.
+
+---
+
+## 10. The design system — A64-025.2
+
+A64-025.1 found the foundation in better shape than a redesign brief
+assumes: a complete OKLCH token file, light and dark, almost no arbitrary
+values, and only three colour utilities used across the whole tree. Nothing
+here replaces that. This extends it.
+
+### 10.1 Brand — indigo
+
+`--primary: oklch(0.5 0.19 275)` in light, `oklch(0.68 0.16 275)` in dark.
+That closes OQ-2.
+
+Chosen from the repository rather than from taste, and the constraint that
+decided it is on the board: `board.tsx` tints the last move with
+`color-mix(… var(--color-primary) 18% …)` and draws every legal-move dot
+with `bg-primary`. The brand is therefore not only a button colour — it is
+the colour a player reads the position through, over neutral squares and
+beside near-white and near-black pieces.
+
+| Candidate | Verdict |
+| --- | --- |
+| Electric blue ~255° | White text at 4.69:1 — passes AA and only just. It is also the default tech-product blue and the closest hue to the game's best-known competitor, so it costs distinctiveness and buys nothing |
+| **Indigo ~275°** | **Chosen.** White text at 6.12:1 light, 6.52:1 dark. Far from `--destructive` (~27°) and from `--success` (~150°) on the hue wheel, so a status colour can never be mistaken for the brand. Cool enough to separate cleanly from a neutral board |
+| Violet ~295° | Works numerically (5.76:1) and reads more consumer-social than competitive |
+| Amber / gold | Rejected on measurement: white on amber cannot reach 4.5:1 without becoming brown, and it collides with light board squares |
+
+Every ratio above was computed from the OKLCH values rather than estimated.
+
+### 10.2 Light and dark
+
+Both themes define every token. The dark values are not the light ones
+dimmed: `--primary` goes *lighter* and slightly less saturated in dark
+(0.68/0.16 against 0.50/0.19), which is what keeps it legible on a
+near-black page — 6.65:1 against the background.
+
+`--ring` is now the brand in both themes. A focus ring that is grey reads as
+a border; one that is the product's own colour reads as deliberate.
+
+### 10.3 Game and status semantics
+
+Two tokens added, and the restraint matters as much as the additions:
+
+| Token | Why it exists | Callers today |
+| --- | --- | --- |
+| `--success` / `--success-foreground` | A rating gain and an online dot were `text-emerald-600` and `bg-emerald-500` — fixed palette values that do not change with the theme, in an app where everything else does | rating delta, two presence dots |
+| `--warning` / `--warning-foreground` | The only one of `Notice`'s four tones with no existing token. Its foreground is *dark*, because white on amber never reaches 4.5:1 | `Notice` |
+
+Deliberately **not** added:
+
+- **loss** — `--destructive` already means it, and a second red is two things
+  to keep in step;
+- **draw / neutral result** — `--muted-foreground`, and the history row
+  already carries the result in words;
+- **active turn** — `--primary` now has a hue, which is what that signal was
+  missing;
+- **low time** — it has no caller. A64-025.6 builds the clock and will add
+  it with the component that needs it, which is the point at which its value
+  can be chosen against a real background.
+
+### 10.4 Typography, spacing, radius, elevation
+
+Unchanged, and that is the finding rather than an omission. The audit found
+one type scale in consistent use, `--radius` already deriving four sizes,
+and shadows used only where shadcn's own components use them. Adding a
+parallel scale would give the codebase two.
+
+The conventions the existing code already follows, written down so the next
+task does not re-derive them:
+
+| Role | Pattern |
+| --- | --- |
+| Page title | `text-2xl font-semibold tracking-tight`, one `h1` per route |
+| Section heading | `text-lg font-semibold tracking-tight` |
+| Card heading | `text-base font-medium` |
+| Body | inherited; `text-sm` in dense surfaces |
+| Secondary | `text-muted-foreground text-sm` |
+| Meta | `text-muted-foreground text-xs` |
+| Numeric | **`tabular-nums`**, always — a clock or a rating whose digits change width makes the layout twitch once a second |
+| Page gap | `gap-6` to `gap-8` |
+| Section gap | `gap-4` |
+| Card padding | shadcn `Card`'s own |
+| Compact row | `gap-2`, `min-h-11` |
+
+### 10.5 Control size and the touch target
+
+**Every player-facing control is at least 44px tall, and the primitive
+guarantees it.**
+
+It did not. `min-h-11` appeared **112 times** across `apps/web`, on 86 of
+the 100 `<Button>`s, because the stock shadcn sizes are 32–40px and this
+product's standard is 44. A rule pasted a hundred times is a rule that will
+be missed on the hundred-and-first — and the fourteen that missed it are how
+A64-025.3 came to measure a 36px control in the app shell.
+
+`min-h-11` is now on `buttonVariants`' base, so `size` chooses padding and
+type while the floor is unconditional; `size="icon"` is `size-11`, because a
+square control must grow in both directions or stop being square. Measured
+in Chromium after the change: the smallest interactive control on `/` is
+44px at 360 and 1280, in both themes.
+
+The hundred-odd now-redundant `min-h-11` classes are harmless and are left
+in place: removing them is a hundred-file sweep, and a foundation change is
+the wrong commit to hide one in.
+
+### 10.6 Focus and interaction
+
+Unchanged apart from the ring's colour. The base already carries
+`focus-visible:ring-[3px]`, `disabled:opacity-50`,
+`aria-invalid:border-destructive` and a hover for every variant. No state is
+carried by hover alone.
+
+### 10.7 Feedback primitives
+
+`ListState` was **promoted, not invented**. It already existed in
+`features/social` and five social pages used it, while tournaments, history
+and notifications each rewrote the same three branches. The barrier was not
+the component — it was that its strings were `social.state.*`, so nothing
+outside that feature could reuse it without announcing "social" to somebody
+reading a tournament list. The strings are now `state.*` and the file is in
+`shared/ui`. Its markup is untouched.
+
+`Notice` is new: one short message, four tones, and **the tone chooses the
+role** — `error` is `role="alert"`, everything else is `role="status"`. A
+success that interrupts a screen reader mid-sentence is worse than one
+nobody hears. A caller may override `role` for the case the rule does not
+fit. Adopted once, on the match-history failure, to prove it against a real
+surface; the other seventy-odd hand-rolled regions are A64-025.11/.12's.
+
+`emptyTitle` and `emptyHint` stay with the caller. "No tournaments open" is a
+domain sentence, and a generic primitive that owned it would be `shared/ui`
+holding five features' vocabulary.
+
+### 10.8 What was deliberately not built
+
+| Candidate | Decision |
+| --- | --- |
+| `Badge` | **Not built.** One true status pill exists (`tournament-card`); the other `rounded-full` uses are a filter chip, an avatar, a count bubble and a board piece. CLAUDE.md §2.7 earns an abstraction on the third case, not the first |
+| `Sheet` | **Not built.** One consumer — `MobileNav`, which applies a sheet's geometry as a `className` on the existing `Dialog`. A second consumer makes it worth extracting |
+| `Typography` components | **Not built.** A component per heading level is a system nobody reads; §10.4 is the contract instead |
+| Storybook or a gallery route | **Not built**, and not by omission: A64-025.3 removed a developer surface from `/`, and adding one back would undo it. The primitives are proved by tests |
+| Motion tokens | **Not added.** The policy below needs none yet |
+
+### 10.9 Motion
+
+The policy, ahead of any motion existing: functional, short, interruptible,
+and silent under `prefers-reduced-motion`. Nothing may animate that delays a
+player's input, and nothing on the board animates before A64-025.6 owns it.
+No animation library — `tw-animate-css` and CSS transitions are already
+here and already enough.
+
+### 10.10 Primitive inventory
+
+Ten: Avatar, Button, Card, Dialog, ErrorBoundary, Input, **ListState**,
+**Notice**, Skeleton, Spinner. Two added, both earned.
+
+Still absent and still unearned until a second caller appears: Select,
+Switch, Tabs, Tooltip, DropdownMenu, Badge, Sheet. Each is a `shadcn add`
+away into this theme when the caller exists — `apps/web/components.json`
+already points at `@/shared/ui`.

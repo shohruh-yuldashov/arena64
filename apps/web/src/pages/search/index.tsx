@@ -2,9 +2,9 @@ import { useEffect, useId, useState } from "react";
 
 import { MIN_QUERY_LENGTH } from "@/features/social/api";
 import { useUserSearch } from "@/features/social/model/queries";
-import { ListState } from "@/features/social/ui/list-state";
 import { RelationshipActions } from "@/features/social/ui/relationship-actions";
 import { useTranslation } from "@/shared/i18n";
+import { ListState } from "@/shared/ui";
 import { Button, Input, Spinner } from "@/shared/ui";
 import { PlayerRow } from "@/widgets/player-row";
 import { SocialNav } from "@/widgets/social-nav";

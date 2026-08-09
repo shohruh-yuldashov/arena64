@@ -73,7 +73,7 @@ export function PlayerRow({
                 aria-hidden="true"
                 className={
                   player.is_online
-                    ? "size-2 rounded-full bg-emerald-500"
+                    ? "size-2 rounded-full bg-success"
                     : "bg-muted-foreground/50 size-2 rounded-full"
                 }
               />

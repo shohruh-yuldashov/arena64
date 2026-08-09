@@ -58,14 +58,51 @@ export function statePath(username: string): string {
  * file from a *read* of the same file, so a partially-restored `arena64`
  * kept working for the one field `resetRelationship` happened to use.
  *
+ * ## It waits for the network to go quiet before reading the cookies
+ *
+ * Refresh tokens rotate, and presenting a superseded one is **reuse**: the
+ * server revokes the entire family (A64-020.2). So the cookie this writes
+ * has to be the newest one the server issued — and a refresh the app still
+ * has in flight is one the server has already rotated.
+ *
+ * That is not hypothetical. A64-024's closing sweep traced it in the server
+ * log: alice's family rotated twice inside one second while
+ * `social.spec.ts` was finishing, the file kept the first of the two, and
+ * `challenges.spec.ts` presented it minutes later —
+ * `refresh_token_reuse_detected`, family revoked, and a spec that failed on
+ * a missing friends row while actually looking at a sign-in page.
+ *
+ * Closing the pages first was tried and is **worse**: it aborts the request
+ * client-side, but the server has already processed it and moved on, so the
+ * new cookie is one the jar now never receives. The stale file is then
+ * guaranteed rather than merely likely.
+ *
+ * Waiting for `networkidle` is the fix that matches the cause. The in-flight
+ * refresh lands, its `Set-Cookie` reaches the jar, and the capture that
+ * follows is the newest token. A page that has already gone is not an error
+ * — there is nothing in flight to wait for.
+ *
  * Every spec that loads a seeded session must save through this.
  */
 export async function saveState(
-  context: { storageState: (options: { path: string }) => Promise<unknown> },
+  context: {
+    storageState: (options: { path: string }) => Promise<unknown>;
+    pages?: () => { waitForLoadState: (state: "networkidle") => Promise<void> }[];
+  },
   username: string,
 ): Promise<void> {
   const path = statePath(username);
   const account = JSON.parse(readFileSync(path, "utf8")) as { arena64?: SeededAccount };
+
+  // `pages` is optional so a stub satisfies this signature; a real
+  // `BrowserContext` always has it. A page closed by its own spec rejects
+  // here, and that is the one case where there is nothing left to settle.
+  await Promise.all(
+    (context.pages?.() ?? []).map((page) =>
+      page.waitForLoadState("networkidle").catch(() => undefined),
+    ),
+  );
+
   await context.storageState({ path });
   const rotated = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
   writeFileSync(path, JSON.stringify({ ...rotated, arena64: account.arena64 }, null, 2));

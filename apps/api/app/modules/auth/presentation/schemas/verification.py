@@ -57,6 +57,14 @@ class VerifyCodeRequest(BaseRequestDTO):
         examples=["482193"],
     )
 
+    # A field example fills the field; only a body example fills the
+    # "Try it out" box, which is the one a reader actually sends. Every
+    # other auth request carries one and this one shipped without it.
+    model_config = {
+        "extra": "forbid",
+        "json_schema_extra": {"examples": [{"code": "482193"}]},
+    }
+
 
 class ResendVerificationRequest(BaseRequestDTO):
     """The `POST /auth/email/resend` body.

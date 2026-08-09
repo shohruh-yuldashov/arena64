@@ -30,9 +30,11 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
+from fastapi.dependencies.models import Dependant
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.admin.presentation.dependencies import require_admin
 from app.modules.game.public import PlayerSide, ProductVariant
 from app.modules.rating.public import SpeedClass
 from app.modules.tournament.application.ports import (
@@ -194,7 +196,7 @@ class TestTheWholeTournamentRuns:
         assert settled is not None and settled.outcome is AttemptOutcome.DRAW
 
         # 22. The public surface serves what the bracket produced.
-        viewer = await register_account(client)
+        viewer = await register_account(client, contract_session)
         detail = await client.get(f"/api/v1/tournaments/{tournament.id}", headers=viewer.auth)
         standings_body = await client.get(
             f"/api/v1/tournaments/{tournament.id}/standings", headers=viewer.auth
@@ -307,18 +309,47 @@ class TestEveryTournamentEntryPointIsWired:
     ) -> None:
         """The other half, and the one that matters for security.
 
-        This platform has no administrator — no role on `users.User`, no
-        scope on `auth.TokenClaims`, no permission primitive. So the
-        lifecycle commands must be reachable by a **process** and by nothing
-        an authenticated player can send, and the strongest way to hold that
-        is for no such route to exist at all.
+        When this was written the platform had no administrator, so the
+        strongest available statement was that **no** route reached a
+        lifecycle command. A64-024 built the administrator, and A64-024.5H
+        put `create`, `open`, `close` and `start` on the admin router — so
+        that statement is now false by design and this test has to say what
+        replaced it rather than be deleted.
 
-        Asserted over the whole route table rather than by trying a few
-        paths, so a route added under any prefix is caught.
+        Two claims, and neither is weaker than the original where it still
+        applies:
+
+        1. **Nothing on the player's router.** Unchanged, and still the
+           reason a player cannot start a tournament: there is no route to
+           send, whatever their token says.
+        2. **Every `/admin` route is behind `require_admin`.** An admin
+           route that forgot the guard is the failure the first claim used
+           to make impossible, so it is asserted directly — over the whole
+           route table, so one added under any prefix is caught.
+
+        Walked rather than sampled for the same reason as before.
         """
-        paths = {path for path, _ in api_routes(build_contract_app(contract_session))}
+        routes = api_routes(build_contract_app(contract_session))
+        paths = {path for path, _ in routes}
 
-        assert not [path for path in paths if "/admin" in path]
+        def guards(dependant: Dependant) -> bool:
+            """`require_admin` anywhere in the route's dependency tree.
+
+            Recursive because `CurrentAdmin` is a *parameter* annotation, so
+            it arrives as a sub-dependency rather than in `route.dependencies`
+            — a one-level check would find nothing and pass vacuously, which
+            is the one outcome this assertion must not have.
+            """
+            return any(
+                child.call is require_admin or guards(child) for child in dependant.dependencies
+            )
+
+        admin_routes = [(path, route) for path, route in routes if "/admin" in path]
+        assert admin_routes, "the admin router is not mounted; this assertion proves nothing"
+
+        unguarded = [path for path, route in admin_routes if not guards(route.dependant)]
+        assert not unguarded, f"admin routes with no `require_admin`: {unguarded}"
+
         assert not [
             path
             for path in paths

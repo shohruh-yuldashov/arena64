@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 
 import { expect, test } from "@playwright/test";
 
-import { E2E_ACCOUNTS, saveState, statePath } from "./accounts";
+import { E2E_ACCOUNTS, resetLobby, saveState, seededAccount, statePath } from "./accounts";
 
 /**
  * The tournament flow, against the real backend — A64-020.6 §28, §29.10.
@@ -94,6 +94,21 @@ test("a player finds a tournament, enters it, and withdraws again", async ({
   // This spec never queues and never plays, so once the game chain has
   // finished with `e2e_lobby_three` nothing else touches it.
   const username = E2E_ACCOUNTS.lobbyThree;
+
+  // **Out of any live game first.** The comment above says nothing touches
+  // this account once the game chain is done, and that is true — but what
+  // the chain *leaves behind* is not nothing: `realtime-push.spec.ts` ends
+  // with a match still running, and since A64-020.5A the lobby sends a
+  // player in a live game to the board rather than to the queue form. So
+  // `/play` answered with a redirect to `/games/{id}` and this spec failed
+  // looking for a navigation link on a page it was never on.
+  //
+  // `resetLobby` is the helper the four game specs already use for exactly
+  // this, and it waits rather than reaching for a back door — `bullet_1_0`
+  // flags sixty seconds after activation and there is no resign endpoint to
+  // call. This spec neither queues nor plays, so the wait is the whole cost.
+  await resetLobby(request, seededAccount(username));
+
   const context = await browser.newContext({ storageState: statePath(username) });
 
   try {

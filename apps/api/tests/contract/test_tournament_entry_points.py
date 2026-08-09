@@ -73,7 +73,7 @@ class TestParticipantEndpoints:
         body — there is no body.
         """
         tournament = await _open_tournament(contract_session)
-        player = await register_account(client)
+        player = await register_account(client, contract_session)
 
         created = await client.post(
             f"/api/v1/tournaments/{tournament.id}/registrations", headers=player.auth
@@ -99,7 +99,7 @@ class TestParticipantEndpoints:
         branches on this code and treats it as success.
         """
         tournament = await _open_tournament(contract_session)
-        player = await register_account(client)
+        player = await register_account(client, contract_session)
         url = f"/api/v1/tournaments/{tournament.id}/registrations"
 
         assert (await client.post(url, headers=player.auth)).status_code == 201
@@ -125,7 +125,7 @@ class TestParticipantEndpoints:
         "registration closed at 14:00" says when.
         """
         full = await _open_tournament(contract_session, capacity=2)
-        first, second, third = [await register_account(client) for _ in range(3)]
+        first, second, third = [await register_account(client, contract_session) for _ in range(3)]
         url = f"/api/v1/tournaments/{full.id}/registrations"
         assert (await client.post(url, headers=first.auth)).status_code == 201
         assert (await client.post(url, headers=second.auth)).status_code == 201
@@ -159,7 +159,7 @@ class TestParticipantEndpoints:
         call safe to send twice without `withdrawn_at` moving.
         """
         tournament = await _open_tournament(contract_session)
-        player = await register_account(client)
+        player = await register_account(client, contract_session)
         await client.post(f"/api/v1/tournaments/{tournament.id}/registrations", headers=player.auth)
 
         withdrawn = await client.delete(
@@ -188,7 +188,7 @@ class TestParticipantEndpoints:
         a forfeit: a forfeit is a *match* outcome and there is no match yet.
         """
         tournament = await _open_tournament(contract_session)
-        player = await register_account(client)
+        player = await register_account(client, contract_session)
         await client.post(f"/api/v1/tournaments/{tournament.id}/registrations", headers=player.auth)
         await operator.close_registration(contract_session, get_settings(), tournament.id)
 
@@ -218,18 +218,24 @@ class TestParticipantEndpoints:
         mounted at `/api/v1/v1/admin/...` — so this assertion kept passing
         for the wrong reason.
 
-        The listing now exists at `/api/v1/admin/tournaments`, `GET`-only and
-        behind `CurrentAdmin`. A player's `POST` is therefore refused by the
-        router before any handler runs, which is `405` rather than `404`.
-        Both mean the same thing here — nothing took the request — and the
-        stronger claim is asserted separately below: the method that *does*
-        exist refuses a player outright.
+        A64-024.5 added a read-only listing there and A64-024.5H added the
+        lifecycle commands, so `/api/v1/admin/tournaments` and
+        `/api/v1/admin/tournaments/{id}/start` are now real routes behind
+        `CurrentAdmin`. The claim they can support has changed with them: not
+        "nothing answers", but "the guard refuses a player" — `403`. Asserting
+        `404` or `405` there today would be asserting that the console had
+        not shipped.
+
+        The player's own router is where the original claim still holds, and
+        it is the one this test is really about.
         """
         tournament = await _open_tournament(contract_session)
-        player = await register_account(client)
+        player = await register_account(client, contract_session)
 
+        # Still nothing at all on the player's own router: seeding, starting
+        # and closing remain a process entry point, and a route that does
+        # not exist is the only authorization that cannot be misconfigured.
         for path in (
-            f"/api/v1/admin/tournaments/{tournament.id}/start",
             f"/api/v1/tournaments/{tournament.id}/seed",
             f"/api/v1/tournaments/{tournament.id}/start",
             f"/api/v1/tournaments/{tournament.id}/registration/close",
@@ -237,15 +243,24 @@ class TestParticipantEndpoints:
             answered = await client.post(path, headers=player.auth)
             assert answered.status_code == 404, f"{path} answered {answered.status_code}"
 
-        # No handler takes a `POST` here either — the console's listing is a
-        # read, and the router refuses the method before authorization is
-        # even consulted.
+        # A64-024.5H put `start` on the admin router, so this one is now a
+        # real route and the claim it supports changes: it is no longer
+        # "nobody can reach this" but "an ordinary player is refused". The
+        # weaker statement is the true one, and asserting `404` here would
+        # be asserting that the feature had not shipped.
+        assert (
+            await client.post(
+                f"/api/v1/admin/tournaments/{tournament.id}/start", headers=player.auth
+            )
+        ).status_code == 403
+
+        # Creation is an admin command since A64-024.5H, so this is the
+        # guard refusing a player rather than the router refusing a method.
         assert (
             await client.post("/api/v1/admin/tournaments", headers=player.auth)
-        ).status_code == 405
+        ).status_code == 403
 
-        # And the read that does exist is not a player's to make. This is
-        # the assertion the `404`s above were standing in for.
+        # And the read is not a player's to make either.
         assert (
             await client.get("/api/v1/admin/tournaments", headers=player.auth)
         ).status_code == 403
@@ -289,7 +304,7 @@ class TestOperatorEntryPoint:
             await operator.open_registration(contract_session, settings, created.id)
         ).status is TournamentStatus.REGISTRATION_OPEN
 
-        players = [await register_account(client) for _ in range(4)]
+        players = [await register_account(client, contract_session) for _ in range(4)]
         for player in players:
             entered = await client.post(
                 f"/api/v1/tournaments/{created.id}/registrations", headers=player.auth

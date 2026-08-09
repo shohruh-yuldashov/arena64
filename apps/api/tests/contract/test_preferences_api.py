@@ -35,11 +35,12 @@ Skipped, not failed, when PostgreSQL is unreachable (see `conftest.py`).
 
 from collections.abc import AsyncIterator
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.app_factory import create_app
@@ -81,8 +82,8 @@ async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
         yield http
 
 
-async def register(client: AsyncClient) -> tuple[str, dict[str, str]]:
-    """One account. Returns its username and an `Authorization` header."""
+async def register(client: AsyncClient, session: AsyncSession) -> tuple[str, dict[str, str]]:
+    """One verified account. Returns its username and an `Authorization` header."""
     suffix = uuid4().hex[:10]
     username = f"player{suffix}"
     account = {
@@ -93,14 +94,24 @@ async def register(client: AsyncClient) -> tuple[str, dict[str, str]]:
     registered = await client.post(REGISTER_URL, json=account)
     assert registered.status_code == 201, registered.text
 
+    # **Verified**, because A64-021.5H put every preference write behind a
+    # verified address. The same thing `app.operator.accounts verify` does;
+    # the OTP flow itself belongs to `test_otp_verification.py`.
+    await session.execute(
+        text("UPDATE users.user SET is_verified = true WHERE id = :id"),
+        {"id": UUID(registered.json()["data"]["id"])},
+    )
+
     signed_in = await client.post(LOGIN_URL, json={"email": account["email"], "password": PASSWORD})
     assert signed_in.status_code == 200, signed_in.text
     return username, {"Authorization": f"Bearer {signed_in.json()['data']['access_token']}"}
 
 
 @pytest_asyncio.fixture
-async def account(client: AsyncClient) -> tuple[str, dict[str, str]]:
-    return await register(client)
+async def account(
+    client: AsyncClient, contract_session: AsyncSession
+) -> tuple[str, dict[str, str]]:
+    return await register(client, contract_session)
 
 
 async def patch_preferences(client: AsyncClient, auth: dict[str, str], body: dict[str, Any]) -> Any:
@@ -458,9 +469,12 @@ class TestUnauthorized:
         assert (await read_preferences(client, auth)) == DEFAULTS
 
     async def test_there_is_no_way_to_name_another_account(
-        self, client: AsyncClient, account: tuple[str, dict[str, str]]
+        self,
+        client: AsyncClient,
+        contract_session: AsyncSession,
+        account: tuple[str, dict[str, str]],
     ) -> None:
-        victim, _ = await register(client)
+        victim, _ = await register(client, contract_session)
         _, attacker = account
 
         by_body = await patch_preferences(

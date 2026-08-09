@@ -87,7 +87,7 @@ class TestPlayerRatings:
         `volatility` is deliberately absent: it is an input to the next
         calculation, not a fact about the player.
         """
-        player = await register_account(client)
+        player = await register_account(client, contract_session)
         await _store(contract_session, player.id, rating=1750.0)
 
         response = await client.get("/api/v1/ratings/me", headers=player.auth)
@@ -119,7 +119,7 @@ class TestPlayerRatings:
         are real. Whether a player exists is `users`' question, behind
         `users`' own rules.
         """
-        viewer = await register_account(client)
+        viewer = await register_account(client, contract_session)
         stranger = uuid4()
 
         response = await client.get(f"/api/v1/players/{stranger}/ratings", headers=viewer.auth)
@@ -143,7 +143,7 @@ class TestLadder:
         minimum-games threshold. A ladder that hid its newcomers is one
         nobody new can see themselves on.
         """
-        viewer = await register_account(client)
+        viewer = await register_account(client, contract_session)
         await _store(contract_session, _player(2), rating=1600.0)
         await _store(contract_session, _player(3), rating=1500.0)
         await _store(
@@ -172,7 +172,7 @@ class TestLadder:
         reports no further cursor — the two failures `OFFSET` produces on a
         ladder that moves between requests.
         """
-        viewer = await register_account(client)
+        viewer = await register_account(client, contract_session)
         for index, rating in enumerate((2000.0, 1900.0, 1800.0, 1700.0, 1600.0), start=1):
             await _store(contract_session, _player(index), rating=rating)
 
@@ -195,7 +195,7 @@ class TestLadder:
         assert cursor is None
 
     async def test_a_forged_cursor_is_refused_without_describing_the_encoding(
-        self, client: AsyncClient
+        self, client: AsyncClient, contract_session: AsyncSession
     ) -> None:
         """§9 — one error for every way a cursor can be wrong.
 
@@ -204,7 +204,7 @@ class TestLadder:
         distinguishing them would narrate the encoding to whoever is probing
         it. The message carries no class name, no stack and no SQL.
         """
-        viewer = await register_account(client)
+        viewer = await register_account(client, contract_session)
 
         response = await client.get(
             LADDER_URL, params={**QUERY, "after": "not-a-cursor"}, headers=viewer.auth
@@ -237,7 +237,7 @@ class TestNeighbourhood:
         with the player in the middle. `span` bounds each side, so a player
         in the middle of a ladder of any size costs the same.
         """
-        viewer = await register_account(client)
+        viewer = await register_account(client, contract_session)
         for index, rating in enumerate((2000.0, 1900.0, 1800.0, 1700.0, 1600.0), start=1):
             await _store(contract_session, _player(index), rating=rating)
 
@@ -264,7 +264,7 @@ class TestNeighbourhood:
         stored row. Asserted with a player who is rated in another speed
         class, so the absence is the key's and not the platform's.
         """
-        viewer = await register_account(client)
+        viewer = await register_account(client, contract_session)
         await _store(
             contract_session,
             _player(1),

@@ -30,8 +30,7 @@ export default defineConfig({
     // here exactly as it is in `npm run dev`.
     trace: "on-first-retry",
   },
-  // **Nine projects, because five specs share four accounts.**
-
+  // **Twelve projects, because the specs share six seeded accounts.**
   //
   // `play.spec.ts`, `game.spec.ts`, `game-controls.spec.ts` and
   // `realtime-push.spec.ts` all drive the lobby with
@@ -68,7 +67,41 @@ export default defineConfig({
         "**/pwa.spec.ts",
         "**/notifications.spec.ts",
         "**/push.spec.ts",
+        "**/challenges.spec.ts",
       ],
+    },
+    {
+      // **Head of the social tail** — A64-024 closing sweep.
+      //
+      // `challenges.spec.ts` drives `e2e_social_alice` and `e2e_social_bob`,
+      // the pair `social.spec.ts` befriends and unfriends. It was left inside
+      // the `chromium` batch when A64-022.5 added it, so under
+      // `fullyParallel` the two interleaved on one relationship: this spec
+      // calls `resetRelationship` then `befriend`, `social.spec.ts` calls
+      // `resetRelationship` in between, and the friends list this one then
+      // opens is empty. Both specs failed, in different places, for a cause
+      // neither file names — this one on a missing row, the other on a
+      // 30-second timeout waiting for a request that had been deleted.
+      //
+      // **Behind `tournament`, not merely behind `chromium`.** Depending on
+      // `chromium` alone fixed the relationship race and started this spec
+      // at the same instant as `lobby`, which is the head of the three long
+      // two-context game specs — and their refresh burst put the pair over
+      // `refresh_ip` (30 per minute per IP). The symptom is not a friends
+      // list with the wrong contents but a **sign-in page**: the session
+      // could not refresh, so the app signed out and the same assertion
+      // failed for an unrelated reason. That is the trap `push` documents
+      // below, and this is the second time it has been walked into.
+      //
+      // So the four specs that share this pair — `social` in `chromium`,
+      // then this one, `notifications` and `push` — now run one at a time
+      // behind the game chain, where the budget is free. A separate seeded
+      // pair was the other option and costs a registration, which is three
+      // per IP per hour and already spent by `auth.spec.ts`.
+      name: "challenges",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: "**/challenges.spec.ts",
+      dependencies: ["tournament"],
     },
     {
       // A64-020.9 §27. Its own project, and deliberately dependency-free:
@@ -135,19 +168,24 @@ export default defineConfig({
       dependencies: ["history"],
     },
     {
-      // A64-021.1 §32.10. **After `chromium`**, because it drives
+      // A64-021.1 §32.10. **After `challenges`**, because it drives
       // `e2e_social_alice` and `e2e_social_bob` — the same pair
-      // `social.spec.ts` friends and unfriends. Running the two at once
-      // would make each flaky for a reason neither file mentions: one
-      // suite's `resetRelationship` would delete the request the other is
-      // waiting to be notified about.
+      // `social.spec.ts` friends and unfriends and `challenges.spec.ts`
+      // befriends. Running any two at once makes each flaky for a reason
+      // none of the files mentions: one suite's `resetRelationship` deletes
+      // the request another is waiting to be notified about.
+      //
+      // It depended on `chromium` while `challenges` was still inside that
+      // batch, which ordered it against `social.spec.ts` and left it racing
+      // the third. Depending on the tail of the pair's chain orders it
+      // against both.
       //
       // It queues for nothing and plays nothing, so it contends with no
       // other project.
       name: "notifications",
       use: { ...devices["Desktop Chrome"] },
       testMatch: "**/notifications.spec.ts",
-      dependencies: ["chromium"],
+      dependencies: ["challenges"],
     },
     {
       // A64-021.6 §30.12. Its own project, and **after** `chromium` rather
@@ -174,10 +212,13 @@ export default defineConfig({
       // Raising the limit was the other option and is forbidden by
       // `.env.example` for the right reason: a suite that only passes with
       // the limiter loosened never exercises the limiter that ships.
+      // Last of the social tail: `challenges` → `notifications` → here.
+      // It depended on `tournament` directly while it was the only one of
+      // the three placed after the game chain.
       name: "push",
       use: { ...devices["Desktop Chrome"] },
       testMatch: "**/push.spec.ts",
-      dependencies: ["tournament"],
+      dependencies: ["notifications"],
     },
     {
       name: "replay",

@@ -100,7 +100,7 @@ class Player:
         self.auth = auth
 
 
-async def register(client: AsyncClient) -> Player:
+async def register(client: AsyncClient, session: AsyncSession) -> Player:
     suffix = uuid4().hex[:10]
     account = {
         "username": f"player{suffix}",
@@ -111,6 +111,13 @@ async def register(client: AsyncClient) -> Player:
     assert created.status_code == 201, created.text
     player_id = UUID(created.json()["data"]["id"])
 
+    # **Verified**, because A64-021.5H made every friend-graph write require
+    # it. The same thing `app.operator.accounts verify` does; the OTP flow
+    # belongs to `test_otp_verification.py`.
+    await session.execute(
+        text("UPDATE users.user SET is_verified = true WHERE id = :id"), {"id": player_id}
+    )
+
     signed_in = await client.post(LOGIN_URL, json={"email": account["email"], "password": PASSWORD})
     assert signed_in.status_code == 200, signed_in.text
     return Player(
@@ -119,13 +126,13 @@ async def register(client: AsyncClient) -> Player:
 
 
 @pytest_asyncio.fixture
-async def alice(client: AsyncClient) -> Player:
-    return await register(client)
+async def alice(client: AsyncClient, contract_session: AsyncSession) -> Player:
+    return await register(client, contract_session)
 
 
 @pytest_asyncio.fixture
-async def bob(client: AsyncClient) -> Player:
-    return await register(client)
+async def bob(client: AsyncClient, contract_session: AsyncSession) -> Player:
+    return await register(client, contract_session)
 
 
 async def send(client: AsyncClient, sender: Player, recipient: Player) -> Any:
@@ -247,9 +254,13 @@ class TestAccept:
         assert response.status_code == 403
 
     async def test_a_third_party_cannot_accept(
-        self, client: AsyncClient, alice: Player, bob: Player
+        self,
+        client: AsyncClient,
+        contract_session: AsyncSession,
+        alice: Player,
+        bob: Player,
     ) -> None:
-        stranger = await register(client)
+        stranger = await register(client, contract_session)
         request = await send_ok(client, alice, bob)
 
         response = await client.post(
@@ -381,9 +392,13 @@ class TestLists:
         assert [item["player"]["id"] for item in items] == [str(bob.id)]
 
     async def test_a_request_appears_in_neither_list_for_a_third_party(
-        self, client: AsyncClient, alice: Player, bob: Player
+        self,
+        client: AsyncClient,
+        contract_session: AsyncSession,
+        alice: Player,
+        bob: Player,
     ) -> None:
-        stranger = await register(client)
+        stranger = await register(client, contract_session)
         await send_ok(client, alice, bob)
 
         assert (await client.get(INCOMING_URL, headers=stranger.auth)).json()["data"]["items"] == []
@@ -404,9 +419,9 @@ class TestLists:
         assert "version" not in item
 
     async def test_pages_with_a_cursor_and_never_repeats(
-        self, client: AsyncClient, bob: Player
+        self, client: AsyncClient, contract_session: AsyncSession, bob: Player
     ) -> None:
-        senders = [await register(client) for _ in range(5)]
+        senders = [await register(client, contract_session) for _ in range(5)]
         for sender in senders:
             await send_ok(client, sender, bob)
 
@@ -454,7 +469,7 @@ class TestBatchComposition:
         rather than pinning an exact number that any unrelated query change
         would break.
         """
-        senders = [await register(client) for _ in range(6)]
+        senders = [await register(client, contract_session) for _ in range(6)]
         for sender in senders:
             await send_ok(client, sender, bob)
 

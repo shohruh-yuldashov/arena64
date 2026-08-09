@@ -30,7 +30,7 @@ from uuid import UUID, uuid4
 
 import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import insert
+from sqlalchemy import insert, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.app_factory import create_app
@@ -106,7 +106,7 @@ async def fallback_client(contract_session: AsyncSession) -> AsyncIterator[Async
         yield http
 
 
-async def register(client: AsyncClient) -> tuple[str, UUID, dict[str, str]]:
+async def register(client: AsyncClient, session: AsyncSession) -> tuple[str, UUID, dict[str, str]]:
     """One account. Returns its username, its player id and an
     `Authorization` header."""
     suffix = uuid4().hex[:10]
@@ -118,7 +118,16 @@ async def register(client: AsyncClient) -> tuple[str, UUID, dict[str, str]]:
     }
     registered = await client.post(REGISTER_URL, json=account)
     assert registered.status_code == 201, registered.text
+
     player_id = UUID(registered.json()["data"]["id"])
+
+    # **Verified**, because A64-021.5H put this write behind a verified
+    # address. The same thing `app.operator.accounts verify` does; the OTP
+    # flow itself belongs to `test_otp_verification.py`.
+    await session.execute(
+        text("UPDATE users.user SET is_verified = true WHERE id = :id"),
+        {"id": player_id},
+    )
 
     signed_in = await client.post(LOGIN_URL, json={"email": account["email"], "password": PASSWORD})
     assert signed_in.status_code == 200, signed_in.text
@@ -127,8 +136,10 @@ async def register(client: AsyncClient) -> tuple[str, UUID, dict[str, str]]:
 
 
 @pytest_asyncio.fixture
-async def account(client: AsyncClient) -> tuple[str, UUID, dict[str, str]]:
-    return await register(client)
+async def account(
+    client: AsyncClient, contract_session: AsyncSession
+) -> tuple[str, UUID, dict[str, str]]:
+    return await register(client, contract_session)
 
 
 async def store_record(session: AsyncSession, player_id: UUID, **record: int) -> None:
@@ -208,7 +219,7 @@ class TestFallbackProvider:
         account while it is off. The composition root logs at `WARNING` on
         every request so an operator can see it; a client cannot.
         """
-        username, player_id, _ = await register(client)
+        username, player_id, _ = await register(client, contract_session)
         await store_record(contract_session, player_id, **A_REAL_RECORD)
 
         served = await client.get(f"{PROFILES_URL}/{username}")
@@ -218,12 +229,12 @@ class TestFallbackProvider:
         assert degraded.json()["data"]["statistics"] == EMPTY_RECORD
 
     async def test_the_fallback_still_serves_the_rest_of_the_profile(
-        self, fallback_client: AsyncClient, client: AsyncClient
+        self, fallback_client: AsyncClient, contract_session: AsyncSession, client: AsyncClient
     ) -> None:
         """The whole point of degrading rather than failing: the platform's
         highest-volume public read keeps working when a rebuildable
         projection does not."""
-        username, _, _ = await register(client)
+        username, _, _ = await register(client, contract_session)
 
         response = await fallback_client.get(f"{PROFILES_URL}/{username}")
 

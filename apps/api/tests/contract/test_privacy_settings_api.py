@@ -35,10 +35,11 @@ Skipped, not failed, when PostgreSQL is unreachable (see `conftest.py`).
 
 from collections.abc import AsyncIterator
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest_asyncio
 from httpx import AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.app_factory import create_app
@@ -98,8 +99,8 @@ async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
         yield http
 
 
-async def register(client: AsyncClient) -> tuple[str, dict[str, str]]:
-    """One account. Returns its username and an `Authorization` header."""
+async def register(client: AsyncClient, session: AsyncSession) -> tuple[str, dict[str, str]]:
+    """One verified account. Returns its username and an `Authorization` header."""
     suffix = uuid4().hex[:10]
     username = f"player{suffix}"
     account = {
@@ -110,6 +111,14 @@ async def register(client: AsyncClient) -> tuple[str, dict[str, str]]:
     registered = await client.post(REGISTER_URL, json=account)
     assert registered.status_code == 201, registered.text
 
+    # **Verified**, because A64-021.5H put this write behind a verified
+    # address. The same thing `app.operator.accounts verify` does; the OTP
+    # flow itself belongs to `test_otp_verification.py`.
+    await session.execute(
+        text("UPDATE users.user SET is_verified = true WHERE id = :id"),
+        {"id": UUID(registered.json()["data"]["id"])},
+    )
+
     signed_in = await client.post(LOGIN_URL, json={"email": account["email"], "password": PASSWORD})
     assert signed_in.status_code == 200, signed_in.text
     token = signed_in.json()["data"]["access_token"]
@@ -117,8 +126,10 @@ async def register(client: AsyncClient) -> tuple[str, dict[str, str]]:
 
 
 @pytest_asyncio.fixture
-async def account(client: AsyncClient) -> tuple[str, dict[str, str]]:
-    return await register(client)
+async def account(
+    client: AsyncClient, contract_session: AsyncSession
+) -> tuple[str, dict[str, str]]:
+    return await register(client, contract_session)
 
 
 async def patch_privacy(client: AsyncClient, auth: dict[str, str], body: dict[str, Any]) -> Any:
@@ -289,7 +300,10 @@ class TestPublicProfileRespectsPrivacy:
         assert hidden.json()["data"]["country"] is None
 
     async def test_a_hidden_country_looks_exactly_like_an_unset_one(
-        self, client: AsyncClient, account: tuple[str, dict[str, str]]
+        self,
+        client: AsyncClient,
+        contract_session: AsyncSession,
+        account: tuple[str, dict[str, str]],
     ) -> None:
         """The response must not let a caller tell the two apart. If it
         could, the setting would announce that something is being hidden —
@@ -299,7 +313,7 @@ class TestPublicProfileRespectsPrivacy:
         await patch_privacy(client, auth, {"show_country": False})
         hiding = (await client.get(f"/api/v1/profiles/{username}")).json()["data"]
 
-        other_username, _ = await register(client)
+        other_username, _ = await register(client, contract_session)
         never_set = (await client.get(f"/api/v1/profiles/{other_username}")).json()["data"]
 
         assert hiding["country"] is never_set["country"] is None
@@ -398,14 +412,17 @@ class TestUnauthorized:
         assert (await client.get(PRIVACY_URL, headers=auth)).json()["data"] == DEFAULTS
 
     async def test_there_is_no_way_to_name_another_account(
-        self, client: AsyncClient, account: tuple[str, dict[str, str]]
+        self,
+        client: AsyncClient,
+        contract_session: AsyncSession,
+        account: tuple[str, dict[str, str]],
     ) -> None:
         """The ownership guarantee is structural: the account comes from
         the token, so a body naming somebody else is an unknown field
         rather than a target. This asserts the absence of the endpoint that
         would break it — a `/profiles/{username}/privacy` would be the
         shape to worry about."""
-        victim_username, _ = await register(client)
+        victim_username, _ = await register(client, contract_session)
         _, attacker = account
 
         by_body = await patch_privacy(

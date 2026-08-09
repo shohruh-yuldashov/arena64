@@ -87,7 +87,7 @@ class TestCost:
         "does not grow" assertion alone would pass a fix that traded 201
         queries for two.
         """
-        viewer = await register_account(client)
+        viewer = await register_account(client, contract_session)
         for index in range(100):
             entered_at = NOW - timedelta(minutes=index)
             tournament = await _tournament(
@@ -127,7 +127,7 @@ class TestEquivalence:
         a subquery that forgot the `REGISTERED` predicate or the round
         status filter would return four and one respectively.
         """
-        viewer = await register_account(client)
+        viewer = await register_account(client, contract_session)
         tournament = await _tournament(
             contract_session, name="Compared", created_at=NOW, entrants=3
         )
@@ -187,7 +187,7 @@ class TestOrdering:
         single-key order would leave that pair in whatever order the join
         happened to produce, which is not an order at all.
         """
-        viewer = await register_account(client)
+        viewer = await register_account(client, contract_session)
         entered = []
         for index, instant in enumerate(
             (
@@ -222,7 +222,7 @@ class TestCursor:
         walk is what proves it: five entries, two at a time, every one seen
         exactly once and the last page reporting none.
         """
-        viewer = await register_account(client)
+        viewer = await register_account(client, contract_session)
         for index in range(5):
             entered_at = NOW - timedelta(minutes=index)
             tournament = await _tournament(

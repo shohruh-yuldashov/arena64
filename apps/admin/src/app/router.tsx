@@ -16,6 +16,8 @@ import { PlaceholderPage } from "@/pages/placeholder";
 import { MatchDetailPage } from "@/pages/match-detail";
 import { MatchesPage } from "@/pages/matches";
 import { ModerationPage } from "@/pages/moderation";
+import { NotificationDetailPage } from "@/pages/notification-detail";
+import { NotificationsPage } from "@/pages/notifications";
 import { TournamentDetailPage } from "@/pages/tournament-detail";
 import { TournamentsPage } from "@/pages/tournaments";
 import { UserDetailPage } from "@/pages/user-detail";
@@ -303,7 +305,33 @@ const moderationRoute = createRoute({
   component: ModerationPage,
 });
 
-const BUILT_SECTIONS = ["/users", "/matches", "/tournaments", "/audit", "/moderation"];
+// A64-024.7. `/notifications` becomes the sixth real section: reads, plus
+// one mutation that re-arms a push a service never accepted. Nothing here
+// sends anything new.
+const notificationsRoute = createRoute({
+  getParentRoute: () => protectedRoute,
+  path: "/notifications",
+  component: NotificationsPage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...(typeof search.recipient === "string" ? { recipient: search.recipient } : {}),
+    ...(typeof search.failed === "string" ? { failed: search.failed } : {}),
+  }),
+});
+
+const notificationDetailRoute = createRoute({
+  getParentRoute: () => protectedRoute,
+  path: "/notifications/$notificationId",
+  component: NotificationDetailPage,
+});
+
+const BUILT_SECTIONS = [
+  "/users",
+  "/matches",
+  "/tournaments",
+  "/audit",
+  "/moderation",
+  "/notifications",
+];
 
 const sectionRoutes = SECTIONS.filter((section) => !BUILT_SECTIONS.includes(section.path)).map(
   (section) =>
@@ -326,6 +354,8 @@ const routeTree = rootRoute.addChildren([
     tournamentDetailRoute,
     auditRoute,
     moderationRoute,
+    notificationsRoute,
+    notificationDetailRoute,
     ...sectionRoutes,
   ]),
 ]);

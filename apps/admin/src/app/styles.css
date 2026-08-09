@@ -363,3 +363,22 @@ dialog textarea {
   margin: 0.75rem 0 0;
   color: var(--muted);
 }
+
+/* A64-024.7. One row per device, with its action beside it — a list rather
+   than a seventh table column, so the button is never adjacent to the
+   column an operator is scanning. */
+.delivery-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.delivery-actions li {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}

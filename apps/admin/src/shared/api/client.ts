@@ -625,3 +625,103 @@ async function authorizedWrite<T>(path: string, body: unknown): Promise<Outcome<
   const value = unwrap<T>(await response.json().catch(() => null));
   return value === null ? { status: "unavailable" } : { status: "ok", value };
 }
+
+// --- admin notification operations — A64-024.7 -------------------------------
+
+export interface AdminPushDeliveryView {
+  subscription_id: string;
+  status: string;
+  outcome: string | null;
+  attempt_count: number;
+  next_attempt_at: string | null;
+  last_attempt_at: string | null;
+  /** When a push service **accepted** the request — never a device acknowledgement. */
+  accepted_at: string | null;
+  created_at: string;
+  can_retry: boolean;
+  device_first_seen_at: string | null;
+  device_last_seen_at: string | null;
+  device_revoked_at: string | null;
+}
+
+export interface AdminNotificationSummary {
+  id: string;
+  recipient_id: string;
+  recipient_username: string | null;
+  type: string;
+  category: string;
+  created_at: string;
+  read_at: string | null;
+  push_capable: boolean;
+  push_summary: string;
+  delivery_count: number;
+}
+
+export interface AdminNotificationDetail {
+  id: string;
+  recipient_id: string;
+  recipient_username: string | null;
+  type: string;
+  category: string;
+  target_type: string;
+  target_ref: string | null;
+  source_event_id: string;
+  created_at: string;
+  read_at: string | null;
+  push_capable: boolean;
+  deliveries: AdminPushDeliveryView[];
+}
+
+export interface AdminNotificationPage {
+  items: AdminNotificationSummary[];
+  next_cursor: string | null;
+}
+
+export interface NotificationQuery {
+  recipient_id?: string;
+  failed_push_only?: boolean;
+  cursor?: string;
+}
+
+export async function fetchNotifications(
+  query: NotificationQuery,
+  signal?: AbortSignal,
+): Promise<Outcome<AdminNotificationPage>> {
+  const params = new URLSearchParams();
+  if (query.recipient_id) params.set("recipient_id", query.recipient_id);
+  if (query.failed_push_only) params.set("failed_push_only", "true");
+  if (query.cursor) params.set("cursor", query.cursor);
+
+  return authorizedRead<AdminNotificationPage>(
+    `/admin/notifications${params.size > 0 ? `?${params.toString()}` : ""}`,
+    signal,
+  );
+}
+
+export async function fetchNotification(
+  notificationId: string,
+  signal?: AbortSignal,
+): Promise<Outcome<AdminNotificationDetail>> {
+  return authorizedRead<AdminNotificationDetail>(
+    `/admin/notifications/${encodeURIComponent(notificationId)}`,
+    signal,
+  );
+}
+
+/**
+ * Queues one more attempt at an already-recorded delivery.
+ *
+ * **Not a send.** There is no body, and there is nothing to put in one: the
+ * recipient, the type, the payload and the destination are already stored
+ * and this changes none of them.
+ */
+export async function retryNotificationDelivery(
+  notificationId: string,
+  subscriptionId: string,
+): Promise<Outcome<AdminPushDeliveryView>> {
+  return authorizedWrite<AdminPushDeliveryView>(
+    `/admin/notifications/${encodeURIComponent(notificationId)}/deliveries/` +
+      `${encodeURIComponent(subscriptionId)}/retry`,
+    {},
+  );
+}

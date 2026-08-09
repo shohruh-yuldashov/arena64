@@ -25,7 +25,7 @@ import pytest
 
 from app.core.exceptions import PermissionDeniedError
 from app.core.identifiers import generate_uuid7
-from app.modules.admin.application.services import AdminRoleService
+from app.modules.admin.application.services import AdminRoleService, AuditRecorder
 from app.modules.admin.domain.exceptions import (
     AlreadyGranted,
     LastAdministrator,
@@ -34,6 +34,7 @@ from app.modules.admin.domain.exceptions import (
 )
 from app.modules.admin.domain.roles import AdminRole, RoleAssignment
 from app.modules.admin.presentation.dependencies import require_admin
+from tests.fakes.admin_audit import InMemoryAuditEntries
 from tests.fakes.presence_redis import MovableClock
 
 NOW = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
@@ -116,9 +117,18 @@ class StubProfiles:
         )
 
 
-def _service(assignments: InMemoryRoleAssignments) -> AdminRoleService:
+def _service(
+    assignments: InMemoryRoleAssignments, entries: InMemoryAuditEntries | None = None
+) -> AdminRoleService:
+    """The real service, with a real recorder over in-memory storage.
+
+    The recorder is not stubbed: A64-024.8 made auditing part of what
+    granting *is*, so a service assembled without one would be testing a
+    configuration that does not exist anywhere.
+    """
     return AdminRoleService(
         assignments=assignments,
+        audit=AuditRecorder(entries=entries or InMemoryAuditEntries(), clock=MovableClock(NOW)),
         unit_of_work=NullUnitOfWork(),  # type: ignore[arg-type]
         clock=MovableClock(NOW),
     )
@@ -178,7 +188,7 @@ class TestTheAuthorizationDecision:
         admitted = await require_admin(identity, StubProfiles(), service)  # type: ignore[arg-type]
         assert admitted.id == admin
 
-        await service.revoke(account_id=admin, role=AdminRole.ADMIN)
+        await service.revoke(account_id=admin, role=AdminRole.ADMIN, revoked_by=granter)
 
         with pytest.raises(PermissionDeniedError):
             await require_admin(identity, StubProfiles(), service)  # type: ignore[arg-type]
@@ -268,16 +278,16 @@ class TestGrantingAndRevoking:
         await service.bootstrap(account_id=first, role=AdminRole.ADMIN)
 
         with pytest.raises(LastAdministrator):
-            await service.revoke(account_id=first, role=AdminRole.ADMIN)
+            await service.revoke(account_id=first, role=AdminRole.ADMIN, revoked_by=second)
 
         await service.grant(account_id=second, role=AdminRole.ADMIN, granted_by=first)
-        revoked = await service.revoke(account_id=first, role=AdminRole.ADMIN)
+        revoked = await service.revoke(account_id=first, role=AdminRole.ADMIN, revoked_by=second)
         assert not revoked.is_live
 
         # And revoking what is not held is refused rather than silently
         # succeeding — a no-op here would hide a typo'd account id.
         with pytest.raises(NotGranted):
-            await service.revoke(account_id=first, role=AdminRole.ADMIN)
+            await service.revoke(account_id=first, role=AdminRole.ADMIN, revoked_by=second)
 
 
 class TestTheBoundaryIsStructural:

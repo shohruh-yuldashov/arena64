@@ -41,6 +41,21 @@ Note that this does not stop an administrator granting a *second* account
 they control — nothing can, and that is not this check's job. What it stops
 is the escalation path where holding the ability to call `grant` is itself
 enough to acquire the role.
+
+## Every grant and revocation is audited, in the same transaction
+
+A64-024.8. `admin.role.grant` and `admin.role.revoke` are the two privileged
+mutations this service performs, and each writes an `admin.audit_entry`
+**inside the unit of work that writes the grant** — so the row and its
+entry commit together, or neither does. An action with no entry and an entry
+with no action are equally useless to somebody reconstructing what happened,
+and atomicity is what makes both impossible rather than unlikely.
+
+The actor is `granted_by` for an ordinary grant and the account whose grant
+is ending for a revocation — never anything a client supplied, because this
+service never sees a request. `bootstrap` records an **operator** entry with
+no account, which is the honest answer for the one grant made from a shell
+before any administrator exists.
 """
 
 import logging
@@ -51,6 +66,8 @@ from app.core.clock import Clock
 from app.core.identifiers import generate_uuid7
 from app.core.unit_of_work import UnitOfWork
 from app.modules.admin.application.ports import RoleAssignmentRepository
+from app.modules.admin.application.services.audit_recorder import AuditRecorder
+from app.modules.admin.domain.audit import AuditAction, AuditSubjectType
 from app.modules.admin.domain.exceptions import (
     AlreadyGranted,
     LastAdministrator,
@@ -69,10 +86,12 @@ class AdminRoleService:
         self,
         *,
         assignments: RoleAssignmentRepository,
+        audit: AuditRecorder,
         unit_of_work: UnitOfWork,
         clock: Clock,
     ) -> None:
         self._assignments = assignments
+        self._audit = audit
         self._unit_of_work = unit_of_work
         self._clock = clock
 
@@ -136,8 +155,10 @@ class AdminRoleService:
 
         return await self._record(account_id=account_id, role=role, granted_by=None)
 
-    async def revoke(self, *, account_id: UUID, role: AdminRole) -> RoleAssignment:
-        """Ends a live grant.
+    async def revoke(
+        self, *, account_id: UUID, role: AdminRole, revoked_by: UUID | None
+    ) -> RoleAssignment:
+        """Ends a live grant, on behalf of `revoked_by`.
 
         Raises `NotGranted` when there is nothing live to revoke, and
         `LastAdministrator` when this would leave the platform with no
@@ -147,6 +168,17 @@ class AdminRoleService:
 
         The check is deliberately on `ADMIN` rather than on `role`: a future
         narrower role may legitimately fall to zero holders.
+
+        `revoked_by` is **required but nullable**, which is not the same as
+        optional: a caller has to state who is ending the grant, and `None`
+        is the explicit claim "an operator process, with no account behind
+        it". A64-024.8 makes that distinction visible in the trail
+        (`actor_type`), so a revocation made from a shell reads as one
+        rather than as an anonymous gap.
+
+        Unlike `grant`, an unattributed revocation carries no escalation
+        risk — it removes authority rather than conferring it — so this
+        does not need `bootstrap`'s separate-method treatment.
         """
         assignment = await self._assignments.live_for(account_id, role)
         if assignment is None:
@@ -162,10 +194,24 @@ class AdminRoleService:
 
         async with self._unit_of_work:
             revoked = await self._assignments.revoke(assignment.revoke(at=self._clock.now()))
+            # Typed slices, chosen field by field (§8). The role that ended
+            # and when it had begun is what a reader needs; a serialised
+            # grant object would carry whatever the row gains next, forever,
+            # in a table nobody may delete from.
+            await self._audit_action(
+                action=AuditAction.ROLE_REVOKED,
+                actor_id=revoked_by,
+                subject_id=account_id,
+                before={"role": role.value, "granted_at": assignment.granted_at.isoformat()},
+                after={
+                    "role": role.value,
+                    "revoked_at": revoked.revoked_at.isoformat() if revoked.revoked_at else None,
+                },
+            )
 
-        # `INFO` and attributable: A64-024.8 will make this an `audit_entry`,
-        # and until then the log is the record. No email, no username — the
-        # account id is the platform's own opaque reference (DM-06).
+        # The log line stays and is not the record — see `AuditRecorder`. No
+        # email, no username: the account id is the platform's own opaque
+        # reference (DM-06).
         logger.info(
             "admin_role_revoked",
             extra={"account_id": str(account_id), "role": role.value},
@@ -186,6 +232,16 @@ class AdminRoleService:
 
         async with self._unit_of_work:
             stored = await self._assignments.add(assignment)
+            await self._audit_action(
+                action=AuditAction.ROLE_GRANTED,
+                actor_id=granted_by,
+                subject_id=account_id,
+                # `before` stays empty: the account held nothing, and an
+                # empty object says that more plainly than a fabricated
+                # `{"role": null}` would.
+                before={},
+                after={"role": role.value, "granted_at": assignment.granted_at.isoformat()},
+            )
 
         logger.info(
             "admin_role_granted",
@@ -196,6 +252,41 @@ class AdminRoleService:
             },
         )
         return stored
+
+    async def _audit_action(
+        self,
+        *,
+        action: AuditAction,
+        actor_id: UUID | None,
+        subject_id: UUID,
+        before: dict[str, object],
+        after: dict[str, object],
+    ) -> None:
+        """Records one privileged mutation, choosing the actor's *kind*.
+
+        The branch is the whole method. An account behind the action makes
+        it an administrator entry; no account makes it an operator entry
+        with `actor_id` null — never a placeholder id, because a reader
+        could not tell that apart from a real grant by that account.
+        """
+        if actor_id is None:
+            await self._audit.record_operator(
+                action=action,
+                subject_type=AuditSubjectType.ACCOUNT,
+                subject_ref=str(subject_id),
+                before=before,
+                after=after,
+            )
+            return
+
+        await self._audit.record_administrator(
+            actor_id=actor_id,
+            action=action,
+            subject_type=AuditSubjectType.ACCOUNT,
+            subject_ref=str(subject_id),
+            before=before,
+            after=after,
+        )
 
 
 __all__ = ["AdminRoleService"]

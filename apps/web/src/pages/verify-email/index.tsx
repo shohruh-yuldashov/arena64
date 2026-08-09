@@ -185,7 +185,7 @@ function CodeVerification() {
   if (verified) {
     return (
       <AuthShell title={t("auth.verifyEmail.verifiedTitle")} footer={<ToLogin />}>
-        <FormStatus>{t("auth.verifyEmail.verifiedBody")}</FormStatus>
+        <FormStatus tone="success">{t("auth.verifyEmail.verifiedBody")}</FormStatus>
       </AuthShell>
     );
   }

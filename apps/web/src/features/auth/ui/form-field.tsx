@@ -1,4 +1,4 @@
-import { type ComponentProps, useId } from "react";
+import { type ComponentProps, type ReactNode, useId } from "react";
 
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "@/features/auth/schemas";
 import { useTranslation } from "@/shared/i18n";
@@ -30,12 +30,22 @@ export function FormField({
   label,
   error,
   description,
+  trailing,
   ...props
 }: ComponentProps<typeof Input> & {
   label: string;
   /** A translation key's resolved text, or `undefined` when valid. */
   error?: string | undefined;
   description?: string | undefined;
+  /**
+   * A control inside the field's trailing edge — the password toggle, and
+   * so far only that.
+   *
+   * A slot rather than a second component: the four ids above have to be
+   * generated in one place or they stop agreeing, and a `PasswordField`
+   * that copied them would be the fifth chance to get one wrong.
+   */
+  trailing?: ReactNode;
 }) {
   const id = useId();
   const errorId = `${id}-error`;
@@ -51,12 +61,18 @@ export function FormField({
       <label htmlFor={id} className="text-sm font-medium">
         {label}
       </label>
-      <Input
-        id={id}
-        aria-invalid={error !== undefined}
-        {...(describedBy !== undefined ? { "aria-describedby": describedBy } : {})}
-        {...props}
-      />
+      <div className="relative">
+        <Input
+          id={id}
+          aria-invalid={error !== undefined}
+          {...(describedBy !== undefined ? { "aria-describedby": describedBy } : {})}
+          {...props}
+          className={trailing !== undefined ? "pr-12" : undefined}
+        />
+        {trailing !== undefined && (
+          <div className="absolute inset-y-0 right-0 flex items-center pr-1">{trailing}</div>
+        )}
+      </div>
       {description !== undefined && (
         <p id={descriptionId} className="text-muted-foreground text-xs">
           {description}

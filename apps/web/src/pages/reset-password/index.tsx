@@ -6,8 +6,9 @@ import { useForm } from "react-hook-form";
 import { resetPassword } from "@/features/auth/api";
 import { messageKeyFor } from "@/features/auth/model/error-messages";
 import { resetPasswordSchema, type ResetPasswordValues } from "@/features/auth/schemas";
-import { FormField, usePasswordHint } from "@/features/auth/ui/form-field";
+import { usePasswordHint } from "@/features/auth/ui/form-field";
 import { FormError, FormStatus } from "@/features/auth/ui/form-status";
+import { PasswordField } from "@/features/auth/ui/password-field";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { Button, Spinner } from "@/shared/ui";
 import { AuthShell } from "@/widgets/auth-shell";
@@ -71,7 +72,7 @@ export default function ResetPasswordPage() {
   if (done) {
     return (
       <AuthShell title={t("auth.resetPassword.successTitle")}>
-        <FormStatus>{t("auth.resetPassword.successBody")}</FormStatus>
+        <FormStatus tone="success">{t("auth.resetPassword.successBody")}</FormStatus>
         <Button onClick={() => void navigate({ to: "/login", replace: true })}>
           {t("auth.login.submit")}
         </Button>
@@ -91,9 +92,8 @@ export default function ResetPasswordPage() {
       >
         <FormError messageKey={failure} />
 
-        <FormField
+        <PasswordField
           label={t("auth.common.password")}
-          type="password"
           autoComplete="new-password"
           autoFocus
           description={passwordHint}
@@ -101,9 +101,8 @@ export default function ResetPasswordPage() {
           {...register("password")}
         />
 
-        <FormField
+        <PasswordField
           label={t("auth.common.confirmPassword")}
-          type="password"
           autoComplete="new-password"
           error={
             errors.passwordConfirmation

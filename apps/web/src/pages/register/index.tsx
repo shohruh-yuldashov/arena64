@@ -8,6 +8,7 @@ import { useSession } from "@/features/auth/model/session-provider";
 import { registerSchema, type RegisterValues } from "@/features/auth/schemas";
 import { FormField, usePasswordHint } from "@/features/auth/ui/form-field";
 import { FormError } from "@/features/auth/ui/form-status";
+import { PasswordField } from "@/features/auth/ui/password-field";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { Button, Spinner } from "@/shared/ui";
 import { AuthShell } from "@/widgets/auth-shell";
@@ -117,9 +118,8 @@ export default function RegisterPage() {
           {...register("email")}
         />
 
-        <FormField
+        <PasswordField
           label={t("auth.common.password")}
-          type="password"
           autoComplete="new-password"
           // The policy is shown before submission rather than discovered
           // one 422 at a time.
@@ -128,9 +128,8 @@ export default function RegisterPage() {
           {...register("password")}
         />
 
-        <FormField
+        <PasswordField
           label={t("auth.common.confirmPassword")}
-          type="password"
           autoComplete="new-password"
           error={
             errors.passwordConfirmation

@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef } from "react";
 
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
+import { Notice } from "@/shared/ui";
 
 /**
  * The form-level error, announced and focused.
@@ -16,9 +17,17 @@ import { type TranslationKey, useTranslation } from "@/shared/i18n";
  * putting it in the tab order, so keyboard users are not made to tab past
  * an empty region on every subsequent pass.
  *
- * `role="alert"` is an assertive live region: it interrupts, which is
- * correct for "your submission failed" and would be wrong for a status
- * update. `FormStatus` below uses `role="status"`, which waits for a pause.
+ * ## The tint is `Notice`'s now — A64-025.4 §12
+ *
+ * The border, the background and the assertive role came from a class
+ * string written here, and A64-025.2 then shipped `Notice` with exactly
+ * those four tones. Two components disagreeing about what a failure looks
+ * like is the duplication that task existed to end, and this one predates
+ * it — so the shape comes from the shared primitive and what stays here is
+ * the one thing `Notice` does not do: move focus.
+ *
+ * `Notice` picks `role="alert"` from `tone="error"` on its own, so nothing
+ * here states it.
  */
 export function FormError({ messageKey }: { messageKey: TranslationKey | null }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -33,25 +42,29 @@ export function FormError({ messageKey }: { messageKey: TranslationKey | null })
   if (messageKey === null) return null;
 
   return (
-    <div
-      ref={ref}
-      role="alert"
-      tabIndex={-1}
-      className="border-destructive/50 bg-destructive/10 text-destructive rounded-md border px-3 py-2 text-sm font-medium"
-    >
+    <Notice ref={ref} tone="error" tabIndex={-1} className="font-medium">
       {t(messageKey)}
-    </div>
+    </Notice>
   );
 }
 
-/** A non-interrupting confirmation — "we sent the link", "that worked". */
-export function FormStatus({ children }: { children: ReactNode }) {
-  return (
-    <div
-      role="status"
-      className="border-border bg-muted/40 text-foreground rounded-md border px-3 py-2 text-sm"
-    >
-      {children}
-    </div>
-  );
+/**
+ * A non-interrupting confirmation — "we sent the link", "that worked".
+ *
+ * Either tone is `role="status"`: it waits for a pause rather than
+ * interrupting, because nothing here has failed.
+ *
+ * `success` is for the end of a journey — the address is verified, the
+ * password is changed. `info` is for everything still in progress, which is
+ * most of them: "we sent the link" is not an outcome, it is a step. Marking
+ * both the same way is how a person stops noticing which is which.
+ */
+export function FormStatus({
+  tone = "info",
+  children,
+}: {
+  tone?: "info" | "success";
+  children: ReactNode;
+}) {
+  return <Notice tone={tone}>{children}</Notice>;
 }

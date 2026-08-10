@@ -35,8 +35,9 @@ from app.modules.game.application.services.match_replay_service import (
     PersistedMatchReplay,
 )
 from app.modules.game.domain.clock import ClockState
-from app.modules.game.domain.match_record import MatchRecord
+from app.modules.game.domain.match_record import MatchRecord, SeatRating
 from app.modules.game.domain.replay import ReplayEngine
+from app.modules.game.public.matches import SeatRating as PublishedSeatRating
 from app.modules.game.public.moves import ClockView
 from app.modules.game.public.snapshots import DrawOfferState, MatchSnapshot, PlacedPiece
 
@@ -91,6 +92,10 @@ class GameMatchSnapshot:
             rated=record.rated,
             light_player_id=record.light.player_id,
             dark_player_id=record.dark.player_id,
+            # From the record already read above — no second query and no
+            # read of `rating`. See `_published_rating`.
+            light_rating=_published_rating(record.light.rating),
+            dark_rating=_published_rating(record.dark.rating),
             clock=_clock_view(record.clock, at=observed_at),
             draw_offer=_draw_offer_state(record),
             # Both sides, because a snapshot has no viewer — see
@@ -109,6 +114,30 @@ class GameMatchSnapshot:
             winner=result.winner if result is not None else None,
             observed_at=observed_at,
         )
+
+
+def _published_rating(seat: SeatRating | None) -> PublishedSeatRating | None:
+    """The aggregate's seat snapshot as the published one — A64-025.6B.
+
+    The inverse of `match_creation_service._seat_rating`, and it exists for
+    the same reason: two identical shapes, one on the port and one in the
+    domain, so neither side holds a type the other decides. The conversion
+    is the boundary.
+
+    Nothing is recomputed here. `is_provisional` in particular is the flag
+    captured at creation rather than a fresh comparison against a threshold
+    — the threshold is `rating`'s and may have moved since.
+    """
+    if seat is None:
+        return None
+    return PublishedSeatRating(
+        value=seat.value,
+        deviation=seat.deviation,
+        volatility=seat.volatility,
+        games_played=seat.games_played,
+        is_provisional=seat.is_provisional,
+        speed_class=seat.speed_class,
+    )
 
 
 def _draw_offer_state(record: MatchRecord) -> DrawOfferState | None:

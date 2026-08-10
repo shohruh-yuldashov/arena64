@@ -36,6 +36,7 @@ export type {
   QuickMessageReceivedPayload,
   Rank,
   ResultPayload,
+  SeatRatingPayload,
   Side,
   SnapshotPayload,
 } from "./protocol";

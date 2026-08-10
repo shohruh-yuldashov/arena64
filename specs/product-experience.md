@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6 game room |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-08-10 — A64-025.6A, the game room's visual hardening |
+| **Last updated** | 2026-08-10 — A64-025.6B, seat ratings on the board |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -998,12 +998,10 @@ match card or a leaderboard row holds an id and needs a handle to render",
 and it carries no email, no account state and no storage key. So the seats
 show who is playing with **no contract change**.
 
-Ratings are not shown, and that is a deferral rather than an oversight: they
-live on `GET /profiles/{username}`, which takes a different key and is
-governed by viewer-relative privacy settings. Two privacy-governed round
-trips per player during a bullet game is the wrong trade; a snapshot that
-carried the seat ratings would be the right fix and is a contract change
-nobody has asked for yet.
+Ratings were not shown here, and that deferral is **closed by A64-025.6B**
+(§14): the snapshot carries the seat ratings, so the right fix was taken
+rather than the second privacy-governed round trip per player that
+`GET /profiles/{username}` would have cost.
 
 ### 13.3 Clock placement — OQ-3, closed
 
@@ -1056,7 +1054,7 @@ always wanted them and is now literally true.
 
 | Gap | Why |
 | --- | --- |
-| Seat ratings | Needs either a second privacy-governed request per player mid-game, or the snapshot to carry them. A contract change nobody has asked for |
+| ~~Seat ratings~~ | **Closed by A64-025.6B** — the snapshot carries them. §14 |
 | Captured / material summary | The client holds a position, not a capture history. Deriving "captured so far" from the opening position and the current one is arithmetic the domain does not publish, and a second truth source next to an authoritative board is exactly what §2 forbids |
 | Control-relative low-time threshold | §13.5 — needs the time control on the snapshot |
 
@@ -1124,8 +1122,85 @@ dark, 768 light, 360 light and dark, plus the result surface at 360 and
 
 **Deferred to A64-025.6B, with the reason.** Seat ratings. The data exists
 and is already persisted — `game.infrastructure.models` stores
-`light_rating_value` and its pair at match creation, and `rating.public`
-publishes a `RatingReader` — so the gap is only that the realtime snapshot
-does not carry them. Closing it is a protocol extension plus generated types
-plus backend tests, which is its own task rather than a corner of a visual
-one. Nothing in this task guessed a rating or fetched one per player.
+`light_rating_value` and its pair at match creation — so the gap was only
+that the realtime snapshot did not carry them. Closing it is a protocol
+extension plus backend tests, which is its own task rather than a corner of
+a visual one. Nothing in this task guessed a rating or fetched one per
+player. **Closed by §14.**
+
+## 14. Seat ratings on the board — A64-025.6B
+
+### 14.1 The gap, and which of the two fixes was taken
+
+A seat named a player and showed a clock. It did not say how strong they
+are, which is the fact a player wants before the first move and the one
+every comparable product shows. §13.2 left two ways to close it:
+
+| Option | Cost |
+| --- | --- |
+| `GET /profiles/{username}` per player | A second request each, on a different key, governed by viewer-relative privacy, on the most latency-sensitive screen in the product |
+| The snapshot carries the seat ratings | A protocol extension. No new query at all |
+
+The second was taken. `game` already stores what each seat rated when the
+match was created (MT-4), the reconnect path already loads that row, and
+`GameMatchSnapshot` already had the record in hand — so the values reached
+the wire without a single additional read.
+
+### 14.2 It is a match fact, not a profile read
+
+The distinction is the whole design, and it is why this is not the privacy
+shortcut it could look like:
+
+- **It is `game`'s own column**, not a read of `rating`. No module boundary
+  moved, and `rating.public.RatingReader` is not involved.
+- **It is the rating at match creation**, frozen. It does not answer "what
+  do they rate now", and a client must not present it as though it does.
+  PR-3 already depends on that distinction for the rating calculation.
+- **A rating is not privacy-governed.** UP-5: profile visibility never
+  hides rated results from the opponent of those results, and
+  `show_statistics` deliberately does not cover the rating itself. So
+  nothing crosses that a viewer could not already see.
+
+Spectators get it too, in the base projection, for the reason `rated` is
+there: an audience that cannot tell how strong the players are is missing
+what makes a game worth watching.
+
+### 14.3 What crosses, and what stays behind
+
+`ratings`, keyed by side like `participants`, each seat either an object or
+`null`:
+
+    ratings: { light: { value, is_provisional } | null, dark: … }
+
+Two of the six stored fields. The Glicko-2 deviation and volatility, the
+game count and the speed class are calculation inputs and a rating key — a
+seat beside a board renders a number and whether it is settled. Publishing
+the rest would be publishing bookkeeping, which §9 already refused for draw
+cooldowns.
+
+`value` crosses as the **stored float**. Rounding is a rendering decision,
+and a server that rounded would be making it for every client that ever
+reads the frame.
+
+`null` per seat means *this match carries no rating* — every match created
+before A64-017.2. The seat then shows no number and no placeholder: a dash
+beside a name reads as a load that never finishes.
+
+### 14.4 Two compatibility rules
+
+**The field is optional on the wire.** A client that reconnects to a server
+mid-rollout applies the snapshot rather than discarding a frame that is
+valid in every other respect — during a deploy it is the only frame on
+offer, and rejecting it would leave a live game with no board.
+
+**A provisional rating is marked, not hidden.** `1487?`, with the word
+"provisional" for a screen reader, because the mark is shorthand and
+"question mark" is not what it means.
+
+### 14.5 One test changed rather than one test weakened
+
+`test_gateway_connection.py` asserted `"rating" not in` the snapshot
+payload. That assertion encoded the requirement this task changes, so it was
+replaced by a positive one plus the half that still holds: the calculation
+fields and the rating key are asserted **absent**, and handles remain absent
+too.

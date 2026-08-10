@@ -151,6 +151,7 @@ export default function GamePage() {
           <PlayerSeat
             side={far}
             identity={identities.get(state.participants?.[far] ?? "")}
+            rating={state.ratings?.[far] ?? null}
             ms={far === "light" ? clock.lightMs : clock.darkMs}
             active={clock.activeSide === far}
             awaiting={clock.awaitingServer}
@@ -179,6 +180,7 @@ export default function GamePage() {
           <PlayerSeat
             side={near}
             identity={identities.get(state.participants?.[near] ?? "")}
+            rating={state.ratings?.[near] ?? null}
             ms={near === "light" ? clock.lightMs : clock.darkMs}
             active={clock.activeSide === near}
             awaiting={clock.awaitingServer}

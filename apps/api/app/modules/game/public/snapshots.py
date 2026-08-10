@@ -33,9 +33,15 @@ the durable log answers that and is unbounded, so putting it here would make
 the reconnect payload grow with the length of the game, which is precisely
 what a snapshot exists to avoid.
 
-No opponent profile, no handles, no ratings. Those are `users`' and are
-composed by whoever renders them; a snapshot that carried them would make
-`game` depend on a module it has no business knowing about.
+No opponent profile and no handles. Those are `users`' and are composed by
+whoever renders them; a snapshot that carried them would make `game` depend
+on a module it has no business knowing about.
+
+The **seat ratings are carried** — A64-025.6B — and they are not the
+exception that argument would forbid. They are `game`'s own columns, written
+once at creation and never refreshed, so publishing them reads no other
+module and cannot go stale. What a player rates *now* is a different
+question with a different owner, and this does not answer it.
 """
 
 from dataclasses import dataclass
@@ -47,6 +53,7 @@ from app.modules.engine import PlayerSide
 from app.modules.game.domain.match_record import MatchRecordStatus
 from app.modules.game.domain.result import MatchOutcome, TerminationReason
 from app.modules.game.domain.variants import ProductVariant
+from app.modules.game.public.matches import SeatRating
 from app.modules.game.public.moves import ClockView
 
 
@@ -123,6 +130,25 @@ class MatchSnapshot:
 
     light_player_id: UUID
     dark_player_id: UUID
+
+    light_rating: SeatRating | None
+    dark_rating: SeatRating | None
+    """What each seat rated **when the match was created** — A64-025.6B.
+
+    The stored seat snapshot, straight from the match row, not a read of
+    what either player rates now. `SeatRating` says why it is never
+    refreshed: it is a fact about the past, and answering "what do they
+    rate" with it would be as wrong as answering this with that.
+
+    `None` for either seat when the match carries no rating — every match
+    created before A64-017.2, and any created without one since. Null means
+    "this match has none", never "we could not look it up", because there is
+    no lookup to fail.
+
+    **Spectator-safe**, so it is in the base projection like `rated`: a
+    rating is the platform's public statement of strength and is
+    deliberately outside the profile privacy flags (UP-5).
+    """
 
     clock: ClockView | None
     """The authoritative clock, or `None` for an untimed match — §7.

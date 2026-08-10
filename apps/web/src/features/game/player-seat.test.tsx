@@ -26,6 +26,7 @@ function seat(overrides: Partial<Parameters<typeof PlayerSeat>[0]> = {}) {
     <PlayerSeat
       side="light"
       identity={IDENTITY}
+      rating={null}
       ms={60_000}
       active={false}
       awaiting={false}
@@ -93,5 +94,32 @@ describe("the player seat", () => {
   it("marks the viewer's own seat", () => {
     const { container } = seat({ isViewer: true });
     expect(within(container).getByText(/· you|· siz|· вы/i)).toBeVisible();
+  });
+
+  it("rounds the seat rating the server sent as a float", () => {
+    // A64-025.6B. The server sends the stored value precisely so this
+    // decision is the client's; a seat showing `1487.5` would be exposing
+    // Glicko-2 internals to a player mid-game.
+    const { container } = seat({ rating: { value: 1487.5, is_provisional: false } });
+    expect(within(container).getByText("1488")).toBeVisible();
+  });
+
+  it("qualifies a provisional rating in words, not only with a mark", () => {
+    // The "?" is shorthand a sighted player learns; "question mark" is not
+    // what it means, so the word is what a screen reader gets.
+    const { container } = seat({ rating: { value: 1200, is_provisional: true } });
+    expect(
+      within(container).getByText(/provisional|dastlabki|предварительный/i),
+    ).toBeInTheDocument();
+  });
+
+  it("shows nothing at all when the match carries no rating", () => {
+    // Every match created before ratings existed has none. A placeholder
+    // would read as a load that never finishes.
+    const { container } = seat({ rating: null });
+    expect(container.textContent).not.toMatch(/\d{4}/);
+    expect(
+      within(container).queryByText(/provisional|dastlabki|предварительный/i),
+    ).not.toBeInTheDocument();
   });
 });

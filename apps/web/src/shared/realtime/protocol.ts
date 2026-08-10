@@ -368,6 +368,23 @@ export interface QuickMessageReceivedPayload {
   sent_at: string;
 }
 
+/**
+ * One seat's rating, as of match creation — A64-025.6B.
+ *
+ * Two fields of the six the server stores. The Glicko-2 deviation and
+ * volatility, the game count and the speed class are calculation inputs and
+ * a rating key; a seat beside a board renders a number and whether it is
+ * settled.
+ *
+ * `value` arrives as the stored float. Rounding is this client's decision,
+ * which is why the server does not make it.
+ */
+export interface SeatRatingPayload {
+  value: number;
+  /** Too few games for the number to mean much yet — marked, never hidden. */
+  is_provisional: boolean;
+}
+
 export interface CommandRejectedPayload {
   code: GatewayErrorCode;
   /** Server prose. Logged, never rendered — §13 forbids branching on it. */
@@ -381,8 +398,13 @@ export interface CommandRejectedPayload {
  * in step. **Replacement is authoritative**: a snapshot is never merged
  * into what the client already had.
  *
- * Carries no player handles and no ratings — those are `users`' and
- * `rating`'s, and the gateway deliberately does not reach for them.
+ * Carries no player handles — those are `users`', and the gateway
+ * deliberately does not reach for them.
+ *
+ * It does carry the **seat ratings** (A64-025.6B), and that is not the same
+ * reach: they are `game`'s own columns, written when the match was created
+ * and never refreshed, so the gateway reads nothing it did not already
+ * hold. See `ratings` on what that means for what they may be used for.
  */
 export interface SnapshotPayload {
   match_id: string;
@@ -396,6 +418,22 @@ export interface SnapshotPayload {
   fingerprint: string;
   pieces: PlacedPiece[];
   participants: { light: string; dark: string };
+  /**
+   * What each seat rated **when this match was created** — A64-025.6B.
+   *
+   * Keyed by side, like `participants`. A seat is `null` when the match
+   * carries no rating, which is every match created before the platform
+   * stored them — render nothing, never a default.
+   *
+   * **Not a current rating.** It does not move when the match ends, and a
+   * client must not present it as what the player rates now. The rating
+   * consequence of *this* game arrives separately, after completion.
+   *
+   * Optional on the wire, so a client that reconnects to a server
+   * mid-rollout still applies the snapshot rather than discarding a frame
+   * that is valid in every other respect.
+   */
+  ratings?: { light: SeatRatingPayload | null; dark: SeatRatingPayload | null };
   /** Whether finishing this match moves a rating — A64-020.5D §14. */
   rated: boolean;
   clock: ClockPayload | null;

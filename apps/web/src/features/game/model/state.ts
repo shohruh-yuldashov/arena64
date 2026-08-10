@@ -9,6 +9,7 @@ import type {
   GameCompletedPayload,
   MovePayload,
   ResultPayload,
+  SeatRatingPayload,
   Side,
   SnapshotPayload,
 } from "@/shared/realtime";
@@ -117,6 +118,14 @@ export interface GameState {
   sideToMove: Side | null;
   fingerprint: string | null;
   participants: { light: string; dark: string } | null;
+  /**
+   * What each seat rated when the match was created — A64-025.6B.
+   *
+   * `null` until a snapshot names them, and per seat `null` for a match
+   * that carries none. Only the snapshot writes this: a seat rating is
+   * fixed at creation, so no later frame can move it and none tries to.
+   */
+  ratings: { light: SeatRatingPayload | null; dark: SeatRatingPayload | null } | null;
   clock: ClockPayload | null;
   result: ResultPayload | null;
   /** The squares of the move just played, for highlighting. */
@@ -158,6 +167,7 @@ export function initialState(matchId: string): GameState {
     sideToMove: null,
     fingerprint: null,
     participants: null,
+    ratings: null,
     clock: null,
     result: null,
     lastMove: null,
@@ -228,6 +238,9 @@ export function reduce(state: GameState, action: GameAction): GameState {
         sideToMove: snapshot.side_to_move,
         fingerprint: snapshot.fingerprint,
         participants: snapshot.participants,
+        // Absent from a server that predates A64-025.6B, and the seats
+        // simply render without a number then.
+        ratings: snapshot.ratings ?? null,
         clock: snapshot.clock,
         result: snapshot.result,
         engineVersion: snapshot.engine_version,

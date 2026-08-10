@@ -522,7 +522,8 @@
     "players": {
       "you": "You",
       "opponent": "Opponent",
-      "unknown": "Unknown player"
+      "unknown": "Unknown player",
+      "provisional": "provisional rating"
     },
     "result": {
       "title": "Game over",

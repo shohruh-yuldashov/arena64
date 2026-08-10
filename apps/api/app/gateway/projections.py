@@ -14,15 +14,19 @@ which is what a transport adapter is for.
 
 ## What never crosses
 
-No handles, no ratings, no email, no connection ids and no node identity.
-Those are other modules' or are internal topology, and a snapshot that grew
-them would make `game` depend on a module it has no business knowing about.
+No handles, no email, no connection ids and no node identity. Those are
+other modules' or are internal topology, and a snapshot that grew them would
+make `game` depend on a module it has no business knowing about.
+
+The seat ratings do cross — A64-025.6B. They are not a read of `rating`:
+they are `game`'s own columns, captured when the match was created and
+never refreshed, so this projection reaches no further than it already did.
 """
 
 from typing import Any
 from uuid import UUID
 
-from app.modules.game.public import DrawOfferState, DrawOfferView, MatchSnapshot
+from app.modules.game.public import DrawOfferState, DrawOfferView, MatchSnapshot, SeatRating
 
 
 def spectator_snapshot_payload(snapshot: MatchSnapshot) -> dict[str, Any]:
@@ -139,8 +143,9 @@ def _base_payload(snapshot: MatchSnapshot) -> dict[str, Any]:
     about this protocol. The gateway is where the two vocabularies meet,
     which is what a transport adapter is for.
 
-    Carries **no player handles and no ratings**: those are `users`' and are
-    composed by whoever renders them.
+    Carries **no player handles**: those are `users`' and are composed by
+    whoever renders them. The seat ratings are `game`'s own — see this
+    module's docstring and `_ratings_payload`.
     """
     return {
         "match_id": str(snapshot.match_id),
@@ -159,10 +164,40 @@ def _base_payload(snapshot: MatchSnapshot) -> dict[str, Any]:
             "light": str(snapshot.light_player_id),
             "dark": str(snapshot.dark_player_id),
         },
+        "ratings": _ratings_payload(snapshot),
         "clock": _clock_payload(snapshot),
         "result": _result_payload(snapshot),
         "server_time": snapshot.observed_at.isoformat(),
     }
+
+
+def _ratings_payload(snapshot: MatchSnapshot) -> dict[str, Any]:
+    """What each seat rated when the match was created — A64-025.6B.
+
+    Keyed by side, like `participants`, so a client that knows its seat
+    reads both the same way. `None` per seat for a match that carries no
+    rating, which is every match created before A64-017.2.
+
+    **Two fields of the six.** The Glicko-2 deviation and volatility, the
+    game count and the speed class are calculation inputs and a rating key
+    — the seat beside a board renders a number and whether it is settled.
+    Publishing the rest would be publishing bookkeeping, and the argument
+    §9 makes about draw cooldowns applies unchanged.
+
+    The value crosses as the stored float. Rounding is a rendering
+    decision, and a server that rounded would be deciding it for every
+    client that will ever read this frame.
+    """
+    return {
+        "light": _seat_rating_payload(snapshot.light_rating),
+        "dark": _seat_rating_payload(snapshot.dark_rating),
+    }
+
+
+def _seat_rating_payload(rating: SeatRating | None) -> dict[str, Any] | None:
+    if rating is None:
+        return None
+    return {"value": rating.value, "is_provisional": rating.is_provisional}
 
 
 def _clock_payload(snapshot: MatchSnapshot) -> dict[str, Any] | None:

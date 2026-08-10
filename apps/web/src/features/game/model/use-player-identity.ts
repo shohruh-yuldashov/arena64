@@ -20,12 +20,12 @@ import type { components } from "@/shared/api/generated/schema";
  *
  * ## What it deliberately does not fetch
  *
- * Ratings. They live on `GET /profiles/{username}`, which takes a different
- * key, is governed by the viewer-relative privacy settings, and would be a
- * second request per player on the most latency-sensitive screen in the
- * product. A rating beside a seat is worth having and is not worth two
- * privacy-governed round trips during a bullet game — see
- * `specs/product-experience.md` §13 for the deferral.
+ * Ratings — and since A64-025.6B it does not need to. They arrive on the
+ * snapshot as the seat values the match was created with, which costs no
+ * request at all. Reading them from `GET /profiles/{username}` would have
+ * meant a second privacy-governed round trip per player during a bullet
+ * game, and would have answered a different question: what the player
+ * rates *now*, rather than what they rated when they sat down.
  *
  * ## One query per player, cached across matches
  *

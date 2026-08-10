@@ -80,6 +80,7 @@ from app.modules.game.public import (
     MatchRecordStatus,
     MatchRoster,
     NotYourTurn,
+    SeatRating,
     StaleMatchState,
 )
 from tests.fakes.gateway import (
@@ -299,6 +300,23 @@ def _quick_messages(
         limiter=limiter if limiter is not None else CountingMoveLimiter(allowance=100),
         social_graph=social_graph if social_graph is not None else StubSocialGraph(),
         metrics=RecordingMetrics(),
+    )
+
+
+def _seat_rating(value: float, *, is_provisional: bool) -> SeatRating:
+    """A seat's stored rating — A64-025.6B.
+
+    The four fields the projection does not publish are fixed here, because
+    a test that varied them would be asserting that they stay behind by
+    coincidence rather than by rule.
+    """
+    return SeatRating(
+        value=value,
+        deviation=45.0,
+        volatility=0.06,
+        games_played=30,
+        is_provisional=is_provisional,
+        speed_class="blitz",
     )
 
 
@@ -1502,9 +1520,17 @@ class TestReconnection:
         `server_time` let it correct its skew; a duration would drift by the
         latency it was meant to describe.
 
-        **No handles and no ratings.** Those are `users`' and are composed by
-        whoever renders them — asserted, because a snapshot that grew them
-        would make `game` depend on a module it has no business knowing.
+        **No handles.** Those are `users`' and are composed by whoever
+        renders them — asserted, because a snapshot that grew them would
+        make `game` depend on a module it has no business knowing.
+
+        This asserted "and no ratings" until A64-025.6B, which is the
+        requirement that changed rather than the assertion that was
+        weakened: the seat ratings published here are `game`'s own columns,
+        captured at creation and never refreshed, so nothing reads `rating`
+        and no live value can leak. Asserted positively below, with the
+        bookkeeping fields asserted *absent* — that half of the old rule
+        still holds.
         """
         player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
         rosters = StubMatchRosters()
@@ -1524,6 +1550,8 @@ class TestReconnection:
                 deadline=NOW + timedelta(seconds=42),
                 server_time=NOW,
             ),
+            light_rating=_seat_rating(1487.5, is_provisional=False),
+            dark_rating=_seat_rating(1502.25, is_provisional=True),
         )
 
         tickets.add(VALID_TICKET, player_id)
@@ -1543,7 +1571,58 @@ class TestReconnection:
         assert snapshot.payload["clock"]["deadline"].startswith("2026-")
         assert snapshot.payload["clock"]["server_time"].startswith("2026-")
         assert "handle" not in json.dumps(snapshot.payload)
-        assert "rating" not in json.dumps(snapshot.payload)
+
+        # A64-025.6B. The seat snapshot, per side, as the float it was
+        # stored as — a server that rounded would be deciding rendering for
+        # every client that will ever read this frame.
+        assert snapshot.payload["ratings"]["light"] == {
+            "value": 1487.5,
+            "is_provisional": False,
+        }
+        assert snapshot.payload["ratings"]["dark"] == {
+            "value": 1502.25,
+            "is_provisional": True,
+        }
+        # The calculation inputs and the rating key stay behind: a seat
+        # renders a number and whether it is settled, not bookkeeping.
+        assert "volatility" not in json.dumps(snapshot.payload)
+        assert "deviation" not in json.dumps(snapshot.payload)
+        assert "speed_class" not in json.dumps(snapshot.payload)
+
+    @pytest.mark.asyncio
+    async def test_a_match_created_before_ratings_existed_projects_null_seats(
+        self,
+        tickets: FakeTicketRedeemer,
+        registry: FakeConnectionRegistry,
+        presence: RecordingPresence,
+    ) -> None:
+        """A64-025.6B — the match that carries no rating.
+
+        Every match created before A64-017.2 has none, and a match may be
+        created without one since. The key is present and the seats are
+        `null`, rather than the key being absent: a client reading
+        `ratings.light` gets "this match has none" from one shape, and does
+        not have to distinguish a missing field from an empty one.
+        """
+        player_id, opponent_id, match_id = generate_uuid7(), generate_uuid7(), generate_uuid7()
+        rosters = StubMatchRosters()
+        rosters.add(match_id, light=player_id, dark=opponent_id)
+        rooms = _rooms(rosters)
+
+        snapshots = StubMatchSnapshots()
+        snapshots.add(match_id, light=player_id, dark=opponent_id, sequence=2)
+
+        tickets.add(VALID_TICKET, player_id)
+        socket = FakeGatewaySocket(
+            [_frame("game.resume", channel="game", payload={"match_id": str(match_id)})]
+        )
+
+        await _service(
+            tickets, registry, presence, rooms, resumes=_resumes(rooms, snapshots=snapshots)
+        ).run(socket, ticket=VALID_TICKET)
+
+        snapshot = next(m for m in socket.sent if m.type is MessageType.SNAPSHOT)
+        assert snapshot.payload["ratings"] == {"light": None, "dark": None}
 
     @pytest.mark.asyncio
     async def test_a_player_opening_a_game_nobody_has_moved_in_gets_the_board(
@@ -1784,15 +1863,26 @@ class TestSpectating:
         another frame for.
 
         What crosses is the **same projection a resuming participant gets**
-        — the fingerprint, the placement and the sequence — and what does
-        not is anything about the two players beyond their identifiers. See
-        `app/gateway/projections.py`.
+        — the fingerprint, the placement, the sequence and, since
+        A64-025.6B, the seat ratings. Those are in the base projection for
+        the reason `rated` is: an audience that could not tell how strong
+        the two players are is missing what makes a game worth watching,
+        and a rating is deliberately outside the profile privacy flags
+        (UP-5). What still does not cross is the draw agreement, which the
+        last assertion here holds to. See `app/gateway/projections.py`.
         """
         viewer, light, dark = generate_uuid7(), generate_uuid7(), generate_uuid7()
         match_id = generate_uuid7()
 
         snapshots = StubMatchSnapshots()
-        snapshots.add(match_id, light=light, dark=dark, sequence=4)
+        snapshots.add(
+            match_id,
+            light=light,
+            dark=dark,
+            sequence=4,
+            light_rating=_seat_rating(1610.0, is_provisional=False),
+            dark_rating=_seat_rating(1355.5, is_provisional=True),
+        )
         store = InMemorySpectatorStore()
 
         tickets.add(VALID_TICKET, viewer)
@@ -1827,6 +1917,10 @@ class TestSpectating:
         assert joined.payload["audience"] == 1
         assert joined.payload["sequence"] == 4
         assert joined.payload["fingerprint"] == "fingerprint-4"
+        assert joined.payload["ratings"]["light"] == {"value": 1610.0, "is_provisional": False}
+        assert joined.payload["ratings"]["dark"] == {"value": 1355.5, "is_provisional": True}
+        # Still physically incapable of carrying the negotiation — §9.
+        assert "draw" not in joined.payload
         assert {sub.player_id for sub in store.watching[match_id]} == {viewer}
 
         socket.hang_up()

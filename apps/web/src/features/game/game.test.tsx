@@ -272,6 +272,36 @@ describe("the game state machine", () => {
     expect(over.phase).toBe("completed");
   });
 
+  it("keeps the seat ratings the snapshot named, and survives a server without them", () => {
+    // A64-025.6B. The snapshot is the only writer: a seat rating is fixed
+    // when the match is created, so no later frame can move it.
+    const rated = reduce(initialState("m1"), {
+      type: "snapshot",
+      payload: snapshot({
+        ratings: {
+          light: { value: 1487.5, is_provisional: false },
+          dark: { value: 1355.25, is_provisional: true },
+        },
+      }),
+      viewerId: VIEWER,
+    });
+    expect(rated.ratings?.light).toEqual({ value: 1487.5, is_provisional: false });
+    expect(rated.ratings?.dark?.is_provisional).toBe(true);
+    // A move changes the board, never the seats.
+    expect(reduce(rated, { type: "applied", payload: applied(5) }).ratings).toBe(rated.ratings);
+
+    // A frame from a server that predates the field is still a valid
+    // snapshot — during a rolling deploy it is the only one on offer, and
+    // discarding it would leave the client with no board at all.
+    const older = reduce(initialState("m1"), {
+      type: "snapshot",
+      payload: snapshot(),
+      viewerId: VIEWER,
+    });
+    expect(older.phase).toBe("active");
+    expect(older.ratings).toBeNull();
+  });
+
   it("ignores a duplicate, refuses to move backward, and resyncs on a gap", () => {
     // §17, and the three failures it prevents are all ordinary on a
     // reconnect: the buffer replays frames we already have, out of order, or

@@ -1102,7 +1102,16 @@ changes, it is already under the match row's lock, and it is already what `uq_mo
 serialises on.
 
 Deliberately absent: move history (the durable log answers that and is unbounded), and any
-opponent profile — handles and ratings are `users`', composed by whoever renders them.
+opponent profile — handles are `users`', composed by whoever renders them.
+
+It does carry the **seat ratings** as of match creation (A64-025.6B), under a `ratings` object
+keyed by side, `null` per seat for a match that has none. That is not a read of `rating`: the
+values are `game`'s own columns, written once at creation and never refreshed, so the gateway
+reaches no further than it already did. A rating is also deliberately outside the profile
+privacy flags (UP-5), so nothing that a viewer could not otherwise see crosses here. Two of the
+six stored fields are published — the value and whether it is provisional; the Glicko-2
+deviation and volatility, the game count and the speed class are calculation inputs and stay
+behind.
 
 ### 20.2 The replay buffer
 

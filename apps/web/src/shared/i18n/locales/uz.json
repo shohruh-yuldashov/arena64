@@ -522,7 +522,8 @@
     "players": {
       "you": "Siz",
       "opponent": "Raqib",
-      "unknown": "Noma'lum o'yinchi"
+      "unknown": "Noma'lum o'yinchi",
+      "provisional": "dastlabki reyting"
     },
     "result": {
       "title": "O'yin tugadi",

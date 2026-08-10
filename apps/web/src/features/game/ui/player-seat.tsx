@@ -1,7 +1,7 @@
 import type { PlayerIdentity } from "@/features/game/model/use-player-identity";
 import { useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
-import type { Side } from "@/shared/realtime";
+import type { SeatRatingPayload, Side } from "@/shared/realtime";
 import { Avatar, AvatarFallback, AvatarImage } from "@/shared/ui";
 
 /** Seconds at which the remaining time becomes the loudest thing on screen. */
@@ -48,10 +48,23 @@ function formatClock(ms: number, locale: string): string {
  * better and is not possible today, because `ClockPayload` carries only the
  * remaining milliseconds and the snapshot does not carry the time control.
  * That gap is recorded in `specs/product-experience.md` §13.
+ *
+ * ## The rating is what the seat rated at the start — A64-025.6B
+ *
+ * It sits with the side label rather than beside the clock, because it
+ * describes the *player* and the clock container is the instrument. It is
+ * rounded here — the server sends the stored float precisely so that this
+ * decision stays on the client — and a provisional rating is marked rather
+ * than withheld, since hiding it would be less honest than qualifying it.
+ *
+ * Nothing renders when there is no rating, and no placeholder holds the
+ * space: a match created before ratings existed has none, and an em dash
+ * beside a name reads as a loading state that will never finish.
  */
 export function PlayerSeat({
   side,
   identity,
+  rating,
   ms,
   active,
   awaiting,
@@ -61,6 +74,8 @@ export function PlayerSeat({
   side: Side;
   /** `undefined` while the read is in flight, or if it failed. */
   identity: PlayerIdentity | undefined;
+  /** The seat's rating at match creation, or `null` if it has none. */
+  rating: SeatRatingPayload | null;
   ms: number;
   active: boolean;
   awaiting: boolean;
@@ -90,10 +105,31 @@ export function PlayerSeat({
 
       <div className="flex min-w-0 flex-col">
         <span className="truncate text-sm font-medium">{name}</span>
-        <span className="text-muted-foreground truncate text-xs">
+        <span className="text-muted-foreground flex min-w-0 items-baseline gap-1.5 text-xs">
           {/* The seat's colour, and whose seat it is. Both matter: a player
               reconnecting needs to know which side they are. */}
-          {isViewer ? `${sideLabel} · ${t("game.players.you")}` : sideLabel}
+          <span className="truncate">
+            {isViewer ? `${sideLabel} · ${t("game.players.you")}` : sideLabel}
+          </span>
+          {rating !== null && (
+            <span className="tabular-nums">
+              {/* Ungrouped: a rating is an identifier-like number, and
+                  "1 487" beside a clock reads as two values. `Intl` still
+                  localises the digits. */}
+              {new Intl.NumberFormat(locale, { useGrouping: false }).format(
+                Math.round(rating.value),
+              )}
+              {rating.is_provisional && (
+                <>
+                  {/* The mark is visual shorthand; the word is what a
+                      screen reader gets, because "question mark" is not
+                      what it means. */}
+                  <span aria-hidden="true">?</span>
+                  <span className="sr-only"> {t("game.players.provisional")}</span>
+                </>
+              )}
+            </span>
+          )}
         </span>
       </div>
 

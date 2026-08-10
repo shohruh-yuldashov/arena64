@@ -57,6 +57,7 @@ from app.modules.game.public import (
     MatchRoster,
     MatchSnapshot,
     PlacedPiece,
+    SeatRating,
     SubmitMoveRequest,
     SubmitMoveResult,
     TerminationReason,
@@ -602,6 +603,8 @@ class StubMatchSnapshots:
         draw_offer: DrawOfferState | None = None,
         may_offer_light: bool = True,
         may_offer_dark: bool = True,
+        light_rating: SeatRating | None = None,
+        dark_rating: SeatRating | None = None,
     ) -> MatchSnapshot:
         snapshot = MatchSnapshot(
             match_id=match_id,
@@ -615,6 +618,8 @@ class StubMatchSnapshots:
             pieces=(PlacedPiece(square="c3", side="light", rank="man"),),
             light_player_id=light,
             dark_player_id=dark,
+            light_rating=light_rating,
+            dark_rating=dark_rating,
             clock=clock,
             draw_offer=draw_offer,
             may_offer_light=may_offer_light,

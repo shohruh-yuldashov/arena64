@@ -70,30 +70,64 @@ jobs:
       # are not the ports a service container publishes here.
       CONTRACT_TEST_POSTGRES_DSN: postgresql+asyncpg://arena64:arena64@localhost:5432/arena64_test
       CONTRACT_TEST_REDIS_URL: redis://localhost:6379/15
+      # And the application's own settings, for the same reason: their code
+      # defaults name 55432, which is the host port compose publishes and not
+      # the one a service container does. Nothing in the suite is expected to
+      # open these — `build_contract_app` injects the session — but a default
+      # pointing at a port with nothing behind it turns any test that does
+      # into a connection timeout rather than a readable failure.
+      POSTGRES_DSN: postgresql+asyncpg://arena64:arena64@localhost:5432/arena64
+      REDIS_LIVE_URL: redis://localhost:6379/0
+      REDIS_BUS_URL: redis://localhost:6379/1
+      REDIS_BROKER_URL: redis://localhost:6379/2
+      REDIS_CACHE_URL: redis://localhost:6379/3
+      REDIS_LIMITS_URL: redis://localhost:6379/4
 
     defaults:
       run:
         working-directory: apps/api
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      # `docker/postgres/init/` runs only against a fresh compose volume, so
-      # the contract database has to be created explicitly here. Same name and
-      # owner as that script, for the same reason: a test that escapes the
-      # rollback fixture must not be able to reach the development database.
-      - name: Create the contract database
-        env:
-          PGPASSWORD: arena64
-        run: psql -h localhost -U arena64 -d arena64 -c 'CREATE DATABASE arena64_test OWNER arena64'
-
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
           cache-dependency-glob: apps/api/uv.lock
 
       - name: Install
         run: uv sync --frozen --extra dev
+
+      # `docker/postgres/init/` runs only against a fresh compose volume, so
+      # the contract database has to be created explicitly here. Same name and
+      # owner as that script, for the same reason: a test that escapes the
+      # rollback fixture must not be able to reach the development database.
+      #
+      # Through `asyncpg` rather than `psql`: the runner image documents a
+      # PostgreSQL *server* and does not promise the client binaries, while
+      # asyncpg is a runtime dependency of this application and is therefore
+      # present the moment `uv sync` finishes. It also connects exactly the
+      # way the platform does.
+      - name: Create the contract database
+        run: |
+          uv run python - <<'PY'
+          import asyncio
+
+          import asyncpg
+
+
+          async def main() -> None:
+              connection = await asyncpg.connect(
+                  "postgresql://arena64:arena64@localhost:5432/arena64"
+              )
+              try:
+                  await connection.execute("CREATE DATABASE arena64_test OWNER arena64")
+              finally:
+                  await connection.close()
+
+
+          asyncio.run(main())
+          PY
 
       # Each gate is its own step so a failure names itself in the summary,
       # and `if: always()` so one failure does not hide the others — a run
@@ -131,11 +165,14 @@ jobs:
         working-directory: apps/web
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          # 24, not the `>=20` floor in package.json: the suites were verified
+          # on 24 locally, and a gate that runs on a different runtime than the
+          # one anybody develops against reports on a build nobody has.
+          node-version: 24
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
@@ -166,11 +203,14 @@ jobs:
         working-directory: apps/admin
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          # 24, not the `>=20` floor in package.json: the suites were verified
+          # on 24 locally, and a gate that runs on a different runtime than the
+          # one anybody develops against reports on a build nobody has.
+          node-version: 24
           cache: npm
           cache-dependency-path: apps/admin/package-lock.json
 

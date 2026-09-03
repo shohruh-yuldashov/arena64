@@ -90,7 +90,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10
+      # An exact tag, not a floating major: this action publishes `v1`
+      # through `v7` as moving majors and nothing above, so `@v10` does
+      # not resolve at all — the job failed before running a step of its
+      # own. Pinning the patch is what CLAUDE.md §2.6 asks for anyway.
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: apps/api/uv.lock

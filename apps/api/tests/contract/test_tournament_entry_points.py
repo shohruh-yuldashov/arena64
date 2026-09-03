@@ -15,6 +15,7 @@ is that something *reaches* it.
 Skipped, not failed, when PostgreSQL is unreachable.
 """
 
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -24,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import get_settings
 from app.modules.game.public import ProductVariant
-from app.modules.tournament.domain.tournament import TournamentStatus
+from app.modules.tournament.domain.tournament import Tournament, TournamentStatus
 from app.modules.tournament.infrastructure.repositories.tournament_repository import (
     SqlAlchemyPairingAttemptRepository,
     SqlAlchemyTournamentRepository,
@@ -37,14 +38,14 @@ NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
 
 
 @pytest_asyncio.fixture
-async def client(contract_session: AsyncSession):
+async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     async with contract_client(build_contract_app(contract_session)) as http:
         yield http
 
 
 async def _open_tournament(
     session: AsyncSession, *, capacity: int = 8, deadline: datetime | None = None
-):  # type: ignore[no-untyped-def]
+) -> Tournament:
     """A tournament open for entries, created through the **operator entry
     point** — so every test here exercises both surfaces at once."""
     settings = get_settings()
@@ -359,4 +360,5 @@ class TestOperatorEntryPoint:
         parser = operator._parser()
         commands = next(action for action in parser._actions if getattr(action, "choices", None))
 
+        assert commands.choices is not None
         assert set(commands.choices) == {"create", "open", "close", "seed", "start", "run"}

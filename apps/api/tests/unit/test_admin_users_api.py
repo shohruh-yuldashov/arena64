@@ -29,7 +29,11 @@ from app.modules.admin.presentation.routers.users import (
     list_users,
     read_user,
 )
-from app.modules.admin.presentation.schemas.users import AdminUserDetail, AdminUserSummary
+from app.modules.admin.presentation.schemas.users import (
+    AdminUserDetail,
+    AdminUserPageResponse,
+    AdminUserSummary,
+)
 from app.modules.users.public import AdminUserFilters, AdminUserPage, AdminUserRecord
 from tests.fakes.admin_audit import InMemoryAuditEntries
 from tests.fakes.moderation import (
@@ -100,7 +104,7 @@ def _moderation(cases: InMemoryModerationCases, sanctions: InMemorySanctions) ->
         sanctions=sanctions,
         sessions=RecordingSessionRevoker(),
         audit=AuditRecorder(entries=InMemoryAuditEntries(), clock=MovableClock(NOW)),
-        unit_of_work=NullUnitOfWork(),  # type: ignore[arg-type]
+        unit_of_work=NullUnitOfWork(),
         clock=MovableClock(NOW),
     )
 
@@ -121,7 +125,7 @@ def _roles(assignments: InMemoryRoleAssignments) -> AdminRoleService:
     return AdminRoleService(
         assignments=assignments,
         audit=AuditRecorder(entries=InMemoryAuditEntries(), clock=MovableClock(NOW)),
-        unit_of_work=NullUnitOfWork(),  # type: ignore[arg-type]
+        unit_of_work=NullUnitOfWork(),
         clock=MovableClock(NOW),
     )
 
@@ -131,7 +135,9 @@ class _Identity:
         self.id = account_id
 
 
-async def _list(directory: InMemoryDirectory, roles: AdminRoleService, **kwargs: object):
+async def _list(
+    directory: InMemoryDirectory, roles: AdminRoleService, **kwargs: object
+) -> AdminUserPageResponse:
     return await list_users(
         _Identity(generate_uuid7()),  # type: ignore[arg-type]
         directory,  # type: ignore[arg-type]
@@ -307,8 +313,5 @@ class TestTheGuardIsOnEveryRoute:
         for route in admin_users_router.routes:
             dependencies = getattr(route, "dependant", None)
             assert dependencies is not None
-            named = {
-                sub.call
-                for sub in dependencies.dependencies  # type: ignore[attr-defined]
-            }
+            named = {sub.call for sub in dependencies.dependencies}
             assert require_admin in named, getattr(route, "path", route)

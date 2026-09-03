@@ -161,7 +161,7 @@ def _queue(
             [_Eligible(), CooldownEligibilityPolicy(cooldowns, clock=clock)]
         ),
         events=RecordingPublisher(),
-        unit_of_work=unit_of_work,  # type: ignore[arg-type]
+        unit_of_work=unit_of_work,
         clock=clock,
         ticket_ttl_seconds=TTL.total_seconds(),
         snapshot_limit=50,
@@ -180,7 +180,7 @@ def policy(
         queue=_queue(tickets, cooldowns, clock, unit_of_work),
         cooldowns=cooldowns,
         audit=audit,
-        unit_of_work=unit_of_work,  # type: ignore[arg-type]
+        unit_of_work=unit_of_work,
         clock=clock,
         metrics=RecordingMetrics(),
         decline_cooldown_seconds=COOLDOWN_SECONDS,
@@ -339,7 +339,7 @@ class TestTheRecordSharesTheBarsTransaction:
             queue=_queue(tickets, cooldowns, clock, unit_of_work),
             cooldowns=cooldowns,
             audit=audit,
-            unit_of_work=unit_of_work,  # type: ignore[arg-type]
+            unit_of_work=unit_of_work,
             clock=clock,
             metrics=RecordingMetrics(),
             decline_cooldown_seconds=COOLDOWN_SECONDS,

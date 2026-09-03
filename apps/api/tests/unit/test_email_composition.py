@@ -151,9 +151,9 @@ class TestTheEnvFile:
             "NOTIFICATION_EMAIL_ENABLED=false\n"
         )
 
-        app = AppSettings(_env_file=env_file)  # type: ignore[call-arg]
-        email = EmailSettings(_env_file=env_file)  # type: ignore[call-arg]
-        notifications = NotificationEmailSettings(_env_file=env_file)  # type: ignore[call-arg]
+        app = AppSettings(_env_file=env_file)
+        email = EmailSettings(_env_file=env_file)
+        notifications = NotificationEmailSettings(_env_file=env_file)
 
         assert app.log_level == "DEBUG"
         assert app.public_url == "https://arena64.gg"
@@ -176,7 +176,7 @@ class TestTheEnvFile:
         env_file = tmp_path / ".env.local"
         env_file.write_text("APP_LOG_LEVEL=DEBUG\nPOSTGRES_POOL_SIZE=7\n")
 
-        assert EmailSettings(_env_file=env_file).from_name == "Arena64"  # type: ignore[call-arg]
+        assert EmailSettings(_env_file=env_file).from_name == "Arena64"
 
     def test_the_env_file_path_does_not_depend_on_the_working_directory(self) -> None:
         """`.env.local`, always, wherever a command was typed.

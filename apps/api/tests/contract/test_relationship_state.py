@@ -120,7 +120,7 @@ class TestEveryState:
         def record(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
             statements.append(statement)
 
-        engine = contract_session.get_bind().engine  # type: ignore[union-attr]
+        engine = contract_session.get_bind().engine
 
         async def search(limit: int) -> tuple[list[Any], int]:
             statements.clear()

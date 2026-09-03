@@ -298,11 +298,11 @@ class TestClaiming:
             await _relay(outbox, processed, clock, uninterested).run_once()
 
         tick = next(r for r in caplog.records if r.message == "outbox_tick_completed")
-        assert tick.skipped == 1
-        assert tick.skipped_event_types == [_Thing.event_type]
+        assert tick.skipped == 1  # type: ignore[attr-defined]
+        assert tick.skipped_event_types == [_Thing.event_type]  # type: ignore[attr-defined]
         # The two are distinct: this entry was published, and it was not
         # delivered to anybody. A reader of one number could not tell.
-        assert tick.published == 1
+        assert tick.published == 1  # type: ignore[attr-defined]
 
 
 class TestMarkingProcessed:

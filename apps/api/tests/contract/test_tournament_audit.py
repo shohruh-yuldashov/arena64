@@ -24,6 +24,7 @@ Skipped, not failed, when PostgreSQL is unreachable.
 
 import ast
 import re
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -70,7 +71,7 @@ _APP = Path(__file__).resolve().parents[2] / "app"
 
 
 @pytest_asyncio.fixture
-async def client(contract_session: AsyncSession):
+async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     async with contract_client(build_contract_app(contract_session)) as http:
         yield http
 
@@ -188,6 +189,7 @@ class TestTheWholeTournamentRuns:
 
         # The adjudicated advancement is counted as one, and as no win.
         advanced = adjudicated.winner_id
+        assert advanced is not None
         by_player = {s.player_id: s for s in standings}
         assert by_player[advanced].adjudicated_advancements >= 1
         assert by_player[advanced].draws == 2

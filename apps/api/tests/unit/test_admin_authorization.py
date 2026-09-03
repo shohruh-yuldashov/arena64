@@ -151,7 +151,7 @@ def _service(
     return AdminRoleService(
         assignments=assignments,
         audit=AuditRecorder(entries=entries or InMemoryAuditEntries(), clock=MovableClock(NOW)),
-        unit_of_work=NullUnitOfWork(),  # type: ignore[arg-type]
+        unit_of_work=NullUnitOfWork(),
         clock=MovableClock(NOW),
     )
 

@@ -88,6 +88,7 @@ dev = [
     # A dev dependency, never a runtime one: it reads the import graph and
     # ships in no image.
     "import-linter>=2.0,<3.0",
+    "pyright>=1.1,<2.0",
 ]
 
 # --- Build backend -----------------------------------------------------------
@@ -142,6 +143,16 @@ python_version = "3.13"
 strict = true
 plugins = ["pydantic.mypy"]
 warn_unused_ignores = true
+
+# `asyncpg` ships no `py.typed` marker, so strict mode refuses the import
+# rather than the library. Scoped to that one package: a blanket
+# `ignore_missing_imports` would silence a genuinely missing dependency
+# anywhere in the tree. Only `tests/contract/test_schema_drift.py` imports
+# it directly — everything else reaches PostgreSQL through SQLAlchemy,
+# which is typed.
+[[tool.mypy.overrides]]
+module = ["asyncpg.*"]
+ignore_missing_imports = true
 
 # --- Pytest ------------------------------------------------------------------
 # ENVIRONMENT=test is set in tests/conftest.py before app imports, not here —

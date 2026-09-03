@@ -34,6 +34,7 @@ from app.modules.admin.presentation.routers.notifications import (
 )
 from app.modules.admin.presentation.schemas.notifications import (
     AdminNotificationDetailResponse,
+    AdminNotificationPageResponse,
     AdminNotificationSummary,
     AdminPushDeliveryView,
 )
@@ -102,7 +103,7 @@ class _Fixture:
         self.operations = NotificationOperationsService(
             deliveries=self.directory,
             audit=AuditRecorder(entries=self.entries, clock=self.clock),
-            unit_of_work=NullUnitOfWork(),  # type: ignore[arg-type]
+            unit_of_work=NullUnitOfWork(),
             clock=self.clock,
         )
 
@@ -436,7 +437,9 @@ class _Identity:
         self.id = account_id
 
 
-async def _list(fixture: _Fixture, accounts: _Accounts, **kwargs: object):
+async def _list(
+    fixture: _Fixture, accounts: _Accounts, **kwargs: object
+) -> AdminNotificationPageResponse:
     return await list_notifications(
         _Identity(generate_uuid7()),  # type: ignore[arg-type]
         fixture.directory,  # type: ignore[arg-type]

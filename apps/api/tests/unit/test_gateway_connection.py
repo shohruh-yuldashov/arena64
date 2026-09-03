@@ -30,6 +30,7 @@ import asyncio
 import json
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -50,6 +51,7 @@ from app.gateway.connections import (
 )
 from app.gateway.delivery import InMemoryLocalSockets, RoomBroadcaster
 from app.gateway.dispatch import CLIENT_SENDABLE
+from app.gateway.event_buffer import RedisMatchEventBuffer
 from app.gateway.forwarding import ForwardingRun, GatewayForwarder
 from app.gateway.metrics import CloseReason
 from app.gateway.moves import MoveSubmissionHandler
@@ -70,7 +72,11 @@ from app.gateway.room_service import GameRoomService
 from app.gateway.rooms import RoomMember
 from app.gateway.routing import FleetConnectionRouter
 from app.gateway.spectator_handler import SpectatorHandler
-from app.gateway.spectators import BlockAwareSpectatorPolicy, SpectatorSubscription
+from app.gateway.spectators import (
+    BlockAwareSpectatorPolicy,
+    SpectatorEligibility,
+    SpectatorSubscription,
+)
 from app.modules.engine import PlayerSide
 from app.modules.game.public import (
     ClockView,
@@ -219,7 +225,13 @@ def _moves(
             publisher=publisher if publisher is not None else RecordingRemotePublisher(),
             metrics=RecordingMetrics(),
         ),
-        buffer=buffer if buffer is not None else InMemoryEventBuffer(),
+        # `MoveSubmissionHandler` is annotated with the concrete
+        # `RedisMatchEventBuffer`, though `event_buffer.py`'s docstring
+        # names a `MatchEventBuffer` port that was never written. The
+        # substitution is safe — the in-memory buffer implements every
+        # method the handler calls — and the cast is what says the
+        # missing abstraction is the defect, not this test.
+        buffer=cast(RedisMatchEventBuffer, buffer if buffer is not None else InMemoryEventBuffer()),
         spectators=spectators if spectators is not None else InMemorySpectatorStore(),
         idempotency=InMemoryMoveIdempotency(),
         limiter=limiter if limiter is not None else CountingMoveLimiter(allowance=100),
@@ -338,7 +350,7 @@ def _resumes(
 def _spectators(
     *,
     snapshots: StubMatchSnapshots | None = None,
-    policy: StubSpectatorPolicy | None = None,
+    policy: SpectatorEligibility | None = None,
     store: InMemorySpectatorStore | None = None,
 ) -> SpectatorHandler:
     """The real spectator handler over in-memory collaborators."""
@@ -856,7 +868,9 @@ class TestGameRooms:
         await service.run(second, ticket="second-tab")
 
         assert len(members.rooms[match_id]) == 1
-        assert (await rooms.room_of(match_id)).connections_of(player_id) != ()
+        room = await rooms.room_of(match_id)
+        assert room is not None
+        assert room.connections_of(player_id) != ()
 
         first.hang_up()
         await held

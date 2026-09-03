@@ -138,7 +138,7 @@ async def moves(contract_session: AsyncSession) -> SqlAlchemyMoveLogRepository:
     return SqlAlchemyMoveLogRepository(contract_session)
 
 
-@pytest_asyncio.fixture
+@pytest.fixture
 def events() -> _RecordingEvents:
     return _RecordingEvents()
 

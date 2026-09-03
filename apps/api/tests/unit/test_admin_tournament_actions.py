@@ -100,9 +100,9 @@ class _Fixture:
         self.entries = InMemoryAuditEntries()
         self.unit = NullUnitOfWork()
         self.service = TournamentAdministrationService(
-            lifecycle=self.lifecycle,  # type: ignore[arg-type]
+            lifecycle=self.lifecycle,
             audit=AuditRecorder(entries=self.entries, clock=MovableClock(NOW)),
-            unit_of_work=self.unit,  # type: ignore[arg-type]
+            unit_of_work=self.unit,
         )
 
 
@@ -238,9 +238,9 @@ class TestRefusalsAreRecordedAndCommitNothing:
 
         fixture = _Fixture()
         fixture.service = TournamentAdministrationService(
-            lifecycle=fixture.lifecycle,  # type: ignore[arg-type]
+            lifecycle=fixture.lifecycle,
             audit=AuditRecorder(entries=_BrokenEntries(), clock=MovableClock(NOW)),  # type: ignore[arg-type]
-            unit_of_work=fixture.unit,  # type: ignore[arg-type]
+            unit_of_work=fixture.unit,
         )
 
         with pytest.raises(RuntimeError, match="unreachable"):

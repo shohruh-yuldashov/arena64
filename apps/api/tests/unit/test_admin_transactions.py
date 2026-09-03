@@ -84,7 +84,7 @@ class TestTheRoleServiceCommits:
         service = AdminRoleService(
             assignments=InMemoryRoleAssignments(),
             audit=_recorder(InMemoryAuditEntries()),
-            unit_of_work=unit,  # type: ignore[arg-type]
+            unit_of_work=unit,
             clock=MovableClock(NOW),
         )
 
@@ -100,7 +100,7 @@ class TestTheRoleServiceCommits:
         service = AdminRoleService(
             assignments=assignments,
             audit=_recorder(InMemoryAuditEntries()),
-            unit_of_work=unit,  # type: ignore[arg-type]
+            unit_of_work=unit,
             clock=MovableClock(NOW),
         )
         first, second = generate_uuid7(), generate_uuid7()
@@ -120,7 +120,7 @@ class TestTheRoleServiceCommits:
         service = AdminRoleService(
             assignments=assignments,
             audit=_recorder(InMemoryAuditEntries()),
-            unit_of_work=unit,  # type: ignore[arg-type]
+            unit_of_work=unit,
             clock=MovableClock(NOW),
         )
         only = generate_uuid7()
@@ -201,7 +201,7 @@ class TestNotificationOperationsCommit:
         service = NotificationOperationsService(
             deliveries=directory,
             audit=_recorder(InMemoryAuditEntries()),
-            unit_of_work=unit,  # type: ignore[arg-type]
+            unit_of_work=unit,
             clock=MovableClock(NOW),
         )
 
@@ -220,7 +220,7 @@ class TestNotificationOperationsCommit:
         service = NotificationOperationsService(
             deliveries=directory,
             audit=_recorder(InMemoryAuditEntries()),
-            unit_of_work=unit,  # type: ignore[arg-type]
+            unit_of_work=unit,
             clock=MovableClock(NOW),
         )
         missing = generate_uuid7()
@@ -247,7 +247,7 @@ def _moderation(unit: NullUnitOfWork) -> ModerationService:
         sanctions=InMemorySanctions(),
         sessions=RecordingSessionRevoker(),
         audit=_recorder(InMemoryAuditEntries()),
-        unit_of_work=unit,  # type: ignore[arg-type]
+        unit_of_work=unit,
         clock=MovableClock(NOW),
     )
 

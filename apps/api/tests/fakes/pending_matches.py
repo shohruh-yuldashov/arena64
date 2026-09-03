@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from uuid import UUID
 
-from app.common.locale import Locale
+from app.core.enums import Locale
 from app.modules.matchmaking.domain.pending_match import PendingMatchOffer
 from app.modules.users.public import (
     AvatarReference,

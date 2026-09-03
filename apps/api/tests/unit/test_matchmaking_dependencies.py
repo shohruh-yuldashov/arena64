@@ -69,6 +69,9 @@ class TestTheEligibilityPortIsSatisfiedByTheRoot:
         check that says less. See `AllEligibilityChecks`."""
         policy = build_eligibility_policy(_session(), StubPresence(), clock=SystemClock())
 
+        # The factory is typed as the port; the ordering being asserted is
+        # a property of the composite it actually builds.
+        assert isinstance(policy, AllEligibilityChecks)
         assert [type(check) for check in policy._checks] == [
             PresenceEligibilityPolicy,
             CooldownEligibilityPolicy,

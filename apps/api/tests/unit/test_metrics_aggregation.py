@@ -230,7 +230,7 @@ class TestTheFlushTask:
             def observe(self, name: str, value: float, **kwargs: object) -> None:
                 raise RuntimeError("the sink is on fire")
 
-        broken = AggregatingMetrics(sink=_Broken())  # type: ignore[arg-type]
+        broken = AggregatingMetrics(sink=_Broken())
         broken.increment("thing")
 
         await MetricsFlushTask(metrics=broken).run({})

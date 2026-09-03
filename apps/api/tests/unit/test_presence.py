@@ -253,7 +253,10 @@ class TestDegradation:
             cast(Redis, UnreachablePresenceRedis()), settings=settings, clock=clock
         )
 
-        assert await provider.record_presence(PLAYER, is_online=True) is None
+        # Returns nothing; what is asserted is that it does not raise —
+        # an unreachable Redis must not fail the request that observed
+        # the player.
+        await provider.record_presence(PLAYER, is_online=True)
 
     @pytest.mark.parametrize(
         "stored",

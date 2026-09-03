@@ -39,7 +39,6 @@ from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.notifications.application.ports import DueEmailDelivery
 from app.modules.notifications.application.services.email_delivery_service import (
     EmailDeliveryService,
-    PermanentEmailFailure,
 )
 from app.modules.notifications.application.services.preference_delivery_policy import (
     PreferenceDeliveryPolicy,
@@ -68,7 +67,7 @@ from app.modules.notifications.infrastructure.repositories import (
 )
 from app.modules.notifications.presentation.email import TemplateEmailRenderer
 from app.modules.users.public import EmailRecipient
-from app.platform.email import EmailMessage
+from app.platform.email import EmailMessage, PermanentEmailFailure
 from app.platform.metrics import NullMetrics
 from tests.fakes.presence_redis import MovableClock
 
@@ -156,14 +155,14 @@ def _service(
     return EmailDeliveryService(
         deliveries=SqlAlchemyEmailDeliveryRepository(session),
         notifications=SqlAlchemyNotificationRepository(session),
-        recipients=recipients,  # type: ignore[arg-type]
+        recipients=recipients,
         policy=PreferenceDeliveryPolicy(
             preferences=SqlAlchemyNotificationPreferenceRepository(
                 session, availability=availability
             )
         ),
         renderer=TemplateEmailRenderer(public_origin=ORIGIN),
-        provider=provider,  # type: ignore[arg-type]
+        provider=provider,
         metrics=NullMetrics(),
         unit_of_work=SessionUnitOfWork(session),
         clock=clock or MovableClock(NOW),

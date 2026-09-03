@@ -57,7 +57,7 @@ def _roles(assignments: InMemoryRoleAssignments, entries: InMemoryAuditEntries) 
     return AdminRoleService(
         assignments=assignments,
         audit=_recorder(entries),
-        unit_of_work=NullUnitOfWork(),  # type: ignore[arg-type]
+        unit_of_work=NullUnitOfWork(),
         clock=MovableClock(NOW),
     )
 

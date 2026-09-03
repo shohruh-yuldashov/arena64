@@ -43,7 +43,7 @@ from app.modules.tournament.application.services.seeding_service import (
 )
 from app.modules.tournament.domain.exceptions import InvalidBracketPosition
 from app.modules.tournament.domain.seeding import PlannedPairing
-from app.modules.tournament.domain.tournament import TournamentStatus
+from app.modules.tournament.domain.tournament import Tournament, TournamentStatus
 from app.modules.tournament.infrastructure.rating_snapshots import (
     PublishedRatingSnapshots,
 )
@@ -91,8 +91,11 @@ def _service(
 
 
 async def _open_tournament(
-    service: TournamentRegistrationService, *, capacity: int = 4, deadline=None
-):  # type: ignore[no-untyped-def]
+    service: TournamentRegistrationService,
+    *,
+    capacity: int = 4,
+    deadline: datetime | None = None,
+) -> Tournament:
     tournament = await service.create(
         name="Sunday Open",
         variant=ProductVariant.RUSSIAN_8X8,
@@ -387,7 +390,7 @@ class TestSeeding:
             await service.close_registration(tournament.id)
             await setup.commit()
 
-        async def seed() -> list[object]:
+        async def seed() -> list[PlannedPairing]:
             async with AsyncSession(contract_engine) as session:
                 return await _seeding(session).seed_tournament(tournament.id)
 
@@ -576,6 +579,9 @@ class TestBracket:
 
         semi = next(n for n in nodes if n.round_number == 1 and n.slot == 0)
         light, dark = semi.light_player_id, semi.dark_player_id
+        # A materialised round-one node has both seats filled; a bye would
+        # leave one null, and this bracket has none.
+        assert light is not None and dark is not None
 
         async def advance(winner: UUID) -> str:
             async with AsyncSession(contract_engine) as session:

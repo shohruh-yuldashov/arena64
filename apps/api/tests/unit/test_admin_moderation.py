@@ -13,6 +13,7 @@ writes together is PostgreSQL's, and `tests/contract/test_admin_moderation.py`
 is where that is falsifiable.
 """
 
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -46,7 +47,8 @@ from app.modules.admin.presentation.schemas.moderation import (
     RestrictAccountRequest,
     SanctionView,
 )
-from app.modules.users.public import AdminUserRecord
+from app.modules.users.public import AdminUserFilters, AdminUserPage, AdminUserRecord
+from app.modules.users.public.administration import AdminAccountSummary
 from tests.fakes.admin_audit import InMemoryAuditEntries
 from tests.fakes.moderation import (
     InMemoryModerationCases,
@@ -73,7 +75,7 @@ class _Fixture:
             sanctions=self.sanctions,
             sessions=self.sessions,
             audit=AuditRecorder(entries=self.entries, clock=self.clock),
-            unit_of_work=NullUnitOfWork(),  # type: ignore[arg-type]
+            unit_of_work=NullUnitOfWork(),
             clock=self.clock,
         )
 
@@ -320,8 +322,8 @@ class TestTheHttpSurface:
         page = await list_restrictions(
             _Identity(admin),  # type: ignore[arg-type]
             fixture.service,
-            fixture.cases,  # type: ignore[arg-type]
-            accounts,  # type: ignore[arg-type]
+            fixture.cases,
+            accounts,
             _Headers(),  # type: ignore[arg-type]
         )
 
@@ -361,7 +363,7 @@ class TestTheHttpSurface:
 
         # And the category is a closed vocabulary, not a free string.
         with pytest.raises(PydanticValidationError):
-            RestrictAccountRequest(category="whatever", reasoning="x")  # type: ignore[arg-type]
+            RestrictAccountRequest(category="whatever", reasoning="x")
 
     def test_no_response_model_can_carry_credential_material(self) -> None:
         """Asserted as absence, so no serialisation path could leak one."""
@@ -432,8 +434,8 @@ class TestTheHttpSurface:
             player,
             _Identity(admin),  # type: ignore[arg-type]
             fixture.service,
-            fixture.cases,  # type: ignore[arg-type]
-            accounts,  # type: ignore[arg-type]
+            fixture.cases,
+            accounts,
             _Headers(),  # type: ignore[arg-type]
         )
 
@@ -466,7 +468,7 @@ class _Accounts:
         self.known = known
         self.batches: list[int] = []
 
-    async def accounts_by_ids(self, user_ids: list[UUID]) -> dict[UUID, AdminUserRecord]:
+    async def accounts_by_ids(self, user_ids: Sequence[UUID]) -> Mapping[UUID, AdminUserRecord]:
         self.batches.append(len(set(user_ids)))
         wanted = set(user_ids)
         return {
@@ -479,8 +481,20 @@ class _Accounts:
         name = self.known.get(user_id)
         return None if name is None else _account(user_id, name)
 
-    async def list_accounts(self, **_: object) -> None:  # pragma: no cover
+    async def list_accounts(
+        self,
+        *,
+        term: str | None,
+        filters: AdminUserFilters,
+        limit: int,
+        cursor: str | None,
+    ) -> AdminUserPage:  # pragma: no cover
         raise AssertionError("the moderation router must not list accounts")
+
+    async def account_summary(
+        self, *, since_day: datetime, since_week: datetime
+    ) -> AdminAccountSummary:  # pragma: no cover
+        raise AssertionError("the moderation router must not read the dashboard summary")
 
 
 def _account(user_id: UUID, name: str) -> AdminUserRecord:
@@ -533,8 +547,8 @@ async def _restrict(
         _Identity(generate_uuid7()),  # type: ignore[arg-type]
         fixture.service,
         _Roles([generate_uuid7(), generate_uuid7()]),  # type: ignore[arg-type]
-        fixture.cases,  # type: ignore[arg-type]
-        accounts,  # type: ignore[arg-type]
+        fixture.cases,
+        accounts,
         _Headers(),  # type: ignore[arg-type]
     )
 

@@ -20,6 +20,7 @@ without covering anything new.
 Skipped, not failed, when PostgreSQL is unreachable.
 """
 
+from collections.abc import AsyncIterator, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -56,9 +57,9 @@ from app.modules.tournament.application.services.seeding_service import (
 from app.modules.tournament.application.services.start_service import (
     TournamentStartService,
 )
-from app.modules.tournament.domain.attempts import AdvancementReason
+from app.modules.tournament.domain.attempts import AdvancementReason, PairingAttempt
 from app.modules.tournament.domain.standings import FinalStatus
-from app.modules.tournament.domain.tournament import TournamentStatus
+from app.modules.tournament.domain.tournament import Tournament, TournamentStatus
 from app.modules.tournament.infrastructure.rating_snapshots import (
     PublishedRatingSnapshots,
 )
@@ -92,7 +93,7 @@ _SETTINGS = TournamentSettings(no_show_seconds=NO_SHOW_SECONDS)
 
 
 @pytest_asyncio.fixture
-async def client(contract_session: AsyncSession):
+async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     """The real API over this suite's session — §17's requirement.
 
     A route file that exists without router registration is incomplete, and
@@ -199,8 +200,13 @@ def _completion(*, match_id: UUID, pairing_id: UUID, winner: PlayerSide | None):
 
 
 async def _seeded_tournament(
-    session: AsyncSession, clock: MovableClock, *, entrants: int, capacity: int, players=None
-):  # type: ignore[no-untyped-def]
+    session: AsyncSession,
+    clock: MovableClock,
+    *,
+    entrants: int,
+    capacity: int,
+    players: Sequence[UUID] | None = None,
+) -> tuple[Tournament, Sequence[UUID]]:
     """A tournament registered, seeded, bracketed and started."""
     field = players or [uuid4() for _ in range(entrants)]
     directory = _KnownPlayers(*field)
@@ -236,7 +242,7 @@ async def _play_out(
     clock: MovableClock,
     tournament_id: UUID,
     *,
-    winner_of=None,
+    winner_of: Callable[[PairingAttempt], PlayerSide] | None = None,
 ) -> None:
     """Plays every match to a decisive result until nothing is left.
 

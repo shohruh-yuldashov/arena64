@@ -478,7 +478,7 @@ class TestBatchComposition:
         def record(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
             statements.append(statement)
 
-        engine = contract_session.get_bind().engine  # type: ignore[union-attr]
+        engine = contract_session.get_bind().engine
         event.listen(engine, "before_cursor_execute", record)
         try:
             response = await client.get(INCOMING_URL, headers=bob.auth, params={"limit": 6})

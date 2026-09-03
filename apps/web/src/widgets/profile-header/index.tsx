@@ -40,7 +40,13 @@ export function ProfileHeader({
 
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <h1 className="text-2xl font-semibold break-words">{nameOf(profile)}</h1>
-        <p className="text-muted-foreground text-sm">@{profile.username}</p>
+        {/* A64-025.9, and the same rule `PlayerRow` follows: only when it
+            says something the heading did not. `nameOf` falls back to the
+            username, so an account without a display name — which is most
+            of them — printed `alice` over `@alice`. */}
+        {nameOf(profile) !== profile.username && (
+          <p className="text-muted-foreground text-sm">@{profile.username}</p>
+        )}
 
         {profile.bio !== null && profile.bio !== undefined && profile.bio !== "" ? (
           <p className="mt-1 text-sm break-words whitespace-pre-line">{profile.bio}</p>

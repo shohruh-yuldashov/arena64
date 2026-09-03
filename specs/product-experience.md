@@ -3,10 +3,10 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-PRODUCT-EXPERIENCE` |
-| **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social |
+| **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-03 — A64-025.8, blocking looks like blocking |
+| **Last updated** | 2026-09-04 — A64-025.9, the page that overflowed |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -1559,3 +1559,80 @@ are unverified rather than that they are fine.
 Both empty states *were* verified, and they are the two this task changed.
 
 The challenge rows themselves are the remainder of `.8`.
+
+---
+
+## 18. Profile — A64-025.9
+
+### 18.1 The one page in this epic that overflowed
+
+Every surface `.6C` through `.8` measured zero horizontal overflow. `/profile`
+at 360 measured **47px**, and the cause was the avatar upload's raw
+`<input type="file">`: its intrinsic width does not shrink, so it pushed the
+page past the viewport on the narrowest screen the product supports.
+
+The same control carried a second defect that no measurement would have
+caught. The words inside it — "Choose File", "No file chosen" — are the
+**browser's**, not the product's. They are English in every locale, on a page
+where all 775 other strings go through `t()`.
+
+### 18.2 The input stayed an input
+
+The component's own note argued for a real `<input type="file">` and against
+"a hidden input behind a `<div onClick>`": the native control is keyboard
+reachable, announces its accepted types, and opens the system picker on
+Enter, and a div does none of that. That argument is correct and nothing
+here contradicts it.
+
+The input is therefore **visually** hidden rather than replaced — `sr-only`
+leaves it in the tab order and in the accessibility tree — and the `<label>`
+already bound to it is what a pointer hits and what carries the text this
+product owns. `peer-focus-visible` on the label is what keeps a keyboard
+user's focus visible now that the control itself is not drawn.
+
+The avatar test passes unchanged, which is the check that matters: it finds
+the input through its label, exactly as assistive technology does.
+
+### 18.3 A rule applied where it had been missed
+
+`PlayerRow` renders `@username` only when the display name differs from it —
+A64-025.8 §17.2. `ProfileHeader` did not, so a profile printed `alice` over
+`@alice` for every account without a display name, which is most of them.
+The same condition now guards both.
+
+### 18.4 Measured
+
+| Surface | Width | Theme | Page overflow |
+| --- | --- | --- | --- |
+| `/profile` | 1280 | light | 0 |
+| `/profile` | 360 | dark | **0** — was 47 |
+| `/players/{username}` | 1280 | light | 0 |
+| `/players/{username}` | 360 | dark | 0 |
+
+`npm run test` 204 passed, `tsc --noEmit` clean, eslint zero errors.
+
+### 18.5 An open question, not a change
+
+The ratings section renders **five cards, each `1,500`, each captioned "not
+rated yet"** — a third of the page spent saying a player has no rating, five
+times, in the largest type on the surface.
+
+The number is the server's: `specs/rating.md` gives every player a
+provisional 1500, and §14.4 of this document already decided that a
+provisional rating is *marked rather than withheld*, because hiding it would
+be less honest than qualifying it. So the value is right and the caption is
+right.
+
+What is arguably wrong is the **hierarchy** — the placeholder is set large
+and bold while the fact that qualifies it is small and grey, which is the
+opposite of their importance to a reader. The game room solved the same
+tension inline: `1487?` with "provisional" for a screen reader.
+
+Not changed here, because it is a judgement about emphasis on a surface
+whose data is correct, and the epic's own rule is to change what is
+demonstrably wrong rather than what could be arranged differently.
+
+### 18.6 The rest of A64-025.9
+
+The statistics panel, the rating cards' own design, the edit form and the
+five settings surfaces were not redesigned.

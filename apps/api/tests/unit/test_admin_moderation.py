@@ -363,7 +363,10 @@ class TestTheHttpSurface:
 
         # And the category is a closed vocabulary, not a free string.
         with pytest.raises(PydanticValidationError):
-            RestrictAccountRequest(category="whatever", reasoning="x")
+            # Deliberately invalid: what is asserted is that the *runtime*
+            # refuses it, which is the half a type checker cannot enforce
+            # at a boundary that takes JSON.
+            RestrictAccountRequest(category="whatever", reasoning="x")  # pyright: ignore[reportArgumentType]
 
     def test_no_response_model_can_carry_credential_material(self) -> None:
         """Asserted as absence, so no serialisation path could leak one."""

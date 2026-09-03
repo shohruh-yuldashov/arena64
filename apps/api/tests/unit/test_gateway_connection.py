@@ -2965,7 +2965,7 @@ class TestQuickMessages:
                 super().__init__()
                 self.reads = 0
 
-            async def roster_of(self, requested: UUID) -> MatchRoster | None:
+            async def roster_of(self, match_id: UUID) -> MatchRoster | None:
                 self.reads += 1
                 if self.reads > 2:
                     self.add(
@@ -2974,7 +2974,7 @@ class TestQuickMessages:
                         dark=opponent_id,
                         status=MatchRecordStatus.COMPLETED,
                     )
-                return await super().roster_of(requested)
+                return await super().roster_of(match_id)
 
         rosters = _CompletingRosters()
         rosters.add(match_id, light=player_id, dark=opponent_id)
@@ -3301,8 +3301,8 @@ class TestQuickMessageHardening:
         # its script without pausing, so the graph is what changes: the
         # second read returns the block.
         class _BlockingAfterFirst(StubSocialGraph):
-            async def blocked_ids_for(self, requested: UUID) -> frozenset[UUID]:
-                answer = await super().blocked_ids_for(requested)
+            async def blocked_ids_for(self, player_id: UUID) -> frozenset[UUID]:
+                answer = await super().blocked_ids_for(player_id)
                 if len(self.reads) == 1:
                     self.block(player_id, opponent_id)
                 return answer

@@ -426,6 +426,10 @@
       "correspondence": "Yozishma",
       "unknown": "Noma'lum"
     },
+    "variant": {
+      "russian_8x8": "Rus shashkasi",
+      "unknown": "Noma'lum"
+    },
     "waiting": {
       "searching": "Raqib qidirilmoqda…",
       "speed": "Toifa",

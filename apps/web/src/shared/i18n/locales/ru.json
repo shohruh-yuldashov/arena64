@@ -426,6 +426,10 @@
       "correspondence": "По переписке",
       "unknown": "Неизвестно"
     },
+    "variant": {
+      "russian_8x8": "Русские шашки",
+      "unknown": "Неизвестно"
+    },
     "waiting": {
       "searching": "Идёт поиск соперника…",
       "speed": "Категория",

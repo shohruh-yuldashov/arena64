@@ -1,7 +1,8 @@
 import { Link } from "@tanstack/react-router";
 
 import type { Tournament } from "@/features/tournament/api";
-import { formatKey, statusKey } from "@/features/tournament/ui/labels";
+import { formatKey, speedClassKey, variantKey } from "@/features/tournament/ui/labels";
+import { TournamentStatusBadge } from "@/features/tournament/ui/status-badge";
 import { useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
 import { formatDate } from "@/shared/lib/format";
@@ -31,7 +32,6 @@ export function TournamentCard({ tournament }: { tournament: Tournament }) {
   const { t, locale } = useTranslation();
 
   const open = tournament.status === "registration_open";
-  const finished = tournament.status === "completed";
   const cancelled = tournament.status === "cancelled";
 
   return (
@@ -47,25 +47,20 @@ export function TournamentCard({ tournament }: { tournament: Tournament }) {
       >
         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <span className="text-base font-semibold">{tournament.name}</span>
-          {/* The status is a **word**, never only a colour — §24. */}
-          <span
-            className={cn(
-              "rounded-full border px-2 py-0.5 text-xs font-medium",
-              open && "border-primary text-primary",
-              finished && "text-muted-foreground",
-            )}
-          >
-            {t(statusKey(tournament.status))}
-          </span>
+          <TournamentStatusBadge status={tournament.status} />
         </div>
 
-        <div className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 text-xs">
+        {/* Separated by middots, the way the detail page's subtitle and the
+            game room's seat line already are. Four grey words with only
+            spacing between them read as one phrase rather than as four
+            facts. */}
+        <div className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs [&>span:not(:last-child)]:after:ml-1.5 [&>span:not(:last-child)]:after:content-['·']">
           <span>{t(formatKey(tournament.format))}</span>
           <span>
             {t(tournament.rated ? "tournament.field.rated" : "tournament.field.casual")}
           </span>
-          <span>{tournament.variant}</span>
-          <span>{tournament.speed_class}</span>
+          <span>{t(variantKey(tournament.variant))}</span>
+          <span>{t(speedClassKey(tournament.speed_class))}</span>
         </div>
 
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">

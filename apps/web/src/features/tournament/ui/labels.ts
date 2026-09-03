@@ -48,6 +48,41 @@ export function formatKey(format: string): TranslationKey {
   return FORMAT[format] ?? "tournament.format.unknown";
 }
 
+/**
+ * The variant and the speed class — A64-025.7.
+ *
+ * Both were rendering the **raw server enum**: a tournament card said
+ * `russian_8x8` and `classical` to a player, in every locale, on the lobby
+ * and on the detail page. Nothing failed; the identifiers simply arrived on
+ * screen, which is the same failure the note above describes.
+ *
+ * The keys live under `play.*` because that is where this vocabulary already
+ * was — `play.speed` has carried all five classes since the lobby was built,
+ * and a second copy under `tournament.*` would be two places to add
+ * `correspondence` when it ships. `play.variant` is new only because no
+ * surface had ever needed to name a variant: the game room does not, since
+ * a player who is playing knows what they are playing.
+ */
+const VARIANT: Record<string, TranslationKey> = {
+  russian_8x8: "play.variant.russian_8x8",
+};
+
+export function variantKey(variant: string): TranslationKey {
+  return VARIANT[variant] ?? "play.variant.unknown";
+}
+
+const SPEED_CLASS: Record<string, TranslationKey> = {
+  bullet: "play.speed.bullet",
+  blitz: "play.speed.blitz",
+  rapid: "play.speed.rapid",
+  classical: "play.speed.classical",
+  correspondence: "play.speed.correspondence",
+};
+
+export function speedClassKey(speedClass: string): TranslationKey {
+  return SPEED_CLASS[speedClass] ?? "play.speed.unknown";
+}
+
 const ROUND_STATUS: Record<string, TranslationKey> = {
   pending: "tournament.bracket.roundStatus.pending",
   published: "tournament.bracket.roundStatus.published",

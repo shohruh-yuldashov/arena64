@@ -4,9 +4,10 @@ import { isAuthenticated } from "@/entities/session";
 import { useSession } from "@/features/auth/model/session-provider";
 import { useBracket, useStandings, useTournament } from "@/features/tournament/model/queries";
 import { BracketView } from "@/features/tournament/ui/bracket-view";
-import { formatKey, statusKey } from "@/features/tournament/ui/labels";
+import { formatKey, speedClassKey, variantKey } from "@/features/tournament/ui/labels";
 import { RegistrationPanel } from "@/features/tournament/ui/registration-panel";
 import { StandingsTable } from "@/features/tournament/ui/standings-table";
+import { TournamentStatusBadge } from "@/features/tournament/ui/status-badge";
 import { ApiError } from "@/shared/api/errors";
 import { useTranslation } from "@/shared/i18n";
 import { formatDate, formatDateTime } from "@/shared/lib/format";
@@ -114,9 +115,14 @@ export default function TournamentPage() {
         <Button asChild variant="ghost" className="min-h-11 self-start px-2">
           <Link to="/tournaments">{t("tournament.backToList")}</Link>
         </Button>
-        <h1 className="text-xl font-semibold">{tournament.name}</h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-xl font-semibold">{tournament.name}</h1>
+          {/* The same badge the card that linked here drew, rather than the
+              same fact buried in the line below it. */}
+          <TournamentStatusBadge status={tournament.status} />
+        </div>
         <p className="text-muted-foreground text-sm">
-          {t(statusKey(tournament.status))} · {t(formatKey(tournament.format))} ·{" "}
+          {t(formatKey(tournament.format))} ·{" "}
           {t(tournament.rated ? "tournament.field.rated" : "tournament.field.casual")}
         </p>
         {cancelled && (
@@ -134,8 +140,10 @@ export default function TournamentPage() {
               capacity: tournament.capacity,
             })}
           </Fact>
-          <Fact label={t("tournament.field.variant")}>{tournament.variant}</Fact>
-          <Fact label={t("tournament.field.speed")}>{tournament.speed_class}</Fact>
+          <Fact label={t("tournament.field.variant")}>{t(variantKey(tournament.variant))}</Fact>
+          <Fact label={t("tournament.field.speed")}>
+            {t(speedClassKey(tournament.speed_class))}
+          </Fact>
           <Fact label={t("tournament.field.round")}>
             {tournament.current_round != null
               ? t("tournament.currentRound", { round: tournament.current_round })

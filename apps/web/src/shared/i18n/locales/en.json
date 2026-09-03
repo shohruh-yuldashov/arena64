@@ -426,6 +426,10 @@
       "correspondence": "Correspondence",
       "unknown": "Unknown"
     },
+    "variant": {
+      "russian_8x8": "Russian draughts",
+      "unknown": "Unknown"
+    },
     "waiting": {
       "searching": "Searching for an opponent…",
       "speed": "Category",

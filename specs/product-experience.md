@@ -1407,8 +1407,29 @@ is still the only thing that does.
 
 `npm run test` 202 passed, `tsc --noEmit` clean, `eslint` zero errors.
 
-### 16.7 The rest of A64-025.7
+### 16.7 Two defects the same review found on the surfaces around it
 
-This task took the finding the audit raised. The tournament list and detail
-surfaces, the status presentation, the entrants list and the standings table
-were not redesigned and are the remainder of `.7`.
+**The variant and the speed class were raw server enums.** A tournament card
+said `russian_8x8` and `classical` to a player, in every locale, on the lobby
+and on the detail page. Nothing failed — the identifiers simply arrived on
+screen, which is exactly the failure `labels.ts` was written to prevent and
+which its own note describes.
+
+The keys live under `play.*` rather than `tournament.*` because that is where
+this vocabulary already was: `play.speed` has carried all five classes since
+the lobby was built, and a second copy would be two places to add
+`correspondence`. `play.variant` is new only because no surface had ever
+needed to name a variant — the game room does not, since a player who is
+playing knows what they are playing.
+
+**The status was drawn two ways.** The lobby card had a bordered pill; the
+detail page put the same fact into a run-on subtitle, so the surface a player
+lands on after clicking a card dropped the treatment the card had just taught
+them. One `TournamentStatusBadge` now serves both, and `in_progress` gains
+`--success` — it had no tint at all, though it is the state a spectator is
+looking for.
+
+### 16.8 The rest of A64-025.7
+
+The entrants list, the standings table and the registration panel were not
+redesigned and are the remainder of `.7`.

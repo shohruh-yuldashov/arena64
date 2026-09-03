@@ -1538,7 +1538,24 @@ nothing offered.
 The rule is a test, not a convention a reviewer has to hold: the friends
 empty state must expose a link to `/search`.
 
-### 17.6 The rest of A64-025.8
+### 17.6 What was seen, and what was not
 
-The challenge flow itself, the sent-challenges rows and the search surface
-were not redesigned. They are the remainder of `.8`.
+**Search was reviewed and needed nothing of its own.** Twenty results
+against a real term at 1280: the rows carry both fixes above — one name line
+where there is no display name, `Block` in the destructive tone — and the
+page does not overflow. What it does raise is a *product* question rather
+than a visual one: a stranger's row offers `Block` beside `Add friend` as a
+co-equal action, which is `actionsFor` returning what the relationship
+allows rather than what a search result should lead with. Left alone,
+because narrowing it is a decision about the social model.
+
+**The challenge rows were never seen.** Two pending challenges were seeded
+directly into `matchmaking.friend_challenge` — one sent, one received — and
+neither reached the list. The read filters them for a reason this task did
+not chase: seeding a friend challenge through the database alone evidently
+misses something the service does, and the honest record is that the rows
+are unverified rather than that they are fine.
+
+Both empty states *were* verified, and they are the two this task changed.
+
+The challenge rows themselves are the remainder of `.8`.

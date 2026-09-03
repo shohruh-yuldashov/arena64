@@ -24,10 +24,12 @@ schema, endpoints, or code.
 
 ## 1. Assumptions and Inputs
 
-`docs/00-overview/vision.md` and `roadmap.md` are still placeholders, so this architecture
-is derived from the feature set enumerated in `specs/`, the existing monorepo layout, and
-the intended stack recorded in the root `README.md`. The following assumptions are load
-bearing — **if any is wrong, the design must be revisited**:
+`docs/00-overview/vision.md` and `roadmap.md` were placeholders when this document was
+written, so this architecture is derived from the feature set enumerated in `specs/`, the
+existing monorepo layout, and the intended stack recorded in the root `README.md`. Both
+have since been written, but they were themselves reconstructed from what shipped — they
+record these assumptions rather than independently confirming them. The following are
+load bearing — **if any is wrong, the design must be revisited**:
 
 | # | Assumption | Consequence if wrong |
 | --- | --- | --- |
@@ -37,6 +39,11 @@ bearing — **if any is wrong, the design must be revisited**:
 | A-4 | Ratings are **competitive and permanent** — a corrupted result is unacceptable | Exactly-once result processing could be relaxed, simplifying the outbox |
 | A-5 | Spectating is a first-class feature with **fan-out far exceeding player traffic** | The player/spectator channel split becomes unnecessary |
 | A-6 | The platform is a **single global deployment** initially, not multi-region active-active | Data ownership and consistency sections change substantially |
+
+**A-5 is the one assumption the product has not validated.** Spectating is implemented at
+the gateway (`specs/spectator.md`, A64-016.7) but has no player-facing surface, so the
+fan-out that justifies the player/spectator channel split has never been observed — see
+`docs/00-overview/vision.md` OQ-3.
 
 Every decision below is tagged `AD-nn` and carries its rationale. These are **candidates
 for promotion to ADRs** in `docs/07-decisions/` — see §17.

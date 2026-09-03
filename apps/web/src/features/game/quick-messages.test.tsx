@@ -70,7 +70,7 @@ it("offers exactly the server's catalogue and nothing that could carry text", as
     />,
   );
 
-  await userEvent.setup().click(screen.getByRole("button", { name: /^quick messages$/i }));
+  await userEvent.setup().click(screen.getByRole("button", { name: /^send a message$/i }));
 
   const menu = screen.getByRole("menu");
   expect(within(menu).getAllByRole("menuitem")).toHaveLength(QUICK_MESSAGES.length);
@@ -102,7 +102,7 @@ it("sends the semantic identifier, not the label, and closes", async () => {
   );
 
   const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: /^quick messages$/i }));
+  await user.click(screen.getByRole("button", { name: /^send a message$/i }));
   await user.click(screen.getByRole("menuitem", { name: /nice move/i }));
 
   expect(sent).toEqual(["nice_move"]);
@@ -124,7 +124,7 @@ it("is keyboard operable and returns focus on Escape", async () => {
   );
 
   const user = userEvent.setup();
-  const trigger = screen.getByRole("button", { name: /^quick messages$/i });
+  const trigger = screen.getByRole("button", { name: /^send a message$/i });
   await user.click(trigger);
 
   // Opening focuses the first item, so the list is reachable at all.
@@ -188,7 +188,7 @@ it("disables sending but never the mute control on a terminal match", () => {
   );
 
   expect(
-    screen.getByRole("button", { name: /^quick messages$/i }).hasAttribute("disabled"),
+    screen.getByRole("button", { name: /^send a message$/i }).hasAttribute("disabled"),
   ).toBe(true);
   expect(
     screen.getByRole("button", { name: /^mute quick messages$/i }).hasAttribute("disabled"),
@@ -332,7 +332,7 @@ async function openGame(status: "active" | "completed" = "active") {
   const sockets = stubWebSocket(status);
   renderApp({ path: `/games/${MATCH}`, realtimeClient: new RealtimeClient() });
   // The picker only renders once the snapshot has named this client a seat.
-  await screen.findByRole("button", { name: /^quick messages$/i }, { timeout: 5000 });
+  await screen.findByRole("button", { name: /^send a message$/i }, { timeout: 5000 });
   return sockets;
 }
 
@@ -346,7 +346,7 @@ it("puts a real send frame on the real socket and renders the server's echo once
   const socket = sockets[sockets.length - 1]!;
 
   const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: /^quick messages$/i }));
+  await user.click(screen.getByRole("button", { name: /^send a message$/i }));
   await user.click(screen.getByRole("menuitem", { name: /good game/i }));
 
   const frame = socket.sent
@@ -417,7 +417,7 @@ it("shows a calm localised message when the server rate-limits a send", async ()
   const socket = sockets[sockets.length - 1]!;
 
   const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: /^quick messages$/i }));
+  await user.click(screen.getByRole("button", { name: /^send a message$/i }));
   await user.click(screen.getByRole("menuitem", { name: /thanks/i }));
 
   socket.onmessage?.({
@@ -443,7 +443,7 @@ it("refuses to send once the match is terminal, and replays nothing on reconnect
   // without a bubble.
   const sockets = await openGame("completed");
   expect(
-    screen.getByRole("button", { name: /^quick messages$/i }).hasAttribute("disabled"),
+    screen.getByRole("button", { name: /^send a message$/i }).hasAttribute("disabled"),
   ).toBe(true);
 
   // A message that arrived while the game was live finishes its own
@@ -529,7 +529,7 @@ it("treats an intentionally repeated message as new rather than as a duplicate",
     const sockets = stubWebSocket();
     renderApp({ path: `/games/${MATCH}`, realtimeClient: new RealtimeClient() });
     await vi.waitFor(() =>
-      expect(screen.getByRole("button", { name: /^quick messages$/i })).toBeTruthy(),
+      expect(screen.getByRole("button", { name: /^send a message$/i })).toBeTruthy(),
     );
     const socket = sockets[sockets.length - 1]!;
 
@@ -571,7 +571,7 @@ it("takes a refusal away again instead of leaving it on a finished game", async 
     const sockets = stubWebSocket();
     renderApp({ path: `/games/${MATCH}`, realtimeClient: new RealtimeClient() });
     await vi.waitFor(() =>
-      expect(screen.getByRole("button", { name: /^quick messages$/i })).toBeTruthy(),
+      expect(screen.getByRole("button", { name: /^send a message$/i })).toBeTruthy(),
     );
     const socket = sockets[sockets.length - 1]!;
 
@@ -622,7 +622,7 @@ it("returns focus to the trigger when a finishing game closes an open picker", a
 
   renderWithProviders(<Harness />);
   const user = userEvent.setup();
-  const trigger = screen.getByRole("button", { name: /^quick messages$/i });
+  const trigger = screen.getByRole("button", { name: /^send a message$/i });
   const mute = screen.getByRole("button", { name: /^mute quick messages$/i });
 
   await user.click(trigger);

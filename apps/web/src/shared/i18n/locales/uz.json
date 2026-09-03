@@ -596,7 +596,8 @@
       "late": "Reyting yangilanishi kutilganidan uzoqroq davom etmoqda."
     },
     "quickMessages": {
-      "open": "Tezkor xabarlar",
+      "heading": "Tezkor xabarlar",
+      "open": "Xabar yuborish",
       "mute": "Tezkor xabarlarni o'chirish",
       "unmute": "Tezkor xabarlarni yoqish",
       "goodLuck": "Omad!",

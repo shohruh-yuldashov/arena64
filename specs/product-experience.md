@@ -3,10 +3,10 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-PRODUCT-EXPERIENCE` |
-| **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6 game room |
+| **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6/.6A/.6B/.6C game room |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-08-10 — A64-025.6B, seat ratings on the board |
+| **Last updated** | 2026-09-03 — A64-025.6C, the board's own palette |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -451,13 +451,30 @@ tokens.
 | **A64-025.4** | Authentication UX | .2 | Changing the session or verification model |
 | **A64-025.5** | Lobby and matchmaking | .2 | Changing the queue state machine |
 | **A64-025.6** | Game room. Fixes P1-2, P1-3 | .2 | Changing board semantics or the protocol |
-| **A64-025.7** | Profile and social | .2 | Changing privacy rules |
-| **A64-025.8** | Tournament and bracket, edges derived from `BracketSlot.parent()` | .2 | Backend contract changes; canvas, zoom or drag |
-| **A64-025.9** | Notifications | .2 | Admin notification surfaces |
-| **A64-025.10** | Email design system. Fixes P2-2 | .2 (tokens only) | New email types |
-| **A64-025.11** | Responsive and mobile polish | .3–.9 | Re-architecting layouts already designed mobile-first |
-| **A64-025.12** | Accessibility and motion. Fixes P3-5 | .3–.9 | Adding motion for its own sake |
+| **A64-025.6A** | Game room visual hardening — §13.10 | .6 | New data on the board |
+| **A64-025.6B** | Seat ratings on the snapshot — §14 | .6A | Reading a rating per player |
+| **A64-025.6C** | The board itself, and the panel around it — §15 | .6B | New data on the board; changing board semantics |
+| **A64-025.7** | Tournament and bracket, edges derived from `BracketSlot.parent()`. Closes OQ-4 | .2 | Backend contract changes; canvas, zoom or drag |
+| **A64-025.8** | Friends and social | .2 | Changing privacy or blocking rules |
+| **A64-025.9** | Profile and player | .2 | Changing privacy rules; inventing a statistic |
+| **A64-025.10** | Notifications | .2 | Admin notification surfaces |
+| **A64-025.10E** | Email design system. Fixes P2-2 | .2 (tokens only) | New email types |
+| **A64-025.11** | Global UI consistency and component cleanup | .3–.10 | Re-architecting layouts already designed mobile-first |
+| **A64-025.12** | Motion and interaction system. Fixes P3-5 | .3–.10 | Adding motion for its own sake |
 | **A64-025.13** | Closing audit | all | New work |
+
+**Renumbered on 2026-09-03**, at the owner's direction, and the order below is
+theirs: tournament before social, social before profile, notifications after both.
+The plan this replaces read `.7` profile and social, `.8` tournament, `.9`
+notifications, `.10` email.
+
+Two consequences worth stating rather than leaving to be noticed. The game-room
+tasks that actually shipped — `.6A` and `.6B` — were never in this table and are
+now, because a plan that omits half the delivered work cannot be checked against
+it. And the email design system keeps its scope under `.10E` rather than a number
+of its own: it is the email half of notifications, it was absent from the new
+ordering, and P2-2 is a live defect — the password-reset mail is English-only
+plain text while the other two are trilingual HTML.
 
 ---
 
@@ -1204,3 +1221,105 @@ payload. That assertion encoded the requirement this task changes, so it was
 replaced by a positive one plus the half that still holds: the calculation
 fields and the rating key are asserted **absent**, and handles remain absent
 too.
+
+---
+
+## 15. The board itself, and the panel around it — A64-025.6C
+
+### 15.1 What the previous two tasks left
+
+A64-025.6 fixed the *composition* and A64-025.6A the *surfaces beside* the
+board. Neither touched the board, and a screenshot review of a real 1+0 game
+found that what the page is entirely about was the one thing nobody had
+designed.
+
+Five findings, all from the running product rather than from reading the
+code:
+
+| # | Finding | Evidence |
+| --- | --- | --- |
+| B-1 | The board had no palette. Squares were `--foreground` at 22% opacity — the *text* colour, thinned — and pieces were hard-coded `neutral-*`. In the light theme that is a grey checkerboard; the surface read as a wireframe | `board.tsx` before this task |
+| B-2 | In the dark theme a dark piece was all but invisible on a dark square, because `neutral-800` does not move when the theme does | Measured at 360 dark |
+| B-3 | The quick-message group had no heading while `GameControls` beside it had one, so two labelled sections sandwiched two loose buttons | 1280 light |
+| B-4 | The seat joined the rating with a space and the side with a middot — `Dark  1500?` beside `Light · You  1500?` | Both seats, every width |
+| B-5 | The captured-piece ring was `ring-red-500`, a raw Tailwind colour in a product with a semantic destructive token | `board.tsx` |
+
+### 15.2 The board is a surface with a palette, not an opacity of the text
+
+Six tokens, defined in both themes beside every other token this product
+has — `--board-light`, `--board-dark`, `--piece-light`, `--piece-light-edge`,
+`--piece-dark`, `--piece-dark-edge`.
+
+**Warm neutral, and deliberately not indigo.** The brand hue is what the
+board already uses to mean *interaction*: the last move is `--primary` mixed
+into the square, a legal destination is a `--primary` dot, the selected
+square takes a `--primary` ring. A board tinted with the same hue would leave
+every one of those competing with its own background. The board is therefore
+the one surface in the product that carries a hue the brand does not.
+
+The dark theme moves both squares down and keeps them the same distance
+apart, so the checkerboard reads identically. **The dark piece is the one
+value that is not a straight translation** — at the light theme's lightness
+it would sit on a dark square with nothing between them, which is B-2. It
+keeps a dark fill and takes a much lighter rim, so the piece is found by its
+edge rather than by its body.
+
+### 15.3 Two consequences of an opaque board
+
+The last-move highlight was `--primary` at 18% **over transparency**, which
+worked only because the square beneath it was itself a transparency. Against
+an opaque board it would drop the square back to the container behind it, so
+it is now mixed *into* `--board-dark` at 30% and stays opaque.
+
+The pieces gained an inset shadow — lit from above, shaded below. That is the
+whole of the relief, and it is what makes a piece read as an object on a
+board rather than as a filled circle in a cell.
+
+### 15.4 What did not change
+
+The board's semantics, the move model, the keyboard navigation and every
+accessible name. `squareLabel` still states coordinate, occupant and
+interaction state, so nothing here moved information into colour. The king is
+still a glyph as well as a ring — two ranks that differ by shape and not only
+by tone.
+
+### 15.5 A finding that was not a defect
+
+The panel beside the board ends well above the board's bottom edge at `lg`,
+and that was on the review list as an imbalance. It is not one: the parent
+already carries `lg:items-start`, so the panel is the height of its contents
+and nothing is stretching. The space beside a tall board is what a two-column
+layout with unequal content produces, and the only way to fill it is to put
+something in the panel that the domain does not publish — which §2 forbids
+and §13.7 already refused once for a captured-material summary.
+
+A `lg:self-start` was written and then removed. It changed nothing, and a
+class that changes nothing is a claim that something was fixed.
+
+### 15.6 Deferred, with the reason
+
+| Gap | Why |
+| --- | --- |
+| Secondary player statistics in the seat | The snapshot carries ratings and nothing else about a player, by design — §14.3. Adding a win rate would be a profile read per player on the most latency-sensitive surface in the product, to decorate a card |
+| Board coordinate labels | Not a regression and not asked for; the accessible name already carries the coordinate, and a rank-and-file gutter costs board size at 360 where a square is already 41px |
+
+### 15.7 Measured
+
+A real 1+0 game paired through the lobby in Chromium, screenshotted before
+and after at every combination:
+
+| Width | Theme | Page overflow |
+| --- | --- | --- |
+| 1280 | light | 0 |
+| 1280 | dark | 0 |
+| 768 | light | 0 |
+| 768 | dark | 0 |
+| 360 | light | 0 |
+| 360 | dark | 0 |
+
+`npm run test` 202 passed, `tsc --noEmit` clean, `eslint` zero errors.
+
+Eleven selectors in `quick-messages.test.tsx` changed with the trigger's
+label, which is now "Send a message" — the group heading above it says
+"Quick messages", and a button repeating its own heading is a label that
+tells a reader nothing. The assertions are the same assertions.

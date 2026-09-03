@@ -5,6 +5,7 @@ import { avatarSrc, initialsOf } from "@/entities/profile";
 import { profileErrorKey } from "@/features/profile/model/error-messages";
 import { useDeleteAvatar, useUploadAvatar } from "@/features/profile/model/queries";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
+import { cn } from "@/shared/lib/cn";
 import {
   Avatar,
   AvatarFallback,
@@ -132,16 +133,26 @@ export function AvatarManager({ profile }: { profile: MyProfile }) {
           <AvatarFallback className="text-lg">{initialsOf(profile)}</AvatarFallback>
         </Avatar>
 
-        <div className="flex flex-col gap-2">
-          {/* A real `<input type="file">`, labelled — not a hidden input
-              behind a `<div onClick>`. The native control is keyboard
-              reachable, announces its accepted types, and opens the system
-              picker on Enter; a div does none of that. */}
-          <label htmlFor="avatar-file" className="text-sm font-medium">
-            {profile.avatar_url === null
-              ? t("profile.avatar.upload")
-              : t("profile.avatar.replace")}
-          </label>
+        <div className="flex min-w-0 flex-col gap-2">
+          {/* Still a real `<input type="file">` — A64-025.9 keeps that and
+              changes only where it is drawn.
+
+              The control is keyboard reachable, announces its accepted
+              types and opens the system picker on Enter, and a hidden input
+              behind a `<div onClick>` does none of that. So the input is
+              **visually** hidden rather than removed: `sr-only` leaves it in
+              the tab order and in the accessibility tree, and the `<label>`
+              beside it is what a pointer hits.
+
+              Two things forced the move. Its intrinsic width does not
+              shrink, so at 360 it pushed 47px past the viewport — the only
+              page in this epic that overflowed. And the words inside it,
+              "Choose File" and "No file chosen", are the browser's: they
+              are English in every locale, in a product where all 775 other
+              strings go through `t()`.
+
+              `peer-focus-visible` on the label is what keeps a keyboard
+              user's focus visible now that the input itself is not. */}
           <input
             ref={input}
             id="avatar-file"
@@ -149,12 +160,25 @@ export function AvatarManager({ profile }: { profile: MyProfile }) {
             accept={ACCEPTED_TYPES.join(",")}
             disabled={busy}
             aria-describedby="avatar-hint"
-            className="text-sm file:mr-3 file:min-h-11 file:rounded-md file:border file:bg-transparent file:px-3 file:text-sm file:font-medium"
+            className="peer sr-only"
             onChange={(event) => {
               const file = event.target.files?.[0];
               if (file !== undefined) void onFileChosen(file);
             }}
           />
+          <label
+            htmlFor="avatar-file"
+            className={cn(
+              "border-border inline-flex min-h-11 w-fit cursor-pointer items-center",
+              "rounded-md border px-3 text-sm font-medium",
+              "hover:bg-accent peer-focus-visible:ring-ring peer-focus-visible:ring-2",
+              "peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+            )}
+          >
+            {profile.avatar_url === null
+              ? t("profile.avatar.upload")
+              : t("profile.avatar.replace")}
+          </label>
           <p id="avatar-hint" className="text-muted-foreground text-xs">
             {t("profile.avatar.hint", { max: MAX_MB })}
           </p>

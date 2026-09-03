@@ -3,10 +3,10 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-PRODUCT-EXPERIENCE` |
-| **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6/.6A/.6B/.6C game room |
+| **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 bracket edges |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-03 — A64-025.6C, the board's own palette |
+| **Last updated** | 2026-09-03 — A64-025.7, the bracket draws its edges |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -349,7 +349,7 @@ most, the clock can be off-screen.
 
 | # | Finding | Task |
 | --- | --- | --- |
-| P2-1 | Bracket has no visual parent-child relationship, though the relationship is authoritative and already on the wire (§3.6) | A64-025.8 |
+| ~~P2-1~~ | ~~Bracket has no visual parent-child relationship, though the relationship is authoritative and already on the wire (§3.6)~~ | **Fixed** — §16 |
 | P2-2 | Password-reset email is English-only and plain-text-only while the other two are trilingual HTML (§3.10) | A64-025.10 |
 | P2-3 | No shared empty/error/loading component — 74 hand-rolled live regions (§3.9) | **Foundation laid** — `ListState` promoted and `Notice` added (§10.7); the sweep across surfaces is A64-025.11/.12 |
 | ~~P2-4~~ | ~~No `aria-current` anywhere in navigation~~ | **Fixed** — §9.3 |
@@ -485,7 +485,7 @@ plain text while the other two are trilingual HTML.
 | ~~OQ-1~~ | ~~What does `/` show an anonymous visitor?~~ | **Closed by A64-025.3** — `/` is the authenticated player's product home; the route keeps its existing lack of a guard, so an anonymous visitor gets a signed-out home offering sign-in and registration. A public marketing page is a separate surface for a separate audience and is not this epic's |
 | ~~OQ-2~~ | ~~What is Arena64's brand colour?~~ | **Closed by A64-025.2** — indigo, `oklch(0.5 0.19 275)` light and `oklch(0.68 0.16 275)` dark. The reasoning is in §10.1 and it is reversible in two token values |
 | ~~OQ-3~~ | ~~Where do the clocks go on a phone?~~ | **Closed by A64-025.6** — neither. Each clock lives in its player's seat, and the seats sit directly above and below the board at every width. §13.3 |
-| OQ-4 | Does the bracket keep horizontal scroll on mobile, or switch to a round-at-a-time view below `sm:`? | A64-025.8 |
+| ~~OQ-4~~ | ~~Does the bracket keep horizontal scroll on mobile, or switch to a round-at-a-time view below `sm:`?~~ | **Closed by A64-025.7** — horizontal scroll, kept. A segmented view hides the comparison the bracket exists to make, and the edges are now drawn, which is what the scroll was missing rather than the scroll being the problem. §16 |
 
 ---
 
@@ -1323,3 +1323,92 @@ Eleven selectors in `quick-messages.test.tsx` changed with the trigger's
 label, which is now "Send a message" — the group heading above it says
 "Quick messages", and a button repeating its own heading is a label that
 tells a reader nothing. The assertions are the same assertions.
+
+---
+
+## 16. The bracket draws its edges — A64-025.7
+
+### 16.1 The finding this closes
+
+P2-1, from the A64-025.1 audit: *"the bracket has no visual parent-child
+relationship, though the relationship is authoritative and already on the
+wire."* §3.6 recorded the reasoning that left it out — connectors imply
+absolute positioning and fixed row heights, and fixed heights are what stop a
+bracket reflowing at 360px — and then said plainly that the trade was
+defensible and *"the result is still not a bracket: a reader cannot see which
+two nodes feed the one above them."*
+
+### 16.2 The half of that argument that was wrong
+
+Absolute positioning is needed. Fixed heights are not.
+
+Each round column now distributes its own height with `flex-1` on every
+node, so a round with four nodes gives each a quarter and the round beside it
+with two gives each a half. A node in round N is therefore exactly as tall as
+the two in round N-1 that feed it, and its centre is their midpoint **by
+construction** rather than by measurement. No height is stated anywhere in the
+component, and the bracket reflows exactly as it did before.
+
+### 16.3 Every edge is the domain relationship
+
+`bracket_plan.py` states it and the drawing consumes it unchanged:
+
+- a node is `(round_number, slot)`;
+- `BracketSlot.parent()` is `(round_number + 1, slot // 2)`;
+- `takes_light_seat_of_parent()` is `slot % 2 == 0`.
+
+That last one is the only thing the drawing branches on. An even slot is the
+upper of its pair, so its line runs **down** to the midpoint the pair shares;
+an odd slot's runs **up**. The two meet at the height of the node they feed,
+which is where that node's incoming line already is.
+
+Nothing measures a rendered box, and nothing infers a relationship from
+position — which is what §7's principle 7 asked for: *a relationship the
+domain knows is a relationship the UI draws.*
+
+The gap between columns is `gap-8` and each stub is `w-4`. That is not a
+visual preference: the two stubs and the vertical line meet in the middle of
+the gap because the gap is twice the stub.
+
+### 16.4 The lines are decoration; the text is the relationship
+
+Every connector is `aria-hidden`. A line is invisible to a screen reader, so
+the round heading and the seed number still carry the relationship in words
+exactly as they did — §3.6 was right that this is the only form assistive
+technology can use, and the drawing is an addition to it rather than a
+replacement.
+
+### 16.5 OQ-4, closed
+
+**Horizontal scroll, kept.** The question was whether a phone should get a
+round-at-a-time segmented view instead, and the answer is no for the reason
+the original choice gave: a player comparing "who is in the semi-final"
+against "who they beat" wants both columns visible, and a segmented view
+hides exactly that behind a control.
+
+What the scrolling bracket was missing was not a different navigation model.
+It was the edges, and they are drawn now at every width.
+
+### 16.6 Measured
+
+The bracket of a real eight-entrant tournament, seeded and started through
+`python -m app.operator.tournament run`, so every node, seed and live match
+is a server fact:
+
+| Width | Theme | Page overflow |
+| --- | --- | --- |
+| 1280 | light | 0 |
+| 1280 | dark | 0 |
+| 360 | light | 0 |
+| 360 | dark | 0 |
+
+The page body still never scrolls sideways; the labelled, focusable scroller
+is still the only thing that does.
+
+`npm run test` 202 passed, `tsc --noEmit` clean, `eslint` zero errors.
+
+### 16.7 The rest of A64-025.7
+
+This task took the finding the audit raised. The tournament list and detail
+surfaces, the status presentation, the entrants list and the standings table
+were not redesigned and are the remainder of `.7`.

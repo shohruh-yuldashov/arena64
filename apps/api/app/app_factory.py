@@ -249,7 +249,7 @@ from app.platform.tasks import (
     PeriodicTaskScheduler,
     TaskHandler,
 )
-from app.storage import LocalStorageProvider
+from app.storage import LocalStorageProvider, S3StorageProvider
 
 logger = logging.getLogger(__name__)
 
@@ -1775,6 +1775,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await presence_sweeper.stop()
         if outbox_worker is not None:
             await outbox_worker.stop()
+        # A64-027.1. `_configure_storage`'s note said an S3 client would be
+        # closed here "at the point it exists"; it exists now. Duck-typed
+        # rather than `isinstance`, because closing is a property of holding
+        # a connection pool and not of being one particular provider —
+        # `LocalStorageProvider` holds a path and has nothing to release.
+        storage = getattr(app.state, "storage", None)
+        closer = getattr(storage, "aclose", None)
+        if closer is not None:
+            await closer()
         await redis_pools.aclose()
         await db.close()
         logger.info("shutdown_complete")
@@ -1813,7 +1822,13 @@ def _configure_storage(app: FastAPI, settings: Settings) -> None:
     that wired into `lifespan` at the point it exists, alongside its
     construction.
     """
-    storage = LocalStorageProvider(settings.storage, settings.environment)
+    # The one branch A64-012.2 predicted, and the only place on the platform
+    # that names a concrete provider.
+    storage: LocalStorageProvider | S3StorageProvider = (
+        S3StorageProvider(settings.storage)
+        if settings.storage.provider == "s3"
+        else LocalStorageProvider(settings.storage, settings.environment)
+    )
     app.state.storage = storage
 
     # Development only, and the guard is the provider's own type rather

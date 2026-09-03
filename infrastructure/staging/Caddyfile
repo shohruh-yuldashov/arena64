@@ -1,0 +1,39 @@
+# The staging edge — TLS, and the two things behind one hostname.
+#
+# Caddy obtains and renews the certificate itself, which is the whole reason
+# it is here rather than nginx: a staging tier whose certificate expires
+# silently is one nobody trusts the next failure of.
+
+{$ARENA64_DOMAIN} {
+	# Media first — it is the more specific path, and Caddy matches in
+	# order of specificity rather than declaration, but stating it first
+	# keeps the file readable in the order a request is resolved.
+	#
+	# The bucket is public (`minio-provision` sets `anonymous download`),
+	# so this proxy carries no credentials and signs nothing. It exists so
+	# that `STORAGE_PUBLIC_BASE_URL` can be a real hostname on the public
+	# certificate rather than an internal one a browser cannot resolve.
+	#
+	# In production this is a CDN, and the only thing that changes is the
+	# value of that setting — which is exactly the substitution
+	# `StorageSettings.public_base_url` was made configurable for.
+	handle_path /media/* {
+		reverse_proxy minio:9000
+	}
+
+	# Everything else, including the WebSocket. Caddy upgrades `/ws`
+	# connections without configuration — no `Upgrade`/`Connection` header
+	# dance, which is the single most common way a reverse proxy in front of
+	# a realtime application silently downgrades every socket to a polling
+	# fallback that does not exist here.
+	handle {
+		reverse_proxy api:8000
+	}
+
+	# `X-Forwarded-For` reaches the application through Caddy, and
+	# `RATE_LIMIT_TRUSTED_PROXY_COUNT` must agree with how many proxies sit
+	# in front of it — one, here. A limiter that trusts the wrong hop
+	# either rate-limits the proxy as one client or accepts a spoofed
+	# address from a real one.
+	encode zstd gzip
+}

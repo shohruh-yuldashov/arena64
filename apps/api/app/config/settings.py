@@ -968,11 +968,50 @@ class StorageSettings(SectionSettings):
 
     model_config = SettingsConfigDict(env_prefix="STORAGE_", frozen=True, extra="forbid")
 
-    provider: Literal["local"] = "local"
-    """The only value today. A `Literal` rather than a free string so that
-    `STORAGE_PROVIDER=s3` on a tier where S3 is not yet implemented fails
-    at startup with a readable error, rather than silently falling through
-    to local and losing every upload."""
+    provider: Literal["local", "s3"] = "local"
+    """Which adapter `_configure_storage` builds.
+
+    `s3` since A64-027.1 and it means any S3-compatible store — AWS S3,
+    Cloudflare R2, MinIO, Backblaze B2 — because they share one signing
+    scheme and one request shape. `local` is development only and refuses
+    to construct in a deployed tier.
+
+    A `Literal` rather than a free string, so a typo fails at startup with a
+    readable error rather than falling through to a provider that loses
+    every upload."""
+
+    s3_endpoint_url: str = ""
+    """The store's base URL — `https://s3.eu-central-1.amazonaws.com`,
+    `https://<account>.r2.cloudflarestorage.com`, `http://minio:9000`.
+
+    Required when `provider` is `s3` and empty otherwise. There is no
+    default: every candidate store spells this differently, and a guessed
+    endpoint fails at the first upload rather than at startup."""
+
+    s3_bucket: str = ""
+    """The bucket objects are written to. Required when `provider` is `s3`."""
+
+    s3_region: str = "auto"
+    """The region name that goes into the signature.
+
+    `auto` is what R2 and most MinIO deployments expect; AWS needs the real
+    region. It is part of the signing key, so a wrong value produces a
+    `403` with a correct-looking request — which is why it is configurable
+    rather than derived from the endpoint."""
+
+    s3_access_key_id: SecretStr = SecretStr("")
+    """Required when `provider` is `s3`."""
+
+    s3_secret_access_key: SecretStr = SecretStr("")
+    """Required when `provider` is `s3`. A `SecretStr`, so it cannot reach a
+    log through a settings dump — the same protection `JWT_SECRET_KEY` and
+    the Postgres DSN carry."""
+
+    s3_timeout_seconds: float = 10.0
+    """Every request to the store carries it — CLAUDE.md §9.10 and §10.6: no
+    I/O without a deadline. Ten seconds is generous for a few hundred
+    kilobytes and short enough that a stalled store cannot hold an upload
+    handler open indefinitely."""
 
     local_root: str = "var/storage"
     """Where `LocalStorageProvider` writes. Relative to the process working
@@ -1005,6 +1044,36 @@ class StorageSettings(SectionSettings):
         path = self.public_base_url.split("://", 1)[-1]
         mount = path[path.index("/") :] if "/" in path else "/media"
         return mount.rstrip("/") or "/media"
+
+    @model_validator(mode="after")
+    def _s3_is_configured_when_chosen(self) -> "StorageSettings":
+        """`provider=s3` without an endpoint, a bucket or credentials fails
+        **at startup**, not at the first upload.
+
+        The alternative is a tier that serves every page correctly and
+        rejects the first avatar somebody tries to change, hours later, with
+        a 500 nobody can trace to configuration. DI-06's rule: fail before
+        serving traffic.
+        """
+        if self.provider != "s3":
+            return self
+
+        missing = [
+            name
+            for name, value in (
+                ("STORAGE_S3_ENDPOINT_URL", self.s3_endpoint_url),
+                ("STORAGE_S3_BUCKET", self.s3_bucket),
+                ("STORAGE_S3_ACCESS_KEY_ID", self.s3_access_key_id.get_secret_value()),
+                ("STORAGE_S3_SECRET_ACCESS_KEY", self.s3_secret_access_key.get_secret_value()),
+            )
+            if not value.strip()
+        ]
+        if missing:
+            raise ValueError(
+                f"STORAGE_PROVIDER=s3 requires {', '.join(missing)} — "
+                "an object store cannot be reached without them"
+            )
+        return self
 
 
 # Configured with **class keywords** rather than a `model_config`, and this

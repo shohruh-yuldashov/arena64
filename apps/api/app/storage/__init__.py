@@ -7,12 +7,18 @@ property. `avatars` writes to it, `profiles` reads URLs out of it, and a
 future exports feature (architecture.md §134 names "avatars, exports" as
 the object-storage workload) will too.
 
-One provider today — `LocalStorageProvider`, development only. The
-S3/R2/MinIO/GCS providers A64-012.2 anticipates are new classes in this
-package plus a branch in one dependency factory; nothing above the port
-changes, which is what makes that claim checkable rather than aspirational.
+Two providers. `LocalStorageProvider` is development only and refuses to
+construct in a deployed tier; `S3StorageProvider` is what a deployed tier
+uses, and covers AWS S3, Cloudflare R2, MinIO and Backblaze B2 alike
+because they share one signing scheme.
+
+A64-012.2 predicted the shape of this: *"a new class in this package plus a
+branch in one dependency factory; nothing above the port changes."* That
+held exactly — `_configure_storage` gained a branch and no service, domain
+type or schema moved.
 """
 
 from app.storage.local import LocalStorageProvider
+from app.storage.s3 import S3StorageProvider
 
-__all__ = ["LocalStorageProvider"]
+__all__ = ["LocalStorageProvider", "S3StorageProvider"]

@@ -99,13 +99,14 @@ Arena64/
 ├── prompts/              # Prompt library for AI-assisted development (unpopulated)
 ├── templates/            # Document skeletons — specs, ADRs, PRs, bug reports, READMEs
 ├── docker/               # Local development infrastructure — Postgres 17, Redis 8
+├── infrastructure/       # Deployment definitions — staging
 └── .github/workflows/    # CI — every gate, on every pull request
 ```
 
 There is **no `packages/` directory**: nothing has yet been needed by two consumers at
 once, and a shared package earns its place on the third real use, not the first
-prediction (`CLAUDE.md` §3.5, §2.7). `infrastructure/` and `scripts/` do not exist
-either — see [Known gaps](#known-gaps).
+prediction (`CLAUDE.md` §3.5, §2.7). `scripts/` does not exist either — see
+[Known gaps](#known-gaps).
 
 Placement rules for new code and documents are in
 [`docs/02-development/folder-structure.md`](./docs/02-development/folder-structure.md).
@@ -262,6 +263,7 @@ as a placeholder.
 | [Database](./docs/01-architecture/database.md) | Persistence strategy and data model | Draft — proposed for review |
 | [WebSocket](./docs/01-architecture/websocket.md) | Realtime connection and message design | **Approved** |
 | [Caching](./docs/01-architecture/caching.md) | Keyspaces, owners, TTLs | **Approved** for the keyspaces that exist |
+| [Deployment](./docs/01-architecture/deployment.md) | How it runs outside a laptop, and where that deviates from AD-02/AD-03 | Draft — staging only |
 | [Events](./docs/01-architecture/events.md) | Domain event catalogue | Placeholder |
 | [Security](./docs/01-architecture/security.md) | Threat model and controls | Placeholder |
 
@@ -321,7 +323,7 @@ repository's own rules require.
 | # | Gap | Rule it contradicts |
 | --- | --- | --- |
 | G-1 | **CI runs every gate except the Playwright suite**, which needs a running API and seeded accounts | `CLAUDE.md` §5.10 — "the full test suite" is not yet the whole of it |
-| G-2 | **No deployment definition.** No `infrastructure/`, no application container; only local Compose | `architecture.md` AD-02 names three runtime profiles that nothing yet deploys |
+| G-2 | **Staging is defined and has never run on a public host.** `infrastructure/staging/` and `apps/api/Dockerfile` exist and boot locally; TLS, the WebSocket through a proxy and email links are unverified. AD-02's three profiles are still one process — see [`deployment.md`](./docs/01-architecture/deployment.md) §2 | `architecture.md` AD-02 |
 | G-3 | **Placeholder process docs.** `coding-standards.md`, `git-workflow.md`, `folder-structure.md` are placeholders that `CLAUDE.md` cites as authoritative | `CLAUDE.md` §4.2 — every document declares status and owner |
 | G-4 | **No document owners.** Every `Owner` field reads `_Unassigned_` | `CLAUDE.md` §4.2 — "unowned documents rot" |
 | G-5 | **Stack decisions unratified.** Backend platform choices live as `AD-nn` notes, not ADRs | `CLAUDE.md` §3.10 |

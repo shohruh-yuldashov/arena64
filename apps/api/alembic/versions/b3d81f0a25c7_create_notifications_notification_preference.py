@@ -75,8 +75,8 @@ still lives in it, and this migration did not create it.
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 
+from alembic import op
 from app.database.types import UtcDateTime
 
 revision: str = "b3d81f0a25c7"

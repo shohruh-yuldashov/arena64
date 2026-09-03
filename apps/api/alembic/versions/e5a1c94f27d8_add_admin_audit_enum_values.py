@@ -60,6 +60,7 @@ down_revision: str | Sequence[str] | None = "d4f2b83c05a1"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+
 def upgrade() -> None:
     """Every label spelled out, one statement each.
 

@@ -18,9 +18,9 @@ Revises: e7a2f9c45b13
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
 from app.database.types import UtcDateTime
 
 revision: str = "f2c8b4e07a91"

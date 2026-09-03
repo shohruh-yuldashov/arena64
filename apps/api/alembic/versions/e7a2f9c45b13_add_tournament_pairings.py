@@ -18,8 +18,8 @@ Revises: d4b7c3e12f80
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 
+from alembic import op
 from app.database.types import UtcDateTime
 
 revision: str = "e7a2f9c45b13"

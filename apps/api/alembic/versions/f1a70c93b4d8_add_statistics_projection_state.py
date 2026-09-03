@@ -64,8 +64,8 @@ followed by a backfill, which is idempotent and says so.
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 
+from alembic import op
 from app.database.types import UtcDateTime
 
 revision: str = "f1a70c93b4d8"

@@ -61,8 +61,8 @@ The schema is deliberately **not** dropped: two other tables live in it.
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 
+from alembic import op
 from app.database.types import UtcDateTime
 
 revision: str = "c9e4b21f0d73"

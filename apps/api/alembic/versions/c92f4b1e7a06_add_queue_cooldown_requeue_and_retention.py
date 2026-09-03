@@ -119,9 +119,7 @@ def downgrade() -> None:
 
 
 def _create_cooldowns() -> None:
-    reason = postgresql.ENUM(
-        *_COOLDOWN_REASONS, name="queue_cooldown_reason", schema=_MATCHMAKING
-    )
+    reason = postgresql.ENUM(*_COOLDOWN_REASONS, name="queue_cooldown_reason", schema=_MATCHMAKING)
     reason.create(op.get_bind(), checkfirst=True)
 
     op.create_table(
@@ -142,9 +140,7 @@ def _create_cooldowns() -> None:
         ),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.CheckConstraint(
-            "expires_at > created_at", name="ck_queue_cooldown__window_positive"
-        ),
+        sa.CheckConstraint("expires_at > created_at", name="ck_queue_cooldown__window_positive"),
         # The player, not a surrogate id — see this revision's docstring.
         sa.PrimaryKeyConstraint("player_id", name=op.f("pk_queue_cooldown")),
         schema=_MATCHMAKING,
@@ -183,9 +179,7 @@ def _add_requeue_provenance() -> None:
 
 
 def _drop_requeue_provenance() -> None:
-    op.drop_index(
-        "uq_queue_ticket__requeued_from", table_name="queue_ticket", schema=_MATCHMAKING
-    )
+    op.drop_index("uq_queue_ticket__requeued_from", table_name="queue_ticket", schema=_MATCHMAKING)
     op.drop_column("queue_ticket", "source_ticket_id", schema=_MATCHMAKING)
 
 

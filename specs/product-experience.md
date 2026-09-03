@@ -1429,7 +1429,36 @@ them. One `TournamentStatusBadge` now serves both, and `in_progress` gains
 `--success` — it had no tint at all, though it is the state a spectator is
 looking for.
 
-### 16.8 The rest of A64-025.7
+### 16.8 The entrants list, and why there is not one
 
-The entrants list, the standings table and the registration panel were not
-redesigned and are the remainder of `.7`.
+**Who has entered an open tournament is not visible anywhere.** The detail
+page says "Entrants: 3 of 8" and the bracket carries `participants` — but a
+bracket exists only after registration closes and the field is materialised,
+so for the whole period when the question actually matters, the answer is a
+count.
+
+It stays that way here, because there is no endpoint. `GET /tournaments/{id}`
+publishes `entrant_count` and nothing else about who they are; the read
+surface is `/bracket`, `/standings` and `/registrations/me`. Serving the list
+means a new contract, and a backend contract change is this task's stated
+non-goal — as it should be: an entrants list is a paginated read over a
+table with its own privacy question (whether entering a tournament is public
+is a product decision nobody has made), not a corner of a visual task.
+
+Recorded rather than quietly skipped: it is the one thing a player looking at
+an open tournament cannot find out.
+
+### 16.9 Two smaller corrections on the same page
+
+**"Round: —" on a tournament that has not started.** The row rendered an em
+dash where `started_at` and `completed_at` beside it are omitted entirely
+when absent. A dash in a definition list reads as a value that failed to
+load, so the row now follows its neighbours' convention.
+
+**The standings table was left alone deliberately.** It is well built —
+`sr-only` tie announcements, the viewer's row highlighted, tabular figures,
+a horizontal scroller for its eight columns — and it renders only for a
+completed tournament, which this task had no way to put on screen. Changing
+a surface nobody could look at would have been the one kind of work this
+epic has avoided throughout: a claim that something was improved, unbacked
+by having seen it.

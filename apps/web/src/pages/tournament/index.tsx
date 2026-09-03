@@ -144,11 +144,15 @@ export default function TournamentPage() {
           <Fact label={t("tournament.field.speed")}>
             {t(speedClassKey(tournament.speed_class))}
           </Fact>
-          <Fact label={t("tournament.field.round")}>
-            {tournament.current_round != null
-              ? t("tournament.currentRound", { round: tournament.current_round })
-              : "—"}
-          </Fact>
+          {/* Omitted rather than dashed when there is none, which is how
+              `started_at` and `completed_at` below already behave. A
+              tournament that has not begun has no round, and an em dash in a
+              definition list reads as a value that failed to load. */}
+          {tournament.current_round != null && (
+            <Fact label={t("tournament.field.round")}>
+              {t("tournament.currentRound", { round: tournament.current_round })}
+            </Fact>
+          )}
           <Fact label={t("tournament.field.deadline")}>
             {/* The server's timestamp, rendered through `Intl` — §11. No
                 countdown: this client does not decide whether entries are

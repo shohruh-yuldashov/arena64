@@ -173,7 +173,14 @@ export function QuickMessagePicker({
   };
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-3">
+      {/* The group says what it is, exactly as `GameControls` does. Without
+          it this was two loose buttons between two labelled groups, which is
+          what made the panel read as a list rather than as sections. */}
+      <h2 className="text-muted-foreground text-xs font-medium">
+        {t("game.quickMessages.heading")}
+      </h2>
+
       <div className="relative flex flex-wrap items-center gap-2">
         <Button
           ref={trigger}

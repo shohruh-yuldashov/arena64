@@ -426,6 +426,10 @@
       "correspondence": "Correspondence",
       "unknown": "Unknown"
     },
+    "variant": {
+      "russian_8x8": "Russian draughts",
+      "unknown": "Unknown"
+    },
     "waiting": {
       "searching": "Searching for an opponent…",
       "speed": "Category",
@@ -596,7 +600,8 @@
       "late": "Rating update is taking longer than expected."
     },
     "quickMessages": {
-      "open": "Quick messages",
+      "heading": "Quick messages",
+      "open": "Send a message",
       "mute": "Mute quick messages",
       "unmute": "Unmute quick messages",
       "goodLuck": "Good luck!",

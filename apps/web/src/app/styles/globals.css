@@ -50,6 +50,24 @@
   /* The focus ring is the brand, so focus is unmistakably deliberate
      rather than a grey outline the eye reads as a border. */
   --ring: oklch(0.5 0.19 275);
+  /* The board — A64-025.6C §1.
+
+     Until this task the squares were `--foreground` at 22% and the pieces
+     were hard-coded `neutral-*`, which produced a grey checkerboard in the
+     light theme and, in the dark one, a dark piece all but invisible on a
+     dark square. Both are here now because the board is a surface with its
+     own palette, not an opacity of the text colour.
+
+     **Warm neutral, deliberately not indigo.** The brand hue is what this
+     board uses to mean *interaction* — the last move is `--primary` at 18%
+     and a legal destination is a `--primary` dot. A board tinted with the
+     same hue would leave those cues competing with their own background. */
+  --board-light: oklch(0.93 0.02 80);
+  --board-dark: oklch(0.68 0.055 65);
+  --piece-light: oklch(0.97 0.008 85);
+  --piece-light-edge: oklch(0.7 0.025 85);
+  --piece-dark: oklch(0.28 0.025 60);
+  --piece-dark-edge: oklch(0.17 0.02 60);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
@@ -91,6 +109,20 @@
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.68 0.16 275);
+  /* The same board, lit for a near-black page. Both squares move down and
+     stay the same distance apart, so the checkerboard reads identically.
+
+     The dark piece is the one value that is *not* a straight translation:
+     at the light theme's lightness it would sit on a dark square with
+     almost nothing between them, which is exactly the defect this fixes.
+     It keeps a dark fill and takes a much lighter rim, so the piece is
+     found by its edge rather than by its body. */
+  --board-light: oklch(0.52 0.03 75);
+  --board-dark: oklch(0.36 0.03 65);
+  --piece-light: oklch(0.93 0.01 85);
+  --piece-light-edge: oklch(0.64 0.02 85);
+  --piece-dark: oklch(0.2 0.02 60);
+  --piece-dark-edge: oklch(0.6 0.025 60);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
@@ -131,6 +163,12 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-board-light: var(--board-light);
+  --color-board-dark: var(--board-dark);
+  --color-piece-light: var(--piece-light);
+  --color-piece-light-edge: var(--piece-light-edge);
+  --color-piece-dark: var(--piece-dark);
+  --color-piece-dark-edge: var(--piece-dark-edge);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);

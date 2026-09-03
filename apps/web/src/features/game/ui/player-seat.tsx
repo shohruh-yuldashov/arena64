@@ -113,6 +113,9 @@ export function PlayerSeat({
           </span>
           {rating !== null && (
             <span className="tabular-nums">
+              {/* The same separator the side and the seat use, so the line
+                  reads as one list rather than as two joined by a space. */}
+              <span aria-hidden="true">· </span>
               {/* Ungrouped: a rating is an identifier-like number, and
                   "1 487" beside a clock reads as two values. `Intl` still
                   localises the digits. */}

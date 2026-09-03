@@ -138,7 +138,10 @@ export function GameBoard({
       // `aspect-square` and a percentage width: the board is whatever the
       // column gives it and stays square at every size — §27's "board uses
       // available width" without a resize observer.
-      className="border-border grid aspect-square w-full grid-cols-8 overflow-hidden rounded-xl border-2 shadow-sm"
+      // The frame is the board's own dark tone rather than `--border`, so
+      // the eight squares read as one object with an edge instead of as a
+      // grid inside a page-coloured box.
+      className="border-piece-dark-edge/40 grid aspect-square w-full grid-cols-8 overflow-hidden rounded-xl border-4 shadow-md"
     >
       {ranks.map((rank) => (
         <div key={rank} role="row" className="contents">
@@ -154,7 +157,7 @@ export function GameBoard({
                   key={square}
                   role="gridcell"
                   aria-hidden="true"
-                  className="bg-muted/40 aspect-square"
+                  className="bg-board-light aspect-square"
                 />
               );
             }
@@ -184,9 +187,14 @@ export function GameBoard({
                 onClick={() => onSelect(square)}
                 className={cn(
                   "relative flex aspect-square items-center justify-center transition-colors",
-                  "bg-[color-mix(in_oklab,var(--color-foreground)_22%,transparent)]",
+                  "bg-board-dark",
                   "focus-visible:ring-ring focus-visible:z-10 focus-visible:ring-2 focus-visible:outline-none",
-                  inLastMove && "bg-[color-mix(in_oklab,var(--color-primary)_18%,transparent)]",
+                  // Mixed **into** the square rather than laid over it as a
+                  // transparency: the board now has a colour of its own, and
+                  // a translucent tint would drop the highlighted square back
+                  // to the container behind it.
+                  inLastMove &&
+                    "bg-[color-mix(in_oklab,var(--color-primary)_30%,var(--color-board-dark))]",
                   isSelected && "ring-primary z-10 ring-2 ring-inset",
                   canPickUp && !isSelected && "cursor-pointer",
                   !interactive && "cursor-default",
@@ -196,11 +204,15 @@ export function GameBoard({
                   <span
                     aria-hidden="true"
                     className={cn(
-                      "flex size-[72%] items-center justify-center rounded-full border-2 text-[0.6rem] font-bold",
+                      // The inset shadow is the whole of the relief: a disc
+                      // lit from above, which is what a physical piece looks
+                      // like and what a flat circle did not.
+                      "flex size-[72%] items-center justify-center rounded-full border-2 text-[0.65rem] font-bold",
+                      "shadow-[inset_0_1.5px_0_rgb(255_255_255/0.25),inset_0_-1.5px_2px_rgb(0_0_0/0.25),0_1px_2px_rgb(0_0_0/0.3)]",
                       piece.side === "light"
-                        ? "border-neutral-400 bg-neutral-100 text-neutral-700"
-                        : "border-neutral-900 bg-neutral-800 text-neutral-100",
-                      willBeCaptured && "opacity-50 ring-2 ring-red-500 ring-offset-1",
+                        ? "border-piece-light-edge bg-piece-light text-piece-dark"
+                        : "border-piece-dark-edge bg-piece-dark text-piece-light",
+                      willBeCaptured && "ring-destructive opacity-50 ring-2 ring-offset-1",
                     )}
                   >
                     {/* The king mark is a glyph as well as a ring, so the

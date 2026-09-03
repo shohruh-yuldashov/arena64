@@ -426,6 +426,10 @@
       "correspondence": "Yozishma",
       "unknown": "Noma'lum"
     },
+    "variant": {
+      "russian_8x8": "Rus shashkasi",
+      "unknown": "Noma'lum"
+    },
     "waiting": {
       "searching": "Raqib qidirilmoqda…",
       "speed": "Toifa",
@@ -596,7 +600,8 @@
       "late": "Reyting yangilanishi kutilganidan uzoqroq davom etmoqda."
     },
     "quickMessages": {
-      "open": "Tezkor xabarlar",
+      "heading": "Tezkor xabarlar",
+      "open": "Xabar yuborish",
       "mute": "Tezkor xabarlarni o'chirish",
       "unmute": "Tezkor xabarlarni yoqish",
       "goodLuck": "Omad!",

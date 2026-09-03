@@ -18,6 +18,7 @@ import {
   useUnblockPlayer,
 } from "@/features/social/model/queries";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
+import { cn } from "@/shared/lib/cn";
 import {
   Button,
   Dialog,
@@ -144,7 +145,19 @@ export function RelationshipActions({
             key={action}
             size={size}
             variant={action === "accept_request" ? "default" : "outline"}
-            className="min-h-11"
+            className={cn(
+              "min-h-11",
+              // A64-025.8. Blocking and removing a friend were drawn exactly
+              // like declining a request, and they are not the same kind of
+              // act: one answers a question, the others end a relationship
+              // and take a confirmation dialog to undo. The tone is the same
+              // one the game room gives Resign — destructive *text*, not a
+              // red slab a thumb finds by accident in a dense list — and it
+              // comes from `isDestructive`, the predicate that already
+              // decides which of these open a dialog.
+              isDestructive(action) &&
+                "text-destructive hover:bg-destructive/10 hover:text-destructive",
+            )}
             disabled={pending}
             // The player's name is in the accessible name, so a screen
             // reader hears "Add friend, Ali" rather than twelve identical

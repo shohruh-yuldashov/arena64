@@ -164,7 +164,7 @@ describe("player search", () => {
 
     // Typing the rest issues **one** request, not one per keystroke.
     await user.type(input, "libek");
-    expect(await screen.findByText("@stranger")).toBeVisible();
+    expect(await screen.findByText("stranger")).toBeVisible();
     expect(terms).toEqual(["alibek"]);
 
     // Each row's action set comes from the state the server sent, so a
@@ -301,6 +301,38 @@ describe("request transitions", () => {
 });
 
 describe("the friends list", () => {
+  it("shows the handle only when it says something the name did not", async () => {
+    signedIn();
+    mswServer.use(
+      http.get(FRIENDS, () =>
+        HttpResponse.json(
+          cursorPage([
+            {
+              // A display name of its own: both lines carry a fact.
+              player: player("quiet_rook", "friend", { display_name: "Quiet Rook" }),
+              friends_since: "2026-05-01T10:00:00Z",
+            },
+            {
+              // No display name, so `nameOf` falls back to the username —
+              // rendering `@plainmover` beneath `plainmover` would be two
+              // lines carrying one fact.
+              player: player("plainmover", "friend", { display_name: null }),
+              friends_since: "2026-06-01T10:00:00Z",
+            },
+          ]),
+        ),
+      ),
+    );
+
+    renderApp({ path: "/friends" });
+
+    expect(await screen.findByText("Quiet Rook")).toBeVisible();
+    expect(screen.getByText("@quiet_rook")).toBeVisible();
+
+    expect(screen.getByText("plainmover")).toBeVisible();
+    expect(screen.queryByText("@plainmover")).toBeNull();
+  });
+
   it("uses thumbnails and the server's presence, with one request per page", async () => {
     let friendCalls = 0;
     let profileCalls = 0;
@@ -331,7 +363,7 @@ describe("the friends list", () => {
 
     renderApp({ path: "/friends" });
 
-    expect(await screen.findByText("@visible")).toBeVisible();
+    expect(await screen.findByText("visible")).toBeVisible();
     // Scoped to the results list: `SocialNav` renders its own list of
     // links, so an unscoped `listitem` query finds the navigation first.
     const rows = within(

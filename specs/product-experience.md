@@ -3,10 +3,10 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-PRODUCT-EXPERIENCE` |
-| **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 bracket edges |
+| **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-03 — A64-025.7, the bracket draws its edges |
+| **Last updated** | 2026-09-03 — A64-025.8, blocking looks like blocking |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -1462,3 +1462,67 @@ completed tournament, which this task had no way to put on screen. Changing
 a surface nobody could look at would have been the one kind of work this
 epic has avoided throughout: a claim that something was improved, unbacked
 by having seen it.
+
+---
+
+## 17. Friends and social — A64-025.8
+
+Reviewed the way §15 and §16 were: the five surfaces driven in a browser
+against seeded relationships — two friendships, an incoming request, an
+outgoing one and a blocked player — rather than read as code.
+
+### 17.1 Blocking was drawn like declining
+
+`Block` sat beside `Decline` and beside `Cancel request` at identical
+weight. They are not the same kind of act: one answers a question, the other
+ends a relationship and takes a confirmation dialog to undo. A player
+skimming a request row had nothing to tell them apart.
+
+The tone is the one the game room already gives Resign — destructive
+**text**, not a red slab a thumb finds by accident in a dense list — and the
+branch is `isDestructive`, the predicate this file already imports to decide
+which actions open a dialog. Removing a friend gets it for the same reason.
+
+### 17.2 A name over its own handle
+
+`PlayerRow` rendered the display name and then `@username` beneath it. Most
+accounts have no display name, so `nameOf` falls back to the username and
+the row showed `alice` over `@alice` — two lines carrying one fact, on every
+social surface, since the row was written.
+
+The handle now renders only when it says something the line above did not.
+The rule is stated as a test rather than left to a reviewer's eye: a friend
+with a display name shows both, one without shows the name once.
+
+### 17.3 A question for the backend, not a fix here
+
+The blocked list shows a blocked player's **presence**. `is_online` arrives
+on that row and `PlayerRow`'s rule is to render whatever the API sent and
+default nothing — so the client is behaving correctly, and changing it here
+would be this module deciding a privacy rule that belongs to `friends`.
+
+Whether somebody you blocked should still report as online to you is a
+product decision. It is recorded here rather than patched in the view.
+
+### 17.4 Measured
+
+Five surfaces — friends, requests, blocked, search, challenges — at 1280
+light and 360 dark, against seeded relationships:
+
+| Surface | Page overflow |
+| --- | --- |
+| `/friends` | 0 |
+| `/friends/requests` | 0 |
+| `/friends/blocked` | 0 |
+| `/search` | 0 |
+| `/challenges` | 0 |
+
+`npm run test` 203 passed — one more than before, and it is the handle rule.
+`tsc --noEmit` clean, eslint zero errors.
+
+### 17.5 The rest of A64-025.8
+
+The empty states name an action they do not offer — "Find players and send
+them a request" with no way to reach search from where it is written. The
+challenge flow, the sent-challenges tab and the search surface were not
+redesigned. All are the remainder of `.8`.

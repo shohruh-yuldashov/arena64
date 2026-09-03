@@ -64,7 +64,14 @@ export function PlayerRow({
 
         <span className="flex min-w-0 flex-col">
           <span className="truncate text-sm font-medium">{name}</span>
-          <span className="text-muted-foreground truncate text-xs">@{player.username}</span>
+          {/* A64-025.8. Only when it says something the line above did not.
+              `nameOf` falls back to the username when there is no display
+              name, and most accounts have none — so this row rendered
+              `alice` over `@alice` for the majority of players, two lines
+              carrying one fact. */}
+          {name !== player.username && (
+            <span className="text-muted-foreground truncate text-xs">@{player.username}</span>
+          )}
 
           {/* Each rendered only when the API sent it — see the note above. */}
           {player.is_online != null && (

@@ -3,10 +3,10 @@
 | Field | Value |
 | --- | --- |
 | **Spec ID** | `SPEC-PRODUCT-EXPERIENCE` |
-| **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 bracket edges |
+| **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-03 — A64-025.7, the bracket draws its edges |
+| **Last updated** | 2026-09-03 — A64-025.8, blocking looks like blocking |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -1462,3 +1462,100 @@ completed tournament, which this task had no way to put on screen. Changing
 a surface nobody could look at would have been the one kind of work this
 epic has avoided throughout: a claim that something was improved, unbacked
 by having seen it.
+
+---
+
+## 17. Friends and social — A64-025.8
+
+Reviewed the way §15 and §16 were: the five surfaces driven in a browser
+against seeded relationships — two friendships, an incoming request, an
+outgoing one and a blocked player — rather than read as code.
+
+### 17.1 Blocking was drawn like declining
+
+`Block` sat beside `Decline` and beside `Cancel request` at identical
+weight. They are not the same kind of act: one answers a question, the other
+ends a relationship and takes a confirmation dialog to undo. A player
+skimming a request row had nothing to tell them apart.
+
+The tone is the one the game room already gives Resign — destructive
+**text**, not a red slab a thumb finds by accident in a dense list — and the
+branch is `isDestructive`, the predicate this file already imports to decide
+which actions open a dialog. Removing a friend gets it for the same reason.
+
+### 17.2 A name over its own handle
+
+`PlayerRow` rendered the display name and then `@username` beneath it. Most
+accounts have no display name, so `nameOf` falls back to the username and
+the row showed `alice` over `@alice` — two lines carrying one fact, on every
+social surface, since the row was written.
+
+The handle now renders only when it says something the line above did not.
+The rule is stated as a test rather than left to a reviewer's eye: a friend
+with a display name shows both, one without shows the name once.
+
+### 17.3 A question for the backend, not a fix here
+
+The blocked list shows a blocked player's **presence**. `is_online` arrives
+on that row and `PlayerRow`'s rule is to render whatever the API sent and
+default nothing — so the client is behaving correctly, and changing it here
+would be this module deciding a privacy rule that belongs to `friends`.
+
+Whether somebody you blocked should still report as online to you is a
+product decision. It is recorded here rather than patched in the view.
+
+### 17.4 Measured
+
+Five surfaces — friends, requests, blocked, search, challenges — at 1280
+light and 360 dark, against seeded relationships:
+
+| Surface | Page overflow |
+| --- | --- |
+| `/friends` | 0 |
+| `/friends/requests` | 0 |
+| `/friends/blocked` | 0 |
+| `/search` | 0 |
+| `/challenges` | 0 |
+
+`npm run test` 203 passed — one more than before, and it is the handle rule.
+`tsc --noEmit` clean, eslint zero errors.
+
+### 17.5 An empty state that names an action now offers it
+
+"Find players and send them a request" named something to do and left the
+player to find the way. The control was in the navigation beside it and
+nowhere the sentence pointed.
+
+`ListState` gains an optional `emptyAction`, and **the option matters more
+than the slot**: only two of this product's empty states pass one. The
+friends list offers Search, and the sent-challenges tab offers the friends
+list, because both hints name something the player can do. The incoming
+tab's does not — "when a friend invites you to a game, it appears here"
+describes waiting, and a button under it would be an invented next step. The
+blocked list and the two request lists are the same: nothing to offer, so
+nothing offered.
+
+The rule is a test, not a convention a reviewer has to hold: the friends
+empty state must expose a link to `/search`.
+
+### 17.6 What was seen, and what was not
+
+**Search was reviewed and needed nothing of its own.** Twenty results
+against a real term at 1280: the rows carry both fixes above — one name line
+where there is no display name, `Block` in the destructive tone — and the
+page does not overflow. What it does raise is a *product* question rather
+than a visual one: a stranger's row offers `Block` beside `Add friend` as a
+co-equal action, which is `actionsFor` returning what the relationship
+allows rather than what a search result should lead with. Left alone,
+because narrowing it is a decision about the social model.
+
+**The challenge rows were never seen.** Two pending challenges were seeded
+directly into `matchmaking.friend_challenge` — one sent, one received — and
+neither reached the list. The read filters them for a reason this task did
+not chase: seeding a friend challenge through the database alone evidently
+misses something the service does, and the honest record is that the rows
+are unverified rather than that they are fine.
+
+Both empty states *were* verified, and they are the two this task changed.
+
+The challenge rows themselves are the remainder of `.8`.

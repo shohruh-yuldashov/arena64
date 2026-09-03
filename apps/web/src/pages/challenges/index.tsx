@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
 import type { Challenge } from "@/features/challenges/api";
@@ -141,6 +142,17 @@ export default function ChallengesPage() {
                 ? "challenges.empty.incomingHint"
                 : "challenges.empty.outgoingHint",
             )}
+            // Only the outgoing tab. Its hint says to invite somebody from
+            // the friends list; the incoming one says an invitation will
+            // appear here, and a button under *that* would be an invented
+            // next step for a player whose only move is to wait.
+            emptyAction={
+              tab === "outgoing" ? (
+                <Button asChild variant="outline">
+                  <Link to="/friends">{t("social.nav.friends")}</Link>
+                </Button>
+              ) : undefined
+            }
             onRetry={() => void list.refetch()}
           >
             <ul

@@ -1,3 +1,5 @@
+import { Link } from "@tanstack/react-router";
+
 import { ChallengeButton } from "@/features/challenges/ui/challenge-button";
 import { useFriendCount, useFriends } from "@/features/social/model/queries";
 import { RelationshipActions } from "@/features/social/ui/relationship-actions";
@@ -50,6 +52,13 @@ export default function FriendsPage() {
           isEmpty={items.length === 0}
           emptyTitle={t("social.friends.empty")}
           emptyHint={t("social.friends.emptyHint")}
+          // The hint says to find players; this is the way to. It was in
+          // the navigation beside it and nowhere the sentence pointed.
+          emptyAction={
+            <Button asChild variant="outline">
+              <Link to="/search">{t("social.nav.search")}</Link>
+            </Button>
+          }
           onRetry={() => void friends.refetch()}
         >
           <ul aria-label={t("social.friends.title")} className="flex flex-col gap-2">

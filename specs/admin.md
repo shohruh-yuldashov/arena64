@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| **Status** | A64-024.1 (authorization), A64-024.2 (sign-in, routing), A64-024.2H (deployment origins), A64-024.3 (**Users**), A64-024.4 (**Matches**) and A64-024.5 (**Tournaments**) — all read-only. Remaining surfaces deferred; see §8. |
+| **Status** | Implemented and audited — A64-024.1 (authorization) through A64-024.10 (closing audit). Read surfaces: **Users**, **Matches**, **Tournaments**, **Audit log**, **Notification operations**, **Dashboard**. Write actions: account restrictions (§6.12) and the four tournament lifecycle commands (§6.15). Remaining surfaces deferred; see §8. |
 | **Owner** | _Unassigned_ |
 | **Related ADRs** | `architecture.md` AD-04 (separate application) |
 | **Related docs** | `docs/01-architecture/database.md` §10.4, `docs/01-architecture/domain-model.md` §13 |

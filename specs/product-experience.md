@@ -1520,9 +1520,25 @@ light and 360 dark, against seeded relationships:
 `npm run test` 203 passed — one more than before, and it is the handle rule.
 `tsc --noEmit` clean, eslint zero errors.
 
-### 17.5 The rest of A64-025.8
+### 17.5 An empty state that names an action now offers it
 
-The empty states name an action they do not offer — "Find players and send
-them a request" with no way to reach search from where it is written. The
-challenge flow, the sent-challenges tab and the search surface were not
-redesigned. All are the remainder of `.8`.
+"Find players and send them a request" named something to do and left the
+player to find the way. The control was in the navigation beside it and
+nowhere the sentence pointed.
+
+`ListState` gains an optional `emptyAction`, and **the option matters more
+than the slot**: only two of this product's empty states pass one. The
+friends list offers Search, and the sent-challenges tab offers the friends
+list, because both hints name something the player can do. The incoming
+tab's does not — "when a friend invites you to a game, it appears here"
+describes waiting, and a button under it would be an invented next step. The
+blocked list and the two request lists are the same: nothing to offer, so
+nothing offered.
+
+The rule is a test, not a convention a reviewer has to hold: the friends
+empty state must expose a link to `/search`.
+
+### 17.6 The rest of A64-025.8
+
+The challenge flow itself, the sent-challenges rows and the search surface
+were not redesigned. They are the remainder of `.8`.

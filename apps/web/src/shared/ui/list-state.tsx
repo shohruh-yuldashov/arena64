@@ -27,6 +27,17 @@ import { Skeleton } from "@/shared/ui/skeleton";
  * friends yet" and "no tournaments open" are domain sentences, and a
  * generic primitive that owned them would be this module holding vocabulary
  * that belongs to five features.
+ *
+ * ## `emptyAction` — A64-025.8
+ *
+ * Optional, and only some empty states should pass one. "Find players and
+ * send them a request" names something to do and then left the player to
+ * find the way themselves; "when a friend invites you to a game, it appears
+ * here" names nothing, because there is nothing to do but wait.
+ *
+ * A button under the second would be an invented next step. The slot exists
+ * so the first can offer what its own sentence promised — not so every
+ * empty list grows a button.
  */
 export function ListState({
   isPending,
@@ -34,6 +45,7 @@ export function ListState({
   isEmpty,
   emptyTitle,
   emptyHint,
+  emptyAction,
   onRetry,
   children,
 }: {
@@ -42,6 +54,8 @@ export function ListState({
   isEmpty: boolean;
   emptyTitle: string;
   emptyHint?: string;
+  /** Pass one only where `emptyHint` names something the player can do. */
+  emptyAction?: ReactNode;
   onRetry: () => void;
   children: ReactNode;
 }) {
@@ -70,11 +84,12 @@ export function ListState({
 
   if (isEmpty) {
     return (
-      <div className="flex flex-col gap-1 py-8">
+      <div className="flex flex-col items-start gap-1 py-8">
         <h2 className="text-base font-medium">{emptyTitle}</h2>
         {emptyHint !== undefined && (
           <p className="text-muted-foreground text-sm">{emptyHint}</p>
         )}
+        {emptyAction !== undefined && <div className="pt-3">{emptyAction}</div>}
       </div>
     );
   }

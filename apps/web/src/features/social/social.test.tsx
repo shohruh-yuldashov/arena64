@@ -301,6 +301,23 @@ describe("request transitions", () => {
 });
 
 describe("the friends list", () => {
+  it("offers the way to the action its empty state names", async () => {
+    signedIn();
+    mswServer.use(http.get(FRIENDS, () => HttpResponse.json(cursorPage([]))));
+
+    renderApp({ path: "/friends" });
+
+    // The hint says to find players; the control that does it has to be
+    // here, not only in the navigation beside it.
+    const empty = await screen.findByRole("heading", {
+      name: /no friends yet|hali do'st yo'q|друзей пока нет/i,
+    });
+    const action = within(empty.parentElement as HTMLElement).getByRole("link", {
+      name: /^search$|^qidirish$|^поиск$/i,
+    });
+    expect(action).toHaveAttribute("href", "/search");
+  });
+
   it("shows the handle only when it says something the name did not", async () => {
     signedIn();
     mswServer.use(

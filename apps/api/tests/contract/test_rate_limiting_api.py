@@ -165,12 +165,14 @@ class TestRegister:
         assert elsewhere.status_code == 201
 
     async def test_the_refusal_carries_retry_after(self, client: AsyncClient) -> None:
-        for _ in range(TEST_SETTINGS.register_ip_limit + 1):
-            response = await client.post(
-                REGISTER_URL, json=credentials(), headers=caller("203.0.113.2")
-            )
+        for _ in range(TEST_SETTINGS.register_ip_limit):
+            await client.post(REGISTER_URL, json=credentials(), headers=caller("203.0.113.2"))
 
-        assert int(response.headers["Retry-After"]) > 0
+        # The request past the limit, named rather than left as whatever the
+        # loop happened to bind last.
+        refused = await client.post(REGISTER_URL, json=credentials(), headers=caller("203.0.113.2"))
+
+        assert int(refused.headers["Retry-After"]) > 0
 
     async def test_successful_responses_publish_the_budget(self, client: AsyncClient) -> None:
         response = await client.post(

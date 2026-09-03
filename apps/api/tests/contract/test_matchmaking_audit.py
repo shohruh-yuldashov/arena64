@@ -24,8 +24,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.core.identifiers import generate_uuid7
 from app.modules.matchmaking.domain.cooldown import CooldownReason, QueueCooldown
@@ -285,7 +284,7 @@ class TestTwoDeliveriesOnTwoConnections:
     """
 
     async def test_only_one_audit_row_survives(self, contract_engine: AsyncEngine) -> None:
-        maker = sessionmaker(contract_engine, class_=AsyncSession, expire_on_commit=False)
+        maker = async_sessionmaker(contract_engine, expire_on_commit=False)
         player_id, match_id = generate_uuid7(), generate_uuid7()
 
         async with maker() as first, maker() as second:
@@ -307,7 +306,7 @@ class TestTwoDeliveriesOnTwoConnections:
         assert written.id == history[0].id
 
     async def test_only_one_timeline_entry_survives(self, contract_engine: AsyncEngine) -> None:
-        maker = sessionmaker(contract_engine, class_=AsyncSession, expire_on_commit=False)
+        maker = async_sessionmaker(contract_engine, expire_on_commit=False)
         event_id, ticket_id = generate_uuid7(), generate_uuid7()
 
         async with maker() as first, maker() as second:
@@ -451,7 +450,7 @@ class TestRetentionOverBothRelations:
         """`SKIP LOCKED`, which is the property a dictionary cannot have: two
         maintenance workers must divide the backlog rather than contend for
         it or delete it twice."""
-        maker = sessionmaker(contract_engine, class_=AsyncSession, expire_on_commit=False)
+        maker = async_sessionmaker(contract_engine, expire_on_commit=False)
 
         async with maker() as setup:
             for minutes in range(6):

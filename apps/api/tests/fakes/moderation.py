@@ -71,6 +71,11 @@ class InMemorySanctions:
     async def effective_for(self, player_id: UUID, *, at: datetime) -> Sequence[Sanction]:
         return [row for row in self.rows if row.player_id == player_id and row.is_effective_at(at)]
 
+    async def count_effective(self, *, at: datetime) -> int:
+        """How many restrictions are in force at `at` — the dashboard's
+        number, over the same predicate `effective_for` uses."""
+        return sum(1 for row in self.rows if row.is_effective_at(at))
+
     async def live_of_kind(self, player_id: UUID, kind: SanctionKind) -> Sanction | None:
         return next(
             (

@@ -111,7 +111,7 @@ def _service(
         events=RecordingPublisher(),
         unit_of_work=NullUnitOfWork(),
         clock=MovableClock(NOW),
-        metrics=metrics,  # type: ignore[arg-type]
+        metrics=metrics,
         candidate_batch_size=50,
         reservation_ttl_seconds=RESERVATION_TTL,
     )

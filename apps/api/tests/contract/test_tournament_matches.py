@@ -65,7 +65,10 @@ from app.modules.tournament.domain.attempts import (
     AdvancementReason,
     AttemptOutcome,
     AttemptStatus,
+    PairingAttempt,
 )
+from app.modules.tournament.domain.bracket_plan import BracketSlot
+from app.modules.tournament.domain.tournament import Tournament
 from app.modules.tournament.infrastructure.rating_snapshots import (
     PublishedRatingSnapshots,
 )
@@ -195,7 +198,7 @@ def _no_show(session: AsyncSession, clock: MovableClock) -> TournamentNoShowServ
 
 async def _running_tournament(
     session: AsyncSession, clock: MovableClock, *, entrants: int, capacity: int
-):  # type: ignore[no-untyped-def]
+) -> tuple[Tournament, list[PairingAttempt]]:
     """A tournament seeded, bracketed and started. Returns it and its attempts."""
     players = [uuid4() for _ in range(entrants)]
     directory = _KnownPlayers(*players)
@@ -422,11 +425,15 @@ async def _match_count(session: AsyncSession, origin: MatchOrigin) -> int:
     return len(list(rows))
 
 
-def _higher_seed(node) -> UUID:  # type: ignore[no-untyped-def]
+def _higher_seed(node: BracketSlot) -> UUID:
     """The better-seeded participant — seed numbers count up from the best."""
     if node.light_seed is None or node.dark_seed is None:
         pytest.fail("a played node has a seed on both seats")
-    return node.light_player_id if node.light_seed < node.dark_seed else node.dark_player_id
+    winner = node.light_player_id if node.light_seed < node.dark_seed else node.dark_player_id
+    # Seated on both sides, for the same reason the seeds are: a node with a
+    # bye never reaches here.
+    assert winner is not None
+    return winner
 
 
 class TestSystemActivationAndNoShow:

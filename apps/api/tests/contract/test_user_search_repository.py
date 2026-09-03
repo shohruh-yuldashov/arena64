@@ -104,7 +104,7 @@ async def _plan(session: AsyncSession, query: UserSearchQuery) -> str:
 
     statement = SqlAlchemyUserRepository(session).build_search_statement(query)
     compiled = statement.compile(
-        dialect=session.bind.dialect,  # type: ignore[union-attr]
+        dialect=session.bind.dialect,
         compile_kwargs={"literal_binds": True},
     )
 

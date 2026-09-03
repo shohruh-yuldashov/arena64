@@ -42,6 +42,7 @@ costs a minute where a false pass cost three features.
 """
 
 import re
+from enum import Enum
 from pathlib import Path
 
 import pytest
@@ -109,7 +110,9 @@ def _labels_from_migrations(qualified: str) -> set[str]:
     ],
     ids=["action", "subject_type", "outcome", "actor_type"],
 )
-def test_every_member_reaches_the_database_through_a_migration(enum: type, qualified: str) -> None:
+def test_every_member_reaches_the_database_through_a_migration(
+    enum: type[Enum], qualified: str
+) -> None:
     """The check that was missing.
 
     A member added to the Python enum without a migration is a mutation

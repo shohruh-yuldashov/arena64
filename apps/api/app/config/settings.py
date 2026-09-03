@@ -1007,7 +1007,28 @@ class StorageSettings(SectionSettings):
         return mount.rstrip("/") or "/media"
 
 
-class RateLimitSettings(SectionSettings):
+# Configured with **class keywords** rather than a `model_config`, and this
+# is the only section that is. Seven modules key an `lru_cache` on an instance
+# of this class (`presentation/rate_limits.py` in each), which requires it to
+# be hashable — which `frozen=True` makes it. A type checker only sees that
+# through `dataclass_transform`, and `dataclass_transform` cannot see inside
+# `SettingsConfigDict`: spelled there, Pyright rejects all seven call sites as
+# unhashable, while mypy's pydantic plugin accepts them. The keywords are
+# identical at runtime, visible to both checkers, and pydantic refuses to mix
+# the two forms — hence all three move, not just `frozen`.
+#
+# The suppression is the cost of spelling it this way. `dataclass_transform`
+# forbids a frozen class inheriting a non-frozen one, and `SectionSettings`
+# declares no `frozen` at all because each section decides for itself.
+# Pydantic permits it, and every other section is frozen through its own
+# `model_config` — so the rule is describing a dataclass invariant this base
+# class does not have.
+class RateLimitSettings(
+    SectionSettings,
+    env_prefix="RATE_LIMIT_",
+    frozen=True,  # pyright: ignore[reportGeneralTypeIssues]
+    extra="forbid",
+):
     """`rate_limit` — abuse prevention on the authentication endpoints
     (A64-011.8), and since A64-012.4 on the privacy settings endpoint too.
 
@@ -1051,8 +1072,6 @@ class RateLimitSettings(SectionSettings):
     launch alive should not be blocked by a bound this file guessed at.
     Lowering is the direction that matters and the floors protect it.
     """
-
-    model_config = SettingsConfigDict(env_prefix="RATE_LIMIT_", frozen=True, extra="forbid")
 
     profile: RateLimitProfile = RateLimitProfile.PRODUCTION
     """How hard every limit below bites — A64-021.6.

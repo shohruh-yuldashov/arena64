@@ -121,12 +121,12 @@ async def matches(contract_session: AsyncSession) -> SqlAlchemyMatchRecordReposi
     return SqlAlchemyMatchRecordRepository(contract_session)
 
 
-@pytest_asyncio.fixture
+@pytest.fixture
 def events() -> _RecordingEvents:
     return _RecordingEvents()
 
 
-@pytest_asyncio.fixture
+@pytest.fixture
 def deadlines() -> _RecordingDeadlines:
     return _RecordingDeadlines()
 
@@ -136,7 +136,7 @@ def _commands(
 ) -> GameCommandService:
     return GameCommandService(
         matches=SqlAlchemyMatchRecordRepository(session),
-        deadlines=deadlines,  # type: ignore[arg-type]
+        deadlines=deadlines,
         events=events,  # type: ignore[arg-type]
         clock=MovableClock(NOW),
     )
@@ -148,7 +148,7 @@ def _moves(session: AsyncSession, events: _RecordingEvents) -> LiveMoveService:
         matches=SqlAlchemyMatchRecordRepository(session),
         moves=SqlAlchemyMoveLogRepository(session),
         live=_NullLiveCache(),
-        deadlines=_RecordingDeadlines(),  # type: ignore[arg-type]
+        deadlines=_RecordingDeadlines(),
         events=events,  # type: ignore[arg-type]
         generator=engine.generator,
         applier=engine.applier,

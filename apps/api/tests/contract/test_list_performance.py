@@ -27,6 +27,7 @@ Skipped, not failed, when PostgreSQL is unreachable (see `conftest.py`).
 """
 
 from collections.abc import AsyncIterator, Callable, Coroutine
+from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -151,22 +152,23 @@ async def page_costs(
             )
             assert placed.status_code == 201, placed.text
 
-        # `auth=viewer.auth` binds the header dict at definition time. The
-        # lambdas are invoked in this same iteration, so late binding happens
-        # to be harmless today — but a closure over a loop variable is a bug
-        # waiting for somebody to collect the callables and run them later,
-        # which is exactly what a "measure every endpoint" helper invites.
+        # `partial` rather than a lambda, so the header dict is bound at
+        # definition time by construction. A closure over a loop variable is
+        # a bug waiting for somebody to collect the callables and run them
+        # later, which is exactly what a "measure every endpoint" helper
+        # invites — and unlike a default argument, this shape is one mypy
+        # can check against the annotation.
         auth = viewer.auth
         endpoints: dict[str, Callable[[], Coroutine[Any, Any, Any]]] = {
-            "GET /friends": lambda a=auth: client.get(FRIENDS_URL, headers=a),
-            "GET /friends/requests/incoming": lambda a=auth: client.get(
-                f"{REQUESTS_URL}/incoming", headers=a
+            "GET /friends": partial(client.get, FRIENDS_URL, headers=auth),
+            "GET /friends/requests/incoming": partial(
+                client.get, f"{REQUESTS_URL}/incoming", headers=auth
             ),
-            "GET /blocks": lambda a=auth: client.get(BLOCKS_URL, headers=a),
-            "GET /users/search": lambda a=auth: client.get(
-                SEARCH_URL, headers=a, params={"q": "player"}
+            "GET /blocks": partial(client.get, BLOCKS_URL, headers=auth),
+            "GET /users/search": partial(
+                client.get, SEARCH_URL, headers=auth, params={"q": "player"}
             ),
-            "GET /users": lambda: client.get(USERS_URL),
+            "GET /users": partial(client.get, USERS_URL),
         }
         for name, call in endpoints.items():
             costs.setdefault(name, {})[size] = await statements_for(contract_session, call)

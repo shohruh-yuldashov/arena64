@@ -21,12 +21,14 @@ scan need.
 Skipped, not failed, when PostgreSQL is unreachable (see `conftest.py`).
 """
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import UUID
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete
+from sqlalchemy import Table, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
@@ -44,6 +46,27 @@ NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 #: The default `MATCHMAKING_RESERVATION_TTL_SECONDS`, and the same instant
 #: both source queue tickets carry as `reserved_until`.
 WINDOW = timedelta(seconds=30)
+
+#: The two ways a pending match leaves the "current" read without being
+#: played. Named rather than written inline at each use, because a tuple of
+#: bare lambdas is a shape mypy cannot check the calls against.
+_SETTLEMENTS: tuple[Callable[[MatchRecord], MatchRecord], ...] = (
+    lambda record: record.expired(NOW + WINDOW),
+    lambda record: record.declined(PlayerSide.DARK, at=NOW),
+)
+
+
+def _match_table() -> Table:
+    """`MatchRecordModel.__table__`, typed.
+
+    The declarative attribute is annotated as a `FromClause`, which is what
+    a mapper may map and therefore has no `update()`. The constraint tests
+    below drive SQL at the table deliberately — the aggregate already
+    refuses these shapes, and the point is that the database refuses them
+    too — so the cast says which of the two this is rather than widening
+    the call site.
+    """
+    return cast("Table", MatchRecordModel.__table__)
 
 
 def _record(
@@ -468,8 +491,10 @@ class TestTheTwoPublishedReads:
         know who the partner was, so the lookup has to work from either
         side."""
         record, _ = await matches.create(_record())
+        dark_ticket_id = record.dark.queue_ticket_id
+        assert dark_ticket_id is not None  # `_record()` is a queued match
 
-        found = await matches.settlements_for([record.dark.queue_ticket_id])
+        found = await matches.settlements_for([dark_ticket_id])
 
         assert [each.id for each in found] == [record.id]
 
@@ -536,10 +561,7 @@ class TestTheTwoPublishedReads:
         which are transitions the domain already makes. A horizon would be a
         second, softer definition of "current" that nothing else shares.
         """
-        for settle in (
-            lambda record: record.expired(NOW + WINDOW),
-            lambda record: record.declined(PlayerSide.DARK, at=NOW),
-        ):
+        for settle in _SETTLEMENTS:
             record, _ = await matches.create(_record())
             assert await matches.settle(settle(record))
 
@@ -576,10 +598,7 @@ class TestTheTwoPublishedReads:
         # constructing a status: `cancelled` carries `declined_by` and the
         # record refuses one without it, so a hand-made row would be a shape
         # the platform cannot produce.
-        for settle in (
-            lambda record: record.expired(NOW + WINDOW),
-            lambda record: record.declined(PlayerSide.DARK, at=NOW),
-        ):
+        for settle in _SETTLEMENTS:
             light, dark = generate_uuid7(), generate_uuid7()
             offered, _ = await matches.create(_record(light=light, dark=dark))
             assert await matches.settle(settle(offered))
@@ -666,13 +685,15 @@ class TestNonQueueParticipants:
         """
         queued, _ = await matches.create(_record())
         await matches.create(_tournament_record(origin_ref=generate_uuid7()))
+        light_ticket_id = queued.light.queue_ticket_id
+        assert light_ticket_id is not None  # `_record()` is a queued match
 
         settlements = await GamePairingSettlements(matches).settlements_for(
-            [queued.light.queue_ticket_id, generate_uuid7()]
+            [light_ticket_id, generate_uuid7()]
         )
 
-        assert list(settlements) == [queued.light.queue_ticket_id]
-        assert settlements[queued.light.queue_ticket_id].match_id == queued.id
+        assert list(settlements) == [light_ticket_id]
+        assert settlements[light_ticket_id].match_id == queued.id
 
 
 class TestTheDatabaseHoldsTheInvariants:
@@ -687,7 +708,8 @@ class TestTheDatabaseHoldsTheInvariants:
 
         with pytest.raises(IntegrityError, match="ck_match__active_iff_both_accepted"):
             await contract_session.execute(
-                MatchRecordModel.__table__.update()
+                _match_table()
+                .update()
                 .where(MatchRecordModel.__table__.c.id == record.id)
                 .values(status=MatchRecordStatus.ACTIVE.value, settled_at=NOW)
             )
@@ -700,7 +722,8 @@ class TestTheDatabaseHoldsTheInvariants:
 
         with pytest.raises(IntegrityError, match="ck_match__acceptance_window_positive"):
             await contract_session.execute(
-                MatchRecordModel.__table__.update()
+                _match_table()
+                .update()
                 .where(MatchRecordModel.__table__.c.id == record.id)
                 .values(acceptance_deadline=NOW - timedelta(seconds=1))
             )

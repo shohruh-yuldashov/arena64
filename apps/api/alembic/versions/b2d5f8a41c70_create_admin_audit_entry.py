@@ -20,8 +20,9 @@ Revises: a1c4e7b92f30
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision: str = "b2d5f8a41c70"
 down_revision: str | Sequence[str] | None = "a1c4e7b92f30"
@@ -49,11 +50,17 @@ def upgrade() -> None:
     op.execute(sa.text(f'CREATE SCHEMA IF NOT EXISTS "{ADMIN_SCHEMA}"'))
 
     actor_type = postgresql.ENUM(
-        "administrator", "operator", name="audit_actor_type", schema=ADMIN_SCHEMA,
+        "administrator",
+        "operator",
+        name="audit_actor_type",
+        schema=ADMIN_SCHEMA,
         create_type=False,
     )
     action = postgresql.ENUM(
-        "admin.role.grant", "admin.role.revoke", name="audit_action", schema=ADMIN_SCHEMA,
+        "admin.role.grant",
+        "admin.role.revoke",
+        name="audit_action",
+        schema=ADMIN_SCHEMA,
         create_type=False,
     )
     subject_type = postgresql.ENUM(
@@ -134,9 +141,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     for trigger in ("audit_entry_no_truncate", "audit_entry_append_only"):
-        op.execute(
-            sa.text(f"DROP TRIGGER IF EXISTS {trigger} ON {ADMIN_SCHEMA}.audit_entry")
-        )
+        op.execute(sa.text(f"DROP TRIGGER IF EXISTS {trigger} ON {ADMIN_SCHEMA}.audit_entry"))
     op.execute(sa.text(f"DROP FUNCTION IF EXISTS {ADMIN_SCHEMA}.audit_entry_is_append_only()"))
     for name in (
         "ix_audit_entry__subject",

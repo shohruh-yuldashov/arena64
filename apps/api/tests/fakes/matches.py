@@ -28,7 +28,7 @@ from datetime import datetime
 from uuid import UUID
 
 from app.modules.game.domain.match_record import MatchRecord, MatchRecordStatus
-from app.modules.game.public import PairingSettlement
+from app.modules.game.public import MatchOrigin, PairingSettlement
 
 
 class InMemoryMatchRecordRepository:
@@ -63,9 +63,35 @@ class InMemoryMatchRecordRepository:
                 return record
         return None
 
+    async def by_id(self, match_id: UUID) -> MatchRecord | None:
+        """The record, read without locking it.
+
+        Identical to `lock` here, and kept separate anyway: the two exist
+        because their callers want opposite things from PostgreSQL, and a
+        fake that collapsed them would let a caller drift onto the wrong
+        one without the type check noticing.
+        """
+        return self.matches.get(match_id)
+
     async def lock(self, match_id: UUID) -> MatchRecord | None:
         """The record, with no lock — see this module's docstring."""
         return self.matches.get(match_id)
+
+    async def advance(self, record: MatchRecord, *, expected_ply: int) -> bool:
+        """Compare-and-set on `(ply_number, status = 'active')`, as the real
+        `UPDATE` carries it.
+
+        Modelled for the same reason `settle`'s predicate is: a blind write
+        would let a stale move land, and the guard is exactly what a caller
+        turns into `StaleMatchState`.
+        """
+        stored = self.matches.get(record.id)
+        if stored is None:
+            return False
+        if stored.ply_number != expected_ply or stored.status is not MatchRecordStatus.ACTIVE:
+            return False
+        self.matches[record.id] = record
+        return True
 
     async def pending_for(self, player_id: UUID) -> MatchRecord | None:
         for record in self.matches.values():
@@ -99,6 +125,25 @@ class InMemoryMatchRecordRepository:
     async def settlements_for(self, ticket_ids: Sequence[UUID]) -> Sequence[MatchRecord]:
         wanted = set(ticket_ids)
         return [record for record in self.matches.values() if wanted & set(record.ticket_ids())]
+
+    async def by_origin_refs(
+        self, origin_refs: Sequence[UUID], *, origin: MatchOrigin
+    ) -> Sequence[MatchRecord]:
+        """Every match one context created for these references — R-25.
+
+        `origin` is part of the predicate rather than assumed, exactly as it
+        is in the real statement: that is what stops one context reading
+        another's matches by guessing a reference.
+        """
+        if not origin_refs:
+            return ()
+
+        wanted = set(origin_refs)
+        return [
+            record
+            for record in self.matches.values()
+            if record.origin is origin and record.origin_ref in wanted
+        ]
 
     async def latest_opponent_among(self, player_ids: Sequence[UUID]) -> Mapping[UUID, UUID]:
         """Each player's most recent **settled** opponent.

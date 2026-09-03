@@ -49,6 +49,8 @@ from app.modules.game.infrastructure.repositories import (
     SqlAlchemyMoveLogRepository,
 )
 from app.modules.game.public import ClockExpired, SubmitMoveRequest, engine_services
+from app.platform.events import DomainEvent
+from app.platform.outbox import OutboxEntry
 from tests.fakes.presence_redis import MovableClock
 
 NOW = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
@@ -76,18 +78,17 @@ class _RecordingEvents:
     """An `EventPublisher` that keeps what was staged."""
 
     def __init__(self) -> None:
-        self.published: list[object] = []
+        self.published: list[DomainEvent] = []
 
-    async def publish(self, event: object) -> object:
+    async def publish(self, event: DomainEvent) -> OutboxEntry:
         self.published.append(event)
-        return event
+        # A real entry, so a producer's return type behaves exactly as it
+        # does against `OutboxEventPublisher` — the same reason
+        # `tests/fakes/queue_repository.RecordingPublisher` returns one.
+        return OutboxEntry.of(event)
 
-    def of_type(self, event_type: str) -> list[object]:
-        return [
-            event
-            for event in self.published
-            if getattr(type(event), "event_type", None) == event_type
-        ]
+    def of_type(self, event_type: str) -> list[DomainEvent]:
+        return [event for event in self.published if type(event).event_type == event_type]
 
 
 @pytest_asyncio.fixture
@@ -113,7 +114,7 @@ def _service(
         moves=SqlAlchemyMoveLogRepository(session),
         live=_NullLiveCache(),
         deadlines=deadlines,
-        events=events,  # type: ignore[arg-type]
+        events=events,
         generator=engine.generator,
         applier=engine.applier,
         evaluator=engine.terminal,

@@ -26,6 +26,7 @@ from app.modules.matchmaking.application.metrics import (
     DeliveryOutcome,
 )
 from app.modules.matchmaking.application.services import PendingMatchNotifier
+from app.modules.matchmaking.domain.pending_match import PendingMatchOffer
 from app.platform.outbox import OutboxEntry
 from tests.fakes.clock_deadlines import RecordingClockDeadlines
 from tests.fakes.matches import InMemoryMatchRecordRepository
@@ -143,7 +144,7 @@ async def _created(
     return stored, entry
 
 
-def _for(sink: RecordingPendingMatchSink, player_id: UUID) -> list[object]:
+def _for(sink: RecordingPendingMatchSink, player_id: UUID) -> list[PendingMatchOffer]:
     return [offer for offer in sink.delivered if offer.recipient_id == player_id]
 
 
@@ -178,8 +179,13 @@ class TestACreatedMatchIsPushedToBothPlayers:
 
         light = _for(sink, record.light.player_id)[0]
         dark = _for(sink, record.dark.player_id)[0]
-        assert light.opponent.player_id == record.dark.player_id  # type: ignore[union-attr]
-        assert dark.opponent.player_id == record.light.player_id  # type: ignore[union-attr]
+        # `opponent` is optional because a withdrawn account is omitted
+        # rather than previewed; here both players exist, so its presence is
+        # part of what this asserts.
+        assert light.opponent is not None
+        assert dark.opponent is not None
+        assert light.opponent.player_id == record.dark.player_id
+        assert dark.opponent.player_id == record.light.player_id
 
     async def test_the_offer_carries_what_a_client_needs_to_answer(
         self,

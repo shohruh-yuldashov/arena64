@@ -19,6 +19,7 @@ asserts the chain rather than re-testing `CurrentUser`.
 """
 
 from datetime import UTC, datetime
+from types import TracebackType
 from uuid import UUID
 
 import pytest
@@ -101,8 +102,16 @@ class NullUnitOfWork:
     async def __aenter__(self) -> "NullUnitOfWork":
         return self
 
-    async def __aexit__(self, *exc: object) -> None:
-        if exc[0] is not None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        # Named parameters, not `*exc`: a `*args` stand-in cannot satisfy a
+        # protocol whose parameters are nameable, which is the disagreement
+        # `pyproject.toml`'s `[tool.pyright]` note was written about.
+        if exc_type is not None:
             self.rollbacks += 1
 
     async def commit(self) -> None:
@@ -151,7 +160,7 @@ def _service(
     return AdminRoleService(
         assignments=assignments,
         audit=AuditRecorder(entries=entries or InMemoryAuditEntries(), clock=MovableClock(NOW)),
-        unit_of_work=NullUnitOfWork(),  # type: ignore[arg-type]
+        unit_of_work=NullUnitOfWork(),
         clock=MovableClock(NOW),
     )
 

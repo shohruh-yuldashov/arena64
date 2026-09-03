@@ -39,6 +39,7 @@ returns one tournament, so there is no N to multiply.
 
 import uuid
 from collections.abc import Sequence
+from typing import cast
 
 from sqlalchemy import ColumnElement, ScalarSelect, Select, and_, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -421,15 +422,23 @@ def _entrant_count_of() -> ScalarSelect[int]:
 
 def _current_round_of() -> ScalarSelect[int | None]:
     """The lowest round being played, or `NULL` — the same rule as
-    `_current_round`, correlated instead of called per row."""
-    return (
+    `_current_round`, correlated instead of called per row.
+
+    The cast widens what SQLAlchemy infers, and the declared type is the
+    accurate one: `MIN` over no rows is `NULL`, which is exactly the case
+    this subquery exists to express — a tournament with no published round.
+    `ScalarSelect` is invariant, so the narrower inferred `int` is not
+    assignable to it without saying so.
+    """
+    return cast(
+        "ScalarSelect[int | None]",
         select(func.min(TournamentRoundModel.round_number))
         .where(
             TournamentRoundModel.tournament_id == TournamentModel.id,
             TournamentRoundModel.status.in_((RoundStatus.PUBLISHED, RoundStatus.IN_PROGRESS)),
         )
         .correlate(TournamentModel)
-        .scalar_subquery()
+        .scalar_subquery(),
     )
 
 

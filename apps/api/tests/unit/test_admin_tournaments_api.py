@@ -31,6 +31,7 @@ from app.modules.tournament.domain.standings import FinalStatus
 from app.modules.tournament.domain.tournament import TournamentFormat, TournamentStatus
 from app.modules.tournament.public.administration import (
     AdminEntrant,
+    AdminLiveTournamentSummary,
     AdminPairing,
     AdminRound,
     AdminStanding,
@@ -81,6 +82,16 @@ class InMemoryTournaments:
             rows = [row for row in rows if row.rated is filters.rated]
         return AdminTournamentPage(
             records=rows[:limit], next_cursor="c1" if len(rows) > limit else None
+        )
+
+    async def live_tournament_summary(self) -> AdminLiveTournamentSummary:
+        return AdminLiveTournamentSummary(
+            registration_open=sum(
+                1 for row in self.records if row.status is TournamentStatus.REGISTRATION_OPEN
+            ),
+            in_progress=sum(
+                1 for row in self.records if row.status is TournamentStatus.IN_PROGRESS
+            ),
         )
 
     async def find_tournament(self, tournament_id: UUID) -> AdminTournamentDetail | None:

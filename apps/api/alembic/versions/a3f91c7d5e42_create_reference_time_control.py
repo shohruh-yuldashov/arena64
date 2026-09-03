@@ -90,9 +90,7 @@ _SEED = (
 def upgrade() -> None:
     op.execute(f'CREATE SCHEMA IF NOT EXISTS "{_SCHEMA}"')
 
-    time_control_id = postgresql.ENUM(
-        *_TIME_CONTROL_IDS, name="time_control_id", schema=_SCHEMA
-    )
+    time_control_id = postgresql.ENUM(*_TIME_CONTROL_IDS, name="time_control_id", schema=_SCHEMA)
     speed_class = postgresql.ENUM(*_SPEED_CLASSES, name="speed_class", schema=_SCHEMA)
 
     bind = op.get_bind()
@@ -116,9 +114,7 @@ def upgrade() -> None:
         sa.Column("increment_ms", sa.Integer(), nullable=False),
         sa.Column(
             "speed_class",
-            postgresql.ENUM(
-                *_SPEED_CLASSES, name="speed_class", schema=_SCHEMA, create_type=False
-            ),
+            postgresql.ENUM(*_SPEED_CLASSES, name="speed_class", schema=_SCHEMA, create_type=False),
             nullable=False,
         ),
         sa.Column("display_order", sa.Integer(), nullable=False),

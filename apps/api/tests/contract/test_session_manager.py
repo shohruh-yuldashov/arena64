@@ -3,6 +3,7 @@ PostgreSQL."""
 
 from collections.abc import AsyncIterator
 
+import pytest
 import pytest_asyncio
 from pydantic import SecretStr
 from sqlalchemy import text
@@ -15,8 +16,28 @@ from tests.contract.conftest import _TEST_DSN
 
 @pytest_asyncio.fixture
 async def manager() -> AsyncIterator[DatabaseSessionManager]:
+    """The real manager against the contract database.
+
+    Probes first and **skips** when PostgreSQL is unreachable, which is what
+    every other fixture in this suite does (`conftest.contract_engine`) and
+    what this one was missing: without it these three tests were the only
+    ones in the repository that failed rather than skipped on a machine with
+    no Docker running, so a clean checkout reported three failures that were
+    not defects.
+    """
     settings = PostgresSettings(dsn=SecretStr(_TEST_DSN))
     db = DatabaseSessionManager(settings)
+
+    try:
+        async with db.session() as session:
+            await session.execute(text("SELECT 1"))
+    except Exception as exc:  # noqa: BLE001 — the point is to skip, not fail, when unreachable
+        await db.close()
+        pytest.skip(
+            f"contract tests need a reachable PostgreSQL at {_TEST_DSN!r} "
+            f"(see docker/docker-compose.yml): {exc}"
+        )
+
     yield db
     await db.close()
 

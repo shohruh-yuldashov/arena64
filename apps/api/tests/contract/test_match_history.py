@@ -14,6 +14,7 @@ returns are all on the asserted path.
 Skipped, not failed, when PostgreSQL is unreachable.
 """
 
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -41,7 +42,7 @@ NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
 
 
 @pytest_asyncio.fixture
-async def client(contract_session: AsyncSession):
+async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     """The real API, over this suite's session.
 
     The whole point of §7: a route file that exists without router

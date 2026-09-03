@@ -58,8 +58,8 @@ that removes the feature removes the ability to answer one.
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 
+from alembic import op
 from app.database.types import UtcDateTime
 
 revision: str = "e5b3f7a01c94"

@@ -231,9 +231,9 @@ class TestVisibilityLevel:
         string. Asserted against literals rather than the members, so this
         proves the *contract* rather than that the code agrees with
         itself."""
-        assert VisibilityLevel.EVERYONE == "everyone"
-        assert VisibilityLevel.FRIENDS == "friends"
-        assert VisibilityLevel.NOBODY == "nobody"
+        assert str(VisibilityLevel.EVERYONE) == "everyone"
+        assert str(VisibilityLevel.FRIENDS) == "friends"
+        assert str(VisibilityLevel.NOBODY) == "nobody"
 
     def test_an_unknown_value_is_refused(self) -> None:
         """Validation: the set is closed, so a typo cannot become a value no

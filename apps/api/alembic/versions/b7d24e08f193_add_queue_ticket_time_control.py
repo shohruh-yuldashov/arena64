@@ -73,9 +73,7 @@ _SPEED_CLASSES = ("bullet", "blitz", "rapid", "classical", "correspondence")
 def upgrade() -> None:
     bind = op.get_bind()
 
-    time_control_id = postgresql.ENUM(
-        *_TIME_CONTROL_IDS, name="queue_time_control", schema=_SCHEMA
-    )
+    time_control_id = postgresql.ENUM(*_TIME_CONTROL_IDS, name="queue_time_control", schema=_SCHEMA)
     speed_class = postgresql.ENUM(*_SPEED_CLASSES, name="queue_speed_class", schema=_SCHEMA)
     time_control_id.create(bind, checkfirst=True)
     speed_class.create(bind, checkfirst=True)

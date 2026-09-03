@@ -62,9 +62,7 @@ def upgrade() -> None:
     # move written before this revision has none, and null means "before
     # A64-016.5" rather than "unknown when": a backfilled guess would be a
     # flag decision made from a number nobody measured.
-    op.add_column(
-        "move", sa.Column("received_at", UtcDateTime(), nullable=True), schema=_SCHEMA
-    )
+    op.add_column("move", sa.Column("received_at", UtcDateTime(), nullable=True), schema=_SCHEMA)
 
     for name, kind in _COLUMNS:
         op.add_column("match", sa.Column(name, kind, nullable=True), schema=_SCHEMA)

@@ -28,6 +28,7 @@ from app.modules.admin.presentation.schemas.matches import (
 from app.modules.game.domain.match_record import MatchRecordStatus
 from app.modules.game.domain.variants import MatchOrigin, ProductVariant
 from app.modules.game.public import AdminMatchFilters, AdminMatchPage, AdminMatchRecord
+from app.modules.game.public.administration import AdminLiveMatchSummary
 from app.modules.users.public import AdminUserRecord
 
 NOW = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
@@ -79,6 +80,15 @@ class InMemoryMatches:
                 if filters.participant_id in (row.light_player_id, row.dark_player_id)
             ]
         return AdminMatchPage(records=rows[:limit], next_cursor="c1" if len(rows) > limit else None)
+
+    async def live_match_summary(self) -> AdminLiveMatchSummary:
+        self.calls += 1
+        return AdminLiveMatchSummary(
+            active=sum(1 for row in self.records if row.status is MatchRecordStatus.ACTIVE),
+            awaiting_acceptance=sum(
+                1 for row in self.records if row.status is MatchRecordStatus.PENDING_ACCEPTANCE
+            ),
+        )
 
     async def find_match(self, match_id: UUID) -> AdminMatchRecord | None:
         self.calls += 1

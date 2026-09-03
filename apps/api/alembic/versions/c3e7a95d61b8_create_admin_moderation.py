@@ -22,8 +22,9 @@ Revises: b2d5f8a41c70
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision: str = "c3e7a95d61b8"
 down_revision: str | Sequence[str] | None = "b2d5f8a41c70"
@@ -146,7 +147,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    for name in ("uq_sanction__live_kind", "ix_sanction__created_at_id", "ix_sanction__player_expiry"):
+    for name in (
+        "uq_sanction__live_kind",
+        "ix_sanction__created_at_id",
+        "ix_sanction__player_expiry",
+    ):
         op.drop_index(name, table_name="sanction", schema=ADMIN_SCHEMA)
     op.drop_table("sanction", schema=ADMIN_SCHEMA)
 

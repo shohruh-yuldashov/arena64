@@ -30,6 +30,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID, uuid4
 
+import pytest
 import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy import select, text
@@ -102,7 +103,7 @@ async def client(contract_session: AsyncSession) -> AsyncIterator[AsyncClient]:
         yield http
 
 
-@pytest_asyncio.fixture
+@pytest.fixture
 def sink() -> RecordingSink:
     return RecordingSink()
 
@@ -181,7 +182,7 @@ async def drain(session: AsyncSession, sink: RecordingSink) -> Any:
             cache=cache,
             clock=SystemClock(),
         ),
-        sink=sink,  # type: ignore[arg-type]
+        sink=sink,
     )
     relay = OutboxRelay(
         outbox=SqlAlchemyOutboxRepository(session),

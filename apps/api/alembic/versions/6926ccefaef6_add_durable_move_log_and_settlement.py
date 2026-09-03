@@ -179,9 +179,9 @@ def _create_result_enums() -> None:
     postgresql.ENUM(*_OUTCOMES, name="match_outcome", schema=_SCHEMA).create(
         op.get_bind(), checkfirst=True
     )
-    postgresql.ENUM(
-        *_TERMINATION_REASONS, name="match_termination_reason", schema=_SCHEMA
-    ).create(op.get_bind(), checkfirst=True)
+    postgresql.ENUM(*_TERMINATION_REASONS, name="match_termination_reason", schema=_SCHEMA).create(
+        op.get_bind(), checkfirst=True
+    )
 
 
 def _drop_result_enums() -> None:
@@ -215,9 +215,7 @@ def _add_settlement_columns() -> None:
         "match",
         sa.Column(
             "termination_reason",
-            postgresql.ENUM(
-                name="match_termination_reason", schema=_SCHEMA, create_type=False
-            ),
+            postgresql.ENUM(name="match_termination_reason", schema=_SCHEMA, create_type=False),
             nullable=True,
         ),
         schema=_SCHEMA,
@@ -254,9 +252,7 @@ def _add_settlement_columns() -> None:
         ("ck_match__winner_iff_decisive", "(winner IS NOT NULL) = (outcome::text = 'win')"),
         ("ck_match__ply_non_negative", "ply_number >= 0"),
     ):
-        op.execute(
-            f"ALTER TABLE {_SCHEMA}.match ADD CONSTRAINT {name} CHECK ({predicate})"
-        )
+        op.execute(f"ALTER TABLE {_SCHEMA}.match ADD CONSTRAINT {name} CHECK ({predicate})")
 
 
 def _drop_settlement_columns() -> None:
@@ -314,9 +310,7 @@ def _create_move_log() -> None:
     # **The concurrency mechanism** — §2 and §8. Two moves submitted for the
     # same expected ply produce one row and one integrity error, decided by
     # the index rather than by a check either writer would pass.
-    op.create_index(
-        "uq_move__ply", "move", ["match_id", "ply_number"], unique=True, schema=_SCHEMA
-    )
+    op.create_index("uq_move__ply", "move", ["match_id", "ply_number"], unique=True, schema=_SCHEMA)
     # "Replay this match": every move in order, read from the index without
     # touching the heap for the ordering.
     op.create_index("ix_move__replay", "move", ["match_id", "ply_number"], schema=_SCHEMA)

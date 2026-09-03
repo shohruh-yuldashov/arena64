@@ -1,0 +1,193 @@
+# Continuous integration — every gate this repository already declares.
+#
+# CLAUDE.md §5.10 requires lint, type checks and the full test suite to pass
+# before a merge. Until this file existed there was nothing that ran them:
+# every gate was run by hand, and by hand they were not always run. What that
+# cost is on the record — #101 merged four admin phases with the routers
+# mounted at two prefixes, #104 repaired suites that had been failing unread,
+# and `ruff` had never been run over `alembic/versions/` at all.
+#
+# The jobs mirror the commands in README.md §Quality Gates exactly. If one
+# changes, the other is wrong.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A second push to the same branch cancels the first: the older run is
+# reporting on a diff nobody will merge.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: api — lint, types, tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # The real backing services, not stand-ins. `tests/contract/` skips when
+    # either is unreachable (see its conftest), so without these the job would
+    # pass having silently skipped a third of the suite.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: arena64
+          POSTGRES_PASSWORD: arena64
+          POSTGRES_DB: arena64
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U arena64 -d arena64"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:8
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # `ci` rather than `test`: both scale the rate limits by the same
+      # factor (docs/02-development/testing.md), and this one is the tier
+      # that describes where the process is actually running.
+      ENVIRONMENT: ci
+      # The contract suites read these; their defaults name the ports
+      # docker/docker-compose.yml publishes on a developer's machine, which
+      # are not the ports a service container publishes here.
+      CONTRACT_TEST_POSTGRES_DSN: postgresql+asyncpg://arena64:arena64@localhost:5432/arena64_test
+      CONTRACT_TEST_REDIS_URL: redis://localhost:6379/15
+
+    defaults:
+      run:
+        working-directory: apps/api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # `docker/postgres/init/` runs only against a fresh compose volume, so
+      # the contract database has to be created explicitly here. Same name and
+      # owner as that script, for the same reason: a test that escapes the
+      # rollback fixture must not be able to reach the development database.
+      - name: Create the contract database
+        env:
+          PGPASSWORD: arena64
+        run: psql -h localhost -U arena64 -d arena64 -c 'CREATE DATABASE arena64_test OWNER arena64'
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+
+      - name: Install
+        run: uv sync --frozen --extra dev
+
+      # Each gate is its own step so a failure names itself in the summary,
+      # and `if: always()` so one failure does not hide the others — a run
+      # that reports "lint failed" and nothing else costs a second round trip
+      # to learn the types are broken too.
+      - name: ruff — lint
+        run: uv run ruff check .
+
+      - name: ruff — format
+        if: always()
+        run: uv run ruff format --check .
+
+      - name: import-linter — architecture contracts
+        if: always()
+        run: uv run lint-imports
+
+      - name: mypy — strict
+        if: always()
+        run: uv run mypy .
+
+      - name: pyright
+        if: always()
+        run: uv run pyright
+
+      - name: pytest
+        if: always()
+        run: uv run pytest
+
+  web:
+    name: web — lint, types, tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: eslint
+        run: npm run lint
+
+      - name: tsc
+        if: always()
+        run: npm run typecheck
+
+      - name: prettier
+        if: always()
+        run: npm run format:check
+
+      - name: vitest
+        if: always()
+        run: npm run test
+
+  admin:
+    name: admin — lint, types, tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/admin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/admin/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: eslint
+        run: npm run lint
+
+      - name: tsc
+        if: always()
+        run: npm run typecheck
+
+      - name: prettier
+        if: always()
+        run: npm run format:check
+
+      - name: vitest
+        if: always()
+        run: npm run test

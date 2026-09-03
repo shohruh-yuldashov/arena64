@@ -141,9 +141,7 @@ def _create_cooldown_audit() -> None:
         # cannot hold would be a record of something that never happened.
         sa.Column(
             "reason",
-            postgresql.ENUM(
-                name="queue_cooldown_reason", schema=_SCHEMA, create_type=False
-            ),
+            postgresql.ENUM(name="queue_cooldown_reason", schema=_SCHEMA, create_type=False),
             nullable=False,
         ),
         sa.Column("source_match_id", sa.Uuid(as_uuid=True), nullable=True),

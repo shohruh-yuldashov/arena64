@@ -25,8 +25,9 @@ Revises: a3c1d9f47b20
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision: str = "c8f1a2d6e930"
 down_revision: str | None = "a3c1d9f47b20"
@@ -58,9 +59,7 @@ def upgrade() -> None:
         sa.Column("origin", _ORIGIN, nullable=False, server_default=sa.text("'queue'")),
         schema=_SCHEMA,
     )
-    op.add_column(
-        "match", sa.Column("origin_ref", sa.Uuid(), nullable=True), schema=_SCHEMA
-    )
+    op.add_column("match", sa.Column("origin_ref", sa.Uuid(), nullable=True), schema=_SCHEMA)
 
     # "Every match this context produced" — the read a tournament makes to
     # reconcile its own round. Partial, because `origin_ref` is null for the

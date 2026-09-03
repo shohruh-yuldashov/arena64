@@ -90,7 +90,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10
+      # An exact tag, not a floating major: this action publishes `v1`
+      # through `v7` as moving majors and nothing above, so `@v10` does
+      # not resolve at all — the job failed before running a step of its
+      # own. Pinning the patch is what CLAUDE.md §2.6 asks for anyway.
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: apps/api/uv.lock
@@ -169,10 +173,14 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          # 24, not the `>=20` floor in package.json: the suites were verified
-          # on 24 locally, and a gate that runs on a different runtime than the
-          # one anybody develops against reports on a build nobody has.
-          node-version: 24
+          # `.nvmrc`, not a floating major. `node-version: 24` resolved to
+          # whatever 24.x the runner image carried — 24.19.0 against a lock
+          # written by 24.13.0 — and the two ship different npm versions,
+          # which resolve `@tailwindcss/oxide-wasm32-wasi`'s bundled
+          # dependencies at different patches. `npm ci` then refused a lock
+          # that was correct on the machine that wrote it. One version, named
+          # once, is what makes the lock mean the same thing in both places.
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
@@ -207,10 +215,14 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          # 24, not the `>=20` floor in package.json: the suites were verified
-          # on 24 locally, and a gate that runs on a different runtime than the
-          # one anybody develops against reports on a build nobody has.
-          node-version: 24
+          # `.nvmrc`, not a floating major. `node-version: 24` resolved to
+          # whatever 24.x the runner image carried — 24.19.0 against a lock
+          # written by 24.13.0 — and the two ship different npm versions,
+          # which resolve `@tailwindcss/oxide-wasm32-wasi`'s bundled
+          # dependencies at different patches. `npm ci` then refused a lock
+          # that was correct on the machine that wrote it. One version, named
+          # once, is what makes the lock mean the same thing in both places.
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: apps/admin/package-lock.json
 

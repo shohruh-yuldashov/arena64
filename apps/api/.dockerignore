@@ -1,0 +1,28 @@
+# What never belongs in a build context — A64-027.0.
+#
+# Two reasons, and the second is the one that bites: a large context is slow
+# to send to the daemon, and a context carrying `.env.local` is a context
+# that can put a developer's secrets into an image layer.
+
+.env
+.env.*
+!.env.example
+
+.venv/
+__pycache__/
+*.py[cod]
+
+tests/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.import_linter_cache/
+.grimp_cache/
+
+var/
+*.log
+
+.git/
+.gitignore
+.idea/
+.DS_Store

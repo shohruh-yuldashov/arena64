@@ -6,8 +6,8 @@ operator console.
 
 > **Project status:** Implemented and running locally. Sixteen delivery epics
 > (`A64-009` … `A64-024`) are closed, each with its own audit; the player-experience
-> redesign (`A64-025`) is in progress. There is **no deployed environment and no CI
-> pipeline yet** — see [Known gaps](#known-gaps).
+> redesign (`A64-025`) is in progress. Every quality gate runs in CI on each pull
+> request. There is **no deployed environment** — see [Known gaps](#known-gaps).
 >
 > Feature behaviour is specified in [`specs/`](./specs/) before it is built, and every
 > closed epic ends with an audit document recording what was actually shipped.
@@ -98,13 +98,14 @@ Arena64/
 ├── specs/                # One specification per product feature, plus per-epic audits
 ├── prompts/              # Prompt library for AI-assisted development (unpopulated)
 ├── templates/            # Document skeletons — specs, ADRs, PRs, bug reports, READMEs
-└── docker/               # Local development infrastructure — Postgres 17, Redis 8
+├── docker/               # Local development infrastructure — Postgres 17, Redis 8
+└── .github/workflows/    # CI — every gate, on every pull request
 ```
 
 There is **no `packages/` directory**: nothing has yet been needed by two consumers at
 once, and a shared package earns its place on the third real use, not the first
-prediction (`CLAUDE.md` §3.5, §2.7). `infrastructure/`, `scripts/` and `.github/` do not
-exist either — see [Known gaps](#known-gaps).
+prediction (`CLAUDE.md` §3.5, §2.7). `infrastructure/` and `scripts/` do not exist
+either — see [Known gaps](#known-gaps).
 
 Placement rules for new code and documents are in
 [`docs/02-development/folder-structure.md`](./docs/02-development/folder-structure.md).
@@ -132,7 +133,7 @@ carries the reasoning that selected it.
 | Frontend tests | Vitest, Testing Library, MSW, Playwright | same |
 | Quality gates | `ruff`, `mypy --strict`, `pyright`, `lint-imports`; `eslint`, `prettier`, `tsc --noEmit` | `apps/api/pyproject.toml`, `apps/api/.importlinter` |
 | Local infrastructure | Docker Compose — Postgres and Redis only | `docker/docker-compose.yml` |
-| CI | **None configured** | [Known gaps](#known-gaps) |
+| CI | GitHub Actions — three jobs over the gates above | [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) |
 
 The stack choices above are **in force but not all ratified**: only four ADRs exist, and
 the backend platform decisions still live as `AD-nn` entries inside
@@ -191,7 +192,9 @@ npm run dev
 
 ## Quality Gates
 
-Run before opening a pull request. Nothing runs these automatically yet.
+Every gate below runs on each pull request and each push to `main` —
+[`.github/workflows/ci.yml`](./.github/workflows/ci.yml), which mirrors these
+commands exactly. Run them locally first; CI is the check, not the loop.
 
 ```bash
 # apps/api
@@ -206,6 +209,10 @@ npm run lint && npm run typecheck && npm run format:check
 npm run test
 npm run test:e2e                    # apps/web only; needs the backend and services running
 ```
+
+The Playwright suite is **not** in CI yet — it needs a running API, seeded
+accounts and a built client, and shipping an untested pipeline job would
+defeat the point of having one. See [Known gaps](#known-gaps) G-1.
 
 ---
 
@@ -313,7 +320,7 @@ repository's own rules require.
 
 | # | Gap | Rule it contradicts |
 | --- | --- | --- |
-| G-1 | **No CI.** No `.github/`; every gate above is run by hand | `CLAUDE.md` §5.10 — "lint, type checks, and the full test suite pass" before merge |
+| G-1 | **CI runs every gate except the Playwright suite**, which needs a running API and seeded accounts | `CLAUDE.md` §5.10 — "the full test suite" is not yet the whole of it |
 | G-2 | **No deployment definition.** No `infrastructure/`, no application container; only local Compose | `architecture.md` AD-02 names three runtime profiles that nothing yet deploys |
 | G-3 | **Placeholder process docs.** `coding-standards.md`, `git-workflow.md`, `folder-structure.md` are placeholders that `CLAUDE.md` cites as authoritative | `CLAUDE.md` §4.2 — every document declares status and owner |
 | G-4 | **No document owners.** Every `Owner` field reads `_Unassigned_` | `CLAUDE.md` §4.2 — "unowned documents rot" |

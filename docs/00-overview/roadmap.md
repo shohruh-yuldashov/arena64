@@ -96,7 +96,7 @@ Ordered by what the product cannot ship without. Numbers are reserved, not plann
 
 | # | Milestone | Why it is next | Blocks |
 | --- | --- | --- | --- |
-| U-1 | **Continuous integration** | Every gate in `README.md` is run by hand; `CLAUDE.md` §5.10 requires them green before merge, and #101 and #104 are what its absence already cost | Nothing — this is the cheapest correction available |
+| ~~U-1~~ | ~~**Continuous integration**~~ | **Done.** `.github/workflows/ci.yml` runs ruff, `lint-imports`, mypy, pyright and pytest against real Postgres and Redis, plus eslint, tsc, prettier and vitest for both clients. The Playwright suite is not in it yet | — |
 | U-2 | **Deployment definition** | `architecture.md` AD-02 names three runtime profiles and nothing deploys them. There is no staging or production environment | Everything below reaching a player |
 | U-3 | **Leaderboard surface** | The API, read model and keyset pagination exist; no player can reach them (`vision.md` D-9) | The ladder being visible is most of what a permanent rating is for |
 | U-4 | **Ratify the stack decisions** | Backend platform choices are `AD-nn` notes in `architecture.md`, not ADRs (`CLAUDE.md` §3.10) | Nothing, but it gets more expensive to write the longer it waits |

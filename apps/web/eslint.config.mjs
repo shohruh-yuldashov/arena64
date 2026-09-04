@@ -103,13 +103,20 @@ export default tseslint.config(
     // ergonomics: a file exporting both a component and something else
     // makes HMR fall back to a full reload. Every shadcn/ui primitive
     // trips it by construction — `buttonVariants` beside `Button`, Radix
-    // parts re-exported beside wrappers — and so does a context module,
-    // which exists precisely to export a provider and its hook together.
-    // Splitting them to satisfy a dev-server optimisation would make the
-    // source worse to read for no runtime benefit.
-    // ...and a feature's model module, which exports a provider beside the
-    // hook that reads it — splitting those would put a context and its only
-    // accessor in two files that must be read together.
+    // parts re-exported beside wrappers — and so does a provider module,
+    // which exists to export a provider and re-export its hook.
+    //
+    // **The "no runtime benefit" half of this comment was wrong, and
+    // A64-025.13B §37 corrected it.** A full reload is a cost; a *hot swap*
+    // of a module that calls `createContext` is a hazard, because the swap
+    // mints a new context object while every mounted consumer still holds
+    // the old one — a provider rendering, a consumer reading `null`, and a
+    // "must be used inside a Provider" thrown under a tree that has one.
+    //
+    // So every context object now lives in its own module with no component
+    // export, where Fast Refresh will not swap it. What stays exempt is the
+    // provider modules and the barrels, which hold no state: a reload there
+    // is the ergonomic cost this rule is actually about.
     files: [
       "src/shared/ui/**",
       "src/shared/theme/**",

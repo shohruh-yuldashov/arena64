@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.13A, the match nothing could end |
+| **Last updated** | 2026-09-04 — A64-025.13B, every context in its own module |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -476,6 +476,7 @@ tokens.
 | **A64-025.11** | Global UI consistency and component cleanup. Fixes P2-3 | .3–.10 | Re-architecting layouts already designed mobile-first |
 | **A64-025.12A** | A throw inside the router reaches this app's error page | — | The unreproduced i18n context fault itself (§33.3) |
 | **A64-025.13A** | The match a no-show left open, and the port that closes it | .13 | A moderator's adjudication of a *played* game, which needs an audit trail |
+| **A64-025.13B** | Every context object in a module Fast Refresh will not swap | .12A | `features/auth`'s session context (§37.3) |
 | **A64-025.12** | Motion and interaction system. Fixes P3-5 | .3–.10 | Adding motion for its own sake |
 | **A64-025.13** | Closing audit | all | New work |
 
@@ -3441,7 +3442,7 @@ abandoned match is permanent, and a player carrying one cannot queue.
 | `confirm_move` | The fifth gameplay preference, still write-only. A rule about submitting a move, not something the document can express — its own task |
 | The `useTranslation` context fault | §33.3. Open, dev-only, not reproduced, now reported under `scope: "router"` |
 | ~~The stuck-match question~~ | **Answered and fixed** — §36. It was reachable, every unplayed tournament fixture hit it, and the player could not queue again |
-| Three `react-refresh` warnings | `shared/realtime/context.tsx`, pre-existing, and §33.3 is the reason to look at them again |
+| ~~Three `react-refresh` warnings~~ | **Fixed** — §37. They were the rule reporting the §33.3 hazard, and lint is now at zero problems |
 | Litmus-style email rendering | §31.8. Every client-specific claim is reasoned, not observed |
 
 Nothing in that list is a surface a player uses being wrong. The epic set out
@@ -3580,3 +3581,84 @@ sweep would ever have claimed them again.
 
 `game.match` now holds zero active matches in that database, and the five
 accounts involved — three of them the e2e suite's — can queue again.
+
+## 37. Every context in its own module — A64-025.13B
+
+§33.3 recorded a fault it could not reproduce: `useTranslation` throwing
+"must be used inside an I18nProvider" under a tree that plainly had one,
+after returning to a backgrounded tab. What the code established was that a
+`null` context there **cannot** mean a missing provider — `AppShell` is
+mounted from one place, under `I18nProvider`, in a single React root — so it
+had to mean two `I18nContext` objects, which needs two instances of the
+module that creates it.
+
+This is the structural change that makes that impossible in the one place it
+was reachable. **It is a precaution on an unreproduced theory and is labelled
+as one**, not a proven fix.
+
+### 37.1 The mechanism
+
+React Fast Refresh replaces a module whose exports are all components. A
+module that exports a component **and** something else is not refreshable, so
+Vite falls back to a full page reload — which is safe.
+
+The dangerous case is the first one applied to a module that also calls
+`createContext`. The swap re-runs the module body, `createContext` produces a
+**new object**, and the provider renders with it — while every component
+already mounted is still reading the old one. Provider present, consumer
+`null`, and an error that describes a tree that does not exist.
+
+`react-refresh/only-export-components` is the rule that describes exactly
+this shape. The repository had it switched off for four paths, with a comment
+arguing that splitting a provider from its hook
+
+> would make the source worse to read for no runtime benefit.
+
+**The second half of that was wrong.** A full reload is a cost. A hot swap of
+a context module is a hazard, and the two are not the same thing. The comment
+has been corrected rather than deleted.
+
+### 37.2 What moved
+
+| Context | Was | Now |
+| --- | --- | --- |
+| `I18nContext` | `shared/i18n/index.tsx`, beside `I18nProvider` | `shared/i18n/context.ts`, with `useTranslation` |
+| `ThemeContext` | `shared/theme/theme-context.tsx`, beside `ThemeProvider` | `shared/theme/context.ts`, with `useTheme` |
+| `RealtimeContext` | `shared/realtime/context.tsx`, beside its provider | `shared/realtime/context.ts`, with its three hooks |
+
+Each new module exports no component, so Fast Refresh will not swap it — a
+change there triggers a full reload, which is the safe failure. The providers
+keep their own files and their exemption, because a provider holds no
+identity that a reload can break.
+
+The three `react-refresh/only-export-components` warnings this repository had
+been carrying since before A64-025 were in `shared/realtime/context.tsx`, and
+they were the rule reporting this hazard for three years' worth of sessions.
+**Lint is now at zero problems**, not zero errors.
+
+### 37.3 What this does not claim
+
+The fault was never reproduced, so nothing here can be called its fix. Three
+attempts are listed in §33.3. What can be said precisely:
+
+- The state the error requires — two context objects — needed a module
+  instance the dev server could produce and a production bundle could not.
+- The one module structure that lets Fast Refresh produce it is gone from
+  all three shared contexts.
+- If it recurs, `features/auth/model/session-provider` is the remaining
+  context module of the same shape, and A64-025.12A's `errorComponent` now
+  reports it with `scope: "router"` rather than printing a stack.
+
+`session-provider` was left because it is large, it is a feature module
+rather than a shared one, and moving a context out of it is a change to the
+authentication path that deserves its own reasoning rather than riding along
+with three one-line extractions.
+
+### 37.4 Measured
+
+| | |
+| --- | --- |
+| `tsc --noEmit` | clean |
+| `eslint` | **0 problems** (3 warnings before) |
+| `prettier --check` | clean |
+| `vitest` | 231 passed, 35 files — no assertion changed |

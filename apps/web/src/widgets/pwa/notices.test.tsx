@@ -82,7 +82,10 @@ it("offers installation only after sign-in, and remembers both answers", async (
   // this product actually has.
   signedOut();
   const anonymous = renderApp({ path: "/" });
-  expect(await screen.findByRole("heading", { level: 1, name: "Arena64" })).toBeVisible();
+  // A64-026.1 §39. The anonymous landing page's `<h1>` is a sentence
+  // about the product rather than the wordmark, so this waits for the
+  // route to have rendered at all rather than for one specific title.
+  expect(await screen.findByRole("heading", { level: 1 })).toBeVisible();
   expect(screen.queryByText("Install Arena64")).not.toBeInTheDocument();
   anonymous.unmount();
 

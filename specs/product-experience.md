@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.14, the move a player has chosen but not yet played |
+| **Last updated** | 2026-09-04 — A64-026.1, the page a visitor without an account lands on |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -3790,3 +3790,109 @@ None of them was ever missing from the API. Every one had been on
 `PreferencesResponse` since A64-012.5 and read by nothing — five settings a
 player could change that changed nothing, closed one at a time as each
 surface was redesigned.
+
+## 39. The page a visitor without an account lands on — A64-026.1
+
+`/` is open, and A64-025.3 kept it that way: an anonymous visitor gets a
+signed-out home rather than a redirect. What they got was **one card** — the
+wordmark as an `<h1>`, one sentence, two buttons, and two thirds of an empty
+screen.
+
+Nothing on it said what Arena64 is, what a game costs, whether an account is
+needed, or what happens after one. The first thing a visitor met was a name
+they had not been given a reason to care about.
+
+### 39.1 It is `/`, not a second route
+
+A dedicated `/about` would be a page nothing links to, and a landing page
+behind a link is a landing page nobody lands on. So `pages/home` chooses
+between two pages for two audiences and nothing else does — one is being told
+what this is, the other is being asked where they want to go. They share
+the header and nothing else, which is why the anonymous case returns early
+rather than branching inside a shared layout.
+
+### 39.2 Every claim is one the product can keep
+
+§5 forbids inventing a statistic, and a landing page is where that rule is
+under the most pressure: *"10,000 players"* is one line of copy away and
+would be a lie the moment it was written.
+
+So there is **no player count, no games-played counter, no testimonial and
+no logo wall.** What is there instead is six things the built product does,
+each checkable by opening the app:
+
+| Claim | Where it is true |
+| --- | --- |
+| Four time controls, 1+0 to 30+0 | seeded by the migration that creates the table |
+| A Glicko-2 rating per speed class | `rating.player_rating`, five classes |
+| Single-elimination tournaments with a real bracket | §16's bracket, drawn from `BracketSlot.parent()` |
+| Friends and direct challenges | `/friends`, `/challenges` |
+| Every finished game replayable | `/games/{id}/replay`, move by move |
+| Three languages, emails included | uz/ru/en, and §30's shared email shell |
+
+A visitor who signs up finds exactly that list. That is the test a sentence
+on this page has to pass, and it is a stricter one than "is it appealing".
+
+### 39.3 Three steps, as an ordered list
+
+"Choose a time control → get paired → play" is the lobby's actual flow, and
+the order is the content. It is an `<ol>` rather than a grid of three cards
+because a grid says the same thing to a sighted reader and nothing at all to
+somebody using a screen reader. The numerals are `aria-hidden`: the list
+already announces the position, and reading it twice is worse than not
+styling it.
+
+### 39.4 No marketing theme
+
+A64-026's brief allows a dedicated one. This does not take it.
+
+The product already has a token system, a brand gradient rationed to three
+places (§18.7) and a motion scale (§34). A second palette applying to one
+page would be a second thing to keep in step, and **the first divergence
+would be the moment a visitor crossed from here into `/register`** — which
+is the one journey this page exists to start.
+
+The gradient appears on the two calls to action, which is the "primary
+button" slot §18.7 already grants it. Measured rather than assumed, because
+the memory rule is that no text sits over a gradient whose two ends it has
+not cleared:
+
+| Theme | Text | Contrast at the two stops |
+| --- | --- | --- |
+| Light | `oklch(0.985 0 0)` | **6.15 / 7.05** |
+| Dark | `oklch(0.16 0.02 275)` | **6.51 / 5.72** |
+
+### 39.5 A test that was probing the wrong thing
+
+`App.test.tsx` and `notices.test.tsx` both waited for an `<h1>` named
+"Arena64" before asserting what they were actually about — that the lazy
+route chunk resolves, and that the install prompt is withheld until
+sign-in. The wordmark was a convenient probe, not the subject.
+
+The landing page's `<h1>` is a sentence about the product rather than the
+name, deliberately: the header carries the wordmark four elements above, and
+a heading that repeats it tells a visitor nothing and a search engine less.
+So both probes now wait for a level-one heading without naming it, which is
+what they meant. CLAUDE.md §6.11: the tests encoded an incidental detail,
+and the change says so.
+
+### 39.6 Measured
+
+| | |
+| --- | --- |
+| `tsc --noEmit` | clean |
+| `eslint` | 0 problems |
+| `prettier --check` | clean |
+| `vitest` | 238 passed, 36 files |
+| Clipping sweep | **0** clipped elements and 0 page overflow across 1280 (uz/ru/en), 768, 360 and dark |
+
+### 39.7 Not done
+
+**No metadata.** No `<title>` per route, no description, no OpenGraph, no
+canonical URL, no sitemap. That is A64-026.3, and doing half of it here
+would be a second place for it to live.
+
+No screenshots of the product inside the page: they would need to be real
+captures kept in step with a redesigning product, and the board motif
+already shows the one thing worth showing. §5's "no heavy assets" is the
+other half of that.

@@ -1124,5 +1124,59 @@
       }
     },
     "soon": "very soon"
+  },
+  "landing": {
+    "hero": {
+      "title": "Play Russian draughts online, against real opponents",
+      "body": "Arena64 pairs you with somebody at your level in seconds, keeps the clock, and records the result. Bullet to classical, rated or casual.",
+      "register": "Create an account",
+      "free": "Free to play. No download — it runs in your browser."
+    },
+    "steps": {
+      "title": "How a game starts",
+      "one": {
+        "title": "Choose a time control",
+        "body": "One minute to thirty. Rated if you want the result to count, casual if you do not."
+      },
+      "two": {
+        "title": "Get paired",
+        "body": "The queue finds an opponent near your rating and opens the board for both of you."
+      },
+      "three": {
+        "title": "Play",
+        "body": "Moves and clocks travel live. The game ends the moment one of you wins, draws or runs out of time."
+      }
+    },
+    "features": {
+      "title": "What you get",
+      "realtime": {
+        "title": "Four time controls",
+        "body": "1+0 bullet, 3+2 blitz, 10+0 rapid and 30+0 classical, each with its own clock."
+      },
+      "rating": {
+        "title": "A rating per speed",
+        "body": "Glicko-2, kept separately for each speed class — being quick at bullet says nothing about your classical."
+      },
+      "tournaments": {
+        "title": "Tournaments",
+        "body": "Single-elimination brackets you can enter, follow round by round, and read afterwards."
+      },
+      "friends": {
+        "title": "Friends and challenges",
+        "body": "Find a player, add them, and challenge them directly at a time control you both choose."
+      },
+      "replay": {
+        "title": "Every game, replayable",
+        "body": "Finished games are kept in full. Step through any of them move by move."
+      },
+      "languages": {
+        "title": "Three languages",
+        "body": "Uzbek, Russian and English throughout — including the emails Arena64 sends you."
+      }
+    },
+    "closing": {
+      "title": "Ready for a game?",
+      "body": "An account takes a minute, and the first opponent takes seconds."
+    }
   }
 }

@@ -7,6 +7,7 @@ import { speedClassKey } from "@/entities/time-control";
 import { displayNameOf } from "@/entities/user";
 import { useSession } from "@/features/auth/model/session-provider";
 import { useMyProfile, useMyRatings } from "@/features/profile/model/queries";
+import { LandingPage } from "@/pages/home/landing";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
 import { formatNumber, formatPercent } from "@/shared/lib/format";
@@ -78,6 +79,13 @@ export default function HomePage() {
   const { t } = useTranslation();
   const { state } = useSession();
   const signedIn = isAuthenticated(state);
+
+  // A64-026.1 §39. `/` is open and stays open, so an anonymous visitor is
+  // not redirected — they are simply shown a different page. Returning
+  // early rather than branching inside the layout below, because the two
+  // audiences share nothing beyond the header: one is being told what this
+  // is, the other is being asked where they want to go.
+  if (!signedIn) return <LandingPage />;
 
   return (
     <div className="flex flex-col gap-8">

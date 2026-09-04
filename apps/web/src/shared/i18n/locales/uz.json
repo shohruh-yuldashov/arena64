@@ -1124,5 +1124,59 @@
       }
     },
     "soon": "juda tez orada"
+  },
+  "landing": {
+    "hero": {
+      "title": "Onlayn shashka o'ynang — tirik raqiblar bilan",
+      "body": "Arena64 sizga bir necha soniyada darajangizga mos raqib topadi, vaqtni hisoblaydi va natijani yozib qo'yadi. Bulletdan klassikagacha, reytingli yoki oddiy.",
+      "register": "Hisob yaratish",
+      "free": "O'ynash bepul. Hech narsa yuklab olish shart emas — hammasi brauzerda ishlaydi."
+    },
+    "steps": {
+      "title": "O'yin qanday boshlanadi",
+      "one": {
+        "title": "Vaqt nazoratini tanlang",
+        "body": "Bir daqiqadan o'ttizgacha. Natija hisobga o'tishini istasangiz reytingli, aks holda oddiy."
+      },
+      "two": {
+        "title": "Raqib kuting",
+        "body": "Navbat reytingingizga yaqin o'yinchini topadi va ikkalangizga doskani ochadi."
+      },
+      "three": {
+        "title": "O'ynang",
+        "body": "Yurishlar va soatlar jonli boradi. O'yin g'alaba, durang yoki vaqt tugashi bilan yakunlanadi."
+      }
+    },
+    "features": {
+      "title": "Nimalar bor",
+      "realtime": {
+        "title": "To'rtta vaqt nazorati",
+        "body": "1+0 bullet, 3+2 blits, 10+0 rapid va 30+0 klassik — har birining o'z soati bilan."
+      },
+      "rating": {
+        "title": "Har tezlik uchun alohida reyting",
+        "body": "Glicko-2, har bir tezlik sinfi uchun alohida: bulletdagi kuchingiz klassika haqida hech narsa aytmaydi."
+      },
+      "tournaments": {
+        "title": "Turnirlar",
+        "body": "Chiqib ketish setkalari: ro'yxatdan o'ting, turma-tur kuzating va keyin tahlil qiling."
+      },
+      "friends": {
+        "title": "Do'stlar va chorlovlar",
+        "body": "O'yinchini toping, do'stlikka qo'shing va o'zingiz tanlagan vaqt nazoratida to'g'ridan-to'g'ri chorlang."
+      },
+      "replay": {
+        "title": "Har bir o'yinni qayta ko'rish",
+        "body": "Tugagan o'yinlar to'liq saqlanadi. Istaganini yurishma-yurish varaqlang."
+      },
+      "languages": {
+        "title": "Uch til",
+        "body": "O'zbek, rus va ingliz tillari hamma joyda — Arena64 yuboradigan xatlarda ham."
+      }
+    },
+    "closing": {
+      "title": "O'ynashga tayyormisiz?",
+      "body": "Hisob yaratish bir daqiqa, birinchi raqib esa bir necha soniya."
+    }
   }
 }

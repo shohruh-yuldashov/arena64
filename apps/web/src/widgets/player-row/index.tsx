@@ -50,11 +50,20 @@ export function PlayerRow({
   const name = nameOf(player);
 
   return (
-    <li className="border-border flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 sm:flex-nowrap">
+    // No border of its own — A64-025.8B §27. Every list in this product is
+    // one card with ruled rows; five separate bordered boxes with gaps
+    // between them was the shape social kept from before that existed.
+    <li className="flex flex-wrap items-center gap-3 px-4 py-3 sm:flex-nowrap sm:px-5">
       <Link
         to="/players/$username"
         params={{ username: player.username }}
-        className="focus-visible:ring-ring flex min-w-0 flex-1 items-center gap-3 rounded-md focus-visible:ring-2 focus-visible:outline-none"
+        // `basis-full` below `sm` — A64-025.8B §27. The row wraps there, but
+        // `flex-1` still let the actions share the first line: two buttons
+        // took 200 of 360 pixels and the identity kept what was left, so a
+        // meta line reading "3+2 · Reytingli · 2 soat qoldi" lost 123 of
+        // them. Taking the whole line pushes the actions to their own and
+        // nothing has to be cut.
+        className="focus-visible:ring-ring flex min-w-0 flex-1 basis-full items-center gap-3 rounded-md focus-visible:ring-2 focus-visible:outline-none sm:basis-auto"
         aria-label={`${t("social.actions.viewProfile")} — ${name}`}
       >
         <Avatar className="size-10 shrink-0">

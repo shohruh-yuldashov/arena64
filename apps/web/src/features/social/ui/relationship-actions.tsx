@@ -63,6 +63,7 @@ export function RelationshipActions({
   state,
   requestId,
   size = "sm",
+  tone = "list",
 }: {
   playerId: string;
   /** Named in the confirmation, so a destructive click cannot be ambiguous. */
@@ -70,6 +71,21 @@ export function RelationshipActions({
   state: RelationshipState | null | undefined;
   requestId?: string | undefined;
   size?: "sm" | "default";
+  /**
+   * How loudly a destructive action speaks — A64-025.8B §27.
+   *
+   * `detail` is one player on their own page: two controls, and the red
+   * text §18.8 gives them is right there. `list` is N players down a
+   * column, where the same rule paints **2N** red words and the page reads
+   * as an alarm rather than as a list of friends — six of them on a list of
+   * three. There the word alone carries the meaning until a cursor or the
+   * keyboard reaches it.
+   *
+   * Colour is still never the only signal, in either tone: the label says
+   * "Remove friend" whatever colour it is, and the confirmation dialog is
+   * what actually guards the act.
+   */
+  tone?: "list" | "detail";
 }) {
   const { t } = useTranslation();
   const [failure, setFailure] = useState<TranslationKey | null>(null);
@@ -168,7 +184,9 @@ export function RelationshipActions({
               // decides which of these open a dialog. §18.8 took the border
               // away too, for the same reason.
               isDestructive(action) &&
-                "text-destructive hover:bg-destructive/10 hover:text-destructive",
+                (tone === "detail"
+                  ? "text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  : "text-muted-foreground hover:bg-destructive/10 hover:text-destructive focus-visible:text-destructive"),
             )}
             disabled={pending}
             // The player's name is in the accessible name, so a screen

@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.7C, the tournament page |
+| **Last updated** | 2026-09-04 — A64-025.8B, the social surfaces |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -462,6 +462,7 @@ tokens.
 | **A64-025.5D** | The same surfaces, read in Uzbek and Russian | .5C, .10 | Retranslating; changing layout English needs |
 | **A64-025.7B** | The tournament list, and the browser's missing Uzbek | .7, .5D | Number formatting; hand-writing what ICU gets right |
 | **A64-025.7C** | The tournament page the list links to | .7B | The bracket, which §16 settled |
+| **A64-025.8B** | The five social surfaces, after the card system | .8, .9 | Relationship rules, which §17 settled |
 | **A64-025.9B** | Home, and the account menu in the header | .2, .3 | Inventing a statistic the API does not return |
 | **A64-025.9C** | The four remaining settings surfaces | .2, .9 | Changing what any setting does |
 | **A64-025.10** | Notifications — the feed and the bell | .2 | Admin notification surfaces; what the preferences decide (.9C) |
@@ -2511,3 +2512,63 @@ nobody had noticed it.
 `/tournaments/{id}` in three states — registration open, in progress, and
 Uzbek at 360 — with zero clipped text and zero page overflow. 220 tests
 pass, `tsc --noEmit` clean, eslint zero errors.
+
+---
+
+## 27. The social surfaces, after the card system — A64-025.8B
+
+`/friends`, `/friends/requests`, `/search`, `/blocked` and `/challenges`
+were designed in §17, before the card language, the speed colours and the
+rule §18.8 wrote down about destructive weight. They were the last surfaces
+still shaped the old way.
+
+### 27.1 Six red words on a list of three friends
+
+§18.8 gave destructive actions destructive **text** and no border — right
+for a public profile, which shows one player and two controls. A friends
+list shows N players and **2N** of those controls: "Remove friend" and
+"Block", in red, on every row. Three friends made six red words, and the
+page read as an alarm rather than as a list of people somebody chose to add.
+
+So the rule gains a second half rather than being replaced:
+
+| Tone | Where | Destructive action reads as |
+| --- | --- | --- |
+| `detail` | one player on their own page | destructive text, as §18.8 |
+| `list` | N players down a column | muted, until a cursor or the keyboard reaches it |
+
+Colour was never the only signal in either tone — the label says "Remove
+friend" whatever colour it is, and the confirmation dialog is what actually
+guards the act. What changes is which of the row's controls a reader sees
+first, and on a friends list that should be **Challenge**: the thing
+somebody came there to do.
+
+`tone` is an explicit prop rather than a reading of `size`. The two happen
+to correlate in today's five call sites and would stop correlating the first
+time a dense surface wanted large controls.
+
+### 27.2 Five bordered boxes with gaps between them
+
+Every other list in the product is one card with ruled rows. Social kept a
+`<li>` with its own border and a `gap-2` between them, which is the shape
+lists had before §18. `PlayerRow` no longer draws a border; the five lists
+that render it draw one card around the whole column.
+
+### 27.3 An Uzbek row that lost 123 pixels
+
+`PlayerRow` wraps below `sm`, so the actions were meant to fall to their own
+line. `flex-1` let them share the first one instead: at 360 two buttons took
+200 of the pixels and the identity kept what was left, so a challenge's meta
+line reading `3+2 · Reytingli · 2 soat qoldi` was cut by 123 of them.
+`basis-full` below `sm` gives the identity the whole line and pushes the
+actions to the next.
+
+English never showed it — "3+2 · Rated · 2h left" fits. That is the third
+phase in a row where the fault was only visible in another language, and it
+is why the clipping sweep from §24.4 now runs on every surface this epic
+touches.
+
+### 27.4 Measured
+
+Five surfaces × three languages × two widths: zero clipped text, zero page
+overflow. 220 tests pass, `tsc --noEmit` clean, eslint zero errors.

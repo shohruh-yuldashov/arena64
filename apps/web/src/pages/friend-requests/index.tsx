@@ -58,7 +58,10 @@ export default function FriendRequestsPage() {
             emptyTitle={t("social.requests.incomingEmpty")}
             onRetry={() => void incoming.refetch()}
           >
-            <ul aria-label={t("social.requests.incoming")} className="flex flex-col gap-2">
+            <ul
+              aria-label={t("social.requests.incoming")}
+              className="border-border bg-card divide-border flex flex-col divide-y overflow-hidden rounded-xl border"
+            >
               {incomingItems.map((request) => (
                 <PlayerRow
                   key={request.id}
@@ -107,7 +110,10 @@ export default function FriendRequestsPage() {
             emptyTitle={t("social.requests.outgoingEmpty")}
             onRetry={() => void outgoing.refetch()}
           >
-            <ul aria-label={t("social.requests.outgoing")} className="flex flex-col gap-2">
+            <ul
+              aria-label={t("social.requests.outgoing")}
+              className="border-border bg-card divide-border flex flex-col divide-y overflow-hidden rounded-xl border"
+            >
               {outgoingItems.map((request) => (
                 <PlayerRow
                   key={request.id}

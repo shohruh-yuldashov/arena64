@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
 import { I18nContext, type I18nContextValue } from "@/shared/i18n/context";
 import en from "@/shared/i18n/locales/en.json";
@@ -102,9 +102,23 @@ function interpolate(template: string, values?: Record<string, string | number>)
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(readStoredLocale);
 
+  // A64-026.5 §44.1. `index.html` ships `lang="uz"`, which is right before
+  // any script has run and wrong the moment this provider resolves
+  // something else — a stored preference, or a browser asking for Russian.
+  //
+  // It used to be written only inside `setLocale`, so the attribute was
+  // correct for a player who had *switched* language and wrong for every
+  // player who never touched the control: an English page announced with
+  // Uzbek pronunciation rules, which is WCAG 3.1.1 at level A.
+  //
+  // An effect rather than a line in render, because writing to the
+  // document during render is a side effect in the middle of one.
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
+
   const setLocale = useCallback((next: Locale) => {
     setLocaleState(next);
-    document.documentElement.lang = next;
     try {
       localStorage.setItem(LOCALE_STORAGE_KEY, next);
     } catch {

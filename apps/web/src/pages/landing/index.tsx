@@ -9,6 +9,8 @@ import {
   UserPlusIcon,
 } from "lucide-react";
 
+import { track } from "@/shared/analytics";
+import { useViewEvent } from "@/shared/analytics/use-view-event";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui";
@@ -50,6 +52,11 @@ import { PublicShell } from "@/widgets/marketing/public-shell";
  * template, and a visitor recognises one.
  */
 export default function LandingPage() {
+  // A64-027.2 §35. M1's only input, and the head of the acquisition funnel.
+  // Once per mount — see `useViewEvent` on why that is not the same as once
+  // per effect.
+  useViewEvent("landing_viewed", campaignFromUrl());
+
   // The frame — skip link, header, footer — is `PublicShell`'s since
   // A64-026.4 §43.5, shared with the pages a visitor without an account can
   // now also read. This page is its six sections and nothing else.
@@ -63,6 +70,33 @@ export default function LandingPage() {
       <ClosingCta />
     </PublicShell>
   );
+}
+
+/**
+ * The three attribution fields, sanitised — A64-027.1 §17.
+ *
+ * Lowercased, trimmed to 64 characters and matched against
+ * `^[a-z0-9_-]+$`; anything else is dropped rather than sent. The server
+ * refuses an unbounded value anyway, so this is the half that keeps a
+ * malformed campaign from costing a rejected batch — the batch is
+ * all-or-nothing, so one bad field would lose the events beside it.
+ */
+function campaignFromUrl(): {
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+} {
+  const params = new URLSearchParams(window.location.search);
+  const clean = (value: string | null): string | undefined => {
+    if (value === null) return undefined;
+    const trimmed = value.trim().toLowerCase().slice(0, 64);
+    return /^[a-z0-9_-]+$/.test(trimmed) ? trimmed : undefined;
+  };
+  return {
+    utm_source: clean(params.get("utm_source")),
+    utm_medium: clean(params.get("utm_medium")),
+    utm_campaign: clean(params.get("utm_campaign")),
+  };
 }
 
 /** A section shell: one max-width, one rhythm, set in one place. */
@@ -128,7 +162,12 @@ function Hero() {
 
           <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
             <Button asChild size="lg" className="min-h-12 sm:min-w-48">
-              <Link to="/register">{t("landing.cta.primary")}</Link>
+              <Link
+                to="/register"
+                onClick={() => track("register_cta_clicked", { placement: "hero" })}
+              >
+                {t("landing.cta.primary")}
+              </Link>
             </Button>
             <Button asChild size="lg" variant="outline" className="min-h-12">
               <Link to="/login">{t("auth.login.submit")}</Link>
@@ -437,7 +476,12 @@ function ClosingCta() {
             variant="secondary"
             className="min-h-12 w-full sm:w-auto sm:min-w-52"
           >
-            <Link to="/register">{t("landing.cta.primary")}</Link>
+            <Link
+              to="/register"
+              onClick={() => track("register_cta_clicked", { placement: "closing" })}
+            >
+              {t("landing.cta.primary")}
+            </Link>
           </Button>
         </div>
       </div>

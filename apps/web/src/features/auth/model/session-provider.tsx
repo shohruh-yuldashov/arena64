@@ -18,6 +18,7 @@ import { type AuthChannel, createAuthChannel } from "@/features/auth/model/auth-
 import { isSessionEnded } from "@/features/auth/model/error-messages";
 import { installAuthInterceptors } from "@/features/auth/model/refresh-interceptor";
 import { createSessionStore, type SessionStore } from "@/features/auth/model/session-store";
+import { rotateAnonymousId } from "@/shared/analytics";
 import { ApiError } from "@/shared/api";
 import { reportError } from "@/shared/lib/report-error";
 
@@ -205,6 +206,11 @@ export function SessionProvider({
     if (store.getState().status === "anonymous") return;
 
     store.set({ status: "anonymous" });
+    // A64-027.2 §33. A new analytics identity for whoever uses this
+    // browser next: keeping it would attach the next person on a shared
+    // computer to the previous one's visit. Nothing about authentication
+    // depends on it, and it cannot fail — see `identity.ts`.
+    rotateAnonymousId();
     runCleanups();
     // Every cached query was fetched **as somebody**. Leaving them would
     // show the previous user's data to whoever signs in next on this

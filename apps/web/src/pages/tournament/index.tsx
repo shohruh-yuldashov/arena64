@@ -10,6 +10,8 @@ import { formatKey, variantKey } from "@/features/tournament/ui/labels";
 import { RegistrationPanel } from "@/features/tournament/ui/registration-panel";
 import { StandingsTable } from "@/features/tournament/ui/standings-table";
 import { TournamentStatusBadge } from "@/features/tournament/ui/status-badge";
+import type { TournamentStatus } from "@/shared/analytics";
+import { useViewEvent } from "@/shared/analytics/use-view-event";
 import { ApiError } from "@/shared/api/errors";
 import { useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
@@ -55,6 +57,20 @@ export default function TournamentPage() {
 
   const bracket = useBracket(tournamentId, tournament?.status);
   const standings = useStandings(tournamentId, tournament?.status);
+
+  // A64-027.2 §35. F-C's first step, and **anonymous only**: the funnel
+  // measures whether a shared tournament brings somebody to an account, so
+  // a signed-in player opening one is not the question. Keyed on the id, so
+  // navigating between two tournaments counts two views and a rerender
+  // counts none.
+  useViewEvent(
+    "public_tournament_viewed",
+    {
+      tournament_id: tournamentId,
+      status: (tournament?.status ?? "draft") as TournamentStatus,
+    },
+    viewerId === null && tournament !== undefined ? tournamentId : "",
+  );
 
   if (detail.isPending) {
     return (

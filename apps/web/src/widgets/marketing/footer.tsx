@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 
+import { track } from "@/shared/analytics";
 import { useTranslation } from "@/shared/i18n";
 
 /**
@@ -62,7 +63,11 @@ export function MarketingFooter({ onLanding }: { onLanding: boolean }) {
               </Link>
             </li>
             <li>
-              <Link to="/register" className={FOOTER_LINK}>
+              <Link
+                to="/register"
+                className={FOOTER_LINK}
+                onClick={() => track("register_cta_clicked", { placement: "footer" })}
+              >
                 {t("landing.cta.primary")}
               </Link>
             </li>

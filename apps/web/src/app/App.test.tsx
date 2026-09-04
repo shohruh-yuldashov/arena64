@@ -36,7 +36,14 @@ describe("the application shell", () => {
     // The route component arrives through a dynamic import, so it is not
     // in the first commit — waiting for it is what proves the lazy
     // boundary resolves rather than hanging on its pending state.
-    expect(await screen.findByRole("heading", { level: 1, name: "Arena64" })).toBeVisible();
+    //
+    // A64-026.1 §40: the probe was an `<h1>` reading "Arena64", which the
+    // landing page no longer has — a heading repeating the wordmark three
+    // elements below it tells a visitor nothing, so the first thing on the
+    // page now says what Arena64 *is*. What this test is about is the
+    // chunk resolving and the landmarks existing, so it waits for a
+    // level-one heading without naming it.
+    expect(await screen.findByRole("heading", { level: 1 })).toBeVisible();
 
     // The landmarks a screen-reader user navigates by, and the skip link
     // that has to be first. A layout is the only place these can exist.

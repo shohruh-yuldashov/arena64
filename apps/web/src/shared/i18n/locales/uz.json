@@ -1124,5 +1124,82 @@
       }
     },
     "soon": "juda tez orada"
+  },
+  "landing": {
+    "nav": {
+      "label": "Sahifa bo'limlari",
+      "toggle": "Menyuni ochish",
+      "play": "Qanday ishlaydi",
+      "compete": "Reyting",
+      "tournaments": "Turnirlar"
+    },
+    "cta": {
+      "primary": "Hisob yaratish"
+    },
+    "hero": {
+      "eyebrow": "Rus shashkasi, 8×8",
+      "title": "Onlayn shashka o'ynang — narigi tomonda tirik odam bilan",
+      "body": "Arena64 bir necha soniyada darajangizga yaqin raqib topadi, ikkala soatni yuritadi va natijani yozib qo'yadi. Bulletdan klassikagacha, reytingli yoki oddiy.",
+      "free": "O'ynash bepul. Hech narsa yuklab olish shart emas — hammasi brauzerda ishlaydi."
+    },
+    "showcase": {
+      "light": "Oq",
+      "dark": "Qora",
+      "final": "Final"
+    },
+    "steps": {
+      "title": "Kelganingizdan birinchi yurishgacha",
+      "body": "Uch qadam, va ularning birortasi ham ikki marta to'ldiriladigan anketa emas.",
+      "one": {
+        "title": "Soatni tanlang",
+        "body": "Bir daqiqadan o'ttizgacha. Natija hisobga o'tishini istasangiz reytingli, istamasangiz oddiy."
+      },
+      "two": {
+        "title": "Raqib kuting",
+        "body": "Navbat reytingingizga yaqin o'yinchini qidiradi va doskani ikkalangizga bir vaqtda ochadi."
+      },
+      "three": {
+        "title": "O'ynab bo'ling",
+        "body": "Yurishlar va soatlar jonli boradi. O'yin g'alaba, durang yoki vaqt tugashi bilan yakunlanadi."
+      }
+    },
+    "compete": {
+      "title": "Haqiqatan qimirlaydigan reyting",
+      "body": "Har bir reytingli o'yin ma'noga ega raqamni o'zgartiradi, va u har bir tezlik uchun alohida hisoblanadi — bir daqiqada o'tkirligingiz o'ttiz daqiqa haqida hech narsa aytmaydi.",
+      "points": {
+        "rating": "Glicko-2, bitta umumiy ball emas, har bir tezlik sinfi uchun alohida",
+        "controls": "To'rtta vaqt nazorati, har birining o'z reytingi va o'z xarakteri bilan",
+        "rated": "Oqibatsiz mashq kerak bo'lganda — reytingsiz o'yinlar",
+        "replay": "Har bir tugagan o'yin to'liq saqlanadi va yurishma-yurish varaqlanadi"
+      }
+    },
+    "tournaments": {
+      "eyebrow": "Turnirlar",
+      "title": "Faqat navbat emas — setkalar",
+      "body": "Chiqib ketish turniriga yoziling, turlar to'lib borishini kuzating va keyin butun setkani o'qib chiqing. Tugunlar orasidagi chiziqlar haqiqiy juftliklardan olinadi, ya'ni ko'rganingiz — bo'lgan narsa."
+    },
+    "social": {
+      "title": "O'z raqibingizni olib keling",
+      "body": "Arena64 — bu faqat navbatdagi notanish odamlar emas.",
+      "friends": {
+        "title": "O'yinchilarni toping va qo'shing",
+        "body": "Ism bo'yicha qidiring, so'rov yuboring va o'ynash yoqadigan odamlarni bitta ro'yxatda saqlang."
+      },
+      "challenge": {
+        "title": "To'g'ridan-to'g'ri chorlang",
+        "body": "Vaqt nazoratini o'zingiz tanlab, do'stingizga yuborasiz. Navbat ham, kutish ham yo'q."
+      },
+      "messages": {
+        "title": "O'yin davomida ikki og'iz so'z",
+        "body": "Kichik tayyor iboralar to'plami — «yaxshi o'yin» deyish uchun yetarli, chat'ni nazorat qilish esa shart emas."
+      }
+    },
+    "closing": {
+      "title": "Doska terildi",
+      "body": "Hisob yaratish bir daqiqa. Birinchi raqib esa bir necha soniya."
+    },
+    "footer": {
+      "label": "Pastki qism"
+    }
   }
 }

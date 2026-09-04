@@ -190,7 +190,15 @@ function SignedInMenu({ user }: { user: User }) {
  * that only offers its own language to people who have already registered
  * has the order backwards.
  */
-function BrowserSettingsMenu() {
+/**
+ * Appearance and language, for this browser.
+ *
+ * Exported since A64-026.1 §40.2: the landing page replaces `AppShell`'s
+ * header with a marketing one, and an anonymous visitor must not lose the
+ * theme and language controls in the swap. One control in two headers, not
+ * two controls that drift.
+ */
+export function BrowserSettingsMenu() {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
 

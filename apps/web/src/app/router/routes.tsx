@@ -3,10 +3,13 @@ import {
   createRoute,
   lazyRouteComponent,
   Outlet,
+  useRouterState,
 } from "@tanstack/react-router";
 
 import { RequireAnonymous, RequireAuth, RequireVerifiedEmail } from "@/app/router/guards";
 import { RouteError } from "@/app/router/route-error";
+import { isAuthenticated } from "@/entities/session";
+import { useSession } from "@/features/auth/model/session-provider";
 import NotFoundPage from "@/pages/not-found";
 import { Spinner } from "@/shared/ui";
 import { AppShell } from "@/widgets/app-shell";
@@ -47,12 +50,50 @@ import { AppShell } from "@/widgets/app-shell";
  * address bar keeps the URL that was wrong, which a redirect would discard
  * along with the user's ability to see their own typo.
  */
-export const rootRoute = createRootRoute({
-  component: () => (
+/**
+ * The shell, or the landing page's own chrome — A64-026.1 §40.10.
+ *
+ * `/` serves two audiences and they need different furniture. A signed-in
+ * player gets `AppShell`: product navigation, the notification bell, the
+ * account menu. A visitor without an account gets a marketing header whose
+ * links point at sections rather than at routes they cannot reach — and
+ * putting both on one page would give it two headers.
+ *
+ * So the choice is made here rather than inside the page, because it is a
+ * choice about the *layout*, and a page cannot remove a shell it is
+ * rendered inside.
+ *
+ * ## No flash, and that is what the `bootstrapping` branch is for
+ *
+ * The session resolves asynchronously. Rendering `AppShell` while it is
+ * unknown and swapping to the landing a moment later is the flicker §28
+ * forbids — a header that appears and is replaced. So while the session is
+ * bootstrapping **at `/`**, neither chrome is drawn: the outlet renders on
+ * its own, which is a blank page for the few frames a bootstrap takes and
+ * is what both destinations have in common.
+ *
+ * Every other route keeps the shell unconditionally, including during the
+ * bootstrap, because they have only one audience.
+ */
+function RootLayout() {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const { state } = useSession();
+
+  if (pathname === "/" && !isAuthenticated(state)) {
+    // Anonymous, or not yet known. `pages/landing` brings its own header
+    // and footer; `pages/home` is only ever reached authenticated.
+    return <Outlet />;
+  }
+
+  return (
     <AppShell>
       <Outlet />
     </AppShell>
-  ),
+  );
+}
+
+export const rootRoute = createRootRoute({
+  component: RootLayout,
   notFoundComponent: () => <NotFoundPage />,
   errorComponent: RouteError,
   // Shown while a lazily-loaded route component is in flight. Without it a
@@ -72,7 +113,7 @@ export const rootRoute = createRootRoute({
 export const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  component: lazyRouteComponent(() => import("@/pages/home")),
+  component: lazyRouteComponent(() => import("@/pages/root")),
 });
 
 /** `?next=` — a string here, a *validated destination* only at use. */

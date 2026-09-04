@@ -1,4 +1,5 @@
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { beforeEach, expect, it, vi } from "vitest";
 
@@ -6,7 +7,7 @@ import { httpClient } from "@/shared/api/client";
 import { env } from "@/shared/config/env";
 import { RealtimeClient } from "@/shared/realtime";
 import { mswServer } from "@/shared/test/msw/server";
-import { renderApp } from "@/shared/test/render";
+import { openAccountMenu, renderApp } from "@/shared/test/render";
 
 /**
  * The socket is reachable from the real app — A64-020.5B §33.
@@ -91,5 +92,6 @@ it("starts the one socket when a session exists, and mints a fresh ticket", asyn
 
   // And the session's own teardown closes it — §34's "logout closes the
   // socket", proven through `onSessionEnded` rather than by calling `stop`.
+  await openAccountMenu(userEvent.setup());
   await screen.findByRole("button", { name: /sign out/i });
 });

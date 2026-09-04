@@ -9,7 +9,7 @@ import { api } from "@/shared/api";
 import { httpClient } from "@/shared/api/client";
 import { env } from "@/shared/config/env";
 import { mswServer } from "@/shared/test/msw/server";
-import { renderApp } from "@/shared/test/render";
+import { openAccountMenu, renderApp } from "@/shared/test/render";
 
 /**
  * Authentication, through the real app — A64-020.2 §20.
@@ -76,6 +76,7 @@ describe("session bootstrap", () => {
     // The header renders the account, which means the token and the user
     // both reached memory through the real provider graph.
     expect(await screen.findByText("Player One")).toBeVisible();
+    await openAccountMenu(userEvent.setup());
     expect(screen.getByRole("button", { name: /sign out|chiqish|выйти/i })).toBeVisible();
     signedIn.unmount();
 
@@ -232,6 +233,7 @@ describe("sign-out", () => {
     // every cached query was fetched *as somebody*.
     queryClient.setQueryData(["private", "thing"], { secret: true });
 
+    await openAccountMenu(user);
     await user.click(screen.getByRole("button", { name: /sign out|chiqish|выйти/i }));
 
     await waitFor(() => {

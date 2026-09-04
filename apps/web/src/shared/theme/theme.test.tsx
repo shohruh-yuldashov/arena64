@@ -41,6 +41,15 @@ describe("the theme", () => {
     // Localised in A64-025.3: the control had hardcoded English labels while
     // the translations for them already existed and went unused.
     const darkButton = /^(Dark|Qorong'i|Тёмная)$/;
+
+    // A64-025.9B §19 moved the three theme buttons out of the header and
+    // into the account menu, so reaching them now takes one click more.
+    // Nothing this test asserts changed — only the path to the control.
+    await user.click(
+      await screen.findByRole("button", {
+        name: /^(Appearance and language|Ko'rinish va til|Оформление и язык)$/,
+      }),
+    );
     await user.click(await screen.findByRole("button", { name: darkButton }));
 
     expect(document.documentElement).toHaveClass("dark");

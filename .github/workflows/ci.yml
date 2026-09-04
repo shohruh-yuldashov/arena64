@@ -27,8 +27,86 @@ permissions:
   contents: read
 
 jobs:
+  # --- what changed ----------------------------------------------------------
+  # Which of the three applications a pull request actually touches, so a
+  # one-line change to `apps/web` does not run 4239 Python tests against real
+  # Postgres, Redis and MinIO for fourteen minutes. Four of this epic's pull
+  # requests were frontend-only and each paid that price.
+  #
+  # **Pull requests are filtered; pushes to `main` are not.** A merge to
+  # `main` is what gates publishing an image, and an image built from a
+  # commit whose backend suite was skipped is one nobody can trust. The
+  # saving belongs in the iteration loop, not in the gate.
+  #
+  # Written with `git diff` rather than a filter action: this is one command
+  # and a `case`, and the repository's rule on dependencies applies to a
+  # workflow as much as to `pyproject.toml`.
+  #
+  # **A documentation-only pull request runs no job at all**, which is
+  # correct and worth knowing before branch protection is turned on: a
+  # required check that never runs is one a merge can end up waiting for.
+  # If these are ever made required, they need GitHub's "skipped counts as
+  # success" behaviour, or a job that always succeeds standing in for them.
+  changes:
+    name: what changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      web: ${{ steps.filter.outputs.web }}
+      admin: ${{ steps.filter.outputs.admin }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The whole history, because the comparison is against the merge
+          # base and a shallow clone does not have one.
+          fetch-depth: 0
+
+      - id: filter
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "not a pull request — every job runs"
+            {
+              echo "api=true"
+              echo "web=true"
+              echo "admin=true"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base="origin/${{ github.base_ref }}"
+          changed=$(git diff --name-only "$base...HEAD")
+          echo "changed files:"
+          echo "$changed" | sed 's/^/  /'
+
+          # The workflow itself and the pinned Node version affect every job,
+          # so a change to either runs all three. Being wrong in this
+          # direction costs minutes; being wrong the other way ships
+          # untested code.
+          shared=$(echo "$changed" | grep -E '^(\.github/workflows/|\.nvmrc$)' || true)
+
+          matches() {
+            if [ -n "$shared" ]; then return 0; fi
+            echo "$changed" | grep -qE "$1"
+          }
+
+          matches '^apps/api/' && api=true || api=false
+          matches '^apps/web/' && web=true || web=false
+          matches '^apps/admin/' && admin=true || admin=false
+
+          echo "api=$api web=$web admin=$admin"
+          {
+            echo "api=$api"
+            echo "web=$web"
+            echo "admin=$admin"
+          } >> "$GITHUB_OUTPUT"
+
   api:
     name: api — lint, types, tests
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -211,6 +289,8 @@ jobs:
 
   web:
     name: web — lint, types, tests
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -253,6 +333,8 @@ jobs:
 
   admin:
     name: admin — lint, types, tests
+    needs: changes
+    if: needs.changes.outputs.admin == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:

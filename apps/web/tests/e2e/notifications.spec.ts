@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 
-import { type APIRequestContext, expect, test } from "@playwright/test";
+import { type APIRequestContext, expect, type Page, test } from "@playwright/test";
 
 import {
   API,
@@ -85,6 +85,19 @@ async function tournamentOperator(...args: string[]): Promise<string> {
 // workers resetting Alice and Bob's relationship at once would make each
 // test fail for something the other did.
 test.describe.configure({ mode: "serial" });
+
+/**
+ * The rows of the notification list, and **not** every `<li>` on the page.
+ *
+ * `page.getByRole("listitem").first()` was the product navigation's first
+ * item — the assertion read "Play" and reported it as a missing
+ * notification. The list carries an accessible name; this uses it.
+ */
+function notificationRows(page: Page) {
+  return page
+    .getByRole("list", { name: /notifications|bildirishnoma|уведомлен/i })
+    .getByRole("listitem");
+}
 
 test("a friend request notifies its recipient, who reads it and follows it", async ({
   browser,
@@ -271,7 +284,7 @@ test("a notification reaches an open page with no refresh, and a reload agrees",
     // And so did the page under it: the list invalidated, refetched, and
     // rendered the row. Newest first, and the only unread one — everything
     // older was marked read above.
-    const newest = page.getByRole("listitem").first();
+    const newest = notificationRows(page).first();
     await expect(newest).toContainText(`${alice.username} sent you a friend request`);
     await expect(newest.getByText("Unread")).toBeAttached();
 
@@ -282,10 +295,10 @@ test("a notification reaches an open page with no refresh, and a reload agrees",
     // a reload, so recovering by going somewhere else would prove nothing.
     await reloadBooted(page);
     await expect(page.getByRole("link", { name: "Notifications — 1 unread" })).toBeVisible();
-    await expect(page.getByRole("listitem").first()).toContainText(
+    await expect(notificationRows(page).first()).toContainText(
       `${alice.username} sent you a friend request`,
     );
-    await expect(page.getByRole("listitem").first().getByText("Unread")).toBeAttached();
+    await expect(notificationRows(page).first().getByText("Unread")).toBeAttached();
   } finally {
     if (requestId !== null) {
       await request.delete(`${API}/api/v1/friends/requests/${requestId}`, {
@@ -378,7 +391,7 @@ test("a tournament registration notifies its entrant, who follows it to the tour
     });
 
     // A translated sentence composed from facts, never a server string.
-    const newest = page.getByRole("listitem").first();
+    const newest = notificationRows(page).first();
     await expect(newest).toContainText("E2E Notify Open");
 
     // And the target resolves: an id on the row becomes a route here and

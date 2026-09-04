@@ -51,7 +51,10 @@ test("the shell boots, splits its routes, and is reachable by keyboard", async (
   // discard the URL the user got wrong along with their ability to see it.
   await page.goto("/no-such-page");
   await expect(
-    page.getByRole("heading", { level: 1, name: "This page does not exist" }),
+    page.getByRole("heading", {
+      level: 1,
+      name: /page not found|sahifa topilmadi|страница не найдена/i,
+    }),
   ).toBeVisible();
   expect(new URL(page.url()).pathname).toBe("/no-such-page");
 });

@@ -11,7 +11,7 @@
   },
   "layout": {
     "title": "Arena64",
-    "description": "Competitive online checkers — realtime matches, ratings, and leaderboards.",
+    "description": "Competitive online draughts — realtime matches, ratings, and tournaments.",
     "openMenu": "Open menu",
     "closeMenu": "Close menu",
     "primaryNav": "Main",
@@ -38,7 +38,9 @@
   },
   "notFound": {
     "title": "Page not found",
-    "description": "The page you're looking for doesn't exist or has moved."
+    "description": "The page you're looking for doesn't exist or has moved.",
+    "code": "404",
+    "back": "Back to Arena64"
   },
   "theme": {
     "label": "Theme",
@@ -323,7 +325,8 @@
     "public": {
       "notFoundTitle": "Player not found",
       "notFoundBody": "There is no such username, or it has changed.",
-      "backHome": "Back home"
+      "backHome": "Back home",
+      "signedInOnly": "Sign in to see this player's ratings and tournaments"
     },
     "errors": {
       "not_found": "Not found.",

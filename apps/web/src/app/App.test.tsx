@@ -60,14 +60,21 @@ describe("the application shell", () => {
     // not been implemented yet.
     renderApp({ path: "/no-such-page-anywhere" });
 
+    // Matched across the three catalogues rather than by one English
+    // string: A64-026.5 §44.3 translated this page, and a probe naming one
+    // locale's copy asserts the catalogue rather than the routing.
     expect(
-      await screen.findByRole("heading", { level: 1, name: "This page does not exist" }),
+      await screen.findByRole("heading", {
+        level: 1,
+        name: /page not found|sahifa topilmadi|страница не найдена/i,
+      }),
     ).toBeVisible();
     // A 404 that lost the way back is a dead end.
-    expect(screen.getByRole("link", { name: "Back to the lobby" })).toHaveAttribute(
-      "href",
-      "/",
-    );
+    expect(
+      screen.getByRole("link", {
+        name: /back to arena64|arena64'ga qaytish|вернуться в arena64/i,
+      }),
+    ).toHaveAttribute("href", "/");
   });
 
   it("wires every provider in the graph — none is written but unmounted", async () => {

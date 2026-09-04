@@ -11,7 +11,7 @@
   },
   "layout": {
     "title": "Arena64",
-    "description": "Onlayn shashka musobaqalari — real vaqt rejimidagi o'yinlar, reyting va liderlar jadvali.",
+    "description": "Onlayn shashka musobaqalari — real vaqt rejimidagi o'yinlar, reyting va turnirlar.",
     "openMenu": "Menyuni ochish",
     "closeMenu": "Menyuni yopish",
     "primaryNav": "Asosiy menyu",
@@ -38,7 +38,9 @@
   },
   "notFound": {
     "title": "Sahifa topilmadi",
-    "description": "Siz qidirayotgan sahifa mavjud emas yoki ko'chirilgan."
+    "description": "Siz qidirayotgan sahifa mavjud emas yoki ko'chirilgan.",
+    "code": "404",
+    "back": "Arena64'ga qaytish"
   },
   "theme": {
     "label": "Mavzu",
@@ -323,7 +325,8 @@
     "public": {
       "notFoundTitle": "O'yinchi topilmadi",
       "notFoundBody": "Bunday foydalanuvchi nomi mavjud emas yoki o'zgartirilgan.",
-      "backHome": "Bosh sahifaga"
+      "backHome": "Bosh sahifaga",
+      "signedInOnly": "Bu o'yinchining reytingi va turnirlarini ko'rish uchun kiring"
     },
     "errors": {
       "not_found": "Topilmadi.",

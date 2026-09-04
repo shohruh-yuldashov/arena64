@@ -4460,3 +4460,154 @@ and 1280 in both themes:
 declaration file A64-026.3 added for `generate-seo.mjs` is outside
 `tsconfig`'s program, and a type-aware rule that cannot load aborts the
 whole run rather than skipping the file.
+
+---
+
+## 44. The closing audit — A64-026.5
+
+A64-026 built a landing page, a brand, an SEO foundation and public
+tournament discovery. This is the pass that opened all of it in a real
+browser and asked whether it can go to production without being redesigned.
+
+It can. What follows is what had to be fixed first, and the honest shape of
+what remains.
+
+The audit's method was the thing that found them: **84 page loads** (seven
+public routes × six widths × two themes) measuring layout, then a
+request-level and console-level sweep, then the journeys walked end to end
+with a real API. Four of the five defects below are invisible to a reading
+of the diff, and one of them is invisible to a screenshot.
+
+### 44.1 The document lied about its own language
+
+`document.documentElement.lang` was written **only inside `setLocale`**, so
+the attribute was correct for a player who had switched language and wrong
+for every player who never touched the control. A browser asking for English
+or Russian got the whole page announced under `lang="uz"`.
+
+That is WCAG 3.1.1, Language of Page, at level A — and it also governs
+hyphenation and whether a browser offers to translate. An effect that
+follows the resolved locale fixes it in every case, including the fallback:
+verified at `en-US`, `ru-RU`, `uz-UZ` and `de-DE` (which falls back to
+Uzbek and now says so).
+
+### 44.2 A public page that never stopped asking
+
+The worst finding, and the only one measured in requests per second.
+
+`/players/{username}` is public and has been since before this epic. It
+issues two reads — `/players/{id}/ratings` and `/players/{id}/tournaments` —
+that both take `CurrentUser`. For a visitor with no account they `401`, and
+the `401` started a circuit with no exit:
+
+    ratings + tournaments        401
+    the interceptor refreshes    401 — so "the session ended"
+    ending a session calls       queryClient.removeQueries()
+    removing a query refetches   in every component still mounted
+    the refetch                  401  ->  back to the top
+
+**Measured: 1,397 API requests in 8 seconds, ≈175/s, forever.** The page
+never reached `networkidle` and the tournament history spun permanently.
+Any crawler, any share-link recipient, any open tab.
+
+Both halves are closed, because either alone would leave the other armed:
+
+- The two queries are gated on `isAuthenticated`, not on "we know the id".
+  A query that cannot succeed without a session does not run without one —
+  the same rule §43.4 applied to `useMyRegistration`.
+- `clearLocalSession` returns immediately when the session is **already**
+  anonymous. A refresh fails for two different reasons that were treated as
+  one: a session that ended, and a session that never existed. Only the
+  first has anything to release.
+
+After: **2 requests.** The page now states what a visitor cannot see instead
+of spinning at them, in the dashed frame it already uses for hidden
+statistics.
+
+The test that should have caught this asserted the opposite. It mocked a
+`200` from an endpoint that takes `CurrentUser` and passed while the real
+application looped — a reminder that a mock is a claim about the server, and
+an unchecked one.
+
+### 44.3 The 404 page spoke one language
+
+Every mistyped public URL lands on it, and its three sentences were English
+string literals in a product that ships three. The `notFound` keys existed
+in all three catalogues and had never been read by anything.
+
+Its way out said "Back to the lobby". `/` is not a lobby in either of its
+forms — the landing page for a visitor, the product home for a signed-in
+player — so it names the product, which is true of both.
+
+### 44.4 The product advertised a feature it does not have
+
+Under the wordmark on sign-in, registration, verification and both password
+screens, in all three languages:
+
+> Competitive online **checkers** — realtime matches, ratings, and
+> **leaderboards**.
+
+Arena64 has **no leaderboard surface**: no route, no page, no query. The API
+has `GET /leaderboard` behind `CurrentUser` and nothing in the bundle reads
+it. This is the epic that refused fake statistics, fake reviews and fake
+player counts on the landing page, while five other public pages promised a
+feature that does not exist.
+
+The same string was also the only place in the English catalogue calling the
+game "checkers"; everywhere else it is "draughts". One product, two names, on
+the page a visitor reaches straight from the landing page's primary call to
+action.
+
+Both are now asserted by name in `i18n.test.tsx`. Copy that describes a
+feature outlives the feature's absence, and a marketing sentence is the last
+place anybody looks for a product inventory.
+
+### 44.5 Two end-to-end specs had been red since this epic began
+
+`shell.spec.ts` and `pwa.spec.ts` both waited for an `<h1>` named "Arena64"
+at `/`, which stopped being the anonymous page when A64-026.1 put the
+landing page there. `notifications.spec.ts` read
+`page.getByRole("listitem").first()` — the product navigation's first item —
+and reported "Play" as a missing notification.
+
+All three were confirmed pre-existing by running them on `origin/main` in a
+clean worktree before touching them. Each probe now asserts what its spec is
+actually about: that a level-one heading exists, and that the notification
+list's own rows contain the notification.
+
+The suite is **22 passed**, from 20 passed and 2 failed.
+
+### 44.6 What the audit found nothing wrong with
+
+Recorded because a clean result that is not written down gets re-audited:
+
+| Checked                        | Result                                                                                                                  |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| Page-level horizontal overflow | **0px** across 360/393/768/1024/1280/1440 × light/dark × seven routes                                                   |
+| Anonymous network              | Only the session refresh and the genuinely public reads — no `/me`, friends, notifications or `registrations/me`        |
+| Internal links                 | Every one resolves; no `#` placeholder, no external fake link, no guarded route offered anonymously                     |
+| Long content                   | A 96-character tournament name wraps; 40-character usernames truncate with the seed still visible                       |
+| Keyboard                       | Skip link first, logical order, a visible focus ring on every stop, the mobile menu opens on Enter with `aria-expanded` |
+| Reduced motion                 | `--motion-scale: 0` under `prefers-reduced-motion`                                                                      |
+| Hardcoded colour               | None in any public component                                                                                            |
+| Built SEO output               | Canonical, `og:url`, absolute `og:image`, valid sitemap namespace, no localhost in any of them                          |
+| Bundle                         | JS +0.7 kB, CSS −9.8 kB against `origin/main`. No new dependency                                                        |
+
+### 44.7 Measured
+
+|                    |                                                       |
+| ------------------ | ----------------------------------------------------- |
+| `tsc --noEmit`     | clean                                                 |
+| `eslint`           | 0 errors (2 pre-existing fast-refresh warnings)       |
+| `prettier --check` | clean                                                 |
+| `vitest`           | 274 passed, 40 files (269 before; **+5**)             |
+| `playwright`       | **22 passed** (20 passed / 2 failed on `origin/main`) |
+| `vite build`       | passes, with and without a configured origin          |
+
+Backend untouched: no file under `apps/api` changed, so its gates are the
+ones §43.9 recorded.
+
+The five language-attribute and product-claim assertions were checked
+against a reverted implementation before being trusted — two of them fail
+without the fix, which is the only evidence that a passing test is worth
+anything.

@@ -112,7 +112,18 @@ export function MatchRow({ entry, viewerId }: { entry: MatchHistoryEntry; viewer
             the same chip the tournament history uses. */}
         <span
           className={cn(
-            "inline-flex h-8 w-16 shrink-0 items-center justify-center rounded-md text-xs font-semibold",
+            // `min-w`, not `w` — A64-025.5D. A fixed 4rem chip fitted
+            // "Won", "Lost" and "Draw" and clipped "Yutqazdingiz",
+            // "Поражение" and "Без результата": the width was chosen against
+            // English and nothing else. Short labels still line up; a long
+            // one grows rather than being cut, which is the trade a
+            // multilingual product has to make in that direction.
+            //
+            // A grid with `display: contents` would align every locale
+            // perfectly and is not worth it: it has a history of stripping
+            // list semantics in screen readers, and the list semantics here
+            // were argued for on purpose.
+            "inline-flex h-8 min-w-16 shrink-0 items-center justify-center rounded-md px-2 text-xs font-semibold",
             // `--success`, not `--primary`. A64-025.9 §18.7 gives the brand
             // hue one job — *interaction* — and a finished result is not
             // one; the profile's own win/loss bar has been success-red-grey
@@ -172,7 +183,7 @@ export function MatchRow({ entry, viewerId }: { entry: MatchHistoryEntry; viewer
           title={formatDateTime(played, locale) ?? ""}
           className="text-muted-foreground shrink-0 text-xs"
         >
-          {formatRelativeTime(played, locale)}
+          {formatRelativeTime(played, locale, t)}
         </time>
       </div>
     </li>

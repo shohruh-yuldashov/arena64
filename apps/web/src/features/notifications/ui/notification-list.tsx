@@ -8,7 +8,7 @@ import {
   useUnreadCount,
 } from "@/features/notifications/model/queries";
 import { NotificationRow } from "@/features/notifications/ui/notification-row";
-import { useTranslation } from "@/shared/i18n";
+import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { formatDayHeading } from "@/shared/lib/format";
 import { Button, Skeleton, Spinner } from "@/shared/ui";
 
@@ -150,7 +150,7 @@ export function NotificationList() {
           aria-label={t("notifications.title")}
           className="divide-border flex flex-col divide-y"
         >
-          {groupByDay(entries, locale).map((group) => (
+          {groupByDay(entries, locale, t).map((group) => (
             <Fragment key={group.heading}>
               <li role="presentation" aria-hidden="true">
                 <p className="text-muted-foreground bg-muted/40 px-4 py-2 text-xs font-medium sm:px-5">
@@ -209,11 +209,12 @@ export function NotificationList() {
 function groupByDay(
   entries: Notification[],
   locale: string,
+  t: (key: TranslationKey, values?: Record<string, string | number>) => string,
 ): { heading: string; entries: Notification[] }[] {
   const groups: { heading: string; entries: Notification[] }[] = [];
 
   for (const entry of entries) {
-    const heading = formatDayHeading(entry.created_at, locale) ?? entry.created_at;
+    const heading = formatDayHeading(entry.created_at, locale, t) ?? entry.created_at;
     const last = groups.at(-1);
     if (last !== undefined && last.heading === heading) last.entries.push(entry);
     else groups.push({ heading, entries: [entry] });

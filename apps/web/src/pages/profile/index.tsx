@@ -54,14 +54,19 @@ export default function ProfilePage() {
         {profile.data !== undefined && (
           <>
             <ProfileHeader profile={profile.data} ratings={ratings.data?.ratings}>
-              {/* Two actions, two columns below `sm` — A64-025.5B §22.
-                  "Match history" was a third one here and is a **section**
-                  of the product: it sits in the header at every width, and
-                  offering it a second time on one profile out of many is a
-                  navigation model that disagrees with itself. Removing it
-                  also makes the row divide evenly, which the grid had been
-                  working around with a `col-span-2` on the odd one out. */}
-              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+              {/* Stacked below `sm`, a row above — A64-025.5D.
+                  "Match history" was a third action here until A64-025.5B
+                  and is a **section** of the product: it sits in the header
+                  at every width, and offering it a second time on one
+                  profile out of many is a navigation model that disagrees
+                  with itself.
+                  
+                  Two columns at 360 was the arrangement that replaced it,
+                  and it clipped: "Ommaviy profilni ko'rish" and "Открыть
+                  публичный профиль" do not fit in half of 360, and English
+                  never showed it. Full width each, which cannot clip in any
+                  language. */}
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                 <Button asChild variant="outline" className="min-h-11 w-full sm:w-auto">
                   <Link to="/settings/profile">{t("profile.nav.editProfile")}</Link>
                 </Button>

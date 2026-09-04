@@ -1077,5 +1077,30 @@
       "unexpected": "Nimadir xato ketdi. Qayta urinib ko'ring.",
       "timeControlRetired": "Bu vaqt nazorati endi mavjud emas. Do'stingizdan yangi chorlov yuborishini so'rang."
     }
+  },
+  "time": {
+    "now": "hozirgina",
+    "today": "Bugun",
+    "yesterday": "Kecha",
+    "ago": {
+      "minute": {
+        "one": "{count} daqiqa oldin",
+        "few": "{count} daqiqa oldin",
+        "many": "{count} daqiqa oldin",
+        "other": "{count} daqiqa oldin"
+      },
+      "hour": {
+        "one": "{count} soat oldin",
+        "few": "{count} soat oldin",
+        "many": "{count} soat oldin",
+        "other": "{count} soat oldin"
+      },
+      "day": {
+        "one": "{count} kun oldin",
+        "few": "{count} kun oldin",
+        "many": "{count} kun oldin",
+        "other": "{count} kun oldin"
+      }
+    }
   }
 }

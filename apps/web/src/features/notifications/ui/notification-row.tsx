@@ -64,7 +64,7 @@ export function NotificationRow({
   // A feed is read for recency, and "Sep 4, 2026, 1:40 PM" makes the reader
   // do the subtraction. The exact instant is still on the element, so it is
   // demoted rather than removed.
-  const when = formatRelativeTime(notification.created_at, locale) ?? "";
+  const when = formatRelativeTime(notification.created_at, locale, t) ?? "";
   const exact = formatDateTime(notification.created_at, locale) ?? "";
   const href = notificationHref(notification.target);
 

@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-router";
 
 import { RequireAnonymous, RequireAuth, RequireVerifiedEmail } from "@/app/router/guards";
+import { RouteError } from "@/app/router/route-error";
 import NotFoundPage from "@/pages/not-found";
 import { Spinner } from "@/shared/ui";
 import { AppShell } from "@/widgets/app-shell";
@@ -53,6 +54,7 @@ export const rootRoute = createRootRoute({
     </AppShell>
   ),
   notFoundComponent: () => <NotFoundPage />,
+  errorComponent: RouteError,
   // Shown while a lazily-loaded route component is in flight. Without it a
   // slow connection gets an empty shell that looks like a broken page.
   pendingComponent: () => (

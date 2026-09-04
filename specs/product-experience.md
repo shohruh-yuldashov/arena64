@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.13B, every context in its own module |
+| **Last updated** | 2026-09-04 — A64-026, the move a player has chosen but not yet played |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -2177,7 +2177,7 @@ than quietly left:
 | `piece_set` | **Closed** — three finishes, applied to every piece |
 | `show_coordinates` | **Closed** by A64-025.6D §28 |
 | `animation_speed` | Still unread. There is no move animation to speed up yet — A64-025.12's |
-| `confirm_move` | Still unread. It changes move *submission*, not presentation, and is a gameplay change rather than a design one |
+| ~~`confirm_move`~~ | **Closed by A64-026** — §38. It does change move *submission* rather than presentation, which is why it needed a step rather than an attribute |
 
 ### 22.2 Tokens on the root, not props through four components
 
@@ -2647,7 +2647,9 @@ every square already carries its name in the cell's own label, and reading
 
 Two of the five remain: `animation_speed` (nothing to speed up until
 A64-025.12) and `confirm_move` (a change to move submission, not to
-presentation).
+presentation). *Both are closed now — §34.4 and §38. This paragraph is left
+as it was written, because it records what was true when this phase shipped
+and the two forward pointers say what changed since.*
 
 ### 28.5 Measured, and what was not
 
@@ -3439,7 +3441,7 @@ abandoned match is permanent, and a player carrying one cannot queue.
 
 | | |
 | --- | --- |
-| `confirm_move` | The fifth gameplay preference, still write-only. A rule about submitting a move, not something the document can express — its own task |
+| ~~`confirm_move`~~ | **Closed by A64-026** — §38. All five gameplay preferences are read now |
 | The `useTranslation` context fault | §33.3. Open, dev-only, not reproduced, now reported under `scope: "router"` |
 | ~~The stuck-match question~~ | **Answered and fixed** — §36. It was reachable, every unplayed tournament fixture hit it, and the player could not queue again |
 | ~~Three `react-refresh` warnings~~ | **Fixed** — §37. They were the rule reporting the §33.3 hazard, and lint is now at zero problems |
@@ -3662,3 +3664,122 @@ with three one-line extractions.
 | `eslint` | **0 problems** (3 warnings before) |
 | `prettier --check` | clean |
 | `vitest` | 231 passed, 35 files — no assertion changed |
+
+## 38. The move a player has chosen but not yet played — A64-026
+
+`confirm_move` was the last of the five gameplay preferences that nothing
+read. A player set it, the form saved it, the server stored it, and every
+move still left the browser the instant they clicked a destination.
+
+It is also the only one of the five that could not be closed the way the
+other four were. `board_theme`, `piece_set`, `show_coordinates` and
+`animation_speed` change how something *looks*, so a data attribute on the
+root element and a stylesheet were enough (§34.4). This one changes **when a
+move leaves the browser**, which is behaviour, and behaviour needs a step.
+
+### 38.1 The selection model is untouched
+
+`useMoveSelection` still builds a path and still hands back a completed one.
+Its docstring argues that a move in draughts is a *prefix*, not a from/to
+pair, because two capture sequences can reach the same squares taking
+different pieces — and none of that changes.
+
+What changes is **who receives the completed path**. Without the preference
+the page submits it, exactly as before. With it, `useMoveConfirmation` holds
+it, the board keeps showing it, and a button sends it.
+
+`stage` returns whether it took the move, so the preference is read in one
+place rather than branched on in the page and again inside the hook:
+
+```ts
+const completed = selection.select(square);
+if (completed === null) return;
+if (!confirmation.stage(completed)) void submit(completed);
+```
+
+### 38.2 The board keeps showing the staged move
+
+`selected={confirmation.staged ?? selection.path}`. Without that, "confirm"
+asks a player to confirm something invisible.
+
+The pieces stay where they are — the board renders the server's position,
+which has not moved — so what a player sees is the **path they chose**
+highlighted, not a preview of the result. That is the honest presentation:
+this is the move you are about to play, on the position that is actually
+there.
+
+### 38.3 It clears itself, and that is the careful part
+
+A staged move is a claim about a position. The moment the position moves
+under it — the opponent played, the game ended, a resync replaced the board
+— the path may no longer be legal, and submitting it would be rejected at
+best.
+
+`GameState.sequence` is what says the position changed: *"the authoritative
+ply, never advanced without a server frame."* It moves for the opponent's
+move as much as for this player's, and a resync carries the server's. So the
+staged move is dropped whenever it changes, rather than when the hook guesses
+that something happened.
+
+Switching the preference off mid-game clears it too, so a staged move is
+never left on screen with no control able to answer it.
+
+### 38.4 Two orders, deliberately different
+
+| | |
+| --- | --- |
+| **DOM** | Play, then Cancel — a keyboard reaches the expected answer first, because the player staged this move on purpose |
+| **Screen** | Cancel, then Play — a primary action belongs on the right, beside its cancel |
+
+`flex-row-reverse` is the only thing separating them, which means a refactor
+that drops it silently changes the reading order. There is a test that
+notices.
+
+`role="status"`, not `alert`: nothing failed, and the board has already
+announced each square as it was chosen.
+
+### 38.5 Confirming is not a second chance to change the move
+
+There is no editing. A player who wants a different move cancels and picks
+again, which returns them to the selection they already understand. A staged
+move that could be adjusted would be a second selection model with its own
+rules about multi-capture prefixes, and `useMoveSelection`'s docstring is the
+argument for why there is only one.
+
+### 38.6 Measured
+
+| | |
+| --- | --- |
+| `tsc --noEmit` | clean |
+| `eslint` | 0 errors |
+| `prettier --check` | clean |
+| `vitest` | 238 passed, 36 files (231 before; **+7**) |
+
+The seven tests assert a **negative**, which is what this preference is for:
+with it on, choosing a move must *not* submit it. Four of them turn red when
+`stage` is made to always decline, which is the whole feature removed.
+
+**The live capture did not happen, and that is stated rather than implied.**
+Four attempts against the running stack were each stopped by a different
+environment constraint: a disabled submit until a time control is picked,
+then session rotation between two browser contexts, then the paired game
+flagging on its clock before a move was made, then QT-3 — matchmaking
+excludes a player's most recent opponent, which the two seeded accounts had
+just become. What *was* confirmed live is that the setting saves and reads
+back on, and that two players pair into one room. The staged control itself
+is covered by test rather than by photograph.
+
+### 38.7 All five preferences are now read
+
+| Preference | Closed by |
+| --- | --- |
+| `board_theme` | A64-025.5B |
+| `piece_set` | A64-025.5B |
+| `show_coordinates` | A64-025.6D |
+| `animation_speed` | A64-025.12 |
+| `confirm_move` | this task |
+
+None of them was ever missing from the API. Every one had been on
+`PreferencesResponse` since A64-012.5 and read by nothing — five settings a
+player could change that changed nothing, closed one at a time as each
+surface was redesigned.

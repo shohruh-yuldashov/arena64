@@ -643,6 +643,11 @@
         "unavailable": "That message is not available.",
         "unknown": "The message was not sent."
       }
+    },
+    "confirmMove": {
+      "prompt": "Play this move?",
+      "play": "Play move",
+      "cancel": "Cancel"
     }
   },
   "replay": {

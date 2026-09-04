@@ -5,15 +5,18 @@ import { useSession } from "@/features/auth/model/session-provider";
 import { canInteract } from "@/features/game/model/state";
 import { useClock } from "@/features/game/model/use-clock";
 import { useGameRoom } from "@/features/game/model/use-game-room";
+import { useMoveConfirmation } from "@/features/game/model/use-move-confirmation";
 import { useMoveSelection } from "@/features/game/model/use-move-selection";
 import { usePlayerIdentities } from "@/features/game/model/use-player-identity";
 import { useQuickMessages } from "@/features/game/model/use-quick-messages";
 import { GameBoard } from "@/features/game/ui/board";
 import { GameControls } from "@/features/game/ui/game-controls";
 import { GamePanel } from "@/features/game/ui/game-panel";
+import { PendingMove } from "@/features/game/ui/pending-move";
 import { PlayerSeat } from "@/features/game/ui/player-seat";
 import { QuickMessageBubble } from "@/features/game/ui/quick-message-bubble";
 import { QuickMessagePicker } from "@/features/game/ui/quick-message-picker";
+import { usePreferences } from "@/features/profile/model/queries";
 import { useTranslation } from "@/shared/i18n";
 import { useHoldAppUpdate } from "@/shared/pwa";
 import { useConnectionStatus } from "@/shared/realtime";
@@ -56,6 +59,18 @@ export default function GamePage() {
   const connection = useConnectionStatus();
   const { state, submit, command } = useGameRoom(matchId);
   const selection = useMoveSelection(state);
+
+  // A64-026 §38. The last of the five gameplay preferences that nothing
+  // read. `usePreferences` is an account read, so a spectator's query
+  // simply fails and `data` stays undefined — which falls back to `false`,
+  // the API's own default, and is the right answer for somebody who is not
+  // playing.
+  const preferences = usePreferences();
+  const confirmation = useMoveConfirmation({
+    enabled: preferences.data?.gameplay.confirm_move ?? false,
+    sequence: state.sequence,
+    onSubmit: (path) => void submit([...path]),
+  });
 
   // The countdown runs only while a game is genuinely in progress. A
   // completed game's clock is frozen at whatever the last frame said, which
@@ -113,7 +128,11 @@ export default function GamePage() {
 
   const onSelect = (square: string) => {
     const completed = selection.select(square);
-    if (completed !== null) void submit(completed);
+    if (completed === null) return;
+    // Staged or submitted, never both: `stage` answers whether it took the
+    // move, so the preference is read in one place rather than branched on
+    // here and again inside the hook.
+    if (!confirmation.stage(completed)) void submit(completed);
   };
 
   if (state.phase === "unavailable" || state.phase === "fatal") {
@@ -167,12 +186,20 @@ export default function GamePage() {
             board={state.board}
             orientation={state.side}
             movable={selection.movable}
-            selected={selection.path}
+            selected={confirmation.staged ?? selection.path}
             destinations={selection.destinations}
             captured={selection.captured}
             lastMove={state.lastMove}
             interactive={interactive}
             onSelect={onSelect}
+          />
+        )}
+
+        {confirmation.staged !== null && (
+          <PendingMove
+            onConfirm={confirmation.confirm}
+            onCancel={confirmation.cancel}
+            disabled={state.phase === "submitting_move"}
           />
         )}
 

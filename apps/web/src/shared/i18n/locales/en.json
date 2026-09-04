@@ -323,7 +323,8 @@
     "public": {
       "notFoundTitle": "Player not found",
       "notFoundBody": "There is no such username, or it has changed.",
-      "backHome": "Back home"
+      "backHome": "Back home",
+      "signedInOnly": "Sign in to see this player's ratings and tournaments"
     },
     "errors": {
       "not_found": "Not found.",

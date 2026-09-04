@@ -222,6 +222,8 @@ describe("the profile route", () => {
 
 describe("the public profile", () => {
   it("renders only what the server sent, and 404s at the URL that was typed", async () => {
+    let ratingCalls = 0;
+    let tournamentCalls = 0;
     anonymous();
     // Privacy hid the country, the online indicator, last seen **and** the
     // statistics — so the response simply lacks them. The page must not
@@ -244,10 +246,17 @@ describe("the public profile", () => {
           }),
         ),
       ),
-      http.get(url(`/players/${PLAYER_ID}/ratings`), () => HttpResponse.json(ratings())),
-      http.get(url(`/players/${PLAYER_ID}/tournaments`), () =>
-        HttpResponse.json(emptyTournaments()),
-      ),
+      // Served, and asserted never to be called. A handler that is absent
+      // makes an unwanted request an MSW warning; one that answers makes
+      // the count below the assertion.
+      http.get(url(`/players/${PLAYER_ID}/ratings`), () => {
+        ratingCalls += 1;
+        return HttpResponse.json(ratings());
+      }),
+      http.get(url(`/players/${PLAYER_ID}/tournaments`), () => {
+        tournamentCalls += 1;
+        return HttpResponse.json(emptyTournaments());
+      }),
       http.get(url("/profiles/nobody"), () =>
         HttpResponse.json(
           {
@@ -269,11 +278,21 @@ describe("the public profile", () => {
     expect(screen.queryByText(/online|onlayn|в сети/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/offline|oflayn|не в сети/i)).not.toBeInTheDocument();
     expect(screen.getByText(/statistics are hidden|yashirilgan|скрыта/i)).toBeVisible();
-    // Ratings are never hidden — they are what pairing is computed from.
-    const hiddenRatings = await screen.findByRole("region", {
-      name: /ratings|reyting|рейтинг/i,
-    });
-    expect(within(hiddenRatings).getByText("1,621")).toBeVisible();
+
+    // **Not the ratings, and not the tournament history** — A64-026.5
+    // §44.2. Both endpoints take `CurrentUser`, so a viewer with no account
+    // cannot read either, and this test used to assert otherwise by mocking
+    // a `200` the real server would never send. It passed while the page
+    // looped: `401` -> refresh -> "session ended" -> `removeQueries` ->
+    // refetch -> `401`, measured at ~175 requests a second.
+    expect(
+      screen.queryByRole("region", { name: /ratings|reyting|рейтинг/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/sign in to see|ko'rish uchun kiring|войдите, чтобы увидеть/i),
+    ).toBeVisible();
+    expect(ratingCalls).toBe(0);
+    expect(tournamentCalls).toBe(0);
 
     hidden.unmount();
 

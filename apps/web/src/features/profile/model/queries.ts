@@ -1,6 +1,8 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { PreferencesUpdate, PrivacyUpdate, ProfileUpdate } from "@/entities/profile";
+import { isAuthenticated } from "@/entities/session";
+import { useSession } from "@/features/auth/model/session-provider";
 import * as profileApi from "@/features/profile/api";
 import { profileKeys } from "@/features/profile/api/keys";
 
@@ -75,11 +77,22 @@ export function usePublicProfile(username: string, enabled: boolean) {
   });
 }
 
+/**
+ * A player's ratings.
+ *
+ * `isAuthenticated`, not merely "we know the id" — A64-026.5 §44.2.
+ * `GET /players/{id}/ratings` takes `CurrentUser`, so without a session
+ * this query cannot succeed, only `401`. It was firing anyway on the
+ * **public** profile, which is reachable with no account: see
+ * `useTournamentHistory` below for what that `401` then set in motion.
+ */
 export function usePlayerRatings(playerId: string | undefined) {
+  const { state } = useSession();
+
   return useQuery({
     queryKey: profileKeys.ratings(playerId ?? ""),
     queryFn: () => profileApi.getPlayerRatings(playerId as string),
-    enabled: playerId !== undefined,
+    enabled: playerId !== undefined && isAuthenticated(state),
   });
 }
 
@@ -95,15 +108,32 @@ export function usePlayerRatings(playerId: string | undefined) {
  * tournament's summary in the same statement (A64-020.0C), so a row needs
  * no follow-up call — and a component that fetched a detail per row would
  * reintroduce the N+1 that phase removed on the server.
+ *
+ * ## `isAuthenticated`, and the loop it stops — A64-026.5 §44.2
+ *
+ * The endpoint takes `CurrentUser`. Firing it without a session produced
+ * an unbounded request loop on the **public** profile, measured at roughly
+ * 175 requests a second and never settling:
+ *
+ *     ratings + tournaments  ->  401
+ *     the interceptor refreshes -> 401, so the session "ended"
+ *     ending a session calls `queryClient.removeQueries()`
+ *     every mounted query refetches -> back to the top
+ *
+ * `session-provider` closes the other half of that circuit. This closes
+ * the half that should never have opened it: a query that cannot succeed
+ * without a session does not run without one.
  */
 export function useTournamentHistory(playerId: string | undefined) {
+  const { state } = useSession();
+
   return useInfiniteQuery({
     queryKey: profileKeys.tournaments(playerId ?? ""),
     queryFn: ({ pageParam }) =>
       profileApi.getTournamentHistory(playerId as string, pageParam ?? undefined),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.next_cursor ?? undefined,
-    enabled: playerId !== undefined,
+    enabled: playerId !== undefined && isAuthenticated(state),
   });
 }
 

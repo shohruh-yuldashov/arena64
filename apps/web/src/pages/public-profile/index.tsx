@@ -1,6 +1,6 @@
 import { Link, useParams } from "@tanstack/react-router";
 
-import { isResolved } from "@/entities/session";
+import { isAuthenticated, isResolved } from "@/entities/session";
 import { useSession } from "@/features/auth/model/session-provider";
 import { ChallengeButton } from "@/features/challenges/ui/challenge-button";
 import { isNotFound } from "@/features/profile/model/error-messages";
@@ -135,7 +135,21 @@ export default function PublicProfilePage() {
 
       {ratings.data !== undefined && <RatingCards ratings={ratings.data.ratings} />}
 
-      <TournamentHistory playerId={profile.data?.id} />
+      {/* A64-026.5 §44.2. Both of these read endpoints that take
+          `CurrentUser`, so for a visitor with no account they cannot load —
+          and rendering the history anyway left a skeleton that span
+          forever, because a disabled query is permanently pending.
+
+          One stated absence instead, in the dashed frame this page already
+          uses for hidden statistics. Saying what is missing and what would
+          show it is the honest version of a spinner that never stops. */}
+      {isAuthenticated(session) ? (
+        <TournamentHistory playerId={profile.data?.id} />
+      ) : (
+        <p className="border-border text-muted-foreground rounded-xl border border-dashed px-5 py-4 text-sm">
+          {t("profile.public.signedInOnly")}
+        </p>
+      )}
     </div>
   );
 }

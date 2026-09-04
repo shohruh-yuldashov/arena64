@@ -323,7 +323,8 @@
     "public": {
       "notFoundTitle": "O'yinchi topilmadi",
       "notFoundBody": "Bunday foydalanuvchi nomi mavjud emas yoki o'zgartirilgan.",
-      "backHome": "Bosh sahifaga"
+      "backHome": "Bosh sahifaga",
+      "signedInOnly": "Bu o'yinchining reytingi va turnirlarini ko'rish uchun kiring"
     },
     "errors": {
       "not_found": "Topilmadi.",

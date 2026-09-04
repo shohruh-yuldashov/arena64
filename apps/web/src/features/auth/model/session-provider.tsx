@@ -180,8 +180,30 @@ export function SessionProvider({
 
   const state = useSyncExternalStore(store.subscribe, store.getState, store.getState);
 
-  /** Clears everything this device holds. Never fails, never awaits. */
+  /**
+   * Clears everything this device holds. Never fails, never awaits.
+   *
+   * ## It does nothing when there was nothing — A64-026.5 §44.2
+   *
+   * This runs when a refresh fails, and a refresh fails for two different
+   * reasons that used to be treated as one: a session that ended, and a
+   * session that never existed. The second happens on every public page,
+   * because a `401` from any endpoint that needs an account routes through
+   * the same interceptor.
+   *
+   * Treating it as an ending made a loop with no exit. Clearing calls
+   * `removeQueries`, removing a query refetches it in every component
+   * still mounted, the refetch `401`s, and the `401` clears again —
+   * measured at roughly 175 requests a second on `/players/{username}`,
+   * for as long as the tab stayed open.
+   *
+   * So a viewer who is already anonymous has nothing to release: no cached
+   * response was fetched as anybody, no listener holds a session, and the
+   * state is already `anonymous`. The guard is the exit.
+   */
   const clearLocalSession = useCallback(() => {
+    if (store.getState().status === "anonymous") return;
+
     store.set({ status: "anonymous" });
     runCleanups();
     // Every cached query was fetched **as somebody**. Leaving them would

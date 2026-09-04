@@ -1,5 +1,7 @@
 import { Link } from "@tanstack/react-router";
 
+import { isAuthenticated } from "@/entities/session";
+import { useSession } from "@/features/auth/model/session-provider";
 import { useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
 import { NAV_SECTIONS, useActiveSection } from "@/widgets/primary-nav/model";
@@ -23,6 +25,19 @@ import { NAV_SECTIONS, useActiveSection } from "@/widgets/primary-nav/model";
  *
  * Both the word and the weight change, never colour alone (§12).
  *
+ *
+ * ## Nothing at all when signed out — A64-025.4B §29
+ *
+ * All four sections are `protectedPage`, so every one of these links sent
+ * an anonymous visitor to the sign-in screen. `pages/home` already refuses
+ * to do that and says why — "offering a card that redirects to sign-in is a
+ * link that lies about where it goes" — and the header was breaking the
+ * same rule on the surface where it does most damage: the front door, where
+ * the only visitors are people who are not signed in.
+ *
+ * The signed-out header is the wordmark, the appearance menu and "Sign in".
+ * That is not a truncated product; it is an honest one.
+ *
  * Hidden below `md`, where `MobileNav` takes over. Hidden rather than
  * reflowed: a row of four labelled links plus a brand, a bell and an
  * account control does not fit 360px in any language, and Russian is the
@@ -31,6 +46,9 @@ import { NAV_SECTIONS, useActiveSection } from "@/widgets/primary-nav/model";
 export function PrimaryNav() {
   const { t } = useTranslation();
   const active = useActiveSection();
+  const { state } = useSession();
+
+  if (!isAuthenticated(state)) return null;
 
   return (
     <nav aria-label={t("layout.primaryNav")} className="hidden md:block">

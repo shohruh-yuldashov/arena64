@@ -75,19 +75,43 @@ class TestEveryCountedFactHasAnIndex:
         assert "ix_match__current" in plan, plan
         assert "Seq Scan on match" not in plan, plan
 
-    async def test_effective_restrictions_are_counted_from_the_partial_index(
+    async def test_effective_restrictions_are_counted_from_a_partial_index(
         self, contract_session: AsyncSession
     ) -> None:
-        """`ix_sanction__player_expiry` is partial on `lifted_at IS NULL` —
+        """The count reads an index that holds **only unlifted sanctions** —
         `database.md` §12.6's design, because a partial predicate cannot
-        contain `now()`. The instant comparison is a filter over the few
-        rows it returns."""
+        contain `now()`, so `lifted_at IS NULL` is the immutable half and the
+        instant comparison is a filter over the few rows it returns.
+
+        ## Why this names two indexes and not one
+
+        It named `ix_sanction__player_expiry`, and that made it **flaky**: it
+        passed alone and in a contract-only run and failed a full one, twice.
+        The cause is not statistics — `ANALYZE` before `EXPLAIN` changes
+        nothing — it is that `admin.sanction` carries *two* indexes partial
+        on `lifted_at IS NULL`:
+
+            ix_sanction__player_expiry  (player_id, expires_at)
+            uq_sanction__live_kind      (player_id, kind)
+
+        Either one proves what this test exists to prove. On a table with
+        few rows their costs tie, and which one the planner takes is decided
+        by details that move with the data a run happens to leave behind —
+        so naming one was asserting a **tie-break**, not a property.
+
+        What must hold is that the count never scans the table and that
+        whatever it does read is restricted to unlifted rows. That is what
+        is asserted.
+        """
         plan = await _plan(
             contract_session,
             "SELECT count(*) FROM admin.sanction WHERE lifted_at IS NULL "
             "AND starts_at <= now() AND (expires_at IS NULL OR expires_at > now())",
         )
-        assert "ix_sanction__player_expiry" in plan, plan
+        assert "Seq Scan on sanction" not in plan, plan
+        assert any(
+            index in plan for index in ("ix_sanction__player_expiry", "uq_sanction__live_kind")
+        ), plan
 
     async def test_exhausted_push_deliveries_are_counted_from_the_partial_index(
         self, contract_session: AsyncSession

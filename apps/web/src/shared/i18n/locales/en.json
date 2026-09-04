@@ -941,7 +941,8 @@
       "game_completed_loss_anonymous": "You lost your game",
       "game_completed_draw_anonymous": "Your game was a draw",
       "unknown": "New notification"
-    }
+    },
+    "unreadCount": "{count} unread"
   },
   "notificationPreferences": {
     "title": "Notification preferences",

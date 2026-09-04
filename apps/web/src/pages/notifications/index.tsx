@@ -17,6 +17,11 @@ export default function NotificationsPage() {
 
   return (
     <section className="mx-auto flex w-full max-w-2xl flex-col gap-6">
+      {/* No subtitle. The first attempt borrowed `emptyDescription` — "New
+          notifications will appear here" — which is a sentence written for
+          an empty list and reads as nonsense above a full one. A heading
+          with nothing useful to add under it is better than a heading with
+          the wrong thing. */}
       <h1 className="text-2xl font-semibold tracking-tight">{t("notifications.title")}</h1>
       <NotificationList />
     </section>

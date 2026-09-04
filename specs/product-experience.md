@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.7B, the tournament list and the browser's Uzbek |
+| **Last updated** | 2026-09-04 — A64-025.7C, the tournament page |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -461,6 +461,7 @@ tokens.
 | **A64-025.5C** | Match history and replay | .2, .5B | Changing what a replay reconstructs |
 | **A64-025.5D** | The same surfaces, read in Uzbek and Russian | .5C, .10 | Retranslating; changing layout English needs |
 | **A64-025.7B** | The tournament list, and the browser's missing Uzbek | .7, .5D | Number formatting; hand-writing what ICU gets right |
+| **A64-025.7C** | The tournament page the list links to | .7B | The bracket, which §16 settled |
 | **A64-025.9B** | Home, and the account menu in the header | .2, .3 | Inventing a statistic the API does not return |
 | **A64-025.9C** | The four remaining settings surfaces | .2, .9 | Changing what any setting does |
 | **A64-025.10** | Notifications — the feed and the bell | .2 | Admin notification surfaces; what the preferences decide (.9C) |
@@ -2474,3 +2475,39 @@ Eight surfaces plus the tournament list, in three languages at 360 and
 1280: zero clipped text, zero page overflow. 220 tests pass — seven more
 than §23, every one of them a locale the suite could not previously see.
 `tsc --noEmit` clean, eslint zero errors.
+
+---
+
+## 26. The page the list links to — A64-025.7C
+
+§25 gave the tournament **list** a capacity bar and a deadline that says
+"in 2 days". The page a player reaches by clicking one of those cards still
+said `9 of 16` and `Sep 5, 2026, 1:22 PM`. Two views of one tournament,
+answering the same question two ways — and the detail page is the one where
+somebody actually decides to enter.
+
+| Was | Is |
+| --- | --- |
+| `Entrants 9 of 16` | the same numbers, over the list's own bar |
+| `Registration deadline Sep 5, 2026, 1:22 PM` | `in 1 day` while entries are open, with the instant on the element |
+| `Created September 1, 2026` | removed, as it was from the list |
+| A borderless ghost "Back to tournaments" | the same control with a chevron, matching the replay's way back |
+
+The entrants row moved to the **end** of the definition list. It was the
+first of five, three facts away from the bar that is a picture of it.
+
+### 26.1 The rule §11 wrote down still holds
+
+That section forbade a countdown here, and the reason is good: this client
+does not decide whether entries are open, and a ticking number reaching
+zero would look like it had. Nothing ticks. `formatRelativeTime` is computed
+once at render and is exactly as stale as the status badge beside it — which
+is to say, as stale as the fetch. The comment in the code now says which
+half of §11 was kept and which was not, rather than reading as though
+nobody had noticed it.
+
+### 26.2 Measured
+
+`/tournaments/{id}` in three states — registration open, in progress, and
+Uzbek at 360 — with zero clipped text and zero page overflow. 220 tests
+pass, `tsc --noEmit` clean, eslint zero errors.

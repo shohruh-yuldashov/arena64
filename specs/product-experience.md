@@ -1,14 +1,14 @@
 # Feature Specification — Product Experience
 
-| Field | Value |
-| --- | --- |
-| **Spec ID** | `SPEC-PRODUCT-EXPERIENCE` |
-| **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
-| **Owner** | _Unassigned_ |
-| **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-05 — A64-026.2, brand identity |
-| **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
-| **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
+| Field             | Value                                                                                                                 |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **Spec ID**       | `SPEC-PRODUCT-EXPERIENCE`                                                                                             |
+| **Status**        | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
+| **Owner**         | _Unassigned_                                                                                                          |
+| **Created**       | 2026-08-10                                                                                                            |
+| **Last updated**  | 2026-09-05 — A64-026.3, the SEO foundation                                                                            |
+| **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec                                                          |
+| **Related**       | `docs/04-frontend/`, `docs/02-development/CLAUDE.md`                                                                  |
 
 ---
 
@@ -19,7 +19,7 @@ currently looks and feels like, the principles the redesign is held to, and the 
 that gets it there.
 
 It is deliberately separate from [`frontend.md`](./frontend.md), which specifies the
-*technical* frontend — stack, layers, routing, providers, per-phase implementation.
+_technical_ frontend — stack, layers, routing, providers, per-phase implementation.
 That document answers "how is it built"; this one answers "what is the experience, and
 is it good enough". Neither restates the other.
 
@@ -54,34 +54,34 @@ Stated first, because the temptation in a redesign epic is to widen.
 Twenty-five routes, from `apps/web/src/app/router/routes.tsx`. Nineteen are behind
 `protectedPage` (authenticated **and** verified); the rest are deliberately open.
 
-| Surface | Route | Guard | State |
-| --- | --- | --- | --- |
-| Landing | `/` | none | **Developer exhibit — see P0-1** |
-| Login | `/login` | anonymous-only | Built |
-| Register | `/register` | anonymous-only | Built |
-| Email verification | `/verify-email` | none (two modes) | Built |
-| Forgot password | `/forgot-password` | none | Built |
-| Reset password | `/reset-password` | none | Built |
-| Own profile | `/profile` | protected | Built |
-| Public profile | `/players/$username` | none | Built |
-| Settings — profile | `/settings/profile` | protected | Built |
-| Settings — preferences | `/settings/preferences` | protected | Built |
-| Settings — privacy | `/settings/privacy` | protected | Built |
-| Settings — notifications | `/settings/notifications` | protected | Built |
-| Settings — sessions | `/settings/sessions` | protected | Built |
-| Friends | `/friends` | protected | Built |
-| Friend requests | `/friends/requests` | protected | Built |
-| Blocked | `/friends/blocked` | protected | Built |
-| Challenges | `/challenges` | protected | Built |
-| Player search | `/search` | protected | Built |
-| Lobby | `/play` | protected | Built |
-| Live game | `/games/$matchId` | protected | Built |
-| Replay | `/games/$matchId/replay` | protected | Built |
-| Match history | `/games/history` | protected | Built |
-| Notifications | `/notifications` | protected | Built |
-| Tournament list | `/tournaments` | protected | Built |
-| Tournament detail | `/tournaments/$tournamentId` | protected | Built |
-| Not found / error | fallback | none | Built |
+| Surface                  | Route                        | Guard            | State                            |
+| ------------------------ | ---------------------------- | ---------------- | -------------------------------- |
+| Landing                  | `/`                          | none             | **Developer exhibit — see P0-1** |
+| Login                    | `/login`                     | anonymous-only   | Built                            |
+| Register                 | `/register`                  | anonymous-only   | Built                            |
+| Email verification       | `/verify-email`              | none (two modes) | Built                            |
+| Forgot password          | `/forgot-password`           | none             | Built                            |
+| Reset password           | `/reset-password`            | none             | Built                            |
+| Own profile              | `/profile`                   | protected        | Built                            |
+| Public profile           | `/players/$username`         | none             | Built                            |
+| Settings — profile       | `/settings/profile`          | protected        | Built                            |
+| Settings — preferences   | `/settings/preferences`      | protected        | Built                            |
+| Settings — privacy       | `/settings/privacy`          | protected        | Built                            |
+| Settings — notifications | `/settings/notifications`    | protected        | Built                            |
+| Settings — sessions      | `/settings/sessions`         | protected        | Built                            |
+| Friends                  | `/friends`                   | protected        | Built                            |
+| Friend requests          | `/friends/requests`          | protected        | Built                            |
+| Blocked                  | `/friends/blocked`           | protected        | Built                            |
+| Challenges               | `/challenges`                | protected        | Built                            |
+| Player search            | `/search`                    | protected        | Built                            |
+| Lobby                    | `/play`                      | protected        | Built                            |
+| Live game                | `/games/$matchId`            | protected        | Built                            |
+| Replay                   | `/games/$matchId/replay`     | protected        | Built                            |
+| Match history            | `/games/history`             | protected        | Built                            |
+| Notifications            | `/notifications`             | protected        | Built                            |
+| Tournament list          | `/tournaments`               | protected        | Built                            |
+| Tournament detail        | `/tournaments/$tournamentId` | protected        | Built                            |
+| Not found / error        | fallback                     | none             | Built                            |
 
 PWA install, update and offline notices are not routes: they are mounted globally by
 `AppShell` via `widgets/pwa`.
@@ -90,15 +90,15 @@ PWA install, update and offline notices are not routes: they are mounted globall
 
 The questions A64-025.1 was asked, answered with evidence.
 
-| Question | Answer | Evidence |
-| --- | --- | --- |
-| Design token system? | **Yes** | `apps/web/src/app/styles/globals.css` — a complete shadcn/ui "New York" neutral theme in OKLCH, light and dark, mapped to Tailwind v4 utilities via `@theme inline` |
-| Primitive component layer? | **Yes, partial** | `apps/web/src/shared/ui/` — Button, Input, Card, Dialog, Avatar, Skeleton, Spinner, ErrorBoundary. Eight primitives |
-| Components duplicated? | **Yes, for states** | No shared empty/error/loading component: `role="alert"` is written out 34 times across 24 files, `role="status"` 40 times across 23 |
-| Arbitrary Tailwind values? | **No** | Whole-tree scan finds only justified ones: `focus-visible:ring-[3px]`, `max-h-[90dvh]`, `lg:max-w-[min(70vh,42rem)]`, `pb-[max(1.5rem,env(safe-area-inset-bottom))]` |
-| Visual hierarchy consistent? | **Mostly** | Only three colour utilities appear across the tree — `text-muted-foreground` (132), `text-primary` (14), `text-destructive` (14). No raw palette colours anywhere |
-| Dark/light theme? | **Yes** | `.dark` class on `<html>`, written before first paint by an inline script in `index.html`, kept in step by `apps/web/src/shared/theme/theme-context.tsx` |
-| Responsive strategy consistent? | **Yes, and narrow** | One breakpoint does nearly all the work — `sm:` and `lg:`. Simple, but see §3.7 |
+| Question                        | Answer              | Evidence                                                                                                                                                             |
+| ------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Design token system?            | **Yes**             | `apps/web/src/app/styles/globals.css` — a complete shadcn/ui "New York" neutral theme in OKLCH, light and dark, mapped to Tailwind v4 utilities via `@theme inline`  |
+| Primitive component layer?      | **Yes, partial**    | `apps/web/src/shared/ui/` — Button, Input, Card, Dialog, Avatar, Skeleton, Spinner, ErrorBoundary. Eight primitives                                                  |
+| Components duplicated?          | **Yes, for states** | No shared empty/error/loading component: `role="alert"` is written out 34 times across 24 files, `role="status"` 40 times across 23                                  |
+| Arbitrary Tailwind values?      | **No**              | Whole-tree scan finds only justified ones: `focus-visible:ring-[3px]`, `max-h-[90dvh]`, `lg:max-w-[min(70vh,42rem)]`, `pb-[max(1.5rem,env(safe-area-inset-bottom))]` |
+| Visual hierarchy consistent?    | **Mostly**          | Only three colour utilities appear across the tree — `text-muted-foreground` (132), `text-primary` (14), `text-destructive` (14). No raw palette colours anywhere    |
+| Dark/light theme?               | **Yes**             | `.dark` class on `<html>`, written before first paint by an inline script in `index.html`, kept in step by `apps/web/src/shared/theme/theme-context.tsx`             |
+| Responsive strategy consistent? | **Yes, and narrow** | One breakpoint does nearly all the work — `sm:` and `lg:`. Simple, but see §3.7                                                                                      |
 
 The discipline here is real and should be preserved. What is missing is not rigour but
 **range**:
@@ -126,7 +126,7 @@ Findings:
   need to add a nav item — which is likely why `/games/history`, `/challenges` and
   `/search` never reached it.
 - **No `aria-current`.** Nothing in the header says which section is open.
-- **No mobile treatment.** Only the user's *name* is hidden below `sm:`
+- **No mobile treatment.** Only the user's _name_ is hidden below `sm:`
   (`hidden … sm:inline`). All three nav buttons, the avatar, sign-out, the bell and the
   theme toggle stay in one 56px row at 360px, beside the brand.
 - **The brand is not a link.** `<span>Arena64</span>` — there is no home affordance.
@@ -217,7 +217,7 @@ widths. Real safe-area handling exists
 sideways — the bracket's scroller is the only horizontal scroll in the app, and it is
 labelled and focusable.
 
-The gap is that **nothing has been designed *for* a phone**; it has been made to fit
+The gap is that **nothing has been designed _for_ a phone**; it has been made to fit
 one. The header row (§3.3) and the game room's clock placement (§3.5) are the two
 places where that shows.
 
@@ -225,36 +225,36 @@ places where that shows.
 
 Strong foundations, unevenly finished.
 
-| Present | Evidence |
-| --- | --- |
-| Landmarks and skip link | `AppShell` — `<header>`, `<main id="main" tabIndex={-1}>`, `<footer>`, skip link as first focusable element |
-| Board keyboard/SR support | §3.5 |
-| Live regions | `role="status"` in 23 files, `role="alert"` in 24 — present everywhere they are needed |
-| Focusable scroll region | Bracket scroller has `tabIndex={0}` and `role="region"` |
-| Dialog semantics | Radix Dialog — focus trap and focus return come with it |
+| Present                   | Evidence                                                                                                    |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Landmarks and skip link   | `AppShell` — `<header>`, `<main id="main" tabIndex={-1}>`, `<footer>`, skip link as first focusable element |
+| Board keyboard/SR support | §3.5                                                                                                        |
+| Live regions              | `role="status"` in 23 files, `role="alert"` in 24 — present everywhere they are needed                      |
+| Focusable scroll region   | Bracket scroller has `tabIndex={0}` and `role="region"`                                                     |
+| Dialog semantics          | Radix Dialog — focus trap and focus return come with it                                                     |
 
-| Missing | Consequence |
-| --- | --- |
-| `aria-current` in navigation | Nothing announces which section is open |
-| `prefers-reduced-motion` handling | Only a comment saying there is nothing to reduce — true today, false the moment the redesign adds motion |
-| A shared status/empty/error component | seventy-four hand-rolled live regions is seventy-four chances to omit one |
+| Missing                               | Consequence                                                                                              |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `aria-current` in navigation          | Nothing announces which section is open                                                                  |
+| `prefers-reduced-motion` handling     | Only a comment saying there is nothing to reduce — true today, false the moment the redesign adds motion |
+| A shared status/empty/error component | seventy-four hand-rolled live regions is seventy-four chances to omit one                                |
 
 ### 3.9 Loading, error, empty and success states
 
 All four exist across the app and none is shared. There is no `EmptyState`, no
 `Notice`, no `ErrorNotice` in `shared/ui` — every page writes its own, seventy-four
 times over. `apps/admin`
-*does* have `ErrorNotice` and `PageHeader`; `apps/web`, the larger app, does not.
+_does_ have `ErrorNotice` and `PageHeader`; `apps/web`, the larger app, does not.
 
 ### 3.10 Email
 
 Three senders, three different levels of finish, no shared layout.
 
-| Email | Trigger | HTML | Text | uz/ru/en | CTA |
-| --- | --- | --- | --- | --- | --- |
-| Verification code | Registration, resend | Yes | Yes | **Yes** | Code, not a link |
-| Notification digest | `notifications` email delivery | Yes | Yes | **Yes** | Yes, styled button |
-| Password reset | Forgot-password | **No** | Yes | **No — English only** | Bare URL |
+| Email               | Trigger                        | HTML   | Text | uz/ru/en              | CTA                |
+| ------------------- | ------------------------------ | ------ | ---- | --------------------- | ------------------ |
+| Verification code   | Registration, resend           | Yes    | Yes  | **Yes**               | Code, not a link   |
+| Notification digest | `notifications` email delivery | Yes    | Yes  | **Yes**               | Yes, styled button |
+| Password reset      | Forgot-password                | **No** | Yes  | **No — English only** | Bare URL           |
 
 Every message is hand-built as an inline-styled string at its call site. Inline styles
 are correct for email — a `<style>` block is stripped by several major clients — but
@@ -270,16 +270,16 @@ piece of work with an obvious shared shape.
 
 The stack is already the right one and the redesign needs nothing new.
 
-| Need | Already present |
-| --- | --- |
-| Styling | Tailwind v4 (CSS-first, `@theme inline`) |
+| Need       | Already present                                      |
+| ---------- | ---------------------------------------------------- |
+| Styling    | Tailwind v4 (CSS-first, `@theme inline`)             |
 | Primitives | Radix — `react-dialog`, `react-avatar`, `react-slot` |
-| Variants | `class-variance-authority`, `clsx`, `tailwind-merge` |
-| Icons | `lucide-react` |
-| Forms | `react-hook-form` + `zod` + `@hookform/resolvers` |
-| Routing | `@tanstack/react-router` |
-| Data | `@tanstack/react-query`, `axios` |
-| Animation | `tw-animate-css` |
+| Variants   | `class-variance-authority`, `clsx`, `tailwind-merge` |
+| Icons      | `lucide-react`                                       |
+| Forms      | `react-hook-form` + `zod` + `@hookform/resolvers`    |
+| Routing    | `@tanstack/react-router`                             |
+| Data       | `@tanstack/react-query`, `axios`                     |
+| Animation  | `tw-animate-css`                                     |
 
 `apps/web/components.json` is configured for shadcn/ui with `@/shared/ui` as the component
 alias, so the missing primitives (§3.2) can be **generated into the existing theme**
@@ -308,20 +308,20 @@ Only findings a player could feel are recorded; micro-optimisation is out of sco
 
 **P0-1 — `/` is a developer exhibit.**
 `apps/web/src/pages/home/index.tsx` is the landing route. It renders a heading, the sentence
-*"Application shell. No gameplay surface is built yet."*, a card demonstrating
+_"Application shell. No gameplay surface is built yet."_, a card demonstrating
 `Skeleton` and `Spinner`, and a `FormDemo` from `apps/web/src/features/form-demo`. It is
 untranslated — the only page in the app that is, because every other string in the
 product goes through `t()` and there are 775 keys in each of uz, ru and en.
 
-Its own docstring records the intent: *"The lobby that eventually lives at `/` is
-A64-020.5's, and replacing this file is that phase's first commit."* A64-020.5 built
+Its own docstring records the intent: _"The lobby that eventually lives at `/` is
+A64-020.5's, and replacing this file is that phase's first commit."_ A64-020.5 built
 `/play` and never replaced it.
 
 The consequence is that the first thing any visitor sees — including a signed-in player
 who clicks nothing — is the product telling them it does not exist yet. Nothing links
 to `/play` from it.
 
-*Affected surface:* landing, first-run experience, and every share of the root URL.
+_Affected surface:_ landing, first-run experience, and every share of the root URL.
 **Fixed by A64-025.3** — see §9.1. `src/features/form-demo` was deleted with it.
 
 ### P1 — a primary flow is seriously degraded
@@ -350,28 +350,28 @@ width. Verified in A64-025.13 (§35.2).
 
 ### P2 — a noticeable UX problem
 
-| # | Finding | Task |
-| --- | --- | --- |
-| ~~P2-1~~ | ~~Bracket has no visual parent-child relationship, though the relationship is authoritative and already on the wire (§3.6)~~ | **Fixed** — §16 |
-| ~~P2-2~~ | ~~Password-reset email is English-only and plain-text-only~~ | **Closed by A64-025.10E** — trilingual, both parts, on the shared shell (§30) |
-| ~~P2-3~~ | ~~No shared empty/error/loading component — 74 hand-rolled live regions (§3.9)~~ | **Closed by A64-025.11** — `LoadFailure` added, `ListState` made to fit, six surfaces swept (§32). The live regions that remain are not load states |
-| ~~P2-4~~ | ~~No `aria-current` anywhere in navigation~~ | **Fixed** — §9.3 |
-| ~~P2-5~~ | ~~No brand colour, no semantic colours~~ | **Fixed** — §10.1, §10.3 |
-| ~~P2-6~~ | ~~`/games/history` had no navigation entry~~ | **Fixed** — §9.2. `/challenges` and `/search` stay inside the Social section, which is where they belong |
+| #        | Finding                                                                                                                      | Task                                                                                                                                                |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ~~P2-1~~ | ~~Bracket has no visual parent-child relationship, though the relationship is authoritative and already on the wire (§3.6)~~ | **Fixed** — §16                                                                                                                                     |
+| ~~P2-2~~ | ~~Password-reset email is English-only and plain-text-only~~                                                                 | **Closed by A64-025.10E** — trilingual, both parts, on the shared shell (§30)                                                                       |
+| ~~P2-3~~ | ~~No shared empty/error/loading component — 74 hand-rolled live regions (§3.9)~~                                             | **Closed by A64-025.11** — `LoadFailure` added, `ListState` made to fit, six surfaces swept (§32). The live regions that remain are not load states |
+| ~~P2-4~~ | ~~No `aria-current` anywhere in navigation~~                                                                                 | **Fixed** — §9.3                                                                                                                                    |
+| ~~P2-5~~ | ~~No brand colour, no semantic colours~~                                                                                     | **Fixed** — §10.1, §10.3                                                                                                                            |
+| ~~P2-6~~ | ~~`/games/history` had no navigation entry~~                                                                                 | **Fixed** — §9.2. `/challenges` and `/search` stay inside the Social section, which is where they belong                                            |
 
 ### P3 — polish and consistency
 
-| # | Finding | Task |
-| --- | --- | --- |
-| ~~P3-1~~ | ~~Brand wordmark is a `<span>`~~ | **Fixed** — §9.4 |
-| ~~P3-2~~ | ~~Hardcoded English in the shell~~ | **Fixed** — the skip link and the theme group are localised |
-| ~~P3-3~~ | ~~`session-menu` is misnamed~~ | **Fixed** — it is `AccountMenu` and holds only the account, §9.5 |
-| ~~P3-4~~ | ~~`form-demo` ships in the production bundle~~ | **Fixed** — deleted |
-| ~~P3-5~~ | ~~No `prefers-reduced-motion` handling — correct today, wrong once motion is added~~ | **Fixed** — one motion scale, two sources, the more conservative wins (§34) |
-| P3-6 | Eight primitives; Badge, Select, Tabs, Tooltip, Dropdown, Switch re-authored per feature | **Moot** — measured in A64-025.13 (§35.2): `shared/ui` holds 12, none of those six Radix parts is installed or used, and what remains is three domain chips |
+| #        | Finding                                                                                  | Task                                                                                                                                                        |
+| -------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ~~P3-1~~ | ~~Brand wordmark is a `<span>`~~                                                         | **Fixed** — §9.4                                                                                                                                            |
+| ~~P3-2~~ | ~~Hardcoded English in the shell~~                                                       | **Fixed** — the skip link and the theme group are localised                                                                                                 |
+| ~~P3-3~~ | ~~`session-menu` is misnamed~~                                                           | **Fixed** — it is `AccountMenu` and holds only the account, §9.5                                                                                            |
+| ~~P3-4~~ | ~~`form-demo` ships in the production bundle~~                                           | **Fixed** — deleted                                                                                                                                         |
+| ~~P3-5~~ | ~~No `prefers-reduced-motion` handling — correct today, wrong once motion is added~~     | **Fixed** — one motion scale, two sources, the more conservative wins (§34)                                                                                 |
+| P3-6     | Eight primitives; Badge, Select, Tabs, Tooltip, Dropdown, Switch re-authored per feature | **Moot** — measured in A64-025.13 (§35.2): `shared/ui` holds 12, none of those six Radix parts is installed or used, and what remains is three domain chips |
 
 **Nothing was fixed in A64-025.1.** P0-1 is a one-line route change to make and a
-product decision to get right — what the landing page *should* be for an anonymous
+product decision to get right — what the landing page _should_ be for an anonymous
 visitor is A64-025.3's subject, and shipping a guess here would be the scope creep this
 task's brief forbids.
 
@@ -446,40 +446,40 @@ Ordered by dependency, not by surface importance. The audit moved the app shell 
 of the design system: P0-1 and P1-1 both live there, and neither should wait for
 tokens.
 
-| Task | Objective | Depends on | Non-goals |
-| --- | --- | --- | --- |
-| **A64-025.1** | Audit and foundation — this document | — | Any implementation |
-| **A64-025.3** | App shell, landing page, navigation. Fixes P0-1, P1-1, P2-4, P2-6, P3-1…P3-4 | .1 | New features; visual restyle beyond what the fixes need |
-| **A64-025.2** | Design-system foundation: brand and semantic tokens, missing primitives, shared state components | .1 | Rewriting surfaces; new dependencies |
-| **A64-025.4** | Authentication UX | .2 | Changing the session or verification model |
-| **A64-025.5** | Lobby and matchmaking | .2 | Changing the queue state machine |
-| **A64-025.6** | Game room. Fixes P1-2, P1-3 | .2 | Changing board semantics or the protocol |
-| **A64-025.6A** | Game room visual hardening — §13.10 | .6 | New data on the board |
-| **A64-025.6B** | Seat ratings on the snapshot — §14 | .6A | Reading a rating per player |
-| **A64-025.6C** | The board itself, and the panel around it — §15 | .6B | New data on the board; changing board semantics |
-| **A64-025.7** | Tournament and bracket, edges derived from `BracketSlot.parent()`. Closes OQ-4 | .2 | Backend contract changes; canvas, zoom or drag |
-| **A64-025.8** | Friends and social | .2 | Changing privacy or blocking rules |
-| **A64-025.9** | Profile and player | .2 | Changing privacy rules; inventing a statistic |
-| **A64-025.5B** | The lobby, and the board preferences that did nothing | .2, .5 | Changing what a preference means; the three still unread |
-| **A64-025.5C** | Match history and replay | .2, .5B | Changing what a replay reconstructs |
-| **A64-025.5D** | The same surfaces, read in Uzbek and Russian | .5C, .10 | Retranslating; changing layout English needs |
-| **A64-025.7B** | The tournament list, and the browser's missing Uzbek | .7, .5D | Number formatting; hand-writing what ICU gets right |
-| **A64-025.7C** | The tournament page the list links to | .7B | The bracket, which §16 settled |
-| **A64-025.8B** | The five social surfaces, after the card system | .8, .9 | Relationship rules, which §17 settled |
-| **A64-025.6D** | The game room, read against a live server | .6C, .5B | The board's layout, which §15 settled |
-| **A64-025.4B** | The front door — what a signed-out visitor is offered | .4, .3 | The auth forms, which §11 settled |
-| **A64-025.9B** | Home, and the account menu in the header | .2, .3 | Inventing a statistic the API does not return |
-| **A64-025.9C** | The four remaining settings surfaces | .2, .9 | Changing what any setting does |
-| **A64-025.10** | Notifications — the feed and the bell | .2 | Admin notification surfaces; what the preferences decide (.9C) |
-| **A64-025.10E** | Email design system. Fixes P2-2 | .2 (tokens only) | New email types |
-| **A64-025.10F** | The email shell, designed rather than merely shared | .10E | New email types; a dark variant |
-| **A64-025.11** | Global UI consistency and component cleanup. Fixes P2-3 | .3–.10 | Re-architecting layouts already designed mobile-first |
-| **A64-025.12A** | A throw inside the router reaches this app's error page | — | The unreproduced i18n context fault itself (§33.3) |
-| **A64-025.13A** | The match a no-show left open, and the port that closes it | .13 | A moderator's adjudication of a *played* game, which needs an audit trail |
-| **A64-025.13B** | Every context object in a module Fast Refresh will not swap | .12A | `features/auth`'s session context (§37.3) |
-| **A64-025.14** | `confirm_move`, the fifth gameplay preference | .6D | Editing a staged move (§38.5) |
-| **A64-025.12** | Motion and interaction system. Fixes P3-5 | .3–.10 | Adding motion for its own sake |
-| **A64-025.13** | Closing audit | all | New work |
+| Task            | Objective                                                                                        | Depends on       | Non-goals                                                                 |
+| --------------- | ------------------------------------------------------------------------------------------------ | ---------------- | ------------------------------------------------------------------------- |
+| **A64-025.1**   | Audit and foundation — this document                                                             | —                | Any implementation                                                        |
+| **A64-025.3**   | App shell, landing page, navigation. Fixes P0-1, P1-1, P2-4, P2-6, P3-1…P3-4                     | .1               | New features; visual restyle beyond what the fixes need                   |
+| **A64-025.2**   | Design-system foundation: brand and semantic tokens, missing primitives, shared state components | .1               | Rewriting surfaces; new dependencies                                      |
+| **A64-025.4**   | Authentication UX                                                                                | .2               | Changing the session or verification model                                |
+| **A64-025.5**   | Lobby and matchmaking                                                                            | .2               | Changing the queue state machine                                          |
+| **A64-025.6**   | Game room. Fixes P1-2, P1-3                                                                      | .2               | Changing board semantics or the protocol                                  |
+| **A64-025.6A**  | Game room visual hardening — §13.10                                                              | .6               | New data on the board                                                     |
+| **A64-025.6B**  | Seat ratings on the snapshot — §14                                                               | .6A              | Reading a rating per player                                               |
+| **A64-025.6C**  | The board itself, and the panel around it — §15                                                  | .6B              | New data on the board; changing board semantics                           |
+| **A64-025.7**   | Tournament and bracket, edges derived from `BracketSlot.parent()`. Closes OQ-4                   | .2               | Backend contract changes; canvas, zoom or drag                            |
+| **A64-025.8**   | Friends and social                                                                               | .2               | Changing privacy or blocking rules                                        |
+| **A64-025.9**   | Profile and player                                                                               | .2               | Changing privacy rules; inventing a statistic                             |
+| **A64-025.5B**  | The lobby, and the board preferences that did nothing                                            | .2, .5           | Changing what a preference means; the three still unread                  |
+| **A64-025.5C**  | Match history and replay                                                                         | .2, .5B          | Changing what a replay reconstructs                                       |
+| **A64-025.5D**  | The same surfaces, read in Uzbek and Russian                                                     | .5C, .10         | Retranslating; changing layout English needs                              |
+| **A64-025.7B**  | The tournament list, and the browser's missing Uzbek                                             | .7, .5D          | Number formatting; hand-writing what ICU gets right                       |
+| **A64-025.7C**  | The tournament page the list links to                                                            | .7B              | The bracket, which §16 settled                                            |
+| **A64-025.8B**  | The five social surfaces, after the card system                                                  | .8, .9           | Relationship rules, which §17 settled                                     |
+| **A64-025.6D**  | The game room, read against a live server                                                        | .6C, .5B         | The board's layout, which §15 settled                                     |
+| **A64-025.4B**  | The front door — what a signed-out visitor is offered                                            | .4, .3           | The auth forms, which §11 settled                                         |
+| **A64-025.9B**  | Home, and the account menu in the header                                                         | .2, .3           | Inventing a statistic the API does not return                             |
+| **A64-025.9C**  | The four remaining settings surfaces                                                             | .2, .9           | Changing what any setting does                                            |
+| **A64-025.10**  | Notifications — the feed and the bell                                                            | .2               | Admin notification surfaces; what the preferences decide (.9C)            |
+| **A64-025.10E** | Email design system. Fixes P2-2                                                                  | .2 (tokens only) | New email types                                                           |
+| **A64-025.10F** | The email shell, designed rather than merely shared                                              | .10E             | New email types; a dark variant                                           |
+| **A64-025.11**  | Global UI consistency and component cleanup. Fixes P2-3                                          | .3–.10           | Re-architecting layouts already designed mobile-first                     |
+| **A64-025.12A** | A throw inside the router reaches this app's error page                                          | —                | The unreproduced i18n context fault itself (§33.3)                        |
+| **A64-025.13A** | The match a no-show left open, and the port that closes it                                       | .13              | A moderator's adjudication of a _played_ game, which needs an audit trail |
+| **A64-025.13B** | Every context object in a module Fast Refresh will not swap                                      | .12A             | `features/auth`'s session context (§37.3)                                 |
+| **A64-025.14**  | `confirm_move`, the fifth gameplay preference                                                    | .6D              | Editing a staged move (§38.5)                                             |
+| **A64-025.12**  | Motion and interaction system. Fixes P3-5                                                        | .3–.10           | Adding motion for its own sake                                            |
+| **A64-025.13**  | Closing audit                                                                                    | all              | New work                                                                  |
 
 **Renumbered on 2026-09-03**, at the owner's direction, and the order below is
 theirs: tournament before social, social before profile, notifications after both.
@@ -498,12 +498,12 @@ plain text while the other two are trilingual HTML.
 
 ## 8. Open questions
 
-| # | Question | Blocks |
-| --- | --- | --- |
-| ~~OQ-1~~ | ~~What does `/` show an anonymous visitor?~~ | **Closed by A64-025.3** — `/` is the authenticated player's product home; the route keeps its existing lack of a guard, so an anonymous visitor gets a signed-out home offering sign-in and registration. A public marketing page is a separate surface for a separate audience and is not this epic's |
-| ~~OQ-2~~ | ~~What is Arena64's brand colour?~~ | **Closed by A64-025.2** — indigo, `oklch(0.5 0.19 275)` light and `oklch(0.68 0.16 275)` dark. The reasoning is in §10.1 and it is reversible in two token values |
-| ~~OQ-3~~ | ~~Where do the clocks go on a phone?~~ | **Closed by A64-025.6** — neither. Each clock lives in its player's seat, and the seats sit directly above and below the board at every width. §13.3 |
-| ~~OQ-4~~ | ~~Does the bracket keep horizontal scroll on mobile, or switch to a round-at-a-time view below `sm:`?~~ | **Closed by A64-025.7** — horizontal scroll, kept. A segmented view hides the comparison the bracket exists to make, and the edges are now drawn, which is what the scroll was missing rather than the scroll being the problem. §16 |
+| #        | Question                                                                                                | Blocks                                                                                                                                                                                                                                                                                                 |
+| -------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ~~OQ-1~~ | ~~What does `/` show an anonymous visitor?~~                                                            | **Closed by A64-025.3** — `/` is the authenticated player's product home; the route keeps its existing lack of a guard, so an anonymous visitor gets a signed-out home offering sign-in and registration. A public marketing page is a separate surface for a separate audience and is not this epic's |
+| ~~OQ-2~~ | ~~What is Arena64's brand colour?~~                                                                     | **Closed by A64-025.2** — indigo, `oklch(0.5 0.19 275)` light and `oklch(0.68 0.16 275)` dark. The reasoning is in §10.1 and it is reversible in two token values                                                                                                                                      |
+| ~~OQ-3~~ | ~~Where do the clocks go on a phone?~~                                                                  | **Closed by A64-025.6** — neither. Each clock lives in its player's seat, and the seats sit directly above and below the board at every width. §13.3                                                                                                                                                   |
+| ~~OQ-4~~ | ~~Does the bracket keep horizontal scroll on mobile, or switch to a round-at-a-time view below `sm:`?~~ | **Closed by A64-025.7** — horizontal scroll, kept. A segmented view hides the comparison the bracket exists to make, and the edges are now drawn, which is what the scroll was missing rather than the scroll being the problem. §16                                                                   |
 
 ---
 
@@ -532,12 +532,12 @@ redirects to sign-in is a link that lies.
 
 ### 9.2 Four sections
 
-| Section | Link | Owns | Answers |
-| --- | --- | --- | --- |
-| Play | `/play` | `/play`, `/games/$matchId`, `/games/$matchId/replay` | Where do I start a game? |
-| Tournaments | `/tournaments` | `/tournaments`, `/tournaments/$tournamentId` | Where are the tournaments? |
-| Social | `/friends` | `/friends`, `/friends/requests`, `/friends/blocked`, `/challenges`, `/search`, `/players/$username` | Where are my friends and challenges? |
-| History | `/games/history` | `/games/history` | Where are my past games? |
+| Section     | Link             | Owns                                                                                                | Answers                              |
+| ----------- | ---------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| Play        | `/play`          | `/play`, `/games/$matchId`, `/games/$matchId/replay`                                                | Where do I start a game?             |
+| Tournaments | `/tournaments`   | `/tournaments`, `/tournaments/$tournamentId`                                                        | Where are the tournaments?           |
+| Social      | `/friends`       | `/friends`, `/friends/requests`, `/friends/blocked`, `/challenges`, `/search`, `/players/$username` | Where are my friends and challenges? |
+| History     | `/games/history` | `/games/history`                                                                                    | Where are my past games?             |
 
 Four, not twenty-five. A section owns routes its link does not point at:
 `SocialNav` already carried requests, challenges, blocked and search, so
@@ -632,19 +632,19 @@ with `bg-primary`. The brand is therefore not only a button colour — it is
 the colour a player reads the position through, over neutral squares and
 beside near-white and near-black pieces.
 
-| Candidate | Verdict |
-| --- | --- |
-| Electric blue ~255° | White text at 4.69:1 — passes AA and only just. It is also the default tech-product blue and the closest hue to the game's best-known competitor, so it costs distinctiveness and buys nothing |
-| **Indigo ~275°** | **Chosen.** White text at 6.12:1 light, 6.52:1 dark. Far from `--destructive` (~27°) and from `--success` (~150°) on the hue wheel, so a status colour can never be mistaken for the brand. Cool enough to separate cleanly from a neutral board |
-| Violet ~295° | Works numerically (5.76:1) and reads more consumer-social than competitive |
-| Amber / gold | Rejected on measurement: white on amber cannot reach 4.5:1 without becoming brown, and it collides with light board squares |
+| Candidate           | Verdict                                                                                                                                                                                                                                          |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Electric blue ~255° | White text at 4.69:1 — passes AA and only just. It is also the default tech-product blue and the closest hue to the game's best-known competitor, so it costs distinctiveness and buys nothing                                                   |
+| **Indigo ~275°**    | **Chosen.** White text at 6.12:1 light, 6.52:1 dark. Far from `--destructive` (~27°) and from `--success` (~150°) on the hue wheel, so a status colour can never be mistaken for the brand. Cool enough to separate cleanly from a neutral board |
+| Violet ~295°        | Works numerically (5.76:1) and reads more consumer-social than competitive                                                                                                                                                                       |
+| Amber / gold        | Rejected on measurement: white on amber cannot reach 4.5:1 without becoming brown, and it collides with light board squares                                                                                                                      |
 
 Every ratio above was computed from the OKLCH values rather than estimated.
 
 ### 10.2 Light and dark
 
 Both themes define every token. The dark values are not the light ones
-dimmed: `--primary` goes *lighter* and slightly less saturated in dark
+dimmed: `--primary` goes _lighter_ and slightly less saturated in dark
 (0.68/0.16 against 0.50/0.19), which is what keeps it legible on a
 near-black page — 6.65:1 against the background.
 
@@ -655,10 +655,10 @@ a border; one that is the product's own colour reads as deliberate.
 
 Two tokens added, and the restraint matters as much as the additions:
 
-| Token | Why it exists | Callers today |
-| --- | --- | --- |
+| Token                                | Why it exists                                                                                                                                                               | Callers today                   |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
 | `--success` / `--success-foreground` | A rating gain and an online dot were `text-emerald-600` and `bg-emerald-500` — fixed palette values that do not change with the theme, in an app where everything else does | rating delta, two presence dots |
-| `--warning` / `--warning-foreground` | The only one of `Notice`'s four tones with no existing token. Its foreground is *dark*, because white on amber never reaches 4.5:1 | `Notice` |
+| `--warning` / `--warning-foreground` | The only one of `Notice`'s four tones with no existing token. Its foreground is _dark_, because white on amber never reaches 4.5:1                                          | `Notice`                        |
 
 Deliberately **not** added:
 
@@ -682,19 +682,19 @@ parallel scale would give the codebase two.
 The conventions the existing code already follows, written down so the next
 task does not re-derive them:
 
-| Role | Pattern |
-| --- | --- |
-| Page title | `text-2xl font-semibold tracking-tight`, one `h1` per route |
-| Section heading | `text-lg font-semibold tracking-tight` |
-| Card heading | `text-base font-medium` |
-| Body | inherited; `text-sm` in dense surfaces |
-| Secondary | `text-muted-foreground text-sm` |
-| Meta | `text-muted-foreground text-xs` |
-| Numeric | **`tabular-nums`**, always — a clock or a rating whose digits change width makes the layout twitch once a second |
-| Page gap | `gap-6` to `gap-8` |
-| Section gap | `gap-4` |
-| Card padding | shadcn `Card`'s own |
-| Compact row | `gap-2`, `min-h-11` |
+| Role            | Pattern                                                                                                          |
+| --------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Page title      | `text-2xl font-semibold tracking-tight`, one `h1` per route                                                      |
+| Section heading | `text-lg font-semibold tracking-tight`                                                                           |
+| Card heading    | `text-base font-medium`                                                                                          |
+| Body            | inherited; `text-sm` in dense surfaces                                                                           |
+| Secondary       | `text-muted-foreground text-sm`                                                                                  |
+| Meta            | `text-muted-foreground text-xs`                                                                                  |
+| Numeric         | **`tabular-nums`**, always — a clock or a rating whose digits change width makes the layout twitch once a second |
+| Page gap        | `gap-6` to `gap-8`                                                                                               |
+| Section gap     | `gap-4`                                                                                                          |
+| Card padding    | shadcn `Card`'s own                                                                                              |
+| Compact row     | `gap-2`, `min-h-11`                                                                                              |
 
 ### 10.5 Control size and the touch target
 
@@ -747,13 +747,13 @@ holding five features' vocabulary.
 
 ### 10.8 What was deliberately not built
 
-| Candidate | Decision |
-| --- | --- |
-| `Badge` | **Not built.** One true status pill exists (`tournament-card`); the other `rounded-full` uses are a filter chip, an avatar, a count bubble and a board piece. CLAUDE.md §2.7 earns an abstraction on the third case, not the first |
-| `Sheet` | **Not built.** One consumer — `MobileNav`, which applies a sheet's geometry as a `className` on the existing `Dialog`. A second consumer makes it worth extracting |
-| `Typography` components | **Not built.** A component per heading level is a system nobody reads; §10.4 is the contract instead |
-| Storybook or a gallery route | **Not built**, and not by omission: A64-025.3 removed a developer surface from `/`, and adding one back would undo it. The primitives are proved by tests |
-| Motion tokens | **Not added.** The policy below needs none yet |
+| Candidate                    | Decision                                                                                                                                                                                                                           |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Badge`                      | **Not built.** One true status pill exists (`tournament-card`); the other `rounded-full` uses are a filter chip, an avatar, a count bubble and a board piece. CLAUDE.md §2.7 earns an abstraction on the third case, not the first |
+| `Sheet`                      | **Not built.** One consumer — `MobileNav`, which applies a sheet's geometry as a `className` on the existing `Dialog`. A second consumer makes it worth extracting                                                                 |
+| `Typography` components      | **Not built.** A component per heading level is a system nobody reads; §10.4 is the contract instead                                                                                                                               |
+| Storybook or a gallery route | **Not built**, and not by omission: A64-025.3 removed a developer surface from `/`, and adding one back would undo it. The primitives are proved by tests                                                                          |
+| Motion tokens                | **Not added.** The policy below needs none yet                                                                                                                                                                                     |
 
 ### 10.9 Motion
 
@@ -779,7 +779,7 @@ already points at `@/shared/ui`.
 
 ### 11.1 What was already right
 
-The audit found the *semantics* of authentication in better shape than any
+The audit found the _semantics_ of authentication in better shape than any
 other surface, and none of it was rewritten: `autoComplete="email"` and
 `current-password`/`new-password` in the right places, `noValidate` with a
 zod resolver so the messages are translatable, `disabled={isSubmitting}` on
@@ -845,13 +845,13 @@ sentence and WCAG 2.5.8 exempts those.
 
 Chromium, all four auth routes:
 
-| Route | 360 light | 360 dark | 1280 light | 1280 dark |
-| --- | --- | --- | --- | --- |
-| `/login` | 0 overflow, 44px | 0, 44px | 0, 44px | 0, 44px |
-| `/register` | 0, 44px | — | — | 0, 44px |
-| `/verify-email` | 0, 44px | — | — | 0, 44px |
-| `/forgot-password` | 0, 44px | — | — | 0, 44px |
-| `/reset-password` | 0 overflow | — | — | 0 overflow |
+| Route              | 360 light        | 360 dark | 1280 light | 1280 dark  |
+| ------------------ | ---------------- | -------- | ---------- | ---------- |
+| `/login`           | 0 overflow, 44px | 0, 44px  | 0, 44px    | 0, 44px    |
+| `/register`        | 0, 44px          | —        | —          | 0, 44px    |
+| `/verify-email`    | 0, 44px          | —        | —          | 0, 44px    |
+| `/forgot-password` | 0, 44px          | —        | —          | 0, 44px    |
+| `/reset-password`  | 0 overflow       | —        | —          | 0 overflow |
 
 Exactly one `h1` per route in every combination, and no clipped content.
 
@@ -880,7 +880,7 @@ nothing:
                                   ↘ transitioning → the board
                     unavailable (both reads failed)
 
-Four *busy* states — joining, accepting, declining, transitioning — are the
+Four _busy_ states — joining, accepting, declining, transitioning — are the
 page's, because they describe a request the cache cannot see. A pending
 match outranks a ticket, always, and the precedence is applied in one place.
 None of that moved: this task changed how the states look, not what they
@@ -917,7 +917,7 @@ at 360px in both themes.
 
 **Post-implementation visual review (A64-025.5a).** The first version used
 one rule for both widths, and a screenshot showed why that was wrong:
-`bg-background` inside a `bg-card` surface is *darker* than its parent in
+`bg-background` inside a `bg-card` surface is _darker_ than its parent in
 dark mode — `--background` is 0.145 and `--card` is 0.205 — so the bar read
 as a black slab bolted onto the card rather than its last row. Above `sm`
 there is now no surface at all: the action is the final row of the form,
@@ -994,10 +994,10 @@ from the ticket.
 
 Chromium, signed in, one account per measurement:
 
-| State | 360 light | 360 dark | 1280 light | 1280 dark |
-| --- | --- | --- | --- | --- |
-| Idle | 0 overflow, 44px, CTA in view | same | same | same |
-| Queued | 0 overflow, 44px, `role="status"` | — | — | 0 overflow, 44px |
+| State  | 360 light                         | 360 dark | 1280 light | 1280 dark        |
+| ------ | --------------------------------- | -------- | ---------- | ---------------- |
+| Idle   | 0 overflow, 44px, CTA in view     | same     | same       | same             |
+| Queued | 0 overflow, 44px, `role="status"` | —        | —          | 0 overflow, 44px |
 
 The offer was exercised end to end rather than measured: `play.spec.ts` runs
 two real players into one pool, through the redesigned dialog, to the board.
@@ -1020,7 +1020,7 @@ product — `role="grid"`, arrow-key movement over a roving tabindex, a real
 `<button>` per square, an `aria-label` naming the piece — and none of that
 was touched.
 
-What was wrong was that everything *around* the board lived in a side panel:
+What was wrong was that everything _around_ the board lived in a side panel:
 two clocks, the status line, and no player identity at all beyond the words
 "Opponent" and "You". On a phone that panel is below the board, so in a
 timed game the clock could be under the fold. That was OQ-3.
@@ -1087,22 +1087,22 @@ always wanted them and is now literally true.
 
 ### 13.7 Deferred, with the reason
 
-| Gap | Why |
-| --- | --- |
-| ~~Seat ratings~~ | **Closed by A64-025.6B** — the snapshot carries them. §14 |
-| Captured / material summary | The client holds a position, not a capture history. Deriving "captured so far" from the opening position and the current one is arithmetic the domain does not publish, and a second truth source next to an authoritative board is exactly what §2 forbids |
-| Control-relative low-time threshold | §13.5 — needs the time control on the snapshot |
+| Gap                                 | Why                                                                                                                                                                                                                                                         |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ~~Seat ratings~~                    | **Closed by A64-025.6B** — the snapshot carries them. §14                                                                                                                                                                                                   |
+| Captured / material summary         | The client holds a position, not a capture history. Deriving "captured so far" from the opening position and the current one is arithmetic the domain does not publish, and a second truth source next to an authoritative board is exactly what §2 forbids |
+| Control-relative low-time threshold | §13.5 — needs the time control on the snapshot                                                                                                                                                                                                              |
 
 ### 13.8 Measured
 
 A real two-player game, paired through the lobby in Chromium:
 
-| Width | Theme | Page overflow | Board | `h1` |
-| --- | --- | --- | --- | --- |
-| 1280 | dark | 0 | 630px | 1 |
-| 768 | light | 0 (after §13.9) | 736px | 1 |
-| 360 | light | 0 | 328px | 1 |
-| 360 | dark | 0 | 328px | 1 |
+| Width | Theme | Page overflow   | Board | `h1` |
+| ----- | ----- | --------------- | ----- | ---- |
+| 1280  | dark  | 0               | 630px | 1    |
+| 768   | light | 0 (after §13.9) | 736px | 1    |
+| 360   | light | 0               | 328px | 1    |
+| 360   | dark  | 0               | 328px | 1    |
 
 A board square is 41px at 360 — below the 44px control floor and bounded by
 arithmetic rather than by choice: eight squares plus the page's own padding
@@ -1111,10 +1111,10 @@ viewport's to decide.
 
 ### 13.9 A defect this task found in the shell
 
-Measuring the game room at 768 signed *in* found 110px of horizontal
+Measuring the game room at 768 signed _in_ found 110px of horizontal
 overflow in the **header** — the wordmark, four nav sections, the bell, the
 avatar, the display name and a sign-out button do not fit. A64-025.3 missed
-it because it measured 768 signed *out*, where the account cluster is one
+it because it measured 768 signed _out_, where the account cluster is one
 "Sign in" link.
 
 The display name now returns at `lg` rather than `sm`, and the account
@@ -1123,7 +1123,7 @@ cluster keeps its tight gap until then. Measured signed in at 360, 768,
 
 ### 13.10 Visual hardening — A64-025.6A
 
-A64-025.6 fixed the *composition*: the seats and clocks moved onto the
+A64-025.6 fixed the _composition_: the seats and clocks moved onto the
 board and OQ-3 closed. A manual screenshot review then found the surfaces
 around them had not been designed at all, and three things were wrong.
 
@@ -1171,10 +1171,10 @@ A seat named a player and showed a clock. It did not say how strong they
 are, which is the fact a player wants before the first move and the one
 every comparable product shows. §13.2 left two ways to close it:
 
-| Option | Cost |
-| --- | --- |
+| Option                                | Cost                                                                                                                                |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /profiles/{username}` per player | A second request each, on a different key, governed by viewer-relative privacy, on the most latency-sensitive screen in the product |
-| The snapshot carries the seat ratings | A protocol extension. No new query at all |
+| The snapshot carries the seat ratings | A protocol extension. No new query at all                                                                                           |
 
 The second was taken. `game` already stores what each seat rated when the
 match was created (MT-4), the reconnect path already loads that row, and
@@ -1217,7 +1217,7 @@ cooldowns.
 and a server that rounded would be making it for every client that ever
 reads the frame.
 
-`null` per seat means *this match carries no rating* — every match created
+`null` per seat means _this match carries no rating_ — every match created
 before A64-017.2. The seat then shows no number and no placeholder: a dash
 beside a name reads as a load that never finishes.
 
@@ -1246,7 +1246,7 @@ too.
 
 ### 15.1 What the previous two tasks left
 
-A64-025.6 fixed the *composition* and A64-025.6A the *surfaces beside* the
+A64-025.6 fixed the _composition_ and A64-025.6A the _surfaces beside_ the
 board. Neither touched the board, and a screenshot review of a real 1+0 game
 found that what the page is entirely about was the one thing nobody had
 designed.
@@ -1254,13 +1254,13 @@ designed.
 Five findings, all from the running product rather than from reading the
 code:
 
-| # | Finding | Evidence |
-| --- | --- | --- |
-| B-1 | The board had no palette. Squares were `--foreground` at 22% opacity — the *text* colour, thinned — and pieces were hard-coded `neutral-*`. In the light theme that is a grey checkerboard; the surface read as a wireframe | `board.tsx` before this task |
-| B-2 | In the dark theme a dark piece was all but invisible on a dark square, because `neutral-800` does not move when the theme does | Measured at 360 dark |
-| B-3 | The quick-message group had no heading while `GameControls` beside it had one, so two labelled sections sandwiched two loose buttons | 1280 light |
-| B-4 | The seat joined the rating with a space and the side with a middot — `Dark  1500?` beside `Light · You  1500?` | Both seats, every width |
-| B-5 | The captured-piece ring was `ring-red-500`, a raw Tailwind colour in a product with a semantic destructive token | `board.tsx` |
+| #   | Finding                                                                                                                                                                                                                     | Evidence                     |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| B-1 | The board had no palette. Squares were `--foreground` at 22% opacity — the _text_ colour, thinned — and pieces were hard-coded `neutral-*`. In the light theme that is a grey checkerboard; the surface read as a wireframe | `board.tsx` before this task |
+| B-2 | In the dark theme a dark piece was all but invisible on a dark square, because `neutral-800` does not move when the theme does                                                                                              | Measured at 360 dark         |
+| B-3 | The quick-message group had no heading while `GameControls` beside it had one, so two labelled sections sandwiched two loose buttons                                                                                        | 1280 light                   |
+| B-4 | The seat joined the rating with a space and the side with a middot — `Dark  1500?` beside `Light · You  1500?`                                                                                                              | Both seats, every width      |
+| B-5 | The captured-piece ring was `ring-red-500`, a raw Tailwind colour in a product with a semantic destructive token                                                                                                            | `board.tsx`                  |
 
 ### 15.2 The board is a surface with a palette, not an opacity of the text
 
@@ -1269,7 +1269,7 @@ has — `--board-light`, `--board-dark`, `--piece-light`, `--piece-light-edge`,
 `--piece-dark`, `--piece-dark-edge`.
 
 **Warm neutral, and deliberately not indigo.** The brand hue is what the
-board already uses to mean *interaction*: the last move is `--primary` mixed
+board already uses to mean _interaction_: the last move is `--primary` mixed
 into the square, a legal destination is a `--primary` dot, the selected
 square takes a `--primary` ring. A board tinted with the same hue would leave
 every one of those competing with its own background. The board is therefore
@@ -1287,7 +1287,7 @@ edge rather than by its body.
 The last-move highlight was `--primary` at 18% **over transparency**, which
 worked only because the square beneath it was itself a transparency. Against
 an opaque board it would drop the square back to the container behind it, so
-it is now mixed *into* `--board-dark` at 30% and stays opaque.
+it is now mixed _into_ `--board-dark` at 30% and stays opaque.
 
 The pieces gained an inset shadow — lit from above, shaded below. That is the
 whole of the relief, and it is what makes a piece read as an object on a
@@ -1316,10 +1316,10 @@ class that changes nothing is a claim that something was fixed.
 
 ### 15.6 Deferred, with the reason
 
-| Gap | Why |
-| --- | --- |
+| Gap                                     | Why                                                                                                                                                                                                            |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Secondary player statistics in the seat | The snapshot carries ratings and nothing else about a player, by design — §14.3. Adding a win rate would be a profile read per player on the most latency-sensitive surface in the product, to decorate a card |
-| Board coordinate labels | Not a regression and not asked for; the accessible name already carries the coordinate, and a rank-and-file gutter costs board size at 360 where a square is already 41px |
+| Board coordinate labels                 | Not a regression and not asked for; the accessible name already carries the coordinate, and a rank-and-file gutter costs board size at 360 where a square is already 41px                                      |
 
 ### 15.7 Measured
 
@@ -1327,13 +1327,13 @@ A real 1+0 game paired through the lobby in Chromium, screenshotted before
 and after at every combination:
 
 | Width | Theme | Page overflow |
-| --- | --- | --- |
-| 1280 | light | 0 |
-| 1280 | dark | 0 |
-| 768 | light | 0 |
-| 768 | dark | 0 |
-| 360 | light | 0 |
-| 360 | dark | 0 |
+| ----- | ----- | ------------- |
+| 1280  | light | 0             |
+| 1280  | dark  | 0             |
+| 768   | light | 0             |
+| 768   | dark  | 0             |
+| 360   | light | 0             |
+| 360   | dark  | 0             |
 
 `npm run test` 202 passed, `tsc --noEmit` clean, `eslint` zero errors.
 
@@ -1348,13 +1348,13 @@ tells a reader nothing. The assertions are the same assertions.
 
 ### 16.1 The finding this closes
 
-P2-1, from the A64-025.1 audit: *"the bracket has no visual parent-child
+P2-1, from the A64-025.1 audit: _"the bracket has no visual parent-child
 relationship, though the relationship is authoritative and already on the
-wire."* §3.6 recorded the reasoning that left it out — connectors imply
+wire."_ §3.6 recorded the reasoning that left it out — connectors imply
 absolute positioning and fixed row heights, and fixed heights are what stop a
 bracket reflowing at 360px — and then said plainly that the trade was
-defensible and *"the result is still not a bracket: a reader cannot see which
-two nodes feed the one above them."*
+defensible and _"the result is still not a bracket: a reader cannot see which
+two nodes feed the one above them."_
 
 ### 16.2 The half of that argument that was wrong
 
@@ -1381,8 +1381,8 @@ an odd slot's runs **up**. The two meet at the height of the node they feed,
 which is where that node's incoming line already is.
 
 Nothing measures a rendered box, and nothing infers a relationship from
-position — which is what §7's principle 7 asked for: *a relationship the
-domain knows is a relationship the UI draws.*
+position — which is what §7's principle 7 asked for: _a relationship the
+domain knows is a relationship the UI draws._
 
 The gap between columns is `gap-8` and each stub is `w-4`. That is not a
 visual preference: the two stubs and the vertical line meet in the middle of
@@ -1414,11 +1414,11 @@ The bracket of a real eight-entrant tournament, seeded and started through
 is a server fact:
 
 | Width | Theme | Page overflow |
-| --- | --- | --- |
-| 1280 | light | 0 |
-| 1280 | dark | 0 |
-| 360 | light | 0 |
-| 360 | dark | 0 |
+| ----- | ----- | ------------- |
+| 1280  | light | 0             |
+| 1280  | dark  | 0             |
+| 360   | light | 0             |
+| 360   | dark  | 0             |
 
 The page body still never scrolls sideways; the labelled, focusable scroller
 is still the only thing that does.
@@ -1527,13 +1527,13 @@ product decision. It is recorded here rather than patched in the view.
 Five surfaces — friends, requests, blocked, search, challenges — at 1280
 light and 360 dark, against seeded relationships:
 
-| Surface | Page overflow |
-| --- | --- |
-| `/friends` | 0 |
-| `/friends/requests` | 0 |
-| `/friends/blocked` | 0 |
-| `/search` | 0 |
-| `/challenges` | 0 |
+| Surface             | Page overflow |
+| ------------------- | ------------- |
+| `/friends`          | 0             |
+| `/friends/requests` | 0             |
+| `/friends/blocked`  | 0             |
+| `/search`           | 0             |
+| `/challenges`       | 0             |
 
 `npm run test` 203 passed — one more than before, and it is the handle rule.
 `tsc --noEmit` clean, eslint zero errors.
@@ -1561,7 +1561,7 @@ empty state must expose a link to `/search`.
 **Search was reviewed and needed nothing of its own.** Twenty results
 against a real term at 1280: the rows carry both fixes above — one name line
 where there is no display name, `Block` in the destructive tone — and the
-page does not overflow. What it does raise is a *product* question rather
+page does not overflow. What it does raise is a _product_ question rather
 than a visual one: a stranger's row offers `Block` beside `Add friend` as a
 co-equal action, which is `actionsFor` returning what the relationship
 allows rather than what a search result should lead with. Left alone,
@@ -1574,7 +1574,7 @@ not chase: seeding a friend challenge through the database alone evidently
 misses something the service does, and the honest record is that the rows
 are unverified rather than that they are fine.
 
-Both empty states *were* verified, and they are the two this task changed.
+Both empty states _were_ verified, and they are the two this task changed.
 
 The challenge rows themselves are the remainder of `.8`.
 
@@ -1620,18 +1620,18 @@ The same condition now guards both.
 
 ### 18.4 Measured — the defect pass
 
-| Surface | Width | Theme | Page overflow |
-| --- | --- | --- | --- |
-| `/profile` | 1280 | light | 0 |
-| `/profile` | 360 | dark | **0** — was 47 |
-| `/players/{username}` | 1280 | light | 0 |
-| `/players/{username}` | 360 | dark | 0 |
+| Surface               | Width | Theme | Page overflow  |
+| --------------------- | ----- | ----- | -------------- |
+| `/profile`            | 1280  | light | 0              |
+| `/profile`            | 360   | dark  | **0** — was 47 |
+| `/players/{username}` | 1280  | light | 0              |
+| `/players/{username}` | 360   | dark  | 0              |
 
 `npm run test` 204 passed, `tsc --noEmit` clean, eslint zero errors.
 
 ### 18.5 The open question, answered — the full visual rework
 
-§18.4 above closed a *defect* pass. What follows is a **redesign**, asked for
+§18.4 above closed a _defect_ pass. What follows is a **redesign**, asked for
 explicitly and carried out on this surface first so that it can become the
 template the remaining surfaces are brought up to.
 
@@ -1645,14 +1645,14 @@ measurement finds.
 
 #### What was wrong, and what each part now does
 
-| Was | Is |
-| --- | --- |
-| The page opened with "Joined 5 August 2026" and a file upload | It opens with the name and the leading standing, set as the two largest things on it |
-| The avatar was drawn **twice** — as identity, and again inside the upload control | Drawn once. `AvatarManager` moved to `/settings/profile` |
-| Seven statistics at one weight, all `text-sm` | Three headline figures; wins/losses/draws as one proportional bar with a legend; highest rating as a footnote |
-| Five identical rating cards, `1,500`, "not rated yet" | Cards for categories with games; **one line** naming the rest |
-| The speed class printed the raw server enum — `blitz`, in every locale | `speedClassKey`, translated |
-| `highest_rating` showed `1,500` for an account that had played nothing | Rendered only once something has been played |
+| Was                                                                               | Is                                                                                                            |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| The page opened with "Joined 5 August 2026" and a file upload                     | It opens with the name and the leading standing, set as the two largest things on it                          |
+| The avatar was drawn **twice** — as identity, and again inside the upload control | Drawn once. `AvatarManager` moved to `/settings/profile`                                                      |
+| Seven statistics at one weight, all `text-sm`                                     | Three headline figures; wins/losses/draws as one proportional bar with a legend; highest rating as a footnote |
+| Five identical rating cards, `1,500`, "not rated yet"                             | Cards for categories with games; **one line** naming the rest                                                 |
+| The speed class printed the raw server enum — `blitz`, in every locale            | `speedClassKey`, translated                                                                                   |
+| `highest_rating` showed `1,500` for an account that had played nothing            | Rendered only once something has been played                                                                  |
 
 #### The three decisions worth recording
 
@@ -1687,12 +1687,12 @@ assumption `Intl.ListFormat` already knows better than.
 Overflow at three widths, in **both** the played and the brand-new-account
 states — the second is the one the old ratings block was worst on:
 
-| Surface | 1280 light | 768 light | 360 dark |
-| --- | --- | --- | --- |
-| `/profile`, account with games | 0 | 0 | 0 |
-| `/profile`, new account | 0 | 0 | 0 |
-| `/players/{username}`, account with games | 0 | 0 | 0 |
-| `/players/{username}`, new account | 0 | 0 | 0 |
+| Surface                                   | 1280 light | 768 light | 360 dark |
+| ----------------------------------------- | ---------- | --------- | -------- |
+| `/profile`, account with games            | 0          | 0         | 0        |
+| `/profile`, new account                   | 0          | 0         | 0        |
+| `/players/{username}`, account with games | 0          | 0         | 0        |
+| `/players/{username}`, new account        | 0          | 0         | 0        |
 
 `npm run test` 204 passed, `tsc --noEmit` clean, eslint zero errors — and
 re-run unchanged after §18.7's palette change. The profile suite gained an
@@ -1714,7 +1714,7 @@ from the surfaces a player spends time on.
 focus ring, a live match, a selected option, a legal destination on the
 board. Added beside it is the **display** form of the same brand — a
 gradient from the existing indigo to a magenta, plus `--rating`, an amber
-that means *a personal high* and is kept apart from `--warning` because a
+that means _a personal high_ and is kept apart from `--warning` because a
 best streak is not a caution.
 
 `--background` also picked up a trace of the brand hue, in both themes. It
@@ -1728,11 +1728,11 @@ and the header now says so.
 
 Three places, all of them brand:
 
-| Where | What |
-| --- | --- |
-| The wordmark | `brand-gradient-text`, in the header and on the auth front door — one wordmark, one treatment |
-| The primary action | `Button` `variant="default"` |
-| The auth panel | replaced a flat `bg-primary` on the same element, same foreground |
+| Where              | What                                                                                          |
+| ------------------ | --------------------------------------------------------------------------------------------- |
+| The wordmark       | `brand-gradient-text`, in the header and on the auth front door — one wordmark, one treatment |
+| The primary action | `Button` `variant="default"`                                                                  |
+| The auth panel     | replaced a flat `bg-primary` on the same element, same foreground                             |
 
 Everywhere else is solid, and that is a cost decision rather than a taste
 one: **contrast over a gradient cannot be asserted in a test, only looked
@@ -1757,18 +1757,18 @@ trap is waiting for every other "let us make this one gold".
 
 #### The second vocabulary: a hue per speed class
 
-The brand gradient says *Arena64*. It does not help anyone read a page, and
+The brand gradient says _Arena64_. It does not help anyone read a page, and
 on a profile the ratings block stayed almost entirely neutral under it. So a
 second set of tokens carries **category**: one hue per speed class, hot at
 the fast end and cool at the slow end, applied wherever the product names a
 class.
 
-| Surface | Before | After |
-| --- | --- | --- |
-| A profile's rating cards | neutral label | a 4px rule and a label in the class's hue |
-| A profile's leading figure | brand wash | the hue of the class it is a rating in |
-| Match history | the **raw enum** — `blitz`, in every locale | the translated name, in the class's hue |
-| Tournament card and page | neutral text | the same |
+| Surface                    | Before                                      | After                                     |
+| -------------------------- | ------------------------------------------- | ----------------------------------------- |
+| A profile's rating cards   | neutral label                               | a 4px rule and a label in the class's hue |
+| A profile's leading figure | brand wash                                  | the hue of the class it is a rating in    |
+| Match history              | the **raw enum** — `blitz`, in every locale | the translated name, in the class's hue   |
+| Tournament card and page   | neutral text                                | the same                                  |
 
 That is the point of it: the colour means the same thing on all four, so a
 returning player finds Blitz by colour before reading the word. Values are
@@ -1784,12 +1784,12 @@ places, and it is 15% — nothing is measured against it.
 
 #### Three vocabularies, and the rule that keeps them apart
 
-| Token family | Means | Where |
-| --- | --- | --- |
-| `--primary` | *interaction* | focus ring, live match, selected option, legal destination |
-| `--brand-from`/`--brand-to` | *Arena64* | wordmark, primary action, auth panel, and nothing else |
-| `--speed-*` | *category* | anywhere a speed class is named |
-| `--rating` | *a personal high* | best streak, highest rating |
+| Token family                | Means             | Where                                                      |
+| --------------------------- | ----------------- | ---------------------------------------------------------- |
+| `--primary`                 | _interaction_     | focus ring, live match, selected option, legal destination |
+| `--brand-from`/`--brand-to` | _Arena64_         | wordmark, primary action, auth panel, and nothing else     |
+| `--speed-*`                 | _category_        | anywhere a speed class is named                            |
+| `--rating`                  | _a personal high_ | best streak, highest rating                                |
 
 No surface uses more than two of them at once. That constraint is what stops
 this becoming the wall of colour the ratings block used to be a wall of
@@ -1842,12 +1842,12 @@ its container rather than as a stated absence.
 Both profile surfaces, three widths, and the two states the ratings block
 behaves differently in:
 
-| Surface | 1280 light | 768 light | 360 dark |
-| --- | --- | --- | --- |
-| `/profile`, account with games | 0 | 0 | 0 |
-| `/profile`, new account | 0 | 0 | 0 |
-| `/players/{username}`, account with games | 0 | 0 | 0 |
-| `/players/{username}`, new account | 0 | 0 | 0 |
+| Surface                                   | 1280 light | 768 light | 360 dark |
+| ----------------------------------------- | ---------- | --------- | -------- |
+| `/profile`, account with games            | 0          | 0         | 0        |
+| `/profile`, new account                   | 0          | 0         | 0        |
+| `/players/{username}`, account with games | 0          | 0         | 0        |
+| `/players/{username}`, new account        | 0          | 0         | 0        |
 
 `npm run test` 204 passed, `tsc --noEmit` clean, eslint zero errors.
 
@@ -1877,13 +1877,13 @@ destructive thing in the shell, given the same weight as the link to your
 profile. And the **language** could be changed only from
 `/settings/preferences`, four clicks deep, in a product that ships in three.
 
-| Was | Is |
-| --- | --- |
-| avatar · name · Sign out · ☀ · ☾ · 💻 | avatar · name · ⌄ |
-| Theme: three header buttons | inside the menu, still three explicit choices |
-| Language: `/settings/preferences` only | inside the menu |
-| Sign out: beside the name | inside the menu, ghost, destructive text, last |
-| The avatar: **initials for everyone** | the player's photo |
+| Was                                    | Is                                             |
+| -------------------------------------- | ---------------------------------------------- |
+| avatar · name · Sign out · ☀ · ☾ · 💻  | avatar · name · ⌄                              |
+| Theme: three header buttons            | inside the menu, still three explicit choices  |
+| Language: `/settings/preferences` only | inside the menu                                |
+| Sign out: beside the name              | inside the menu, ghost, destructive text, last |
+| The avatar: **initials for everyone**  | the player's photo                             |
 
 ### 19.2 Three decisions
 
@@ -1916,7 +1916,7 @@ That second consumer surfaced a test that was asserting the test
 harness rather than the product: `createTestQueryClient` sets
 `staleTime: 0`, so two consumers mounting a tick apart fetch twice where
 production's 30-second window fetches once. The assertion now states the
-invariant it was always about — *the save added no read* — rather than an
+invariant it was always about — _the save added no read_ — rather than an
 absolute count.
 
 ### 19.3 Home had no reason to be visited twice
@@ -1960,11 +1960,11 @@ with the section's name as its accessible name.
 
 ### 19.5 Measured
 
-| Surface | 1280 light | 360 dark |
-| --- | --- | --- |
-| `/` signed in | 0 | 0 |
-| `/` signed out | 0 | 0 |
-| `/` with the account menu open | 0 | 0 |
+| Surface                        | 1280 light | 360 dark |
+| ------------------------------ | ---------- | -------- |
+| `/` signed in                  | 0          | 0        |
+| `/` signed out                 | 0          | 0        |
+| `/` with the account menu open | 0          | 0        |
 
 204 tests pass, `tsc --noEmit` clean, eslint zero errors. Four suites
 reached sign-out through the header and now open the menu first through one
@@ -1985,7 +1985,7 @@ they are part of.
 Each was a flat column of labels and controls. At 1280 a 500px select sat
 inside a 1160px column, so two thirds of every row was empty and the eye had
 no right-hand edge to follow; nothing grouped the settings except vertical
-spacing, and spacing alone does not say *these three belong together*.
+spacing, and spacing alone does not say _these three belong together_.
 
 `SettingCard`, `SettingRow` and `SettingGroup` in `shared/ui` are the answer,
 and it is the same card the profile's statistics and ratings already use, so
@@ -1998,7 +1998,7 @@ floating under a sentence with nothing to attach it to.
 `descriptionId` is a prop rather than something the row invents, because the
 caller owns the control. Privacy's checkboxes need the consequence in their
 accessible description — a label reading "Show my country" without saying
-*where* leaves somebody agreeing to they-know-not-what — and a row whose
+_where_ leaves somebody agreeing to they-know-not-what — and a row whose
 description merely repeats its label needs no reference at all. A dangling
 `aria-describedby` is worse than none: it resolves silently to nothing.
 
@@ -2021,10 +2021,10 @@ class of defect rather than three incidents.
 `/settings/notifications` printed every channel's description inside every
 category: three categories × three channels, plus the email caveat twice
 more. The meaning of a channel does not change per category — that is what a
-channel *is* — so it is stated once, in a key above the grid, in the reading
+channel _is_ — so it is stated once, in a key above the grid, in the reading
 order somebody meets before their first checkbox.
 
-A cell is left with the one thing that genuinely is per-cell: why *this*
+A cell is left with the one thing that genuinely is per-cell: why _this_
 switch is locked. The channel list in the key comes from the settings the
 server sent rather than a hardcoded array, which is the rule
 `groupByCategory` already followed for categories.
@@ -2032,8 +2032,8 @@ server sent rather than a hardcoded array, which is the rule
 **The fieldsets stayed.** §21's argument for them over a `<table>` is
 correct and nothing here contradicts it: a table header and its checkbox end
 up on different screens at 360, and a legend is announced before every
-control it contains, so "Email" is never heard without knowing email *of
-what*. The repetition was never the grouping's fault.
+control it contains, so "Email" is never heard without knowing email _of
+what_. The repetition was never the grouping's fault.
 
 The suite's assertion moved with the sentence and got stricter: it asserted
 the caveat appeared inside the social group and now asserts it appears
@@ -2058,12 +2058,12 @@ paragraphs, is a group and a card.
 
 ### 20.5 Measured
 
-| Surface | 1280 light | 360 dark |
-| --- | --- | --- |
-| `/settings/preferences` | 0 | 0 |
-| `/settings/privacy` | 0 | 0 |
-| `/settings/notifications` | 0 | 0 |
-| `/settings/sessions` | 0 | — |
+| Surface                   | 1280 light | 360 dark |
+| ------------------------- | ---------- | -------- |
+| `/settings/preferences`   | 0          | 0        |
+| `/settings/privacy`       | 0          | 0        |
+| `/settings/notifications` | 0          | 0        |
+| `/settings/sessions`      | 0          | —        |
 
 204 tests pass, `tsc --noEmit` clean, eslint zero errors.
 
@@ -2108,17 +2108,17 @@ calendar-day assertion depend on the machine's zone.
 
 ### 21.2 Grouped by day, in one list
 
-| | |
-| --- | --- |
-| **Today / Yesterday** | `Intl`, `numeric: "auto"`, capitalised for the locale |
+|                          |                                                                   |
+| ------------------------ | ----------------------------------------------------------------- |
+| **Today / Yesterday**    | `Intl`, `numeric: "auto"`, capitalised for the locale             |
 | **Inside the last week** | the weekday — "Wednesday" beats "4 days ago", which is arithmetic |
-| **Older** | the date, because the words have stopped helping |
+| **Older**                | the date, because the words have stopped helping                  |
 
 **One list, not one per day.** A section per day was written first and cost
 five test failures, which was the right signal: every row already carries
 its own `<time>`, so a screen reader loses nothing by not hearing the
-separator, and a single list keeps a length that means *the number of
-notifications* rather than however many days they happen to span.
+separator, and a single list keeps a length that means _the number of
+notifications_ rather than however many days they happen to span.
 `role="presentation"` is what takes the separator out of the list without
 taking it off the screen.
 
@@ -2146,10 +2146,10 @@ it is better than a heading with the wrong thing.
 
 ### 21.5 Measured
 
-| Surface | 1280 light | 360 dark |
-| --- | --- | --- |
-| `/notifications`, five entries across three days | 0 | 0 |
-| `/notifications`, empty | 0 | — |
+| Surface                                          | 1280 light | 360 dark |
+| ------------------------------------------------ | ---------- | -------- |
+| `/notifications`, five entries across three days | 0          | 0        |
+| `/notifications`, empty                          | 0          | —        |
 
 213 tests pass (nine of them new, for the two formatters), `tsc --noEmit`
 clean, eslint zero errors.
@@ -2172,13 +2172,13 @@ a missing setting is honest.
 Two of the five are closed here. **Three are not**, and are recorded rather
 than quietly left:
 
-| Preference | State |
-| --- | --- |
-| `board_theme` | **Closed** — four palettes, applied to every board |
-| `piece_set` | **Closed** — three finishes, applied to every piece |
-| `show_coordinates` | **Closed** by A64-025.6D §28 |
-| `animation_speed` | Still unread. There is no move animation to speed up yet — A64-025.12's |
-| ~~`confirm_move`~~ | **Closed by A64-025.14** — §38. It does change move *submission* rather than presentation, which is why it needed a step rather than an attribute |
+| Preference         | State                                                                                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `board_theme`      | **Closed** — four palettes, applied to every board                                                                                                |
+| `piece_set`        | **Closed** — three finishes, applied to every piece                                                                                               |
+| `show_coordinates` | **Closed** by A64-025.6D §28                                                                                                                      |
+| `animation_speed`  | Still unread. There is no move animation to speed up yet — A64-025.12's                                                                           |
+| ~~`confirm_move`~~ | **Closed by A64-025.14** — §38. It does change move _submission_ rather than presentation, which is why it needed a step rather than an attribute |
 
 ### 22.2 Tokens on the root, not props through four components
 
@@ -2198,7 +2198,7 @@ width and the relief were literals in `board.tsx`, which meant `piece_set`
 could only ever have been three names for one disc. They are tokens now —
 `--piece-radius`, `--piece-border-width`, `--piece-shadow` — so "modern" is
 genuinely flat and "neo" genuinely squared. What a set does not change is
-the silhouette a *king* sits on: the king is told apart by a glyph, and a
+the silhouette a _king_ sits on: the king is told apart by a glyph, and a
 set that changed the outline would land that glyph on three different
 shapes.
 
@@ -2245,8 +2245,8 @@ out.
 ### 22.6 Measured
 
 | Surface | 1280 light | 360 dark |
-| --- | --- | --- |
-| `/play` | 0 | 0 |
+| ------- | ---------- | -------- |
+| `/play` | 0          | 0        |
 
 Four board-and-piece combinations rendered and compared: classic/classic,
 wood/neo, marble/modern, midnight/neo. 213 tests pass, `tsc --noEmit` clean,
@@ -2258,7 +2258,7 @@ eslint zero errors.
 
 ### 23.1 A history is scanned for results, and the result was fourth
 
-A row read: avatar, opponent, mode, clock, class — *then* the outcome, then
+A row read: avatar, opponent, mode, clock, class — _then_ the outcome, then
 a reason, then a date, then a "View replay" link. Somebody opening this page
 wants to know how their last five games went, and the answer was the fourth
 thing on each line.
@@ -2268,7 +2268,7 @@ left edge and the page can be read without reading it. Same chip the
 tournament history uses.
 
 **Won was `--primary`.** A64-025.9 §18.7 gives the brand hue one job —
-*interaction* — and a finished result is not one. The profile's own
+_interaction_ — and a finished result is not one. The profile's own
 win/loss/draw bar has been success-red-grey since that phase, so the two
 surfaces were colouring the same fact differently. Wins are `--success`
 here now; losses were already `--destructive`.
@@ -2294,7 +2294,7 @@ locale, on the fourth surface to have shipped one after the tournament card
 (§16), the ratings block (§18) and match history (§18.7).
 
 Four occurrences is not four accidents. The shape is always the same: a
-value arrives over the wire, somebody renders it because it *reads* like a
+value arrives over the wire, somebody renders it because it _reads_ like a
 word in English, and nothing fails. It is recorded here as a checklist item
 for §13's closing audit rather than as a fifth incident report.
 
@@ -2310,10 +2310,10 @@ background; it is in a card, like the summary beside it.
 
 ### 23.5 Measured
 
-| Surface | 1280 light | 360 dark |
-| --- | --- | --- |
-| `/games/history` | 0 | 0 |
-| `/games/{id}/replay` | 0 | 0 |
+| Surface              | 1280 light | 360 dark |
+| -------------------- | ---------- | -------- |
+| `/games/history`     | 0          | 0        |
+| `/games/{id}/replay` | 0          | 0        |
 
 213 tests pass, `tsc --noEmit` clean, eslint zero errors. No assertion
 changed: the row's accessible name is what the suite queries, and it is
@@ -2387,10 +2387,10 @@ phases of "0 overflow" missed all of this.
 The first run also flagged every `sr-only` element, which clips by design.
 The filter for that is part of the check now.
 
-| | uz 360 | uz 1280 | ru 360 | ru 1280 | en 360 | en 1280 |
-| --- | --- | --- | --- | --- | --- | --- |
-| Before | 2 | 1 | 2 | 2 | 0 | 0 |
-| After | 0 | 0 | 0 | 0 | 0 | 0 |
+|        | uz 360 | uz 1280 | ru 360 | ru 1280 | en 360 | en 1280 |
+| ------ | ------ | ------- | ------ | ------- | ------ | ------- |
+| Before | 2      | 1       | 2      | 2       | 0      | 0       |
+| After  | 0      | 0       | 0      | 0       | 0      | 0       |
 
 The script is not committed — it is a scratch harness, and a real one
 belongs with the visual-regression tooling this repo does not yet have.
@@ -2412,13 +2412,13 @@ The card was already a link and already carried the speed colour. What it
 did not do was help anybody **decide**, which is the only thing a list of
 open tournaments is for.
 
-| Was | Is |
-| --- | --- |
-| `Entrants: 27 of 32` | the same numbers, over a capacity bar |
+| Was                               | Is                                                |
+| --------------------------------- | ------------------------------------------------- |
+| `Entrants: 27 of 32`              | the same numbers, over a capacity bar             |
 | `Entries close September 5, 2026` | `Entries close in 2 days`, and amber inside a day |
-| `Created: September 1, 2026` | removed |
+| `Created: September 1, 2026`      | removed                                           |
 
-"27 of 32" is arithmetic; a bar answers *is this nearly full* without any.
+"27 of 32" is arithmetic; a bar answers _is this nearly full_ without any.
 It is `aria-hidden` and the numbers stay beside it, because colour is never
 the only signal — and it is coloured **only while registration is open**:
 `--warning` from four fifths, `--destructive` when full. A full bar on a
@@ -2428,7 +2428,7 @@ reader to hurry about something that ended last week.
 `formatRelativeTime` looks forward now as well as back. A deadline is the
 same question as a timestamp asked the other way round, and the two
 directions genuinely need different words under a minute: something that
-recent *just happened*; something that close is *about to*.
+recent _just happened_; something that close is _about to_.
 
 The creation date was removed. Nobody picks a tournament by when it was
 opened, and it sat at the same weight as the deadline, which is the line a
@@ -2441,23 +2441,23 @@ wrong.
 no patterns for it. That was not one gap. Every `Intl` API this product uses
 was then checked in the same browser:
 
-| API | Uzbek in Chromium | Full ICU (Node) | Done |
-| --- | --- | --- | --- |
-| `RelativeTimeFormat` | `-3 h`, and the English "yesterday" | `3 soat oldin` | our own strings — §24.2 |
-| `DateTimeFormat` dates | `2026 M09 3` | `3-sentabr, 2026` | our own month table |
-| `DateTimeFormat` weekday | `Thu` | `chorshanba` | our own weekday table |
-| `ListFormat` | `Bullet and Yozishma` | `Bullet va Yozishma` | our own conjunction |
-| `DateTimeFormat` time | `15:30` | `15:30` | **correct, left alone** |
-| `PluralRules` | `one`/`other` | same | **correct, left alone** |
-| `NumberFormat` | `1,684.5` | `1 684,5` | **not fixed — see below** |
+| API                      | Uzbek in Chromium                   | Full ICU (Node)      | Done                      |
+| ------------------------ | ----------------------------------- | -------------------- | ------------------------- |
+| `RelativeTimeFormat`     | `-3 h`, and the English "yesterday" | `3 soat oldin`       | our own strings — §24.2   |
+| `DateTimeFormat` dates   | `2026 M09 3`                        | `3-sentabr, 2026`    | our own month table       |
+| `DateTimeFormat` weekday | `Thu`                               | `chorshanba`         | our own weekday table     |
+| `ListFormat`             | `Bullet and Yozishma`               | `Bullet va Yozishma` | our own conjunction       |
+| `DateTimeFormat` time    | `15:30`                             | `15:30`              | **correct, left alone**   |
+| `PluralRules`            | `one`/`other`                       | same                 | **correct, left alone**   |
+| `NumberFormat`           | `1,684.5`                           | `1 684,5`            | **not fixed — see below** |
 
-`M09` is CLDR's *root* month name. The browser resolves the locale, reports
+`M09` is CLDR's _root_ month name. The browser resolves the locale, reports
 it as supported, and then answers from the fallback data — which is why none
 of this failed and none of it was visible in English.
 
 **The number format is knowingly left wrong.** Uzbek groups with a space and
 decimates with a comma, and Chromium gives the English form. Unlike `M09` or
-an English "and", `1,684.5` is *readable* by an Uzbek speaker — and
+an English "and", `1,684.5` is _readable_ by an Uzbek speaker — and
 hand-writing number formatting means owning percent signs, negatives and
 decimal places for three locales, which is the one thing in this table ICU
 is genuinely better at. Recorded rather than fixed.
@@ -2497,12 +2497,12 @@ said `9 of 16` and `Sep 5, 2026, 1:22 PM`. Two views of one tournament,
 answering the same question two ways — and the detail page is the one where
 somebody actually decides to enter.
 
-| Was | Is |
-| --- | --- |
-| `Entrants 9 of 16` | the same numbers, over the list's own bar |
+| Was                                          | Is                                                                 |
+| -------------------------------------------- | ------------------------------------------------------------------ |
+| `Entrants 9 of 16`                           | the same numbers, over the list's own bar                          |
 | `Registration deadline Sep 5, 2026, 1:22 PM` | `in 1 day` while entries are open, with the instant on the element |
-| `Created September 1, 2026` | removed, as it was from the list |
-| A borderless ghost "Back to tournaments" | the same control with a chevron, matching the replay's way back |
+| `Created September 1, 2026`                  | removed, as it was from the list                                   |
+| A borderless ghost "Back to tournaments"     | the same control with a chevron, matching the replay's way back    |
 
 The entrants row moved to the **end** of the definition list. It was the
 first of five, three facts away from the bar that is a picture of it.
@@ -2542,10 +2542,10 @@ page read as an alarm rather than as a list of people somebody chose to add.
 
 So the rule gains a second half rather than being replaced:
 
-| Tone | Where | Destructive action reads as |
-| --- | --- | --- |
-| `detail` | one player on their own page | destructive text, as §18.8 |
-| `list` | N players down a column | muted, until a cursor or the keyboard reaches it |
+| Tone     | Where                        | Destructive action reads as                      |
+| -------- | ---------------------------- | ------------------------------------------------ |
+| `detail` | one player on their own page | destructive text, as §18.8                       |
+| `list`   | N players down a column      | muted, until a cursor or the keyboard reaches it |
 
 Colour was never the only signal in either tone — the label says "Remove
 friend" whatever colour it is, and the confirmation dialog is what actually
@@ -2603,11 +2603,11 @@ live match.
 Three of that setup's constraints are the backend's own and are worth
 recording, because each cost a run:
 
-| Symptom | Cause |
-| --- | --- |
-| The pair would not match a second time | QT-3 excludes a player's most recent opponent — a fixed pair is pairable once. Three accounts, as `tests/e2e/accounts.ts` already documents |
-| `/play` showed the waiting card, not the form | A ticket left by the previous run. Leaving clears it; declining an offer would earn the cooldown that then blocks the join |
-| `/play` bounced straight to a game | An account still in an unfinished match cannot queue |
+| Symptom                                       | Cause                                                                                                                                       |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| The pair would not match a second time        | QT-3 excludes a player's most recent opponent — a fixed pair is pairable once. Three accounts, as `tests/e2e/accounts.ts` already documents |
+| `/play` showed the waiting card, not the form | A ticket left by the previous run. Leaving clears it; declining an offer would earn the cooldown that then blocks the join                  |
+| `/play` bounced straight to a game            | An account still in an unfinished match cannot queue                                                                                        |
 
 ### 28.2 One thing that looked wrong and was not
 
@@ -2629,7 +2629,7 @@ spend twenty minutes was silent on the one fact they would weigh first.
 turn line. `null` until the first snapshot, so nothing is guessed before the
 server has spoken — §18's rule about invented state.
 
-The time control cannot join it: the snapshot carries the clock's *current*
+The time control cannot join it: the snapshot carries the clock's _current_
 milliseconds and no initial value, so "3+2" is not something this surface
 can say honestly. Left unsaid rather than derived.
 
@@ -2648,9 +2648,9 @@ every square already carries its name in the cell's own label, and reading
 
 Two of the five remain: `animation_speed` (nothing to speed up until
 A64-025.12) and `confirm_move` (a change to move submission, not to
-presentation). *Both are closed now — §34.4 and §38. This paragraph is left
+presentation). _Both are closed now — §34.4 and §38. This paragraph is left
 as it was written, because it records what was true when this phase shipped
-and the two forward pointers say what changed since.*
+and the two forward pointers say what changed since._
 
 ### 28.5 Measured, and what was not
 
@@ -2685,7 +2685,7 @@ would have bounced them to the screen they were trying to leave.
 
 The home page applied that rule to its own four cards. The header did not
 apply it to the same four destinations — and it was breaking it on the one
-group of surfaces where *every* visitor is signed out.
+group of surfaces where _every_ visitor is signed out.
 
 `PrimaryNav` and `MobileNav` render nothing when the session is not
 authenticated. The signed-out header is the wordmark, the appearance menu
@@ -2706,9 +2706,9 @@ left as it is rather than reclassified on a hunch.
 
 ### 29.3 Measured
 
-| | en | uz | ru |
-| --- | --- | --- | --- |
-| six surfaces × 360 and 1280 | 0 | 0 | 0 |
+|                             | en  | uz  | ru  |
+| --------------------------- | --- | --- | --- |
+| six surfaces × 360 and 1280 | 0   | 0   | 0   |
 
 220 tests pass, `tsc --noEmit` clean, eslint zero errors.
 
@@ -2718,11 +2718,11 @@ left as it is rather than reclassified on a hunch.
 
 This platform sends three messages. Each built its own HTML:
 
-| Message | Before | After |
-| --- | --- | --- |
-| Verification code | trilingual, both parts, its own `<div>` | the shared shell |
-| Notification | trilingual, both parts, its own `<div>` and button | the shared shell |
-| Password reset | **English only, plain text only, an f-string inside the service** | trilingual, both parts, the shared shell |
+| Message           | Before                                                            | After                                    |
+| ----------------- | ----------------------------------------------------------------- | ---------------------------------------- |
+| Verification code | trilingual, both parts, its own `<div>`                           | the shared shell                         |
+| Notification      | trilingual, both parts, its own `<div>` and button                | the shared shell                         |
+| Password reset    | **English only, plain text only, an f-string inside the service** | trilingual, both parts, the shared shell |
 
 Three shells meant three places to change a colour and one message that had
 been left out of the design entirely. **P2-2 is closed.**
@@ -2735,7 +2735,7 @@ because nobody read the field, not because the information was missing —
 which is why closing this needed no plumbing, only a template.
 
 The one sentence in that message that does real work is
-*"if you did not ask for this, ignore it."* A reset email arriving
+_"if you did not ask for this, ignore it."_ A reset email arriving
 unrequested is the first thing somebody sees when an attacker is probing
 their account, and the correct advice is genuinely to do nothing — saying so
 stops a worried person from clicking the link to "check", which is the one
@@ -2743,7 +2743,7 @@ action that would spend their token for the attacker. That sentence is now
 in the reader's own language, which is the whole point of the defect being a
 defect.
 
-### 30.2 The brand gradient is deliberately not in email — *revised by §31.2*
+### 30.2 The brand gradient is deliberately not in email — _revised by §31.2_
 
 `globals.css` gives the product a gradient and §18.7 rations it to three
 places. **None of them is an email.** Gradients on a button are unevenly
@@ -2755,7 +2755,7 @@ So the email palette is a flat hex translation of the same brand, and
 `layout.py` says so at the top. A divergence that is written down is a
 decision; one that is not is drift.
 
-**§31.2 revised this.** The reasoning above is right about a *bare* gradient
+**§31.2 revised this.** The reasoning above is right about a _bare_ gradient
 and wrong to conclude "never" rather than "never without a solid colour
 beneath it". The palette is still flat hex and `oklch` still appears
 nowhere; the masthead now carries the ramp over a `bgcolor` fallback.
@@ -2788,7 +2788,7 @@ of scope for this phase and they stay out.
 §30 made the three messages share one shell. It did not make that shell look
 like anything: a bare `<div>`, sans-serif paragraphs, a black button and a
 grey line. Every surface a player sees inside the product had been designed
-by then, and the first thing a *new* player sees — the verification code —
+by then, and the first thing a _new_ player sees — the verification code —
 still looked like process output.
 
 An email is also the one surface this platform renders where it cannot see
@@ -2817,15 +2817,18 @@ wrong to conclude "never" rather than "never without something solid
 beneath it". The masthead declares, in this order:
 
 ```html
-<td bgcolor="#494fcc" style="background-color:#494fcc;
-                             background-image:linear-gradient(115deg,#494fcc,#961a91)">
+<td
+  bgcolor="#494fcc"
+  style="background-color:#494fcc;
+                             background-image:linear-gradient(115deg,#494fcc,#961a91)"
+></td>
 ```
 
-| Client understands | Renders | White text clears |
-| --- | --- | --- |
-| nothing but attributes | `bgcolor` indigo | 6.41:1 |
-| colour, not gradients | `background-color` indigo | 6.41:1 |
-| both | the brand ramp | 6.41:1 → 7.36:1 |
+| Client understands     | Renders                   | White text clears |
+| ---------------------- | ------------------------- | ----------------- |
+| nothing but attributes | `bgcolor` indigo          | 6.41:1            |
+| colour, not gradients  | `background-color` indigo | 6.41:1            |
+| both                   | the brand ramp            | 6.41:1 → 7.36:1   |
 
 All three outcomes satisfy the product-side rule that no text sits over a
 gradient whose two ends it has not cleared at 4.5:1 (§18.7). `oklch` still
@@ -2845,11 +2848,11 @@ greeting — so the most-read line of every message this platform sends was
 
 Each message now supplies its own, hidden in the markup:
 
-| Message | Inbox preview |
-| --- | --- |
-| Password reset | "Somebody asked to reset the password on your Arena64 account…" |
-| Verification code | "Your Arena64 verification code is:" |
-| Notification | the notification itself — "Round 3 of Autumn Blitz has been published." |
+| Message           | Inbox preview                                                           |
+| ----------------- | ----------------------------------------------------------------------- |
+| Password reset    | "Somebody asked to reset the password on your Arena64 account…"         |
+| Verification code | "Your Arena64 verification code is:"                                    |
+| Notification      | the notification itself — "Round 3 of Autumn Blitz has been published." |
 
 **Never the code.** A64-021.5H keeps the verification code out of the
 subject because a subject is displayed by every notification surface a phone
@@ -2858,21 +2861,21 @@ the same surfaces, so a preheader carrying the code would put it back
 through the other door. `tests/unit/test_email_layout.py` asserts it does
 not.
 
-The preheader appears in the HTML part only. In the text part it *is* the
+The preheader appears in the HTML part only. In the text part it _is_ the
 first line, and emitting it there would open every message with its own
 second sentence stated twice.
 
 ### 31.4 What each message gained
 
-| | |
-| --- | --- |
-| **Masthead** | The wordmark, as **text**. Mail clients block remote images by default, so a logo is a broken-image icon for most first-time recipients — and the request that would fetch it is a tracking pixel by another name. |
-| **Heading** | One line saying what the message is, so the reader is not re-reading the subject to find out. Optional, and the notification emails do not take one: their whole body is a single sentence, and a heading above it would be that sentence twice. |
-| **Card** | White on `#f2f2f7`, one hairline border, 14px radius, 560px. A border rather than a shadow, because shadows do not render. |
-| **Code panel** | The six digits on a tinted, bordered panel at 30px with 8px of tracking. `text-indent` cancels the trailing letter-space, which otherwise pushes a "centred" code half a space left of centre. |
-| **Button** | A table cell that owns the colour, with the anchor filling it. Word collapses the padding on an inline anchor, so the familiar `display:inline-block` button arrives in Outlook as bare underlined text. |
-| **Footnote** | Above a hairline, so the small print is separated from the message rather than being its last paragraph. |
-| **`lang`** | From the recipient's locale, so a screen reader pronounces a Russian message in Russian. |
+|                |                                                                                                                                                                                                                                                  |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Masthead**   | The wordmark, as **text**. Mail clients block remote images by default, so a logo is a broken-image icon for most first-time recipients — and the request that would fetch it is a tracking pixel by another name.                               |
+| **Heading**    | One line saying what the message is, so the reader is not re-reading the subject to find out. Optional, and the notification emails do not take one: their whole body is a single sentence, and a heading above it would be that sentence twice. |
+| **Card**       | White on `#f2f2f7`, one hairline border, 14px radius, 560px. A border rather than a shadow, because shadows do not render.                                                                                                                       |
+| **Code panel** | The six digits on a tinted, bordered panel at 30px with 8px of tracking. `text-indent` cancels the trailing letter-space, which otherwise pushes a "centred" code half a space left of centre.                                                   |
+| **Button**     | A table cell that owns the colour, with the anchor filling it. Word collapses the padding on an inline anchor, so the familiar `display:inline-block` button arrives in Outlook as bare underlined text.                                         |
+| **Footnote**   | Above a hairline, so the small print is separated from the message rather than being its last paragraph.                                                                                                                                         |
+| **`lang`**     | From the recipient's locale, so a screen reader pronounces a Russian message in Russian.                                                                                                                                                         |
 
 Two line heights are stated rather than inherited. The body's is a ratio, so
 30px digits would inherit a 48px line box — a code panel a third taller than
@@ -2905,12 +2908,12 @@ both parts, at 560px and at 360px.
 
 ### 31.7 Measured
 
-| | |
-| --- | --- |
-| `ruff` / `mypy --strict` / `pyright` | clean, 680 source files |
-| `pytest tests/unit` | 2947 passed, 2 skipped |
-| `pytest tests/contract/test_notification_email.py` | 12 passed |
-| Assertions changed in existing tests | **none** |
+|                                                    |                         |
+| -------------------------------------------------- | ----------------------- |
+| `ruff` / `mypy --strict` / `pyright`               | clean, 680 source files |
+| `pytest tests/unit`                                | 2947 passed, 2 skipped  |
+| `pytest tests/contract/test_notification_email.py` | 12 passed               |
+| Assertions changed in existing tests               | **none**                |
 
 ### 31.8 Not done
 
@@ -2931,14 +2934,14 @@ the sweep.
 
 Not a stylistic complaint. This is what was actually on screen:
 
-| Surface | Loading announced as | Skeleton | Failure | Empty |
-| --- | --- | --- | --- | --- |
-| `ListState` (shared) | `aria-label` on the wrapper | 3 × `h-14` | its own block, `font-medium` | left block, `py-8` |
-| `QueryState` (profile) | `aria-label` on the wrapper | `h-24` + two lines | its own block, `min-h-11` | — |
-| Notification list | `aria-label` on the wrapper | 3 × `h-16` | `<p role="alert">` in a bare `<div>` | centred dashed panel |
-| Tournament history | **nothing — `aria-hidden`** | 2 × `h-16` | **none at all** | dashed paragraph |
-| `/games/history` | `sr-only` sentence | 4 × `h-14` | `Notice tone="error"` | left block, `py-8` |
-| `/tournaments` | `sr-only` sentence | 3 × `h-24` | its own block, `text-sm` | left block, `py-8` |
+| Surface                | Loading announced as        | Skeleton           | Failure                              | Empty                |
+| ---------------------- | --------------------------- | ------------------ | ------------------------------------ | -------------------- |
+| `ListState` (shared)   | `aria-label` on the wrapper | 3 × `h-14`         | its own block, `font-medium`         | left block, `py-8`   |
+| `QueryState` (profile) | `aria-label` on the wrapper | `h-24` + two lines | its own block, `min-h-11`            | —                    |
+| Notification list      | `aria-label` on the wrapper | 3 × `h-16`         | `<p role="alert">` in a bare `<div>` | centred dashed panel |
+| Tournament history     | **nothing — `aria-hidden`** | 2 × `h-16`         | **none at all**                      | dashed paragraph     |
+| `/games/history`       | `sr-only` sentence          | 4 × `h-14`         | `Notice tone="error"`                | left block, `py-8`   |
+| `/tournaments`         | `sr-only` sentence          | 3 × `h-24`         | its own block, `text-sm`             | left block, `py-8`   |
 
 Two rows of that table are defects rather than differences.
 
@@ -2956,11 +2959,11 @@ forgotten silently, and this is what forgetting it looks like.
 
 ### 32.2 What the primitives own now
 
-| Component | Owns |
-| --- | --- |
-| `LoadFailure` | a sentence, a retry, `Notice tone="error"` — **new** |
-| `ListState` | loading, failure (delegated), empty, for a list |
-| `QueryState` | loading and failure for a detail read; no empty branch |
+| Component     | Owns                                                   |
+| ------------- | ------------------------------------------------------ |
+| `LoadFailure` | a sentence, a retry, `Notice tone="error"` — **new**   |
+| `ListState`   | loading, failure (delegated), empty, for a list        |
+| `QueryState`  | loading and failure for a detail read; no empty branch |
 
 `LoadFailure` is new and is the piece that was missing. §3.9 notes that
 `apps/admin` has had an `ErrorNotice` since the beginning and `apps/web`,
@@ -3011,7 +3014,7 @@ sentence in all three languages. `profile.state.*` was a word-for-word
 duplicate of `state.*` throughout. Both are gone; `state.*` is the state
 vocabulary and the primitives own it.
 
-The *specific* strings were kept, and that is the opposite decision on
+The _specific_ strings were kept, and that is the opposite decision on
 purpose. "Tournaments could not be loaded" tells a player which of the three
 lists on their screen is missing; "We could not load this" does not.
 Consistency of **shape** is the goal; flattening six specific sentences into
@@ -3022,12 +3025,12 @@ sentence is the fallback, not the rule.
 
 Consistency is not uniformity, and four surfaces argue for themselves:
 
-| Surface | Why it keeps its own |
-| --- | --- |
-| `/tournaments/$id` page failure | Tells a 404 from a transient fault and offers the way back to the list. A generic retry cannot. |
-| `/games/$id/replay` `Refusal` | Retry only for `unexpected` — a 404 and a refused engine version are stable answers about a permanent record. |
-| Queue form's catalogue | Failure and empty are collapsed **on purpose**: the four time controls are seeded by a migration, so an empty catalogue means an unmigrated deployment. Both mean "we cannot start a game right now", which is what it says. |
-| Registration panel, challenge dialog | Inline skeletons for a single control, and `role="alert"` for a *mutation* failure. A failed write is not a failed read. |
+| Surface                              | Why it keeps its own                                                                                                                                                                                                         |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/tournaments/$id` page failure      | Tells a 404 from a transient fault and offers the way back to the list. A generic retry cannot.                                                                                                                              |
+| `/games/$id/replay` `Refusal`        | Retry only for `unexpected` — a 404 and a refused engine version are stable answers about a permanent record.                                                                                                                |
+| Queue form's catalogue               | Failure and empty are collapsed **on purpose**: the four time controls are seeded by a migration, so an empty catalogue means an unmigrated deployment. Both mean "we cannot start a game right now", which is what it says. |
+| Registration panel, challenge dialog | Inline skeletons for a single control, and `role="alert"` for a _mutation_ failure. A failed write is not a failed read.                                                                                                     |
 
 The two sections of the tournament detail page — standings and bracket — were
 writing the same five lines with different spacing, and those did move onto
@@ -3035,24 +3038,24 @@ writing the same five lines with different spacing, and those did move onto
 
 ### 32.7 Measured
 
-| | Before | After |
-| --- | --- | --- |
-| Hand-written `role="status"` / `role="alert"` outside `shared/ui` | 65 | 57 |
-| Files on `ListState` / `LoadFailure` / `Notice` | 9 | 15 |
-| `<Skeleton>` used outside `shared/ui` | 24 | 16 |
-| Lists with no failure state | 1 | 0 |
-| Duplicate retry-label keys | 3 | 1 |
+|                                                                   | Before | After |
+| ----------------------------------------------------------------- | ------ | ----- |
+| Hand-written `role="status"` / `role="alert"` outside `shared/ui` | 65     | 57    |
+| Files on `ListState` / `LoadFailure` / `Notice`                   | 9      | 15    |
+| `<Skeleton>` used outside `shared/ui`                             | 24     | 16    |
+| Lists with no failure state                                       | 1      | 0     |
+| Duplicate retry-label keys                                        | 3      | 1     |
 
 The remaining 57 are mostly not load states: a game room's turn indicator, a
 form field's validation message, a mutation failure announced beside the
 control that caused it. Those are `role="status"` doing its actual job, and
 `.12` and `.13` will say so rather than counting them again as debt.
 
-| | |
-| --- | --- |
-| `tsc --noEmit` | clean |
-| `eslint` | 0 errors (3 pre-existing `react-refresh` warnings in `shared/realtime/context.tsx`) |
-| `vitest` | 225 passed, 33 files |
+|                |                                                                                     |
+| -------------- | ----------------------------------------------------------------------------------- |
+| `tsc --noEmit` | clean                                                                               |
+| `eslint`       | 0 errors (3 pre-existing `react-refresh` warnings in `shared/realtime/context.tsx`) |
+| `vitest`       | 225 passed, 33 files                                                                |
 
 Five new contract tests, including the one that pins the ordering the
 tournament-history fix depends on: a caller computes `isEmpty` from
@@ -3160,11 +3163,11 @@ optimisation and the runtime are not independent.
 
 ### 33.4 Measured
 
-| | |
-| --- | --- |
-| `tsc --noEmit` | clean |
-| `eslint` | 0 errors, 3 pre-existing warnings |
-| `vitest` | 228 passed, 34 files |
+|                |                                   |
+| -------------- | --------------------------------- |
+| `tsc --noEmit` | clean                             |
+| `eslint`       | 0 errors, 3 pre-existing warnings |
+| `vitest`       | 228 passed, 34 files              |
 
 Three new tests, and each fails without the fix: the app's page is shown
 instead of the router's panel, the error is reported, and the page survives a
@@ -3174,8 +3177,8 @@ code and only the thing that fails is a fixture.
 
 ## 34. The motion system — A64-025.12
 
-P3-5 read: *"No `prefers-reduced-motion` handling — correct today, wrong once
-motion is added."* Motion has since been added. One surface honoured the
+P3-5 read: _"No `prefers-reduced-motion` handling — correct today, wrong once
+motion is added."_ Motion has since been added. One surface honoured the
 setting — the lobby's waiting card, with a `motion-reduce:animate-none` on
 its pulse — and every skeleton, every dialog, every hover transition in the
 product ignored it.
@@ -3188,12 +3191,12 @@ more here than it does for colour: a colour that is missed looks wrong, and
 motion that is missed is a migraine trigger for somebody who asked for it to
 stop.
 
-| Token | Value | For |
-| --- | --- | --- |
-| `--duration-fast` | 120 ms × scale | a state change under the pointer — a hover tint, a border |
-| `--duration-base` | 200 ms × scale | something entering or leaving |
-| `--duration-slow` | 320 ms × scale | where the movement itself is the message |
-| `--ease-out` | `cubic-bezier(0.2, 0, 0, 1)` | asymmetric: arrive decelerating, leave at speed |
+| Token             | Value                        | For                                                       |
+| ----------------- | ---------------------------- | --------------------------------------------------------- |
+| `--duration-fast` | 120 ms × scale               | a state change under the pointer — a hover tint, a border |
+| `--duration-base` | 200 ms × scale               | something entering or leaving                             |
+| `--duration-slow` | 320 ms × scale               | where the movement itself is the message                  |
+| `--ease-out`      | `cubic-bezier(0.2, 0, 0, 1)` | asymmetric: arrive decelerating, leave at speed           |
 
 They are wired to Tailwind's own defaults —
 `--default-transition-duration` and `--default-transition-timing-function` —
@@ -3215,18 +3218,18 @@ reduce motion gets none; moving that block above the attribute blocks would
 silently reverse it, so there is a test that fails if anybody does.
 
 `instant` is zero rather than a fourth speed. That is the API's own
-contract — *"`animation_speed: instant` disables motion rather than being a
-fourth speed — it is an accessibility setting"* — and it is why `instant`
+contract — _"`animation_speed: instant` disables motion rather than being a
+fourth speed — it is an accessibility setting"_ — and it is why `instant`
 also has to stop the keyframe animations, which read no token.
 
-| | scale | `transition-colors` | `animate-pulse` |
-| --- | --- | --- | --- |
-| default | 1 | 0.2 s | 2 s, infinite |
-| `fast` | 0.6 | 0.12 s | 2 s, infinite |
-| `slow` | 1.6 | 0.32 s | 2 s, infinite |
-| `instant` | 0 | 0.001 s | **0.001 s, once** |
-| OS reduce | 0 | 0.001 s | **0.001 s, once** |
-| OS reduce **+** `slow` | 0 | 0.001 s | **0.001 s, once** |
+|                        | scale | `transition-colors` | `animate-pulse`   |
+| ---------------------- | ----- | ------------------- | ----------------- |
+| default                | 1     | 0.2 s               | 2 s, infinite     |
+| `fast`                 | 0.6   | 0.12 s              | 2 s, infinite     |
+| `slow`                 | 1.6   | 0.32 s              | 2 s, infinite     |
+| `instant`              | 0     | 0.001 s             | **0.001 s, once** |
+| OS reduce              | 0     | 0.001 s             | **0.001 s, once** |
+| OS reduce **+** `slow` | 0     | 0.001 s             | **0.001 s, once** |
 
 Every figure in that table was read off a running browser, not predicted.
 
@@ -3275,12 +3278,12 @@ passed if the effect had stopped writing its attributes.
 
 ### 34.5 Measured
 
-| | |
-| --- | --- |
-| `tsc --noEmit` | clean |
-| `eslint` | 0 errors, 3 pre-existing warnings |
-| `vitest` | 231 passed, 35 files |
-| `playwright` (`motion.spec.ts`) | 3 passed, against the built app |
+|                                 |                                   |
+| ------------------------------- | --------------------------------- |
+| `tsc --noEmit`                  | clean                             |
+| `eslint`                        | 0 errors, 3 pre-existing warnings |
+| `vitest`                        | 231 passed, 35 files              |
+| `playwright` (`motion.spec.ts`) | 3 passed, against the built app   |
 
 The Playwright suite is where P3-5 is actually closed, and it is there rather
 than in jsdom for one reason: **jsdom does not resolve a stylesheet.** A unit
@@ -3290,7 +3293,7 @@ computes to. Removing the reduced-motion block turns all three red.
 
 ### 34.6 Not done
 
-No motion was *added*. This phase gives the movement that already existed a
+No motion was _added_. This phase gives the movement that already existed a
 vocabulary and a way to switch it off; a page transition, a board-piece
 animation or a list reorder would each be a design decision with its own
 argument, and §5's principle 8 — "nothing animates because it can" — is the
@@ -3304,32 +3307,32 @@ three of them were wrong.
 
 ### 35.1 Every gate, run
 
-| | |
-| --- | --- |
-| `ruff check` / `ruff format` | clean, 925 files |
-| `mypy --strict` | no issues, 679 source files |
-| `pyright` | 0 errors, 0 warnings |
-| `pytest tests/unit` | 2947 passed, 2 skipped |
-| `lint-imports` | **32 contracts kept, 0 broken** |
-| `tsc --noEmit` (web, admin) | clean |
-| `eslint` | 0 errors, 3 warnings (`react-refresh` in `shared/realtime/context.tsx`) |
-| `prettier --check` | clean |
-| `vitest` | 231 passed, 35 files |
-| `playwright` (chromium, pwa) | 9 passed |
+|                              |                                                                         |
+| ---------------------------- | ----------------------------------------------------------------------- |
+| `ruff check` / `ruff format` | clean, 925 files                                                        |
+| `mypy --strict`              | no issues, 679 source files                                             |
+| `pyright`                    | 0 errors, 0 warnings                                                    |
+| `pytest tests/unit`          | 2947 passed, 2 skipped                                                  |
+| `lint-imports`               | **32 contracts kept, 0 broken**                                         |
+| `tsc --noEmit` (web, admin)  | clean                                                                   |
+| `eslint`                     | 0 errors, 3 warnings (`react-refresh` in `shared/realtime/context.tsx`) |
+| `prettier --check`           | clean                                                                   |
+| `vitest`                     | 231 passed, 35 files                                                    |
+| `playwright` (chromium, pwa) | 9 passed                                                                |
 
 ### 35.2 The original findings, re-checked
 
-| # | This document said | Verdict |
-| --- | --- | --- |
-| P0-1 | Fixed by .3 | ✅ `features/form-demo` is absent from the tree |
-| P1-1 | Fixed by .3 | ✅ **27 screens measured** — 9 routes × uz/ru/en at 360px: 0 clipped elements, 0 page-level overflow. 9 more in dark: 0 |
-| P1-2 | *"Future task: A64-025.6"* | ⚠️ **Fixed in code since .6; this table was never updated.** `PlayerSeat` has `LOW_TIME_SECONDS`, a `text-warning` clock and the word beside the colour |
-| P1-3 | *"Future task: A64-025.6"* | ⚠️ **Same.** The seats sit above and below the board at every width |
-| P2-1…P2-6 | Fixed | ✅ `aria-current` is in four navigation widgets, not zero |
-| P3-1 | Fixed | ✅ `Brand` is a `<Link>` with an accessible name, not a `<span>` |
-| P3-2 | Fixed | ⚠️ Fixed in the shell — **but the footer still held a literal** (§35.4) |
-| P3-3, P3-4, P3-5 | Fixed | ✅ |
-| P3-6 | Open, assigned .2 | See below |
+| #                | This document said         | Verdict                                                                                                                                                 |
+| ---------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P0-1             | Fixed by .3                | ✅ `features/form-demo` is absent from the tree                                                                                                         |
+| P1-1             | Fixed by .3                | ✅ **27 screens measured** — 9 routes × uz/ru/en at 360px: 0 clipped elements, 0 page-level overflow. 9 more in dark: 0                                 |
+| P1-2             | _"Future task: A64-025.6"_ | ⚠️ **Fixed in code since .6; this table was never updated.** `PlayerSeat` has `LOW_TIME_SECONDS`, a `text-warning` clock and the word beside the colour |
+| P1-3             | _"Future task: A64-025.6"_ | ⚠️ **Same.** The seats sit above and below the board at every width                                                                                     |
+| P2-1…P2-6        | Fixed                      | ✅ `aria-current` is in four navigation widgets, not zero                                                                                               |
+| P3-1             | Fixed                      | ✅ `Brand` is a `<Link>` with an accessible name, not a `<span>`                                                                                        |
+| P3-2             | Fixed                      | ⚠️ Fixed in the shell — **but the footer still held a literal** (§35.4)                                                                                 |
+| P3-3, P3-4, P3-5 | Fixed                      | ✅                                                                                                                                                      |
+| P3-6             | Open, assigned .2          | See below                                                                                                                                               |
 
 **Two P1 entries had been fixed for four phases and still read "future task".**
 A defect table that is not updated when the defect closes is a table that
@@ -3364,11 +3367,11 @@ the whole target was 20 px tall. One of them measured **15 px wide**: a flex
 child squeezed by a long label, which is the one element in a row that must
 not be.
 
-| Surface | Checkboxes | Before | After |
-| --- | --- | --- | --- |
-| `/settings/notifications` | 12 | 20×20, one 15×20 | 24×24 |
-| `/settings/privacy` | 2 | 20×20 | 24×24 |
-| `/settings/preferences` | 2 | 20×20 | 24×24 |
+| Surface                   | Checkboxes | Before           | After |
+| ------------------------- | ---------- | ---------------- | ----- |
+| `/settings/notifications` | 12         | 20×20, one 15×20 | 24×24 |
+| `/settings/privacy`       | 2          | 20×20            | 24×24 |
+| `/settings/preferences`   | 2          | 20×20            | 24×24 |
 
 24 px is WCAG 2.5.8 (AA). 44 px is 2.5.5 (AAA) and is what `Button`
 enforces, but a 44 px tick is the wrong visual for a checkbox — the row's
@@ -3440,13 +3443,13 @@ abandoned match is permanent, and a player carrying one cannot queue.
 
 ### 35.8 What A64-025 leaves open
 
-| | |
-| --- | --- |
-| ~~`confirm_move`~~ | **Closed by A64-025.14** — §38. All five gameplay preferences are read now |
-| The `useTranslation` context fault | §33.3. Open, dev-only, not reproduced, now reported under `scope: "router"` |
-| ~~The stuck-match question~~ | **Answered and fixed** — §36. It was reachable, every unplayed tournament fixture hit it, and the player could not queue again |
-| ~~Three `react-refresh` warnings~~ | **Fixed** — §37. They were the rule reporting the §33.3 hazard, and lint is now at zero problems |
-| Litmus-style email rendering | §31.8. Every client-specific claim is reasoned, not observed |
+|                                    |                                                                                                                                |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| ~~`confirm_move`~~                 | **Closed by A64-025.14** — §38. All five gameplay preferences are read now                                                     |
+| The `useTranslation` context fault | §33.3. Open, dev-only, not reproduced, now reported under `scope: "router"`                                                    |
+| ~~The stuck-match question~~       | **Answered and fixed** — §36. It was reachable, every unplayed tournament fixture hit it, and the player could not queue again |
+| ~~Three `react-refresh` warnings~~ | **Fixed** — §37. They were the rule reporting the §33.3 hazard, and lint is now at zero problems                               |
+| Litmus-style email rendering       | §31.8. Every client-specific claim is reasoned, not observed                                                                   |
 
 Nothing in that list is a surface a player uses being wrong. The epic set out
 to make the product look and behave like one thing, and the measurements in
@@ -3474,8 +3477,8 @@ was meant to end one. Its composition root says so in as many words:
 
 It did not. It closed the **attempt** and advanced the **bracket**, and left
 the **match** `active` — because there was no port through which it could do
-anything else. `game.public` published a command to *create* a match, a read
-of its authoritative state, and nothing to *end* one.
+anything else. `game.public` published a command to _create_ a match, a read
+of its authoritative state, and nothing to _end_ one.
 
 The consequence is not cosmetic, and the e2e helper had already written it
 down while blaming something else:
@@ -3502,10 +3505,10 @@ into two players' history that neither played.
 So the match ends as `MatchOutcome.NONE` with `TerminationReason.ABORT` —
 which the taxonomy already defines for exactly this, in its own words:
 
-| | |
-| --- | --- |
-| `ABORT` | *"The match ended with no result and no rating effect — MT-11. Not a draw: a draw is an outcome two players played to, an abort is a match that did not happen."* |
-| `MatchOutcome.NONE` | *"No result at all. An aborted match, which MT-11 keeps out of every rating and statistic."* |
+|                     |                                                                                                                                                                   |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ABORT`             | _"The match ended with no result and no rating effect — MT-11. Not a draw: a draw is an outcome two players played to, an abort is a match that did not happen."_ |
+| `MatchOutcome.NONE` | _"No result at all. An aborted match, which MT-11 keeps out of every rating and statistic."_                                                                      |
 
 Nothing is invented. The **walkover stays where it belongs**: an advanced
 bracket node with `AdvancementReason.ADJUDICATION`, which is the tournament's
@@ -3528,7 +3531,7 @@ one missing check away from a player-issued one.
 
 **Idempotent, and it has to be.** The sweep re-claims an attempt whose worker
 died, so `abort` is called again for a match it already closed. The row lock
-is taken *before* the status is read, so two sweeps serialise: the first
+is taken _before_ the status is read, so two sweeps serialise: the first
 closes it, the second reads a completed row and answers `ALREADY_SETTLED`.
 
 **A played game beats a stale sweep.** A result that arrived while the caller
@@ -3556,12 +3559,12 @@ now named rather than inferred from the absence of one.
 
 ### 36.5 Measured
 
-| | |
-| --- | --- |
-| `ruff` / `mypy --strict` / `pyright` | clean, 681 source files |
-| `lint-imports` | 32 contracts kept, 0 broken |
-| `pytest tests/unit` | 2952 passed, 2 skipped (2947 before; **+5**) |
-| `pytest tests/contract` | 1315 passed, 2 skipped |
+|                                      |                                              |
+| ------------------------------------ | -------------------------------------------- |
+| `ruff` / `mypy --strict` / `pyright` | clean, 681 source files                      |
+| `lint-imports`                       | 32 contracts kept, 0 broken                  |
+| `pytest tests/unit`                  | 2952 passed, 2 skipped (2947 before; **+5**) |
+| `pytest tests/contract`              | 1315 passed, 2 skipped                       |
 
 The five new unit tests pin the port's own contract — the half a caller
 depends on and cannot see: it ends the match without inventing a result, it
@@ -3623,11 +3626,11 @@ has been corrected rather than deleted.
 
 ### 37.2 What moved
 
-| Context | Was | Now |
-| --- | --- | --- |
-| `I18nContext` | `shared/i18n/index.tsx`, beside `I18nProvider` | `shared/i18n/context.ts`, with `useTranslation` |
-| `ThemeContext` | `shared/theme/theme-context.tsx`, beside `ThemeProvider` | `shared/theme/context.ts`, with `useTheme` |
-| `RealtimeContext` | `shared/realtime/context.tsx`, beside its provider | `shared/realtime/context.ts`, with its three hooks |
+| Context           | Was                                                      | Now                                                |
+| ----------------- | -------------------------------------------------------- | -------------------------------------------------- |
+| `I18nContext`     | `shared/i18n/index.tsx`, beside `I18nProvider`           | `shared/i18n/context.ts`, with `useTranslation`    |
+| `ThemeContext`    | `shared/theme/theme-context.tsx`, beside `ThemeProvider` | `shared/theme/context.ts`, with `useTheme`         |
+| `RealtimeContext` | `shared/realtime/context.tsx`, beside its provider       | `shared/realtime/context.ts`, with its three hooks |
 
 Each new module exports no component, so Fast Refresh will not swap it — a
 change there triggers a full reload, which is the safe failure. The providers
@@ -3659,12 +3662,12 @@ with three one-line extractions.
 
 ### 37.4 Measured
 
-| | |
-| --- | --- |
-| `tsc --noEmit` | clean |
-| `eslint` | **0 problems** (3 warnings before) |
-| `prettier --check` | clean |
-| `vitest` | 231 passed, 35 files — no assertion changed |
+|                    |                                             |
+| ------------------ | ------------------------------------------- |
+| `tsc --noEmit`     | clean                                       |
+| `eslint`           | **0 problems** (3 warnings before)          |
+| `prettier --check` | clean                                       |
+| `vitest`           | 231 passed, 35 files — no assertion changed |
 
 ## 38. The move a player has chosen but not yet played — A64-025.14
 
@@ -3680,14 +3683,14 @@ move still left the browser the instant they clicked a destination.
 
 It is also the only one of the five that could not be closed the way the
 other four were. `board_theme`, `piece_set`, `show_coordinates` and
-`animation_speed` change how something *looks*, so a data attribute on the
+`animation_speed` change how something _looks_, so a data attribute on the
 root element and a stylesheet were enough (§34.4). This one changes **when a
 move leaves the browser**, which is behaviour, and behaviour needs a step.
 
 ### 38.1 The selection model is untouched
 
 `useMoveSelection` still builds a path and still hands back a completed one.
-Its docstring argues that a move in draughts is a *prefix*, not a from/to
+Its docstring argues that a move in draughts is a _prefix_, not a from/to
 pair, because two capture sequences can reach the same squares taking
 different pieces — and none of that changes.
 
@@ -3722,8 +3725,8 @@ under it — the opponent played, the game ended, a resync replaced the board
 — the path may no longer be legal, and submitting it would be rejected at
 best.
 
-`GameState.sequence` is what says the position changed: *"the authoritative
-ply, never advanced without a server frame."* It moves for the opponent's
+`GameState.sequence` is what says the position changed: _"the authoritative
+ply, never advanced without a server frame."_ It moves for the opponent's
 move as much as for this player's, and a resync carries the server's. So the
 staged move is dropped whenever it changes, rather than when the hook guesses
 that something happened.
@@ -3733,10 +3736,10 @@ never left on screen with no control able to answer it.
 
 ### 38.4 Two orders, deliberately different
 
-| | |
-| --- | --- |
-| **DOM** | Play, then Cancel — a keyboard reaches the expected answer first, because the player staged this move on purpose |
-| **Screen** | Cancel, then Play — a primary action belongs on the right, beside its cancel |
+|            |                                                                                                                  |
+| ---------- | ---------------------------------------------------------------------------------------------------------------- |
+| **DOM**    | Play, then Cancel — a keyboard reaches the expected answer first, because the player staged this move on purpose |
+| **Screen** | Cancel, then Play — a primary action belongs on the right, beside its cancel                                     |
 
 `flex-row-reverse` is the only thing separating them, which means a refactor
 that drops it silently changes the reading order. There is a test that
@@ -3755,15 +3758,15 @@ argument for why there is only one.
 
 ### 38.6 Measured
 
-| | |
-| --- | --- |
-| `tsc --noEmit` | clean |
-| `eslint` | 0 errors |
-| `prettier --check` | clean |
-| `vitest` | 238 passed, 36 files (231 before; **+7**) |
+|                    |                                           |
+| ------------------ | ----------------------------------------- |
+| `tsc --noEmit`     | clean                                     |
+| `eslint`           | 0 errors                                  |
+| `prettier --check` | clean                                     |
+| `vitest`           | 238 passed, 36 files (231 before; **+7**) |
 
 The seven tests assert a **negative**, which is what this preference is for:
-with it on, choosing a move must *not* submit it. Four of them turn red when
+with it on, choosing a move must _not_ submit it. Four of them turn red when
 `stage` is made to always decline, which is the whole feature removed.
 
 **The live capture did not happen, and that is stated rather than implied.**
@@ -3772,19 +3775,19 @@ environment constraint: a disabled submit until a time control is picked,
 then session rotation between two browser contexts, then the paired game
 flagging on its clock before a move was made, then QT-3 — matchmaking
 excludes a player's most recent opponent, which the two seeded accounts had
-just become. What *was* confirmed live is that the setting saves and reads
+just become. What _was_ confirmed live is that the setting saves and reads
 back on, and that two players pair into one room. The staged control itself
 is covered by test rather than by photograph.
 
 ### 38.7 All five preferences are now read
 
-| Preference | Closed by |
-| --- | --- |
-| `board_theme` | A64-025.5B |
-| `piece_set` | A64-025.5B |
+| Preference         | Closed by  |
+| ------------------ | ---------- |
+| `board_theme`      | A64-025.5B |
+| `piece_set`        | A64-025.5B |
 | `show_coordinates` | A64-025.6D |
-| `animation_speed` | A64-025.12 |
-| `confirm_move` | this task |
+| `animation_speed`  | A64-025.12 |
+| `confirm_move`     | this task  |
 
 None of them was ever missing from the API. Every one had been on
 `PreferencesResponse` since A64-012.5 and read by nothing — five settings a
@@ -3807,11 +3810,11 @@ This is the front door.
 _TBD_. It is **not** the source of truth and this page did not use it. The
 canonical tokens are:
 
-| | |
-| --- | --- |
-| Values | `apps/web/src/app/styles/globals.css` — `:root`, `.dark`, `@theme inline` |
-| Reasoning | §18.7 (colour, and where the gradient is allowed), §34 (motion) |
-| Board palette | the same file's `--board-*` and `--piece-*`, shared with the real board |
+|               |                                                                           |
+| ------------- | ------------------------------------------------------------------------- |
+| Values        | `apps/web/src/app/styles/globals.css` — `:root`, `.dark`, `@theme inline` |
+| Reasoning     | §18.7 (colour, and where the gradient is allowed), §34 (motion)           |
+| Board palette | the same file's `--board-*` and `--piece-*`, shared with the real board   |
 
 **No new colour was invented.** Every value on this page is an existing
 token: `--primary` for accents and the last-move wash, `--brand-from` /
@@ -3838,13 +3841,13 @@ visitor the name of a thing whose purpose they have not been given.
 
 ### 40.2 A marketing header, because the product's does not fit
 
-`AppShell`'s header is *product* navigation — Play, Tournaments, Friends,
+`AppShell`'s header is _product_ navigation — Play, Tournaments, Friends,
 Match history — and **every one of those routes is behind
 `protectedPage`.** A "Browse tournaments" link here would bounce an
 anonymous visitor to `/login`, which is the defect A64-025.3 §2 refused to
 ship on the home page.
 
-So the navigation is in-page anchors to the sections that *explain* those
+So the navigation is in-page anchors to the sections that _explain_ those
 features, and the calls to action go to the account that unlocks them. The
 only routes this page links to are `/`, `/login` and `/register` — the three
 an anonymous visitor can actually reach. There is a test that walks the
@@ -3852,10 +3855,10 @@ header and fails on a fourth.
 
 Two things the swap must not lose, and does not:
 
-| | |
-| --- | --- |
-| Appearance and language | `BrowserSettingsMenu` is exported from `widgets/account-menu` and used in **both** headers. One control, not two that drift |
-| The `unavailable` rule | Sign-in and register appear only for `status === "anonymous"`. Offering them while the session merely failed tells a signed-in player they were logged out because one request did — the claim that state exists to avoid, and `auth.test.tsx` caught it |
+|                         |                                                                                                                                                                                                                                                          |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Appearance and language | `BrowserSettingsMenu` is exported from `widgets/account-menu` and used in **both** headers. One control, not two that drift                                                                                                                              |
+| The `unavailable` rule  | Sign-in and register appear only for `status === "anonymous"`. Offering them while the session merely failed tells a signed-in player they were logged out because one request did — the claim that state exists to avoid, and `auth.test.tsx` caught it |
 
 ### 40.3 The hero visual is the game room, as a still
 
@@ -3900,7 +3903,7 @@ is a row seeded by the migration that creates the table.
 
 The speed-class colours are written as literals rather than through
 `speedAccent`, and the reason is recorded at the call site: that helper maps
-a *server-supplied* class and there is no server here, while Tailwind
+a _server-supplied_ class and there is no server here, while Tailwind
 generates nothing for an interpolated `text-speed-${x}`.
 
 ### 40.6 The bracket is drawn, not fetched
@@ -3911,7 +3914,7 @@ approximation. There is no tournament to read here, so reusing that
 component would mean inventing a payload: the fake data §30 forbids, in the
 one place it would be easiest to justify.
 
-So `widgets/marketing/bracket-showcase` draws the *shape* — four seats, two
+So `widgets/marketing/bracket-showcase` draws the _shape_ — four seats, two
 pairings, a final, and the lines between them — with no names, no scores and
 no title. The first version used plain grey bars and read as a **loading
 skeleton**, which is the failure mode of "honest but empty"; each seat now
@@ -3924,7 +3927,7 @@ Friends, direct challenges, and **quick messages**. The third is the one
 worth being careful about: Arena64 has a fixed set of phrases with a spam
 rule, and it does not have free-text chat. Copy saying "chat with your
 friends" would market a feature this product deliberately does not ship, so
-the wording is about saying *good game* without a chat box to police.
+the wording is about saying _good game_ without a chat box to police.
 
 ### 40.8 One closing statement, not the hero again
 
@@ -3946,9 +3949,9 @@ found them at 17px and this is the fix.
 
 ### 40.10 `/` is two pages, and the chrome switches with them
 
-| | |
-| --- | --- |
-| `pages/root` | picks the page — `HomePage` when authenticated, `LandingPage` otherwise |
+|                                   |                                                                         |
+| --------------------------------- | ----------------------------------------------------------------------- |
+| `pages/root`                      | picks the page — `HomePage` when authenticated, `LandingPage` otherwise |
 | `app/router/routes`' `RootLayout` | picks the chrome — `AppShell`, or nothing at `/` when not authenticated |
 
 Two decisions one layer apart, because a page cannot remove a shell it is
@@ -3989,24 +3992,24 @@ one.
 
 ### 40.12 Measured
 
-| | |
-| --- | --- |
-| `tsc --noEmit` | clean |
-| `eslint` | 0 problems |
-| `prettier --check` | clean |
-| `vitest` | 244 passed, 37 files (238 before; **+6**) |
-| `vite build` | passes |
+|                    |                                           |
+| ------------------ | ----------------------------------------- |
+| `tsc --noEmit`     | clean                                     |
+| `eslint`           | 0 problems                                |
+| `prettier --check` | clean                                     |
+| `vitest`           | 244 passed, 37 files (238 before; **+6**) |
+| `vite build`       | passes                                    |
 
 **Ten renderings swept** — 360, 393, 768, 1024, 1280 and 1440, in light and
 dark, across uz, ru and en:
 
-| | |
-| --- | --- |
-| Clipped elements | **0** |
-| Page-level horizontal overflow | **0** |
-| Interactive targets under 44px | **0** (40 before the footer fix) |
-| `<h1>` per page | exactly 1 in all ten |
-| Landmarks | `header`, `main`, `footer` present in all ten |
+|                                |                                               |
+| ------------------------------ | --------------------------------------------- |
+| Clipped elements               | **0**                                         |
+| Page-level horizontal overflow | **0**                                         |
+| Interactive targets under 44px | **0** (40 before the footer fix)              |
+| `<h1>` per page                | exactly 1 in all ten                          |
+| Landmarks                      | `header`, `main`, `footer` present in all ten |
 
 Reduced motion: `--motion-scale` resolves to `0` and a header transition
 computes to `0.001s`, so §34's scale covers this page without it declaring
@@ -4032,14 +4035,14 @@ The roadmap lists six items for this task. Measured first, three of them
 turned out to be already delivered or moot, and one turned out to be a gap
 nobody had noticed.
 
-| Roadmap item | Measured state |
-| --- | --- |
-| Wordmark | Written out **three times** in three files, differing only in size |
-| Logo / icon system | `scripts/generate-icons.mjs` exists and works — but drew a **neutral placeholder** |
-| Favicon | SVG + three PNGs, same placeholder |
-| Social preview asset | **Absent.** `og:image` pointed at the application icon |
-| Brand usage rules | Not written down anywhere |
-| Final indigo palette | Decided in A64-025.2, in use everywhere — moot |
+| Roadmap item         | Measured state                                                                     |
+| -------------------- | ---------------------------------------------------------------------------------- |
+| Wordmark             | Written out **three times** in three files, differing only in size                 |
+| Logo / icon system   | `scripts/generate-icons.mjs` exists and works — but drew a **neutral placeholder** |
+| Favicon              | SVG + three PNGs, same placeholder                                                 |
+| Social preview asset | **Absent.** `og:image` pointed at the application icon                             |
+| Brand usage rules    | Not written down anywhere                                                          |
+| Final indigo palette | Decided in A64-025.2, in use everywhere — moot                                     |
 
 ### 41.1 One wordmark, three sizes
 
@@ -4072,11 +4075,11 @@ indigo for the light squares, a darker step of the same hue behind them, and
 white for the piece — the **only** light element, which is what makes it
 read as indigo at 16px rather than as a white tile with a tint.
 
-| | |
-| --- | --- |
-| White on the deep square | 13.50:1 |
-| White on the brand square | 6.15:1 |
-| Brand against deep | 2.20:1 — a *shape* boundary, so what matters is visibility at 16px rather than a text threshold |
+|                           |                                                                                                 |
+| ------------------------- | ----------------------------------------------------------------------------------------------- |
+| White on the deep square  | 13.50:1                                                                                         |
+| White on the brand square | 6.15:1                                                                                          |
+| Brand against deep        | 2.20:1 — a _shape_ boundary, so what matters is visibility at 16px rather than a text threshold |
 
 **No gradient.** §18.7 rations it to three places and none of them is a 16px
 square, where a ramp is invisible and only muddies the two tones that have
@@ -4128,11 +4131,147 @@ and it is stated here so the next task starts from it.
 
 ### 41.6 Measured
 
-| | |
-| --- | --- |
-| `tsc --noEmit` | clean |
-| `eslint` | 0 errors |
-| `prettier --check` | clean |
-| `vitest` | 244 passed, 37 files |
-| Icons | rendered and read at 16, 32, 192, 180 and maskable-cropped |
-| `favicon.svg` | parses as XML |
+|                    |                                                            |
+| ------------------ | ---------------------------------------------------------- |
+| `tsc --noEmit`     | clean                                                      |
+| `eslint`           | 0 errors                                                   |
+| `prettier --check` | clean                                                      |
+| `vitest`           | 244 passed, 37 files                                       |
+| Icons              | rendered and read at 16, 32, 192, 180 and maskable-cropped |
+| `favicon.svg`      | parses as XML                                              |
+
+## 42. SEO foundation — A64-026.3
+
+The policy lives in `docs/04-frontend/seo.md` and is not repeated here. This
+records the decisions, the two measurements that shaped them, and the thing
+that was deliberately not built.
+
+### 42.1 What a crawler actually sees, measured
+
+A production build's `index.html`:
+
+|               |                                                        |
+| ------------- | ------------------------------------------------------ |
+| `<head>`      | complete — title, description, OpenGraph, Twitter card |
+| `<body>` text | **0 characters**                                       |
+
+That number is the whole architecture of this task. Google executes
+JavaScript and sees the rendered landing page; **link-preview crawlers do
+not**, and they are the ones a shared URL goes through. Which means the
+static OG tags in `index.html` are not a shortcut — for `/`, which _is_ the
+landing page, they are the only thing that works. And it means per-route OG
+tags injected by JavaScript would be decorative.
+
+Every path answers `200`, including unknown ones, because that is what an
+SPA history fallback is. So an unknown path is a **soft 404**: a 200 with an
+empty body and a client-rendered "this page does not exist". Real 404 status
+is the host's to send; §7 of the document records it as a deployment
+requirement rather than a defect this bundle can fix.
+
+### 42.2 Prerendering was evaluated and refused, with a reason
+
+Rendering `/` at build time is available — Playwright is already a
+dependency and already renders the social card (§41.4). It was not done.
+
+This application mounts with `createRoot().render()`, not `hydrateRoot()`.
+A prerendered DOM would be **discarded and rebuilt** on mount: a crawlable
+body traded for a flash and a layout shift, which is a Core Web Vitals
+regression bought with an SEO gain that only non-Google engines collect.
+
+Doing it properly means a hydration path, and hydration needs the build's
+HTML to match the client's first render. It cannot: the session is unknown
+at build time and §40.10 makes `/` two different pages depending on it.
+
+That is an ADR's worth of consequence, not a step at the end of an SEO task.
+Recorded as an **accepted limitation** rather than an oversight, which is
+the distinction §25 of the brief asks for.
+
+### 42.3 Player profiles: the decision, and why it is the reversible one
+
+`/players/{username}` is open to view and **disallowed to crawl**.
+
+The privacy settings a player has control _who sees what_. None of them says
+"and list me in a search engine". Indexing a person on a permission they
+were never asked for is the wrong default — and it is the one that cannot be
+taken back, because removal from an index takes months while adding an
+opt-in later costs a setting.
+
+Asked and answered by the owner rather than assumed.
+
+### 42.4 A build with no origin fails closed
+
+`VITE_PUBLIC_ORIGIN` is the frontend's name for the value the backend
+already calls `PUBLIC_APP_URL`. Without it, `scripts/generate-seo.mjs`
+writes no canonical, no `og:url`, no sitemap and no structured data — and
+**replaces the robots policy with `Disallow: /`**.
+
+A build that cannot say which URL its content belongs to is a preview, a
+staging deploy or a laptop. Forgetting the variable therefore blocks
+indexing rather than publishing a canonical built from `localhost`, which
+would point a crawler at a page that does not exist.
+
+`https` is required for anything but localhost and a trailing slash is
+dropped, both enforced rather than documented-and-hoped.
+
+### 42.5 The absolute `og:image`, which §41.5 was waiting for
+
+A64-026.2 shipped `og:image` as a relative path and recorded that several
+crawlers will not resolve one, and that making it absolute needed the same
+missing piece `og:url` and the canonical needed. That piece is the origin,
+and all three landed together — which is what "one nameable piece of
+infrastructure rather than three loose ends" was for.
+
+### 42.6 Structured data that claims nothing
+
+One `WebSite` and one `WebApplication`. No `aggregateRating`, `review`,
+`offers`, `author` or `interactionCount`: none has a source, and a rich
+result built on an invented rating is a manual action against the domain
+rather than a nicer listing. A test forbids each of those strings by name,
+because the failure mode of JSON-LD is a field that is easy to write and
+impossible to defend.
+
+No `SearchAction` either — this site has no public search endpoint a crawler
+could use, since `/search` is behind authentication.
+
+### 42.7 Why the script rather than a Vite plugin
+
+A plugin lives in `vite.config.ts`, and this workspace's config carries
+per-developer entries that are not committed. A post-build script needs no
+edit there, reads on its own, and can be re-run over an existing `dist/`
+while looking at the result — which is how the verification below was done.
+
+Re-running it twice must not leave two canonicals, which a crawler treats as
+none. There is a test.
+
+### 42.8 Measured
+
+|                             |                                            |
+| --------------------------- | ------------------------------------------ |
+| `tsc --noEmit`              | clean                                      |
+| `eslint`                    | 0 problems                                 |
+| `prettier --check`          | clean                                      |
+| `vitest`                    | 260 passed, 38 files (244 before; **+16**) |
+| `vite build` + the SEO step | passes, both with and without an origin    |
+
+Verified against a **served production build**, not a source read:
+
+| Fetched                                      | Result                                                                                                                     |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `/robots.txt`                                | the full policy, plus the `Sitemap:` line                                                                                  |
+| `/sitemap.xml`                               | valid XML, correct namespace, one absolute URL, no localhost                                                               |
+| `/` with no JavaScript                       | title, description, canonical, `og:url`, absolute `og:image`, Twitter card and JSON-LD all present in the initial document |
+| `/`, `/login`, `/players/x`, an unknown path | all `200` — the SPA fallback, recorded in §42.1                                                                            |
+
+The sitemap namespace was wrong on the first pass —
+`w3.org/1999/sitemaps/0.9` instead of `sitemaps.org/schemas/sitemap/0.9` —
+which is a file every validator rejects and no test would have caught by
+reading the code. It was found by parsing the output.
+
+### 42.9 Not done
+
+No tournament or player metadata: both are behind authentication or
+disallowed, so there is nothing for a crawler to read and per-route
+metadata cannot reach it anyway (§42.1). No `hreflang`: the locale is a
+browser preference and not in the URL, so alternates do not exist and
+claiming them would be false. No Search Console verification token: the real
+one comes from the property, and a placeholder fails verification.

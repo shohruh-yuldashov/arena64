@@ -4275,3 +4275,187 @@ metadata cannot reach it anyway (§42.1). No `hreflang`: the locale is a
 browser preference and not in the URL, so alternates do not exist and
 claiming them would be false. No Search Console verification token: the real
 one comes from the property, and a placeholder fails verification.
+
+---
+
+## 43. Public content and discovery — A64-026.4
+
+A64-026.1 shipped a landing page that describes tournaments, A64-026.2 gave
+the product a share card, and A64-026.3 decided what a crawler may read. All
+three stopped at the same wall: there was nothing public to link to. Every
+route but `/` and `/players/{username}` was behind a session.
+
+This is the task that opened one thing, and the discipline of it is that
+**public, shareable and indexable are three different decisions**. The
+matrix in `docs/04-frontend/public-content.md` records all three for every
+surface; this section records the reasoning.
+
+### 43.1 Only tournaments, and why not the rest
+
+| Surface        | Opened                  | Why                                                                                                                              |
+| -------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Tournaments    | Yes                     | Already viewer-independent: no owner check, no friends-only variant, no per-viewer filtering to preserve                         |
+| Player profile | Already open, unchanged | Opened before this task. A64-026.3 §42.3 settled the indexing half                                                               |
+| Game replay    | No                      | Two players' identities and moves. `specs/game` has no public-visibility rule to implement, so opening it would be inventing one |
+| Live game      | No                      | Same, plus a realtime channel whose authorization is per-subscriber                                                              |
+| Player search  | No                      | Enumeration over people, not over events. `profiles` already rate-limits it behind a token for that reason                       |
+| Leaderboards   | No                      | Do not exist. Nothing to open                                                                                                    |
+
+The rule the table follows: a surface is opened when the backend already
+treats every viewer alike, and not opened when opening it would require
+**deciding** something about people that no spec has decided. A read that
+needs a new privacy rule is not a discovery task.
+
+### 43.2 What "published" means, and why it is not `is_terminal`
+
+`DRAFT` is the one status the enum itself describes as not yet advertised —
+a tournament whose operator has not decided it exists. It is the only status
+an anonymous caller cannot see.
+
+Every other status is public, **including the terminal ones**. A finished
+bracket is the most useful thing here to show somebody without an account:
+it is a record of something that happened, and hiding it answers "what
+happens on this platform?" with silence.
+
+The filter is `status != DRAFT` rather than a list of published statuses, so
+a status added later is visible by default. That is the failure worth
+having — a new status wrongly public is visible to everyone including the
+person who added it, while a new status wrongly hidden is a tournament
+nobody can find and nobody notices.
+
+### 43.3 404, not 403
+
+A hidden tournament and an id naming nothing return the **same response**,
+compared field by field in a contract test excluding only the two
+per-request identifiers.
+
+`403` confirms the id names something, which is the one fact an enumerating
+caller wants from an endpoint keyed by UUID. `404` is what makes guessing
+worthless. A differing code, message or shape would rebuild the oracle the
+status code exists to remove.
+
+### 43.4 The one read that kept its token
+
+`/tournaments/{id}/registrations/me` answers "am I entered", and there is no
+anonymous answer to a question about the viewer. It stays behind
+`CurrentUser`, and the client stops asking: `useMyRegistration` is gated on
+`isAuthenticated` rather than `isResolved`, so a visitor with no account
+never spends a guaranteed `401` on it.
+
+That distinction is the whole shape of the change. Three reads are about a
+tournament; one is about a person; two mutations act as a person. Only the
+first group moved.
+
+### 43.5 Chrome, and links that lie
+
+`AppShell`'s navigation is entirely guarded routes. Rendering it for a
+visitor with no account hands them a header of destinations that all bounce
+to sign-in, so `/tournaments*` gets `PublicShell` — the landing page's own
+chrome, extracted from `pages/landing` when a second page needed it.
+
+The condition is `session.status === "anonymous"`, not `!isAuthenticated`.
+`unavailable` means one request failed; swapping a signed-in player's
+product navigation for a marketing header because a refresh timed out tells
+them they have been signed out, which is the exact claim that status exists
+to avoid. `bootstrapping` would be the §28 flicker.
+
+Three lying links were removed in the same pass, and two of them were found
+by opening the page rather than by reading the diff:
+
+| Link                           | Was                                       | Now                                          |
+| ------------------------------ | ----------------------------------------- | -------------------------------------------- |
+| Header `#play`, `#compete`     | In-page anchors rendered on every page    | Rendered only on `/`, where the sections are |
+| Footer `#play`, `#tournaments` | Same                                      | Same, with `/tournaments` as a real route    |
+| Bracket "Watch" and "Replay"   | `/games/…` — guarded — offered to anybody | Rendered only for a viewer who can open one  |
+
+The public path list in `app/router/routes` is written out rather than
+derived from the protected set. The protected set is the larger one and
+grows with every feature, so deriving public from it would make a new route
+public by forgetting; this way a new route is private until somebody writes
+it down.
+
+### 43.6 A rate limit an anonymous endpoint can carry
+
+Before this task every tournament read sat behind a token, and a token is a
+subject the platform can count and revoke. An anonymous endpoint has no such
+subject, so the only dimension left is the network address — a weaker
+control with a looser budget, exactly as `profiles`' anonymous profile read
+records: an office or a mobile carrier is one bucket, and a limit tight
+enough to stop a scraper locks out a lecture hall.
+
+One bucket for all three reads, because they are one activity: nobody browses
+a bracket without having browsed the lobby that led to it, and three separate
+allowances would let a caller spend all of them. It is IP-scoped, which is
+what lets it attach as a bare `Depends(...)` — and that is precisely what
+makes an anonymous endpoint able to carry a limit at all.
+
+Registration and withdrawal are not limited: both are behind `VerifiedUser`
+and both are already bounded by the tournament's capacity and lifecycle.
+
+### 43.7 Public, shareable, and still not indexed
+
+`/tournaments` stays `Disallow` in `robots.txt`, and that is a decision
+rather than a leftover — a test says so by name, because the entry looks
+exactly like something to clean up once the router shows an open route.
+
+Every route in this SPA serves the same `index.html`, with one title, one
+description and a body of zero characters (§42.1). An indexed tournament
+would enter the index as a copy of the landing page's title, describing none
+of them and diluting the one page that is meant to be found.
+
+The blocker is the missing per-route metadata layer, not the visibility.
+Building one needs the hydration path §42.6 records as an ADR-sized
+decision. When it exists, completed tournaments are the natural first thing
+to open, and `robots.txt` is the one line to change.
+
+### 43.8 Sharing
+
+A link is only worth handing over if the page opens for whoever receives it.
+Before this task a shared tournament URL delivered a sign-in form.
+
+`navigator.share` where the platform has a sheet — a phone, where the
+address bar is collapsed and selecting a URL by touch is the fiddly thing
+this replaces — and the clipboard where it does not. Where neither exists
+the control renders nothing at all: it cannot do its one job, and the URL is
+genuinely in the address bar of any browser that old.
+
+A dismissed sheet is the one rejection swallowed on purpose. It is somebody
+changing their mind, and neither copying the link they declined to send nor
+logging it is right. A sheet that fails for any other reason falls through
+to the clipboard.
+
+**No per-tournament preview card.** A link preview is built by a crawler
+that does not execute JavaScript, so a shared tournament shows the site's
+card — correct about Arena64, silent about the tournament. Injecting OG tags
+at runtime would change what a browser sees and nothing about what a
+preview shows; it is the §42.1 measurement, and the honest answer is to
+leave it until there is a server that can render a head.
+
+### 43.9 Measured
+
+|                     |                                                 |
+| ------------------- | ----------------------------------------------- |
+| `ruff check`        | clean                                           |
+| `mypy`              | clean, 682 source files                         |
+| `lint-imports`      | 32/32 contracts kept                            |
+| `pytest tests/unit` | 2952 passed                                     |
+| new contract file   | 11 passed                                       |
+| `tsc --noEmit`      | clean                                           |
+| `eslint`            | 0 errors (2 pre-existing fast-refresh warnings) |
+| `prettier --check`  | clean                                           |
+| `vitest`            | 269 passed, 39 files (260 before; **+9**)       |
+
+Verified in a real browser against the running API, anonymous, at 360, 768
+and 1280 in both themes:
+
+- the lobby, a tournament and its bracket render with no session
+- **no horizontal overflow** at any of the six combinations
+- the only failing request is the session refresh that establishes there is
+  no session — `/registrations/me` is never called
+- the entry CTA carries `next=/tournaments/{id}`
+- no `/games/…` link appears anywhere on the page
+
+`eslint` was **red on every file** before this task and is fixed here: the
+declaration file A64-026.3 added for `generate-seo.mjs` is outside
+`tsconfig`'s program, and a type-aware rule that cannot load aborts the
+whole run rather than skipping the file.

@@ -60,25 +60,6 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
-      # A64-027.1. The object store the S3 provider signs against. Unit tests
-      # pin the request it composes; only a real implementation can say
-      # whether that signature is **accepted**, and a canonical request wrong
-      # by one newline is a well-formed request and a 403.
-      #
-      # MinIO rather than a mock, because S3, R2 and B2 all speak this same
-      # protocol — one of them proves the other three.
-      minio:
-        image: minio/minio:latest
-        env:
-          MINIO_ROOT_USER: arena64
-          MINIO_ROOT_PASSWORD: arena64-secret
-        ports:
-          - 9000:9000
-        options: >-
-          --health-cmd "mc ready local"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
 
     env:
       # `ci` rather than `test`: both scale the rate limits by the same
@@ -136,11 +117,41 @@ jobs:
       # asyncpg is a runtime dependency of this application and is therefore
       # present the moment `uv sync` finishes. It also connects exactly the
       # way the platform does.
+      # A64-027.1. The object store the S3 provider signs against. Unit tests
+      # pin the request it composes; only a real implementation can say
+      # whether that signature is **accepted**, and a canonical request wrong
+      # by one newline is a well-formed request and a 403. MinIO proves it for
+      # S3, R2 and B2 alike, because all three speak this protocol.
+      #
+      # A step rather than a `services:` entry, and that is not a style
+      # choice. A GitHub service container accepts `image`, `env`, `ports`
+      # and `options` — there is **no way to pass a command**, and `minio`
+      # is not a server without `server /data`. Declared as a service it
+      # starts, prints its usage, exits, and fails its healthcheck, which is
+      # exactly what it did the first time this was written.
+      - name: Start the object store
+        run: |
+          docker run -d --name minio --network host \
+            -e MINIO_ROOT_USER=arena64 \
+            -e MINIO_ROOT_PASSWORD=arena64-secret \
+            minio/minio:latest server /data
+          # Readiness, not a fixed sleep: a sleep is either too short on a
+          # slow runner or wasted on a fast one.
+          for _ in $(seq 1 30); do
+            if curl --fail --silent http://localhost:9000/minio/health/live; then
+              echo "object store ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "object store did not become ready" >&2
+          docker logs minio >&2
+          exit 1
+
       # The bucket the storage contract test writes to, and the public
       # read policy `get_public_url`'s unsigned URLs depend on. Created here
-      # for the same reason the contract database is: a service container
-      # starts empty, and `docker compose`'s provisioning step is not part
-      # of a GitHub service.
+      # for the same reason the contract database is: a store starts empty,
+      # and `docker compose`'s provisioning step is not part of this job.
       - name: Create the media bucket
         run: |
           docker run --rm --network host \

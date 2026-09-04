@@ -3557,7 +3557,7 @@ now named rather than inferred from the absence of one.
 | `ruff` / `mypy --strict` / `pyright` | clean, 681 source files |
 | `lint-imports` | 32 contracts kept, 0 broken |
 | `pytest tests/unit` | 2952 passed, 2 skipped (2947 before; **+5**) |
-| `pytest tests/contract` | 1138 passed, 2 skipped |
+| `pytest tests/contract` | 1315 passed, 2 skipped |
 
 The five new unit tests pin the port's own contract — the half a caller
 depends on and cannot see: it ends the match without inventing a result, it

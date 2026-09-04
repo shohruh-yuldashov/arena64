@@ -643,6 +643,11 @@
         "unavailable": "Bu xabar mavjud emas.",
         "unknown": "Xabar yuborilmadi."
       }
+    },
+    "confirmMove": {
+      "prompt": "Shu yurishni qilasizmi?",
+      "play": "Yurishni qilish",
+      "cancel": "Bekor qilish"
     }
   },
   "replay": {

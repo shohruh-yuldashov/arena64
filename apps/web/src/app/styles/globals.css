@@ -218,7 +218,75 @@
   --sidebar-ring: oklch(0.556 0 0);
 }
 
+/*
+ * The motion system — A64-025.12 §34.
+ *
+ * ## One scale, not a duration per component
+ *
+ * Everything that moves reads its duration from `--motion-scale`, so there
+ * is exactly one number to change and no component that can be forgotten.
+ * That matters more here than in the colour system: a colour that is missed
+ * looks wrong, and motion that is missed is a migraine trigger for somebody
+ * who asked for it to stop.
+ *
+ * ## Three durations, because there are three jobs
+ *
+ * `fast` for a state change under the pointer — a hover tint, a border. Any
+ * slower and the interface feels like it is lagging behind the cursor.
+ * `base` for something entering or leaving. `slow` only where the movement
+ * itself is the message. Nothing in this product needs a fourth.
+ *
+ * A single easing, and it is asymmetric on purpose: things should leave the
+ * screen at the speed they were already travelling and arrive decelerating,
+ * which is what a curve with no ease-in does.
+ *
+ * ## Whichever asks for less motion wins
+ *
+ * Two sources can ask for it: the operating system, through
+ * `prefers-reduced-motion`, and the player, through `animation_speed` in
+ * their gameplay preferences. They are not ranked — the more conservative
+ * of the two applies, which is why the reduced-motion block is last and
+ * clamps to zero whatever the attribute said.
+ *
+ * `instant` is zero rather than a fourth speed, which is the contract the
+ * API states: it is an accessibility setting, not a taste.
+ */
+:root {
+  --motion-scale: 1;
+
+  --duration-fast: calc(120ms * var(--motion-scale));
+  --duration-base: calc(200ms * var(--motion-scale));
+  --duration-slow: calc(320ms * var(--motion-scale));
+
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+}
+
+[data-motion="instant"] {
+  --motion-scale: 0;
+}
+[data-motion="fast"] {
+  --motion-scale: 0.6;
+}
+[data-motion="slow"] {
+  --motion-scale: 1.6;
+}
+
 @theme inline {
+  /* Every `transition-*` utility in the app inherits these, so a
+     component does not have to remember to state a duration and
+     cannot state one that ignores the scale. A per-site `duration-200`
+     is the thing this replaces. */
+  --default-transition-duration: var(--duration-base);
+  --default-transition-timing-function: var(--ease-out);
+
+  /* ...and `duration-fast` / `duration-slow` for the two cases that are not
+     the default. Registered here rather than written as arbitrary values at
+     the call sites, so the utility either exists or fails the build — an
+     unknown Tailwind class silently generates nothing. */
+  --transition-duration-fast: var(--duration-fast);
+  --transition-duration-base: var(--duration-base);
+  --transition-duration-slow: var(--duration-slow);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-sans);
@@ -286,7 +354,7 @@
  *
  * Selected by a data attribute on the root element rather than by a class
  * per surface, so **every** board inherits it — the game room, the lobby's
- * preview, and anything drawn later — from one place. `BoardPreferences`
+ * preview, and anything drawn later — from one place. `GameplayPreferences`
  * writes the attribute; nothing else reads the preference.
  *
  * Each block overrides only what differs from the base in `:root`/`.dark`,
@@ -418,4 +486,79 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/*
+ * The floor under all of it — A64-025.12 §34.3.
+ *
+ * The scale above only reaches what reads a token. A keyframe animation's
+ * duration comes from the utility that declares it (`animate-pulse` is two
+ * seconds of Tailwind's own), and a component that hardcodes `duration-500`
+ * would slip through. So this stops everything, and it is `!important`
+ * because it has to beat a utility that already is.
+ *
+ * `1ms` rather than `0s`: a zero-length animation never fires `animationend`
+ * in some engines, and code waiting on that event waits forever.
+ *
+ * ## The spinner is exempt, and that is not an oversight
+ *
+ * A spinner's rotation **is** the information — it says "still working" —
+ * and WCAG 2.3.3 exempts motion that is essential to what a control
+ * communicates. Freezing it leaves a sighted reader with a static icon and
+ * no other signal, because `Spinner`'s label is for screen readers. A 16px
+ * rotation is also far below the area that triggers vestibular symptoms,
+ * which is what this media query is for.
+ *
+ * Everything else stops: the skeleton's pulse is decorative and a still
+ * skeleton is still a skeleton, and a dialog that appears without fading is
+ * a dialog that appeared.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root,
+  [data-motion] {
+    --motion-scale: 0;
+  }
+
+  *,
+  ::before,
+  ::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  [data-slot="spinner"] svg {
+    animation-duration: 1.2s !important;
+    animation-iteration-count: infinite !important;
+  }
+}
+
+/*
+ * The same floor, for the player who asked rather than the operating system.
+ *
+ * `--motion-scale: 0` already flattens every *transition*, because those
+ * read the tokens. Keyframe animations do not: `animate-pulse` carries
+ * Tailwind's own two seconds and `animate-in` carries `tw-animate-css`'s.
+ * Without this, a player who chose `instant` still got a pulsing skeleton
+ * and a dialog that faded — and `instant` is the option the API documents
+ * as disabling motion rather than being a fourth speed.
+ *
+ * The block is written twice, here and above, because CSS cannot share one
+ * declaration block between a media query and a selector. The alternative
+ * is a script that listens to the media query and writes a third attribute,
+ * which puts an accessibility guarantee behind JavaScript that may not have
+ * loaded. Six duplicated lines is the cheaper of the two.
+ */
+[data-motion="instant"] *,
+[data-motion="instant"] ::before,
+[data-motion="instant"] ::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important;
+}
+
+[data-motion="instant"] [data-slot="spinner"] svg {
+  animation-duration: 1.2s !important;
+  animation-iteration-count: infinite !important;
 }

@@ -105,7 +105,7 @@ export function MatchRow({ entry, viewerId }: { entry: MatchHistoryEntry; viewer
     // the accessibility tree, which is the same construction the home
     // page's destination cards use.
     <li className="relative">
-      <div className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/50 sm:gap-4 sm:px-5">
+      <div className="flex items-center gap-3 px-4 py-3 transition-colors duration-fast hover:bg-muted/50 sm:gap-4 sm:px-5">
         {/* The result leads. It is what somebody scans a history for, and
             it was the fourth thing on the row behind an avatar, a name and
             a clock. A fixed width so the outcomes line up down the edge —

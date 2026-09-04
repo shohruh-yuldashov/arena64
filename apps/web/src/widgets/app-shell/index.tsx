@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { isResolved } from "@/entities/session";
 import { useSession } from "@/features/auth/model/session-provider";
 import { useNotificationPush } from "@/features/notifications/model/use-notification-push";
-import { BoardPreferences } from "@/features/preferences/board-preferences";
+import { GameplayPreferences } from "@/features/preferences/gameplay-preferences";
 import { useTranslation } from "@/shared/i18n";
 import { AccountMenu } from "@/widgets/account-menu";
 import { Brand } from "@/widgets/brand";
@@ -131,7 +131,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           the document, so every board in the product — the game room's and
           the lobby's preview — is drawn the way they chose. Behind the
           session check because the preference is an account read. */}
-      {signedIn && <BoardPreferences />}
+      {signedIn && <GameplayPreferences />}
 
       {signedIn && <MatchOfferSurface />}
 

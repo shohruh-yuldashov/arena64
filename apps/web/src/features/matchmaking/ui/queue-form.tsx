@@ -312,7 +312,7 @@ function RadioGroup({
             <label
               key={option.value}
               className={cn(
-                "focus-within:ring-ring relative flex min-h-11 cursor-pointer flex-col justify-center rounded-lg border px-3 py-3 transition-colors focus-within:ring-2",
+                "focus-within:ring-ring relative flex min-h-11 cursor-pointer flex-col justify-center rounded-lg border px-3 py-3 transition-colors duration-fast focus-within:ring-2",
                 chosen
                   ? "border-primary bg-primary/10 ring-primary/30 ring-1"
                   : "border-border hover:border-primary/40 hover:bg-muted/50",

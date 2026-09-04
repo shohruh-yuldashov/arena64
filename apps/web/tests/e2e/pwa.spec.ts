@@ -21,7 +21,12 @@ test("installs a worker, serves the shell offline, and caches nothing private", 
   context,
 }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "Arena64" })).toBeVisible();
+  // A level-one heading, unnamed — the twin of `shell.spec.ts`'s probe and
+  // red for the same reason since A64-026.1: `/` is the landing page for a
+  // visitor, whose `h1` is the hero's sentence. What this spec is about is
+  // the service worker, so it waits for the shell to be there and does not
+  // name whichever page currently answers `/`.
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
 
   // The manifest is linked from the document *and* served — a `<link>` to
   // a 404 is an uninstallable app whose HTML looks correct.
@@ -52,7 +57,7 @@ test("installs a worker, serves the shell offline, and caches nothing private", 
   // honest journey: offline works for a returning visitor, and A64-020.9
   // never claims a first visit made offline can run the application.
   await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Arena64" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
 
   // --- offline ------------------------------------------------------------
   await context.setOffline(true);
@@ -60,7 +65,7 @@ test("installs a worker, serves the shell offline, and caches nothing private", 
 
   // The shell came from the precache and the route chunk from the runtime
   // cache. Nothing else in this application could have answered either.
-  await expect(page.getByRole("heading", { level: 1, name: "Arena64" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
 
   // The offline *notice* is deliberately not asserted here.
   // `context.setOffline(true)` disconnects the network through CDP but

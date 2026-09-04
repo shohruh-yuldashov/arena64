@@ -8,12 +8,7 @@
  */
 export type { ConnectionStatus, DeliveryMode } from "./connection-state";
 export { deliveryMode, isPursuing, isReady, isTerminal } from "./connection-state";
-export {
-  RealtimeContextProvider,
-  useConnectionStatus,
-  useFrames,
-  useRealtime,
-} from "./context";
+export { useConnectionStatus, useFrames, useRealtime } from "./context";
 export type {
   AppliedMove,
   ClockPayload,
@@ -41,6 +36,7 @@ export type {
   SnapshotPayload,
 } from "./protocol";
 export { isQuickMessage, QUICK_MESSAGES } from "./protocol";
+export { RealtimeContextProvider } from "./provider";
 export { RealtimeError } from "./request-registry";
 export type { FrameListener } from "./socket-client";
 export { RealtimeClient } from "./socket-client";

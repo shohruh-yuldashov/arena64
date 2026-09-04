@@ -2,8 +2,8 @@
 
 This directory is the permanent log of significant technical decisions made on Arena64.
 
-An Architecture Decision Record (ADR) captures a decision *and the context that produced
-it*. Code shows what was built; an ADR explains why it was built that way, which is the
+An Architecture Decision Record (ADR) captures a decision _and the context that produced
+it_. Code shows what was built; an ADR explains why it was built that way, which is the
 part that is otherwise lost the moment the people involved move on.
 
 ## When to Write an ADR
@@ -15,7 +15,7 @@ Write one when a decision is **significant and hard to reverse**:
 - Defining a cross-cutting mechanism: authentication, caching, eventing, error handling
 - Adopting a rule that constrains all future code
 - Accepting a known trade-off (consistency for latency, cost for reliability)
-- Deliberately choosing *not* to do something that would otherwise be expected
+- Deliberately choosing _not_ to do something that would otherwise be expected
 
 Do **not** write one for reversible, local choices — a helper's name, a component's internal
 structure, or a one-off library used in a single module.
@@ -47,13 +47,13 @@ Proposed ──▶ Accepted ──▶ Superseded
     └──▶ Rejected
 ```
 
-| Status | Meaning |
-| --- | --- |
-| **Proposed** | Written and under discussion; not yet binding |
-| **Accepted** | Binding — code and reviews must comply |
-| **Rejected** | Considered and declined; kept as a record of the reasoning |
-| **Superseded** | Replaced by a later ADR, which must be linked |
-| **Deprecated** | No longer applicable; not replaced |
+| Status         | Meaning                                                    |
+| -------------- | ---------------------------------------------------------- |
+| **Proposed**   | Written and under discussion; not yet binding              |
+| **Accepted**   | Binding — code and reviews must comply                     |
+| **Rejected**   | Considered and declined; kept as a record of the reasoning |
+| **Superseded** | Replaced by a later ADR, which must be linked              |
+| **Deprecated** | No longer applicable; not replaced                         |
 
 ## Process
 
@@ -64,12 +64,13 @@ Proposed ──▶ Accepted ──▶ Superseded
 
 ## Index
 
-| ID | Title | Status | Date |
-| --- | --- | --- | --- |
-| [ADR-001](./ADR-001-glicko2-incremental.md) | Glicko-2, applied incrementally, with lazy RD inflation | Accepted | 2026-08-04 |
-| [ADR-002](./ADR-002-frontend-spa.md) | `apps/web` is a Vite single-page application, not Next.js | Accepted | 2026-08-05 |
-| [ADR-003](./ADR-003-pwa-service-worker.md) | Arena64 owns its service worker; Workbox is not adopted | Accepted | 2026-08-06 |
-| [ADR-004](./ADR-004-quick-messages-not-free-text-chat.md) | Arena64 has no free-text chat; in-match communication is a predefined catalogue | Accepted | 2026-08-09 |
+| ID                                                          | Title                                                                             | Status   | Date       |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------- | -------- | ---------- |
+| [ADR-001](./ADR-001-glicko2-incremental.md)                 | Glicko-2, applied incrementally, with lazy RD inflation                           | Accepted | 2026-08-04 |
+| [ADR-002](./ADR-002-frontend-spa.md)                        | `apps/web` is a Vite single-page application, not Next.js                         | Accepted | 2026-08-05 |
+| [ADR-003](./ADR-003-pwa-service-worker.md)                  | Arena64 owns its service worker; Workbox is not adopted                           | Accepted | 2026-08-06 |
+| [ADR-004](./ADR-004-quick-messages-not-free-text-chat.md)   | Arena64 has no free-text chat; in-match communication is a predefined catalogue   | Accepted | 2026-08-09 |
+| [ADR-005](./ADR-005-first-party-analytics-on-the-outbox.md) | Product analytics is first-party, on the existing outbox; no third-party provider | Accepted | 2026-09-05 |
 
 ## TODO
 

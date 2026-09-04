@@ -16,5 +16,6 @@ export { ListState } from "./list-state";
 export { LoadFailure } from "./load-failure";
 export { Notice } from "./notice";
 export { SettingCard, SettingGroup, SettingRow } from "./setting-row";
+export { ShareButton } from "./share-button";
 export { Skeleton } from "./skeleton";
 export { Spinner } from "./spinner";

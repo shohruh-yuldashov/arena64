@@ -1205,5 +1205,9 @@
     "footer": {
       "label": "Pastki qism"
     }
+  },
+  "share": {
+    "action": "Ulashish",
+    "copied": "Havola nusxalandi"
   }
 }

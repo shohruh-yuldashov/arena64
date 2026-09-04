@@ -1205,5 +1205,9 @@
     "footer": {
       "label": "Footer"
     }
+  },
+  "share": {
+    "action": "Share",
+    "copied": "Link copied"
   }
 }

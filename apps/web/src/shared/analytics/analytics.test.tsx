@@ -22,11 +22,13 @@ import { useViewEvent } from "@/shared/analytics/use-view-event";
 
 let sent: Blob[] = [];
 
+interface SentBatch {
+  events: { event_name: string; properties: Record<string, unknown> }[];
+}
+
 /** The bodies `sendBeacon` was handed. `Blob.text()` is async in jsdom. */
-async function bodies(): Promise<
-  { events: { event_name: string; properties: Record<string, unknown> }[] }[]
-> {
-  return Promise.all(sent.map(async (blob) => JSON.parse(await blob.text())));
+async function bodies(): Promise<SentBatch[]> {
+  return Promise.all(sent.map(async (blob) => JSON.parse(await blob.text()) as SentBatch));
 }
 
 beforeEach(() => {

@@ -7,7 +7,7 @@ import { QueueForm } from "@/features/matchmaking/ui/queue-form";
 import { WaitingCard } from "@/features/matchmaking/ui/waiting-card";
 import { useTranslation } from "@/shared/i18n";
 import { useHoldAppUpdate } from "@/shared/pwa";
-import { Button, Skeleton } from "@/shared/ui";
+import { Button, LoadFailure, Skeleton } from "@/shared/ui";
 import { BoardPreview } from "@/widgets/board-preview";
 
 /**
@@ -121,7 +121,10 @@ export default function PlayPage() {
       </div>
 
       {lobby.state.status === "unavailable" ? (
-        <Unavailable onRetry={lobby.refetch} />
+        // A64-025.11 §32. This was a local `Unavailable` component that
+        // rendered a sentence and a retry button — `LoadFailure`, under
+        // another name and with its own spacing.
+        <LoadFailure message={t("play.errors.unavailable")} onRetry={lobby.refetch} />
       ) : lobby.isLoading ? (
         <Skeleton className="h-64 w-full" />
       ) : lobby.state.status === "queued" ? (
@@ -173,17 +176,5 @@ export default function PlayPage() {
           open, and the transitioning navigation below is this page's
           documented reload recovery. */}
     </section>
-  );
-}
-
-function Unavailable({ onRetry }: { onRetry: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <div role="alert" className="flex flex-col items-start gap-3">
-      <p className="text-sm">{t("play.errors.unavailable")}</p>
-      <Button variant="outline" className="min-h-11" onClick={onRetry}>
-        {t("common.retry")}
-      </Button>
-    </div>
   );
 }

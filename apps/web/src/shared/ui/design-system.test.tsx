@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "@/shared/test/render";
-import { Button, ListState, Notice } from "@/shared/ui";
+import { Button, ListState, LoadFailure, Notice } from "@/shared/ui";
 
 /**
  * The design system's contracts — A64-025.2 §21.
@@ -144,5 +144,91 @@ describe("the list state", () => {
     );
     expect(screen.getByRole("heading", { name: "No tournaments open" })).toBeVisible();
     expect(screen.getByText("Check back later")).toBeVisible();
+  });
+
+  it("shows the failure even when the list is also empty", () => {
+    // The regression this exists for. A caller computes `isEmpty` from
+    // `entries.length === 0`, which is **true** while a request is failing
+    // — so if empty won, a broken list would render "nothing here yet" and
+    // look exactly like a healthy one. That is precisely what the
+    // tournament history did, because it had no failure branch at all.
+    renderWithProviders(
+      <ListState
+        isPending={false}
+        isError
+        isEmpty
+        emptyTitle="No tournaments yet"
+        errorMessage="Tournament history could not be loaded."
+        onRetry={() => {}}
+      >
+        <p>rows</p>
+      </ListState>,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Tournament history could not be loaded.",
+    );
+    expect(screen.queryByText("No tournaments yet")).not.toBeInTheDocument();
+  });
+
+  it("announces what is loading, in the caller's words", () => {
+    // "Loading tournaments…" is worth more to somebody who cannot see the
+    // skeletons than "Loading…", and it is the difference between six
+    // surfaces sounding alike and sounding like themselves.
+    renderWithProviders(
+      <ListState
+        isPending
+        isError={false}
+        isEmpty={false}
+        loadingLabel="Loading tournaments…"
+        emptyTitle="None"
+        onRetry={() => {}}
+      >
+        <p>rows</p>
+      </ListState>,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Loading tournaments…");
+  });
+
+  it("previews the shape of the list it is about to show", () => {
+    // A tournament card is 96px and a match row is 56px. Three bars of the
+    // wrong height are not a preview — the page jumps when the data lands.
+    const { container } = renderWithProviders(
+      <ListState
+        isPending
+        isError={false}
+        isEmpty={false}
+        emptyTitle="None"
+        pendingRows={4}
+        pendingRowClassName="h-24"
+        onRetry={() => {}}
+      >
+        <p>rows</p>
+      </ListState>,
+    );
+    const bars = container.querySelectorAll('[data-slot="skeleton"]');
+    expect(bars).toHaveLength(4);
+    expect(bars[0]).toHaveClass("h-24");
+  });
+});
+
+describe("the load failure", () => {
+  it("offers a way to try again and never shows the error itself", () => {
+    // A player gets a sentence they can act on; the diagnostic goes to
+    // `reportError`. A status code in the interface tells the one person
+    // who cannot use it.
+    const onRetry = vi.fn();
+    renderWithProviders(
+      <LoadFailure message="Tournaments could not be loaded." onRetry={onRetry} />,
+    );
+
+    const retry = screen.getByRole("button");
+    fireEvent.click(retry);
+    expect(onRetry).toHaveBeenCalledOnce();
+    expect(screen.getByRole("alert")).toHaveTextContent("Tournaments could not be loaded.");
+  });
+
+  it("falls back to the generic sentence rather than rendering nothing", () => {
+    renderWithProviders(<LoadFailure onRetry={() => {}} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/\S/);
   });
 });

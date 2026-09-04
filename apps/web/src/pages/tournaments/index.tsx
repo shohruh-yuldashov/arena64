@@ -5,7 +5,7 @@ import { useTournaments } from "@/features/tournament/model/queries";
 import { TournamentCard } from "@/features/tournament/ui/tournament-card";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
-import { Button, Skeleton } from "@/shared/ui";
+import { Button, ListState } from "@/shared/ui";
 
 /**
  * The tournament lobby — A64-020.6 §5, §6, §22.
@@ -103,33 +103,25 @@ export default function TournamentsPage() {
         ))}
       </div>
 
-      {isPending && (
-        <div className="flex flex-col gap-3">
-          <span role="status" className="sr-only">
-            {t("tournament.loading")}
-          </span>
-          {[0, 1, 2].map((row) => (
-            <Skeleton key={row} className="h-24 w-full" />
-          ))}
-        </div>
-      )}
+      {/* A64-025.11 §32. A tournament card is 96px tall, which is why this
+          page kept its own skeleton after `ListState` was promoted — three
+          56px bars in its place is a preview of a different list. The
+          primitive takes the row shape now, so the reason to write it here
+          is gone.
 
-      {isError && (
-        <div role="alert" className="flex flex-col items-start gap-3">
-          <p className="text-sm">{t("tournament.listError")}</p>
-          <Button variant="outline" className="min-h-11" onClick={() => void refetch()}>
-            {t("common.retry")}
-          </Button>
-        </div>
-      )}
-
-      {!isPending && !isError && tournaments.length === 0 && (
-        <div className="flex flex-col items-start gap-3 py-8">
-          <p className="font-medium">{t("tournament.empty.title")}</p>
-          <p className="text-muted-foreground text-sm">
-            {t(isFiltered ? "tournament.empty.filtered" : "tournament.empty.body")}
-          </p>
-          {isFiltered && (
+          The empty state offers a way out only when a filter caused it: an
+          unfiltered list with nothing in it means no tournament is open, and
+          "clear filter" would be a button that changes nothing. */}
+      <ListState
+        isPending={isPending}
+        isError={isError}
+        isEmpty={tournaments.length === 0}
+        loadingLabel={t("tournament.loading")}
+        errorMessage={t("tournament.listError")}
+        emptyTitle={t("tournament.empty.title")}
+        emptyHint={t(isFiltered ? "tournament.empty.filtered" : "tournament.empty.body")}
+        emptyAction={
+          isFiltered ? (
             <Button
               variant="outline"
               className="min-h-11"
@@ -137,35 +129,37 @@ export default function TournamentsPage() {
             >
               {t("tournament.empty.clearFilter")}
             </Button>
-          )}
-        </div>
-      )}
+          ) : undefined
+        }
+        pendingRowClassName="h-24"
+        onRetry={() => void refetch()}
+      >
+        {tournaments.length > 0 && (
+          <>
+            <ol aria-label={t("tournament.title")} className="flex flex-col gap-3">
+              {tournaments.map((tournament) => (
+                <TournamentCard key={tournament.id} tournament={tournament} />
+              ))}
+            </ol>
 
-      {tournaments.length > 0 && (
-        <>
-          <ol aria-label={t("tournament.title")} className="flex flex-col gap-3">
-            {tournaments.map((tournament) => (
-              <TournamentCard key={tournament.id} tournament={tournament} />
-            ))}
-          </ol>
-
-          {hasNextPage ? (
-            // Focus stays on this button while the next page loads — §24.
-            <Button
-              variant="outline"
-              className="min-h-11 self-center"
-              disabled={isFetchingNextPage}
-              onClick={() => void fetchNextPage()}
-            >
-              {t(isFetchingNextPage ? "tournament.loadingMore" : "tournament.loadMore")}
-            </Button>
-          ) : (
-            <p role="status" className="text-muted-foreground py-2 text-center text-sm">
-              {t("tournament.end")}
-            </p>
-          )}
-        </>
-      )}
+            {hasNextPage ? (
+              // Focus stays on this button while the next page loads — §24.
+              <Button
+                variant="outline"
+                className="min-h-11 self-center"
+                disabled={isFetchingNextPage}
+                onClick={() => void fetchNextPage()}
+              >
+                {t(isFetchingNextPage ? "tournament.loadingMore" : "tournament.loadMore")}
+              </Button>
+            ) : (
+              <p role="status" className="text-muted-foreground py-2 text-center text-sm">
+                {t("tournament.end")}
+              </p>
+            )}
+          </>
+        )}
+      </ListState>
     </section>
   );
 }

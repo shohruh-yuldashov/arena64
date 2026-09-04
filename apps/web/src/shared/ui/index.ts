@@ -13,6 +13,7 @@ export {
 export { ErrorBoundary } from "./error-boundary";
 export { Input } from "./input";
 export { ListState } from "./list-state";
+export { LoadFailure } from "./load-failure";
 export { Notice } from "./notice";
 export { SettingCard, SettingGroup, SettingRow } from "./setting-row";
 export { Skeleton } from "./skeleton";

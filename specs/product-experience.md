@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.10F, the email shell given a design |
+| **Last updated** | 2026-09-04 — A64-025.11, one loading/failure/empty across the app |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -351,7 +351,7 @@ most, the clock can be off-screen.
 | --- | --- | --- |
 | ~~P2-1~~ | ~~Bracket has no visual parent-child relationship, though the relationship is authoritative and already on the wire (§3.6)~~ | **Fixed** — §16 |
 | ~~P2-2~~ | ~~Password-reset email is English-only and plain-text-only~~ | **Closed by A64-025.10E** — trilingual, both parts, on the shared shell (§30) |
-| P2-3 | No shared empty/error/loading component — 74 hand-rolled live regions (§3.9) | **Foundation laid** — `ListState` promoted and `Notice` added (§10.7); the sweep across surfaces is A64-025.11/.12 |
+| ~~P2-3~~ | ~~No shared empty/error/loading component — 74 hand-rolled live regions (§3.9)~~ | **Closed by A64-025.11** — `LoadFailure` added, `ListState` made to fit, six surfaces swept (§32). The live regions that remain are not load states |
 | ~~P2-4~~ | ~~No `aria-current` anywhere in navigation~~ | **Fixed** — §9.3 |
 | ~~P2-5~~ | ~~No brand colour, no semantic colours~~ | **Fixed** — §10.1, §10.3 |
 | ~~P2-6~~ | ~~`/games/history` had no navigation entry~~ | **Fixed** — §9.2. `/challenges` and `/search` stay inside the Social section, which is where they belong |
@@ -470,7 +470,7 @@ tokens.
 | **A64-025.10** | Notifications — the feed and the bell | .2 | Admin notification surfaces; what the preferences decide (.9C) |
 | **A64-025.10E** | Email design system. Fixes P2-2 | .2 (tokens only) | New email types |
 | **A64-025.10F** | The email shell, designed rather than merely shared | .10E | New email types; a dark variant |
-| **A64-025.11** | Global UI consistency and component cleanup | .3–.10 | Re-architecting layouts already designed mobile-first |
+| **A64-025.11** | Global UI consistency and component cleanup. Fixes P2-3 | .3–.10 | Re-architecting layouts already designed mobile-first |
 | **A64-025.12** | Motion and interaction system. Fixes P3-5 | .3–.10 | Adding motion for its own sake |
 | **A64-025.13** | Closing audit | all | New work |
 
@@ -2910,3 +2910,150 @@ client-specific decision here is reasoned from a documented rendering
 behaviour, not observed, and that is stated so the next person knows which
 claims are evidence and which are inference. New email types stay out of
 scope, as §5 says.
+
+## 32. The three branches every surface was writing — A64-025.11
+
+§3.9 counted the same loading/failure/empty branches written seventy-four
+times. A64-025.2 laid the foundation — `ListState` promoted out of
+`features/social`, `Notice` added — and left the sweep to this phase. This is
+the sweep.
+
+### 32.1 Six surfaces, six answers to the same three questions
+
+Not a stylistic complaint. This is what was actually on screen:
+
+| Surface | Loading announced as | Skeleton | Failure | Empty |
+| --- | --- | --- | --- | --- |
+| `ListState` (shared) | `aria-label` on the wrapper | 3 × `h-14` | its own block, `font-medium` | left block, `py-8` |
+| `QueryState` (profile) | `aria-label` on the wrapper | `h-24` + two lines | its own block, `min-h-11` | — |
+| Notification list | `aria-label` on the wrapper | 3 × `h-16` | `<p role="alert">` in a bare `<div>` | centred dashed panel |
+| Tournament history | **nothing — `aria-hidden`** | 2 × `h-16` | **none at all** | dashed paragraph |
+| `/games/history` | `sr-only` sentence | 4 × `h-14` | `Notice tone="error"` | left block, `py-8` |
+| `/tournaments` | `sr-only` sentence | 3 × `h-24` | its own block, `text-sm` | left block, `py-8` |
+
+Two rows of that table are defects rather than differences.
+
+**The tournament history had no failure branch.** A failed request rendered
+nothing, under a heading reading "Tournament history" — which a player reads
+as "you have not played in any". A broken list looking exactly like a healthy
+empty one is the failure mode the notification list's own docstring warns
+about, three files away.
+
+**Its loading state was `aria-hidden`.** A screen reader was told nothing
+while it loaded and nothing when it arrived.
+
+That is the argument for a component over a convention: a convention is
+forgotten silently, and this is what forgetting it looks like.
+
+### 32.2 What the primitives own now
+
+| Component | Owns |
+| --- | --- |
+| `LoadFailure` | a sentence, a retry, `Notice tone="error"` — **new** |
+| `ListState` | loading, failure (delegated), empty, for a list |
+| `QueryState` | loading and failure for a detail read; no empty branch |
+
+`LoadFailure` is new and is the piece that was missing. §3.9 notes that
+`apps/admin` has had an `ErrorNotice` since the beginning and `apps/web`,
+the larger app, has not. It never shows the error's own text — a player gets
+a sentence they can act on and the diagnostic goes to `reportError`
+(CLAUDE.md §9.7).
+
+### 32.3 Three things `ListState` had to gain first
+
+Promoting it in .2 was not enough, because three of its decisions were made
+for social lists and were wrong elsewhere. Each is why a surface kept writing
+its own.
+
+**The skeleton is the caller's shape.** A tournament card is 96px and a match
+row is 56px. Three 56px bars in a tournament list's place is not a preview,
+it is a different list — and the page jumps when the data lands.
+`pendingRows` and `pendingRowClassName` are two props with three demonstrated
+callers, not speculation.
+
+**The announcement is the caller's sentence, as real text.** It was an
+`aria-label` on an empty `<div role="status">`, which is announced
+inconsistently, and it said "Loading…". "Loading tournaments…" is worth more
+to somebody who cannot see the skeletons, and those strings already existed
+per surface.
+
+**The failure is `LoadFailure`.** Shared with `QueryState`, which is the
+branch the six surfaces disagreed about most.
+
+### 32.4 The empty state is a placeholder, not a paragraph
+
+It was a bare left-aligned block. It is now a heading and a sentence,
+centred, on a dashed panel that fills the space the list would have filled.
+
+The choice was not taste: the notification list and the tournament history
+had **both** independently moved to a dashed panel, which is the product
+saying which of the two treatments was right. A left-aligned block collapses
+the page to nothing and reads as a sentence that lost its container.
+
+`emptyAction` still appears only where the hint names something to do —
+"Find a game" under an empty history, "Search" under an empty friends list,
+and nothing under "You are all caught up", because there is nothing to do
+but wait.
+
+### 32.5 One retry label, one key
+
+`common.retry`, `state.retry` and `profile.state.retry` were the same
+sentence in all three languages. `profile.state.*` was a word-for-word
+duplicate of `state.*` throughout. Both are gone; `state.*` is the state
+vocabulary and the primitives own it.
+
+The *specific* strings were kept, and that is the opposite decision on
+purpose. "Tournaments could not be loaded" tells a player which of the three
+lists on their screen is missing; "We could not load this" does not.
+Consistency of **shape** is the goal; flattening six specific sentences into
+one generic one would make the product worse in its name. The generic
+sentence is the fallback, not the rule.
+
+### 32.6 What was deliberately left alone
+
+Consistency is not uniformity, and four surfaces argue for themselves:
+
+| Surface | Why it keeps its own |
+| --- | --- |
+| `/tournaments/$id` page failure | Tells a 404 from a transient fault and offers the way back to the list. A generic retry cannot. |
+| `/games/$id/replay` `Refusal` | Retry only for `unexpected` — a 404 and a refused engine version are stable answers about a permanent record. |
+| Queue form's catalogue | Failure and empty are collapsed **on purpose**: the four time controls are seeded by a migration, so an empty catalogue means an unmigrated deployment. Both mean "we cannot start a game right now", which is what it says. |
+| Registration panel, challenge dialog | Inline skeletons for a single control, and `role="alert"` for a *mutation* failure. A failed write is not a failed read. |
+
+The two sections of the tournament detail page — standings and bracket — were
+writing the same five lines with different spacing, and those did move onto
+`LoadFailure`.
+
+### 32.7 Measured
+
+| | Before | After |
+| --- | --- | --- |
+| Hand-written `role="status"` / `role="alert"` outside `shared/ui` | 65 | 57 |
+| Files on `ListState` / `LoadFailure` / `Notice` | 9 | 15 |
+| `<Skeleton>` used outside `shared/ui` | 24 | 16 |
+| Lists with no failure state | 1 | 0 |
+| Duplicate retry-label keys | 3 | 1 |
+
+The remaining 57 are mostly not load states: a game room's turn indicator, a
+form field's validation message, a mutation failure announced beside the
+control that caused it. Those are `role="status"` doing its actual job, and
+`.12` and `.13` will say so rather than counting them again as debt.
+
+| | |
+| --- | --- |
+| `tsc --noEmit` | clean |
+| `eslint` | 0 errors (3 pre-existing `react-refresh` warnings in `shared/realtime/context.tsx`) |
+| `vitest` | 225 passed, 33 files |
+
+Five new contract tests, including the one that pins the ordering the
+tournament-history fix depends on: a caller computes `isEmpty` from
+`entries.length === 0`, which is **true while a request is failing**, so the
+failure branch must win. Verified on screen against a live API with the list
+reads forced to fail, and against real empty accounts for the empty states.
+
+### 32.8 Not done
+
+`.12` owns motion — the skeletons pulse today with no
+`prefers-reduced-motion` guard (P3-5), and that is where it belongs rather
+than here. The success-toast half of §3.9 has no surface asking for it yet
+and stays out.

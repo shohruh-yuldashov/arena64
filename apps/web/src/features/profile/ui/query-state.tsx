@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import { useTranslation } from "@/shared/i18n";
-import { Button, Skeleton } from "@/shared/ui";
+import { LoadFailure, Skeleton } from "@/shared/ui";
 
 /**
  * The three states every profile read can be in, in one place.
@@ -10,18 +10,31 @@ import { Button, Skeleton } from "@/shared/ui";
  * that get forgotten are the failure state and the retry, so a request that
  * fails renders nothing at all and reads as a blank page.
  *
- * A **bounded** failure: a message and a way to try again, never the
- * error's own text. That belongs in `reportError`, not on screen
- * (CLAUDE.md §9.7).
+ * ## Why this is not `ListState` — A64-025.11 §32
+ *
+ * A profile is not a list, and the difference is the loading state: a
+ * heading block with two lines under it, because that is the shape of what
+ * arrives. Three identical bars would be a preview of a list that is not
+ * coming.
+ *
+ * There is no empty branch for the same reason — a profile that resolves
+ * exists, so "nothing here" is not one of its outcomes.
+ *
+ * What the two **do** share is the failure, which is `LoadFailure`. That is
+ * the branch §3.9 found written six different ways, and the one where the
+ * disagreement was not merely cosmetic.
  */
 export function QueryState({
   isPending,
   isError,
+  errorMessage,
   onRetry,
   children,
 }: {
   isPending: boolean;
   isError: boolean;
+  /** What failed, in the caller's words. Falls back to the generic sentence. */
+  errorMessage?: string;
   onRetry: () => void;
   children: ReactNode;
 }) {
@@ -29,11 +42,10 @@ export function QueryState({
 
   if (isPending) {
     return (
-      <div
-        className="flex flex-col gap-3"
-        role="status"
-        aria-label={t("profile.state.loading")}
-      >
+      <div className="flex flex-col gap-3">
+        <span role="status" className="sr-only">
+          {t("state.loading")}
+        </span>
         <Skeleton className="h-24 w-full" />
         <Skeleton className="h-4 w-2/3" />
         <Skeleton className="h-4 w-1/2" />
@@ -41,16 +53,7 @@ export function QueryState({
     );
   }
 
-  if (isError) {
-    return (
-      <div role="alert" className="flex flex-col items-start gap-3">
-        <p className="text-sm font-medium">{t("profile.state.failedTitle")}</p>
-        <Button variant="outline" className="min-h-11" onClick={onRetry}>
-          {t("profile.state.retry")}
-        </Button>
-      </div>
-    );
-  }
+  if (isError) return <LoadFailure message={errorMessage} onRetry={onRetry} />;
 
   return <>{children}</>;
 }

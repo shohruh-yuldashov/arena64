@@ -104,7 +104,7 @@ function Refusal({
             version are stable answers about a permanent record. */}
         {kind === "unexpected" && (
           <Button variant="outline" className="min-h-11" onClick={onRetry}>
-            {t("common.retry")}
+            {t("state.retry")}
           </Button>
         )}
         <Button asChild variant="outline" className="min-h-11">

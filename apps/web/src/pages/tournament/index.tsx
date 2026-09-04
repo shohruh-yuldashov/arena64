@@ -15,7 +15,7 @@ import { useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
 import { formatDate, formatDateTime, formatRelativeTime } from "@/shared/lib/format";
 import { speedAccent } from "@/shared/lib/speed-accent";
-import { Button, Skeleton } from "@/shared/ui";
+import { Button, LoadFailure, Skeleton } from "@/shared/ui";
 
 /**
  * One tournament — A64-020.6 §7, §17, §18, §22, §25.
@@ -91,7 +91,7 @@ export default function TournamentPage() {
               className="min-h-11"
               onClick={() => void detail.refetch()}
             >
-              {t("common.retry")}
+              {t("state.retry")}
             </Button>
           )}
           <Button asChild variant="outline" className="min-h-11">
@@ -270,17 +270,16 @@ export default function TournamentPage() {
               <Skeleton className="h-32 w-full" />
             </>
           )}
+          {/* A64-025.11 §32. This and the bracket below wrote the same
+              five lines with different spacing. They are one component now.
+              The *page-level* failure above is deliberately not — it tells
+              a 404 apart from a transient fault and offers the way back to
+              the list, which a generic retry cannot do. */}
           {standings.isError && (
-            <div role="alert" className="flex flex-col items-start gap-2">
-              <p className="text-sm">{t("tournament.standings.error")}</p>
-              <Button
-                variant="outline"
-                className="min-h-11"
-                onClick={() => void standings.refetch()}
-              >
-                {t("common.retry")}
-              </Button>
-            </div>
+            <LoadFailure
+              message={t("tournament.standings.error")}
+              onRetry={() => void standings.refetch()}
+            />
           )}
           {standings.data !== undefined && (
             <StandingsTable standings={standings.data} viewerId={viewerId} />
@@ -302,16 +301,10 @@ export default function TournamentPage() {
           </>
         )}
         {bracket.isError && (
-          <div role="alert" className="flex flex-col items-start gap-2">
-            <p className="text-sm">{t("tournament.bracket.error")}</p>
-            <Button
-              variant="outline"
-              className="min-h-11"
-              onClick={() => void bracket.refetch()}
-            >
-              {t("common.retry")}
-            </Button>
-          </div>
+          <LoadFailure
+            message={t("tournament.bracket.error")}
+            onRetry={() => void bracket.refetch()}
+          />
         )}
         {bracket.data !== undefined && <BracketView bracket={bracket.data} />}
       </section>

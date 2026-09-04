@@ -7,7 +7,7 @@ import { useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
 import { formatDate } from "@/shared/lib/format";
 import { speedAccent } from "@/shared/lib/speed-accent";
-import { Button, Skeleton, Spinner } from "@/shared/ui";
+import { Button, ListState, Spinner } from "@/shared/ui";
 
 /**
  * A player's tournaments, newest first.
@@ -46,6 +46,18 @@ import { Button, Skeleton, Spinner } from "@/shared/ui";
  * format and date are one subordinate line; and the outcome is stated in
  * words on the right. Gold marks a win — and the word "Champion" is beside
  * it, because colour is never the only signal (WCAG 1.4.1).
+ *
+ * ## The failure state this never had — A64-025.11 §32
+ *
+ * There was no `isError` branch. A failed request rendered **nothing**,
+ * under a heading that says "Tournament history", which a player reads as
+ * "you have not played in any" — a broken list looking exactly like a
+ * healthy empty one. The loading state was `aria-hidden`, so a screen
+ * reader was told nothing either.
+ *
+ * Both are `ListState`'s now, which is the argument for a component over a
+ * convention: a convention can be forgotten silently, and this is what that
+ * looks like.
  */
 export function TournamentHistory({ playerId }: { playerId: string | undefined }) {
   const { t, locale } = useTranslation();
@@ -59,108 +71,104 @@ export function TournamentHistory({ playerId }: { playerId: string | undefined }
         {t("profile.tournaments.title")}
       </h2>
 
-      {history.isPending && (
-        <div className="flex flex-col gap-2" aria-hidden="true">
-          <Skeleton className="h-16 w-full rounded-xl" />
-          <Skeleton className="h-16 w-full rounded-xl" />
-        </div>
-      )}
+      <ListState
+        isPending={history.isPending}
+        isError={history.isError}
+        isEmpty={entries.length === 0}
+        loadingLabel={t("profile.tournaments.loadingLabel")}
+        errorMessage={t("profile.tournaments.error")}
+        emptyTitle={t("profile.tournaments.empty")}
+        pendingRows={2}
+        pendingRowClassName="h-16 rounded-xl"
+        onRetry={() => void history.refetch()}
+      >
+        {entries.length > 0 && (
+          <ul className="border-border bg-card divide-border divide-y overflow-hidden rounded-xl border">
+            {entries.map((entry) => {
+              const rank = entry.final_rank ?? null;
+              const status = entry.final_status ?? null;
+              const accent = speedAccent(entry.tournament.speed_class);
 
-      {history.isSuccess && entries.length === 0 && (
-        // The same dashed frame the unrated categories use, so "nothing
-        // here yet" looks like one thing across the page rather than like
-        // a paragraph that lost its container.
-        <p className="border-border text-muted-foreground rounded-xl border border-dashed px-5 py-4 text-sm">
-          {t("profile.tournaments.empty")}
-        </p>
-      )}
-
-      {entries.length > 0 && (
-        <ul className="border-border bg-card divide-border divide-y overflow-hidden rounded-xl border">
-          {entries.map((entry) => {
-            const rank = entry.final_rank ?? null;
-            const status = entry.final_status ?? null;
-            const accent = speedAccent(entry.tournament.speed_class);
-
-            return (
-              <li
-                key={entry.tournament.id}
-                // The chip stays on the left at every width; the name, the
-                // meta line and the outcome stack under each other below
-                // `sm` and spread across above it. `flex-wrap` alone kept
-                // the outcome on the first line, where it squeezed a
-                // tournament's name down to "Autumn Blitz C…" at 360.
-                className="flex items-start gap-3 px-4 py-3 sm:items-center sm:gap-4 sm:px-5"
-              >
-                <span
-                  className={cn(
-                    // A fixed width, not `min-w-`: "Rank 4" and the em dash
-                    // are different lengths, and a chip that sizes to its
-                    // own text starts each name at a different x.
-                    "inline-flex h-8 w-20 shrink-0 items-center justify-center rounded-md px-2 text-xs font-semibold tabular-nums",
-                    rank === 1
-                      ? "bg-rating/20 text-foreground"
-                      : "bg-muted text-muted-foreground",
-                  )}
+              return (
+                <li
+                  key={entry.tournament.id}
+                  // The chip stays on the left at every width; the name, the
+                  // meta line and the outcome stack under each other below
+                  // `sm` and spread across above it. `flex-wrap` alone kept
+                  // the outcome on the first line, where it squeezed a
+                  // tournament's name down to "Autumn Blitz C…" at 360.
+                  className="flex items-start gap-3 px-4 py-3 sm:items-center sm:gap-4 sm:px-5"
                 >
-                  {rank === null ? "—" : t("profile.tournaments.rank", { rank })}
-                </span>
+                  <span
+                    className={cn(
+                      // A fixed width, not `min-w-`: "Rank 4" and the em dash
+                      // are different lengths, and a chip that sizes to its
+                      // own text starts each name at a different x.
+                      "inline-flex h-8 w-20 shrink-0 items-center justify-center rounded-md px-2 text-xs font-semibold tabular-nums",
+                      rank === 1
+                        ? "bg-rating/20 text-foreground"
+                        : "bg-muted text-muted-foreground",
+                    )}
+                  >
+                    {rank === null ? "—" : t("profile.tournaments.rank", { rank })}
+                  </span>
 
-                <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-                  <div className="flex min-w-0 flex-col gap-0.5">
-                    {/* A64-020.6 §20. The row already holds the whole summary,
+                  <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                    <div className="flex min-w-0 flex-col gap-0.5">
+                      {/* A64-020.6 §20. The row already holds the whole summary,
                       so linking costs **no** request — nothing is prefetched
                       and no detail is read per row. Without it the bracket a
                       player competed in is reachable only from the lobby. */}
-                    <Link
-                      to="/tournaments/$tournamentId"
-                      params={{ tournamentId: entry.tournament.id }}
-                      className="focus-visible:ring-ring truncate text-sm font-medium underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:outline-none"
-                    >
-                      {entry.tournament.name}
-                    </Link>
+                      <Link
+                        to="/tournaments/$tournamentId"
+                        params={{ tournamentId: entry.tournament.id }}
+                        className="focus-visible:ring-ring truncate text-sm font-medium underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:outline-none"
+                      >
+                        {entry.tournament.name}
+                      </Link>
 
-                    <div className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 text-xs [&>span:not(:last-child)]:after:ml-1.5 [&>span:not(:last-child)]:after:content-['·']">
-                      <span className={cn("font-medium", accent.text)}>
-                        {t(speedClassKey(entry.tournament.speed_class))}
-                      </span>
-                      <span>{t(formatKey(entry.tournament.format))}</span>
-                      <span>{formatDate(entry.tournament.created_at, locale)}</span>
+                      <div className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 text-xs [&>span:not(:last-child)]:after:ml-1.5 [&>span:not(:last-child)]:after:content-['·']">
+                        <span className={cn("font-medium", accent.text)}>
+                          {t(speedClassKey(entry.tournament.speed_class))}
+                        </span>
+                        <span>{t(formatKey(entry.tournament.format))}</span>
+                        <span>{formatDate(entry.tournament.created_at, locale)}</span>
+                      </div>
                     </div>
+
+                    <span
+                      className={cn(
+                        "shrink-0 text-sm font-medium",
+                        status === null && "text-muted-foreground",
+                        status === "champion" && "text-rating font-semibold",
+                      )}
+                    >
+                      {status === null
+                        ? t("profile.tournaments.inProgress")
+                        : t(finalStatusKey(status))}
+                    </span>
                   </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
 
-                  <span
-                    className={cn(
-                      "shrink-0 text-sm font-medium",
-                      status === null && "text-muted-foreground",
-                      status === "champion" && "text-rating font-semibold",
-                    )}
-                  >
-                    {status === null
-                      ? t("profile.tournaments.inProgress")
-                      : t(finalStatusKey(status))}
-                  </span>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-
-      {history.hasNextPage && (
-        <Button
-          variant="outline"
-          className="self-start"
-          disabled={history.isFetchingNextPage}
-          onClick={() => void history.fetchNextPage()}
-        >
-          {history.isFetchingNextPage ? (
-            <Spinner label={t("profile.tournaments.loading")} />
-          ) : (
-            t("profile.tournaments.loadMore")
-          )}
-        </Button>
-      )}
+        {history.hasNextPage && (
+          <Button
+            variant="outline"
+            className="self-start"
+            disabled={history.isFetchingNextPage}
+            onClick={() => void history.fetchNextPage()}
+          >
+            {history.isFetchingNextPage ? (
+              <Spinner label={t("profile.tournaments.loading")} />
+            ) : (
+              t("profile.tournaments.loadMore")
+            )}
+          </Button>
+        )}
+      </ListState>
     </section>
   );
 }

@@ -1,7 +1,6 @@
 {
   "common": {
     "loading": "Yuklanmoqda…",
-    "retry": "Qayta urinish",
     "goHome": "Bosh sahifaga",
     "cancel": "Bekor qilish"
   },
@@ -219,7 +218,9 @@
       "inProgress": "Davom etmoqda",
       "rank": "{rank}-o'rin",
       "seed": "{seed}-seed",
-      "loading": "Yuklanmoqda…"
+      "loading": "Yuklanmoqda…",
+      "error": "Turnirlar tarixini yuklab bo'lmadi.",
+      "loadingLabel": "Turnirlar tarixi yuklanmoqda…"
     },
     "edit": {
       "title": "Profilni tahrirlash",
@@ -335,12 +336,6 @@
       "rate_limited": "Juda ko'p urinish. Birozdan so'ng qayta urining.",
       "network": "Serverga ulanib bo'lmadi.",
       "unexpected": "Kutilmagan xatolik. Qayta urinib ko'ring."
-    },
-    "state": {
-      "loading": "Yuklanmoqda…",
-      "retry": "Qayta urinish",
-      "failedTitle": "Ma'lumotni yuklab bo'lmadi",
-      "hiddenByPrivacy": "Egasi yashirgan"
     }
   },
   "social": {

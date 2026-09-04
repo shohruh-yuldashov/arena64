@@ -1,0 +1,799 @@
+# Product Analytics and Measurement
+
+| Field            | Value                                     |
+| ---------------- | ----------------------------------------- |
+| **Status**       | Architecture frozen; collection not built |
+| **Owner**        | Shohruh                                   |
+| **Applies to**   | `apps/api`, `apps/web`                    |
+| **Decided in**   | A64-027.1 — `docs/07-decisions/ADR-005`   |
+| **Last updated** | 2026-09-05                                |
+
+---
+
+## 1. Goals
+
+Answer, with evidence rather than intuition:
+
+1. Does anybody arrive, and do they register?
+2. Do registered players reach their first game?
+3. Do they come back?
+4. Does matchmaking pair people quickly, and do the matches it makes get played to an end?
+5. Do tournaments and friend challenges get used?
+
+## 2. Non-goals
+
+**This is aggregate product measurement, not user surveillance.** An
+administrator answering "is the product healthy" must never need to read one
+person's timeline to do it (§40).
+
+Also not goals: attributing revenue (there is none), advertising, session
+replay, heatmaps, per-move telemetry, and anything requiring free text.
+
+## 3. Four systems, deliberately separate
+
+Arena64 already has three of these. Analytics is the fourth, and conflating
+them is the failure this section exists to prevent.
+
+| System                      | Answers                        | Lives in                         | Keyed by                             | Retention set by     |
+| --------------------------- | ------------------------------ | -------------------------------- | ------------------------------------ | -------------------- |
+| **Product analytics**       | Do people use this, and how?   | This document (store: A64-027.2) | `PlayerId` / `anonymous_id`          | Product policy (§30) |
+| **Operational metrics**     | Is the system healthy?         | `app/platform/metrics`           | Nothing — counters have no actor     | Log retention        |
+| **Audit log**               | Who did this privileged thing? | `admin.audit_entry`              | `actor_id`, closed action vocabulary | Governance           |
+| **Application logs/traces** | Why did this request fail?     | Structured logs                  | `correlation_id`                     | Debugging            |
+
+Three rules follow, and each is a real temptation:
+
+- **Do not count product events with `MetricsRecorder`.** Its counters have
+  no actor, so retention, cohorts and funnels — every per-person question —
+  are unanswerable by construction. Its sink is log lines, whose retention is
+  set for debugging.
+- **Do not put product events in the audit log.** `admin.audit_entry` is
+  append-only under a governance access model, and its action vocabulary is
+  closed for exactly that reason.
+- **Do not read metrics out of application logs.** A log line is a diagnostic
+  artefact, not a measurement.
+
+## 4. Architecture
+
+Decided in ADR-005: **first-party, on the existing outbox.** No third-party
+provider, no SDK, no tracking pixel, no second event bus.
+
+```
+  a domain fact                          a person clicks something
+        │                                          │
+   domain event                        POST /api/v1/analytics/events
+   (same transaction as the fact)          authenticated, allowlisted,
+        │                                   validated, rate-limited
+   platform.outbox                                 │
+        │  at-least-once, retry, backoff           │
+   analytics consumer  ──────────────────────►  analytics event store
+        │  processed_event(consumer, event_id)     ▲
+        │  makes redelivery a no-op                │
+        └──────────────────────────────────────────┘
+```
+
+The left path carries **authoritative** facts and the right path carries
+**behavioural** ones. They never carry the same event name (§9, §41).
+
+### What is reused rather than rebuilt
+
+| Need                   | Existing mechanism                                                         |
+| ---------------------- | -------------------------------------------------------------------------- |
+| Stable event identity  | `outbox.id`, generated at the authoritative source                         |
+| Exactly-once effect    | `platform.processed_event(consumer, event_id)` — composite primary key     |
+| Delivery and retry     | The outbox relay: `attempt_count`, `next_attempt_at`, `last_error`         |
+| Transactional coupling | AD-16 — the event row is written by the unit of work that writes the state |
+| Canonical vocabulary   | `MatchOutcome`, `TerminationReason`, `SpeedClass`, `ProductVariant`        |
+| Identity               | `PlayerId` (DM-06)                                                         |
+| Environment separation | `Environment` — `local`, `test`, `ci`, `staging`, `production`             |
+
+## 5. The event envelope
+
+| Field                | Required                     | Generated by                                                                           | Trust                                               | Privacy                                                 |
+| -------------------- | ---------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------- |
+| `event_id`           | Yes                          | The authoritative source — `outbox.id` for server events, the server for client events | Trusted                                             | None                                                    |
+| `event_name`         | Yes                          | Registry (§6)                                                                          | Validated against the registry                      | None                                                    |
+| `event_version`      | Yes                          | Registry                                                                               | Trusted                                             | None                                                    |
+| `occurred_at`        | Yes                          | Server (§43)                                                                           | Trusted                                             | None                                                    |
+| `client_occurred_at` | Client events only, optional | Client                                                                                 | **Untrusted** — context only, never an ordering key | None                                                    |
+| `source`             | Yes                          | Server                                                                                 | Trusted                                             | None                                                    |
+| `environment`        | Yes                          | Server, from `Environment`                                                             | Trusted                                             | None                                                    |
+| `actor_id`           | Optional                     | Server, from the session                                                               | Trusted                                             | **Pseudonymous** — `PlayerId`, never an email or handle |
+| `anonymous_id`       | Optional                     | Client, first visit                                                                    | Untrusted but harmless                              | Pseudonymous, browser-scoped                            |
+| `session_id`         | Optional                     | Client                                                                                 | Untrusted                                           | Pseudonymous, short-lived                               |
+| `properties`         | Yes (may be empty)           | Per-event schema (§34)                                                                 | Validated                                           | Denylisted (§14)                                        |
+
+Exactly one of `actor_id` or `anonymous_id` is always present. Both are
+present for a client event fired by a signed-in player.
+
+**`event_id` is the deduplication key** and the whole of §26.
+
+## 6. Naming
+
+`snake_case`, and a **past-tense fact**: `user_registered`, `match_completed`.
+
+An interaction is named for the interaction and never for the fact it hopes
+to cause. The distinction is not cosmetic — it is the difference between
+what a person did and what the system did:
+
+| Interaction (client, behavioural) | Fact (server, authoritative) |
+| --------------------------------- | ---------------------------- |
+| `register_cta_clicked`            | `user_registered`            |
+| `queue_join_clicked`              | `queue_joined`               |
+| `tournament_viewed`               | `tournament_entered`         |
+
+No prefixes, no namespacing: this taxonomy is small on purpose and a flat
+name is one fewer thing to spell two ways. The event registry enforces
+uniqueness and the naming pattern in a test.
+
+## 7. Versioning
+
+`event_version` starts at `1` and follows the rule `DomainEvent` already
+uses, so there is one versioning concept on this platform rather than two.
+
+| Change                                     | Bump?                                                                  |
+| ------------------------------------------ | ---------------------------------------------------------------------- |
+| Add an optional property                   | No — additive, and old rows simply lack it                             |
+| Add a member to an existing enum property  | No — a reader that does not know it treats it as other                 |
+| Remove a property                          | **Yes**                                                                |
+| Change a property's meaning, unit or scale | **Yes** — this is the dangerous one, because a reader cannot detect it |
+| Rename a property                          | **Yes** (or add the new one and deprecate)                             |
+| Change what triggers the event             | **Yes**                                                                |
+
+Old rows are never rewritten. A query spanning a bump filters or branches on
+`event_version` explicitly; a query that ignores it is wrong, and the
+metric definitions in §33 name the versions they read.
+
+## 8. Ownership and trust
+
+| Trust             | Meaning                           | Source                             |
+| ----------------- | --------------------------------- | ---------------------------------- |
+| **AUTHORITATIVE** | The server says this happened     | A domain event, via the outbox     |
+| **BEHAVIOURAL**   | A browser reported an interaction | The collector endpoint             |
+| **DERIVED**       | Computed from stored events       | A query — never stored as an event |
+
+`match_completed` is authoritative. `match_completion_rate` is derived.
+Nothing derived is ever emitted as an event, because an emitted derivation is
+a number nobody can recompute.
+
+**Domain modules own facts; analytics consumes them.** The `game` module
+decides a match completed. Analytics never does. This keeps the dependency
+direction the platform already enforces: `app.platform.analytics` imports
+nothing from `app.modules`.
+
+## 9. Identity
+
+Three identities, and the rule that keeps them honest: **the server assigns
+`actor_id`, from the session, never from the request body.**
+
+| Identity       | Scope                    | Storage                | Lifetime                                          |
+| -------------- | ------------------------ | ---------------------- | ------------------------------------------------- |
+| `actor_id`     | A person, across devices | Server-side, per event | Permanent (survives erasure — AC-5)               |
+| `anonymous_id` | One browser              | `localStorage`         | Until cleared, or the retention period (§44 OPEN) |
+| `session_id`   | One visit                | `sessionStorage`       | Tab lifetime                                      |
+
+**`anonymous_id` lives in `localStorage`, not a cookie.** It is never sent to
+a third party, never used for cross-site anything, and is not required for
+the site to function — which is what makes the consent classification in §16
+defensible. A cookie would be sent on every request to the API for no
+purpose.
+
+### The stitch
+
+When an anonymous visitor registers or signs in, the client sends its
+`anonymous_id` with the next authenticated event. The server records the pair
+once, in an `identity_link` table, and funnel queries resolve an
+`anonymous_id` to its `actor_id` **at query time**.
+
+Historical rows are **not rewritten**. Rewriting history to attach a name to
+it is the opposite of what an append-only measurement store is for, and a
+link that turns out to be wrong (a shared browser) can then be deleted
+without having corrupted anything.
+
+On sign-out the client **generates a new `anonymous_id`**. Keeping it would
+attach the next person on a shared computer to the previous one's visit.
+
+Multiple devices produce multiple `anonymous_id`s and one `actor_id`;
+pre-registration activity is therefore attributed per device, which is a
+stated limitation of the acquisition funnel (§36) rather than a defect.
+
+## 10. Identifiers: what analytics may hold
+
+The analytics identity is **`PlayerId`** — DM-06's opaque, cross-context
+identifier, chosen by the domain model precisely because a handle is mutable
+and an email carries an erasure obligation.
+
+- **Never** an email, a hashed email, a username, or a display name.
+- A hashed email is **not** anonymous: it is a stable identifier for a person
+  and joins across any other system holding the same hash.
+
+## 11. PII denylist
+
+Never sent to analytics, in any property, under any name:
+
+email · password, token, session identifier · phone number · real name ·
+username · display name · avatar URL · bio · country _(a free profile field,
+not a derived region)_ · **IP address** · **User-Agent** · quick-message
+content · emoji content · notification title or body · chat of any kind ·
+moderation notes · free text of any kind · full URLs, referrers, or query
+strings beyond the bounded attribution fields in §17
+
+The denylist is a contract test over property names, not a review
+convention. The default is **minimal**: a property is added when a metric in
+§33 names it, and not because it happened to be available.
+
+## 12. IP address and User-Agent
+
+Neither is collected, stored, or derived from.
+
+| Question                            | Answer                                                                                                                                                                                 |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Does the collector receive an IP?   | The web server sees one, as it does for every request. Analytics does **not** read it and does not store it                                                                            |
+| Is it persisted?                    | No                                                                                                                                                                                     |
+| Is a truncated or hashed form kept? | No. A truncated IP is still a location signal, and this product has no metric that needs one                                                                                           |
+| User-Agent?                         | Not stored. Device-class segmentation is a real future want; when it arrives it arrives as a **bounded enum** the client sends (`mobile` \| `tablet` \| `desktop`), never a raw string |
+| Third-party collection?             | None. There is no third party (ADR-005)                                                                                                                                                |
+
+There is no silent collection anywhere in this design, which is the point of
+stating it here rather than leaving it to the implementation.
+
+## 13. Geography
+
+Not collected. Arena64 has a `Region` concept in matchmaking; that is a
+**pairing pool**, and it may appear as a matchmaking dimension because it is
+already a server-side pairing input. It is not a location measurement and
+must not be presented as one.
+
+## 14. Cardinality: dimensions vs correlation
+
+Two different jobs, and mixing them is how an analytics store becomes
+unqueryable.
+
+**Aggregation dimensions** — low cardinality, safe to `GROUP BY`:
+`rated` (2) · `variant` (1 today) · `speed_class` (5) ·
+`termination_reason` (11) · `outcome` (3) · `queue_type` ·
+`tournament_format` · `environment` (5) · `source` (2)
+
+**Correlation identifiers** — envelope or property, never a `GROUP BY` key:
+`match_id` · `tournament_id` · `challenge_id` · `actor_id` · `session_id`
+
+**Never stored at all:** tournament name, username, any raw URL, any error
+message, any free text. A tournament name is a high-cardinality string that
+answers no product question; `tournament_id` answers every one it could.
+
+## 15. Deduplication and idempotency
+
+The outbox already solves this, which is most of ADR-005's argument.
+
+- `event_id` for a server event **is** `outbox.id` — generated once, at the
+  source, inside the transaction that made the fact true. A relay redelivery
+  carries the same id.
+- The analytics consumer writes `processed_event('analytics', event_id)`. The
+  composite primary key makes a second delivery a conflict, and the insert is
+  a no-op.
+- The event store's own primary key is `event_id`, so a duplicate is rejected
+  by the database rather than by application logic that can be forgotten.
+- Client events get a server-generated `event_id`. A client-supplied
+  `event_id` would let a client suppress a real event by replaying an id.
+
+**Semantics: at-least-once delivery, exactly-once effect.**
+
+## 16. Consent classification
+
+A technical classification, not legal advice.
+
+| Class                 | What                                                              | This design                                                 |
+| --------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------- |
+| **Essential**         | Needed for the site to function                                   | Session cookie. Already exists, unchanged by this design    |
+| **Product analytics** | First-party, pseudonymous, no third party, no cross-site tracking | `anonymous_id` in `localStorage`; server-side event storage |
+| **Optional**          | Third-party, advertising, cross-site                              | **None. There is none, by decision (ADR-005)**              |
+
+Because there is no third party, no advertising identifier and no cross-site
+tracking, this is a first-party measurement design in the narrowest category
+that exists. Whether that requires a consent gate in a given jurisdiction is
+a **legal and product policy question** and is recorded as an open decision
+(§44) rather than answered here.
+
+**No cookie banner is implemented, and none should be until that decision is
+made.** A banner shipped speculatively is a permanent tax on every visitor
+for a requirement nobody has established.
+
+## 17. Attribution
+
+Three bounded fields, captured on first landing and stored with the
+acquisition event only: `utm_source`, `utm_medium`, `utm_campaign`.
+
+Each is trimmed to 64 characters, lowercased, and matched against
+`^[a-z0-9_-]+$` — anything else is dropped, not stored. No `utm_term`, no
+`utm_content`, no referrer, no click identifiers, no ad-network parameters,
+and no arbitrary query-string persistence. This is enough to tell whether a
+campaign worked; it is deliberately not an ad-tech stack.
+
+Attribution is captured once per `anonymous_id`, not per page view.
+
+---
+
+## 18. Event taxonomy
+
+Every approved event appears exactly **once** in this table. An event exists
+because a metric in §33 reads it — nothing is here "in case it is useful".
+
+| Event                         | v   | Owner    | Trust         | Trigger                                                 | Properties                                                                                                                          | Identity                  | Dedup key  | PII  | Read by                            |
+| ----------------------------- | --- | -------- | ------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | ---------- | ---- | ---------------------------------- |
+| **Acquisition**               |     |          |               |                                                         |                                                                                                                                     |                           |            |      |                                    |
+| `landing_viewed`              | 1   | frontend | BEHAVIOURAL   | `/` renders for an anonymous visitor                    | `utm_source?`, `utm_medium?`, `utm_campaign?`                                                                                       | `anonymous_id`            | `event_id` | none | M1, F-A                            |
+| `register_cta_clicked`        | 1   | frontend | BEHAVIOURAL   | Any control leading to `/register` is activated         | `placement` (`hero`\|`header`\|`footer`\|`closing`\|`tournament`)                                                                   | `anonymous_id`            | `event_id` | none | M2, F-A                            |
+| `public_tournament_viewed`    | 1   | frontend | BEHAVIOURAL   | `/tournaments/{id}` renders for an anonymous visitor    | `tournament_id`, `status`                                                                                                           | `anonymous_id`            | `event_id` | none | F-C                                |
+| `share_clicked`               | 1   | frontend | BEHAVIOURAL   | The share control completes                             | `surface` (`tournament`), `mechanism` (`share_sheet`\|`clipboard`)                                                                  | either                    | `event_id` | none | —                                  |
+| **Registration & activation** |     |          |               |                                                         |                                                                                                                                     |                           |            |      |                                    |
+| `user_registered`             | 1   | backend  | AUTHORITATIVE | The account row is committed                            | —                                                                                                                                   | `actor_id`                | `event_id` | none | M3, M4, F-A, F-B, retention cohort |
+| `email_verified`              | 1   | backend  | AUTHORITATIVE | The verification token is consumed                      | `hours_since_registration`                                                                                                          | `actor_id`                | `event_id` | none | M5, F-B                            |
+| **Matchmaking**               |     |          |               |                                                         |                                                                                                                                     |                           |            |      |                                    |
+| `queue_joined`                | 1   | backend  | AUTHORITATIVE | The server accepts a queue ticket                       | `variant`, `speed_class`, `rated`, `queue_type`                                                                                     | `actor_id`                | `event_id` | none | M6, M7, F-B                        |
+| `queue_left`                  | 1   | backend  | AUTHORITATIVE | A ticket is cancelled or expires                        | `reason` (`cancelled`\|`expired`), `waited_ms`, `variant`, `speed_class`                                                            | `actor_id`                | `event_id` | none | M7                                 |
+| `match_found`                 | 1   | backend  | AUTHORITATIVE | Two tickets are paired                                  | `match_id`, `variant`, `queue_type`, `waited_ms`, `rated`                                                                           | `actor_id` (one per seat) | `event_id` | none | M7, M8, M9                         |
+| `match_offer_resolved`        | 1   | backend  | AUTHORITATIVE | An offer is accepted by both, declined, or expires      | `match_id`, `resolution` (`both_accepted`\|`declined`\|`expired`)                                                                   | `actor_id` (initiating)   | `event_id` | none | M9                                 |
+| **Game**                      |     |          |               |                                                         |                                                                                                                                     |                           |            |      |                                    |
+| `match_started`               | 1   | backend  | AUTHORITATIVE | The match activates and the clock starts                | `match_id`, `variant`, `speed_class`, `rated`, `origin` (`queue`\|`challenge`\|`tournament`)                                        | one row per seat          | `event_id` | none | M10, M11, F-B, F-D                 |
+| `match_completed`             | 1   | backend  | AUTHORITATIVE | The ply that ends the game                              | `match_id`, `variant`, `speed_class`, `rated`, `outcome`, `termination_reason`, `winner_side`, `ply_count`, `duration_ms`, `origin` | **match-level**, no actor | `event_id` | none | M10 – M14, F-B, F-D                |
+| `rating_changed`              | 1   | backend  | AUTHORITATIVE | A rating is written after a rated match                 | `match_id`, `variant`, `speed_class`, `rating_before`, `rating_after`, `is_provisional`                                             | `actor_id`                | `event_id` | none | —                                  |
+| **Tournament**                |     |          |               |                                                         |                                                                                                                                     |                           |            |      |                                    |
+| `tournament_entered`          | 1   | backend  | AUTHORITATIVE | A registration row is committed                         | `tournament_id`, `format`, `variant`, `speed_class`, `rated`, `capacity`                                                            | `actor_id`                | `event_id` | none | M15, F-C                           |
+| `tournament_withdrawn`        | 1   | backend  | AUTHORITATIVE | A registration is withdrawn                             | `tournament_id`                                                                                                                     | `actor_id`                | `event_id` | none | M15                                |
+| `tournament_completed`        | 1   | backend  | AUTHORITATIVE | The final is decided                                    | `tournament_id`, `format`, `entrant_count`                                                                                          | **tournament-level**      | `event_id` | none | M15                                |
+| **Social**                    |     |          |               |                                                         |                                                                                                                                     |                           |            |      |                                    |
+| `friend_request_sent`         | 1   | backend  | AUTHORITATIVE | A request row is committed                              | —                                                                                                                                   | `actor_id` (requester)    | `event_id` | none | M16                                |
+| `friendship_created`          | 1   | backend  | AUTHORITATIVE | A request is accepted                                   | —                                                                                                                                   | `actor_id` (accepter)     | `event_id` | none | M16                                |
+| `challenge_sent`              | 1   | backend  | AUTHORITATIVE | A friend challenge is created                           | `variant`, `speed_class`, `rated`                                                                                                   | `actor_id` (challenger)   | `event_id` | none | M17, F-D                           |
+| `challenge_resolved`          | 1   | backend  | AUTHORITATIVE | A challenge is accepted, declined, cancelled or expires | `resolution` (`accepted`\|`declined`\|`cancelled`\|`expired`), `match_id?`                                                          | `actor_id` (resolver)     | `event_id` | none | M17, F-D                           |
+
+**19 events.** Every property value is a canonical domain enum or a number;
+none is a free string.
+
+### Deliberately absent
+
+| Not an event                  | Why                                                                                                                                         |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `move_made`                   | `game.move_applied` exists as a domain event and must not reach analytics. Per-move volume with no product question behind it               |
+| `first_match_started`         | **Derived**, not emitted. It is the earliest `match_started` per `actor_id`, and a separate event would be a second thing that can disagree |
+| `login_succeeded`             | Sign-in is not a product outcome here. Returning is measured by activity (§28), which is what retention actually means                      |
+| `notification_created/opened` | Deferred (§22). No metric asks about notification effectiveness yet, and telemetry without a question is noise                              |
+| `page_view` (generic)         | Deferred (§21). A generic page view invites URL and query-string capture and answers nothing this taxonomy does not                         |
+| `quick_message_sent`          | Free-text-adjacent, and no metric needs it                                                                                                  |
+| Anything per bracket render   | Presentation, not behaviour                                                                                                                 |
+
+## 19. Backend source mapping
+
+The most important output of this task: what already exists, and what does
+not. **A64-027.2 builds only the right-hand column.**
+
+| Analytics event        | Owning module  | Existing domain event                                                    | In outbox | Work required                                                                                                                                                       |
+| ---------------------- | -------------- | ------------------------------------------------------------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user_registered`      | `auth`/`users` | **None**                                                                 | No        | **New domain event.** `RegistrationService.register` publishes nothing today                                                                                        |
+| `email_verified`       | `auth`         | **None**                                                                 | No        | **New domain event** from `EmailVerificationService.verify_email`                                                                                                   |
+| `queue_joined`         | `matchmaking`  | `matchmaking.queue_ticket_enqueued`                                      | Yes       | Projection. Confirm `variant`/`speed_class` are on the payload or add them additively                                                                               |
+| `queue_left`           | `matchmaking`  | `queue_ticket_cancelled` + `queue_ticket_expired`                        | Yes       | Projection of two events into one, with `reason`. `waited_for_seconds` already present                                                                              |
+| `match_found`          | `matchmaking`  | `matchmaking.players_paired`                                             | Yes       | Projection. **`waited_for_seconds` is already server-measured** — §31 needs nothing new                                                                             |
+| `match_offer_resolved` | `game`         | `match_accepted_by_player`, `match_declined`, `match_acceptance_expired` | Yes       | Projection of three into one, keyed on `MatchOutcome`'s acceptance vocabulary                                                                                       |
+| `match_started`        | `game`         | `game.match_activated`                                                   | Yes       | Projection. **`speed_class` and `origin` are absent** — add additively (§7: no bump)                                                                                |
+| `match_completed`      | `game`         | `game.match_completed`                                                   | Yes       | Projection. Carries `variant`, `rated`, `outcome`, `termination_reason`, `winner`, `ply_number`. **`speed_class`, `duration_ms`, `origin` absent** — add additively |
+| `rating_changed`       | `rating`       | `rating.updated`                                                         | Yes       | Projection. Already carries `variant`, `speed_class`, `rating_before`, `rating_after` — **nothing to add**                                                          |
+| `tournament_entered`   | `tournament`   | `tournament.player_registered`                                           | Yes       | Projection. Payload carries `name` — **drop it** (§14), add `format`/`capacity`                                                                                     |
+| `tournament_withdrawn` | `tournament`   | **None**                                                                 | No        | **New domain event**, or confirm withdrawal is unrecorded today                                                                                                     |
+| `tournament_completed` | `tournament`   | `tournament.completed`                                                   | Yes       | Projection. Add `entrant_count`; **drop `winner_id`** — no metric reads it                                                                                          |
+| `friend_request_sent`  | `friends`      | `friends.friend_request_sent`                                            | Yes       | Projection                                                                                                                                                          |
+| `friendship_created`   | `friends`      | `friends.friend_request_accepted`                                        | Yes       | Projection                                                                                                                                                          |
+| `challenge_sent`       | `matchmaking`  | `matchmaking.friend_challenge_created`                                   | Yes       | Projection. Carries `time_control_id`, `variant`, `rated` — derive `speed_class`                                                                                    |
+| `challenge_resolved`   | `matchmaking`  | `friend_challenge_accepted`/`declined`/`cancelled`/`expired`             | Yes       | Projection of four into one                                                                                                                                         |
+
+**Fourteen of sixteen are projections of events that already exist.** Three
+new domain events are required — registration, verification, tournament
+withdrawal — and each belongs to its own module, published by that module,
+not by analytics.
+
+**No service acquires an `analytics.track(...)` call.** That is the rule this
+table exists to make enforceable.
+
+## 20. Client event ownership
+
+Four events, all behavioural, all in `apps/web`. They are the only names the
+collector accepts (§42).
+
+Reliability is fire-and-forget: batched, flushed on a timer and on
+`visibilitychange` via `sendBeacon`, never awaited, never retried, and never
+blocking a navigation or a render. Losing a `landing_viewed` is acceptable;
+delaying a page is not.
+
+## 21. Page views
+
+**No generic `page_view` event.** The funnels in §36 are answered by the four
+named client events, and a generic page view invites exactly what §11
+forbids — full URLs, query strings, and a growing set of routes nobody reads.
+
+If one is ever needed it carries the **route template**
+(`/tournaments/$tournamentId`), never the resolved path, and never a query
+string.
+
+## 22. Notifications
+
+Deferred, with a reason. The product question — "does a notification bring a
+player back?" — is real but is not asked by any metric in §33 yet. When it
+is, the events are `notification_created` and `notification_opened` carrying
+a **notification type enum** and nothing else. **Never a title or a body.**
+
+## 23. Failure isolation
+
+**Analytics must never fail a product transaction.** This is not a
+performance target; it is a correctness rule, and the architecture enforces
+it in three places:
+
+| Failure                        | Effect on the product                                                                                                                        |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Analytics store unreachable    | **None.** The outbox row is already committed; the relay retries with backoff                                                                |
+| The analytics consumer throws  | **None.** The relay marks the attempt failed and retries. Other consumers are unaffected                                                     |
+| The collector endpoint is down | **None.** Client events are fire-and-forget and are lost, which is their stated contract                                                     |
+| A malformed client event       | Rejected at the boundary with a `422`. Nothing is stored, nothing else is affected                                                           |
+| The analytics store fills up   | Ingestion fails; the outbox backs up **visibly** (the partial index on unpublished rows is its own health signal). The product keeps working |
+
+A registration must never fail because a measurement did not land. Nothing on
+a request path waits for analytics: the write is an outbox insert in the same
+transaction, and everything after it is asynchronous.
+
+## 24. Environment separation
+
+`environment` is on every event, from the existing `Environment` enum, and it
+is written by the server — never sent by a client.
+
+Production queries filter `environment = 'production'`. A local, CI or
+staging event that reached a production store would still be excluded, which
+is the difference between separation by field and separation by hope.
+
+## 25. Test and bot traffic
+
+| Source              | Excluded by                                                                                                      |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| E2E specs           | `environment` — they run against `test`/`ci`, never `production`                                                 |
+| Local development   | `environment = 'local'`                                                                                          |
+| Staging             | `environment = 'staging'`                                                                                        |
+| Seeded e2e accounts | An `is_synthetic` flag on the **account**, set at seeding. Metrics exclude synthetic actors                      |
+| Crawlers            | They do not execute JavaScript, so they emit no client events. The measured 0-byte body (§42 of `seo.md`) is why |
+| Health checks       | They touch no analytics path                                                                                     |
+
+**No User-Agent-based exclusion**, and no rate-limit or security bypass for
+any of it. Exclusion is by environment and by an account property the
+platform already knows, both of which are server-side facts.
+
+## 26. Storage and query requirements
+
+Any storage choice must answer all of these directly. They are the acceptance
+criteria for A64-027.2's schema.
+
+1. Unique active actors per day, week and month (§28)
+2. Cohort retention — actors registered on day X active on day X+1, +7, +30
+3. Funnel conversion with a bounded window per step
+4. Percentiles (p50, p95) over a numeric property, grouped by dimension
+5. Per-actor counts, e.g. matches per active player
+6. Segmentation by `rated`, `speed_class`, `variant` — up to three dimensions
+7. Anonymous-to-authenticated resolution at query time (§9)
+8. Exclusion of synthetic actors and non-production environments in every query
+
+PostgreSQL answers all eight at Arena64's volume. ADR-005's revisit criteria
+name the point at which that stops being true.
+
+## 27. Retention
+
+Proposed, and the raw window is an open decision (§44).
+
+| Layer            | Grain                        | Retention                                   |
+| ---------------- | ---------------------------- | ------------------------------------------- |
+| Raw events       | One row per event            | **OPEN** — 90 to 400 days                   |
+| Daily aggregates | Metric × day × dimensions    | Indefinite — no actor, so not personal data |
+| Cohort tables    | Cohort × period, counts only | Indefinite                                  |
+
+Raw events are partitioned by `occurred_at` so pruning is a partition detach,
+the mechanism the outbox already uses. Aggregates are built before raw rows
+are pruned, so history survives the window without keeping the rows behind
+it.
+
+## 28. Account erasure
+
+The platform's rule already covers this. **AC-5: an erased account "retains
+the identifier and nothing else — the competitive record must survive, the
+person must not be identifiable."**
+
+Analytics inherits it exactly, and can, because analytics stores **only**
+`PlayerId` and never a name, an email or a handle (§10). There is no
+identifying data in the event store to erase.
+
+`PlayerId` nevertheless remains a stable pseudonymous identifier. Whether an
+erasure request must also break the link between that identifier and its
+behavioural history — or whether inheriting AC-5 is sufficient — is a policy
+question and is **open** (§44). It must be answered before A64-027.2 stores a
+production event, because the answer changes the schema.
+
+---
+
+## 29. Metrics
+
+`M#` identifiers are stable and are what the taxonomy's "read by" column
+refers to. Every metric excludes synthetic actors and non-production
+environments; the exclusions column names only what is additional.
+
+| #   | Metric                    | Question                                 | Formula                                                                     | Events                                   | Window              | Dimensions                           | Exclusions                                    | Limitations                                                                       |
+| --- | ------------------------- | ---------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------- | ------------------- | ------------------------------------ | --------------------------------------------- | --------------------------------------------------------------------------------- |
+| M1  | Landing visitors          | How many people arrive?                  | `COUNT(DISTINCT anonymous_id)`                                              | `landing_viewed`                         | Day                 | `utm_source`                         | —                                             | Per browser, not per person. Cleared storage counts twice                         |
+| M2  | Registration intent rate  | Does the landing page persuade?          | M2a / M1, where M2a = distinct `anonymous_id` with `register_cta_clicked`   | `register_cta_clicked`, `landing_viewed` | Day                 | `placement`, `utm_source`            | —                                             | Behavioural; ad-blockers and lost beacons undercount                              |
+| M3  | Registrations             | How many accounts are created?           | `COUNT(*)`                                                                  | `user_registered`                        | Day                 | `utm_source` via the stitch          | —                                             | Authoritative                                                                     |
+| M4  | Registration completion   | Do people who intend to register finish? | M3 / M2a, joined through the identity stitch                                | both                                     | Day                 | `placement`                          | Registrations with no prior anonymous session | Cross-device journeys break the join (§9)                                         |
+| M5  | Verification rate         | Do accounts become usable?               | verified within 7 days / registered                                         | `email_verified`, `user_registered`      | Registration cohort | —                                    | Cohorts younger than 7 days                   | Deliverability and verification are conflated                                     |
+| M6  | Queue joins               | Is anyone looking for a game?            | `COUNT(*)`                                                                  | `queue_joined`                           | Day                 | `speed_class`, `rated`               | —                                             | Authoritative                                                                     |
+| M7  | Queue wait p50 / p95      | How long does pairing take?              | `percentile_cont(0.5\|0.95) WITHIN GROUP (ORDER BY waited_ms)`              | `match_found`                            | Day                 | `speed_class`, `rated`, `queue_type` | Tickets that never paired                     | **Measures successful pairs only.** Abandoned waits are M7b                       |
+| M7b | Queue abandonment rate    | How often does waiting fail?             | `queue_left` / (`queue_left` + `match_found`)                               | `queue_left`, `match_found`              | Day                 | `reason`, `speed_class`              | —                                             | The honest companion to M7 — without it, p95 flatters the product                 |
+| M8  | Match found rate          | Does joining a queue produce a pairing?  | distinct `match_found` seats / `queue_joined`                               | both                                     | Day                 | `speed_class`                        | —                                             | A ticket spanning midnight is counted in the day it joined                        |
+| M9  | Offer acceptance rate     | Do paired players show up?               | `resolution = both_accepted` / all `match_offer_resolved`                   | `match_offer_resolved`                   | Day                 | `speed_class`                        | —                                             | Authoritative                                                                     |
+| M10 | Match completion rate     | Do started games get played to an end?   | See §32 — the denominator is the whole definition                           | `match_started`, `match_completed`       | Day                 | `rated`, `speed_class`               | `termination_reason = abort`                  | §32                                                                               |
+| M11 | Resignation rate          | How do games end?                        | `termination_reason = resignation` / completed                              | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | —                                                                                 |
+| M12 | Draw rate                 | How do games end?                        | `outcome = draw` / completed                                                | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | —                                                                                 |
+| M13 | Abandonment rate          | How often does somebody just leave?      | `termination_reason IN (abandonment, flag)` / completed                     | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | `flag` is a legitimate loss on time and is reported separately from `abandonment` |
+| M14 | Rated share               | Do people play for rating?               | `rated = true` / completed                                                  | `match_completed`                        | Day                 | `speed_class`                        | Aborts                                        | —                                                                                 |
+| M15 | Tournament participation  | Do tournaments get used?                 | distinct actors with `tournament_entered` / active actors                   | `tournament_entered`                     | Week                | `format`                             | —                                             | A withdrawal still counts as participation in the week it happened                |
+| M16 | Friend graph growth       | Is the social layer used?                | `COUNT(friendship_created)`                                                 | `friendship_created`                     | Week                | —                                    | —                                             | Authoritative                                                                     |
+| M17 | Challenge acceptance rate | Do friend challenges work?               | `resolution = accepted` / `challenge_sent`                                  | `challenge_sent`, `challenge_resolved`   | Week                | `speed_class`, `rated`               | —                                             | Expiry and decline are reported separately, not merged into failure               |
+| M18 | Active players            | How many people actually play?           | See §30                                                                     | §30                                      | D / W / M           | —                                    | Synthetic accounts                            | §30                                                                               |
+| M19 | Activation rate           | Do new accounts reach a first game?      | activated within 7 days / registered                                        | `user_registered`, `match_completed`     | Registration cohort | —                                    | Cohorts younger than 7 days                   | §31                                                                               |
+| M20 | Time to first match       | How long does activation take?           | `percentile_cont(0.5\|0.95)` over `first match_completed − user_registered` | both                                     | Registration cohort | —                                    | Never-activated accounts                      | **Survivor bias by construction** — it describes those who activated              |
+| M21 | D1 / D7 / D30 retention   | Do people come back?                     | See §33                                                                     | §30, §31                                 | Cohort              | —                                    | Cohorts younger than the window               | §33                                                                               |
+| M22 | Matches per active player | How engaged are the people who play?     | `match_started` seats / M18 (weekly)                                        | `match_started`                          | Week                | `speed_class`                        | Synthetic accounts                            | A mean over a skewed distribution — report p50 alongside                          |
+
+## 30. Active player — frozen
+
+> **An active player is an authenticated actor who, within the window,
+> emitted at least one of: `match_started`, `tournament_entered`, or
+> `challenge_sent`.**
+
+Opening a page is **not** activity. If it were, DAU would measure the landing
+page rather than the product, and a marketing campaign would look like
+engagement.
+
+Signing in is **not** activity. It is the cost of entry, not a use of the
+product. This is also why there is no `login_succeeded` event (§18).
+
+`match_started` rather than `match_completed`, because someone who started a
+game and lost connection used the product. DAU / WAU / MAU are this
+definition over 1, 7 and 30 days.
+
+## 31. Activation — frozen
+
+> **A player is activated when they complete their first match.**
+> The activation event is the earliest `match_completed` in which they held a
+> seat, **derived** — never emitted (§18).
+
+Four candidates were considered:
+
+| Candidate           | Rejected because                                                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Email verified      | Measures deliverability. A verified account that never plays has not experienced the product                        |
+| First queue join    | Measures intent. Joining a queue and never being paired is a **failure** the product owns, not activation           |
+| First match started | Close, and kept as a **secondary milestone**. But a game abandoned at ply two has not shown anybody what Arena64 is |
+| **First completed** | Chosen. It is the first moment a player has done the thing the product exists for                                   |
+
+Secondary milestones, tracked but not the headline: `email_verified`,
+`queue_joined`, `match_started`.
+
+## 32. Match completion rate — frozen
+
+The denominator decides whether this number means anything, and the domain's
+own enums decide the classification.
+
+**Denominator:** matches with `match_started`, minus those completing with
+`termination_reason = abort`.
+**Numerator:** matches with `match_completed` and `termination_reason != abort`.
+
+| `termination_reason`         | Counts as completed?                   | Why                                                                                                                                              |
+| ---------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `no_legal_moves`             | **Yes**                                | A game played to its natural end                                                                                                                 |
+| `all_pieces_captured`        | **Yes**                                | Same                                                                                                                                             |
+| `resignation`                | **Yes**                                | A resignation is a result, not a failure                                                                                                         |
+| `agreed_draw`                | **Yes**                                | Same                                                                                                                                             |
+| `repetition`, `move_limit`   | **Yes**                                | Draws by rule                                                                                                                                    |
+| `flag`                       | **Yes**                                | Losing on time is a legitimate loss                                                                                                              |
+| `flag_insufficient_material` | **Yes**                                | A drawn result by rule                                                                                                                           |
+| `adjudication`               | **Yes**                                | The platform decided a result and a rating moved                                                                                                 |
+| `abandonment`                | **Yes**, and tracked separately as M13 | A result was awarded. It is a **product** failure, not a measurement failure, and hiding it in the denominator would hide the thing worth seeing |
+| `abort`                      | **No — excluded from both sides**      | `MatchOutcome.NONE`: no result, no rating change. It is a match that did not happen                                                              |
+
+## 33. Retention — frozen
+
+**Cohort:** the day a player **registered** (`user_registered`), in UTC.
+Registration and not activation, because a player who never activates is
+retention's most important data point and an activation cohort silently
+excludes them.
+
+**Returned:** meets §30's active-player definition on the target day.
+
+**Window:** calendar days in UTC, not rolling 24-hour windows. D1 is the
+calendar day after the registration day; D7 and D30 likewise.
+
+| Term | Means                                                        |
+| ---- | ------------------------------------------------------------ |
+| D1   | Active on cohort day + 1                                     |
+| D7   | Active on cohort day + 7 (**that day**, not "within 7 days") |
+| D30  | Active on cohort day + 30                                    |
+
+Calendar days over rolling windows: a rolling window makes "D1" depend on the
+hour of registration, so two players who behaved identically land in
+different buckets. Calendar days are what every dashboard reader assumes and
+what a cohort table naturally expresses. The cost — a player registering at
+23:50 has ten minutes of "day 0" — is stated rather than hidden.
+
+A cohort is reported only once its window has fully elapsed. A partial D7 is
+always wrong and always looks like a decline.
+
+## 34. Funnels
+
+| Funnel              | Steps                                                                                       | Window per step | Supported today?                                                                            |
+| ------------------- | ------------------------------------------------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------- |
+| **F-A** Acquisition | `landing_viewed` → `register_cta_clicked` → `user_registered`                               | 24 h            | **Yes**, with the identity stitch (§9). Cross-device journeys break it                      |
+| **F-B** Activation  | `user_registered` → `email_verified` → `queue_joined` → `match_started` → `match_completed` | 7 days          | **Yes**, entirely authoritative                                                             |
+| **F-C** Tournament  | `public_tournament_viewed` → `user_registered` → `tournament_entered`                       | 7 days          | **Yes** — A64-026.4 made the anonymous view real and the deep link preserves the tournament |
+| **F-D** Challenge   | `challenge_sent` → `challenge_resolved(accepted)` → `match_started` → `match_completed`     | 48 h            | **Yes** — the challenge lifecycle is fully evented already                                  |
+
+Step order is enforced by timestamp, and a step is only counted after its
+predecessor. A player who somehow reaches step 3 without step 2 is not
+counted in either — a funnel that repairs its own gaps hides them.
+
+## 35. Queue wait — frozen
+
+`waited_ms` is **the server's own measurement**:
+`matchmaking.players_paired.waited_for_seconds`, which exists today.
+
+- **Start:** the server accepted and persisted the queue ticket.
+- **End:** the pairing was made.
+
+Never a button click, never a UI render, never a client clock. That is the
+whole reason M7 is authoritative rather than behavioural.
+
+`match_found` and not `match_offer_resolved` as the end: waiting is over when
+the system finds an opponent. Whether that opponent then accepts is M9's
+question, and merging the two would make a slow acceptance look like a slow
+queue.
+
+## 36. Known measurement limitations
+
+Stated here so a dashboard reader never discovers them from a number that
+looks wrong:
+
+1. **Anonymous identity is per browser.** Cleared storage, a private window
+   or a second device is a second visitor. M1 and M2 overcount arrivals.
+2. **Cross-device journeys break F-A.** Landing on a phone and registering on
+   a laptop loses the attribution.
+3. **Behavioural events can be lost.** Fire-and-forget with no retry means
+   M1, M2 and F-A's first two steps undercount. Every authoritative metric is
+   unaffected.
+4. **M20 has survivor bias by construction.** It describes players who
+   activated, and says nothing about those who did not.
+5. **M7 measures successful pairs only.** M7b exists because that number
+   alone would flatter the product.
+
+---
+
+## 37. Security and threat model
+
+The collector accepts input from browsers. Every client event is untrusted.
+
+| Threat                           | Control                                                                                                                                                                       |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Forging an authoritative event   | **`CLIENT_EMITTABLE` is derived from the registry's ownership field.** A server-owned name is not accepted, and the check is a set membership rather than a review convention |
+| Impersonating another actor      | `actor_id` comes from the session, never from the body. A body field named `actor_id` is rejected                                                                             |
+| Event spam                       | IP-scoped rate limit, using the existing `RateLimit` mechanism — the same one A64-026.4 attached to the public tournament reads                                               |
+| Oversized payloads               | Bounded body size, a maximum property count, and a maximum string length per property                                                                                         |
+| Arbitrary event names            | Rejected — the name must be in the client allowlist                                                                                                                           |
+| PII injection through properties | Property schemas are closed: unknown keys are **rejected**, not stored (§38)                                                                                                  |
+| Replay                           | The server generates `event_id`, so a client cannot replay one. Duplicate submissions produce distinct rows and are bounded by the rate limit                                 |
+| Anonymous abuse                  | Anonymous events are accepted (they must be, for F-A) under a tighter IP-scoped limit                                                                                         |
+| Analytics used as an oracle      | The endpoint returns `202` for every accepted event and reveals nothing about stored state                                                                                    |
+
+**No security or rate-limit bypass exists for any environment.** Test
+exclusion is by `environment` and by the synthetic-account flag (§25).
+
+## 38. Allowlists
+
+| List               | Contents                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------- |
+| `CLIENT_EMITTABLE` | `landing_viewed`, `register_cta_clicked`, `public_tournament_viewed`, `share_clicked` |
+| Server-only        | Every other event in §18                                                              |
+
+A client submitting `user_registered`, `match_completed`, `rating_changed`,
+`tournament_entered` or any other server-owned name is rejected with `422`.
+This is enforced by the registry, in code, and asserted by a contract test —
+not by documentation.
+
+## 39. Property validation
+
+Per-event closed schemas. **Not `dict[str, Any]`.**
+
+- Enum properties validate against the **domain enum**, not a copy.
+- Numeric properties have ranges; a negative `waited_ms` is rejected.
+- String properties exist only for the three attribution fields, each
+  bounded to 64 characters and matched against `^[a-z0-9_-]+$`.
+- Unknown keys are **rejected**, so a property added by a client that the
+  server does not know is an error rather than an untyped column.
+- Required keys are required. A missing one is a `422`, not a `NULL`.
+
+## 40. Future admin analytics
+
+A64-027.6 may expose read models. The contract now, so it is not invented
+later:
+
+- Six read models: overview, acquisition, activation, retention, matchmaking, games and social.
+- **Aggregates only.** No per-actor timeline, no raw event browser.
+- No PII, because there is none stored.
+- An administrator answering "is the product healthy" must never need to read
+  one person's behaviour. Designing for that is what keeps this measurement
+  rather than surveillance.
+
+## 41. Testing strategy
+
+For A64-027.2 onward. This task builds only the fourth row.
+
+| Level       | Asserts                                                                                                                           |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Unit        | Metric formulas over fixture events; identity stitch resolution; retention window arithmetic                                      |
+| Contract    | A client cannot emit a server event; a duplicate `event_id` is stored once; malformed payloads are rejected; property bounds hold |
+| Integration | Outbox → consumer → store; the store being unavailable does not fail the producing transaction                                    |
+| E2E         | Landing → registration → first match produces the expected authoritative events                                                   |
+| **Static**  | **Built now.** Taxonomy uniqueness, naming convention, ownership/trust totality, PII denylist, client allowlist derivation        |
+
+## 42. What A64-027.1 deliberately did not build
+
+No collector endpoint, no event store, no migration, no outbox consumer, no
+frontend tracker, no dashboard, no provider integration, no SDK, no cookie
+banner, and no fake data of any kind. Those are A64-027.2 and later.
+
+---
+
+## 43. Clock and timestamps
+
+- **Server events:** `occurred_at` is the domain event's own instant, from the
+  injected clock (AD-07). Already the outbox's ordering key.
+- **Client events:** the server's receive time is authoritative for ordering
+  and for every metric. `client_occurred_at` may be sent and stored as
+  context; it is never a metric input.
+- Skew beyond ±5 minutes on `client_occurred_at` is recorded and the value
+  dropped, because a client clock that wrong is evidence rather than data.
+
+## 44. Open decisions
+
+Four, each blocking something specific.
+
+| #   | Decision                     | Options                                                                                                | Recommendation                                                                                                     | Blocked on                                                           | Latest point                                             |
+| --- | ---------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- | -------------------------------------------------------- |
+| D1  | Consent gate                 | (a) none — first-party pseudonymous is not consent-requiring; (b) a banner; (c) an opt-out in settings | **(c)** — an opt-out honours the choice without taxing every visitor with a banner                                 | A legal reading for the launch jurisdictions, and a product decision | Before A64-027.2 ships to production                     |
+| D2  | Raw event retention          | 90 / 180 / 400 days                                                                                    | **400 days** — the shortest window that allows a year-on-year comparison                                           | Whether a storage budget makes 400 days material                     | Before A64-027.2's migration                             |
+| D3  | Erasure and the surviving id | (a) inherit AC-5 unchanged; (b) also break the `PlayerId` → history link on erasure                    | **(b)** for raw events, keeping aggregates — it costs one nullable column decided now and is expensive to retrofit | The same legal reading as D1                                         | **Before A64-027.2's migration** — it changes the schema |
+| D4  | `anonymous_id` lifetime      | Session only / 30 days / 400 days                                                                      | **30 days** — long enough for F-A, short enough not to be a durable tracker                                        | D1's answer                                                          | Before A64-027.2's client work                           |
+
+None of these is a silent default. Each is written down with a
+recommendation because a recommendation is reviewable and a silent choice is
+not.
+
+## 45. The A64-027.2 contract
+
+The next task implements, and nothing more:
+
+1. Three new domain events — registration, verification, tournament withdrawal (§19).
+2. Additive fields on `match_activated` and `match_completed` — `speed_class`, `origin`, `duration_ms` (§19, no version bump per §7).
+3. The analytics event store: partitioned by `occurred_at`, primary key `event_id`, satisfying §26's eight queries.
+4. The `analytics` outbox consumer, writing `processed_event('analytics', …)`.
+5. `POST /api/v1/analytics/events` — allowlisted, closed-schema, rate-limited, server-stamped.
+6. The frontend emitter for the four client events, fire-and-forget.
+7. The identity stitch table.
+8. Answers to D1 – D4 before any of it reaches production.
+
+## Related
+
+- `docs/07-decisions/ADR-005-first-party-analytics-on-the-outbox.md` — why first-party
+- `docs/01-architecture/architecture.md` AD-16 — the outbox this reuses
+- `docs/01-architecture/domain-model.md` DM-06, AC-5 — `PlayerId`, and erasure
+- `docs/01-architecture/database.md` §297 — `arena64_readonly`
+- `app/platform/analytics/registry.py` — the taxonomy, in code

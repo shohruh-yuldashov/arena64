@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.13, the closing audit |
+| **Last updated** | 2026-09-04 — A64-025.13B, every context in its own module |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -475,6 +475,8 @@ tokens.
 | **A64-025.10F** | The email shell, designed rather than merely shared | .10E | New email types; a dark variant |
 | **A64-025.11** | Global UI consistency and component cleanup. Fixes P2-3 | .3–.10 | Re-architecting layouts already designed mobile-first |
 | **A64-025.12A** | A throw inside the router reaches this app's error page | — | The unreproduced i18n context fault itself (§33.3) |
+| **A64-025.13A** | The match a no-show left open, and the port that closes it | .13 | A moderator's adjudication of a *played* game, which needs an audit trail |
+| **A64-025.13B** | Every context object in a module Fast Refresh will not swap | .12A | `features/auth`'s session context (§37.3) |
 | **A64-025.12** | Motion and interaction system. Fixes P3-5 | .3–.10 | Adding motion for its own sake |
 | **A64-025.13** | Closing audit | all | New work |
 
@@ -3439,10 +3441,224 @@ abandoned match is permanent, and a player carrying one cannot queue.
 | --- | --- |
 | `confirm_move` | The fifth gameplay preference, still write-only. A rule about submitting a move, not something the document can express — its own task |
 | The `useTranslation` context fault | §33.3. Open, dev-only, not reproduced, now reported under `scope: "router"` |
-| The stuck-match question | §35.7 |
-| Three `react-refresh` warnings | `shared/realtime/context.tsx`, pre-existing, and §33.3 is the reason to look at them again |
+| ~~The stuck-match question~~ | **Answered and fixed** — §36. It was reachable, every unplayed tournament fixture hit it, and the player could not queue again |
+| ~~Three `react-refresh` warnings~~ | **Fixed** — §37. They were the rule reporting the §33.3 hazard, and lint is now at zero problems |
 | Litmus-style email rendering | §31.8. Every client-specific claim is reasoned, not observed |
 
 Nothing in that list is a surface a player uses being wrong. The epic set out
 to make the product look and behave like one thing, and the measurements in
 §35.1 and §35.2 are what that claim rests on.
+
+## 36. The match nothing could end — A64-025.13A
+
+§35.7 left a question rather than a finding, because the evidence was four
+rows in a development database and the code had moved since they were
+written. The question was whether current code could still produce a match
+that is `active` with no clock and therefore no way to end.
+
+**It could, and it did so every time a tournament fixture went unplayed.**
+
+### 36.1 What was actually wrong
+
+A tournament fixture is **system-activated**: nobody accepts it, so `game`'s
+acceptance expiry never claims it, and it carries **no time control**, so the
+clock adjudicator has no deadline to flag. `TournamentNoShowService` is what
+was meant to end one. Its composition root says so in as many words:
+
+> Tournament matches are system-activated, so `game`'s acceptance expiry
+> never claims one and nothing else would ever end a fixture nobody turned up
+> for. This is what does.
+
+It did not. It closed the **attempt** and advanced the **bracket**, and left
+the **match** `active` — because there was no port through which it could do
+anything else. `game.public` published a command to *create* a match, a read
+of its authoritative state, and nothing to *end* one.
+
+The consequence is not cosmetic, and the e2e helper had already written it
+down while blaming something else:
+
+> Since A64-020.5A `GET /matches/pending` reports a game that has started,
+> and the lobby correctly sends that player to it rather than to the queue
+> form — so an account still in yesterday's match cannot join a pool.
+
+**A player adjudicated a no-show could never queue again.** Not until a
+deadline that does not exist expired.
+
+### 36.2 An abort, not a win — and this is the whole design
+
+A64-019.5H pinned the old behaviour in a test, with a comment:
+
+> The `game` match is untouched: nothing invented a result.
+
+**That instinct was right and the mechanism was wrong.** Leaving the row
+active is not how a fabricated result is avoided; it is how a player is
+locked out. And a win would have been worse than cosmetic: these fixtures are
+**rated**, so recording one would move two Glicko-2 numbers and write a game
+into two players' history that neither played.
+
+So the match ends as `MatchOutcome.NONE` with `TerminationReason.ABORT` —
+which the taxonomy already defines for exactly this, in its own words:
+
+| | |
+| --- | --- |
+| `ABORT` | *"The match ended with no result and no rating effect — MT-11. Not a draw: a draw is an outcome two players played to, an abort is a match that did not happen."* |
+| `MatchOutcome.NONE` | *"No result at all. An aborted match, which MT-11 keeps out of every rating and statistic."* |
+
+Nothing is invented. The **walkover stays where it belongs**: an advanced
+bracket node with `AdvancementReason.ADJUDICATION`, which is the tournament's
+own record of a competitive verdict nobody played to. `game` records only
+that the fixture is over.
+
+### 36.3 The port
+
+`game.public.abort` — `MatchAbortUseCase.abort(AbortMatchRequest)`.
+
+**A match id and nothing else.** There is no `reason` parameter because there
+is one reason, and a caller that could choose would be a caller that could
+record `RESIGNATION` for a game nobody resigned.
+
+**Separate from `commands`.** `GameCommandUseCase` is a participant's
+channel — resign, offer, accept, decline — and every one of them is
+authorised as "you are in this match". This is a system verdict with no
+participant behind it, and folding it into the participant enum would put it
+one missing check away from a player-issued one.
+
+**Idempotent, and it has to be.** The sweep re-claims an attempt whose worker
+died, so `abort` is called again for a match it already closed. The row lock
+is taken *before* the status is read, so two sweeps serialise: the first
+closes it, the second reads a completed row and answers `ALREADY_SETTLED`.
+
+**A played game beats a stale sweep.** A result that arrived while the caller
+held its claim wins — the same rule `TournamentNoShowService` already applies
+to a superseded attempt, enforced on this side of the boundary too so that a
+caller which forgot it cannot close a game that was played.
+
+`MatchCompleted` is published with `origin` and `origin_ref`, for the reason
+the clock adjudicator records: an aborted match is as much a completion as
+one played out. Without the event the tournament's own reconciler keeps
+re-reading a match it believes unfinished, and the gateway leaves a room open
+on a game that has ended.
+
+### 36.4 The test that had to change, and why that is not weakening it
+
+`test_one_present_player_advances_by_adjudication` asserted
+`record.status is ACTIVE`. It now asserts `COMPLETED`, `MatchOutcome.NONE`,
+`ABORT` and no winner.
+
+CLAUDE.md §6.11: a failing test means either the code is wrong or the test
+encodes an outdated requirement, and the change must say which. **The test
+was encoding a proxy.** What it meant to protect — "nothing invented a
+result" — is still asserted, and more precisely than before: the outcome is
+now named rather than inferred from the absence of one.
+
+### 36.5 Measured
+
+| | |
+| --- | --- |
+| `ruff` / `mypy --strict` / `pyright` | clean, 681 source files |
+| `lint-imports` | 32 contracts kept, 0 broken |
+| `pytest tests/unit` | 2952 passed, 2 skipped (2947 before; **+5**) |
+| `pytest tests/contract` | 1315 passed, 2 skipped |
+
+The five new unit tests pin the port's own contract — the half a caller
+depends on and cannot see: it ends the match without inventing a result, it
+publishes the completion, a second call writes nothing, a played game beats
+a stale sweep, and an unknown id is reported rather than raised.
+
+The contract suite proves the **sweep** uses it, against a real database and
+with the real adjudication rather than a fake — for the reason that suite
+already used the real reader: a fake would prove only that the code asks
+something.
+
+### 36.6 The four rows
+
+They were closed through `PersistentMatchAbort` itself rather than by hand.
+An `UPDATE` would have left the outbox silent and the reconciler re-reading
+them forever; the production path publishes `match.completed`, so every
+consumer settled them exactly as it would have had the sweep been able to
+close them at the time. Their pairing attempts were already `NO_SHOW`, so no
+sweep would ever have claimed them again.
+
+`game.match` now holds zero active matches in that database, and the five
+accounts involved — three of them the e2e suite's — can queue again.
+
+## 37. Every context in its own module — A64-025.13B
+
+§33.3 recorded a fault it could not reproduce: `useTranslation` throwing
+"must be used inside an I18nProvider" under a tree that plainly had one,
+after returning to a backgrounded tab. What the code established was that a
+`null` context there **cannot** mean a missing provider — `AppShell` is
+mounted from one place, under `I18nProvider`, in a single React root — so it
+had to mean two `I18nContext` objects, which needs two instances of the
+module that creates it.
+
+This is the structural change that makes that impossible in the one place it
+was reachable. **It is a precaution on an unreproduced theory and is labelled
+as one**, not a proven fix.
+
+### 37.1 The mechanism
+
+React Fast Refresh replaces a module whose exports are all components. A
+module that exports a component **and** something else is not refreshable, so
+Vite falls back to a full page reload — which is safe.
+
+The dangerous case is the first one applied to a module that also calls
+`createContext`. The swap re-runs the module body, `createContext` produces a
+**new object**, and the provider renders with it — while every component
+already mounted is still reading the old one. Provider present, consumer
+`null`, and an error that describes a tree that does not exist.
+
+`react-refresh/only-export-components` is the rule that describes exactly
+this shape. The repository had it switched off for four paths, with a comment
+arguing that splitting a provider from its hook
+
+> would make the source worse to read for no runtime benefit.
+
+**The second half of that was wrong.** A full reload is a cost. A hot swap of
+a context module is a hazard, and the two are not the same thing. The comment
+has been corrected rather than deleted.
+
+### 37.2 What moved
+
+| Context | Was | Now |
+| --- | --- | --- |
+| `I18nContext` | `shared/i18n/index.tsx`, beside `I18nProvider` | `shared/i18n/context.ts`, with `useTranslation` |
+| `ThemeContext` | `shared/theme/theme-context.tsx`, beside `ThemeProvider` | `shared/theme/context.ts`, with `useTheme` |
+| `RealtimeContext` | `shared/realtime/context.tsx`, beside its provider | `shared/realtime/context.ts`, with its three hooks |
+
+Each new module exports no component, so Fast Refresh will not swap it — a
+change there triggers a full reload, which is the safe failure. The providers
+keep their own files and their exemption, because a provider holds no
+identity that a reload can break.
+
+The three `react-refresh/only-export-components` warnings this repository had
+been carrying since before A64-025 were in `shared/realtime/context.tsx`, and
+they were the rule reporting this hazard for three years' worth of sessions.
+**Lint is now at zero problems**, not zero errors.
+
+### 37.3 What this does not claim
+
+The fault was never reproduced, so nothing here can be called its fix. Three
+attempts are listed in §33.3. What can be said precisely:
+
+- The state the error requires — two context objects — needed a module
+  instance the dev server could produce and a production bundle could not.
+- The one module structure that lets Fast Refresh produce it is gone from
+  all three shared contexts.
+- If it recurs, `features/auth/model/session-provider` is the remaining
+  context module of the same shape, and A64-025.12A's `errorComponent` now
+  reports it with `scope: "router"` rather than printing a stack.
+
+`session-provider` was left because it is large, it is a feature module
+rather than a shared one, and moving a context out of it is a change to the
+authentication path that deserves its own reasoning rather than riding along
+with three one-line extractions.
+
+### 37.4 Measured
+
+| | |
+| --- | --- |
+| `tsc --noEmit` | clean |
+| `eslint` | **0 problems** (3 warnings before) |
+| `prettier --check` | clean |
+| `vitest` | 231 passed, 35 files — no assertion changed |

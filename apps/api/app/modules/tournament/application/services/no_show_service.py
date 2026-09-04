@@ -52,6 +52,11 @@ from uuid import UUID
 from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork
 from app.modules.game.public import MatchOrigin
+from app.modules.game.public.abort import (
+    AbortMatchRequest,
+    AbortOutcome,
+    MatchAbortUseCase,
+)
 from app.modules.game.public.reconciliation import (
     OriginMatchOutcome,
     OriginMatchReader,
@@ -124,6 +129,7 @@ class TournamentNoShowService:
         attempts: PairingAttemptRepository,
         advancement: TournamentAdvancementService,
         origin_matches: OriginMatchReader,
+        match_abort: MatchAbortUseCase,
         unit_of_work: UnitOfWork,
         clock: Clock,
         batch_size: int,
@@ -134,6 +140,7 @@ class TournamentNoShowService:
         self._attempts = attempts
         self._advancement = advancement
         self._origin_matches = origin_matches
+        self._match_abort = match_abort
         self._unit_of_work = unit_of_work
         self._clock = clock
         self._batch_size = batch_size
@@ -246,6 +253,23 @@ class TournamentNoShowService:
             return _Verdict.SKIPPED
 
         await self._record(attempt, advancement.winner_id)
+
+        # A64-025.13A §36. **The match itself**, which this sweep recorded a
+        # verdict on and then left `active` forever.
+        #
+        # It was the missing half of A64-019.5H: the attempt closed, the
+        # bracket advanced, and `game` was never told. A tournament fixture
+        # is system-activated and untimed, so neither acceptance expiry nor
+        # the clock adjudicator would ever claim it — and an active match
+        # sends its player to the game room instead of the queue form, so a
+        # player adjudicated a no-show could not queue again at all.
+        #
+        # After the attempt and before the bracket, deliberately: the same
+        # ordering argument `_record` makes. A settled match with no
+        # advancement is repaired by the reconciler; an advancement over a
+        # match still open is the state nothing repairs.
+        await self._close_match(attempt)
+
         try:
             await self._brackets.advance_winner(
                 tournament.id,
@@ -303,6 +327,41 @@ class TournamentNoShowService:
         logger.info(
             "tournament_no_show_superseded",
             extra={"pairing_id": str(attempt.pairing_id), "match_id": str(attempt.match_id)},
+        )
+
+    async def _close_match(self, attempt: PairingAttempt) -> None:
+        """Asks `game` to close the fixture, and does not stop the sweep if
+        it cannot.
+
+        **An abort, not a win.** A64-019.5H's test said "nothing invented a
+        result" and that instinct was right: these fixtures are rated, so
+        recording a win would move two Glicko-2 numbers for a game nobody
+        played. `game.public.abort` ends it as `MatchOutcome.NONE`, which
+        MT-11 keeps out of every rating and statistic.
+
+        The walkover stays where it belongs — an advanced bracket node with
+        `AdvancementReason.ADJUDICATION`, which is this module's own record
+        of a competitive verdict nobody played to.
+
+        Every outcome that is not a closure is logged and swallowed. A tick
+        that raised here would leave the attempt closed and the bracket
+        unmoved, which is worse than a match this sweep will try again: the
+        port is idempotent, and the reconciler re-examines matches that
+        disagree with their attempt.
+        """
+        outcome = await self._match_abort.abort(AbortMatchRequest(match_id=attempt.match_id))
+        if outcome in (AbortOutcome.ABORTED, AbortOutcome.ALREADY_SETTLED):
+            # `ALREADY_SETTLED` means a real result landed between the
+            # re-read above and this write. It wins, and the reconciler is
+            # what corrects the bracket if the two disagree.
+            return
+        logger.error(
+            "tournament_no_show_match_not_closed",
+            extra={
+                "pairing_id": str(attempt.pairing_id),
+                "match_id": str(attempt.match_id),
+                "outcome": outcome.value,
+            },
         )
 
     async def _record(self, attempt: PairingAttempt, winner_id: UUID) -> None:

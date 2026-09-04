@@ -49,10 +49,28 @@ it("ships a manifest the browser can install, linked from the real document", ()
     scope: "/",
     display: "standalone",
     lang: "uz",
-    theme_color: "#0a0a0a",
-    background_color: "#0a0a0a",
   });
   expect(manifest.description).toEqual(expect.any(String));
+
+  // A64-026.2 §41.3. These two used to be asserted as the literal
+  // `#0a0a0a`, which is a copy of a value that lives in `globals.css` —
+  // and when A64-025.9 §18.7 gave both themes a trace of the brand hue,
+  // this test failed for a colour rather than for anything to do with
+  // installability, which is its subject.
+  //
+  // What is actually worth holding is that the **splash screen and the
+  // browser chrome agree**: the manifest paints behind the icon while the
+  // app loads and `theme-color` paints the system UI, and a seam between
+  // them is visible on every cold start. So the assertion is that they are
+  // the same value, whatever that value becomes.
+  const document = read("../index.html");
+  const darkThemeColor =
+    /<meta name="theme-color" media="\(prefers-color-scheme: dark\)" content="([^"]+)"/.exec(
+      document,
+    )?.[1];
+  expect(darkThemeColor).toMatch(/^#[0-9a-f]{6}$/i);
+  expect(manifest.theme_color).toBe(darkThemeColor);
+  expect(manifest.background_color).toBe(darkThemeColor);
 
   // Installability needs a 192 and a 512, and a launcher that masks the
   // icon needs one declared `maskable` — without it the board is cropped.

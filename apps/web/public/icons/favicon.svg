@@ -8,8 +8,17 @@
     favicon and the 180px PNG is Apple's fallback — not two artworks, one
     description in two forms.
 
-    A64-025 owns the final brand; this is the placeholder §21 of
-    specs/frontend.md records.
+    A64-026.2 §41.2 put it in the brand palette: the brand indigo for the
+    light squares, a darker step of the same hue behind them, and white for
+    the piece — which is the only light element, so the mark reads as
+    indigo at every size rather than as a white tile with a tint.
+
+    No gradient. §18.7 rations that to three places and none of them is a
+    16px square, where a ramp is invisible and only muddies the two tones
+    that have to separate.
+
+    The values are generate-icons.mjs's. These two files are one
+    description in two forms, not two artworks that can drift.
   -->
   <defs>
     <clipPath id="board">
@@ -17,9 +26,9 @@
     </clipPath>
   </defs>
   <g clip-path="url(#board)">
-    <rect width="100" height="100" fill="#262626" />
-    <rect width="50" height="50" fill="#fafafa" />
-    <rect x="50" y="50" width="50" height="50" fill="#fafafa" />
+    <rect width="100" height="100" fill="#202268" />
+    <rect width="50" height="50" fill="#494fcc" />
+    <rect x="50" y="50" width="50" height="50" fill="#494fcc" />
     <circle cx="25" cy="75" r="16.5" fill="#fafafa" />
   </g>
 </svg>

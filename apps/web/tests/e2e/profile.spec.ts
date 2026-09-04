@@ -46,7 +46,7 @@ test("a player edits their profile and sees it on their public page", async ({
   const context = await browser.newContext({ storageState: statePath(username) });
   const page = await context.newPage();
   await page.goto("/profile");
-  await expect(page.getByRole("button", { name: /sign out/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^(Account|Hisob|Аккаунт)$/ })).toBeVisible();
 
   // --- the profile is reachable from the header, not only by URL ---------
   await page.goto("/profile");

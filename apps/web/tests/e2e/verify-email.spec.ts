@@ -58,7 +58,7 @@ test("registration lands on verification, product routes wait, and verifying ope
   await page.getByRole("button", { name: /create account/i }).click();
 
   // --- signed in, unverified, and on the one page with something to do ---
-  await expect(page.getByRole("button", { name: /sign out/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^(Account|Hisob|Аккаунт)$/ })).toBeVisible();
   await expect(page).toHaveURL(/\/verify-email/);
   const field = page.getByLabel(/verification code|tasdiqlash kodi/i);
   await expect(field).toBeVisible();
@@ -88,7 +88,7 @@ test("registration lands on verification, product routes wait, and verifying ope
   // §22's claim that the session response — not anything this client
   // remembers — is the authority for this state.
   await page.reload();
-  await expect(page.getByRole("button", { name: /sign out/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^(Account|Hisob|Аккаунт)$/ })).toBeVisible();
 
   await page
     .getByRole("link", { name: /friends/i })

@@ -145,7 +145,7 @@ function Toggle({
           // consequence is wired to the control here rather than being
           // nearby text a screen reader might skip.
           aria-describedby={`${id}-hint`}
-          className="accent-primary size-5"
+          className="accent-primary size-6 shrink-0"
           onChange={(event) => onChange(event.target.checked)}
         />
       }

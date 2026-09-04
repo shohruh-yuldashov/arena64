@@ -253,7 +253,7 @@ function ChannelToggle({
         checked={checked}
         disabled={disabled || !setting.editable}
         aria-describedby={lockReason === null ? undefined : `${id}-hint`}
-        className="accent-primary mt-1 size-5"
+        className="accent-primary mt-0.5 size-6 shrink-0"
         onChange={(event) => onChange(event.target.checked)}
       />
       <div className="flex min-w-0 flex-col">

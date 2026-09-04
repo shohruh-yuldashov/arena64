@@ -61,7 +61,10 @@ export default function FriendsPage() {
           }
           onRetry={() => void friends.refetch()}
         >
-          <ul aria-label={t("social.friends.title")} className="flex flex-col gap-2">
+          <ul
+            aria-label={t("social.friends.title")}
+            className="border-border bg-card divide-border flex flex-col divide-y overflow-hidden rounded-xl border"
+          >
             {items.map((entry) => (
               <PlayerRow
                 key={entry.player.id}

@@ -108,6 +108,9 @@ export default function PublicProfilePage() {
                     playerName={profile.data.display_name ?? profile.data.username}
                     state={profile.data.relationship}
                     size="default"
+                    // One player on their own page, so the destructive
+                    // actions keep §18.8's red text — A64-025.8B §27.
+                    tone="detail"
                   />
                 </div>
               )}

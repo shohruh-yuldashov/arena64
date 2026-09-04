@@ -92,7 +92,10 @@ export default function SearchPage() {
             emptyTitle={t("social.search.noResults")}
             onRetry={() => void search.refetch()}
           >
-            <ul aria-label={t("social.search.title")} className="flex flex-col gap-2">
+            <ul
+              aria-label={t("social.search.title")}
+              className="border-border bg-card divide-border flex flex-col divide-y overflow-hidden rounded-xl border"
+            >
               {results.map((player) => (
                 <PlayerRow
                   key={player.id}

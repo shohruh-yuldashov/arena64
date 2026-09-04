@@ -43,7 +43,10 @@ export default function BlockedPage() {
           emptyHint={t("social.blocked.emptyHint")}
           onRetry={() => void blocked.refetch()}
         >
-          <ul aria-label={t("social.blocked.title")} className="flex flex-col gap-2">
+          <ul
+            aria-label={t("social.blocked.title")}
+            className="border-border bg-card divide-border flex flex-col divide-y overflow-hidden rounded-xl border"
+          >
             {items.map((entry) => (
               <PlayerRow
                 key={entry.player.id}

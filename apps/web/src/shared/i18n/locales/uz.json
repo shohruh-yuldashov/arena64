@@ -264,7 +264,32 @@
       "animationSpeed": "Animatsiya tezligi",
       "save": "Saqlash",
       "saved": "Saqlandi",
-      "themeNote": "Yorug'/qorong'i mavzu shu brauzerda saqlanadi va serverga yuborilmaydi."
+      "themeNote": "Yorug' va qorong'i shu brauzerda saqlanadi, serverga yuborilmaydi. Ularni tepadagi hisob menyusidan o'zgartirasiz.",
+      "boardThemes": {
+        "classic": "Klassik",
+        "wood": "Yog'och",
+        "marble": "Marmar",
+        "midnight": "Yarim tun"
+      },
+      "pieceSets": {
+        "classic": "Klassik",
+        "modern": "Zamonaviy",
+        "neo": "Neo"
+      },
+      "animationSpeeds": {
+        "instant": "Bir zumda",
+        "fast": "Tez",
+        "normal": "Oddiy",
+        "slow": "Sekin"
+      },
+      "gameplayTitle": "Taxta va o'yin",
+      "gameplayHint": "O'ynayotganingizda taxta qanday ko'rinishi va ishlashi.",
+      "languageHint": "Interfeys tili, hisobingizda saqlanadi.",
+      "boardThemeHint": "Kataklarning rangi.",
+      "pieceSetHint": "Tosh va damkalarning shakli.",
+      "animationSpeedHint": "Tosh o'z katagiga qanchalik tez boradi.",
+      "confirmMoveHint": "Har bir yurishdan oldin so'ralsin.",
+      "showCoordinatesHint": "Taxta chetiga harf va raqamlar chizilsin."
     },
     "privacy": {
       "title": "Maxfiylik",
@@ -987,7 +1012,9 @@
       "deviceCount": "Sizda {{count}} ta qurilmada push bildirishnomalari yoqilgan. Bu faqat shu qurilmada o'chiradi.",
       "subscribeFailed": "Push bildirishnomalarini yoqib bo'lmadi. Qayta urinib ko'ring.",
       "noServiceWorker": "Push bildirishnomalari fonda ishlaydigan service worker'ni talab qiladi, bu brauzer esa uni ro'yxatdan o'tkazmagan. Lokal ishlab chiqishda bu production build ishga tushirish kerakligini bildiradi (`npm run build && npm run preview`), dev server emas."
-    }
+    },
+    "channelKeyTitle": "Bildirishnoma sizga qayerdan yetib boradi",
+    "unverifiedEmailOnce": "Bildirishnomalarni faqat tasdiqlangan e-pochta manzili oladi."
   },
   "challenges": {
     "title": "Chorlovlar",

@@ -264,7 +264,32 @@
       "animationSpeed": "Animation speed",
       "save": "Save",
       "saved": "Saved",
-      "themeNote": "Light and dark are stored in this browser and never sent to the server."
+      "themeNote": "Light and dark are stored in this browser and never sent to the server. Change them from the account menu in the header.",
+      "boardThemes": {
+        "classic": "Classic",
+        "wood": "Wood",
+        "marble": "Marble",
+        "midnight": "Midnight"
+      },
+      "pieceSets": {
+        "classic": "Classic",
+        "modern": "Modern",
+        "neo": "Neo"
+      },
+      "animationSpeeds": {
+        "instant": "Instant",
+        "fast": "Fast",
+        "normal": "Normal",
+        "slow": "Slow"
+      },
+      "gameplayTitle": "Board and gameplay",
+      "gameplayHint": "How the board looks and behaves while you play.",
+      "languageHint": "The language of the interface, stored on your account.",
+      "boardThemeHint": "The colour of the squares.",
+      "pieceSetHint": "The shape of the men and kings.",
+      "animationSpeedHint": "How quickly a piece travels to its square.",
+      "confirmMoveHint": "Ask before every move is sent.",
+      "showCoordinatesHint": "Draw file and rank labels along the board's edge."
     },
     "privacy": {
       "title": "Privacy",
@@ -987,7 +1012,9 @@
       "deviceCount": "You have push notifications on {{count}} devices. This turns them off here only.",
       "subscribeFailed": "Could not turn push notifications on. Please try again.",
       "noServiceWorker": "Push notifications need a background service worker, and this browser has not registered one. In local development that means running a production build (`npm run build && npm run preview`) rather than the dev server."
-    }
+    },
+    "channelKeyTitle": "Where a notification can reach you",
+    "unverifiedEmailOnce": "Only a verified email address receives notifications."
   },
   "challenges": {
     "title": "Challenges",

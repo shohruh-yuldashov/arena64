@@ -318,6 +318,15 @@ function Tournaments() {
           <p className="text-muted-foreground max-w-xl text-base leading-relaxed">
             {t("landing.tournaments.body")}
           </p>
+
+          {/* A64-026.4 §43.5. The one section of this page with something
+              real to point at: the lobby opened to visitors without an
+              account, so the argument can end at the thing itself rather
+              than at a sign-up form. Every other section still ends at
+              registration, because everything else needs one. */}
+          <Button asChild variant="outline" className="min-h-11 w-fit">
+            <Link to="/tournaments">{t("landing.tournaments.browse")}</Link>
+          </Button>
         </div>
 
         <BracketShowcase className="w-full" />

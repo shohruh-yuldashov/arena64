@@ -804,6 +804,9 @@
     "cancelled": "Bu turnir bekor qilingan.",
     "registration": {
       "title": "Sizning ishtirokingiz",
+      "signInTitle": "Bu turnirga yozilish",
+      "signInPrompt": "Turnirni har kim o'qiy oladi. Unga yozilish uchun esa hisob kerak — setka kim o'ynayotganini bilishi shart.",
+      "signInCta": "Yozilish uchun kiring",
       "notRegistered": "Siz bu turnirga yozilmagansiz.",
       "registered": "Siz yozilgansiz.",
       "withdrawn": "Siz bu turnirdan chiqdingiz.",
@@ -1176,7 +1179,8 @@
     "tournaments": {
       "eyebrow": "Turnirlar",
       "title": "Faqat navbat emas — setkalar",
-      "body": "Chiqib ketish turniriga yoziling, turlar to'lib borishini kuzating va keyin butun setkani o'qib chiqing. Tugunlar orasidagi chiziqlar haqiqiy juftliklardan olinadi, ya'ni ko'rganingiz — bo'lgan narsa."
+      "body": "Chiqib ketish turniriga yoziling, turlar to'lib borishini kuzating va keyin butun setkani o'qib chiqing. Tugunlar orasidagi chiziqlar haqiqiy juftliklardan olinadi, ya'ni ko'rganingiz — bo'lgan narsa.",
+      "browse": "Turnirlarni ko'rish"
     },
     "social": {
       "title": "O'z raqibingizni olib keling",

@@ -6,7 +6,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 
-import { isResolved } from "@/entities/session";
+import { isAuthenticated, isResolved } from "@/entities/session";
 import { useSession } from "@/features/auth/model/session-provider";
 import { profileKeys } from "@/features/profile/api/keys";
 import type { TournamentFilters } from "@/features/tournament/api";
@@ -172,7 +172,12 @@ export function useMyRegistration(tournamentId: string) {
   return useQuery({
     queryKey: tournamentKeys.myRegistration(tournamentId),
     queryFn: () => tournamentApi.readMyRegistration(tournamentId),
-    enabled: isResolved(state),
+    // A64-026.4 §43.4. `isAuthenticated`, not `isResolved`: the tournament
+    // reads are open to a visitor with no account, but "am I in this one"
+    // has no anonymous answer and the endpoint keeps its token. Firing it
+    // for an anonymous viewer would spend a request to be told 401 on every
+    // public tournament page.
+    enabled: isAuthenticated(state),
   });
 }
 

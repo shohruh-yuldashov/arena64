@@ -13,6 +13,7 @@ import { useSession } from "@/features/auth/model/session-provider";
 import NotFoundPage from "@/pages/not-found";
 import { Spinner } from "@/shared/ui";
 import { AppShell } from "@/widgets/app-shell";
+import { PublicShell } from "@/widgets/marketing/public-shell";
 
 /**
  * The route tree — code-based, not file-based.
@@ -72,6 +73,22 @@ import { AppShell } from "@/widgets/app-shell";
  * its own, which is a blank page for the few frames a bootstrap takes and
  * is what both destinations have in common.
  *
+ * ## `/tournaments` has two audiences too — A64-026.4 §43.5
+ *
+ * It opened to visitors without an account, and `AppShell` is the wrong
+ * frame for one: its navigation is entirely guarded routes, so a person who
+ * followed a shared link would be given a header of destinations that all
+ * bounce them to sign-in. They get `PublicShell` instead — the landing
+ * page's chrome, which leads somewhere they can go.
+ *
+ * The condition is `status === "anonymous"` rather than `!isAuthenticated`,
+ * and the difference is the whole point of that state. `unavailable` means
+ * one request failed, not that the player is signed out; swapping a
+ * signed-in player's product navigation for a marketing header because a
+ * refresh timed out would tell them they had been logged out. `bootstrapping`
+ * would be the §28 flicker. Neither is a claim worth making, so while the
+ * session is anything but known-absent the shell stays.
+ *
  * Every other route keeps the shell unconditionally, including during the
  * bootstrap, because they have only one audience.
  */
@@ -80,9 +97,17 @@ function RootLayout() {
   const { state } = useSession();
 
   if (pathname === "/" && !isAuthenticated(state)) {
-    // Anonymous, or not yet known. `pages/landing` brings its own header
-    // and footer; `pages/home` is only ever reached authenticated.
+    // Anonymous, or not yet known. `pages/landing` brings its own shell;
+    // `pages/home` is only ever reached authenticated.
     return <Outlet />;
+  }
+
+  if (state.status === "anonymous" && isPublicPath(pathname)) {
+    return (
+      <PublicShell>
+        <Outlet />
+      </PublicShell>
+    );
   }
 
   return (
@@ -90,6 +115,23 @@ function RootLayout() {
       <Outlet />
     </AppShell>
   );
+}
+
+/**
+ * The paths a visitor without an account is meant to read — §43.5.
+ *
+ * A list rather than "not in the protected set": the protected set is the
+ * larger one and grows with every feature, so deriving public from it makes
+ * a new route public by forgetting. This way a new route is private until
+ * somebody writes it down here.
+ *
+ * `/players/$username` is deliberately absent. It is open too, but a
+ * profile is reached from inside the product far more often than from
+ * outside it, and A64-026.3 §42.3 already decided it is not a page this
+ * platform advertises — giving it marketing chrome would be advertising it.
+ */
+function isPublicPath(pathname: string): boolean {
+  return pathname === "/tournaments" || pathname.startsWith("/tournaments/");
 }
 
 export const rootRoute = createRootRoute({
@@ -445,38 +487,38 @@ export const notificationsRoute = createRoute({
 // --- tournaments — A64-020.6 ------------------------------------------------
 
 /**
- * `/tournaments` — the lobby.
+ * `/tournaments` — the lobby, **open** since A64-026.4 §43.
  *
- * **Protected**, and the reason is the backend's actual policy rather than
- * a preference. `specs/tournament` §7 makes tournaments "public" in the
- * sense that *no viewer is narrower than another* — there is no owner
- * check and no friends-only variant — but every route on this platform
- * outside `/health` still sits behind a session, and the tournament router
- * is no exception: each of its handlers takes `CurrentUser`.
+ * It was protected, and the guard was honest at the time: every handler on
+ * the tournament router took `CurrentUser`, so an anonymous visitor would
+ * have rendered a page whose every request took a `401` — an outage, not a
+ * sign-in prompt. §3's rule was and is to follow the backend's visibility.
  *
- * So an anonymous visitor here would render a page whose every request
- * takes a `401`, which looks like an outage rather than a sign-in prompt.
- * §3's rule is to follow the backend's visibility, and this is it.
+ * The backend moved. The three reads now take an *optional* viewer and
+ * answer without one, hiding only `DRAFT`. So does this route. The rule did
+ * not change; the thing it points at did.
  */
 export const tournamentsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tournaments",
-  component: protectedPage(() => import("@/pages/tournaments")),
+  component: lazyRouteComponent(() => import("@/pages/tournaments")),
 });
 
 /**
  * `/tournaments/$tournamentId` — one tournament, its bracket and its result.
  *
- * Guarded for the lobby's reason. **The guard is not the authorization**:
- * it stops an anonymous visitor reaching a page that would only get a
- * `401`, and nothing more — a hand-typed tournament id gets the same `404`
- * here as anywhere else, because a tournament is there for everybody or
- * absent for everybody.
+ * Open for the lobby's reason, and **openness is not authorization**: a
+ * hand-typed id gets the same `404` here as anywhere else, and an
+ * unpublished tournament gets that `404` too rather than a `403` that would
+ * confirm it exists (§43.2). Entering still needs an account, which
+ * `RegistrationPanel` asks for rather than this route.
+ *
+ * This is the URL a player shares. It has to open for whoever it reaches.
  */
 export const tournamentRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tournaments/$tournamentId",
-  component: protectedPage(() => import("@/pages/tournament")),
+  component: lazyRouteComponent(() => import("@/pages/tournament")),
 });
 
 export const routeTree = rootRoute.addChildren([

@@ -200,6 +200,7 @@
     },
     "ratings": {
       "title": "Ratings",
+      "inCategory": "{category} rating",
       "provisional": "Provisional",
       "games": "{count} games",
       "deviation": "Confidence range",

@@ -100,3 +100,31 @@ export function avatarSrc(
 export function winRateLabel(statistics: ProfileStatistics): number | null {
   return statistics.games_played === 0 ? null : statistics.win_rate;
 }
+
+/**
+ * The standing a profile leads with, or `null` when nothing has been played.
+ *
+ * **The one with the most games**, and ties broken by the higher rating.
+ * `/ratings/me` returns every speed class, marking the unplayed ones
+ * provisional at the starting value — so "highest rating" would crown a
+ * category nobody has entered, and "first in the list" would crown whatever
+ * order the API happened to send.
+ *
+ * Presentation only, and deliberately so: this decides which number a page
+ * shows *largest*, not which one is authoritative. Every rating remains
+ * exactly what the server sent.
+ */
+export function primaryRating(ratings: PlayerRating[]): PlayerRating | null {
+  const played = ratings.filter((rating) => rating.games_played > 0);
+  if (played.length === 0) return null;
+
+  return played.reduce((best, candidate) =>
+    candidate.games_played !== best.games_played
+      ? candidate.games_played > best.games_played
+        ? candidate
+        : best
+      : candidate.rating > best.rating
+        ? candidate
+        : best,
+  );
+}

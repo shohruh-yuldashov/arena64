@@ -1600,7 +1600,7 @@ A64-025.8 §17.2. `ProfileHeader` did not, so a profile printed `alice` over
 `@alice` for every account without a display name, which is most of them.
 The same condition now guards both.
 
-### 18.4 Measured
+### 18.4 Measured — the defect pass
 
 | Surface | Width | Theme | Page overflow |
 | --- | --- | --- | --- |
@@ -1611,28 +1611,230 @@ The same condition now guards both.
 
 `npm run test` 204 passed, `tsc --noEmit` clean, eslint zero errors.
 
-### 18.5 An open question, not a change
+### 18.5 The open question, answered — the full visual rework
 
-The ratings section renders **five cards, each `1,500`, each captioned "not
-rated yet"** — a third of the page spent saying a player has no rating, five
-times, in the largest type on the surface.
+§18.4 above closed a *defect* pass. What follows is a **redesign**, asked for
+explicitly and carried out on this surface first so that it can become the
+template the remaining surfaces are brought up to.
 
-The number is the server's: `specs/rating.md` gives every player a
-provisional 1500, and §14.4 of this document already decided that a
-provisional rating is *marked rather than withheld*, because hiding it would
-be less honest than qualifying it. So the value is right and the caption is
-right.
+The open question was the ratings block: five cards, each `1,500`, each
+captioned "not rated yet", occupying a third of the page in the largest type
+on it. The earlier answer was that the data was correct and the epic's rule
+was to change only what is demonstrably wrong. **That rule is retired here.**
+A surface whose every number is accurate and which still fails to tell a
+reader who this player is has a real defect; it is simply not one a
+measurement finds.
 
-What is arguably wrong is the **hierarchy** — the placeholder is set large
-and bold while the fact that qualifies it is small and grey, which is the
-opposite of their importance to a reader. The game room solved the same
-tension inline: `1487?` with "provisional" for a screen reader.
+#### What was wrong, and what each part now does
 
-Not changed here, because it is a judgement about emphasis on a surface
-whose data is correct, and the epic's own rule is to change what is
-demonstrably wrong rather than what could be arranged differently.
+| Was | Is |
+| --- | --- |
+| The page opened with "Joined 5 August 2026" and a file upload | It opens with the name and the leading standing, set as the two largest things on it |
+| The avatar was drawn **twice** — as identity, and again inside the upload control | Drawn once. `AvatarManager` moved to `/settings/profile` |
+| Seven statistics at one weight, all `text-sm` | Three headline figures; wins/losses/draws as one proportional bar with a legend; highest rating as a footnote |
+| Five identical rating cards, `1,500`, "not rated yet" | Cards for categories with games; **one line** naming the rest |
+| The speed class printed the raw server enum — `blitz`, in every locale | `speedClassKey`, translated |
+| `highest_rating` showed `1,500` for an account that had played nothing | Rendered only once something has been played |
 
-### 18.6 The rest of A64-025.9
+#### The three decisions worth recording
 
-The statistics panel, the rating cards' own design, the edit form and the
-five settings surfaces were not redesigned.
+**The headline standing is the most-played category, not the highest
+number.** `/ratings/me` returns every speed class, seeding the unplayed ones
+at 1,500 — so "highest" would crown a category nobody has entered, and
+"first" would crown whatever order the API sent. `primaryRating` in
+`entities/profile` picks the one with the most games, ties broken by rating,
+and its doc comment says why. It is presentation only; every rating stays
+exactly what the server sent.
+
+**Played and unplayed are different kinds of thing, so they are drawn
+differently.** A category with games is a measurement and gets a card. A
+category without them is an invitation, and the honest form of that is one
+line — not five cards impersonating results. A brand-new account now reads
+as a short, calm page rather than a wall of numbers nobody earned.
+
+**`/profile` shows; `/settings/profile` edits.** The avatar was the one
+editable thing not reached through "Edit profile", which is what produced
+the duplicate. Moving it removes nothing: the control, its label, its size
+check and its test are unchanged — only the route that renders it.
+
+`speedClassKey` moved from `features/tournament/ui/labels.ts` to
+`entities/time-control`, where the `SpeedClass` type already lives. Three
+surfaces now read it; a second copy beside the ratings would have been the
+divergence §3.4 forbids. `formatList` was added to `shared/lib/format.ts`
+because joining the unrated categories with `", "` is a Latin-script
+assumption `Intl.ListFormat` already knows better than.
+
+### 18.6 Measured, after the rework
+
+Overflow at three widths, in **both** the played and the brand-new-account
+states — the second is the one the old ratings block was worst on:
+
+| Surface | 1280 light | 768 light | 360 dark |
+| --- | --- | --- | --- |
+| `/profile`, account with games | 0 | 0 | 0 |
+| `/profile`, new account | 0 | 0 | 0 |
+| `/players/{username}`, account with games | 0 | 0 | 0 |
+| `/players/{username}`, new account | 0 | 0 | 0 |
+
+`npm run test` 204 passed, `tsc --noEmit` clean, eslint zero errors — and
+re-run unchanged after §18.7's palette change. The profile suite gained an
+assertion that the band leads with the played
+category and never with an unplayed 1,500; the avatar test moved to
+`/settings/profile`, unchanged otherwise.
+
+### 18.7 Colour — the brand gradient, and where it is allowed
+
+The rework above left the surface correct and almost entirely neutral. The
+brand colour existed, was decided in A64-025.2 (OQ-2), and was used in 29
+places across tournaments, the game room and history — and in **none** on a
+profile. Colour was therefore not missing from the product; it was missing
+from the surfaces a player spends time on.
+
+#### The decision
+
+`--primary` is unchanged and still carries every functional accent: the
+focus ring, a live match, a selected option, a legal destination on the
+board. Added beside it is the **display** form of the same brand — a
+gradient from the existing indigo to a magenta, plus `--rating`, an amber
+that means *a personal high* and is kept apart from `--warning` because a
+best streak is not a caution.
+
+`--background` also picked up a trace of the brand hue, in both themes. It
+is far below the threshold at which anyone would call the page coloured; its
+job is to let a white `--card` read as a raised surface instead of
+dissolving into the page, which the borders were doing alone. These are the
+only two departures from the shadcn neutral base the file header documents,
+and the header now says so.
+
+#### Gradient is rationed, and the rule is written down
+
+Three places, all of them brand:
+
+| Where | What |
+| --- | --- |
+| The wordmark | `brand-gradient-text`, in the header and on the auth front door — one wordmark, one treatment |
+| The primary action | `Button` `variant="default"` |
+| The auth panel | replaced a flat `bg-primary` on the same element, same foreground |
+
+Everywhere else is solid, and that is a cost decision rather than a taste
+one: **contrast over a gradient cannot be asserted in a test, only looked
+at — and then looked at again in the other theme.** So both ends of the ramp
+are pinned to values that clear 4.5:1 against `--primary-foreground` on
+their own (the magenta end is darker than a magenta wants to be for exactly
+that reason), and the rule is that no text sits over a gradient whose two
+ends it has not already cleared. The gradient is defined once, in
+`globals.css`, so its angle and stops cannot drift between the four.
+
+`brand-gradient-text` degrades to the solid brand colour where
+`background-clip: text` is unsupported — never to invisible text.
+
+#### One thing that did not work
+
+`--rating` was first applied to the best-streak **figure**. An amber dark
+enough to clear 4.5:1 on white is brown by the time it gets there, and a
+brown numeral reads as a rendering fault rather than as a highlight. The
+tint moved behind the figure — the cell is washed and the label carries the
+hue, so the number keeps the card's own contrast. Recorded because the same
+trap is waiting for every other "let us make this one gold".
+
+#### The second vocabulary: a hue per speed class
+
+The brand gradient says *Arena64*. It does not help anyone read a page, and
+on a profile the ratings block stayed almost entirely neutral under it. So a
+second set of tokens carries **category**: one hue per speed class, hot at
+the fast end and cool at the slow end, applied wherever the product names a
+class.
+
+| Surface | Before | After |
+| --- | --- | --- |
+| A profile's rating cards | neutral label | a 4px rule and a label in the class's hue |
+| A profile's leading figure | brand wash | the hue of the class it is a rating in |
+| Match history | the **raw enum** — `blitz`, in every locale | the translated name, in the class's hue |
+| Tournament card and page | neutral text | the same |
+
+That is the point of it: the colour means the same thing on all four, so a
+returning player finds Blitz by colour before reading the word. Values are
+tuned for text on a card — L≈0.48 light for 4.5:1 on white, L≈0.74 dark for
+the same on `--card` — and one token serves both the label and the rule, so
+the two cannot drift apart.
+
+**The leading figure takes the class's hue rather than the brand's.** It is
+a rating in that class and the card for it sits further down the same page;
+a brand-purple panel above an orange Blitz card would be one fact wearing
+two colours. That wash is the only gradient outside the brand's own four
+places, and it is 15% — nothing is measured against it.
+
+#### Three vocabularies, and the rule that keeps them apart
+
+| Token family | Means | Where |
+| --- | --- | --- |
+| `--primary` | *interaction* | focus ring, live match, selected option, legal destination |
+| `--brand-from`/`--brand-to` | *Arena64* | wordmark, primary action, auth panel, and nothing else |
+| `--speed-*` | *category* | anywhere a speed class is named |
+| `--rating` | *a personal high* | best streak, highest rating |
+
+No surface uses more than two of them at once. That constraint is what stops
+this becoming the wall of colour the ratings block used to be a wall of
+numbers.
+
+### 18.8 Closing the surface
+
+Four things the rework left standing, and what each now is.
+
+**The tournament history was three facts at one weight.** A name, a date and
+a rank, spread by `justify-between` so the date floated in the middle of the
+row with nothing to align to. The response already carried the speed class,
+the format and `final_status`, and none of it was rendered — so "Rank 1" and
+"Champion" were the same information published once, in the weaker of the
+two forms. Now the placing leads as a fixed-width chip (fixed, because a
+chip that sizes to its own text starts every name at a different x), the
+name is the row, the speed class and format and date are one subordinate
+line, and the outcome is stated in words. Gold marks a win with the word
+"Champion" beside it. Below `sm` the three stack instead of competing; the
+old layout truncated a tournament to "Autumn Blitz C…" at 360.
+
+**Destructive actions had the same weight as the thing a visitor came for.**
+On a public profile, "Add friend" and "Block" were both outlined buttons of
+equal size. `RelationshipActions` now has three weights rather than two: the
+affirmative act (`send_request`, `accept_request`) leads as the primary
+button, and `isDestructive` actions drop to `ghost` — destructive text, no
+border, the quietest thing in the group. That predicate already decided
+which actions open a confirmation dialog, so nothing new decides anything.
+
+**Three actions wrapped raggedly at 360.** `flex-wrap` put "Match history"
+alone on a second line, indented by a ghost button's own padding, which
+reads as an accident rather than as a third action. A two-column grid below
+`sm` makes the wrap deliberate: two, then one across.
+
+**The photo control was three loose siblings.** The avatar, the upload
+label and the removal button were all children of the section, so "Remove
+photo" sat under the hint text with nothing tying it to the picture it
+removes. They are one carded block now, with removal reduced to the same
+ghost weight §18.8 gives blocking. The input itself is untouched — still a
+real `<input type="file">`, still `sr-only` with its label as the target,
+and its test still finds it by label exactly as assistive technology does.
+
+One consistency fix went with them: hidden statistics, an empty tournament
+history and the unrated categories now share a single dashed frame. Each was
+a bare paragraph between two carded sections, which reads as text that lost
+its container rather than as a stated absence.
+
+### 18.9 Measured, closed
+
+Both profile surfaces, three widths, and the two states the ratings block
+behaves differently in:
+
+| Surface | 1280 light | 768 light | 360 dark |
+| --- | --- | --- | --- |
+| `/profile`, account with games | 0 | 0 | 0 |
+| `/profile`, new account | 0 | 0 | 0 |
+| `/players/{username}`, account with games | 0 | 0 | 0 |
+| `/players/{username}`, new account | 0 | 0 | 0 |
+
+`npm run test` 204 passed, `tsc --noEmit` clean, eslint zero errors.
+
+**A64-025.9 is closed for `/profile`, `/players/{username}` and
+`/settings/profile`.** The remaining four settings surfaces
+(`/settings/{preferences,privacy,notifications,sessions}`) are not
+redesigned; they are the next surfaces to take this template — see `L-1` in
+`specs/README.md`, which records that they also ship against no spec.

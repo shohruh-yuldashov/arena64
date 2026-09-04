@@ -200,6 +200,7 @@
     },
     "ratings": {
       "title": "Рейтинги",
+      "inCategory": "Рейтинг · {category}",
       "provisional": "Предварительный",
       "games": "партий: {count}",
       "deviation": "Интервал точности",

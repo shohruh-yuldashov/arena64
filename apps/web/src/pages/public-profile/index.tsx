@@ -86,13 +86,13 @@ export default function PublicProfilePage() {
       >
         {profile.data !== undefined && (
           <>
-            <ProfileHeader profile={profile.data}>
+            <ProfileHeader profile={profile.data} ratings={ratings.data?.ratings}>
               {/* Belt and braces: the API already omits `relationship` on
                   the viewer's own profile, and this makes the "never on
                   your own page" rule visible where somebody reading the
                   page would look for it. */}
               {session.status === "authenticated" && session.user.id !== profile.data.id && (
-                <div className="mt-3 flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {/* A64-022.5 §13. Rendered from the **same** `relationship`
                       the actions beside it read — one server-computed value,
                       so the button cannot appear for a stranger, a blocked
@@ -118,7 +118,13 @@ export default function PublicProfilePage() {
             {profile.data.statistics !== null && profile.data.statistics !== undefined ? (
               <StatisticsPanel statistics={profile.data.statistics} />
             ) : (
-              <p className="text-muted-foreground text-sm">{t("profile.stats.hidden")}</p>
+              // The same dashed frame the unrated categories and an empty
+              // tournament history use — A64-025.9 §18.8. It was a bare
+              // paragraph between two carded sections, which read as text
+              // that had lost its container rather than as a stated absence.
+              <p className="border-border text-muted-foreground rounded-xl border border-dashed px-5 py-4 text-sm">
+                {t("profile.stats.hidden")}
+              </p>
             )}
           </>
         )}

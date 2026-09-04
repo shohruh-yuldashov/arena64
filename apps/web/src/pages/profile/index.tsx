@@ -1,6 +1,5 @@
 import { Link } from "@tanstack/react-router";
 
-import { AvatarManager } from "@/features/avatar";
 import { useMyProfile, useMyRatings } from "@/features/profile/model/queries";
 import { QueryState } from "@/features/profile/ui/query-state";
 import { useTranslation } from "@/shared/i18n";
@@ -27,6 +26,18 @@ import { TournamentHistory } from "@/widgets/tournament-history";
  *
  * Each section renders as its own data arrives. A page that waited for the
  * slowest of three would show nothing for as long as the worst one takes.
+ * The identity band is the one exception in shape rather than in timing: it
+ * renders from `/profile/me` alone and gains the leading standing when
+ * `/ratings/me` lands, because a name that waits for a number shows nothing
+ * for the length of the slower request.
+ *
+ * ## Viewing, not editing — A64-025.9
+ *
+ * The avatar used to be uploadable from here, which drew the same picture
+ * twice on one screen — once as identity, once as a file field — while
+ * every other editable thing lived behind "Edit profile". `AvatarManager`
+ * now sits on `/settings/profile` with the rest of them, and this page
+ * shows the profile rather than being a second, partial editor for it.
  */
 export default function ProfilePage() {
   const { t } = useTranslation();
@@ -42,12 +53,17 @@ export default function ProfilePage() {
       >
         {profile.data !== undefined && (
           <>
-            <ProfileHeader profile={profile.data}>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button asChild variant="outline" className="min-h-11">
+            <ProfileHeader profile={profile.data} ratings={ratings.data?.ratings}>
+              {/* Two columns below `sm`, a row above — A64-025.9 §18.8.
+                  `flex-wrap` put "Match history" alone on a second line,
+                  indented by a ghost button's own padding, which reads as a
+                  layout accident rather than as a third action. A grid
+                  makes the wrap deliberate: two, then one across. */}
+              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+                <Button asChild variant="outline" className="min-h-11 w-full sm:w-auto">
                   <Link to="/settings/profile">{t("profile.nav.editProfile")}</Link>
                 </Button>
-                <Button asChild variant="ghost" className="min-h-11">
+                <Button asChild variant="ghost" className="min-h-11 w-full sm:w-auto">
                   <Link to="/players/$username" params={{ username: profile.data.username }}>
                     {t("profile.header.viewPublic")}
                   </Link>
@@ -55,13 +71,16 @@ export default function ProfilePage() {
                 {/* A64-020.5F §20. A link, not an inline preview: the
                     profile's request count stays where it was, and the
                     history page owns its own pagination. */}
-                <Button asChild variant="ghost" className="min-h-11">
+                <Button
+                  asChild
+                  variant="ghost"
+                  className="col-span-2 min-h-11 w-full sm:col-span-1 sm:w-auto"
+                >
                   <Link to="/games/history">{t("history.title")}</Link>
                 </Button>
               </div>
             </ProfileHeader>
 
-            <AvatarManager profile={profile.data} />
             <StatisticsPanel statistics={profile.data.statistics} />
           </>
         )}

@@ -127,114 +127,128 @@ export function AvatarManager({ profile }: { profile: MyProfile }) {
         {t("profile.avatar.title")}
       </h2>
 
-      <div className="flex items-center gap-4">
-        <Avatar className="size-20">
+      {/* One carded block — A64-025.9 §18.8. The photo, the two things that
+          can be done to it and everything the page has to say about it were
+          three siblings of the section, so "Remove photo" sat below the hint
+          text with nothing tying it to the picture it removes. */}
+      <div className="border-border bg-card flex flex-col gap-4 rounded-xl border p-5 sm:flex-row sm:items-center sm:gap-6">
+        <Avatar className="size-20 shrink-0">
           {shown !== null && <AvatarImage src={shown} alt="" />}
           <AvatarFallback className="text-lg">{initialsOf(profile)}</AvatarFallback>
         </Avatar>
 
-        <div className="flex min-w-0 flex-col gap-2">
-          {/* Still a real `<input type="file">` — A64-025.9 keeps that and
-              changes only where it is drawn.
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Still a real `<input type="file">` — A64-025.9 keeps that and
+                changes only where it is drawn.
 
-              The control is keyboard reachable, announces its accepted
-              types and opens the system picker on Enter, and a hidden input
-              behind a `<div onClick>` does none of that. So the input is
-              **visually** hidden rather than removed: `sr-only` leaves it in
-              the tab order and in the accessibility tree, and the `<label>`
-              beside it is what a pointer hits.
+                The control is keyboard reachable, announces its accepted
+                types and opens the system picker on Enter, and a hidden
+                input behind a `<div onClick>` does none of that. So the
+                input is **visually** hidden rather than removed: `sr-only`
+                leaves it in the tab order and in the accessibility tree, and
+                the `<label>` beside it is what a pointer hits.
 
-              Two things forced the move. Its intrinsic width does not
-              shrink, so at 360 it pushed 47px past the viewport — the only
-              page in this epic that overflowed. And the words inside it,
-              "Choose File" and "No file chosen", are the browser's: they
-              are English in every locale, in a product where all 775 other
-              strings go through `t()`.
+                Two things forced the move. Its intrinsic width does not
+                shrink, so at 360 it pushed 47px past the viewport — the only
+                page in this epic that overflowed. And the words inside it,
+                "Choose File" and "No file chosen", are the browser's: they
+                are English in every locale, in a product where all 775 other
+                strings go through `t()`.
 
-              `peer-focus-visible` on the label is what keeps a keyboard
-              user's focus visible now that the input itself is not. */}
-          <input
-            ref={input}
-            id="avatar-file"
-            type="file"
-            accept={ACCEPTED_TYPES.join(",")}
-            disabled={busy}
-            aria-describedby="avatar-hint"
-            className="peer sr-only"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file !== undefined) void onFileChosen(file);
-            }}
-          />
-          <label
-            htmlFor="avatar-file"
-            className={cn(
-              "border-border inline-flex min-h-11 w-fit cursor-pointer items-center",
-              "rounded-md border px-3 text-sm font-medium",
-              "hover:bg-accent peer-focus-visible:ring-ring peer-focus-visible:ring-2",
-              "peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+                `peer-focus-visible` on the label is what keeps a keyboard
+                user's focus visible now that the input itself is not. */}
+            <input
+              ref={input}
+              id="avatar-file"
+              type="file"
+              accept={ACCEPTED_TYPES.join(",")}
+              disabled={busy}
+              aria-describedby="avatar-hint"
+              className="peer sr-only"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file !== undefined) void onFileChosen(file);
+              }}
+            />
+            <label
+              htmlFor="avatar-file"
+              className={cn(
+                "border-border inline-flex min-h-11 w-fit cursor-pointer items-center",
+                "rounded-md border px-3 text-sm font-medium",
+                "hover:bg-accent peer-focus-visible:ring-ring peer-focus-visible:ring-2",
+                "peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+              )}
+            >
+              {profile.avatar_url === null
+                ? t("profile.avatar.upload")
+                : t("profile.avatar.replace")}
+            </label>
+
+            {profile.avatar_url !== null && (
+              <Dialog open={confirmingRemoval} onOpenChange={setConfirmingRemoval}>
+                <DialogTrigger asChild>
+                  {/* Ghost, and destructive only in the text — the same
+                      weight §18.8 gives blocking and unfriending. Removing a
+                      photo is not what a visitor came here to do. */}
+                  <Button
+                    variant="ghost"
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive min-h-11"
+                    disabled={busy}
+                  >
+                    {t("profile.avatar.remove")}
+                  </Button>
+                </DialogTrigger>
+                {/* Radix's dialog: focus trap, focus return, Escape,
+                    aria-modal. A destructive action needs an explicit
+                    confirmation, and one that a keyboard user can escape. */}
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>{t("profile.avatar.removeTitle")}</DialogTitle>
+                    <DialogDescription>{t("profile.avatar.removeBody")}</DialogDescription>
+                  </DialogHeader>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <DialogClose asChild>
+                      <Button variant="ghost" className="min-h-11">
+                        {t("profile.avatar.cancel")}
+                      </Button>
+                    </DialogClose>
+                    <Button
+                      variant="destructive"
+                      className="min-h-11"
+                      disabled={remove.isPending}
+                      onClick={() => void onRemove()}
+                    >
+                      {remove.isPending ? (
+                        <Spinner label={t("profile.avatar.uploading")} />
+                      ) : (
+                        t("profile.avatar.removeConfirm")
+                      )}
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
             )}
-          >
-            {profile.avatar_url === null
-              ? t("profile.avatar.upload")
-              : t("profile.avatar.replace")}
-          </label>
+          </div>
+
           <p id="avatar-hint" className="text-muted-foreground text-xs">
             {t("profile.avatar.hint", { max: MAX_MB })}
           </p>
+
+          {busy && (
+            <p role="status" className="text-muted-foreground flex items-center gap-2 text-sm">
+              <Spinner label={t("profile.avatar.uploading")} />
+              {t("profile.avatar.uploading")}
+            </p>
+          )}
+
+          {failure !== null && (
+            <p role="alert" className="text-destructive text-sm font-medium">
+              {t(failure, { max: MAX_MB })}
+            </p>
+          )}
         </div>
       </div>
-
-      {busy && (
-        <p role="status" className="text-muted-foreground flex items-center gap-2 text-sm">
-          <Spinner label={t("profile.avatar.uploading")} />
-          {t("profile.avatar.uploading")}
-        </p>
-      )}
-
-      {failure !== null && (
-        <p role="alert" className="text-destructive text-sm font-medium">
-          {t(failure, { max: MAX_MB })}
-        </p>
-      )}
-
-      {profile.avatar_url !== null && (
-        <Dialog open={confirmingRemoval} onOpenChange={setConfirmingRemoval}>
-          <DialogTrigger asChild>
-            <Button variant="outline" className="min-h-11 self-start" disabled={busy}>
-              {t("profile.avatar.remove")}
-            </Button>
-          </DialogTrigger>
-          {/* Radix's dialog: focus trap, focus return, Escape, aria-modal.
-              A destructive action needs an explicit confirmation, and one
-              that a keyboard user can escape from. */}
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{t("profile.avatar.removeTitle")}</DialogTitle>
-              <DialogDescription>{t("profile.avatar.removeBody")}</DialogDescription>
-            </DialogHeader>
-            <div className="flex flex-wrap justify-end gap-2">
-              <DialogClose asChild>
-                <Button variant="ghost" className="min-h-11">
-                  {t("profile.avatar.cancel")}
-                </Button>
-              </DialogClose>
-              <Button
-                variant="destructive"
-                className="min-h-11"
-                disabled={remove.isPending}
-                onClick={() => void onRemove()}
-              >
-                {remove.isPending ? (
-                  <Spinner label={t("profile.avatar.uploading")} />
-                ) : (
-                  t("profile.avatar.removeConfirm")
-                )}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
     </section>
   );
 }

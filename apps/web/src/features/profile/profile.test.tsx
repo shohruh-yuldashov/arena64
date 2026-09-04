@@ -197,6 +197,17 @@ describe("the profile route", () => {
       name: /ratings|reyting|рейтинг/i,
     });
     expect(within(ratingsRegion).getByText("1,621")).toBeVisible();
+
+    // A64-025.9: the identity band leads with the category actually
+    // played — classical has 40 games, blitz has none — so the same figure
+    // is stated twice on purpose, once as the headline and once in the
+    // grid. Blitz's starting 1,500 is never the headline.
+    expect(
+      screen.getByText(/classical rating|klassik reytingi|рейтинг · классика/i),
+    ).toBeVisible();
+    expect(screen.getAllByText("1,621")).toHaveLength(2);
+    expect(screen.queryByText("1,500")).not.toBeInTheDocument();
+
     // A category with no games says so instead of presenting the starting
     // value as a measurement.
     expect(
@@ -259,7 +270,10 @@ describe("the public profile", () => {
     expect(screen.queryByText(/offline|oflayn|не в сети/i)).not.toBeInTheDocument();
     expect(screen.getByText(/statistics are hidden|yashirilgan|скрыта/i)).toBeVisible();
     // Ratings are never hidden — they are what pairing is computed from.
-    expect(await screen.findByText("1,621")).toBeVisible();
+    const hiddenRatings = await screen.findByRole("region", {
+      name: /ratings|reyting|рейтинг/i,
+    });
+    expect(within(hiddenRatings).getByText("1,621")).toBeVisible();
 
     hidden.unmount();
 
@@ -350,7 +364,9 @@ describe("the avatar", () => {
       }),
     );
 
-    renderApp({ path: "/profile" });
+    // A64-025.9: the avatar is edited where the rest of the profile is
+    // edited. `/profile` shows it; it no longer uploads it.
+    renderApp({ path: "/settings/profile" });
 
     const input = await screen.findByLabelText(/upload a photo|rasm yuklash|загрузить фото/i);
 

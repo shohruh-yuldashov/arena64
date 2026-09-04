@@ -33,6 +33,18 @@ export function formatNumber(value: number, locale: string): string {
 }
 
 /**
+ * "Bullet, Blitz and Rapid" — a list, joined the way the locale joins one.
+ *
+ * `join(", ")` is a Latin-script assumption: the separator, the spacing and
+ * whether the last item takes a conjunction all differ by language, and
+ * none of it belongs in a translation string a translator has to remember
+ * to punctuate. `Intl` already knows.
+ */
+export function formatList(items: string[], locale: string): string {
+  return new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(items);
+}
+
+/**
  * A share as a percentage.
  *
  * The API's `win_rate` is a fraction; `Intl` applies the locale's own

@@ -18,13 +18,23 @@
  * filter 0, one `IDAT`. Roughly sixty lines, and it has no version to
  * update.
  *
- * ## The mark itself is a placeholder, and says so
+ * ## The mark, and the palette it is finally in — A64-026.2 §41.2
  *
- * A 2×2 draughts board with one piece on it, in the neutral palette
- * `app/styles/globals.css` already establishes. **A64-025 Product
- * Experience Redesign owns the real brand**; this exists so that the
- * manifest is installable and the home-screen tile is not a stretched
- * screenshot. `specs/frontend.md` §20 records that.
+ * A 2×2 draughts board with one piece on it: the smallest thing that is
+ * recognisably this product rather than a generic tile, and it survives
+ * being drawn at sixteen pixels, which is where a favicon actually lives.
+ *
+ * It was **neutral** until now, and this docstring said so — a placeholder
+ * deferring the real brand to A64-025. A64-025 decided the brand and never
+ * came back for the icons, so the installed application and the browser tab
+ * were the last two surfaces still black and white while everything else
+ * had been indigo for a phase. This is that correction.
+ *
+ * The field is `--brand-from` and the deep square is a darker step of the
+ * same hue, so the mark is monochrome-brand: **no gradient**. §18.7 rations
+ * the gradient to three places and none of them is a 16px square, where a
+ * ramp is invisible and only muddies the two tones that have to separate.
+ * Every value below is that stylesheet's, converted to sRGB once, here.
  *
  * Usage: `npm run assets:icons`
  */
@@ -35,10 +45,20 @@ import { fileURLToPath } from "node:url";
 
 const OUT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "public", "icons");
 
-/** The neutral palette, as `globals.css` states it in oklch. */
-const BACKGROUND = [10, 10, 10, 255]; // oklch(0.145 0 0)
-const LIGHT = [250, 250, 250, 255]; // oklch(0.985 0 0)
-const DARK_SQUARE = [38, 38, 38, 255];
+/**
+ * The brand palette, as `globals.css` states it in oklch.
+ *
+ * White clears 6.15:1 on the field and 13.50:1 on the deep square, and the
+ * two squares separate from each other at 2.20:1 — which is a *shape*
+ * boundary rather than text, so the threshold that matters is visibility at
+ * 16px rather than 4.5:1.
+ */
+const DEEP = [32, 34, 104, 255]; // a darker step of the brand hue
+const BRAND = [73, 79, 204, 255]; // --brand-from, oklch(0.5 0.19 275)
+const PIECE = [250, 250, 250, 255]; // oklch(0.985 0 0)
+
+/** Outside the tile: the deeper tone, so the rounded corners read as edges. */
+const BACKGROUND = DEEP;
 
 /**
  * Supersampling factor. The mark is drawn at 4× and box-filtered down, so
@@ -70,11 +90,13 @@ function markColorAt(x, y, inset) {
   const row = by < 0.5 ? 0 : 1;
   const isLightSquare = (row + column) % 2 === 0;
 
-  // The piece: on the dark square at bottom-left, so it reads against it.
+  // The piece is the **only** light element, which is what makes the mark
+  // read as indigo at every size rather than as a white tile with a tint.
+  // It sits on the deep square at bottom-left, where it clears 13.5:1.
   const pieceCenter = { x: 0.25, y: 0.75 };
-  if (Math.hypot(bx - pieceCenter.x, by - pieceCenter.y) <= 0.165) return LIGHT;
+  if (Math.hypot(bx - pieceCenter.x, by - pieceCenter.y) <= 0.165) return PIECE;
 
-  return isLightSquare ? LIGHT : DARK_SQUARE;
+  return isLightSquare ? BRAND : DEEP;
 }
 
 /** Renders one square icon as raw RGBA bytes. */

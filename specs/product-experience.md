@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-026.1, the public landing page |
+| **Last updated** | 2026-09-05 — A64-026.2, brand identity |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -4025,3 +4025,114 @@ written.
 
 Every capability named was verified against the repository before it was
 written down.
+
+## 41. Brand identity — A64-026.2
+
+The roadmap lists six items for this task. Measured first, three of them
+turned out to be already delivered or moot, and one turned out to be a gap
+nobody had noticed.
+
+| Roadmap item | Measured state |
+| --- | --- |
+| Wordmark | Written out **three times** in three files, differing only in size |
+| Logo / icon system | `scripts/generate-icons.mjs` exists and works — but drew a **neutral placeholder** |
+| Favicon | SVG + three PNGs, same placeholder |
+| Social preview asset | **Absent.** `og:image` pointed at the application icon |
+| Brand usage rules | Not written down anywhere |
+| Final indigo palette | Decided in A64-025.2, in use everywhere — moot |
+
+### 41.1 One wordmark, three sizes
+
+`brand-gradient-text font-semibold tracking-tight` was written out in
+`widgets/brand`, `widgets/auth-shell` and the landing page's header. The
+drift had already started: the landing header was a step larger than the
+other two with nothing recording why.
+
+`widgets/brand` is the definition now — `Brand` for the linked form, and an
+exported `wordmarkClass()` for the one caller that must not link, which is
+the auth front door: it is already inside a card that is the way home, and a
+second link to `/` there would be two controls doing one thing.
+
+### 41.2 The icons were still the placeholder, and said so
+
+`generate-icons.mjs` opened with:
+
+> **A64-025 Product Experience Redesign owns the real brand**; this exists
+> so that the manifest is installable and the home-screen tile is not a
+> stretched screenshot.
+
+A64-025 decided the brand and never came back. So the installed application
+and the browser tab were **the last two surfaces still black and white**
+while every other one had been indigo for a phase — a placeholder that
+outlived the thing it was waiting for, which is the failure a deferral
+comment cannot prevent on its own.
+
+The mark is unchanged in shape and now in the brand palette: the brand
+indigo for the light squares, a darker step of the same hue behind them, and
+white for the piece — the **only** light element, which is what makes it
+read as indigo at 16px rather than as a white tile with a tint.
+
+| | |
+| --- | --- |
+| White on the deep square | 13.50:1 |
+| White on the brand square | 6.15:1 |
+| Brand against deep | 2.20:1 — a *shape* boundary, so what matters is visibility at 16px rather than a text threshold |
+
+**No gradient.** §18.7 rations it to three places and none of them is a 16px
+square, where a ramp is invisible and only muddies the two tones that have
+to separate.
+
+`favicon.svg` is the same description as vector and was edited to match. It
+briefly became **invalid XML**, because an XML comment cannot contain a
+double hyphen and the token's own name is `--brand-from`; the file is parsed
+as part of the check now rather than assumed to be well-formed.
+
+### 41.3 The browser chrome was painting the old page
+
+`theme-color` was `#ffffff` / `#0a0a0a` and the manifest matched it. That is
+the shadcn neutral base this product left in A64-025.9 §18.7, when both
+themes picked up a trace of the brand hue so a white card reads as a raised
+surface. The page moved; the system UI did not.
+
+Both are `--background` now, converted once. The test that pinned the
+literal `#0a0a0a` was asserting a copy of a value owned elsewhere — it now
+asserts the thing actually worth holding, that **the splash screen and the
+browser chrome agree**, since a seam between them is visible on every cold
+start. Verified by breaking it.
+
+### 41.4 A social card rendered from the stylesheet
+
+`npm run assets:og` writes `public/og-card.png` at 1200×630.
+
+It uses Playwright rather than the byte-level PNG writer its sibling uses,
+and the reason is type: drawing text without a rasteriser means shipping
+glyph outlines — a font file, a parser, and a second description of the
+wordmark that would drift from the one the application renders. Playwright
+is already a dev dependency, and it renders the card from **`globals.css`
+itself**, so the tokens, the gradient and the type are the product's. A card
+built any other way is a second design system with one consumer.
+
+The output is committed rather than built, because a crawler fetching a
+share preview never runs `npm run build` and a `public/` asset is the only
+kind it can read.
+
+### 41.5 What still needs one missing piece
+
+`og:image` is a **relative** path, and several crawlers will not resolve
+one. Making it absolute needs exactly what `og:url` and the canonical need
+— a configured public origin, which nothing in this build has.
+
+All three wait for A64-026.3 together rather than one being guessed at. That
+is a single, nameable piece of infrastructure rather than three loose ends,
+and it is stated here so the next task starts from it.
+
+### 41.6 Measured
+
+| | |
+| --- | --- |
+| `tsc --noEmit` | clean |
+| `eslint` | 0 errors |
+| `prettier --check` | clean |
+| `vitest` | 244 passed, 37 files |
+| Icons | rendered and read at 16, 32, 192, 180 and maskable-cropped |
+| `favicon.svg` | parses as XML |

@@ -34,10 +34,17 @@
     />
 
     <!--
-      The share preview. `og:image` is the installed-application icon,
-      which is a real asset in this repository — a purpose-built social
-      card is A64-026.2's, and pointing at one that does not exist yet
-      would be a broken preview rather than an early one.
+      The share preview. `og:image` is the purpose-built card that
+      `npm run assets:og` renders from this application's own stylesheet —
+      A64-026.2 §41.4. It was the installed-application icon, which is a
+      square tile where a preview wants a 1200×630 card.
+
+      **The path is relative, and that is a limitation rather than a
+      choice.** Several crawlers require an absolute URL here and will not
+      resolve this one. Making it absolute needs the same missing piece
+      `og:url` and the canonical need — a configured public origin, which
+      nothing in this build has — so all three wait for A64-026.3 together
+      rather than one of them being guessed at.
 
       No `og:url` and no canonical: neither is knowable at build time,
       because this bundle is served from whatever origin deploys it and
@@ -55,9 +62,12 @@
       property="og:description"
       content="Rus shashkasi onlayn. Bir necha soniyada raqib toping, reytingli yoki oddiy o'ynang, turnirlarda qatnashing."
     />
-    <meta property="og:image" content="/icons/icon-512.png" />
+    <meta property="og:image" content="/og-card.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Arena64 — onlayn shashka" />
     <meta property="og:locale" content="uz" />
-    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:card" content="summary_large_image" />
 
     <!--
       A64-020.9 §7. The installable-application metadata.
@@ -82,8 +92,19 @@
       dark value would put a black status bar above a white page for every
       light-mode player.
     -->
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0a0a" />
+    <!--
+      A64-026.2 §41.3. These were `#ffffff` and `#0a0a0a`, which is the
+      shadcn neutral base this product left in A64-025.9 §18.7: both themes
+      picked up a trace of the brand hue so a white card reads as a raised
+      surface. The browser chrome was still painting the old page.
+
+      They are `--background` in each theme, converted to sRGB once — the
+      point of a theme colour is that the system UI and the page are the
+      same colour, and two values that disagree by a hair are worse than a
+      visible seam because nobody can see where it came from.
+    -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fcfbfe" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0c0a0e" />
     <meta name="color-scheme" content="light dark" />
 
     <!--

@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
 import { useTranslation } from "@/shared/i18n";
+import { wordmarkClass } from "@/widgets/brand";
 
 /**
  * The frame every authentication page renders in — A64-025.4 §3.
@@ -64,9 +65,7 @@ export function AuthShell({
       >
         {/* The same treatment `Brand` gives it in the header — the two are
             the one wordmark, and this page shows both at once. */}
-        <span className="brand-gradient-text text-sm font-semibold tracking-tight">
-          {t("layout.title")}
-        </span>
+        <span className={wordmarkClass()}>{t("layout.title")}</span>
       </Link>
 
       <div className="border-border bg-card grid overflow-hidden rounded-xl border shadow-sm lg:grid-cols-[1fr_1.1fr]">

@@ -7,6 +7,7 @@ import { useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui";
 import { BrowserSettingsMenu } from "@/widgets/account-menu";
+import { Brand } from "@/widgets/brand";
 
 /**
  * The header a visitor without an account sees — A64-026.1 §40.2.
@@ -72,15 +73,10 @@ export function MarketingHeader() {
       )}
     >
       <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4">
-        <Link
-          to="/"
-          className="focus-visible:ring-ring flex min-h-11 items-center rounded-md pr-2 focus-visible:ring-2 focus-visible:outline-none"
-          aria-label={t("layout.home")}
-        >
-          <span className="brand-gradient-text text-base font-semibold tracking-tight">
-            {t("layout.title")}
-          </span>
-        </Link>
+        {/* A64-026.2 §41.1. The shared wordmark, a step larger here because
+            this header is the first thing a visitor sees and the product's
+            is not. One definition, three sizes. */}
+        <Brand size="base" />
 
         <nav aria-label={t("landing.nav.label")} className="ml-2 hidden md:block">
           <ul className="flex items-center gap-1">

@@ -36,6 +36,15 @@ _SUBJECTS: Final[dict[Locale, str]] = {
     Locale.UZ: "Arena64 parolini tiklash",
 }
 
+# The heading, which is not the subject: a subject competes for room in a
+# list beside twenty others and says which product it is, while a heading is
+# read inside a message whose masthead already answered that.
+_HEADING: Final[dict[Locale, str]] = {
+    Locale.EN: "Reset your password",
+    Locale.RU: "Сброс пароля",
+    Locale.UZ: "Parolni tiklash",
+}
+
 _GREETING: Final[dict[Locale, str]] = {
     Locale.EN: "Hello {name},",
     Locale.RU: "Здравствуйте, {name}!",
@@ -107,12 +116,19 @@ def build_password_reset_email(
     recipient and this function never sees an address.
     """
     text_body, html_body = render_email_body(
+        heading=_HEADING[locale],
+        # The lead rather than the greeting — A64-025.10F §31. Left alone,
+        # the inbox preview of this message reads "Assalomu alaykum,
+        # Shohruh!", which is the one line a reader sees before deciding
+        # whether an unrequested reset needs their attention.
+        preheader=_LEAD[locale],
         paragraphs=[
             _GREETING[locale].format(name=recipient_name),
             _LEAD[locale],
         ],
         action=EmailAction(label=_ACTION[locale], url=reset_url),
         footnote=f"{_EXPIRY[locale].format(hours=ttl_hours)} {_IGNORE[locale]}",
+        language=locale.value,
     )
     return {"subject": _SUBJECTS[locale], "text_body": text_body, "html_body": html_body}
 

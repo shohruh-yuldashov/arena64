@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.10E, one email shell for three messages |
+| **Last updated** | 2026-09-04 — A64-025.10F, the email shell given a design |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -469,6 +469,7 @@ tokens.
 | **A64-025.9C** | The four remaining settings surfaces | .2, .9 | Changing what any setting does |
 | **A64-025.10** | Notifications — the feed and the bell | .2 | Admin notification surfaces; what the preferences decide (.9C) |
 | **A64-025.10E** | Email design system. Fixes P2-2 | .2 (tokens only) | New email types |
+| **A64-025.10F** | The email shell, designed rather than merely shared | .10E | New email types; a dark variant |
 | **A64-025.11** | Global UI consistency and component cleanup | .3–.10 | Re-architecting layouts already designed mobile-first |
 | **A64-025.12** | Motion and interaction system. Fixes P3-5 | .3–.10 | Adding motion for its own sake |
 | **A64-025.13** | Closing audit | all | New work |
@@ -2733,7 +2734,7 @@ action that would spend their token for the attacker. That sentence is now
 in the reader's own language, which is the whole point of the defect being a
 defect.
 
-### 30.2 The brand gradient is deliberately not in email
+### 30.2 The brand gradient is deliberately not in email — *revised by §31.2*
 
 `globals.css` gives the product a gradient and §18.7 rations it to three
 places. **None of them is an email.** Gradients on a button are unevenly
@@ -2744,6 +2745,11 @@ read is worse than a plain one.
 So the email palette is a flat hex translation of the same brand, and
 `layout.py` says so at the top. A divergence that is written down is a
 decision; one that is not is drift.
+
+**§31.2 revised this.** The reasoning above is right about a *bare* gradient
+and wrong to conclude "never" rather than "never without a solid colour
+beneath it". The palette is still flat hex and `oklch` still appears
+nowhere; the masthead now carries the ramp over a `bgcolor` fallback.
 
 ### 30.3 What each module kept
 
@@ -2767,3 +2773,140 @@ underneath it without a single assertion changing.
 
 The three messages are the three that exist. §5 lists new email types as out
 of scope for this phase and they stay out.
+
+## 31. The email shell, designed — A64-025.10F
+
+§30 made the three messages share one shell. It did not make that shell look
+like anything: a bare `<div>`, sans-serif paragraphs, a black button and a
+grey line. Every surface a player sees inside the product had been designed
+by then, and the first thing a *new* player sees — the verification code —
+still looked like process output.
+
+An email is also the one surface this platform renders where it cannot see
+the result. So each decision below is stated with the failure it is chosen
+against, because there is no browser to check them in.
+
+### 31.1 Why it is built out of tables
+
+§30 described the shell as "a table-free single column" and treated that as
+the careful choice. It was the reason the messages could not be designed.
+Outlook on Windows renders mail through Word: no flexbox, `max-width` on a
+`<div>` ignored, `margin:auto` centring ignored. A centred card with its own
+background is **not expressible** without a layout table, so a `<div>`-only
+email can never be more than left-aligned text in the client a large share
+of recipients read mail in.
+
+Every layout table carries `role="presentation"`. Without it a screen reader
+announces "table, three rows" before the first sentence of every message the
+platform sends — the accessibility cost of the technique, paid once, here.
+
+### 31.2 The brand gradient, on a solid colour — revising §30.2
+
+§30.2 banned gradients from email outright, because a client that drops one
+paints white text on white. That is right about a **bare** gradient. It is
+wrong to conclude "never" rather than "never without something solid
+beneath it". The masthead declares, in this order:
+
+```html
+<td bgcolor="#494fcc" style="background-color:#494fcc;
+                             background-image:linear-gradient(115deg,#494fcc,#961a91)">
+```
+
+| Client understands | Renders | White text clears |
+| --- | --- | --- |
+| nothing but attributes | `bgcolor` indigo | 6.41:1 |
+| colour, not gradients | `background-color` indigo | 6.41:1 |
+| both | the brand ramp | 6.41:1 → 7.36:1 |
+
+All three outcomes satisfy the product-side rule that no text sits over a
+gradient whose two ends it has not cleared at 4.5:1 (§18.7). `oklch` still
+appears nowhere — these are the same two `globals.css` stops, converted to
+sRGB hex once, in `layout.py`.
+
+This is the fourth place the gradient appears, and it is the brand mark of
+the product in somebody else's inbox, which is exactly the job §18.7 gives
+it.
+
+### 31.3 The preview line
+
+Every mail client shows around ninety characters after the subject in the
+message list, taken from the first text in the body. Left alone that is the
+greeting — so the most-read line of every message this platform sends was
+"Hello Shohruh,".
+
+Each message now supplies its own, hidden in the markup:
+
+| Message | Inbox preview |
+| --- | --- |
+| Password reset | "Somebody asked to reset the password on your Arena64 account…" |
+| Verification code | "Your Arena64 verification code is:" |
+| Notification | the notification itself — "Round 3 of Autumn Blitz has been published." |
+
+**Never the code.** A64-021.5H keeps the verification code out of the
+subject because a subject is displayed by every notification surface a phone
+has — a lock screen, a watch, a preview pane. A preview line is displayed by
+the same surfaces, so a preheader carrying the code would put it back
+through the other door. `tests/unit/test_email_layout.py` asserts it does
+not.
+
+The preheader appears in the HTML part only. In the text part it *is* the
+first line, and emitting it there would open every message with its own
+second sentence stated twice.
+
+### 31.4 What each message gained
+
+| | |
+| --- | --- |
+| **Masthead** | The wordmark, as **text**. Mail clients block remote images by default, so a logo is a broken-image icon for most first-time recipients — and the request that would fetch it is a tracking pixel by another name. |
+| **Heading** | One line saying what the message is, so the reader is not re-reading the subject to find out. Optional, and the notification emails do not take one: their whole body is a single sentence, and a heading above it would be that sentence twice. |
+| **Card** | White on `#f2f2f7`, one hairline border, 14px radius, 560px. A border rather than a shadow, because shadows do not render. |
+| **Code panel** | The six digits on a tinted, bordered panel at 30px with 8px of tracking. `text-indent` cancels the trailing letter-space, which otherwise pushes a "centred" code half a space left of centre. |
+| **Button** | A table cell that owns the colour, with the anchor filling it. Word collapses the padding on an inline anchor, so the familiar `display:inline-block` button arrives in Outlook as bare underlined text. |
+| **Footnote** | Above a hairline, so the small print is separated from the message rather than being its last paragraph. |
+| **`lang`** | From the recipient's locale, so a screen reader pronounces a Russian message in Russian. |
+
+Two line heights are stated rather than inherited. The body's is a ratio, so
+30px digits would inherit a 48px line box — a code panel a third taller than
+the thing in it, with the digits sitting low in the space.
+
+### 31.5 One look, declared
+
+`color-scheme: light`. This design is light and asks clients not to invert
+it. A dark variant is honoured by some mail clients and silently ignored by
+others, and a half-supported dark mode is worse than one consistent light
+one. Adding it later is additive; guessing at it now is not.
+
+### 31.6 What the tests assert, and what they do not
+
+`tests/unit/test_email_layout.py` — ten tests, and deliberately **not** a
+snapshot of the markup. A test that pins the exact bytes of a design fails
+on every visual change while asserting nothing about whether the design
+works.
+
+What it pins is the four things that are contracts rather than appearance:
+the code never reaches the preview line; the text part is never escaped and
+always carries the bare action URL; the gradient always has a solid colour
+declared before it; and every layout table is hidden from assistive
+technology. Each was checked by breaking it — removing the `bgcolor`
+fallback and letting the preheader into the text part both turn the
+corresponding test red.
+
+The messages themselves were reviewed by looking at them: three languages,
+both parts, at 560px and at 360px.
+
+### 31.7 Measured
+
+| | |
+| --- | --- |
+| `ruff` / `mypy --strict` / `pyright` | clean, 680 source files |
+| `pytest tests/unit` | 2947 passed, 2 skipped |
+| `pytest tests/contract/test_notification_email.py` | 12 passed |
+| Assertions changed in existing tests | **none** |
+
+### 31.8 Not done
+
+A dark variant (§31.5). Litmus-style rendering in real clients — every
+client-specific decision here is reasoned from a documented rendering
+behaviour, not observed, and that is stated so the next person knows which
+claims are evidence and which are inference. New email types stay out of
+scope, as §5 says.

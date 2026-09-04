@@ -235,6 +235,12 @@ def render(
     # password reset had none. What stays here is the part that is genuinely
     # this module's: which lines a record renders into, in which language.
     text_body, html_body = render_email_body(
+        # No heading — A64-025.10F §31. The whole body of one of these is a
+        # single statement ("Round 3 of Autumn Blitz has been published"),
+        # and a heading above it would be that sentence twice. The first
+        # line doubles as the inbox preview instead, which is exactly what a
+        # reader wants to see beside the subject.
+        preheader=lines[0],
         paragraphs=lines,
         action=EmailAction(label=action_label, url=action_url),
         # §18: the preference screen, not a tokenised one-click unsubscribe.
@@ -242,6 +248,7 @@ def render(
         # platform has a settings page behind a session that does the job.
         footnote=_PREFERENCE_NOTE[locale],
         footer=EmailAction(label=_PREFERENCE_NOTE[locale], url=settings_url),
+        language=locale.value,
     )
     return RenderedEmail(subject=subject, text_body=text_body, html_body=html_body)
 

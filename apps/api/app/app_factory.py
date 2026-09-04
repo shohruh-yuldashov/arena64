@@ -47,6 +47,7 @@ from app.modules.friends.infrastructure.cache import (
     RedisSocialGraphCache,
 )
 from app.modules.game.application.services import ClockAdjudicationService
+from app.modules.game.application.services.match_abort_service import PersistentMatchAbort
 from app.modules.game.application.services.origin_match_service import GameOriginMatches
 from app.modules.game.infrastructure import (
     ClockAdjudicationTask,
@@ -1005,6 +1006,15 @@ def _tournament_no_show_for(
         session,
         matches=build_match_creation(session, events=events, clock=clock),
         origin_matches=GameOriginMatches(SqlAlchemyMatchRecordRepository(session)),
+        # A64-025.13A §36. Assembled here for the reason `GameOriginMatches`
+        # is: it is `game`'s own adapter over `game`'s repository, and
+        # `tournament` must not be able to name either.
+        match_abort=PersistentMatchAbort(
+            matches=SqlAlchemyMatchRecordRepository(session),
+            events=events,
+            unit_of_work=SessionUnitOfWork(session),
+            clock=clock,
+        ),
         settings=settings.tournament,
         events=events,
         clock=clock,

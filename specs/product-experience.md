@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.13, the closing audit |
+| **Last updated** | 2026-09-04 — A64-025.13A, the match nothing could end |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -475,6 +475,7 @@ tokens.
 | **A64-025.10F** | The email shell, designed rather than merely shared | .10E | New email types; a dark variant |
 | **A64-025.11** | Global UI consistency and component cleanup. Fixes P2-3 | .3–.10 | Re-architecting layouts already designed mobile-first |
 | **A64-025.12A** | A throw inside the router reaches this app's error page | — | The unreproduced i18n context fault itself (§33.3) |
+| **A64-025.13A** | The match a no-show left open, and the port that closes it | .13 | A moderator's adjudication of a *played* game, which needs an audit trail |
 | **A64-025.12** | Motion and interaction system. Fixes P3-5 | .3–.10 | Adding motion for its own sake |
 | **A64-025.13** | Closing audit | all | New work |
 
@@ -3439,10 +3440,143 @@ abandoned match is permanent, and a player carrying one cannot queue.
 | --- | --- |
 | `confirm_move` | The fifth gameplay preference, still write-only. A rule about submitting a move, not something the document can express — its own task |
 | The `useTranslation` context fault | §33.3. Open, dev-only, not reproduced, now reported under `scope: "router"` |
-| The stuck-match question | §35.7 |
+| ~~The stuck-match question~~ | **Answered and fixed** — §36. It was reachable, every unplayed tournament fixture hit it, and the player could not queue again |
 | Three `react-refresh` warnings | `shared/realtime/context.tsx`, pre-existing, and §33.3 is the reason to look at them again |
 | Litmus-style email rendering | §31.8. Every client-specific claim is reasoned, not observed |
 
 Nothing in that list is a surface a player uses being wrong. The epic set out
 to make the product look and behave like one thing, and the measurements in
 §35.1 and §35.2 are what that claim rests on.
+
+## 36. The match nothing could end — A64-025.13A
+
+§35.7 left a question rather than a finding, because the evidence was four
+rows in a development database and the code had moved since they were
+written. The question was whether current code could still produce a match
+that is `active` with no clock and therefore no way to end.
+
+**It could, and it did so every time a tournament fixture went unplayed.**
+
+### 36.1 What was actually wrong
+
+A tournament fixture is **system-activated**: nobody accepts it, so `game`'s
+acceptance expiry never claims it, and it carries **no time control**, so the
+clock adjudicator has no deadline to flag. `TournamentNoShowService` is what
+was meant to end one. Its composition root says so in as many words:
+
+> Tournament matches are system-activated, so `game`'s acceptance expiry
+> never claims one and nothing else would ever end a fixture nobody turned up
+> for. This is what does.
+
+It did not. It closed the **attempt** and advanced the **bracket**, and left
+the **match** `active` — because there was no port through which it could do
+anything else. `game.public` published a command to *create* a match, a read
+of its authoritative state, and nothing to *end* one.
+
+The consequence is not cosmetic, and the e2e helper had already written it
+down while blaming something else:
+
+> Since A64-020.5A `GET /matches/pending` reports a game that has started,
+> and the lobby correctly sends that player to it rather than to the queue
+> form — so an account still in yesterday's match cannot join a pool.
+
+**A player adjudicated a no-show could never queue again.** Not until a
+deadline that does not exist expired.
+
+### 36.2 An abort, not a win — and this is the whole design
+
+A64-019.5H pinned the old behaviour in a test, with a comment:
+
+> The `game` match is untouched: nothing invented a result.
+
+**That instinct was right and the mechanism was wrong.** Leaving the row
+active is not how a fabricated result is avoided; it is how a player is
+locked out. And a win would have been worse than cosmetic: these fixtures are
+**rated**, so recording one would move two Glicko-2 numbers and write a game
+into two players' history that neither played.
+
+So the match ends as `MatchOutcome.NONE` with `TerminationReason.ABORT` —
+which the taxonomy already defines for exactly this, in its own words:
+
+| | |
+| --- | --- |
+| `ABORT` | *"The match ended with no result and no rating effect — MT-11. Not a draw: a draw is an outcome two players played to, an abort is a match that did not happen."* |
+| `MatchOutcome.NONE` | *"No result at all. An aborted match, which MT-11 keeps out of every rating and statistic."* |
+
+Nothing is invented. The **walkover stays where it belongs**: an advanced
+bracket node with `AdvancementReason.ADJUDICATION`, which is the tournament's
+own record of a competitive verdict nobody played to. `game` records only
+that the fixture is over.
+
+### 36.3 The port
+
+`game.public.abort` — `MatchAbortUseCase.abort(AbortMatchRequest)`.
+
+**A match id and nothing else.** There is no `reason` parameter because there
+is one reason, and a caller that could choose would be a caller that could
+record `RESIGNATION` for a game nobody resigned.
+
+**Separate from `commands`.** `GameCommandUseCase` is a participant's
+channel — resign, offer, accept, decline — and every one of them is
+authorised as "you are in this match". This is a system verdict with no
+participant behind it, and folding it into the participant enum would put it
+one missing check away from a player-issued one.
+
+**Idempotent, and it has to be.** The sweep re-claims an attempt whose worker
+died, so `abort` is called again for a match it already closed. The row lock
+is taken *before* the status is read, so two sweeps serialise: the first
+closes it, the second reads a completed row and answers `ALREADY_SETTLED`.
+
+**A played game beats a stale sweep.** A result that arrived while the caller
+held its claim wins — the same rule `TournamentNoShowService` already applies
+to a superseded attempt, enforced on this side of the boundary too so that a
+caller which forgot it cannot close a game that was played.
+
+`MatchCompleted` is published with `origin` and `origin_ref`, for the reason
+the clock adjudicator records: an aborted match is as much a completion as
+one played out. Without the event the tournament's own reconciler keeps
+re-reading a match it believes unfinished, and the gateway leaves a room open
+on a game that has ended.
+
+### 36.4 The test that had to change, and why that is not weakening it
+
+`test_one_present_player_advances_by_adjudication` asserted
+`record.status is ACTIVE`. It now asserts `COMPLETED`, `MatchOutcome.NONE`,
+`ABORT` and no winner.
+
+CLAUDE.md §6.11: a failing test means either the code is wrong or the test
+encodes an outdated requirement, and the change must say which. **The test
+was encoding a proxy.** What it meant to protect — "nothing invented a
+result" — is still asserted, and more precisely than before: the outcome is
+now named rather than inferred from the absence of one.
+
+### 36.5 Measured
+
+| | |
+| --- | --- |
+| `ruff` / `mypy --strict` / `pyright` | clean, 681 source files |
+| `lint-imports` | 32 contracts kept, 0 broken |
+| `pytest tests/unit` | 2952 passed, 2 skipped (2947 before; **+5**) |
+| `pytest tests/contract` | 1138 passed, 2 skipped |
+
+The five new unit tests pin the port's own contract — the half a caller
+depends on and cannot see: it ends the match without inventing a result, it
+publishes the completion, a second call writes nothing, a played game beats
+a stale sweep, and an unknown id is reported rather than raised.
+
+The contract suite proves the **sweep** uses it, against a real database and
+with the real adjudication rather than a fake — for the reason that suite
+already used the real reader: a fake would prove only that the code asks
+something.
+
+### 36.6 The four rows
+
+They were closed through `PersistentMatchAbort` itself rather than by hand.
+An `UPDATE` would have left the outbox silent and the reconciler re-reading
+them forever; the production path publishes `match.completed`, so every
+consumer settled them exactly as it would have had the sweep been able to
+close them at the time. Their pairing attempts were already `NO_SHOW`, so no
+sweep would ever have claimed them again.
+
+`game.match` now holds zero active matches in that database, and the five
+accounts involved — three of them the e2e suite's — can queue again.

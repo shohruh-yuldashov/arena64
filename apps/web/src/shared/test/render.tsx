@@ -1,6 +1,8 @@
 import { QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory } from "@tanstack/react-router";
+import { screen } from "@testing-library/react";
 import { render, type RenderResult } from "@testing-library/react";
+import type { UserEvent } from "@testing-library/user-event";
 import type { ReactElement } from "react";
 
 import { App } from "@/app/App";
@@ -69,4 +71,16 @@ export function renderWithProviders(ui: ReactElement): RenderResult & {
     ...render(<AppProviders queryClient={queryClient}>{ui}</AppProviders>),
     queryClient,
   };
+}
+
+/**
+ * Opens the account menu.
+ *
+ * A64-025.9B §19 collapsed the header's five account controls into one, so
+ * sign-out, the theme choice and the language choice are all a click behind
+ * this trigger. Four suites reach one of those; the click that gets there is
+ * written here so the next change to the header is one edit rather than four.
+ */
+export async function openAccountMenu(user: UserEvent): Promise<void> {
+  await user.click(await screen.findByRole("button", { name: /^(Account|Hisob|Аккаунт)$/ }));
 }

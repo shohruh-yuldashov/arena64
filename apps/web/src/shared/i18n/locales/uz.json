@@ -17,6 +17,8 @@
     "closeMenu": "Menyuni yopish",
     "primaryNav": "Asosiy menyu",
     "accountNav": "Hisob",
+    "accountDescription": "Hisobingiz, ko'rinishi va tili.",
+    "appearance": "Ko'rinish va til",
     "navDescription": "Arena64 bo'limlari va hisobingiz.",
     "home": "Arena64 — bosh sahifa",
     "skipToContent": "Asosiy qismga o'tish"
@@ -40,6 +42,7 @@
     "description": "Siz qidirayotgan sahifa mavjud emas yoki ko'chirilgan."
   },
   "theme": {
+    "label": "Mavzu",
     "toggle": "Mavzuni almashtirish",
     "light": "Yorug'",
     "dark": "Qorong'i",

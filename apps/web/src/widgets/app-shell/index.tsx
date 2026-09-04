@@ -11,7 +11,6 @@ import { MobileNav } from "@/widgets/mobile-nav";
 import { NotificationBell } from "@/widgets/notification-bell";
 import { PrimaryNav } from "@/widgets/primary-nav";
 import { PwaNotices } from "@/widgets/pwa";
-import { ThemeToggle } from "@/widgets/theme-toggle";
 
 /**
  * The frame every page renders inside — header, main region, footer.
@@ -93,10 +92,13 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Brand />
           <PrimaryNav />
 
-          {/* Account and the two global controls, pushed to the far end.
-              `ml-auto` rather than `justify-between` on the row: the
-              navigation must sit beside the wordmark, not float between
-              the two ends. */}
+          {/* The account, pushed to the far end. `ml-auto` rather than
+              `justify-between` on the row: the navigation must sit beside
+              the wordmark, not float between the two ends.
+
+              A64-025.9B §19: theme and language used to be three more
+              buttons out here. They are inside `AccountMenu` now, which is
+              why this row is two controls rather than five. */}
           <div className="ml-auto flex items-center gap-1 lg:gap-2">
             {/* A64-021.1. The one entry point to `/notifications`, and the
                 unread badge. Beside the account controls rather than inside
@@ -105,7 +107,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                 out. */}
             <NotificationBell />
             <AccountMenu />
-            <ThemeToggle />
           </div>
         </div>
       </header>

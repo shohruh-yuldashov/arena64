@@ -334,12 +334,20 @@ describe("profile editing", () => {
 
     // Saved, and re-baselined against the server's answer — so the form is
     // clean again rather than dirty against its own successful save.
+    const readsBeforeSave = profileReads;
+
     expect(await screen.findByRole("status")).toHaveTextContent(/saved|saqlandi|сохранено/i);
     await waitFor(() => expect(submit).toBeDisabled());
 
-    // `me` was written from the response; the public surfaces were
-    // invalidated. The read count proves no blanket refetch storm.
-    expect(profileReads).toBe(1);
+    // `me` was written from the response, not refetched — the public
+    // surfaces were invalidated and `me` was not. Asserted as "the save
+    // added no read" rather than as an absolute count: `/profile/me` has a
+    // second consumer since A64-025.9B §19 (the header reads it for the
+    // avatar), and `createTestQueryClient` sets `staleTime: 0`, so two
+    // consumers mounting a tick apart fetch twice here where production's
+    // 30-second window fetches once. The count before the save is whatever
+    // mounting cost; what this test is about is that saving cost nothing.
+    expect(profileReads).toBe(readsBeforeSave);
   });
 });
 

@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.9, the page that overflowed |
+| **Last updated** | 2026-09-04 — A64-025.9B, home and the account menu |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -457,6 +457,7 @@ tokens.
 | **A64-025.7** | Tournament and bracket, edges derived from `BracketSlot.parent()`. Closes OQ-4 | .2 | Backend contract changes; canvas, zoom or drag |
 | **A64-025.8** | Friends and social | .2 | Changing privacy or blocking rules |
 | **A64-025.9** | Profile and player | .2 | Changing privacy rules; inventing a statistic |
+| **A64-025.9B** | Home, and the account menu in the header | .2, .3 | Inventing a statistic the API does not return |
 | **A64-025.10** | Notifications | .2 | Admin notification surfaces |
 | **A64-025.10E** | Email design system. Fixes P2-2 | .2 (tokens only) | New email types |
 | **A64-025.11** | Global UI consistency and component cleanup | .3–.10 | Re-architecting layouts already designed mobile-first |
@@ -1838,3 +1839,117 @@ behaves differently in:
 (`/settings/{preferences,privacy,notifications,sessions}`) are not
 redesigned; they are the next surfaces to take this template — see `L-1` in
 `specs/README.md`, which records that they also ship against no spec.
+
+---
+
+## 19. Home, and the account menu — A64-025.9B
+
+Not in §5's original plan. The phase exists because closing `/profile`
+exposed the two surfaces around it: the header every page carries, and the
+first screen a player lands on.
+
+### 19.1 The header was five controls for one idea
+
+Counted on a signed-in page at 1280: the avatar, the name, a sign-out
+button, and a three-button theme group. Five targets, four of them account
+or browser settings, and the theme group alone was three.
+
+Worse than the count was the ranking. **Sign-out sat beside the player's own
+name**, as though leaving were a peer of arriving — the single most
+destructive thing in the shell, given the same weight as the link to your
+profile. And the **language** could be changed only from
+`/settings/preferences`, four clicks deep, in a product that ships in three.
+
+| Was | Is |
+| --- | --- |
+| avatar · name · Sign out · ☀ · ☾ · 💻 | avatar · name · ⌄ |
+| Theme: three header buttons | inside the menu, still three explicit choices |
+| Language: `/settings/preferences` only | inside the menu |
+| Sign out: beside the name | inside the menu, ghost, destructive text, last |
+| The avatar: **initials for everyone** | the player's photo |
+
+### 19.2 Three decisions
+
+**A dialog, not a new dependency.** The same call `MobileNav` recorded: Radix
+Dialog is already here and already wrapped, and it brings the four things a
+menu must not get wrong — focus trap, focus returned to the trigger,
+`Escape`, and `aria-expanded`/`aria-controls` wired between trigger and
+content. Positioning it under the trigger instead of centred is a
+`className`, not a second primitive. `@radix-ui/react-dropdown-menu` was the
+alternative and would have been a dependency for what one already installed
+does.
+
+**Theme and language stay reachable when signed out — and when the session
+is `unavailable`.** Neither is an account preference: both are properties of
+the browser in front of the player, stored in `localStorage`. A player
+staring at a page the server could not fill is exactly the one who might
+want the interface in another language, so the appearance menu renders in
+every state that is not `authenticated`. The sign-in link still renders only
+for `anonymous`, which is the one state that actually means "there is no
+session".
+
+**The photo needed a request the shell was not making.** `SessionUser`
+carries no `avatar_url` — the bootstrap response has never included one — so
+the header drew initials for every player, including those who had uploaded
+a picture. The menu now reads `/profile/me`, the query `/profile` already
+fills, mounted only when authenticated so an anonymous visitor cannot fire a
+request that could only 401.
+
+That second consumer surfaced a test that was asserting the test
+harness rather than the product: `createTestQueryClient` sets
+`staleTime: 0`, so two consumers mounting a tick apart fetch twice where
+production's 30-second window fetches once. The assertion now states the
+invariant it was always about — *the save added no read* — rather than an
+absolute count.
+
+### 19.3 Home had no reason to be visited twice
+
+A heading, a sentence, one button and four cards. Every word of it was true
+and none of it was about the player.
+
+§3 forbade any query here, and its reasoning was sound: a dashboard would
+have to invent its figures — an online-player count, a recommended
+tournament — and a plausible number the server never sent is worse than an
+empty page. **Nothing invented has been added.** What has been added is the
+player's own standing: `/profile/me` and `/ratings/me`, the same two
+requests `/profile` makes, already cached on any second visit, the first of
+them already fetched by the header. A home page that cannot tell a returning
+player how strong they are is not being disciplined; it is being empty.
+
+The strip renders only when both have landed and never renders a skeleton —
+a placeholder that pushes the primary button down the page for 200ms is
+worse than a strip that appears.
+
+### 19.4 The product now draws its own board
+
+There was no artwork anywhere in the repository. `BoardMotif` is an inline
+SVG of a board fragment with three men on it, drawn in `--board-light`,
+`--board-dark` and the two piece tokens, so it follows the theme and any
+future change to the board's palette without a second asset to keep in step.
+A PNG would be two files that drift.
+
+It is `aria-hidden` and carries no information; everything the section says
+is said in text beside it.
+
+The first attempt drew it at 18% opacity and it read as a rendering fault.
+It is at full strength now — the board's own tokens are a muted warm beige
+to begin with, so it sits behind the text without ghosting, and a product
+that shows its own board apologetically is not showing it.
+
+The destination cards took icons and a whole-card click target, done with
+`after:inset-0` on the one link rather than an anchor wrapped round the
+heading: the card is the target and there is still exactly **one** link,
+with the section's name as its accessible name.
+
+### 19.5 Measured
+
+| Surface | 1280 light | 360 dark |
+| --- | --- | --- |
+| `/` signed in | 0 | 0 |
+| `/` signed out | 0 | 0 |
+| `/` with the account menu open | 0 | 0 |
+
+204 tests pass, `tsc --noEmit` clean, eslint zero errors. Four suites
+reached sign-out through the header and now open the menu first through one
+shared `openAccountMenu` helper — the behaviour each asserts is unchanged;
+only the path to the control is.

@@ -57,13 +57,17 @@ endpoint that could finish a bracket is one that could finish an
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Path, Query, status
+from fastapi import APIRouter, Depends, Path, Query, status
 
 from app.api.openapi import error_response
 from app.api.responses import build_response
 from app.core.exceptions import NotFoundError
 from app.core.responses import ApiResponse
-from app.modules.auth.presentation.dependencies import CurrentUser, VerifiedUser
+from app.modules.auth.presentation.dependencies import (
+    CurrentUser,
+    OptionalCurrentUser,
+    VerifiedUser,
+)
 from app.modules.game.public import ProductVariant
 from app.modules.rating.public import SpeedClass
 from app.modules.tournament.application.read_models import (
@@ -76,6 +80,7 @@ from app.modules.tournament.presentation.dependencies import (
     TournamentRegistrationServiceDep,
     TournamentResultsDep,
 )
+from app.modules.tournament.presentation.rate_limits import TOURNAMENT_READ_RATE_LIMIT
 from app.modules.tournament.presentation.schemas.registrations import RegistrationResponse
 from app.modules.tournament.presentation.schemas.results import (
     BracketResponse,
@@ -100,16 +105,27 @@ _DEFAULT_LIMIT = 20
 _MAX_LIMIT = 100
 
 
+def _hidden_from(status: TournamentStatus, viewer: object | None) -> bool:
+    """Whether this tournament is invisible to this viewer — §43.2.
+
+    One place, so the lobby's predicate and the three detail guards cannot
+    drift into disagreeing about what "published" means. `DRAFT` is the only
+    state that hides, and only from a caller with no account.
+    """
+    return viewer is None and not status.is_published
+
+
 @tournaments_router.get(
     "",
     response_model=ApiResponse[TournamentListResponse],
     status_code=status.HTTP_200_OK,
     summary="The tournament lobby",
     responses=error_response(422, "The pagination cursor is not valid"),
+    dependencies=[Depends(TOURNAMENT_READ_RATE_LIMIT)],
 )
 async def tournament_lobby(
-    user: CurrentUser,
     directory: TournamentDirectoryDep,
+    viewer: OptionalCurrentUser = None,
     tournament_status: Annotated[
         TournamentStatus | None, Query(alias="status", description="Only this lifecycle state.")
     ] = None,
@@ -136,10 +152,22 @@ async def tournament_lobby(
     silence, and `status` is what narrows the view to what a player can
     still enter.
 
-    Public in the same sense as everything else here (§7): visible to every
-    authenticated player, with no viewer narrower than another. Private
-    tournaments do not exist in v0.x, so there is no visibility predicate to
-    get wrong.
+    **Open to a visitor with no account** since A64-026.4 §43. A tournament
+    is a public competition and its bracket is a record of something that
+    happened; requiring an account to look at one made the landing page
+    describe a feature it could not show.
+
+    The one narrowing is `DRAFT`, which the enum itself calls "not yet
+    advertised" — a state whose operator has not decided it exists. It is
+    excluded for an anonymous viewer and included for an authenticated one,
+    so the lobby a player has seen since A64-020.0B is unchanged. Private
+    tournaments still do not exist in v0.x; this is a lifecycle predicate,
+    not a visibility flag.
+
+    The response is identical either way: `TournamentSummary` is already the
+    public read model — `created_by` is operational and was never published
+    — so there is no field an anonymous caller sees less of, and none it
+    sees more of.
 
     The five filters are a **closed set** and each is an enum or a boolean
     the tournament already stores, so an unknown value is a `422` from
@@ -158,6 +186,7 @@ async def tournament_lobby(
         ),
         after=decode_list_cursor(after) if after else None,
         limit=limit,
+        published_only=viewer is None,
     )
     return build_response(TournamentListResponse.of(page))
 
@@ -168,19 +197,27 @@ async def tournament_lobby(
     status_code=status.HTTP_200_OK,
     summary="One tournament",
     responses=error_response(404, "No such tournament"),
+    dependencies=[Depends(TOURNAMENT_READ_RATE_LIMIT)],
 )
 async def tournament_detail(
-    user: CurrentUser,
     results: TournamentResultsDep,
     tournament_id: Annotated[UUID, Path(description="Which tournament to read.")],
+    viewer: OptionalCurrentUser = None,
 ) -> ApiResponse[TournamentResponse]:
-    """A tournament's public detail — §9.
+    """A tournament's public detail — §9, opened to anonymous in §43.
 
     Everything a lobby or a detail page renders: the configuration, how full
     it is, which round is being played, and the three lifecycle instants.
+
+    A `DRAFT` tournament answers **404 to an anonymous caller**, not 403.
+    The two are distinguishable and one of them is an oracle: a 403 confirms
+    the id names something, which is the only fact an enumerating caller
+    wants from an endpoint whose identifiers are UUIDs. Not-found is the
+    same answer they would get for an id that names nothing, which is what
+    makes guessing worthless.
     """
     summary = await results.summary(tournament_id)
-    if summary is None:
+    if summary is None or _hidden_from(summary.status, viewer):
         raise NotFoundError("That tournament does not exist.")
     return build_response(TournamentResponse.of(summary))
 
@@ -191,12 +228,13 @@ async def tournament_detail(
     status_code=status.HTTP_200_OK,
     summary="A tournament's bracket",
     responses=error_response(404, "No such tournament"),
+    dependencies=[Depends(TOURNAMENT_READ_RATE_LIMIT)],
 )
 async def tournament_bracket(
-    user: CurrentUser,
     results: TournamentResultsDep,
     players: PublicProfileReaderDep,
     tournament_id: Annotated[UUID, Path(description="Which tournament's bracket to read.")],
+    viewer: OptionalCurrentUser = None,
 ) -> ApiResponse[BracketResponse]:
     """Every round, node and attempt — §10.
 
@@ -212,7 +250,11 @@ async def tournament_bracket(
     make. Without it a client turns each seat into a name by asking, and a
     128-player field is 128 requests behind one page.
     """
-    if await results.summary(tournament_id) is None:
+    # A64-026.4 §43.2. The same guard the detail applies, for the same
+    # reason: a draft answers 404 to an anonymous caller rather than 403,
+    # because 403 confirms the id names something.
+    summary = await results.summary(tournament_id)
+    if summary is None or _hidden_from(summary.status, viewer):
         raise NotFoundError("That tournament does not exist.")
 
     bracket = await results.bracket(tournament_id)
@@ -226,13 +268,14 @@ async def tournament_bracket(
     response_model=ApiResponse[StandingsResponse],
     status_code=status.HTTP_200_OK,
     summary="A tournament's final standings",
+    dependencies=[Depends(TOURNAMENT_READ_RATE_LIMIT)],
     responses=error_response(404, "No such tournament"),
 )
 async def tournament_standings(
-    user: CurrentUser,
     results: TournamentResultsDep,
     players: PublicProfileReaderDep,
     tournament_id: Annotated[UUID, Path(description="Which tournament's results to read.")],
+    viewer: OptionalCurrentUser = None,
 ) -> ApiResponse[StandingsResponse]:
     """The immutable final placement — §11.
 
@@ -244,7 +287,11 @@ async def tournament_standings(
     Identities are composed in one batched read, for the bracket's reason.
     An empty placing costs no lookup at all.
     """
-    if await results.summary(tournament_id) is None:
+    # A64-026.4 §43.2. The same guard the detail applies, for the same
+    # reason: a draft answers 404 to an anonymous caller rather than 403,
+    # because 403 confirms the id names something.
+    summary = await results.summary(tournament_id)
+    if summary is None or _hidden_from(summary.status, viewer):
         raise NotFoundError("That tournament does not exist.")
 
     standings = await results.standings(tournament_id)

@@ -61,6 +61,7 @@ from app.modules.tournament.application.read_models import (
 )
 from app.modules.tournament.domain.registration import RegistrationStatus
 from app.modules.tournament.domain.rounds import RoundStatus
+from app.modules.tournament.domain.tournament import TournamentStatus
 from app.modules.tournament.infrastructure.models import (
     PairingAttemptModel,
     PairingModel,
@@ -99,6 +100,7 @@ class SqlAlchemyTournamentResults:
         filters: TournamentFilter,
         after: TournamentListCursor | None,
         limit: int,
+        published_only: bool = False,
     ) -> TournamentPage:
         """The lobby, newest first — A64-020.0B.
 
@@ -115,10 +117,14 @@ class SqlAlchemyTournamentResults:
 
         `limit + 1` rows are read, so "is there a next page" is a fact
         rather than a second `COUNT`.
+
+        `published_only` adds one predicate over the same indexed `status`
+        column the five filters already use, so an anonymous page costs what
+        an authenticated one costs — A64-026.4 §43.2.
         """
         statement = (
             select(TournamentModel, _entrant_count_of(), _current_round_of())
-            .where(*_filter_clauses(filters))
+            .where(*_filter_clauses(filters), *_published_clauses(published_only))
             .order_by(TournamentModel.created_at.desc(), TournamentModel.id.desc())
             .limit(limit + 1)
         )
@@ -440,6 +446,20 @@ def _current_round_of() -> ScalarSelect[int | None]:
         .correlate(TournamentModel)
         .scalar_subquery(),
     )
+
+
+def _published_clauses(published_only: bool) -> list[ColumnElement[bool]]:
+    """The viewer's predicate, kept apart from the caller's — §43.2.
+
+    `NOT IN` over the one unpublished state rather than `IN` over the five
+    published ones: a state added to the enum is published by default, which
+    is the direction that fails *visibly*. The inverse would silently hide a
+    new state from every anonymous visitor and nobody would notice until
+    somebody asked why their tournament was missing.
+    """
+    if not published_only:
+        return []
+    return [TournamentModel.status != TournamentStatus.DRAFT]
 
 
 def _filter_clauses(filters: TournamentFilter) -> list[ColumnElement[bool]]:

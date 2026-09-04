@@ -1480,6 +1480,15 @@ class RateLimitSettings(
     profile_read_ip_limit: int = Field(default=120, ge=1)
     profile_read_window_seconds: int = Field(default=60, ge=1)
 
+    # A64-026.4 §43.6. The tournament reads became anonymous, so they need
+    # the one dimension an anonymous caller has. Looser than a per-user
+    # budget for the reason `profiles` records — a shared address is one
+    # bucket for everyone behind it — and a single allowance across the
+    # three reads, because browsing a bracket means having browsed the
+    # lobby that led to it.
+    tournament_read_ip_limit: int = Field(default=180, ge=1)
+    tournament_read_window_seconds: int = Field(default=60, ge=1)
+
     # --- POST /profile/avatar ------------------------------------------------
     # **Per user**, because it is authenticated — the correct dimension for a
     # write behind a token, and the one A64-013.2 asks these endpoints be

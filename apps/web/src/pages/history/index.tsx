@@ -39,12 +39,12 @@ export default function HistoryPage() {
 
   return (
     <section className="mx-auto flex w-full max-w-3xl flex-col gap-4 py-6">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h1 className="text-xl font-semibold">{t("history.title")}</h1>
-        <Button asChild variant="outline" className="min-h-11">
-          <Link to="/profile">{t("history.backToProfile")}</Link>
-        </Button>
-      </div>
+      {/* A64-025.5D. "Back to profile" sat here and is gone: match history
+          is a section in the header at every width, so a button pointing at
+          the profile duplicated a route the shell already offers and made
+          the page look like a sub-page of one profile. The wrapper went with
+          it — a `justify-between` row with one child is a row for nothing. */}
+      <h1 className="text-xl font-semibold">{t("history.title")}</h1>
 
       {isPending && (
         <div className="flex flex-col gap-3">

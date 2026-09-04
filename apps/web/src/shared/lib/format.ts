@@ -1,3 +1,5 @@
+import type { TranslationKey } from "@/shared/i18n";
+
 /**
  * Locale-aware dates and numbers — A64-020.3 §17.
  *
@@ -45,78 +47,104 @@ export function formatList(items: string[], locale: string): string {
 }
 
 /**
- * "2 hours ago" — how long ago, in the reader's language.
+ * How long ago, from **our own strings** — A64-025.5D.
  *
- * A notification feed is read for recency, and an absolute timestamp makes
- * the reader do the subtraction: "Sep 4, 2026, 1:40 PM" is the same number
- * of words as "2 hours ago" and answers a different question. The absolute
- * time stays on the `<time>` element's `dateTime` and `title`, so nothing is
- * lost — it is demoted, not removed.
+ * ## Why not `Intl.RelativeTimeFormat`
  *
- * `Intl.RelativeTimeFormat` supplies every string, including "yesterday" and
- * "last week", so this adds no translations to maintain and is correct in
- * locales whose plural rules are not English's.
+ * §21 used it and said it "adds no translations to maintain". That was
+ * true of English and Russian and **false of Uzbek**, which is this
+ * product's first language. Chromium answers
+ * `RelativeTimeFormat.supportedLocalesOf(["uz"])` with `["uz"]` and then
+ * has no patterns for it: three hours ago rendered as `-3 h`, and a day ago
+ * rendered as the English word "yesterday". Neither failed, which is why it
+ * shipped — it took a screenshot in Uzbek to see it.
  *
- * ## Days are calendar days, not 86,400 seconds
+ * So the sentences are ours and `Intl.PluralRules` picks the form, which is
+ * the part genuinely worth taking from the platform: Russian needs
+ * one/few/many and getting that wrong by hand is a certainty. Chromium's
+ * plural data for all three locales is complete, and was checked before
+ * this was written rather than assumed.
  *
- * The first version divided elapsed seconds, which put a row reading
- * "yesterday" under a heading reading "2 days ago": 46 hours is one
- * 24-hour period and two calendar days, and both statements were true of
- * different quantities. People mean calendar days, and the heading and the
- * row have to mean the same thing — so anything a day or more apart is
- * measured in days between midnights, and only hours and below come from
- * elapsed time.
+ * ## Only up to a week
+ *
+ * Minutes, hours and days, then `null` — the caller falls back to a date.
+ * "Four months ago" is worse than the date it replaces, and stopping at a
+ * week is also what keeps this to three units rather than six.
+ *
+ * ## Days are calendar days
+ *
+ * Not elapsed seconds divided by 86,400. 46 hours is one 24-hour period and
+ * two calendar days, and the first version of this said "yesterday" in a
+ * row sitting under a heading that said "2 days ago". People mean calendar
+ * days, and a row and its heading have to mean the same thing.
  *
  * `now` is injected so a test does not depend on the wall clock.
  */
+/**
+ * The app's own `t`, so a key that does not exist is a type error here and
+ * not a blank on screen. The two lookups below build their keys from a
+ * plural form and are cast at the point of use, which is the same trade
+ * every other dynamic lookup in this codebase makes — and the tests read
+ * the real dictionaries, so a misspelt one fails there.
+ */
+type Translate = (key: TranslationKey, values?: Record<string, string | number>) => string;
+
 function calendarDaysBetween(from: Date, to: Date): number {
   const midnight = (value: Date) =>
     new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
   return Math.round((midnight(from) - midnight(to)) / 86_400_000);
 }
 
+function agoKey(
+  locale: string,
+  unit: "minute" | "hour" | "day",
+  count: number,
+): TranslationKey {
+  return `time.ago.${unit}.${new Intl.PluralRules(locale).select(count)}` as TranslationKey;
+}
+
 export function formatRelativeTime(
   iso: string | null | undefined,
   locale: string,
+  t: Translate,
   now: Date = new Date(),
 ): string | null {
   if (iso === null || iso === undefined) return null;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return null;
 
-  const formatter = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
-  const days = calendarDaysBetween(date, now);
+  const days = Math.abs(calendarDaysBetween(date, now));
+  if (days >= 7) return null;
+  if (days >= 1) return t(agoKey(locale, "day", days), { count: days });
 
-  if (days !== 0) {
-    if (Math.abs(days) >= 365) return formatter.format(Math.trunc(days / 365), "year");
-    if (Math.abs(days) >= 30) return formatter.format(Math.trunc(days / 30), "month");
-    if (Math.abs(days) >= 7) return formatter.format(Math.trunc(days / 7), "week");
-    return formatter.format(days, "day");
+  const minutes = Math.floor(Math.abs(now.getTime() - date.getTime()) / 60_000);
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    return t(agoKey(locale, "hour", hours), { count: hours });
   }
-
-  // Same calendar day: hours, then minutes, then "now".
-  const seconds = Math.round((date.getTime() - now.getTime()) / 1000);
-  if (Math.abs(seconds) >= 3600) return formatter.format(Math.trunc(seconds / 3600), "hour");
-  if (Math.abs(seconds) >= 60) return formatter.format(Math.trunc(seconds / 60), "minute");
-  return formatter.format(0, "second");
+  if (minutes >= 1) return t(agoKey(locale, "minute", minutes), { count: minutes });
+  return t("time.now");
 }
 
 /**
  * "Today", "Yesterday", "Wednesday", or the date — the heading a day of
  * rows sits under.
  *
- * Three registers, because each is the clearest at its own distance. Today
- * and yesterday have names everyone uses. Inside the last week a weekday
- * beats "4 days ago", which is arithmetic the reader has to do. Beyond it
- * the words stop helping and the date is what somebody would look for.
+ * Three registers, because each is clearest at its own distance. Today and
+ * yesterday have names everyone uses. Inside the last week a weekday beats
+ * "4 days ago", which is arithmetic the reader has to do. Beyond it the
+ * words stop helping and the date is what somebody would look for.
  *
- * Capitalised for the reader's own locale rather than with `toUpperCase`:
- * `Intl` returns these lowercase, and a heading that begins in lower case
- * reads as an unfinished sentence.
+ * The weekday comes from `Intl.DateTimeFormat`, which **does** have Uzbek
+ * data — it is only the relative-time patterns that are missing — and it is
+ * capitalised for the reader's own locale, because `Intl` returns it
+ * lowercase and a heading that begins in lower case reads as an unfinished
+ * sentence.
  */
 export function formatDayHeading(
   iso: string,
   locale: string,
+  t: Translate,
   now: Date = new Date(),
 ): string | null {
   const date = new Date(iso);
@@ -124,13 +152,11 @@ export function formatDayHeading(
 
   const days = calendarDaysBetween(date, now);
   if (days > 0 || days <= -7) return formatDate(iso, locale);
+  if (days === 0) return t("time.today");
+  if (days === -1) return t("time.yesterday");
 
-  const text =
-    days >= -1
-      ? new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(days, "day")
-      : new Intl.DateTimeFormat(locale, { weekday: "long" }).format(date);
-
-  return text.charAt(0).toLocaleUpperCase(locale) + text.slice(1);
+  const weekday = new Intl.DateTimeFormat(locale, { weekday: "long" }).format(date);
+  return weekday.charAt(0).toLocaleUpperCase(locale) + weekday.slice(1);
 }
 
 /**

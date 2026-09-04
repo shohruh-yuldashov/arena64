@@ -1077,5 +1077,30 @@
       "unexpected": "Something went wrong. Please try again.",
       "timeControlRetired": "This time control is no longer available. Ask your friend to send a new challenge."
     }
+  },
+  "time": {
+    "now": "just now",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "ago": {
+      "minute": {
+        "one": "{count} minute ago",
+        "few": "{count} minutes ago",
+        "many": "{count} minutes ago",
+        "other": "{count} minutes ago"
+      },
+      "hour": {
+        "one": "{count} hour ago",
+        "few": "{count} hours ago",
+        "many": "{count} hours ago",
+        "other": "{count} hours ago"
+      },
+      "day": {
+        "one": "{count} day ago",
+        "few": "{count} days ago",
+        "many": "{count} days ago",
+        "other": "{count} days ago"
+      }
+    }
   }
 }

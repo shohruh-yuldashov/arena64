@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.5C, match history and replay |
+| **Last updated** | 2026-09-04 — A64-025.5D, the surfaces read in Uzbek and Russian |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -459,6 +459,7 @@ tokens.
 | **A64-025.9** | Profile and player | .2 | Changing privacy rules; inventing a statistic |
 | **A64-025.5B** | The lobby, and the board preferences that did nothing | .2, .5 | Changing what a preference means; the three still unread |
 | **A64-025.5C** | Match history and replay | .2, .5B | Changing what a replay reconstructs |
+| **A64-025.5D** | The same surfaces, read in Uzbek and Russian | .5C, .10 | Retranslating; changing layout English needs |
 | **A64-025.9B** | Home, and the account menu in the header | .2, .3 | Inventing a statistic the API does not return |
 | **A64-025.9C** | The four remaining settings surfaces | .2, .9 | Changing what any setting does |
 | **A64-025.10** | Notifications — the feed and the bell | .2 | Admin notification surfaces; what the preferences decide (.9C) |
@@ -2076,6 +2077,12 @@ not removed.
 "last week", so this added **no translations to maintain** and is correct in
 locales whose plural rules are not English's.
 
+> **Corrected by A64-025.5D §24.2.** That claim was true of English and
+> Russian and false of Uzbek, which is this product's first language.
+> Chromium reports `uz` as supported and then has no patterns for it. The
+> sentences are the product's own now; `Intl.PluralRules` still picks the
+> form.
+
 **The first version was wrong and the test is the proof.** It divided
 elapsed seconds by 86,400, so 46 hours produced "yesterday" while the day
 heading above the same row produced "2 days ago" — both true of different
@@ -2298,3 +2305,86 @@ background; it is in a card, like the summary beside it.
 213 tests pass, `tsc --noEmit` clean, eslint zero errors. No assertion
 changed: the row's accessible name is what the suite queries, and it is
 unchanged.
+
+---
+
+## 24. Read in Uzbek and Russian — A64-025.5D
+
+Everything from §18 to §23 was designed while looking at English. Three
+faults were waiting in the other two languages, and none of them failed
+anything.
+
+### 24.1 A chip sized against one language
+
+The match-history result chip was `w-16` — four rems, chosen because it fits
+"Won", "Lost" and "Draw". It clips **"Yutqazdingiz"**, **"Natija yo'q"**,
+**"Поражение"** and **"Без результата"**, at every width. The profile's
+action row was two columns below `sm` for the same reason, and "Ommaviy
+profilni ko'rish" does not fit in half of 360.
+
+Both are `min-w` and a stack now. Perfect column alignment across a locale
+would need a grid with `display: contents`, which has a history of stripping
+list semantics in screen readers — and those semantics were argued for on
+purpose, so the trade goes the other way: short labels align, a long one
+grows, nothing is cut.
+
+### 24.2 `Intl.RelativeTimeFormat` has no Uzbek
+
+§21 introduced relative timestamps and said they "add no translations to
+maintain". Chromium answers
+`Intl.RelativeTimeFormat.supportedLocalesOf(["uz"])` with `["uz"]` — and
+then renders three hours ago as **`-3 h`** and one day ago as the English
+word **"yesterday"**. Partial data, reported as complete, degrading to two
+different kinds of wrong in the same list.
+
+Nothing threw. It took a screenshot in Uzbek to see it, two phases after it
+shipped.
+
+The sentences are the product's own now, in all three languages, and
+`Intl.PluralRules` picks the form — which is the part genuinely worth taking
+from the platform, because Russian needs one/few/many and getting that right
+by hand is a certainty of getting it wrong. Chromium's plural data for all
+three was **checked** before this was written rather than assumed.
+
+Relative now stops at a week and returns `null` beyond it, so the caller
+falls back to a date. "Four months ago" is worse than the date it replaces,
+and stopping there is also what keeps this to three units rather than six.
+
+`Intl.DateTimeFormat` **does** have Uzbek — the weekday heading reads
+"Chorshanba" — so the failure is specific to relative-time patterns and not
+a reason to distrust `Intl` generally.
+
+### 24.3 One link that duplicated the header
+
+`/games/history` carried "Back to profile". Match history is a section in
+the header at every width, so the button pointed at a route the shell
+already offers and made the page read as a sub-page of one profile. Gone,
+and the `justify-between` wrapper with it — a row with one child is a row
+for nothing.
+
+### 24.4 How they were found, and the check that now exists
+
+Not by reading. A script walks eight surfaces in three languages at two
+widths, and reports every leaf element whose `scrollWidth` exceeds its
+`clientWidth` — text that is being cut off, whether or not the page
+scrolls. Page-level overflow was already 0 everywhere; **that measurement
+never sees a clipped label inside a fixed-width box**, which is why five
+phases of "0 overflow" missed all of this.
+
+The first run also flagged every `sr-only` element, which clips by design.
+The filter for that is part of the check now.
+
+| | uz 360 | uz 1280 | ru 360 | ru 1280 | en 360 | en 1280 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Before | 2 | 1 | 2 | 2 | 0 | 0 |
+| After | 0 | 0 | 0 | 0 | 0 | 0 |
+
+The script is not committed — it is a scratch harness, and a real one
+belongs with the visual-regression tooling this repo does not yet have.
+Recorded here so the next phase does not have to rediscover the method.
+
+### 24.5 Measured
+
+Eight surfaces × three languages × two widths, zero clipped text. 215 tests
+pass (two more than §23: the formatter tests now read the real
+dictionaries), `tsc --noEmit` clean, eslint zero errors.

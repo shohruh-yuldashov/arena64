@@ -38,7 +38,9 @@
   },
   "notFound": {
     "title": "Sahifa topilmadi",
-    "description": "Siz qidirayotgan sahifa mavjud emas yoki ko'chirilgan."
+    "description": "Siz qidirayotgan sahifa mavjud emas yoki ko'chirilgan.",
+    "code": "404",
+    "back": "Arena64'ga qaytish"
   },
   "theme": {
     "label": "Mavzu",

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { env } from "@/shared/config/env";
 import { mswServer } from "@/shared/test/msw/server";
-import { renderApp } from "@/shared/test/render";
+import { openAccountMenu, renderApp } from "@/shared/test/render";
 
 /**
  * The push section of `/settings/notifications` — A64-021.6 §20, §21, §30.
@@ -366,6 +366,7 @@ describe("signing out", () => {
     api();
     renderApp({ path: "/settings/notifications" });
 
+    await openAccountMenu(userEvent.setup());
     await userEvent.click(await screen.findByRole("button", { name: /sign out/i }));
 
     // The header offers a way back in, which it does only once the session

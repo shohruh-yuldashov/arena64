@@ -17,6 +17,8 @@
     "closeMenu": "Close menu",
     "primaryNav": "Main",
     "accountNav": "Account",
+    "accountDescription": "Your account, appearance and language.",
+    "appearance": "Appearance and language",
     "navDescription": "Arena64 sections and your account.",
     "home": "Arena64 — home",
     "skipToContent": "Skip to content"
@@ -40,6 +42,7 @@
     "description": "The page you're looking for doesn't exist or has moved."
   },
   "theme": {
+    "label": "Theme",
     "toggle": "Toggle theme",
     "light": "Light",
     "dark": "Dark",

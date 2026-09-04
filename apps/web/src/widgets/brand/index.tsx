@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 
 import { useTranslation } from "@/shared/i18n";
+import { cn } from "@/shared/lib/cn";
 
 /**
  * The Arena64 wordmark, and the way home — A64-025.3 §5.
@@ -25,8 +26,42 @@ import { useTranslation } from "@/shared/i18n";
  * A64-025.9 §18.7 set that type in the brand gradient — one of the three
  * places the gradient is allowed. It degrades to the solid brand colour
  * where `background-clip: text` is unsupported, never to invisible text.
+ *
+ * ## One definition, three sizes — A64-026.2 §41.1
+ *
+ * The treatment was written out three times: here, in `auth-shell`, and in
+ * the landing page's header, differing only in whether the type was `sm` or
+ * `base`. Three copies of a brand is three places to find when the brand
+ * changes, and the drift had already started — the landing header was a
+ * step larger than the other two with nothing recording why.
+ *
+ * So the size is a prop with three values and the treatment is stated once.
+ * `wordmarkClass` exists for the one caller that needs the *mark* without
+ * this component's link, which is the auth front door: it is already inside
+ * a card that is itself the way home, and a second link to `/` there would
+ * be two controls doing one thing.
  */
-export function Brand() {
+
+/** The wordmark's type, at the three sizes this product uses it. */
+const SIZE_CLASS = {
+  sm: "text-sm",
+  base: "text-base",
+  lg: "text-lg",
+} as const;
+
+export type BrandSize = keyof typeof SIZE_CLASS;
+
+/**
+ * The wordmark's own classes, without a link around it.
+ *
+ * Exported so a caller that cannot use `Brand` still cannot invent a fourth
+ * treatment — the thing this task exists to stop.
+ */
+export function wordmarkClass(size: BrandSize = "sm"): string {
+  return cn("brand-gradient-text font-semibold tracking-tight", SIZE_CLASS[size]);
+}
+
+export function Brand({ size = "sm" }: { size?: BrandSize }) {
   const { t } = useTranslation();
 
   return (
@@ -37,9 +72,7 @@ export function Brand() {
     >
       {/* The gradient is on the text, not the link: the link keeps its own
           focus ring, which a clipped background would otherwise swallow. */}
-      <span className="brand-gradient-text text-sm font-semibold tracking-tight">
-        {t("layout.title")}
-      </span>
+      <span className={wordmarkClass(size)}>{t("layout.title")}</span>
     </Link>
   );
 }

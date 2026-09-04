@@ -38,6 +38,12 @@ _SUBJECTS: Final[dict[Locale, str]] = {
     Locale.UZ: "Arena64 — tasdiqlash kodingiz",
 }
 
+_HEADING: Final[dict[Locale, str]] = {
+    Locale.EN: "Your verification code",
+    Locale.RU: "Ваш код подтверждения",
+    Locale.UZ: "Tasdiqlash kodingiz",
+}
+
 _GREETING: Final[dict[Locale, str]] = {
     Locale.EN: "Hello {name},",
     Locale.RU: "Здравствуйте, {name}!",
@@ -77,12 +83,19 @@ def build_verification_code_email(
     `O'Brien` and an HTML one safely, and neither rule is restated here.
     """
     text_body, html_body = render_email_body(
+        heading=_HEADING[locale],
+        # The lead, and **never** the code. An inbox preview is displayed by
+        # every notification surface a phone has, which is the whole reason
+        # the code is kept out of the subject — a preheader carrying it
+        # would put it back on the lock screen through the other door.
+        preheader=_LEAD[locale],
         paragraphs=[
             _GREETING[locale].format(name=recipient_name),
             _LEAD[locale],
         ],
         code=code,
         footnote=f"{_EXPIRY[locale]} {_IGNORE[locale]}",
+        language=locale.value,
     )
     return {"subject": _SUBJECTS[locale], "text_body": text_body, "html_body": html_body}
 

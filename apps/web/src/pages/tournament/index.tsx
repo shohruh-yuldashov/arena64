@@ -1,4 +1,5 @@
 import { Link, useParams } from "@tanstack/react-router";
+import { ChevronLeftIcon } from "lucide-react";
 
 import { isAuthenticated } from "@/entities/session";
 import { speedClassKey } from "@/entities/time-control";
@@ -12,7 +13,7 @@ import { TournamentStatusBadge } from "@/features/tournament/ui/status-badge";
 import { ApiError } from "@/shared/api/errors";
 import { useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
-import { formatDate, formatDateTime } from "@/shared/lib/format";
+import { formatDate, formatDateTime, formatRelativeTime } from "@/shared/lib/format";
 import { speedAccent } from "@/shared/lib/speed-accent";
 import { Button, Skeleton } from "@/shared/ui";
 
@@ -112,11 +113,25 @@ export default function TournamentPage() {
     (standing) => standing.player_id === viewerId,
   );
 
+  const open = tournament.status === "registration_open";
+  const deadline = tournament.registration_deadline ?? null;
+  const relativeDeadline = open ? formatRelativeTime(deadline, locale, t) : null;
+  const fillPercent =
+    tournament.capacity > 0 ? (tournament.entrant_count / tournament.capacity) * 100 : 0;
+  const full = open && tournament.entrant_count >= tournament.capacity;
+  const filling = open && !full && fillPercent >= 80;
+
   return (
     <section className="mx-auto flex w-full max-w-4xl flex-col gap-6 py-6">
       <header className="flex flex-col gap-2">
-        <Button asChild variant="ghost" className="min-h-11 self-start px-2">
-          <Link to="/tournaments">{t("tournament.backToList")}</Link>
+        {/* A64-025.7C: with a chevron, matching the replay's way back. A
+            ghost button with no icon and no border reads as a stray bold
+            sentence above the heading rather than as a control. */}
+        <Button asChild variant="ghost" size="sm" className="min-h-11 self-start px-2">
+          <Link to="/tournaments">
+            <ChevronLeftIcon aria-hidden="true" className="size-4" />
+            {t("tournament.backToList")}
+          </Link>
         </Button>
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-semibold">{tournament.name}</h1>
@@ -136,51 +151,90 @@ export default function TournamentPage() {
       </header>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <dl className="border-border grid grid-cols-2 gap-x-4 gap-y-2 rounded-lg border p-4 text-sm">
-          <Fact label={t("tournament.field.entrants")}>
-            {t("tournament.entrantsOf", {
-              count: tournament.entrant_count,
-              capacity: tournament.capacity,
-            })}
-          </Fact>
-          <Fact label={t("tournament.field.variant")}>{t(variantKey(tournament.variant))}</Fact>
-          <Fact label={t("tournament.field.speed")}>
-            <span className={cn("font-medium", speedAccent(tournament.speed_class).text)}>
-              {t(speedClassKey(tournament.speed_class))}
-            </span>
-          </Fact>
-          {/* Omitted rather than dashed when there is none, which is how
+        <div className="border-border bg-card flex flex-col gap-3 rounded-xl border p-4">
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+            <Fact label={t("tournament.field.variant")}>
+              {t(variantKey(tournament.variant))}
+            </Fact>
+            <Fact label={t("tournament.field.speed")}>
+              <span className={cn("font-medium", speedAccent(tournament.speed_class).text)}>
+                {t(speedClassKey(tournament.speed_class))}
+              </span>
+            </Fact>
+            {/* Omitted rather than dashed when there is none, which is how
               `started_at` and `completed_at` below already behave. A
               tournament that has not begun has no round, and an em dash in a
               definition list reads as a value that failed to load. */}
-          {tournament.current_round != null && (
-            <Fact label={t("tournament.field.round")}>
-              {t("tournament.currentRound", { round: tournament.current_round })}
+            {tournament.current_round != null && (
+              <Fact label={t("tournament.field.round")}>
+                {t("tournament.currentRound", { round: tournament.current_round })}
+              </Fact>
+            )}
+            <Fact label={t("tournament.field.deadline")}>
+              {/* §11's rule stands and is the reason this is not a countdown:
+                the client does not decide whether entries are open, and a
+                ticking number that reached zero would look like it had.
+                A64-025.7C makes it *relative* rather than ticking — computed
+                once at render, exactly as stale as everything else on the
+                page — because "in 2 days" is the question a deadline is
+                read to answer, and the list already answers it that way.
+                The instant stays on the element. */}
+              {deadline === null ? (
+                t("tournament.deadlineNone")
+              ) : (
+                <span title={formatDateTime(deadline, locale) ?? ""}>
+                  {open && relativeDeadline !== null
+                    ? relativeDeadline
+                    : (formatDateTime(deadline, locale) ?? "—")}
+                </span>
+              )}
             </Fact>
-          )}
-          <Fact label={t("tournament.field.deadline")}>
-            {/* The server's timestamp, rendered through `Intl` — §11. No
-                countdown: this client does not decide whether entries are
-                open, and a ticking number that reached zero would look
-                like it had. */}
-            {tournament.registration_deadline != null
-              ? (formatDateTime(tournament.registration_deadline, locale) ?? "—")
-              : t("tournament.deadlineNone")}
-          </Fact>
-          <Fact label={t("tournament.field.created")}>
-            {formatDate(tournament.created_at, locale) ?? "—"}
-          </Fact>
-          {tournament.started_at != null && (
-            <Fact label={t("tournament.field.started")}>
-              {formatDate(tournament.started_at, locale) ?? "—"}
+            {tournament.started_at != null && (
+              <Fact label={t("tournament.field.started")}>
+                {formatDate(tournament.started_at, locale) ?? "—"}
+              </Fact>
+            )}
+            {tournament.completed_at != null && (
+              <Fact label={t("tournament.field.finished")}>
+                {formatDate(tournament.completed_at, locale) ?? "—"}
+              </Fact>
+            )}
+            {/* Last, so the bar below the list sits directly under the
+                number it is a picture of — A64-025.7C. It was the first
+                row, three facts away from its own bar. */}
+            <Fact label={t("tournament.field.entrants")}>
+              {t("tournament.entrantsOf", {
+                count: tournament.entrant_count,
+                capacity: tournament.capacity,
+              })}
             </Fact>
-          )}
-          {tournament.completed_at != null && (
-            <Fact label={t("tournament.field.finished")}>
-              {formatDate(tournament.completed_at, locale) ?? "—"}
-            </Fact>
-          )}
-        </dl>
+          </dl>
+
+          {/* The same capacity bar the list card carries — A64-025.7C. The
+              list gained it in §25 and this page, which is where somebody
+              actually decides to enter, did not: two views of one
+              tournament answering "is it nearly full" differently. Coloured
+              only while registration is open, for the reason recorded
+              there. */}
+          <div
+            aria-hidden="true"
+            className="bg-muted h-1.5 w-full overflow-hidden rounded-full"
+          >
+            <div
+              className={cn(
+                "h-full rounded-full",
+                full
+                  ? "bg-destructive"
+                  : filling
+                    ? "bg-warning"
+                    : open
+                      ? "bg-primary"
+                      : "bg-muted-foreground/40",
+              )}
+              style={{ width: `${Math.min(100, fillPercent).toString()}%` }}
+            />
+          </div>
+        </div>
 
         {/* §17: no registration controls on a completed tournament. The
             panel is dropped entirely rather than rendered disabled — a

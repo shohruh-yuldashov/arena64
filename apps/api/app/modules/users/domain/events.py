@@ -32,6 +32,68 @@ from app.platform.events import DomainEvent
 
 
 @dataclass(frozen=True)
+class UserRegistered(DomainEvent):
+    """An account exists — A64-027.2 §11.
+
+    The platform had no such event: registration created a row and told
+    nobody. Analytics needs it as the head of every cohort and the last step
+    of the acquisition funnel, and it is a **domain fact** rather than an
+    analytics concern — "an account was created" is true whether or not
+    anything measures it, and a consumer that wanted to send a welcome mail
+    or seed a preference would subscribe to the same event.
+
+    Carries the id and nothing else. Not the username, not the email: a
+    payload is durable and readable by every consumer, and an address in one
+    is personal data in a table with a different retention policy than the
+    account it describes (services.md §8.5, and the same reason the
+    registration log line carries only an id).
+    """
+
+    event_type: ClassVar[str] = "users.registered"
+    aggregate_type: ClassVar[str] = "player"
+
+    user_id: UUID
+
+    @property
+    def aggregate_id(self) -> UUID:
+        return self.user_id
+
+    def payload(self) -> dict[str, Any]:
+        return {"user_id": str(self.user_id)}
+
+
+@dataclass(frozen=True)
+class EmailVerified(DomainEvent):
+    """An account became usable — A64-027.2 §11.
+
+    The transition AC-2 turns on: an unverified account cannot play rated
+    matches, so this is the moment a registration becomes a player.
+
+    `hours_since_registration` is on the payload rather than left to a join
+    because a consumer reading this event should not have to read the
+    account back — the rule every payload on this platform follows (AD-16),
+    and here it is also what lets analytics answer "how long does
+    verification take" without joining two event streams.
+    """
+
+    event_type: ClassVar[str] = "users.email_verified"
+    aggregate_type: ClassVar[str] = "player"
+
+    user_id: UUID
+    hours_since_registration: int
+
+    @property
+    def aggregate_id(self) -> UUID:
+        return self.user_id
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "user_id": str(self.user_id),
+            "hours_since_registration": self.hours_since_registration,
+        }
+
+
+@dataclass(frozen=True)
 class PresenceOnline(DomainEvent):
     """A player became present — the `offline -> online` edge.
 

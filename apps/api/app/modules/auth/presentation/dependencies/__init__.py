@@ -56,6 +56,7 @@ from typing import Annotated
 from fastapi import Depends
 
 from app.api.deps import ClockDep, DbSessionDep, RedisPoolsDep, SettingsDep
+from app.api.outbox_deps import EventPublisherDep
 from app.api.restriction_deps import AccountRestrictionGateDep
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
@@ -118,17 +119,24 @@ def get_password_hasher(settings: SettingsDep) -> PasswordHasher:
 PasswordHasherDep = Annotated[PasswordHasher, Depends(get_password_hasher)]
 
 
-def get_user_account_creator(session: DbSessionDep, clock: ClockDep) -> UserAccountCreator:
+def get_user_account_creator(
+    session: DbSessionDep, clock: ClockDep, events: EventPublisherDep
+) -> UserAccountCreator:
     """Assembles `users`' side of the graph behind its published port.
 
     The unit of work wraps the *same* session the repository holds —
     otherwise the service would commit a transaction the repository never
     wrote to, and the registration would be silently lost on teardown.
+
+    The publisher wraps that same session too, which is what makes
+    `users.registered` part of the registration rather than a second write
+    that can fail on its own (AD-16, A64-027.2 §12).
     """
     users = UserService(
         users=SqlAlchemyUserRepository(session),
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
+        events=events,
     )
     return UserAccountService(users)
 
@@ -352,6 +360,7 @@ def get_email_verification_service(
     email: EmailProviderDep,
     clock: ClockDep,
     settings: SettingsDep,
+    events: EventPublisherDep,
 ) -> EmailVerificationService:
     """Email verification (A64-011.6).
 
@@ -372,6 +381,7 @@ def get_email_verification_service(
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
         settings=settings.email,
+        events=events,
     )
 
 

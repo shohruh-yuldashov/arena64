@@ -1,11 +1,13 @@
 import { Link } from "@tanstack/react-router";
 
+import { speedClassKey } from "@/entities/time-control";
 import type { Tournament } from "@/features/tournament/api";
-import { formatKey, speedClassKey, variantKey } from "@/features/tournament/ui/labels";
+import { formatKey, variantKey } from "@/features/tournament/ui/labels";
 import { TournamentStatusBadge } from "@/features/tournament/ui/status-badge";
 import { useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
 import { formatDate } from "@/shared/lib/format";
+import { speedAccent } from "@/shared/lib/speed-accent";
 
 /**
  * One tournament, as the lobby lists it — A64-020.6 §5, §24, §25.
@@ -60,7 +62,9 @@ export function TournamentCard({ tournament }: { tournament: Tournament }) {
             {t(tournament.rated ? "tournament.field.rated" : "tournament.field.casual")}
           </span>
           <span>{t(variantKey(tournament.variant))}</span>
-          <span>{t(speedClassKey(tournament.speed_class))}</span>
+          <span className={cn("font-medium", speedAccent(tournament.speed_class).text)}>
+            {t(speedClassKey(tournament.speed_class))}
+          </span>
         </div>
 
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">

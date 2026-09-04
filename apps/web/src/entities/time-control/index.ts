@@ -1,4 +1,5 @@
 import type { components } from "@/shared/api/generated/schema";
+import type { TranslationKey } from "@/shared/i18n";
 
 /**
  * A clock the platform offers — A64-020.5A §4.
@@ -70,4 +71,29 @@ export function formatMillis(
 function clockNotation(baseMs: number, incrementMs: number, locale: string): string {
   const format = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 });
   return `${format.format(baseMs / 60_000)}+${format.format(incrementMs / 1_000)}`;
+}
+
+/**
+ * What a player calls a speed class — "Blitz", not `blitz`.
+ *
+ * The catalogue decides which class a control belongs to, so the name of
+ * that class belongs here with the type rather than in whichever feature
+ * happened to render it first. Three surfaces now read it: the tournament
+ * card, the tournament page, and a profile's ratings — which were printing
+ * the raw server enum, in every locale, until A64-025.9.
+ *
+ * `Record<string, …>` rather than `Record<SpeedClass, …>` on purpose: these
+ * values arrive over the wire, and a closed union would let a backend
+ * addition compile here and reach a player as a blank.
+ */
+const SPEED_CLASS_KEY: Record<string, TranslationKey> = {
+  bullet: "play.speed.bullet",
+  blitz: "play.speed.blitz",
+  rapid: "play.speed.rapid",
+  classical: "play.speed.classical",
+  correspondence: "play.speed.correspondence",
+};
+
+export function speedClassKey(speedClass: string): TranslationKey {
+  return SPEED_CLASS_KEY[speedClass] ?? "play.speed.unknown";
 }

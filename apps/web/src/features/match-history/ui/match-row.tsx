@@ -1,9 +1,11 @@
 import { Link } from "@tanstack/react-router";
 
 import { formatMillis } from "@/entities/time-control";
+import { speedClassKey } from "@/entities/time-control";
 import type { MatchHistoryEntry } from "@/features/match-history/api";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
+import { speedAccent } from "@/shared/lib/speed-accent";
 import { Avatar, AvatarFallback, AvatarImage } from "@/shared/ui";
 
 /**
@@ -67,6 +69,7 @@ function reasonKey(reason: string | null): TranslationKey {
     abandonment: "game.reason.abandonment",
     adjudication: "game.reason.adjudication",
   };
+
   return (reason !== null ? known[reason] : undefined) ?? "game.reason.unknown";
 }
 
@@ -83,6 +86,9 @@ export function MatchRow({ entry, viewerId }: { entry: MatchHistoryEntry; viewer
     entry.time_control?.increment_ms ?? null,
     locale,
   );
+  // Nullable *and* optional on the wire; the two absent cases are one
+  // thing to a reader, so they collapse before anything renders.
+  const speedClass = entry.speed_class ?? null;
   const played = entry.ended_at ?? entry.started_at;
   const name =
     entry.opponent?.display_name ?? entry.opponent?.username ?? t("history.unknownOpponent");
@@ -104,7 +110,17 @@ export function MatchRow({ entry, viewerId }: { entry: MatchHistoryEntry; viewer
         <span className="text-muted-foreground truncate text-xs">
           {t(entry.rated ? "play.mode.ranked" : "play.mode.casual")}
           {clock !== null && ` · ${clock}`}
-          {entry.speed_class !== null && ` · ${entry.speed_class}`}
+          {/* A64-025.9 §18.7. This printed the **raw enum** — `blitz`, in
+              every locale — and now reads as the translated name in the
+              class's own colour, the same one the profile's cards use. */}
+          {speedClass !== null && (
+            <>
+              {" · "}
+              <span className={cn("font-medium", speedAccent(speedClass).text)}>
+                {t(speedClassKey(speedClass))}
+              </span>
+            </>
+          )}
         </span>
       </div>
 

@@ -200,6 +200,7 @@
     },
     "ratings": {
       "title": "Reytinglar",
+      "inCategory": "{category} reytingi",
       "provisional": "Dastlabki",
       "games": "{count} o'yin",
       "deviation": "Aniqlik oralig'i",

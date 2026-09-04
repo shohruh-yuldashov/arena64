@@ -60,14 +60,23 @@ export function AuthShell({
           from the form. Hidden above `lg`, where the panel carries it. */}
       <Link
         to="/"
-        className="focus-visible:ring-ring self-center rounded-md text-sm font-semibold tracking-tight focus-visible:ring-2 focus-visible:outline-none lg:hidden"
+        className="focus-visible:ring-ring self-center rounded-md focus-visible:ring-2 focus-visible:outline-none lg:hidden"
       >
-        {t("layout.title")}
+        {/* The same treatment `Brand` gives it in the header — the two are
+            the one wordmark, and this page shows both at once. */}
+        <span className="brand-gradient-text text-sm font-semibold tracking-tight">
+          {t("layout.title")}
+        </span>
       </Link>
 
       <div className="border-border bg-card grid overflow-hidden rounded-xl border shadow-sm lg:grid-cols-[1fr_1.1fr]">
         {/* --- identity, wide screens only ---------------------------- */}
-        <aside className="bg-primary text-primary-foreground relative hidden flex-col justify-between p-8 lg:flex">
+        {/* The brand gradient rather than the flat brand colour — A64-025.9
+            §18.7. It replaces `bg-primary` on the same element with the same
+            foreground, so the contrast this panel already had is the
+            contrast it keeps: both ends of the ramp clear 4.5:1 against
+            `--primary-foreground` on their own. */}
+        <aside className="brand-gradient text-primary-foreground relative hidden flex-col justify-between p-8 lg:flex">
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 opacity-[0.07]"

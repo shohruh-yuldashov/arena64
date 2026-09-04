@@ -15,13 +15,24 @@
  * <component>` produces components that fit this theme with zero
  * adjustment, rather than a foundation only some future components agree
  * with.
+ *
+ * **Three deliberate departures from that base**, all A64-025.9 §18.7:
+ * `--background` carries a trace of the brand hue so that white cards
+ * separate from the page; `--brand-from`/`--brand-to` add a gradient the
+ * neutral base has no concept of; and `--speed-*` adds a hue per speed
+ * class. Every other token is unchanged, so a generated component still
+ * lands correctly.
  */
 
 @custom-variant dark (&:is(.dark *));
 
 :root {
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
+  /* Not pure white — A64-025.9 §18.7. A trace of the brand hue, far below
+     the threshold at which anyone would call the page coloured, so that a
+     white `--card` reads as a raised surface instead of dissolving into
+     its own background. The borders were doing that work alone. */
+  --background: oklch(0.99 0.004 300);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
@@ -68,6 +79,51 @@
   --piece-light-edge: oklch(0.7 0.025 85);
   --piece-dark: oklch(0.28 0.025 60);
   --piece-dark-edge: oklch(0.17 0.02 60);
+
+  /* The brand gradient — A64-025.9 §18.7.
+
+     `--primary` stays exactly what it was and still carries every small
+     accent in the product: the focus ring, a live match, a selected option,
+     a legal destination on the board. This is the *display* form of the
+     same brand, used in three places and no more — the wordmark, the
+     primary action, and the leading figure on a profile.
+
+     Gradient is expensive in a way solid colour is not: contrast over it
+     cannot be asserted in a test, only looked at, and it has to be looked
+     at again in the other theme. So both ends are pinned to values that
+     clear 4.5:1 against `--primary-foreground` on their own — the magenta
+     end is darker than a magenta wants to be for exactly that reason — and
+     the rule is that no text ever sits on the middle of a gradient it did
+     not also clear at both ends.
+
+     `--rating` is the achievement note: a personal best, a peak. Amber, and
+     kept apart from `--warning` because a best streak is not a caution. */
+  --brand-from: oklch(0.5 0.19 275);
+  --brand-to: oklch(0.48 0.2 330);
+  --rating: oklch(0.5 0.11 85);
+
+  /* A hue per speed class — A64-025.9 §18.7.
+
+     Not decoration, and not brand. A speed class is the one attribute a
+     player reads on every surface that lists a game — the lobby, a
+     tournament card, match history, a profile's ratings — and it was
+     neutral text on all of them. A hue per class means the category is
+     recognised before the word is read, and it means the same thing
+     everywhere, which is the only way a colour code repays its cost.
+
+     Ordered the way the classes are: hot at the fast end, cool at the slow
+     end. Every value is tuned for **text on a card**, so one token serves
+     both the label and the rule beside it — the light set sits at L≈0.48
+     for 4.5:1 on white, the dark set at L≈0.74 for the same on `--card`.
+
+     These read as *category*; the brand gradient reads as *Arena64*; and
+     `--primary` reads as *interaction*. Three jobs, three vocabularies,
+     and no surface uses more than two of them at once. */
+  --speed-bullet: oklch(0.5 0.19 25);
+  --speed-blitz: oklch(0.48 0.14 55);
+  --speed-rapid: oklch(0.46 0.13 155);
+  --speed-classical: oklch(0.48 0.14 245);
+  --speed-correspondence: oklch(0.48 0.16 300);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
@@ -84,7 +140,8 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
+  /* The same trace of hue as the light theme, for the same reason. */
+  --background: oklch(0.15 0.008 300);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
   --card-foreground: oklch(0.985 0 0);
@@ -123,6 +180,20 @@
   --piece-light-edge: oklch(0.64 0.02 85);
   --piece-dark: oklch(0.2 0.02 60);
   --piece-dark-edge: oklch(0.6 0.025 60);
+
+  /* Lifted to sit on a dark surface, and re-checked against the dark
+     `--primary-foreground` rather than against white — see `:root`. */
+  --brand-from: oklch(0.68 0.16 275);
+  --brand-to: oklch(0.66 0.18 330);
+  --rating: oklch(0.8 0.12 85);
+
+  /* The same five, lifted to sit on a dark card — see the note in `:root`.
+     The light values measure roughly 1.6:1 here. */
+  --speed-bullet: oklch(0.72 0.17 25);
+  --speed-blitz: oklch(0.76 0.14 62);
+  --speed-rapid: oklch(0.74 0.14 155);
+  --speed-classical: oklch(0.72 0.13 245);
+  --speed-correspondence: oklch(0.74 0.14 300);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
@@ -169,6 +240,14 @@
   --color-piece-light-edge: var(--piece-light-edge);
   --color-piece-dark: var(--piece-dark);
   --color-piece-dark-edge: var(--piece-dark-edge);
+  --color-brand-from: var(--brand-from);
+  --color-brand-to: var(--brand-to);
+  --color-rating: var(--rating);
+  --color-speed-bullet: var(--speed-bullet);
+  --color-speed-blitz: var(--speed-blitz);
+  --color-speed-rapid: var(--speed-rapid);
+  --color-speed-classical: var(--speed-classical);
+  --color-speed-correspondence: var(--speed-correspondence);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -186,6 +265,33 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer utilities {
+  /* One definition, so the angle and the stops cannot drift between the
+     three surfaces that use them. `115deg` rather than `to right`: the
+     wordmark and the button are wide and short, and a horizontal ramp
+     across them shows almost none of the second colour. */
+  .brand-gradient {
+    background-image: linear-gradient(115deg, var(--brand-from), var(--brand-to));
+  }
+
+  /* The same ramp as the letterforms themselves. `background-clip: text`
+     is supported everywhere this product targets; where it is not, the
+     fallback is the solid brand colour rather than invisible text, which
+     is why `color` is set and only then overridden. */
+  .brand-gradient-text {
+    color: var(--brand-from);
+    background-image: linear-gradient(115deg, var(--brand-from), var(--brand-to));
+    background-clip: text;
+    -webkit-background-clip: text;
+  }
+
+  @supports (background-clip: text) or (-webkit-background-clip: text) {
+    .brand-gradient-text {
+      color: transparent;
+    }
+  }
 }
 
 @layer base {

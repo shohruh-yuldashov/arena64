@@ -144,7 +144,18 @@ export function RelationshipActions({
           <Button
             key={action}
             size={size}
-            variant={action === "accept_request" ? "default" : "outline"}
+            // A64-025.9 §18.8. Three weights, not two. "Add friend" and
+            // "Accept" are the affirmative act and lead; blocking and
+            // removing recede to `ghost`, so a destructive control is the
+            // *quietest* thing in the group rather than an outlined slab
+            // with equal weight to the one a visitor came to press.
+            variant={
+              action === "accept_request" || action === "send_request"
+                ? "default"
+                : isDestructive(action)
+                  ? "ghost"
+                  : "outline"
+            }
             className={cn(
               "min-h-11",
               // A64-025.8. Blocking and removing a friend were drawn exactly
@@ -154,7 +165,8 @@ export function RelationshipActions({
               // one the game room gives Resign — destructive *text*, not a
               // red slab a thumb finds by accident in a dense list — and it
               // comes from `isDestructive`, the predicate that already
-              // decides which of these open a dialog.
+              // decides which of these open a dialog. §18.8 took the border
+              // away too, for the same reason.
               isDestructive(action) &&
                 "text-destructive hover:bg-destructive/10 hover:text-destructive",
             )}

@@ -281,3 +281,58 @@ jobs:
       - name: vitest
         if: always()
         run: npm run test
+
+  # --- publish ---------------------------------------------------------------
+  # Builds the image and pushes it, and does so **only** for a commit that has
+  # already passed every gate above. `needs` is what makes that true rather
+  # than hopeful: a red suite means no image, so a tag in the registry is a
+  # tag somebody can deploy without asking what state it was in.
+  #
+  # Pull requests do not publish. A fork could otherwise push to this
+  # repository's registry, and a tag that moved on every proposal would make
+  # `latest` meaningless.
+  publish:
+    name: publish the api image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [api, web, admin]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: read
+      # The one job that writes anything. Scoped here rather than at the
+      # workflow, so the three test jobs keep the read-only token they have.
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Sign in to the registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # Provided by Actions; no secret to rotate and nothing stored in
+          # this repository.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Two tags for one image, and both are needed. `latest` is what
+      # `infrastructure/staging/compose.yml` follows by default so a staging
+      # host can pull without being told a version. The commit SHA is what
+      # makes a deployment reproducible: `latest` says "whatever was newest",
+      # and a report about a bug needs to name the build it came from.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/arena64-api:latest
+            ghcr.io/${{ github.repository_owner }}/arena64-api:${{ github.sha }}
+          # The registry is also the cache. A build that reuses the previous
+          # layers takes seconds; without it every merge rebuilds the whole
+          # dependency layer for a source change of two lines.
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/arena64-api:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/arena64-api:buildcache,mode=max

@@ -134,7 +134,7 @@ carries the reasoning that selected it.
 | Frontend tests | Vitest, Testing Library, MSW, Playwright | same |
 | Quality gates | `ruff`, `mypy --strict`, `pyright`, `lint-imports`; `eslint`, `prettier`, `tsc --noEmit` | `apps/api/pyproject.toml`, `apps/api/.importlinter` |
 | Local infrastructure | Docker Compose — Postgres and Redis only | `docker/docker-compose.yml` |
-| CI | GitHub Actions — three jobs over the gates above | [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) |
+| CI | GitHub Actions — three test jobs, then an image published to GHCR from what passed | [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) |
 
 The stack choices above are **in force but not all ratified**: only four ADRs exist, and
 the backend platform decisions still live as `AD-nn` entries inside

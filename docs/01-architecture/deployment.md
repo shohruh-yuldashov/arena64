@@ -40,6 +40,41 @@ docker compose --env-file staging.env up -d
 `staging.env` is gitignored and every value in it is the operator's.
 `staging.env.example` names each one and says what it is for.
 
+### Where the image comes from
+
+CI publishes it. The `publish` job in `.github/workflows/ci.yml` builds
+`apps/api` and pushes to `ghcr.io/<owner>/arena64-api` on a push to `main`,
+and it `needs` the three test jobs — so **an image exists only for a commit
+that passed every gate**, and a tag in the registry is one somebody can
+deploy without asking what state it was in.
+
+Two tags per build, and both earn their place. `latest` is what the compose
+file follows by default, so a host can pull without being told a version.
+The commit SHA is what makes a deployment reproducible: `latest` means
+"whatever was newest", and a bug report needs to name the build it came
+from. Pin `ARENA64_TAG` to a SHA when reproducing one.
+
+**The package is private until somebody makes it public.** A GHCR package
+inherits nothing from the repository's visibility, so the first pull from a
+staging host fails with `denied` until either the package is set to public
+in GitHub → Packages, or the host signs in with a token that can read it.
+Stated here because the failure is a permission error on a machine at the
+end of a deploy, not on the machine that built anything.
+
+### Upgrading
+
+```bash
+cd infrastructure/staging
+docker compose --env-file staging.env pull
+docker compose --env-file staging.env up -d
+```
+
+`pull` fetches the new image; `up -d` recreates only what changed, runs the
+migration job first and waits for it. **Every live game is dropped** — one
+process holds the WebSocket connections and the schedulers alike, which is
+§2's AD-02 deviation showing up as an operational fact rather than a
+paragraph.
+
 ---
 
 ## 2. Three deviations from `architecture.md`, each deliberate

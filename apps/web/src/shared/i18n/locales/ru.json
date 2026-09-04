@@ -941,7 +941,8 @@
       "game_completed_loss_anonymous": "Вы проиграли партию",
       "game_completed_draw_anonymous": "Ваша партия завершилась вничью",
       "unknown": "Новое уведомление"
-    }
+    },
+    "unreadCount": "Непрочитанных: {count}"
   },
   "notificationPreferences": {
     "title": "Настройки уведомлений",

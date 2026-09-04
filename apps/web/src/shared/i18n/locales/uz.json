@@ -941,7 +941,8 @@
       "game_completed_loss_anonymous": "Siz o'yinda yutqazdingiz",
       "game_completed_draw_anonymous": "O'yiningiz durrang tugadi",
       "unknown": "Yangi bildirishnoma"
-    }
+    },
+    "unreadCount": "{count} ta o'qilmagan"
   },
   "notificationPreferences": {
     "title": "Bildirishnoma sozlamalari",

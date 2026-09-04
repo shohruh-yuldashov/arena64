@@ -7,7 +7,8 @@ import {
   notificationSubject,
 } from "@/features/notifications/model/render";
 import { useTranslation } from "@/shared/i18n";
-import { formatDateTime } from "@/shared/lib/format";
+import { cn } from "@/shared/lib/cn";
+import { formatDateTime, formatRelativeTime } from "@/shared/lib/format";
 import { Avatar, AvatarFallback, AvatarImage } from "@/shared/ui";
 
 /**
@@ -59,7 +60,12 @@ export function NotificationRow({
   const { key, values } = notificationMessage(notification);
   const subject = notificationSubject(notification);
   const message = t(key, values);
-  const when = formatDateTime(notification.created_at, locale) ?? "";
+  // Relative in the text, absolute in the attributes — A64-025.10 §21.
+  // A feed is read for recency, and "Sep 4, 2026, 1:40 PM" makes the reader
+  // do the subtraction. The exact instant is still on the element, so it is
+  // demoted rather than removed.
+  const when = formatRelativeTime(notification.created_at, locale) ?? "";
+  const exact = formatDateTime(notification.created_at, locale) ?? "";
   const href = notificationHref(notification.target);
 
   const body = (
@@ -82,7 +88,9 @@ export function NotificationRow({
           {/* `<time>` with a machine-readable `dateTime`, and human text
               inside it — §23, §28. The server's instant is authoritative;
               `Intl` decides how it reads in this locale. */}
-          <time dateTime={notification.created_at}>{when}</time>
+          <time dateTime={notification.created_at} title={exact}>
+            {when}
+          </time>
         </p>
       </div>
 
@@ -100,8 +108,13 @@ export function NotificationRow({
 
   // `min-h-11` on both branches: 44px is the touch target §28 requires, and
   // a row that is only as tall as its text would miss it on a phone.
-  const className =
-    "focus-visible:ring-ring flex min-h-11 w-full items-start gap-3 rounded-md p-3 text-left focus-visible:ring-2 focus-visible:outline-none";
+  const className = cn(
+    "focus-visible:ring-ring flex min-h-11 w-full items-start gap-3 px-4 py-3 text-left focus-visible:ring-2 focus-visible:outline-none sm:px-5",
+    // Unread is a **band**, not only a dot 900px away from the sentence it
+    // belongs to — §21. It is still never the sole signal: the dot, the
+    // `sr-only` word and the heavier text all say the same thing.
+    !notification.is_read && "bg-primary/[0.05]",
+  );
 
   if (href === null) {
     return (
@@ -115,7 +128,7 @@ export function NotificationRow({
     <li>
       <Link
         to={href}
-        className={`${className} hover:bg-muted`}
+        className={cn(className, "hover:bg-muted")}
         // Marking read is fired here and **not awaited**: navigation must
         // not wait on a mutation, or a notification opened on a bad
         // connection is a tap that appears to do nothing (§21).

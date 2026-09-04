@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.9C, the settings surfaces |
+| **Last updated** | 2026-09-04 — A64-025.10, the notification feed |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -459,7 +459,7 @@ tokens.
 | **A64-025.9** | Profile and player | .2 | Changing privacy rules; inventing a statistic |
 | **A64-025.9B** | Home, and the account menu in the header | .2, .3 | Inventing a statistic the API does not return |
 | **A64-025.9C** | The four remaining settings surfaces | .2, .9 | Changing what any setting does |
-| **A64-025.10** | Notifications | .2 | Admin notification surfaces |
+| **A64-025.10** | Notifications — the feed and the bell | .2 | Admin notification surfaces; what the preferences decide (.9C) |
 | **A64-025.10E** | Email design system. Fixes P2-2 | .2 (tokens only) | New email types |
 | **A64-025.11** | Global UI consistency and component cleanup | .3–.10 | Re-architecting layouts already designed mobile-first |
 | **A64-025.12** | Motion and interaction system. Fixes P3-5 | .3–.10 | Adding motion for its own sake |
@@ -2054,3 +2054,80 @@ paragraphs, is a group and a card.
 **A64-025.9 is now closed on every settings surface.** `L-1` remains open:
 these four still ship against no specification, and this section describes
 how they look, not what they do.
+
+---
+
+## 21. The notification feed — A64-025.10
+
+`/notifications` and the bell. The preferences that decide what arrives were
+A64-025.9C's; this is the list of what did.
+
+### 21.1 An absolute timestamp answers the wrong question
+
+Every row read `Sep 4, 2026, 1:40 PM`. A feed is read for **recency**, and
+that string is the same number of words as "2 hours ago" while making the
+reader do the subtraction. The relative form is now the text and the exact
+instant stays on the `<time>` element's `dateTime` and `title` — demoted,
+not removed.
+
+`Intl.RelativeTimeFormat` supplies every word, including "yesterday" and
+"last week", so this added **no translations to maintain** and is correct in
+locales whose plural rules are not English's.
+
+**The first version was wrong and the test is the proof.** It divided
+elapsed seconds by 86,400, so 46 hours produced "yesterday" while the day
+heading above the same row produced "2 days ago" — both true of different
+quantities, and visibly contradictory. Days are calendar days now, measured
+between local midnights, and only hours and below come from elapsed time.
+`shared/lib/format.test.ts` pins that invariant, along with the "now"
+boundary and the climb to weeks, months and years; the dates are built from
+local parts rather than `Z` literals, because a UTC literal makes a
+calendar-day assertion depend on the machine's zone.
+
+### 21.2 Grouped by day, in one list
+
+| | |
+| --- | --- |
+| **Today / Yesterday** | `Intl`, `numeric: "auto"`, capitalised for the locale |
+| **Inside the last week** | the weekday — "Wednesday" beats "4 days ago", which is arithmetic |
+| **Older** | the date, because the words have stopped helping |
+
+**One list, not one per day.** A section per day was written first and cost
+five test failures, which was the right signal: every row already carries
+its own `<time>`, so a screen reader loses nothing by not hearing the
+separator, and a single list keeps a length that means *the number of
+notifications* rather than however many days they happen to span.
+`role="presentation"` is what takes the separator out of the list without
+taking it off the screen.
+
+### 21.3 Unread was a dot 900 pixels from its sentence
+
+The unread marker sat against the right margin of a wide row with nothing
+connecting it to the message it belonged to. It is a tinted band across the
+whole row now, and the dot and the `sr-only` word both stay — three signals
+where colour was never the only one.
+
+"Mark all as read" was alone against the right margin too. It sits beside
+the count it answers ("3 unread") now: a control with nothing to align to
+reads as an afterthought.
+
+The rows were floating on the page background with hairline rules and
+nothing containing them — the last list in the product that was not in a
+card. The empty state took the dashed frame every other stated absence uses.
+
+### 21.4 One thing tried and removed
+
+A subtitle under the heading, borrowing `emptyDescription` — "New
+notifications will appear here." It is a sentence written for an empty list
+and reads as nonsense above a full one. A heading with nothing useful under
+it is better than a heading with the wrong thing.
+
+### 21.5 Measured
+
+| Surface | 1280 light | 360 dark |
+| --- | --- | --- |
+| `/notifications`, five entries across three days | 0 | 0 |
+| `/notifications`, empty | 0 | — |
+
+213 tests pass (nine of them new, for the two formatters), `tsc --noEmit`
+clean, eslint zero errors.

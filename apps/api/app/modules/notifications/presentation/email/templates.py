@@ -11,14 +11,15 @@ recipient had *then*, and would keep being sent after a template fixed a
 mistake in it. Rendering from the typed payload means a retry produces the
 current template in the current language.
 
-## Every user-controlled string is escaped, once, here
+## Every user-controlled string is escaped, once, and not here
 
 A tournament name is chosen by an operator and a display name by a player,
-and both reach an HTML document. `escape` is applied at the **interpolation
-site** rather than at the boundary, because that is the only place that
-knows a value is about to become markup — the text part must *not* be
-escaped, or a tournament called "Bob & Sons" reads as `Bob &amp; Sons` in
-every plain-text client.
+and both reach an HTML document. Since A64-025.10E the escaping is
+`platform/email/layout`'s, which applies it at the **interpolation site**
+rather than at the boundary — the only place that knows a value is about to
+become markup. The lines this module produces are deliberately *unescaped*:
+the text part must stay that way, or a tournament called "Bob & Sons"
+reaches a plain-text client as `Bob &amp; Sons`.
 
 There is no template engine and no `format` on a caller-supplied string.
 Every template below is a Python function, so there is no string a payload
@@ -30,16 +31,20 @@ could contain that becomes a placeholder.
 `EmailMessage` carries both — a client that refuses markup, a screen reader
 and a plain-text archive all get a complete message.
 
-## The HTML is deliberately boring
+## The HTML is deliberately boring, and it is no longer built here
 
 A table-free single column, inline styles only, no `<script>`, no external
 stylesheet, no image, no tracking pixel (§17). Mail clients strip most of
 what a web page can do, and the parts they keep are the parts that break
 differently in each of them.
+
+A64-025.10E moved that shell into `platform/email/layout`, where all three
+of this platform's messages share it. What stays here is the part that is
+genuinely this module's: which lines a record renders into, in which
+language.
 """
 
 from collections.abc import Mapping
-from html import escape
 from typing import Final
 
 from app.core.enums import Locale
@@ -49,6 +54,7 @@ from app.modules.notifications.domain.record import (
     NotificationType,
     TournamentSummary,
 )
+from app.platform.email.layout import EmailAction, render_email_body
 
 
 class UnsupportedEmailTemplate(LookupError):
@@ -224,62 +230,20 @@ def render(
     # has a settings page behind a session that does the same job.
     settings_url = f"{public_origin}/settings/notifications"
 
-    return RenderedEmail(
-        subject=subject,
-        text_body=_as_text(lines, action_label, action_url, settings_url, locale),
-        html_body=_as_html(lines, action_label, action_url, settings_url, locale),
+    # A64-025.10E §30. The shell is `platform/email/layout` now — this
+    # module had its own `<div>`, `verification_email` had another, and the
+    # password reset had none. What stays here is the part that is genuinely
+    # this module's: which lines a record renders into, in which language.
+    text_body, html_body = render_email_body(
+        paragraphs=lines,
+        action=EmailAction(label=action_label, url=action_url),
+        # §18: the preference screen, not a tokenised one-click unsubscribe.
+        # A token in a URL is a bearer credential in a mailbox, and this
+        # platform has a settings page behind a session that does the job.
+        footnote=_PREFERENCE_NOTE[locale],
+        footer=EmailAction(label=_PREFERENCE_NOTE[locale], url=settings_url),
     )
-
-
-def _as_text(
-    lines: list[str],
-    action_label: str,
-    action_url: str,
-    settings_url: str,
-    locale: Locale,
-) -> str:
-    """The plain-text part. **Nothing is escaped here.**
-
-    Escaping text that is never parsed as markup is how `Bob & Sons` becomes
-    `Bob &amp; Sons` in somebody's inbox — a bug that only shows up in the
-    half of the message nobody looks at during review.
-    """
-    body = "\n".join(lines)
-    return f"{body}\n\n{action_label}: {action_url}\n\n{_PREFERENCE_NOTE[locale]}\n{settings_url}\n"
-
-
-def _as_html(
-    lines: list[str],
-    action_label: str,
-    action_url: str,
-    settings_url: str,
-    locale: Locale,
-) -> str:
-    """The HTML part. Every interpolation escaped, at the interpolation.
-
-    The URLs are escaped too, and that is not belt-and-braces: they contain
-    a UUID and a configured origin today, and the day one carries a query
-    parameter an unescaped `&` is a malformed document in a client that
-    parses strictly.
-
-    Inline styles only, and few of them. A `<style>` block is stripped by
-    several major clients and a `class` attribute by more, so anything that
-    matters has to survive as an attribute on the element it styles.
-    """
-    paragraphs = "".join(f'<p style="margin:0 0 12px 0">{escape(line)}</p>' for line in lines)
-    return (
-        '<div style="font-family:sans-serif;font-size:15px;line-height:1.5;color:#111">'
-        f"{paragraphs}"
-        f'<p style="margin:20px 0"><a href="{escape(action_url)}" '
-        'style="display:inline-block;padding:10px 16px;background:#111;color:#fff;'
-        'text-decoration:none;border-radius:6px">'
-        f"{escape(action_label)}</a></p>"
-        '<p style="margin:24px 0 0 0;font-size:13px;color:#666">'
-        f"{escape(_PREFERENCE_NOTE[locale])} "
-        f'<a href="{escape(settings_url)}" style="color:#666">{escape(settings_url)}</a>'
-        "</p>"
-        "</div>"
-    )
+    return RenderedEmail(subject=subject, text_body=text_body, html_body=html_body)
 
 
 __all__ = ["TemplateEmailRenderer", "UnsupportedEmailTemplate", "render"]

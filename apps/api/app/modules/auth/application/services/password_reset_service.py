@@ -137,6 +137,7 @@ from app.core.clock import Clock
 from app.core.exceptions import ConflictError
 from app.core.unit_of_work import UnitOfWork
 from app.modules.auth.application.ports import PasswordHasher, PasswordResetTokenRepository
+from app.modules.auth.application.reset_email import build_password_reset_email
 from app.modules.auth.application.services.opaque_tokens import OpaqueTokenService
 from app.modules.auth.application.services.session_service import SessionService
 from app.modules.auth.domain.exceptions import InvalidResetToken
@@ -496,31 +497,22 @@ class PasswordResetService:
         recoverable by the user asking again, and it is the *rate* of these
         that indicates a broken provider.
         """
-        hours = self._settings.password_reset_token_ttl_hours
+        # A64-025.10E §30. Composed in `reset_email` alongside the
+        # verification message, in the recipient's own language and with
+        # both parts. It was an English-only, plain-text f-string here —
+        # P2-2 — while `preferred_language` sat unread on the DTO this
+        # method already receives.
         message = EmailMessage(
             to=account.email,
-            subject="Reset your Arena64 password",
-            text_body=(
-                # `effective_display_name` is on the `User` *entity*, which
-                # is private to `users`; the published DTO carries the two
-                # fields it is derived from. Falling back here rather than
-                # publishing the property keeps the boundary narrow.
-                f"Hello {account.display_name or account.username},\n\n"
-                "Somebody asked to reset the password on your Arena64 account. "
-                "If it was you, choose a new password here:\n\n"
-                f"    {self._settings.password_reset_url(raw_token)}\n\n"
-                f"This link expires in {hours} hour{'s' if hours != 1 else ''} and can "
-                "be used once. Resetting your password signs you out on every "
-                "device.\n\n"
-                # The one sentence in this message that does real work. A
-                # reset email arriving unrequested is the first thing
-                # somebody sees when an attacker is probing their account,
-                # and the correct advice is genuinely "do nothing" —
-                # saying so stops a worried person from clicking the link
-                # to "check", which is the one action that would consume
-                # their token for the attacker's benefit.
-                "If you did not ask for this, ignore this message. Your password "
-                "has not changed and no action is needed.\n"
+            # `effective_display_name` is on the `User` *entity*, which is
+            # private to `users`; the published DTO carries the two fields
+            # it is derived from. Falling back here rather than publishing
+            # the property keeps the boundary narrow.
+            **build_password_reset_email(
+                reset_url=self._settings.password_reset_url(raw_token),
+                recipient_name=account.display_name or account.username,
+                locale=account.preferred_language,
+                ttl_hours=self._settings.password_reset_token_ttl_hours,
             ),
         )
 

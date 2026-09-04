@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node scripts/generate-seo.mjs",
     "preview": "vite preview",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -21,7 +21,8 @@
     "test:e2e": "playwright test",
     "assets:icons": "node scripts/generate-icons.mjs",
     "openapi:generate": "openapi-typescript ${ARENA64_OPENAPI:-http://localhost:8000/openapi.json} --output src/shared/api/generated/schema.d.ts",
-    "assets:og": "node scripts/generate-og-card.mjs"
+    "assets:og": "node scripts/generate-og-card.mjs",
+    "assets:seo": "node scripts/generate-seo.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "5.7.1",

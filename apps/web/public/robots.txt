@@ -1,0 +1,45 @@
+# Arena64 — A64-026.3 §42.
+#
+# One page on this origin is meant to be found: the landing page at `/`.
+# Everything else is either behind authentication or is a form, and neither
+# is something a search result should lead to.
+#
+# `Disallow` stops crawling, not indexing. A disallowed URL can still be
+# listed if something links to it, showing the URL with no description —
+# closing that needs an `X-Robots-Tag: noindex` response header, which is
+# the host's to send and not this bundle's. §42.7 records why a per-route
+# `<meta name="robots">` cannot do it here: every route serves the same
+# `index.html`, so a meta tag written for one is written for all.
+
+User-agent: *
+
+# The account funnel. Forms, not content — and a search result that lands a
+# stranger on a password-reset page is a result that helped nobody.
+Disallow: /login
+Disallow: /register
+Disallow: /verify-email
+Disallow: /forgot-password
+Disallow: /reset-password
+
+# Player profiles are **public to view and not for indexing**, decided in
+# A64-026.3. The privacy settings a player has today control *who sees
+# what*; none of them says "and list me in a search engine". Indexing a
+# person on a permission they were never asked for is the wrong default,
+# and it is the one that cannot be taken back — removal from an index takes
+# months. An opt-in can be added later; an opt-out cannot be un-indexed.
+Disallow: /players/
+
+# Behind authentication. A crawler reaching any of these is redirected to
+# sign-in, so the only thing it could index is the login form twice over.
+Disallow: /profile
+Disallow: /settings/
+Disallow: /friends
+Disallow: /challenges
+Disallow: /search
+Disallow: /play
+Disallow: /games/
+Disallow: /notifications
+Disallow: /tournaments
+
+# The API shares this origin in production. Nothing under it is a document.
+Disallow: /api/

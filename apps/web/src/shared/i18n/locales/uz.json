@@ -514,7 +514,10 @@
       "friendTitle": "Do'st bilan o'ynash",
       "friendBody": "Tanish raqibni chorlang yoki chorlovga javob bering.",
       "friendCta": "Chorlovlarga o'tish"
-    }
+    },
+    "boardTitle": "Sizning taxtangiz",
+    "boardBody": "{theme} taxta, {pieces} toshlar.",
+    "boardCta": "O'zgartirish"
   },
   "game": {
     "title": "O'yin",

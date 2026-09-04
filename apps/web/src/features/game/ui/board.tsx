@@ -4,6 +4,7 @@ import {
   type Board,
   BOARD_SIZE,
   isPlayable,
+  PIECE_FINISH_CLASS,
   type Side,
   type Square,
   toCoordinate,
@@ -207,8 +208,17 @@ export function GameBoard({
                       // The inset shadow is the whole of the relief: a disc
                       // lit from above, which is what a physical piece looks
                       // like and what a flat circle did not.
-                      "flex size-[72%] items-center justify-center rounded-full border-2 text-[0.65rem] font-bold",
-                      "shadow-[inset_0_1.5px_0_rgb(255_255_255/0.25),inset_0_-1.5px_2px_rgb(0_0_0/0.25),0_1px_2px_rgb(0_0_0/0.3)]",
+                      "flex size-[72%] items-center justify-center text-[0.65rem] font-bold",
+                      // The finish comes from the piece set — A64-025.5B
+                      // §22. Radius, rim and relief were literals here, so
+                      // `piece_set` could only ever have been three names
+                      // for one disc; they are tokens now and a set changes
+                      // them without this component knowing a set exists.
+                      //
+                      // Shared with the lobby's preview rather than copied,
+                      // so the preview cannot come to show a board nobody
+                      // has.
+                      PIECE_FINISH_CLASS,
                       piece.side === "light"
                         ? "border-piece-light-edge bg-piece-light text-piece-dark"
                         : "border-piece-dark-edge bg-piece-dark text-piece-light",

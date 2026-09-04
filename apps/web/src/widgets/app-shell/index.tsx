@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { isResolved } from "@/entities/session";
 import { useSession } from "@/features/auth/model/session-provider";
 import { useNotificationPush } from "@/features/notifications/model/use-notification-push";
+import { BoardPreferences } from "@/features/preferences/board-preferences";
 import { useTranslation } from "@/shared/i18n";
 import { AccountMenu } from "@/widgets/account-menu";
 import { Brand } from "@/widgets/brand";
@@ -126,6 +127,12 @@ export function AppShell({ children }: { children: ReactNode }) {
           the route the player happens to be on. Last in the DOM and pinned
           by its own positioning, so it is last in the tab order and covers
           nothing until it has something to say. */}
+      {/* A64-025.5B §22. Applies the player's board theme and piece set to
+          the document, so every board in the product — the game room's and
+          the lobby's preview — is drawn the way they chose. Behind the
+          session check because the preference is an account read. */}
+      {signedIn && <BoardPreferences />}
+
       {signedIn && <MatchOfferSurface />}
 
       <PwaNotices />

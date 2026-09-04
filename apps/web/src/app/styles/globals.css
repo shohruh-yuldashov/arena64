@@ -79,6 +79,15 @@
   --piece-light-edge: oklch(0.7 0.025 85);
   --piece-dark: oklch(0.28 0.025 60);
   --piece-dark-edge: oklch(0.17 0.02 60);
+  /* A piece's finish, so a set can change it without a component knowing —
+     A64-025.5B §22. The values here are "classic": a fully round disc with
+     a 2px rim, lit from above. The relief is the whole of the illusion; a
+     flat circle is what the board looked like before A64-025.6C. */
+  --piece-radius: 9999px;
+  --piece-border-width: 2px;
+  --piece-shadow:
+    inset 0 1.5px 0 rgb(255 255 255 / 0.25), inset 0 -1.5px 2px rgb(0 0 0 / 0.25),
+    0 1px 2px rgb(0 0 0 / 0.3);
 
   /* The brand gradient — A64-025.9 §18.7.
 
@@ -265,6 +274,97 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+}
+
+/*
+ * The board's own palettes — A64-025.5B §22.
+ *
+ * `board_theme` and `piece_set` have been on `PreferencesResponse` since
+ * A64-012.5 and were read by nothing: a player picked "Wood", the form
+ * saved it, and every board in the product stayed exactly as it was. These
+ * blocks are what makes the setting true.
+ *
+ * Selected by a data attribute on the root element rather than by a class
+ * per surface, so **every** board inherits it — the game room, the lobby's
+ * preview, and anything drawn later — from one place. `BoardPreferences`
+ * writes the attribute; nothing else reads the preference.
+ *
+ * Each block overrides only what differs from the base in `:root`/`.dark`,
+ * so "classic" needs no block at all: it *is* the base, and a duplicate set
+ * of values for it would be the first pair to drift.
+ */
+
+/* --- board themes ---------------------------------------------------- */
+[data-board-theme="wood"] {
+  --board-light: oklch(0.87 0.045 75);
+  --board-dark: oklch(0.55 0.075 55);
+}
+.dark [data-board-theme="wood"],
+[data-board-theme="wood"].dark {
+  --board-light: oklch(0.48 0.05 60);
+  --board-dark: oklch(0.32 0.045 50);
+}
+
+[data-board-theme="marble"] {
+  --board-light: oklch(0.95 0.005 250);
+  --board-dark: oklch(0.72 0.02 250);
+}
+.dark [data-board-theme="marble"],
+[data-board-theme="marble"].dark {
+  --board-light: oklch(0.55 0.012 250);
+  --board-dark: oklch(0.38 0.015 250);
+}
+
+[data-board-theme="midnight"] {
+  --board-light: oklch(0.72 0.03 250);
+  --board-dark: oklch(0.42 0.06 255);
+}
+.dark [data-board-theme="midnight"],
+[data-board-theme="midnight"].dark {
+  --board-light: oklch(0.42 0.05 255);
+  --board-dark: oklch(0.27 0.05 260);
+}
+
+/* --- piece sets -------------------------------------------------------
+ *
+ * A set changes the discs' colour **and their finish**: the radius, the rim
+ * width and the relief are tokens, so "modern" is genuinely flat and "neo"
+ * genuinely squared rather than three names for three shades of the same
+ * disc. What a set does not change is the *silhouette* on the board — a man
+ * is a disc in all three — which is deliberate: the king is told apart by a
+ * glyph, and a set that changed the outline would make that glyph land on
+ * three different shapes.
+ */
+[data-piece-set="modern"] {
+  --piece-light: oklch(0.98 0 0);
+  --piece-light-edge: oklch(0.82 0 0);
+  --piece-dark: oklch(0.24 0 0);
+  --piece-dark-edge: oklch(0.4 0 0);
+  --piece-border-width: 0px;
+  --piece-shadow: 0 1px 3px rgb(0 0 0 / 0.28);
+}
+.dark [data-piece-set="modern"],
+[data-piece-set="modern"].dark {
+  --piece-light: oklch(0.93 0 0);
+  --piece-light-edge: oklch(0.72 0 0);
+  --piece-dark: oklch(0.2 0 0);
+  --piece-dark-edge: oklch(0.5 0 0);
+}
+
+[data-piece-set="neo"] {
+  --piece-light: oklch(0.97 0.03 95);
+  --piece-light-edge: oklch(0.55 0.14 60);
+  --piece-dark: oklch(0.26 0.06 275);
+  --piece-dark-edge: oklch(0.62 0.17 275);
+  --piece-radius: 32%;
+  --piece-border-width: 3px;
+}
+.dark [data-piece-set="neo"],
+[data-piece-set="neo"].dark {
+  --piece-light: oklch(0.93 0.05 95);
+  --piece-light-edge: oklch(0.68 0.15 60);
+  --piece-dark: oklch(0.28 0.07 275);
+  --piece-dark-edge: oklch(0.7 0.16 275);
 }
 
 @layer utilities {

@@ -514,7 +514,10 @@
       "friendTitle": "Игра с другом",
       "friendBody": "Вызовите знакомого соперника или ответьте на вызов.",
       "friendCta": "К вызовам"
-    }
+    },
+    "boardTitle": "Ваша доска",
+    "boardBody": "Доска «{theme}», шашки «{pieces}».",
+    "boardCta": "Изменить"
   },
   "game": {
     "title": "Партия",

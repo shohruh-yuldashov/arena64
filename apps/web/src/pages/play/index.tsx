@@ -8,6 +8,7 @@ import { WaitingCard } from "@/features/matchmaking/ui/waiting-card";
 import { useTranslation } from "@/shared/i18n";
 import { useHoldAppUpdate } from "@/shared/pwa";
 import { Button, Skeleton } from "@/shared/ui";
+import { BoardPreview } from "@/widgets/board-preview";
 
 /**
  * The lobby — A64-020.5A §2, §9, §19.
@@ -137,6 +138,14 @@ export default function PlayPage() {
         <div className="border-border bg-card rounded-xl border p-4 shadow-sm sm:p-6">
           <QueueForm disabled={match !== null} />
         </div>
+      )}
+
+      {/* A64-025.5B §22. What the board will look like, which until now was
+          chosen on a settings page and shown nowhere. Below the form and
+          above the friend link: it is information, not an action, and it
+          must not sit between a player and the button they came for. */}
+      {lobby.state.status !== "queued" && lobby.state.status !== "unavailable" && (
+        <BoardPreview />
       )}
 
       {/* A64-025.5 §14. The second way to start a game, named and linked

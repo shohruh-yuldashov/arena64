@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.6D, the game room against a live server |
+| **Last updated** | 2026-09-04 — A64-025.4B, the front door |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -464,6 +464,7 @@ tokens.
 | **A64-025.7C** | The tournament page the list links to | .7B | The bracket, which §16 settled |
 | **A64-025.8B** | The five social surfaces, after the card system | .8, .9 | Relationship rules, which §17 settled |
 | **A64-025.6D** | The game room, read against a live server | .6C, .5B | The board's layout, which §15 settled |
+| **A64-025.4B** | The front door — what a signed-out visitor is offered | .4, .3 | The auth forms, which §11 settled |
 | **A64-025.9B** | Home, and the account menu in the header | .2, .3 | Inventing a statistic the API does not return |
 | **A64-025.9C** | The four remaining settings surfaces | .2, .9 | Changing what any setting does |
 | **A64-025.10** | Notifications — the feed and the bell | .2 | Admin notification surfaces; what the preferences decide (.9C) |
@@ -2650,3 +2651,53 @@ both changes confirmed on screen against a real server.
 had ended by the time that run started and the page no longer had a game to
 show. Every other surface in this epic has that check; this one does not,
 and it is recorded rather than implied.
+
+---
+
+## 29. The front door — A64-025.4B
+
+Five surfaces an anonymous visitor can reach: `/login`, `/register`,
+`/forgot-password`, `/reset-password`, `/verify-email`. §11 designed the
+forms and they hold up — the brand panel, the gradient action, the field
+copy. What did not hold up was the **header above them**.
+
+### 29.1 Four links that all went to the sign-in screen
+
+Every product section is `protectedPage`. So a visitor on `/register` was
+offered Play, Tournaments, Friends and Match history, and every one of them
+would have bounced them to the screen they were trying to leave.
+
+`pages/home` already refuses to do this, and says why:
+
+> Only for a signed-in player: every destination below is behind the
+> verified-email guard, and **offering a card that redirects to sign-in is a
+> link that lies about where it goes.**
+
+The home page applied that rule to its own four cards. The header did not
+apply it to the same four destinations — and it was breaking it on the one
+group of surfaces where *every* visitor is signed out.
+
+`PrimaryNav` and `MobileNav` render nothing when the session is not
+authenticated. The signed-out header is the wordmark, the appearance menu
+and "Sign in". That is not a truncated product; it is an honest one, and at
+360 it also removes a hamburger that opened a panel listing four redirects.
+
+### 29.2 What was checked and left alone
+
+The forms themselves. Six surfaces — the five above plus the not-found
+page — in three languages at 360 and 1280: **zero clipped text, zero page
+overflow**, every string translated, the brand gradient where §18.7 allows
+it and nowhere else.
+
+`/verify-email` renders "The link is incomplete" in a neutral notice rather
+than a destructive one. Reading it as informational is defensible — a
+visitor who arrived without a token has not done anything wrong — so it was
+left as it is rather than reclassified on a hunch.
+
+### 29.3 Measured
+
+| | en | uz | ru |
+| --- | --- | --- | --- |
+| six surfaces × 360 and 1280 | 0 | 0 | 0 |
+
+220 tests pass, `tsc --noEmit` clean, eslint zero errors.

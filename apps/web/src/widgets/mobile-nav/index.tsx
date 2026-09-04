@@ -62,6 +62,12 @@ export function MobileNav() {
   const { signingOut, signOut } = useSignOutAction();
   const signedIn = isAuthenticated(state);
 
+  // A64-025.4B §29. Nothing to open when signed out: every product section
+  // is `protectedPage` and the account links below are already gated, so
+  // the panel would be a title and a list of redirects to the sign-in
+  // screen the visitor is probably already on.
+  if (!signedIn) return null;
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>

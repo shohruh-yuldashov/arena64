@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 
 import { useTranslation } from "@/shared/i18n";
-import { Button } from "@/shared/ui/button";
+import { cn } from "@/shared/lib/cn";
+import { LoadFailure } from "@/shared/ui/load-failure";
 import { Skeleton } from "@/shared/ui/skeleton";
 
 /**
@@ -15,13 +16,38 @@ import { Skeleton } from "@/shared/ui/skeleton";
  * `social.state.*`, so nothing outside that feature could reuse it without
  * announcing "social" to a player reading a tournament list.
  *
- * The strings are now `state.*` and the component is shared. That is the
- * whole change — the markup, the roles and the three-skeleton loading shape
- * are exactly as they were, because they were right.
+ * ## Made to fit the surfaces that were writing their own — A64-025.11 §32
  *
- * The empty state is a **heading and a sentence**, not a decorative icon:
- * an icon alone says nothing to a screen reader and nothing to anybody who
- * has not seen it before.
+ * Promoting it was not enough, because three things about it were decided
+ * for social lists and were wrong for the rest:
+ *
+ * | | Before | Now |
+ * | --- | --- | --- |
+ * | Skeleton | three rows, `h-14`, always | `pendingRows` × `pendingRowClassName` |
+ * | Announcement | `aria-label` on the wrapper | the caller's sentence, as real text |
+ * | Failure | its own block | `LoadFailure`, shared with `QueryState` |
+ *
+ * The skeleton is the reason `/tournaments` kept its own: a tournament card
+ * is 96px tall and three 56px bars in its place is not a preview of the
+ * list, it is a different list. A loading state that does not match the
+ * shape it precedes makes the page jump when the data lands.
+ *
+ * The announcement is real text in an `sr-only` element rather than an
+ * `aria-label` on an empty `<div>`, because a live region with no text
+ * content is announced inconsistently, and "Loading tournaments…" is worth
+ * more to somebody who cannot see the skeletons than "Loading…".
+ *
+ * ## The empty state is a placeholder, not a paragraph
+ *
+ * A heading and a sentence on a dashed panel, filling the space the list
+ * would have filled. It was a bare left-aligned block, which collapses the
+ * page to nothing and reads as a sentence that lost its container — the
+ * notification list and the tournament history had both already moved to a
+ * dashed panel independently, which is the product telling us which one was
+ * right.
+ *
+ * No decorative icon, here or in `Notice`: an icon alone says nothing to a
+ * screen reader and nothing to anybody who has not seen it before.
  *
  * `emptyTitle` and `emptyHint` stay the caller's, and deliberately: "no
  * friends yet" and "no tournaments open" are domain sentences, and a
@@ -43,19 +69,31 @@ export function ListState({
   isPending,
   isError,
   isEmpty,
+  loadingLabel,
+  errorMessage,
   emptyTitle,
   emptyHint,
   emptyAction,
+  pendingRows = 3,
+  pendingRowClassName = "h-16",
   onRetry,
   children,
 }: {
   isPending: boolean;
   isError: boolean;
   isEmpty: boolean;
+  /** "Loading tournaments…" — announced, never shown. Falls back to "Loading…". */
+  loadingLabel?: string;
+  /** "Tournaments could not be loaded." Falls back to the generic sentence. */
+  errorMessage?: string;
   emptyTitle: string;
   emptyHint?: string;
   /** Pass one only where `emptyHint` names something the player can do. */
   emptyAction?: ReactNode;
+  /** As many bars as the list usually shows above the fold. */
+  pendingRows?: number;
+  /** The height of one row, so the skeleton is a preview and not a guess. */
+  pendingRowClassName?: string;
   onRetry: () => void;
   children: ReactNode;
 }) {
@@ -63,28 +101,22 @@ export function ListState({
 
   if (isPending) {
     return (
-      <div className="flex flex-col gap-2" role="status" aria-label={t("state.loading")}>
-        <Skeleton className="h-14 w-full" />
-        <Skeleton className="h-14 w-full" />
-        <Skeleton className="h-14 w-full" />
+      <div className="flex flex-col gap-2">
+        <span role="status" className="sr-only">
+          {loadingLabel ?? t("state.loading")}
+        </span>
+        {Array.from({ length: pendingRows }, (_, row) => (
+          <Skeleton key={row} className={cn("w-full", pendingRowClassName)} />
+        ))}
       </div>
     );
   }
 
-  if (isError) {
-    return (
-      <div role="alert" className="flex flex-col items-start gap-3">
-        <p className="text-sm font-medium">{t("state.failed")}</p>
-        <Button variant="outline" onClick={onRetry}>
-          {t("state.retry")}
-        </Button>
-      </div>
-    );
-  }
+  if (isError) return <LoadFailure message={errorMessage} onRetry={onRetry} />;
 
   if (isEmpty) {
     return (
-      <div className="flex flex-col items-start gap-1 py-8">
+      <div className="border-border flex flex-col items-center gap-1 rounded-xl border border-dashed px-5 py-12 text-center">
         <h2 className="text-base font-medium">{emptyTitle}</h2>
         {emptyHint !== undefined && (
           <p className="text-muted-foreground text-sm">{emptyHint}</p>

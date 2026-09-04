@@ -10,7 +10,7 @@ import {
 import { NotificationRow } from "@/features/notifications/ui/notification-row";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { formatDayHeading } from "@/shared/lib/format";
-import { Button, Skeleton, Spinner } from "@/shared/ui";
+import { Button, ListState, Spinner } from "@/shared/ui";
 
 /**
  * The notification list — A64-021.1 §20, §22, §28, §29.
@@ -51,88 +51,64 @@ export function NotificationList() {
   );
   const hasUnread = (unread.data?.unread_count ?? 0) > 0;
 
-  if (notifications.isPending) {
-    return (
-      <div
-        role="status"
-        aria-label={t("notifications.loading")}
-        className="flex flex-col gap-2"
-      >
-        {[0, 1, 2].map((row) => (
-          <Skeleton key={row} className="h-16 w-full" />
-        ))}
-      </div>
-    );
-  }
-
-  if (notifications.isError) {
-    return (
-      <div className="flex flex-col items-start gap-3">
-        <p role="alert" className="text-sm">
-          {t("notifications.listError")}
-        </p>
-        <Button
-          variant="outline"
-          className="min-h-11"
-          onClick={() => void notifications.refetch()}
-        >
-          {t("common.retry")}
-        </Button>
-      </div>
-    );
-  }
-
-  if (entries.length === 0) {
-    return (
-      <div className="border-border rounded-xl border border-dashed px-5 py-12 text-center">
-        <p className="text-sm font-medium">{t("notifications.emptyTitle")}</p>
-        <p className="text-muted-foreground mt-1 text-sm">
-          {t("notifications.emptyDescription")}
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <div className="flex flex-col gap-4">
-      {/* Rendered only when something is unread: a disabled "mark all as
+    // A64-025.11 §32. The three branches below this were written here — a
+    // skeleton at one height, a failure that was a `<p role="alert">` in a
+    // bare `<div>`, and the dashed empty panel `ListState` has now adopted
+    // for every list. The empty state's distinction from the failure is the
+    // one thing this file argued for and it survives: a player with no
+    // notifications and a player whose request failed are in completely
+    // different situations, and rendering both as "nothing here" is how a
+    // broken list looks healthy.
+    <ListState
+      isPending={notifications.isPending}
+      isError={notifications.isError}
+      isEmpty={entries.length === 0}
+      loadingLabel={t("notifications.loading")}
+      errorMessage={t("notifications.listError")}
+      emptyTitle={t("notifications.emptyTitle")}
+      emptyHint={t("notifications.emptyDescription")}
+      onRetry={() => void notifications.refetch()}
+    >
+      <div className="flex flex-col gap-4">
+        {/* Rendered only when something is unread: a disabled "mark all as
           read" on an already-read list is a control that can never do
           anything, which is worse than an absent one. */}
-      {hasUnread && (
-        // The count on the left gives the button a partner — A64-025.10
-        // §21. A control alone against the right margin has nothing to
-        // align to and reads as an afterthought; beside the number it is
-        // answering, it reads as the response to it.
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-muted-foreground text-sm">
-            {t("notifications.unreadCount", { count: unread.data?.unread_count ?? 0 })}
-          </p>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="min-h-11"
-            disabled={markAll.isPending}
-            onClick={() => markAll.mutate()}
-          >
-            {markAll.isPending ? (
-              <Spinner label={t("notifications.markingAll")} />
-            ) : (
-              t("notifications.markAllRead")
-            )}
-          </Button>
-        </div>
-      )}
+        {hasUnread && (
+          // The count on the left gives the button a partner — A64-025.10
+          // §21. A control alone against the right margin has nothing to
+          // align to and reads as an afterthought; beside the number it is
+          // answering, it reads as the response to it.
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-muted-foreground text-sm">
+              {t("notifications.unreadCount", { count: unread.data?.unread_count ?? 0 })}
+            </p>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="min-h-11"
+              disabled={markAll.isPending}
+              onClick={() => markAll.mutate()}
+            >
+              {markAll.isPending ? (
+                <Spinner label={t("notifications.markingAll")} />
+              ) : (
+                t("notifications.markAllRead")
+              )}
+            </Button>
+          </div>
+        )}
 
-      {/* A mutation failure is announced where it happened and does not
+        {/* A mutation failure is announced where it happened and does not
           replace the list — the notifications a player can already see stay
           on screen (§22). */}
-      {(markError !== null || markAll.isError) && (
-        <p role="alert" className="text-destructive text-sm">
-          {t("notifications.markReadError")}
-        </p>
-      )}
+        {(markError !== null || markAll.isError) && (
+          <p role="alert" className="text-destructive text-sm">
+            {t("notifications.markReadError")}
+          </p>
+        )}
 
-      {/* Grouped by day, in one card — A64-025.10 §21.
+        {/* Grouped by day, in one card — A64-025.10 §21.
 
           **One list, not one per day.** The day heading is a visual aid:
           every row already carries its own `<time>`, so a screen reader
@@ -145,49 +121,50 @@ export function NotificationList() {
           The card is the same surface every other list in the product now
           uses; these rows were floating on the page background with
           hairline rules and nothing containing them. */}
-      <div className="border-border bg-card overflow-hidden rounded-xl border">
-        <ul
-          aria-label={t("notifications.title")}
-          className="divide-border flex flex-col divide-y"
-        >
-          {groupByDay(entries, locale, t).map((group) => (
-            <Fragment key={group.heading}>
-              <li role="presentation" aria-hidden="true">
-                <p className="text-muted-foreground bg-muted/40 px-4 py-2 text-xs font-medium sm:px-5">
-                  {group.heading}
-                </p>
-              </li>
-              {group.entries.map((notification) => (
-                <NotificationRow
-                  key={notification.id}
-                  notification={notification}
-                  onOpen={(opened) => markRead(opened.id, opened.is_read)}
-                />
-              ))}
-            </Fragment>
-          ))}
-        </ul>
-      </div>
+        <div className="border-border bg-card overflow-hidden rounded-xl border">
+          <ul
+            aria-label={t("notifications.title")}
+            className="divide-border flex flex-col divide-y"
+          >
+            {groupByDay(entries, locale, t).map((group) => (
+              <Fragment key={group.heading}>
+                <li role="presentation" aria-hidden="true">
+                  <p className="text-muted-foreground bg-muted/40 px-4 py-2 text-xs font-medium sm:px-5">
+                    {group.heading}
+                  </p>
+                </li>
+                {group.entries.map((notification) => (
+                  <NotificationRow
+                    key={notification.id}
+                    notification={notification}
+                    onOpen={(opened) => markRead(opened.id, opened.is_read)}
+                  />
+                ))}
+              </Fragment>
+            ))}
+          </ul>
+        </div>
 
-      {notifications.hasNextPage ? (
-        <Button
-          variant="outline"
-          className="min-h-11 self-center"
-          disabled={notifications.isFetchingNextPage}
-          onClick={() => void notifications.fetchNextPage()}
-        >
-          {notifications.isFetchingNextPage ? (
-            <Spinner label={t("notifications.loading")} />
-          ) : (
-            t("notifications.loadMore")
-          )}
-        </Button>
-      ) : (
-        <p className="text-muted-foreground text-center text-xs">
-          {t("notifications.endOfList")}
-        </p>
-      )}
-    </div>
+        {notifications.hasNextPage ? (
+          <Button
+            variant="outline"
+            className="min-h-11 self-center"
+            disabled={notifications.isFetchingNextPage}
+            onClick={() => void notifications.fetchNextPage()}
+          >
+            {notifications.isFetchingNextPage ? (
+              <Spinner label={t("notifications.loading")} />
+            ) : (
+              t("notifications.loadMore")
+            )}
+          </Button>
+        ) : (
+          <p className="text-muted-foreground text-center text-xs">
+            {t("notifications.endOfList")}
+          </p>
+        )}
+      </div>
+    </ListState>
   );
 }
 

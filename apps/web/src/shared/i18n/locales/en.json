@@ -1,7 +1,6 @@
 {
   "common": {
     "loading": "Loading…",
-    "retry": "Try again",
     "goHome": "Go home",
     "cancel": "Cancel"
   },
@@ -219,7 +218,9 @@
       "inProgress": "In progress",
       "rank": "Rank {rank}",
       "seed": "Seed {seed}",
-      "loading": "Loading…"
+      "loading": "Loading…",
+      "error": "Tournament history could not be loaded.",
+      "loadingLabel": "Loading tournament history…"
     },
     "edit": {
       "title": "Edit profile",
@@ -335,12 +336,6 @@
       "rate_limited": "Too many attempts. Try again shortly.",
       "network": "We could not reach the server.",
       "unexpected": "Something went wrong. Try again."
-    },
-    "state": {
-      "loading": "Loading…",
-      "retry": "Try again",
-      "failedTitle": "We could not load this",
-      "hiddenByPrivacy": "Hidden by the owner"
     }
   },
   "social": {

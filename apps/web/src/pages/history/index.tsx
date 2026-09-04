@@ -5,7 +5,7 @@ import { useSession } from "@/features/auth/model/session-provider";
 import { useMatchHistory } from "@/features/match-history/model/queries";
 import { MatchRow } from "@/features/match-history/ui/match-row";
 import { useTranslation } from "@/shared/i18n";
-import { Button, Notice, Skeleton } from "@/shared/ui";
+import { Button, ListState } from "@/shared/ui";
 
 /**
  * The player's finished matches — A64-020.5F §15, §21, §24.
@@ -46,78 +46,68 @@ export default function HistoryPage() {
           it — a `justify-between` row with one child is a row for nothing. */}
       <h1 className="text-xl font-semibold">{t("history.title")}</h1>
 
-      {isPending && (
-        <div className="flex flex-col gap-3">
-          <span role="status" className="sr-only">
-            {t("history.loading")}
-          </span>
-          {[0, 1, 2, 3].map((row) => (
-            <Skeleton key={row} className="h-14 w-full" />
-          ))}
-        </div>
-      )}
+      {/* A64-025.11 §32. This page wrote all three branches itself — its own
+          skeleton, its own `Notice`, its own empty block — and each was
+          slightly different from the same branch on `/tournaments` next
+          door. `ListState` owns them now.
 
-      {isError && (
-        // A64-025.2 §10: the first surface on the shared `Notice`. The role
-        // comes from the tone — `error` is assertive — so this no longer
-        // states it, and the tint is the one every other failure will use.
-        <Notice tone="error" className="flex flex-col items-start gap-3">
-          <p>{t("history.error")}</p>
-          <Button variant="outline" onClick={() => void refetch()}>
-            {t("common.retry")}
-          </Button>
-        </Notice>
-      )}
-
-      {!isPending && !isError && entries.length === 0 && (
-        // §21: helpful, not "No data". A player with no history is a player
-        // who has not played yet, and the useful thing to give them is the
-        // way to.
-        <div className="flex flex-col items-start gap-3 py-8">
-          <p className="font-medium">{t("history.empty.title")}</p>
-          <p className="text-muted-foreground text-sm">{t("history.empty.body")}</p>
+          §21 for the empty state: helpful, not "No data". A player with no
+          history is a player who has not played yet, and the useful thing to
+          give them is the way to. */}
+      <ListState
+        isPending={isPending}
+        isError={isError}
+        isEmpty={entries.length === 0}
+        loadingLabel={t("history.loading")}
+        errorMessage={t("history.error")}
+        emptyTitle={t("history.empty.title")}
+        emptyHint={t("history.empty.body")}
+        emptyAction={
           <Button asChild className="min-h-11">
             <Link to="/play">{t("history.empty.action")}</Link>
           </Button>
-        </div>
-      )}
-
-      {entries.length > 0 && viewerId !== null && (
-        <>
-          {/* A semantic list — §23. Each row is an item, so a screen reader
+        }
+        pendingRows={4}
+        pendingRowClassName="h-14"
+        onRetry={() => void refetch()}
+      >
+        {viewerId !== null && (
+          <>
+            {/* A semantic list — §23. Each row is an item, so a screen reader
               announces the count and the position without being told.
 
               In a card since A64-025.5C §23: it was the last list in the
               product still floating on the page background with hairline
               rules and nothing containing it. */}
-          <ol
-            aria-label={t("history.title")}
-            className="border-border bg-card divide-border flex flex-col divide-y overflow-hidden rounded-xl border"
-          >
-            {entries.map((entry) => (
-              <MatchRow key={entry.match_id} entry={entry} viewerId={viewerId} />
-            ))}
-          </ol>
-
-          {hasNextPage ? (
-            // Focus stays on this button while the next page loads, which
-            // is why it is not replaced by a spinner — §23's "focus does
-            // not jump when loading more".
-            <Button
-              variant="outline"
-              className="min-h-11 self-center"
-              disabled={isFetchingNextPage}
-              onClick={() => void fetchNextPage()}
+            <ol
+              aria-label={t("history.title")}
+              className="border-border bg-card divide-border flex flex-col divide-y overflow-hidden rounded-xl border"
             >
-              {t(isFetchingNextPage ? "history.loadingMore" : "history.loadMore")}
-            </Button>
-          ) : (
-            <p role="status" className="text-muted-foreground py-2 text-center text-sm">
-              {t("history.end")}
-            </p>
-          )}
-        </>
-      )}
+              {entries.map((entry) => (
+                <MatchRow key={entry.match_id} entry={entry} viewerId={viewerId} />
+              ))}
+            </ol>
+
+            {hasNextPage ? (
+              // Focus stays on this button while the next page loads, which
+              // is why it is not replaced by a spinner — §23's "focus does
+              // not jump when loading more".
+              <Button
+                variant="outline"
+                className="min-h-11 self-center"
+                disabled={isFetchingNextPage}
+                onClick={() => void fetchNextPage()}
+              >
+                {t(isFetchingNextPage ? "history.loadingMore" : "history.loadMore")}
+              </Button>
+            ) : (
+              <p role="status" className="text-muted-foreground py-2 text-center text-sm">
+                {t("history.end")}
+              </p>
+            )}
+          </>
+        )}
+      </ListState>
     </section>
   );
 }

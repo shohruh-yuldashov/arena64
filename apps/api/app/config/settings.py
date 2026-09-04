@@ -1489,6 +1489,20 @@ class RateLimitSettings(
     tournament_read_ip_limit: int = Field(default=180, ge=1)
     tournament_read_window_seconds: int = Field(default=60, ge=1)
 
+    # --- POST /analytics/events — A64-027.2 §40 -------------------------------
+    # Two scopes on one endpoint, because it serves both an anonymous
+    # visitor and a signed-in player. The account bound is the meaningful
+    # one — an account is countable *and* revocable — and the address bound
+    # is the only dimension an anonymous caller has, so it is looser for the
+    # reason every IP-scoped limit here is: an office is one bucket.
+    #
+    # Both are generous against what the tracker sends. It batches and
+    # flushes on a timer and on page hide, so a busy session is a handful of
+    # requests a minute; a caller near either number is not a person.
+    analytics_collect_ip_limit: int = Field(default=120, ge=1)
+    analytics_collect_user_limit: int = Field(default=240, ge=1)
+    analytics_collect_window_seconds: int = Field(default=60, ge=1)
+
     # --- POST /profile/avatar ------------------------------------------------
     # **Per user**, because it is authenticated — the correct dimension for a
     # write behind a token, and the one A64-013.2 asks these endpoints be
@@ -3069,6 +3083,31 @@ class GatewaySettings(SectionSettings):
         return self
 
 
+class AnalyticsSettings(BaseModel):
+    """The analytics pipeline's operational knobs — A64-027.2.
+
+    The **horizon is not here.** `RETENTION_DAYS` is a constant in
+    `analytics/application/services/retention.py` because 400 days is a
+    product and privacy decision (D2), and a setting would let a deployment
+    quietly keep more than the policy allows. What is configurable is the
+    shape of the work: whether the job runs at all, how often, and how much
+    it may delete per run.
+    """
+
+    retention_enabled: bool = True
+
+    #: Six hours. A prune finds nothing on almost every run — the horizon is
+    #: 400 days — so this bounds how far past the horizon a row can live,
+    #: not how fast the job keeps up with arrivals.
+    prune_interval_seconds: float = Field(default=6 * 3600, gt=0)
+
+    #: Rows per statement, and statements per run. Their product is the most
+    #: a single run may delete; beyond it the run stops and says so, and the
+    #: next one continues from the same oldest rows.
+    prune_batch_size: int = Field(default=5_000, ge=1)
+    prune_max_batches: int = Field(default=20, ge=1)
+
+
 class Settings(BaseModel):
     """The composed, immutable configuration for this process."""
 
@@ -3095,6 +3134,10 @@ class Settings(BaseModel):
     game: GameSettings
     tournament: TournamentSettings
     browser_session: BrowserSessionSettings
+    #: Defaulted, unlike every group above it: each field has a default and
+    #: none is a secret, so requiring every construction site to pass one
+    #: would be churn for a group that is entirely operational tuning.
+    analytics: AnalyticsSettings = Field(default_factory=AnalyticsSettings)
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":

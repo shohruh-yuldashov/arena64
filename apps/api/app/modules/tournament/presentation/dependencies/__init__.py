@@ -34,6 +34,7 @@ from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.game.public import MatchCreationUseCase
+from app.modules.game.public.abort import MatchAbortUseCase
 from app.modules.game.public.reconciliation import OriginMatchReader
 from app.modules.rating.presentation.dependencies import get_rating_reader
 from app.modules.tournament.application.ports import (
@@ -457,6 +458,7 @@ def build_no_show_service(
     *,
     matches: MatchCreationUseCase,
     origin_matches: OriginMatchReader,
+    match_abort: MatchAbortUseCase,
     settings: TournamentSettings,
     events: EventPublisher,
     clock: Clock,
@@ -476,6 +478,10 @@ def build_no_show_service(
             session, matches=matches, settings=settings, events=events, clock=clock
         ),
         origin_matches=origin_matches,
+        # A64-025.13A §36. The third published `game` collaborator on this
+        # path, and the one that was missing: a command to create a match, a
+        # read of its authoritative state, and now a command to end it.
+        match_abort=match_abort,
         unit_of_work=SessionUnitOfWork(session),
         clock=clock,
         batch_size=settings.no_show_batch_size,

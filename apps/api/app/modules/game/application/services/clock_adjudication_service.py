@@ -224,8 +224,8 @@ class ClockAdjudicationService:
                 ply_number=record.ply_number,
                 engine_version=record.engine_version.as_primitive(),
                 speed_class=record.light.rating.speed_class if record.light.rating else None,
-                light=_seat_summary(record.light),
-                dark=_seat_summary(record.dark),
+                light=seat_summary(record.light),
+                dark=seat_summary(record.dark),
                 # A match that flags is as much a completion as one that is
                 # played out, so the originating context must recognise it
                 # here too — see `MatchCompleted`.
@@ -292,8 +292,12 @@ class _Outcome(StrEnum):
 __all__ = ["AdjudicationRun", "ClockAdjudicationService"]
 
 
-def _seat_summary(seat: MatchSeat) -> SeatSummary | None:
+def seat_summary(seat: MatchSeat) -> SeatSummary | None:
     """A seat's persisted rating snapshot, for the completion event.
+
+    Public since A64-025.13A: `PersistentMatchAdjudication` publishes the
+    same event and needs the same mapping, and two copies of a mapper are
+    two places for a new rating field to be forgotten.
 
     `None` when the seat has none — a match created before A64-017.2.
     `rating` treats that as "not rateable", which is correct: nothing

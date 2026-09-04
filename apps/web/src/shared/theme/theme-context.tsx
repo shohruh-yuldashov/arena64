@@ -1,13 +1,6 @@
-import {
-  createContext,
-  type ReactNode,
-  use,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
+import { ThemeContext, type ThemeContextValue } from "@/shared/theme/context";
 import {
   isThemeMode,
   THEME_STORAGE_KEY,
@@ -40,16 +33,6 @@ import {
  * two agree because both read `THEME_STORAGE_KEY` and both toggle `.dark`;
  * `theme.test.tsx` asserts they still do.
  */
-interface ThemeContextValue {
-  /** What the user chose: `"light"`, `"dark"` or `"system"`. */
-  mode: ThemeMode;
-  /** What that currently *means* — `"system"` resolved against the OS. */
-  resolved: "light" | "dark";
-  setMode: (mode: ThemeMode) => void;
-}
-
-const ThemeContext = createContext<ThemeContextValue | null>(null);
-
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 
 function readStoredMode(): ThemeMode {
@@ -117,12 +100,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
  * forever because somebody forgot a provider three files away — the exact
  * class of bug the reachability test in `app/App.test.tsx` exists to stop.
  */
-export function useTheme(): ThemeContextValue {
-  const value = use(ThemeContext);
-  if (value === null) {
-    throw new Error("useTheme must be used inside a ThemeProvider.");
-  }
-  return value;
-}
 
+// A64-025.13B §37. The context and its hook live in `context.ts`, which
+// defines no component — see that module on why that matters at runtime.
+export { type ThemeContextValue, useTheme } from "@/shared/theme/context";
 export { THEME_STORAGE_KEY, type ThemeMode, THEMES };

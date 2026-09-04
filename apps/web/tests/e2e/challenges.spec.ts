@@ -62,7 +62,13 @@ test("a challenge is sent, accepted, and both players land in the game", async (
   try {
     // --- Alice challenges from her friends list -------------------------
     await alicePage.goto("/friends");
-    const bobRow = alicePage.getByRole("listitem").filter({ hasText: `@${bob.username}` });
+    // A64-025.13 §35.6. Selected by the username itself, not `@username`.
+    // A64-025.8's `PlayerRow` renders the handle line **only when a display
+    // name differs from it** — "alice" beats "alice / @alice", which is two
+    // lines saying one thing. The seeded accounts have no display name, so
+    // that line is correctly absent and this selector had been matching
+    // nothing since that phase.
+    const bobRow = alicePage.getByRole("listitem").filter({ hasText: bob.username });
     await expect(bobRow).toBeVisible();
     await bobRow.getByRole("button", { name: /challenge/i }).click();
 
@@ -79,13 +85,13 @@ test("a challenge is sent, accepted, and both players land in the game", async (
     await alicePage.goto("/challenges");
     await alicePage.getByRole("tab", { name: /sent/i }).click();
     await expect(
-      alicePage.getByRole("list", { name: /sent/i }).getByText(`@${bob.username}`),
+      alicePage.getByRole("list", { name: /sent/i }).getByText(bob.username),
     ).toBeVisible();
 
     // --- Bob sees it and accepts ----------------------------------------
     await bobPage.goto("/challenges");
     const incoming = bobPage.getByRole("list", { name: /incoming/i });
-    await expect(incoming.getByText(`@${alice.username}`)).toBeVisible();
+    await expect(incoming.getByText(alice.username)).toBeVisible();
     // Incoming means accept/decline — never "cancel", which is the
     // sender's word for the same row.
     await expect(incoming.getByRole("button", { name: /cancel the challenge/i })).toHaveCount(

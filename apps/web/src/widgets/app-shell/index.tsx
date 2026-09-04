@@ -118,7 +118,11 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <footer className="border-t">
         <div className="text-muted-foreground mx-auto flex h-12 max-w-5xl items-center px-4 text-xs">
-          Arena64
+          {/* A64-025.13 §35.4. The literal that was here is the same string
+              `Brand` reads from `layout.title`, written a second time — one
+              concept, two definitions, and the pair that would drift if the
+              product were ever renamed. */}
+          {t("layout.title")}
         </div>
       </footer>
 

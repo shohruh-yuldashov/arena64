@@ -67,7 +67,13 @@ test("two players find each other, become friends, and unfriend", async ({
     await alicePage.goto("/search");
     await alicePage.getByLabel(/username or name/i).fill(bob.username);
 
-    const bobRow = alicePage.getByRole("listitem").filter({ hasText: `@${bob.username}` });
+    // A64-025.13 §35.6. Selected by the username itself, not `@username`.
+    // A64-025.8's `PlayerRow` renders the handle line **only when a display
+    // name differs from it** — "alice" beats "alice / @alice", which is two
+    // lines saying one thing. The seeded accounts have no display name, so
+    // that line is correctly absent and this selector had been matching
+    // nothing since that phase.
+    const bobRow = alicePage.getByRole("listitem").filter({ hasText: bob.username });
     await expect(bobRow).toBeVisible();
 
     // The dense list renders the **thumbnail**, not the full-size avatar.
@@ -84,13 +90,13 @@ test("two players find each other, become friends, and unfriend", async ({
     // rather than sitting there next to a pending request.
     await alicePage.goto("/friends/requests");
     await expect(
-      alicePage.getByRole("list", { name: /outgoing/i }).getByText(`@${bob.username}`),
+      alicePage.getByRole("list", { name: /outgoing/i }).getByText(bob.username),
     ).toBeVisible();
 
     // --- Bob sees it and accepts ---------------------------------------
     await bobPage.goto("/friends/requests");
     const incoming = bobPage.getByRole("list", { name: /incoming/i });
-    await expect(incoming.getByText(`@${alice.username}`)).toBeVisible();
+    await expect(incoming.getByText(alice.username)).toBeVisible();
     // Incoming means accept/decline — never "cancel", which is the
     // sender's word for the same row.
     await expect(incoming.getByRole("button", { name: /cancel request/i })).toHaveCount(0);
@@ -102,12 +108,12 @@ test("two players find each other, become friends, and unfriend", async ({
     // --- the friendship exists on both sides ----------------------------
     await bobPage.goto("/friends");
     await expect(
-      bobPage.getByRole("list", { name: /^friends$/i }).getByText(`@${alice.username}`),
+      bobPage.getByRole("list", { name: /^friends$/i }).getByText(alice.username),
     ).toBeVisible();
 
     await alicePage.goto("/friends");
     const aliceFriends = alicePage.getByRole("list", { name: /^friends$/i });
-    await expect(aliceFriends.getByText(`@${bob.username}`)).toBeVisible();
+    await expect(aliceFriends.getByText(bob.username)).toBeVisible();
 
     // --- and the public profile agrees ----------------------------------
     await alicePage.goto(`/players/${bob.username}`);
@@ -126,7 +132,7 @@ test("two players find each other, become friends, and unfriend", async ({
 
     await alicePage.goto("/friends");
     await expect(
-      alicePage.getByRole("list", { name: /^friends$/i }).getByText(`@${bob.username}`),
+      alicePage.getByRole("list", { name: /^friends$/i }).getByText(bob.username),
     ).toHaveCount(0);
   } finally {
     // The contexts refreshed while running, rotating each cookie, so the

@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { openAccountMenu } from "./session";
+
 /**
  * One complete authentication journey, across the **real** boundary —
  * A64-020.2 §20.8.
@@ -51,7 +53,7 @@ test("a player registers, reloads, stays signed in, and signs out", async ({
   // **A64-021.5H.** Registration signs the browser in and lands on the
   // verification screen, not the app: the session exists and the address
   // does not, so every product write behind the app would answer `403`.
-  await expect(page.getByRole("button", { name: /sign out/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^(Account|Hisob|Аккаунт)$/ })).toBeVisible();
   expect(new URL(page.url()).pathname).toBe("/verify-email");
   await expect(page.getByLabel(/verification code|tasdiqlash kodi/i)).toBeVisible();
 
@@ -78,7 +80,7 @@ test("a player registers, reloads, stays signed in, and signs out", async ({
   // part of that state lives in this component, so a reload rebuilds it
   // from the session and the server rather than losing it.
   await page.reload();
-  await expect(page.getByRole("button", { name: /sign out/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^(Account|Hisob|Аккаунт)$/ })).toBeVisible();
   await expect(page.getByLabel(/verification code|tasdiqlash kodi/i)).toBeVisible();
 
   // --- sign out clears both halves ---
@@ -96,6 +98,9 @@ test("a player registers, reloads, stays signed in, and signs out", async ({
   // Either one reads the cookie mid-flight and fails intermittently. The
   // banner's link appears only for `anonymous`, which the session reaches
   // after the logout response has been applied.
+  // A64-025.13 §35.5. Sign-out lives inside the account menu since
+  // A64-025.9B, so reaching it is two steps now.
+  await openAccountMenu(page);
   await page.getByRole("button", { name: /sign out/i }).click();
   await expect(page.getByRole("banner").getByRole("link", { name: "Sign in" })).toBeVisible();
   const afterLogout = await page.context().cookies();

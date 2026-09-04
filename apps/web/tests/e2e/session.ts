@@ -32,8 +32,8 @@ import { expect, type Page } from "@playwright/test";
  */
 
 /**
- * What proves the session resolved: the header's sign-out control, which
- * `SessionMenu` renders for an authenticated session and for nothing else.
+ * What proves the session resolved: the header's account control, which
+ * `AccountMenu` renders for an authenticated session and for nothing else.
  *
  * A **positive** signal, deliberately. The first version of this helper
  * waited for the *absence* of "we could not check your session", and an
@@ -41,8 +41,25 @@ import { expect, type Page } from "@playwright/test";
  * returned during the gap between `goto` and the first paint, and the spec
  * failed on the alert that appeared a moment later. Waiting for something to
  * exist cannot be satisfied early.
+ *
+ * ## It used to be the sign-out button — A64-025.13 §35.5
+ *
+ * A64-025.9B collapsed the header's five account controls into one menu, so
+ * sign-out stopped being visible until the menu is opened. This constant
+ * kept naming it, and **four specs across three files failed from that phase
+ * onward** — every one of them on a signal that no longer exists rather than
+ * on the behaviour it covers. The jsdom suite was updated in the same phase,
+ * through `openAccountMenu` in `shared/test/render`; the browser suite was
+ * not, and nothing ran it.
+ *
+ * The docstring named `SessionMenu`, which A64-025.3 renamed to
+ * `AccountMenu`. Two phases of drift in eleven lines.
+ *
+ * Trilingual, because the locale falls back to the browser's and then to
+ * Uzbek — an English-only pattern is a spec that passes on the machine it
+ * was written on.
  */
-const SIGNED_IN = /sign out/i;
+const SIGNED_IN = /^(Account|Hisob|Аккаунт)$/;
 
 /**
  * How long a session bootstrap is given, across retries.
@@ -88,4 +105,17 @@ export async function reloadBooted(page: Page): Promise<void> {
       timeout: 5_000,
     });
   }).toPass({ timeout: BOOT_BUDGET_MS });
+}
+
+/**
+ * Opens the account menu, where sign-out and the appearance controls live.
+ *
+ * The browser twin of `openAccountMenu` in `src/shared/test/render` — same
+ * trigger, same reason. It is here rather than duplicated in three specs so
+ * that the next header change is one edit, which is exactly what A64-025.9B
+ * would have needed and did not have.
+ */
+export async function openAccountMenu(page: Page): Promise<void> {
+  await page.getByRole("button", { name: SIGNED_IN }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
 }

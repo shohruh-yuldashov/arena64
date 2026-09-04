@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.12, the motion system and `prefers-reduced-motion` |
+| **Last updated** | 2026-09-04 — A64-025.13, the closing audit |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -338,12 +338,15 @@ and a wordmark in one row, with Uzbek labels ("O'ynash", "Turnirlar", "Do'stlar"
 `ClockFace` renders identically at 60 s and at 2 s. Arena64 offers `bullet_1_0`. A
 player's most time-critical information has no escalation, and the active-clock cue is
 a 5 % tint of a neutral primary.
-*Future task:* A64-025.6.
+**Fixed by A64-025.6** — `PlayerSeat` carries `LOW_TIME_SECONDS`, a `--warning` clock and
+the word beside the colour. Verified in A64-025.13; this line had read "future task"
+for four phases after the work shipped (§35.2).
 
 **P1-3 — On a phone the clocks sit below the board.**
 The game page stacks board-then-panel until `lg:`. On the surface where time matters
 most, the clock can be off-screen.
-*Future task:* A64-025.6.
+**Fixed by A64-025.6** — the seats sit directly above and below the board at every
+width. Verified in A64-025.13 (§35.2).
 
 ### P2 — a noticeable UX problem
 
@@ -365,7 +368,7 @@ most, the clock can be off-screen.
 | ~~P3-3~~ | ~~`session-menu` is misnamed~~ | **Fixed** — it is `AccountMenu` and holds only the account, §9.5 |
 | ~~P3-4~~ | ~~`form-demo` ships in the production bundle~~ | **Fixed** — deleted |
 | ~~P3-5~~ | ~~No `prefers-reduced-motion` handling — correct today, wrong once motion is added~~ | **Fixed** — one motion scale, two sources, the more conservative wins (§34) |
-| P3-6 | Eight primitives; Badge, Select, Tabs, Tooltip, Dropdown, Switch re-authored per feature | A64-025.2 |
+| P3-6 | Eight primitives; Badge, Select, Tabs, Tooltip, Dropdown, Switch re-authored per feature | **Moot** — measured in A64-025.13 (§35.2): `shared/ui` holds 12, none of those six Radix parts is installed or used, and what remains is three domain chips |
 
 **Nothing was fixed in A64-025.1.** P0-1 is a one-line route change to make and a
 product decision to get right — what the landing page *should* be for an anonymous
@@ -3287,3 +3290,159 @@ vocabulary and a way to switch it off; a page transition, a board-piece
 animation or a list reorder would each be a design decision with its own
 argument, and §5's principle 8 — "nothing animates because it can" — is the
 reason none of them is in this diff.
+
+## 35. The closing audit — A64-025.13
+
+Nothing here was taken on trust, including this document's own strikethroughs.
+Every claim in §4 was checked against the code or measured in a browser, and
+three of them were wrong.
+
+### 35.1 Every gate, run
+
+| | |
+| --- | --- |
+| `ruff check` / `ruff format` | clean, 925 files |
+| `mypy --strict` | no issues, 679 source files |
+| `pyright` | 0 errors, 0 warnings |
+| `pytest tests/unit` | 2947 passed, 2 skipped |
+| `lint-imports` | **32 contracts kept, 0 broken** |
+| `tsc --noEmit` (web, admin) | clean |
+| `eslint` | 0 errors, 3 warnings (`react-refresh` in `shared/realtime/context.tsx`) |
+| `prettier --check` | clean |
+| `vitest` | 231 passed, 35 files |
+| `playwright` (chromium, pwa) | 9 passed |
+
+### 35.2 The original findings, re-checked
+
+| # | This document said | Verdict |
+| --- | --- | --- |
+| P0-1 | Fixed by .3 | ✅ `features/form-demo` is absent from the tree |
+| P1-1 | Fixed by .3 | ✅ **27 screens measured** — 9 routes × uz/ru/en at 360px: 0 clipped elements, 0 page-level overflow. 9 more in dark: 0 |
+| P1-2 | *"Future task: A64-025.6"* | ⚠️ **Fixed in code since .6; this table was never updated.** `PlayerSeat` has `LOW_TIME_SECONDS`, a `text-warning` clock and the word beside the colour |
+| P1-3 | *"Future task: A64-025.6"* | ⚠️ **Same.** The seats sit above and below the board at every width |
+| P2-1…P2-6 | Fixed | ✅ `aria-current` is in four navigation widgets, not zero |
+| P3-1 | Fixed | ✅ `Brand` is a `<Link>` with an accessible name, not a `<span>` |
+| P3-2 | Fixed | ⚠️ Fixed in the shell — **but the footer still held a literal** (§35.4) |
+| P3-3, P3-4, P3-5 | Fixed | ✅ |
+| P3-6 | Open, assigned .2 | See below |
+
+**Two P1 entries had been fixed for four phases and still read "future task".**
+A defect table that is not updated when the defect closes is a table that
+cannot be used to decide what is left — which is the only thing it is for.
+
+**P3-6 is mostly moot, and saying so is more useful than striking it
+through.** The finding was "eight primitives; Badge, Select, Tabs, Tooltip,
+Dropdown, Switch re-authored per feature". Measured today:
+
+- `shared/ui` holds **12** primitives, not 8.
+- Radix's Select, Switch, Tabs, Tooltip, Dropdown and Popover are **not
+  installed and not used anywhere**. The three Radix packages present are
+  Avatar, Dialog and Slot. The app uses a native `<select>` and a native
+  `<input type="checkbox">`, by a decision recorded in `features/privacy` and
+  repeated in the notification matrix: they are keyboard-operable, announce
+  their own state, and participate in a form for free.
+- What remains is **three badge-shaped chips** — a match result, a tournament
+  status, a tournament placing — each carrying domain meaning rather than
+  being a generic `Badge` written three times.
+
+So there is no consolidation left to do that would not be inventing an
+abstraction for three things that only look alike. The finding stays open
+in name and is closed in substance.
+
+### 35.3 Sixteen controls below the accessibility minimum
+
+The one product defect this audit found on its own.
+
+Every checkbox in the product was `size-5` — **20 × 20 px**, under WCAG
+2.5.8's 24 px minimum — and the label beside it is a 20 px line of text, so
+the whole target was 20 px tall. One of them measured **15 px wide**: a flex
+child squeezed by a long label, which is the one element in a row that must
+not be.
+
+| Surface | Checkboxes | Before | After |
+| --- | --- | --- | --- |
+| `/settings/notifications` | 12 | 20×20, one 15×20 | 24×24 |
+| `/settings/privacy` | 2 | 20×20 | 24×24 |
+| `/settings/preferences` | 2 | 20×20 | 24×24 |
+
+24 px is WCAG 2.5.8 (AA). 44 px is 2.5.5 (AAA) and is what `Button`
+enforces, but a 44 px tick is the wrong visual for a checkbox — the row's
+padding is what gives the aim. The `<select>` controls on the same pages
+already measured 44 px and were left alone.
+
+This was invisible to every previous phase because nobody measured. It is
+the argument for an audit that runs a browser rather than one that reads.
+
+### 35.4 One concept, two definitions
+
+The footer wrote `Arena64` as a literal while `Brand`, four elements above
+it, reads the same string from `layout.title`. Both would have to be found
+if the product were ever renamed. Now there is one.
+
+### 35.5 The browser suite had been failing for four phases
+
+`playwright test` was not part of this epic's loop, and it shows.
+
+**A64-025.9B collapsed the header's five account controls into one menu**, so
+sign-out stopped being visible until the menu is opened. The e2e suite's
+"this session resolved" signal was the sign-out button. **Four specs across
+three files failed from that phase onward** — every one on a signal that no
+longer exists rather than on the behaviour it covers.
+
+The jsdom suite was updated in the same phase, through `openAccountMenu` in
+`shared/test/render`. The browser suite was not, and nothing ran it. It has
+the browser twin of that helper now, in one place, so the next header change
+is one edit.
+
+`session.ts`'s docstring named `SessionMenu`, which A64-025.3 renamed. Two
+phases of drift in eleven lines.
+
+### 35.6 Nine selectors encoding an expectation the product had dropped
+
+`social.spec.ts` and `challenges.spec.ts` selected players by `@username`.
+A64-025.8's `PlayerRow` renders the handle line **only when a display name
+differs from it** — "alice" beats "alice / @alice", which is two lines saying
+one thing. The seeded accounts have no display name, so the line is correctly
+absent and those selectors had been matching nothing since that phase.
+
+CLAUDE.md §6.11: either the code is wrong or the test encodes an outdated
+requirement, and the change must say which. **The test was outdated.** The
+selectors now use the username itself.
+
+### 35.7 What is blocked, and why it is not fixed here
+
+The `lobby` e2e project fails, and seven projects downstream of it do not
+run. The cause is **four matches in the local development database, created
+2026-09-03 16:22–16:30 UTC**, that are `status = 'active'` with
+`time_control_initial_ms` and `clock_turn_started_at` both `NULL`. The clock
+adjudicator has nothing to flag, so they never settle, and `resetLobby`
+waits ninety seconds for a state that cannot arrive. They involve
+`e2e_lobby_one`, `e2e_lobby_two`, `e2e_social_alice`, `e2e_social_bob`,
+`e2e_profile_owner` and one human account — they are the residue of the
+A64-025.6D investigation, which drove two browser contexts into a live match
+and stopped.
+
+**Not fixed here, deliberately.** Clearing them means writing to a database
+that holds the owner's own account, which is their call rather than a
+change to make inside an audit.
+
+**And it leaves a question worth answering in the backend rather than
+guessing at here:** all three columns are nullable, so a match that is
+`active` with no clock is a representable state, and nothing will ever end
+one. Whether current code can still produce it was not established by this
+audit — these rows are a day old and the code has moved. If it can, an
+abandoned match is permanent, and a player carrying one cannot queue.
+
+### 35.8 What A64-025 leaves open
+
+| | |
+| --- | --- |
+| `confirm_move` | The fifth gameplay preference, still write-only. A rule about submitting a move, not something the document can express — its own task |
+| The `useTranslation` context fault | §33.3. Open, dev-only, not reproduced, now reported under `scope: "router"` |
+| The stuck-match question | §35.7 |
+| Three `react-refresh` warnings | `shared/realtime/context.tsx`, pre-existing, and §33.3 is the reason to look at them again |
+| Litmus-style email rendering | §31.8. Every client-specific claim is reasoned, not observed |
+
+Nothing in that list is a surface a player uses being wrong. The epic set out
+to make the product look and behave like one thing, and the measurements in
+§35.1 and §35.2 are what that claim rests on.

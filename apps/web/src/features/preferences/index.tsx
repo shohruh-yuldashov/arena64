@@ -253,7 +253,13 @@ function Toggle({
           type="checkbox"
           checked={checked}
           disabled={disabled}
-          className="accent-primary size-5"
+          // A64-025.13 §35.3. `size-5` was 20px, under WCAG 2.5.8's 24px
+          // minimum, and the label beside it is a 20px line of text — so
+          // the whole target was 20px tall. `shrink-0` because one of
+          // these was measured at **15px wide**: a flex child with a long
+          // label next to it gets squeezed, and a checkbox is the one
+          // element in a row that must not be.
+          className="accent-primary size-6 shrink-0"
           onChange={(event) => onChange(event.target.checked)}
         />
       }

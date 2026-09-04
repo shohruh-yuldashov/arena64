@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.8B, the social surfaces |
+| **Last updated** | 2026-09-04 — A64-025.6D, the game room against a live server |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -463,6 +463,7 @@ tokens.
 | **A64-025.7B** | The tournament list, and the browser's missing Uzbek | .7, .5D | Number formatting; hand-writing what ICU gets right |
 | **A64-025.7C** | The tournament page the list links to | .7B | The bracket, which §16 settled |
 | **A64-025.8B** | The five social surfaces, after the card system | .8, .9 | Relationship rules, which §17 settled |
+| **A64-025.6D** | The game room, read against a live server | .6C, .5B | The board's layout, which §15 settled |
 | **A64-025.9B** | Home, and the account menu in the header | .2, .3 | Inventing a statistic the API does not return |
 | **A64-025.9C** | The four remaining settings surfaces | .2, .9 | Changing what any setting does |
 | **A64-025.10** | Notifications — the feed and the bell | .2 | Admin notification surfaces; what the preferences decide (.9C) |
@@ -2166,7 +2167,7 @@ than quietly left:
 | --- | --- |
 | `board_theme` | **Closed** — four palettes, applied to every board |
 | `piece_set` | **Closed** — three finishes, applied to every piece |
-| `show_coordinates` | Still unread. A board-rendering flag; small, and A64-025.11's |
+| `show_coordinates` | **Closed** by A64-025.6D §28 |
 | `animation_speed` | Still unread. There is no move animation to speed up yet — A64-025.12's |
 | `confirm_move` | Still unread. It changes move *submission*, not presentation, and is a gameplay change rather than a design one |
 
@@ -2572,3 +2573,80 @@ touches.
 
 Five surfaces × three languages × two widths: zero clipped text, zero page
 overflow. 220 tests pass, `tsc --noEmit` clean, eslint zero errors.
+
+---
+
+## 28. The game room, read against a live server — A64-025.6D
+
+### 28.1 It could not be read any other way
+
+Every other surface in this epic was reviewed against a mocked API. The game
+room has no such surface to mock: it renders from a **WebSocket** snapshot,
+behind a ticket, a `room.join` and a `game.resume`. A hand-built socket mock
+answered the first three and never produced a snapshot the reducer accepted,
+and guessing at payload shapes was costing more than it was worth.
+
+So the room was read against the real thing: Postgres and Redis in Docker,
+`apps/api` on 8000, three registered accounts verified through
+`app.operator.accounts`, and two browsers driven through the lobby into a
+live match.
+
+Three of that setup's constraints are the backend's own and are worth
+recording, because each cost a run:
+
+| Symptom | Cause |
+| --- | --- |
+| The pair would not match a second time | QT-3 excludes a player's most recent opponent — a fixed pair is pairable once. Three accounts, as `tests/e2e/accounts.ts` already documents |
+| `/play` showed the waiting card, not the form | A ticket left by the previous run. Leaving clears it; declining an offer would earn the cooldown that then blocks the join |
+| `/play` bounced straight to a game | An account still in an unfinished match cannot queue |
+
+### 28.2 One thing that looked wrong and was not
+
+The pieces appeared to sit on both square colours. They do not: reading the
+computed background of every occupied cell gives **24 pieces, one colour,
+`oklch(0.68 0.055 65)`**. The relief and the cream squares read differently
+at different sizes and my eye was wrong. Recorded because measuring instead
+of reporting is the only reason a phantom defect did not reach a commit —
+the third time this epic that a measurement corrected a reading.
+
+### 28.3 The room never said what was at stake
+
+Two names, two clocks, two ratings, a board — and nowhere did it say whether
+the result **counted**. `rated` has been on the snapshot since the room was
+built and was kept by nothing, so the one screen where somebody is about to
+spend twenty minutes was silent on the one fact they would weigh first.
+
+`GameState` keeps it now and the panel says "Rated" or "Casual" above the
+turn line. `null` until the first snapshot, so nothing is guessed before the
+server has spoken — §18's rule about invented state.
+
+The time control cannot join it: the snapshot carries the clock's *current*
+milliseconds and no initial value, so "3+2" is not something this surface
+can say honestly. Left unsaid rather than derived.
+
+### 28.4 `show_coordinates`, the third preference closed
+
+§22.1 recorded five gameplay preferences that were stored and read by
+nothing, and closed two. This closes the third. Files and ranks are drawn
+inside the board's edge squares, positionally rather than absolutely, so a
+flipped board labels its own bottom and left rather than the board's.
+
+They ride `data-coordinates` on the root, like the board theme, so the
+component does not ask for a preference it would then thread through two
+routes — the replay gets them for the same reason. They are `aria-hidden`:
+every square already carries its name in the cell's own label, and reading
+"a" again under it would be the same fact twice.
+
+Two of the five remain: `animation_speed` (nothing to speed up until
+A64-025.12) and `confirm_move` (a change to move submission, not to
+presentation).
+
+### 28.5 Measured, and what was not
+
+`/games/{id}` in a live match at 1280: zero clipped text, zero overflow, and
+both changes confirmed on screen against a real server.
+
+**The room was not checked at 360 in Uzbek.** Both probe accounts' matches
+had ended by the time that run started and the page no longer had a game to
+show. Every other surface in this epic has that check; this one does not,
+and it is recorded rather than implied.

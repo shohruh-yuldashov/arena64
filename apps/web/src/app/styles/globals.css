@@ -367,6 +367,23 @@
   --piece-dark-edge: oklch(0.7 0.16 275);
 }
 
+/*
+ * Board coordinates — A64-025.6D §28.
+ *
+ * `show_coordinates` was the third of five preferences that were stored and
+ * read by nothing. The labels are always in the DOM and CSS decides whether
+ * they are seen, so the board component does not have to ask for a
+ * preference it would then thread through two routes — the same mechanism
+ * `data-board-theme` uses, and for the same reason.
+ *
+ * `display: none` rather than opacity: a coordinate a reader has turned off
+ * should not be read out either, and hiding it takes it out of the
+ * accessibility tree as well as off the screen.
+ */
+[data-coordinates="off"] .board-coordinate {
+  display: none;
+}
+
 @layer utilities {
   /* One definition, so the angle and the stops cannot drift between the
      three surfaces that use them. `115deg` rather than `to right`: the

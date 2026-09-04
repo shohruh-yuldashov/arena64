@@ -144,13 +144,39 @@ export function GameBoard({
       // grid inside a page-coloured box.
       className="border-piece-dark-edge/40 grid aspect-square w-full grid-cols-8 overflow-hidden rounded-xl border-4 shadow-md"
     >
-      {ranks.map((rank) => (
+      {ranks.map((rank, rankIndex) => (
         <div key={rank} role="row" className="contents">
-          {files.map((file) => {
+          {files.map((file, fileIndex) => {
             const square = toSquare({ file, rank });
             if (square === null) return null;
             const playable = isPlayable({ file, rank });
             const piece = board.get(square);
+
+            // A64-025.6D §28. Positional rather than absolute, so a flipped
+            // board labels its own bottom and left rather than the board's.
+            // `aria-hidden`: every square already carries its name in the
+            // cell's own label, and reading "a" again under it would be the
+            // same fact twice.
+            const coordinates = (
+              <>
+                {rankIndex === ranks.length - 1 && (
+                  <span
+                    aria-hidden="true"
+                    className="board-coordinate text-piece-dark-edge/70 pointer-events-none absolute right-0.5 bottom-0 text-[0.5rem] leading-none font-medium select-none"
+                  >
+                    {square.charAt(0)}
+                  </span>
+                )}
+                {fileIndex === 0 && (
+                  <span
+                    aria-hidden="true"
+                    className="board-coordinate text-piece-dark-edge/70 pointer-events-none absolute top-0.5 left-0.5 text-[0.5rem] leading-none font-medium select-none"
+                  >
+                    {square.slice(1)}
+                  </span>
+                )}
+              </>
+            );
 
             if (!playable) {
               return (
@@ -158,8 +184,10 @@ export function GameBoard({
                   key={square}
                   role="gridcell"
                   aria-hidden="true"
-                  className="bg-board-light aspect-square"
-                />
+                  className="bg-board-light relative aspect-square"
+                >
+                  {coordinates}
+                </div>
               );
             }
 
@@ -230,6 +258,8 @@ export function GameBoard({
                     {piece.rank === "king" ? "♛" : ""}
                   </span>
                 )}
+
+                {coordinates}
 
                 {/* A legal destination is a dot, which is a shape — the
                     tint beside it is decoration. */}

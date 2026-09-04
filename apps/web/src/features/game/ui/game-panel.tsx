@@ -247,8 +247,22 @@ export function GamePanel({
   /** Whose rating the result block reports. `null` for a spectator. */
   viewerId: string | null;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div className="flex flex-col gap-3">
+      {/* What is at stake — A64-025.6D §28. The room named the two players,
+          their clocks and their ratings, and never said whether the result
+          counted: the one fact a player weighs before spending twenty
+          minutes. `rated` has been on the snapshot since the room was
+          built. Nothing is inferred — `null` before the first snapshot
+          renders nothing at all. */}
+      {state.rated !== null && (
+        <p className="text-muted-foreground text-xs font-medium">
+          {t(state.rated ? "play.mode.ranked" : "play.mode.casual")}
+        </p>
+      )}
+
       <StatusLine state={state} connection={connection} />
       <Result state={state} viewerId={viewerId} />
     </div>

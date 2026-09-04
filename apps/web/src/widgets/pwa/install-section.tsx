@@ -1,6 +1,6 @@
 import { useTranslation } from "@/shared/i18n";
 import { isIosSafari, promptInstall, useInstall, useStandaloneDisplay } from "@/shared/pwa";
-import { Button } from "@/shared/ui";
+import { Button, SettingCard, SettingGroup } from "@/shared/ui";
 
 /**
  * The explicit install entry — A64-020.9 §16, §32.
@@ -32,25 +32,28 @@ export function AppInstallSection() {
   const installed = standalone || install.installed;
 
   return (
-    <section className="border-t pt-6">
-      <h2 className="text-base font-medium">{t("pwa.install.sectionTitle")}</h2>
-      <p className="text-muted-foreground mt-1 text-sm">
-        {t("pwa.install.sectionDescription")}
-      </p>
-
-      <div className="mt-4">
-        {installed ? (
-          <p className="text-sm">{t("pwa.install.installed")}</p>
-        ) : install.canPrompt ? (
-          <Button className="min-h-11" onClick={() => void promptInstall()}>
-            {t("pwa.install.action")}
-          </Button>
-        ) : ios ? (
-          <p className="text-sm">{t("pwa.install.iosSteps")}</p>
-        ) : (
-          <p className="text-muted-foreground text-sm">{t("pwa.install.unavailable")}</p>
-        )}
-      </div>
-    </section>
+    // A64-025.9C: the same group-and-card the rest of settings uses. It was
+    // a rule and two paragraphs, which read as a footnote to the form above
+    // rather than as its own section.
+    <SettingGroup
+      title={t("pwa.install.sectionTitle")}
+      description={t("pwa.install.sectionDescription")}
+    >
+      <SettingCard>
+        <div className="px-4 py-4 sm:px-6">
+          {installed ? (
+            <p className="text-sm">{t("pwa.install.installed")}</p>
+          ) : install.canPrompt ? (
+            <Button className="min-h-11" onClick={() => void promptInstall()}>
+              {t("pwa.install.action")}
+            </Button>
+          ) : ios ? (
+            <p className="text-sm">{t("pwa.install.iosSteps")}</p>
+          ) : (
+            <p className="text-muted-foreground text-sm">{t("pwa.install.unavailable")}</p>
+          )}
+        </div>
+      </SettingCard>
+    </SettingGroup>
   );
 }

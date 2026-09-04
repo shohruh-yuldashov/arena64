@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.9B, home and the account menu |
+| **Last updated** | 2026-09-04 — A64-025.9C, the settings surfaces |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -458,6 +458,7 @@ tokens.
 | **A64-025.8** | Friends and social | .2 | Changing privacy or blocking rules |
 | **A64-025.9** | Profile and player | .2 | Changing privacy rules; inventing a statistic |
 | **A64-025.9B** | Home, and the account menu in the header | .2, .3 | Inventing a statistic the API does not return |
+| **A64-025.9C** | The four remaining settings surfaces | .2, .9 | Changing what any setting does |
 | **A64-025.10** | Notifications | .2 | Admin notification surfaces |
 | **A64-025.10E** | Email design system. Fixes P2-2 | .2 (tokens only) | New email types |
 | **A64-025.11** | Global UI consistency and component cleanup | .3–.10 | Re-architecting layouts already designed mobile-first |
@@ -1953,3 +1954,103 @@ with the section's name as its accessible name.
 reached sign-out through the header and now open the menu first through one
 shared `openAccountMenu` helper — the behaviour each asserts is unchanged;
 only the path to the control is.
+
+---
+
+## 20. Settings — A64-025.9C
+
+The four surfaces `L-1` in `specs/README.md` records as shipping against no
+spec: `/settings/{preferences,privacy,notifications,sessions}`. Behaviour is
+unchanged on all four. What changed is that they now look like the product
+they are part of.
+
+### 20.1 One shape, four pages
+
+Each was a flat column of labels and controls. At 1280 a 500px select sat
+inside a 1160px column, so two thirds of every row was empty and the eye had
+no right-hand edge to follow; nothing grouped the settings except vertical
+spacing, and spacing alone does not say *these three belong together*.
+
+`SettingCard`, `SettingRow` and `SettingGroup` in `shared/ui` are the answer,
+and it is the same card the profile's statistics and ratings already use, so
+settings stop looking like a different product. A row puts the name and its
+consequence on the left and the control on the right; below `sm` it stacks,
+**except** for checkboxes, where `inline` keeps the row horizontal — a tick
+is small enough to sit beside its label at 360, and stacking one leaves it
+floating under a sentence with nothing to attach it to.
+
+`descriptionId` is a prop rather than something the row invents, because the
+caller owns the control. Privacy's checkboxes need the consequence in their
+accessible description — a label reading "Show my country" without saying
+*where* leaves somebody agreeing to they-know-not-what — and a row whose
+description merely repeats its label needs no reference at all. A dangling
+`aria-describedby` is worse than none: it resolves silently to nothing.
+
+### 20.2 Ten raw enum values, in three languages
+
+`Preferences` printed the server's own identifiers as option labels:
+`classic`, `wood`, `marble`, `midnight`, `modern`, `neo`, `instant`, `fast`,
+`normal`, `slow` — and `UZ`, `RU`, `EN` for the language itself. A
+`capitalize` class was papering over it, which is not a translation: it
+produced "Classic" in Russian too.
+
+Eleven keys per locale now, and the language names come from `localeName`,
+which already existed for exactly this and had one caller. This is the same
+defect A64-025.7 fixed for the speed class and A64-025.9 fixed for the
+ratings cards; it is the third time, which is why it is written down as a
+class of defect rather than three incidents.
+
+### 20.3 Nine copies of three sentences
+
+`/settings/notifications` printed every channel's description inside every
+category: three categories × three channels, plus the email caveat twice
+more. The meaning of a channel does not change per category — that is what a
+channel *is* — so it is stated once, in a key above the grid, in the reading
+order somebody meets before their first checkbox.
+
+A cell is left with the one thing that genuinely is per-cell: why *this*
+switch is locked. The channel list in the key comes from the settings the
+server sent rather than a hardcoded array, which is the rule
+`groupByCategory` already followed for categories.
+
+**The fieldsets stayed.** §21's argument for them over a `<table>` is
+correct and nothing here contradicts it: a table header and its checkbox end
+up on different screens at 360, and a legend is announced before every
+control it contains, so "Email" is never heard without knowing email *of
+what*. The repetition was never the grouping's fault.
+
+The suite's assertion moved with the sentence and got stricter: it asserted
+the caveat appeared inside the social group and now asserts it appears
+**exactly once** on the page. The behaviour it protects — nobody turns email
+on without being told what a verified address means — is unchanged.
+
+### 20.4 The one control on `/settings/sessions` was the loudest in the product
+
+A full-weight red slab, alone on an otherwise empty page, so the page read
+as a warning rather than as a setting. It is a ghost button with destructive
+text now — the weight §18.8 gives blocking a player and removing a photo —
+and the confirmation dialog behind it is what actually guards the act, as it
+always was. The "no device list yet" note took the dashed frame every other
+stated absence in this product uses.
+
+Two more things joined the system while they were open: the notification
+form's save and discard buttons were the only primary and ghost controls in
+the product spelled out in utility classes, so they had kept the flat brand
+colour when A64-025.9B gave `variant="default"` the gradient — they are
+`Button` now. And the app-install section, which was a rule and two
+paragraphs, is a group and a card.
+
+### 20.5 Measured
+
+| Surface | 1280 light | 360 dark |
+| --- | --- | --- |
+| `/settings/preferences` | 0 | 0 |
+| `/settings/privacy` | 0 | 0 |
+| `/settings/notifications` | 0 | 0 |
+| `/settings/sessions` | 0 | — |
+
+204 tests pass, `tsc --noEmit` clean, eslint zero errors.
+
+**A64-025.9 is now closed on every settings surface.** `L-1` remains open:
+these four still ship against no specification, and this section describes
+how they look, not what they do.

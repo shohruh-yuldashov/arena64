@@ -14,6 +14,8 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  SettingCard,
+  SettingRow,
   Spinner,
 } from "@/shared/ui";
 import { SettingsShell } from "@/widgets/settings-shell";
@@ -79,47 +81,64 @@ export default function SettingsSessionsPage() {
       <div className="flex flex-col gap-4">
         <FormError messageKey={failure} />
 
-        <p className="text-muted-foreground text-sm">{t("profile.sessions.listDeferred")}</p>
+        {/* The same dashed frame every other stated absence on this
+            product uses — A64-025.9C. It was a bare paragraph above a
+            bordered box, which read as a caption for the box rather than
+            as a fact about the page. */}
+        <p className="border-border text-muted-foreground rounded-xl border border-dashed px-5 py-4 text-sm">
+          {t("profile.sessions.listDeferred")}
+        </p>
 
-        <div className="border-border flex flex-col gap-2 rounded-md border p-4">
-          <h2 className="text-sm font-medium">{t("profile.sessions.signOutAll")}</h2>
-          <p className="text-muted-foreground text-xs">
-            {t("profile.sessions.signOutAllHint")}
-          </p>
-
-          <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger asChild>
-              <Button variant="destructive" className="mt-2 min-h-11 self-start">
-                {t("profile.sessions.signOutAll")}
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>{t("profile.sessions.confirmTitle")}</DialogTitle>
-                <DialogDescription>{t("profile.sessions.confirmBody")}</DialogDescription>
-              </DialogHeader>
-              <div className="flex flex-wrap justify-end gap-2">
-                <DialogClose asChild>
-                  <Button variant="ghost" className="min-h-11">
-                    {t("profile.sessions.cancel")}
+        <SettingCard>
+          <SettingRow
+            label={t("profile.sessions.signOutAll")}
+            description={t("profile.sessions.signOutAllHint")}
+            control={
+              <Dialog open={open} onOpenChange={setOpen}>
+                <DialogTrigger asChild>
+                  {/* Ghost with destructive text, not a red slab — the same
+                      weight §18.8 gives blocking a player and removing a
+                      photo. This was the only control on the page and was
+                      drawn as the loudest thing in the product; a page whose
+                      single action shouts reads as a warning rather than as
+                      a setting. The dialog behind it is what actually
+                      guards the act. */}
+                  <Button
+                    variant="ghost"
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive min-h-11 w-full"
+                  >
+                    {t("profile.sessions.signOutAll")}
                   </Button>
-                </DialogClose>
-                <Button
-                  variant="destructive"
-                  className="min-h-11"
-                  disabled={pending}
-                  onClick={() => void onConfirm()}
-                >
-                  {pending ? (
-                    <Spinner label={t("profile.sessions.confirm")} />
-                  ) : (
-                    t("profile.sessions.confirm")
-                  )}
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
-        </div>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>{t("profile.sessions.confirmTitle")}</DialogTitle>
+                    <DialogDescription>{t("profile.sessions.confirmBody")}</DialogDescription>
+                  </DialogHeader>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <DialogClose asChild>
+                      <Button variant="ghost" className="min-h-11">
+                        {t("profile.sessions.cancel")}
+                      </Button>
+                    </DialogClose>
+                    <Button
+                      variant="destructive"
+                      className="min-h-11"
+                      disabled={pending}
+                      onClick={() => void onConfirm()}
+                    >
+                      {pending ? (
+                        <Spinner label={t("profile.sessions.confirm")} />
+                      ) : (
+                        t("profile.sessions.confirm")
+                      )}
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            }
+          />
+        </SettingCard>
       </div>
     </SettingsShell>
   );

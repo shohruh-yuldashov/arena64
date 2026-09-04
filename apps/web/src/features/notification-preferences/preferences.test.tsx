@@ -117,10 +117,15 @@ it("reflects an available email channel instead of claiming it is not", async ()
   const email = within(social).getByRole("checkbox", { name: /email/i });
   expect(email).toBeEnabled();
   expect(within(social).queryByText(/not available yet/i)).not.toBeInTheDocument();
-  // And the one thing a player has to know before turning it on.
+  // And the one thing a player has to know before turning it on. Stated in
+  // the channel key above the grid rather than beside each email switch —
+  // A64-025.9C — so `getAllByText` with a length of one is the assertion:
+  // the caveat is still on the page *and* is no longer printed once per
+  // category. Whether the address is verified is a property of the account,
+  // not of tournaments-versus-friends.
   expect(
-    within(social).getByText(/only a verified email address receives notifications/i),
-  ).toBeInTheDocument();
+    screen.getAllByText(/only a verified email address receives notifications/i),
+  ).toHaveLength(1);
 });
 
 it("explains every control a player may not change", async () => {

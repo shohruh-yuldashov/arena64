@@ -11,7 +11,7 @@ import type {
 import { preferenceErrorKey } from "@/features/notification-preferences/model/error-messages";
 import { useUpdateNotificationPreferences } from "@/features/notification-preferences/model/queries";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
-import { Spinner } from "@/shared/ui";
+import { Button, Spinner } from "@/shared/ui";
 
 /**
  * The `(category, channel)` matrix — A64-021.3 §21, §22.
@@ -65,6 +65,15 @@ export function PreferenceMatrix({ preferences }: { preferences: NotificationPre
   const [saved, setSaved] = useState(false);
 
   const categories = useMemo(() => groupByCategory(preferences.settings), [preferences]);
+  // The channels the server actually sent, in its order and deduplicated —
+  // never a hardcoded list. A channel added on the backend appears in the
+  // key without a frontend change, which is the same rule
+  // `groupByCategory` follows for categories.
+  const channels = useMemo(
+    () =>
+      [...new Set(preferences.settings.map((setting) => setting.channel))] as DeliveryChannel[],
+    [preferences],
+  );
 
   function toggle(setting: PreferenceSetting, next: boolean): void {
     setSaved(false);
@@ -100,6 +109,8 @@ export function PreferenceMatrix({ preferences }: { preferences: NotificationPre
       <FormError messageKey={failure} />
       {saved && <FormStatus>{t("notificationPreferences.saved")}</FormStatus>}
 
+      <ChannelKey channels={channels} />
+
       {categories.map(([category, settings]) => (
         <CategoryGroup
           key={category}
@@ -112,29 +123,35 @@ export function PreferenceMatrix({ preferences }: { preferences: NotificationPre
       ))}
 
       <div className="flex items-center gap-3">
-        <button
+        {/* `Button`, not a hand-rolled one — A64-025.9C. These two were the
+            only primary and ghost controls in the product spelled out in
+            utility classes, so they kept the flat brand colour when
+            A64-025.9B gave `variant="default"` the brand gradient, and
+            would have missed every change after it. */}
+        <Button
           type="button"
           disabled={pending.size === 0 || update.isPending}
           onClick={() => void save()}
-          className="bg-primary text-primary-foreground focus-visible:ring-ring inline-flex min-h-11 items-center gap-2 rounded-md px-4 text-sm font-medium disabled:opacity-50 focus-visible:ring-2 focus-visible:outline-none"
+          className="min-h-11"
         >
           {update.isPending && <Spinner label={t("notificationPreferences.saving")} />}
           {update.isPending
             ? t("notificationPreferences.saving")
             : t("notificationPreferences.save")}
-        </button>
+        </Button>
 
         {pending.size > 0 && !update.isPending && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            className="min-h-11"
             onClick={() => {
               setPending(new Map());
               setFailure(null);
             }}
-            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring min-h-11 rounded-md px-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
           >
             {t("notificationPreferences.discard")}
-          </button>
+          </Button>
         )}
 
         {pending.size > 0 && (
@@ -166,15 +183,15 @@ function CategoryGroup({
   const { t } = useTranslation();
 
   return (
-    <fieldset className="border-border rounded-lg border p-4">
-      <legend className="px-1 text-sm font-medium">
+    <fieldset className="border-border bg-card rounded-xl border p-5">
+      <legend className="px-1 text-sm font-semibold">
         {t(`notificationPreferences.categories.${category}` as TranslationKey)}
       </legend>
       <p className="text-muted-foreground text-xs">
         {t(`notificationPreferences.categoryHints.${category}` as TranslationKey)}
       </p>
 
-      <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:gap-8">
+      <div className="mt-4 grid gap-3 sm:grid-cols-3 sm:gap-6">
         {settings.map((setting) => (
           <ChannelToggle
             key={setting.channel}
@@ -217,9 +234,16 @@ function ChannelToggle({
   // `locked.channel_unavailable`, which the server sends only while it is
   // true. A hint that said it unconditionally would keep saying it the day
   // email starts working, which is the same lie in the other direction.
-  const hint = setting.locked_reason
+  // Only when it says something the key above did not — A64-025.9C.
+  //
+  // Every cell used to carry its channel's description, so three categories
+  // × three channels printed the same three sentences nine times, and the
+  // email note twice more on top. The channel's meaning does not change per
+  // category, so it is stated once in `ChannelKey` and a cell is left with
+  // the one thing that *is* per-cell: why this particular switch is locked.
+  const lockReason = setting.locked_reason
     ? t(`notificationPreferences.locked.${setting.locked_reason}` as TranslationKey)
-    : t(`notificationPreferences.channelHints.${channel}` as TranslationKey);
+    : null;
 
   return (
     <div className="flex items-start gap-3">
@@ -228,27 +252,55 @@ function ChannelToggle({
         type="checkbox"
         checked={checked}
         disabled={disabled || !setting.editable}
-        aria-describedby={`${id}-hint`}
+        aria-describedby={lockReason === null ? undefined : `${id}-hint`}
         className="accent-primary mt-1 size-5"
         onChange={(event) => onChange(event.target.checked)}
       />
-      <div className="flex flex-col">
+      <div className="flex min-w-0 flex-col">
         <label htmlFor={id} className="text-sm font-medium">
           {t(`notificationPreferences.channels.${channel}` as TranslationKey)}
         </label>
-        <p id={`${id}-hint`} className="text-muted-foreground text-xs">
-          {hint}
-        </p>
-        {channel === "email" && setting.editable && (
-          // Said only where it applies. Email reaches a **verified**
-          // address and nothing else (§6), and a player whose address is
-          // unconfirmed would otherwise turn a switch on and receive
-          // nothing with no explanation anywhere.
-          <p className="text-muted-foreground text-xs">
-            {t("notificationPreferences.notes.unverifiedEmail")}
+        {lockReason !== null && (
+          <p id={`${id}-hint`} className="text-muted-foreground text-xs">
+            {lockReason}
           </p>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * What each channel means, said once for the whole page.
+ *
+ * The three sentences are the same in every category — that is the point of
+ * a channel — so repeating them per cell was nine copies of three facts,
+ * and the email caveat two copies more. Here they are a key, above the
+ * grid, in the reading order somebody meets before their first checkbox.
+ *
+ * Email carries its caveat here rather than beside each of its switches:
+ * the address is verified or it is not, and that is a property of the
+ * account, not of tournaments-versus-friends.
+ */
+function ChannelKey({ channels }: { channels: DeliveryChannel[] }) {
+  const { t } = useTranslation();
+
+  return (
+    <div className="border-border bg-muted/30 rounded-xl border p-5">
+      <h3 className="text-sm font-semibold">{t("notificationPreferences.channelKeyTitle")}</h3>
+      <dl className="mt-3 grid gap-3 sm:grid-cols-3 sm:gap-6">
+        {channels.map((channel) => (
+          <div key={channel} className="flex flex-col gap-0.5">
+            <dt className="text-sm font-medium">
+              {t(`notificationPreferences.channels.${channel}` as TranslationKey)}
+            </dt>
+            <dd className="text-muted-foreground text-xs">
+              {t(`notificationPreferences.channelHints.${channel}` as TranslationKey)}
+              {channel === "email" && ` ${t("notificationPreferences.unverifiedEmailOnce")}`}
+            </dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
 }

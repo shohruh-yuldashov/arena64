@@ -5,7 +5,7 @@ import { FormError, FormStatus } from "@/features/auth/ui/form-status";
 import { profileErrorKey } from "@/features/profile/model/error-messages";
 import { useUpdatePrivacy } from "@/features/profile/model/queries";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
-import { Spinner } from "@/shared/ui";
+import { SettingCard, SettingRow, Spinner } from "@/shared/ui";
 
 /**
  * Who sees what.
@@ -65,37 +65,42 @@ export function PrivacySettingsForm({ settings }: { settings: PrivacySettings })
         </p>
       )}
 
-      <Toggle
-        label={t("profile.privacy.showCountry")}
-        description={t("profile.privacy.showCountryHint")}
-        checked={settings.show_country}
-        disabled={update.isPending}
-        onChange={(show_country) => void save({ show_country })}
-      />
+      {/* One card, four rows — A64-025.9C. They were four siblings of a
+          flex column, so the two selects sat in a 500px box inside a
+          1160px page and nothing said the four belonged together. */}
+      <SettingCard>
+        <Toggle
+          label={t("profile.privacy.showCountry")}
+          description={t("profile.privacy.showCountryHint")}
+          checked={settings.show_country}
+          disabled={update.isPending}
+          onChange={(show_country) => void save({ show_country })}
+        />
 
-      <Toggle
-        label={t("profile.privacy.showStatistics")}
-        description={t("profile.privacy.showStatisticsHint")}
-        checked={settings.show_statistics}
-        disabled={update.isPending}
-        onChange={(show_statistics) => void save({ show_statistics })}
-      />
+        <Toggle
+          label={t("profile.privacy.showStatistics")}
+          description={t("profile.privacy.showStatisticsHint")}
+          checked={settings.show_statistics}
+          disabled={update.isPending}
+          onChange={(show_statistics) => void save({ show_statistics })}
+        />
 
-      <AudienceSelect
-        label={t("profile.privacy.onlineStatus")}
-        description={t("profile.privacy.onlineStatusHint")}
-        value={settings.online_status}
-        disabled={update.isPending}
-        onChange={(online_status) => void save({ online_status })}
-      />
+        <AudienceSelect
+          label={t("profile.privacy.onlineStatus")}
+          description={t("profile.privacy.onlineStatusHint")}
+          value={settings.online_status}
+          disabled={update.isPending}
+          onChange={(online_status) => void save({ online_status })}
+        />
 
-      <AudienceSelect
-        label={t("profile.privacy.lastSeen")}
-        description={t("profile.privacy.lastSeenHint")}
-        value={settings.last_seen}
-        disabled={update.isPending}
-        onChange={(last_seen) => void save({ last_seen })}
-      />
+        <AudienceSelect
+          label={t("profile.privacy.lastSeen")}
+          description={t("profile.privacy.lastSeenHint")}
+          value={settings.last_seen}
+          disabled={update.isPending}
+          onChange={(last_seen) => void save({ last_seen })}
+        />
+      </SettingCard>
     </div>
   );
 }
@@ -124,25 +129,27 @@ function Toggle({
 }) {
   const id = useId();
   return (
-    <div className="flex items-start gap-3">
-      <input
-        id={id}
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        aria-describedby={`${id}-hint`}
-        className="accent-primary mt-1 size-5"
-        onChange={(event) => onChange(event.target.checked)}
-      />
-      <div className="flex flex-col">
-        <label htmlFor={id} className="text-sm font-medium">
-          {label}
-        </label>
-        <p id={`${id}-hint`} className="text-muted-foreground text-xs">
-          {description}
-        </p>
-      </div>
-    </div>
+    <SettingRow
+      label={label}
+      description={description}
+      descriptionId={`${id}-hint`}
+      htmlFor={id}
+      inline
+      control={
+        <input
+          id={id}
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          // `SettingRow` renders the description with no id, so the
+          // consequence is wired to the control here rather than being
+          // nearby text a screen reader might skip.
+          aria-describedby={`${id}-hint`}
+          className="accent-primary size-5"
+          onChange={(event) => onChange(event.target.checked)}
+        />
+      }
+    />
   );
 }
 
@@ -162,27 +169,27 @@ function AudienceSelect({
   const { t } = useTranslation();
   const id = useId();
   return (
-    <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-sm font-medium">
-        {label}
-      </label>
-      <p id={`${id}-hint`} className="text-muted-foreground text-xs">
-        {description}
-      </p>
-      <select
-        id={id}
-        value={value}
-        disabled={disabled}
-        aria-describedby={`${id}-hint`}
-        className="border-input focus-visible:border-ring focus-visible:ring-ring/50 min-h-11 w-full max-w-xs rounded-md border bg-transparent px-3 text-sm outline-none focus-visible:ring-[3px]"
-        onChange={(event) => onChange(event.target.value as PrivacyAudience)}
-      >
-        {AUDIENCES.map((audience) => (
-          <option key={audience} value={audience}>
-            {t(`profile.privacy.${audience}` as TranslationKey)}
-          </option>
-        ))}
-      </select>
-    </div>
+    <SettingRow
+      label={label}
+      description={description}
+      descriptionId={`${id}-hint`}
+      htmlFor={id}
+      control={
+        <select
+          id={id}
+          value={value}
+          disabled={disabled}
+          aria-describedby={`${id}-hint`}
+          className="border-input focus-visible:border-ring focus-visible:ring-ring/50 min-h-11 w-full rounded-md border bg-transparent px-3 text-sm outline-none focus-visible:ring-[3px]"
+          onChange={(event) => onChange(event.target.value as PrivacyAudience)}
+        >
+          {AUDIENCES.map((audience) => (
+            <option key={audience} value={audience}>
+              {t(`profile.privacy.${audience}` as TranslationKey)}
+            </option>
+          ))}
+        </select>
+      }
+    />
   );
 }

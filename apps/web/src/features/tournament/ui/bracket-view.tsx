@@ -1,5 +1,7 @@
 import { Link } from "@tanstack/react-router";
 
+import { isAuthenticated } from "@/entities/session";
+import { useSession } from "@/features/auth/model/session-provider";
 import type { Bracket, BracketNode, TournamentParticipant } from "@/features/tournament/api";
 import {
   liveMatchOf,
@@ -60,6 +62,13 @@ import { cn } from "@/shared/lib/cn";
  * waiting. Each is labelled in words.
  */
 export function BracketView({ bracket }: { bracket: Bracket }) {
+  // A64-026.4 §43.5. The game routes stayed behind `protectedPage` when the
+  // tournament routes came out from behind it, so for a visitor with no
+  // account every "Watch" and "Replay" here would be a link to a sign-in
+  // form. Read once at the top and passed down: a bracket is many nodes and
+  // the answer is the same for all of them.
+  const { state: session } = useSession();
+  const canOpenGames = isAuthenticated(session);
   const { t } = useTranslation();
   const participants = participantsById(bracket.participants ?? []);
   const totalRounds = bracket.rounds.length;
@@ -122,6 +131,7 @@ export function BracketView({ bracket }: { bracket: Bracket }) {
                     key={node.pairing_id}
                     node={node}
                     participants={participants}
+                    canOpenGames={canOpenGames}
                     hasParent={roundIndex < bracket.rounds.length - 1}
                     hasChildren={roundIndex > 0}
                   />
@@ -146,11 +156,14 @@ const STATE_LABEL: Record<NodeState, TranslationKey> = {
 function BracketNodeCard({
   node,
   participants,
+  canOpenGames,
   hasParent,
   hasChildren,
 }: {
   node: BracketNode;
   participants: Map<string, TournamentParticipant>;
+  /** Whether the viewer can reach `/games/…` at all — see `BracketView`. */
+  canOpenGames: boolean;
   /** Whether a later round exists for this node to feed. */
   hasParent: boolean;
   /** Whether an earlier round exists for this node to be fed by. */
@@ -243,8 +256,9 @@ function BracketNodeCard({
 
         {/* §15: a live match links to the game, a finished one to its
           replay, and a node with neither offers no link at all — a
-          pending future node is not clickable. */}
-        {liveMatch !== null && (
+          pending future node is not clickable. §43.5 adds a fourth case:
+          a viewer who cannot open a game is offered neither. */}
+        {canOpenGames && liveMatch !== null && (
           <Link
             to="/games/$matchId"
             params={{ matchId: liveMatch }}
@@ -255,7 +269,7 @@ function BracketNodeCard({
           </Link>
         )}
 
-        {replays.length > 0 && (
+        {canOpenGames && replays.length > 0 && (
           <div className="flex flex-wrap gap-x-3">
             {replays.map((attempt) => (
               <Link

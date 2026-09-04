@@ -651,6 +651,28 @@ it("asks a visitor with no account to sign in rather than offering to enter", as
   unmount();
 });
 
+it("offers no game link to a visitor who cannot open a game", async () => {
+  // The bracket's "Watch" and "Replay" go to `/games/…`, which stayed
+  // behind `protectedPage` when the tournament routes came out from behind
+  // it. Offering them to a visitor with no account would be a link that
+  // lies about where it goes — three of them per finished node.
+  serveAnonymous();
+  serveDetail(tournament({ status: "in_progress", current_round: 1 }));
+
+  const { unmount } = renderApp({ path: `/tournaments/${OPEN_ID}` });
+  await screen.findByRole("link", { name: SIGN_IN_TO_ENTER }, { timeout: 3000 });
+
+  // The bracket is there — otherwise this test would pass on an empty page.
+  expect(screen.getByText("Rival")).toBeVisible();
+
+  const links = screen.getAllByRole("link");
+  expect(links.filter((link) => link.getAttribute("href")?.includes("/games/"))).toHaveLength(
+    0,
+  );
+
+  unmount();
+});
+
 it("never asks the server whether an anonymous visitor is registered", async () => {
   // `/registrations/me` keeps its token. Firing it anyway would spend a
   // guaranteed `401` on every public tournament page — and the response

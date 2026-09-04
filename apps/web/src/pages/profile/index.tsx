@@ -54,11 +54,13 @@ export default function ProfilePage() {
         {profile.data !== undefined && (
           <>
             <ProfileHeader profile={profile.data} ratings={ratings.data?.ratings}>
-              {/* Two columns below `sm`, a row above — A64-025.9 §18.8.
-                  `flex-wrap` put "Match history" alone on a second line,
-                  indented by a ghost button's own padding, which reads as a
-                  layout accident rather than as a third action. A grid
-                  makes the wrap deliberate: two, then one across. */}
+              {/* Two actions, two columns below `sm` — A64-025.5B §22.
+                  "Match history" was a third one here and is a **section**
+                  of the product: it sits in the header at every width, and
+                  offering it a second time on one profile out of many is a
+                  navigation model that disagrees with itself. Removing it
+                  also makes the row divide evenly, which the grid had been
+                  working around with a `col-span-2` on the odd one out. */}
               <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
                 <Button asChild variant="outline" className="min-h-11 w-full sm:w-auto">
                   <Link to="/settings/profile">{t("profile.nav.editProfile")}</Link>
@@ -67,16 +69,6 @@ export default function ProfilePage() {
                   <Link to="/players/$username" params={{ username: profile.data.username }}>
                     {t("profile.header.viewPublic")}
                   </Link>
-                </Button>
-                {/* A64-020.5F §20. A link, not an inline preview: the
-                    profile's request count stays where it was, and the
-                    history page owns its own pagination. */}
-                <Button
-                  asChild
-                  variant="ghost"
-                  className="col-span-2 min-h-11 w-full sm:col-span-1 sm:w-auto"
-                >
-                  <Link to="/games/history">{t("history.title")}</Link>
                 </Button>
               </div>
             </ProfileHeader>

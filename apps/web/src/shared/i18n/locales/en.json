@@ -514,7 +514,10 @@
       "friendTitle": "Play with a friend",
       "friendBody": "Challenge somebody you know, or answer a challenge.",
       "friendCta": "Go to challenges"
-    }
+    },
+    "boardTitle": "Your board",
+    "boardBody": "{theme} board, {pieces} pieces.",
+    "boardCta": "Change"
   },
   "game": {
     "title": "Game",

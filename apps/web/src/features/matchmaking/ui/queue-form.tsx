@@ -13,6 +13,7 @@ import { cooldownSeconds, queueErrorKey } from "@/features/matchmaking/model/err
 import { useJoinQueue, useTimeControls } from "@/features/matchmaking/model/queries";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
+import { speedAccent } from "@/shared/lib/speed-accent";
 import { Button, Skeleton, Spinner } from "@/shared/ui";
 
 /**
@@ -184,6 +185,7 @@ export function QueueForm({ disabled = false }: { disabled?: boolean }) {
               value: control.id,
               label: formatTimeControl(control, locale),
               hint: t(SPEED_LABELS[control.speed_class] ?? "play.speed.unknown"),
+              accent: speedAccent(control.speed_class).text,
             }))}
           />
         )}
@@ -290,7 +292,7 @@ function RadioGroup({
   hint: string;
   value: string;
   onChange: (value: string) => void;
-  options: { value: string; label: string; hint: string }[];
+  options: { value: string; label: string; hint: string; accent?: string }[];
   disabled: boolean;
   columns?: boolean;
 }) {
@@ -337,7 +339,20 @@ function RadioGroup({
               >
                 {option.label}
               </span>
-              <span className="text-muted-foreground text-xs">{option.hint}</span>
+              {/* The speed class in its own colour — A64-025.5B §22. The
+                  same hue the profile's rating cards and match history
+                  use, so a player recognises Blitz here before reading the
+                  word. Muted when this tile is the chosen one, because the
+                  selection is already saying something in `--primary` and
+                  two colours on one tile is neither. */}
+              <span
+                className={cn(
+                  "text-xs",
+                  chosen ? "text-primary" : (option.accent ?? "text-muted-foreground"),
+                )}
+              >
+                {option.hint}
+              </span>
             </label>
           );
         })}

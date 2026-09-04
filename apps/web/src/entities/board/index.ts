@@ -98,3 +98,18 @@ export function opponentOf(side: Side): Side {
 }
 
 export type { PlacedPiece, Rank, Side };
+
+/**
+ * A piece's finish, as the classes that read the piece-set tokens.
+ *
+ * Here rather than in either component that draws one — A64-025.5B §22.
+ * The game room's board and the lobby's preview must show the same disc,
+ * and a preview with its own copy of the radius, the rim and the relief is
+ * a preview that will eventually show a board nobody has.
+ *
+ * Classes rather than the values themselves: the values belong to
+ * `globals.css`, where a piece set overrides them, and this is only the
+ * agreement about *which* tokens a piece reads.
+ */
+export const PIECE_FINISH_CLASS =
+  "rounded-[var(--piece-radius)] border-[length:var(--piece-border-width)] shadow-[var(--piece-shadow)]";

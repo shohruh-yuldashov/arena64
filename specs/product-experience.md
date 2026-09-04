@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.10, the notification feed |
+| **Last updated** | 2026-09-04 — A64-025.5B, the lobby and the board preferences |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -457,6 +457,7 @@ tokens.
 | **A64-025.7** | Tournament and bracket, edges derived from `BracketSlot.parent()`. Closes OQ-4 | .2 | Backend contract changes; canvas, zoom or drag |
 | **A64-025.8** | Friends and social | .2 | Changing privacy or blocking rules |
 | **A64-025.9** | Profile and player | .2 | Changing privacy rules; inventing a statistic |
+| **A64-025.5B** | The lobby, and the board preferences that did nothing | .2, .5 | Changing what a preference means; the three still unread |
 | **A64-025.9B** | Home, and the account menu in the header | .2, .3 | Inventing a statistic the API does not return |
 | **A64-025.9C** | The four remaining settings surfaces | .2, .9 | Changing what any setting does |
 | **A64-025.10** | Notifications — the feed and the bell | .2 | Admin notification surfaces; what the preferences decide (.9C) |
@@ -2131,3 +2132,101 @@ it is better than a heading with the wrong thing.
 
 213 tests pass (nine of them new, for the two formatters), `tsc --noEmit`
 clean, eslint zero errors.
+
+---
+
+## 22. The lobby, and the settings that did nothing — A64-025.5B
+
+### 22.1 Five preferences were write-only
+
+`PreferencesResponse.gameplay` has carried `board_theme`, `piece_set`,
+`animation_speed`, `confirm_move` and `show_coordinates` since A64-012.5.
+A search of the client finds **exactly one reader for each: the form that
+writes it.** Nothing else in the product has ever looked at any of them.
+
+A player chose "Wood", the form said "Saved", the server stored it, and
+every board stayed exactly as it was. That is worse than a missing setting:
+a missing setting is honest.
+
+Two of the five are closed here. **Three are not**, and are recorded rather
+than quietly left:
+
+| Preference | State |
+| --- | --- |
+| `board_theme` | **Closed** — four palettes, applied to every board |
+| `piece_set` | **Closed** — three finishes, applied to every piece |
+| `show_coordinates` | Still unread. A board-rendering flag; small, and A64-025.11's |
+| `animation_speed` | Still unread. There is no move animation to speed up yet — A64-025.12's |
+| `confirm_move` | Still unread. It changes move *submission*, not presentation, and is a gameplay change rather than a design one |
+
+### 22.2 Tokens on the root, not props through four components
+
+A board is drawn in the game room, in the lobby's preview, and wherever one
+is drawn next. Threading two strings to each is three places to forget, so
+`BoardPreferences` writes `data-board-theme` and `data-piece-set` on
+`<html>` and the palettes live in `globals.css` beside the tokens they
+override. It follows `shared/theme`, which puts the `dark` class on the same
+element for the same reason, and it is mounted behind the session check
+because the preference is an account read that can only 401 without one.
+
+`classic` has **no block**: it is the base in `:root`/`.dark`, and a
+duplicate set of values for it would be the first pair to drift.
+
+**A piece set changes the finish, not only the colour.** The radius, the rim
+width and the relief were literals in `board.tsx`, which meant `piece_set`
+could only ever have been three names for one disc. They are tokens now —
+`--piece-radius`, `--piece-border-width`, `--piece-shadow` — so "modern" is
+genuinely flat and "neo" genuinely squared. What a set does not change is
+the silhouette a *king* sits on: the king is told apart by a glyph, and a
+set that changed the outline would land that glyph on three different
+shapes.
+
+`PIECE_FINISH_CLASS` lives in `entities/board`, not in either component that
+draws a piece. The first attempt put it in the preview widget and had
+`features/game` import from `widgets/` — backwards, and caught by nothing
+but reading it.
+
+### 22.3 The preview had to be a board, not a drawing
+
+`BoardMotif` — the home page's artwork — was the obvious thing to reuse and
+would have been wrong. Its pieces are SVG `<circle>`s, so a radius, a rim
+and a relief do not survive them: the preview would have shown the colours
+of "neo" on the shape of "classic", which is a preview that lies about the
+thing it previews.
+
+`BoardSample` is a four-by-four grid of the same elements with the same
+classes the real board uses, reading the same tokens. That is also what
+stops the two drifting: a piece set added later appears in the preview
+without anybody remembering there is a second drawing.
+
+It sits **below** the form and above the friend link. It is information, not
+an action, and it must not come between a player and the button they opened
+the page for.
+
+### 22.4 The lobby's time controls carry their speed class
+
+`Bullet`, `Blitz`, `Rapid` and `Classical` were four grey words under four
+clocks. They are in their own hues now — the same ones the profile's rating
+cards, match history and the tournament surfaces use, so a player recognises
+Blitz here before reading it. A chosen tile drops back to `--primary`,
+because the selection is already saying something in that colour and two
+colours on one tile is neither.
+
+### 22.5 One link removed
+
+`/profile` offered "Match history" beside "Edit profile". Match history is a
+**section** of the product: it is in the header at every width, and offering
+it a second time on one profile out of many is a navigation model
+disagreeing with itself. Removing it also let the action row divide evenly,
+which the grid had been working around with a `col-span-2` on the odd one
+out.
+
+### 22.6 Measured
+
+| Surface | 1280 light | 360 dark |
+| --- | --- | --- |
+| `/play` | 0 | 0 |
+
+Four board-and-piece combinations rendered and compared: classic/classic,
+wood/neo, marble/modern, midnight/neo. 213 tests pass, `tsc --noEmit` clean,
+eslint zero errors.

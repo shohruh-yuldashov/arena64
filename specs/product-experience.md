@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-026, the move a player has chosen but not yet played |
+| **Last updated** | 2026-09-04 — A64-026.1, the public landing page |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -477,6 +477,7 @@ tokens.
 | **A64-025.12A** | A throw inside the router reaches this app's error page | — | The unreproduced i18n context fault itself (§33.3) |
 | **A64-025.13A** | The match a no-show left open, and the port that closes it | .13 | A moderator's adjudication of a *played* game, which needs an audit trail |
 | **A64-025.13B** | Every context object in a module Fast Refresh will not swap | .12A | `features/auth`'s session context (§37.3) |
+| **A64-025.14** | `confirm_move`, the fifth gameplay preference | .6D | Editing a staged move (§38.5) |
 | **A64-025.12** | Motion and interaction system. Fixes P3-5 | .3–.10 | Adding motion for its own sake |
 | **A64-025.13** | Closing audit | all | New work |
 
@@ -2177,7 +2178,7 @@ than quietly left:
 | `piece_set` | **Closed** — three finishes, applied to every piece |
 | `show_coordinates` | **Closed** by A64-025.6D §28 |
 | `animation_speed` | Still unread. There is no move animation to speed up yet — A64-025.12's |
-| ~~`confirm_move`~~ | **Closed by A64-026** — §38. It does change move *submission* rather than presentation, which is why it needed a step rather than an attribute |
+| ~~`confirm_move`~~ | **Closed by A64-025.14** — §38. It does change move *submission* rather than presentation, which is why it needed a step rather than an attribute |
 
 ### 22.2 Tokens on the root, not props through four components
 
@@ -3441,7 +3442,7 @@ abandoned match is permanent, and a player carrying one cannot queue.
 
 | | |
 | --- | --- |
-| ~~`confirm_move`~~ | **Closed by A64-026** — §38. All five gameplay preferences are read now |
+| ~~`confirm_move`~~ | **Closed by A64-025.14** — §38. All five gameplay preferences are read now |
 | The `useTranslation` context fault | §33.3. Open, dev-only, not reproduced, now reported under `scope: "router"` |
 | ~~The stuck-match question~~ | **Answered and fixed** — §36. It was reachable, every unplayed tournament fixture hit it, and the player could not queue again |
 | ~~Three `react-refresh` warnings~~ | **Fixed** — §37. They were the rule reporting the §33.3 hazard, and lint is now at zero problems |
@@ -3665,7 +3666,13 @@ with three one-line extractions.
 | `prettier --check` | clean |
 | `vitest` | 231 passed, 35 files — no assertion changed |
 
-## 38. The move a player has chosen but not yet played — A64-026
+## 38. The move a player has chosen but not yet played — A64-025.14
+
+> **Renumbered.** This shipped as `A64-026`, which is wrong: the owner's
+> roadmap reserves that number for the landing, brand and marketing epic.
+> It belongs to A64-025 — it closes the last of the five gameplay
+> preferences that redesign phase found unread — so it is `.14`, and the
+> landing epic keeps `A64-026`.
 
 `confirm_move` was the last of the five gameplay preferences that nothing
 read. A player set it, the form saved it, the server stored it, and every
@@ -3783,3 +3790,238 @@ None of them was ever missing from the API. Every one had been on
 `PreferencesResponse` since A64-012.5 and read by nothing — five settings a
 player could change that changed nothing, closed one at a time as each
 surface was redesigned.
+
+## 40. The public landing page — A64-026.1
+
+`/` is open, and A64-025.3 kept it that way: an anonymous visitor gets a
+signed-out home rather than a redirect. What they got was **one card** — the
+wordmark as an `<h1>`, one sentence, two buttons, and two thirds of an empty
+screen. Nothing on it said what Arena64 is, what a game costs, whether an
+account is needed, or what happens after one.
+
+This is the front door.
+
+### 40.0 Where the design came from
+
+`docs/04-frontend/design-system.md` is a placeholder — every section reads
+_TBD_. It is **not** the source of truth and this page did not use it. The
+canonical tokens are:
+
+| | |
+| --- | --- |
+| Values | `apps/web/src/app/styles/globals.css` — `:root`, `.dark`, `@theme inline` |
+| Reasoning | §18.7 (colour, and where the gradient is allowed), §34 (motion) |
+| Board palette | the same file's `--board-*` and `--piece-*`, shared with the real board |
+
+**No new colour was invented.** Every value on this page is an existing
+token: `--primary` for accents and the last-move wash, `--brand-from` /
+`--brand-to` for the wordmark, the primary button and the closing panel,
+`--card` / `--border` / `--muted` for surfaces, `--speed-*` for the four time
+controls, and the board's own variables for the showcase. No hex literal was
+written except the white grid in the closing panel's overlay, which sits on
+the brand surface and has no token because nothing else needs one.
+
+The gradient's three permitted places (§18.7) are all it takes here: the
+wordmark, the primary button, and the closing panel as the brand surface.
+Both stops clear 4.5:1 against `--primary-foreground`, which is the rule
+that grants them.
+
+### 40.1 What the page answers, in order
+
+What is this → why here → how do I start → what can I do → where do I sign
+up. A visitor who reads only the first screen already knows the first,
+because the picture beside the headline is a board with pieces on it.
+
+The `<h1>` is a sentence about the product, not the wordmark. The header
+carries the wordmark three elements above; a heading repeating it tells a
+visitor the name of a thing whose purpose they have not been given.
+
+### 40.2 A marketing header, because the product's does not fit
+
+`AppShell`'s header is *product* navigation — Play, Tournaments, Friends,
+Match history — and **every one of those routes is behind
+`protectedPage`.** A "Browse tournaments" link here would bounce an
+anonymous visitor to `/login`, which is the defect A64-025.3 §2 refused to
+ship on the home page.
+
+So the navigation is in-page anchors to the sections that *explain* those
+features, and the calls to action go to the account that unlocks them. The
+only routes this page links to are `/`, `/login` and `/register` — the three
+an anonymous visitor can actually reach. There is a test that walks the
+header and fails on a fourth.
+
+Two things the swap must not lose, and does not:
+
+| | |
+| --- | --- |
+| Appearance and language | `BrowserSettingsMenu` is exported from `widgets/account-menu` and used in **both** headers. One control, not two that drift |
+| The `unavailable` rule | Sign-in and register appear only for `status === "anonymous"`. Offering them while the session merely failed tells a signed-in player they were logged out because one request did — the claim that state exists to avoid, and `auth.test.tsx` caught it |
+
+### 40.3 The hero visual is the game room, as a still
+
+`features/game/ui/board.tsx` takes a `GameState`, which comes from
+`useGameRoom`, which opens a socket. A landing page is the first request a
+visitor makes and the one they judge the product's speed by; pulling the
+realtime stack into that bundle to draw a static picture is the trade §26
+forbids. The production build confirms it stayed out — `root` and `game` are
+separate chunks.
+
+So `widgets/marketing/board-showcase` is a presentation component with no
+engine, no socket, no query and no state. It reads the same `--board-*` and
+`--piece-*` tokens the real board does, so the picture follows the theme.
+
+**Every piece is on a dark square.** That is not decoration: draughts is
+played on one colour, and the first draft put men on light squares — wrong
+in a way any player spots before reading a word of the copy. The position is
+a plausible mid-game one with a Light king and a last-move highlight, and
+the piece table is asserted against the parity rule rather than trusted.
+
+The two seats show a name, a rating and a clock — the four facts
+`PlayerSeat` shows, in the same order, so a visitor who signs up recognises
+what they were shown. The names are "Light" and "Dark", the sides the domain
+itself names: an invented username is the first step towards an invented
+rating beside it. The ratings are 1500, which is the platform's genuine
+starting value.
+
+### 40.4 Three steps, as an ordered list
+
+"Pick a clock → get paired → play it out" is the lobby's actual flow, and the
+order is the content. An `<ol>` rather than a grid of three cards, because a
+grid says the same thing to a sighted reader and nothing at all to somebody
+using a screen reader. The numerals are `aria-hidden` — the list already
+announces the position.
+
+### 40.5 Competitive: copy beside the catalogue
+
+Four facts as a list beside the four time controls as cards, because they
+are not peers: the rating is the claim and the rest support it. The clocks
+are the most concrete thing on the page and the easiest to check — every one
+is a row seeded by the migration that creates the table.
+
+The speed-class colours are written as literals rather than through
+`speedAccent`, and the reason is recorded at the call site: that helper maps
+a *server-supplied* class and there is no server here, while Tailwind
+generates nothing for an interpolated `text-speed-${x}`.
+
+### 40.6 The bracket is drawn, not fetched
+
+§16's whole argument is that the real bracket's connectors come from
+`BracketSlot.parent()` — an authoritative relationship, not a CSS
+approximation. There is no tournament to read here, so reusing that
+component would mean inventing a payload: the fake data §30 forbids, in the
+one place it would be easiest to justify.
+
+So `widgets/marketing/bracket-showcase` draws the *shape* — four seats, two
+pairings, a final, and the lines between them — with no names, no scores and
+no title. The first version used plain grey bars and read as a **loading
+skeleton**, which is the failure mode of "honest but empty"; each seat now
+carries the piece disc the product uses for a side, so it reads as a bracket
+with the names withheld rather than as content that failed to arrive.
+
+### 40.7 Social, and the claim that was not made
+
+Friends, direct challenges, and **quick messages**. The third is the one
+worth being careful about: Arena64 has a fixed set of phrases with a spam
+rule, and it does not have free-text chat. Copy saying "chat with your
+friends" would market a feature this product deliberately does not ship, so
+the wording is about saying *good game* without a chat box to police.
+
+### 40.8 One closing statement, not the hero again
+
+A visitor who reached the bottom has read the argument, so the last section
+is a statement and one button rather than a second pitch. It is the brand
+surface, which is the third place §18.7 grants the gradient.
+
+### 40.9 A footer with only real destinations
+
+There is no privacy page, no terms page, no blog, no Discord and no official
+social account, so none of them is linked. A footer column of dead links is
+worse than a short footer. The year is computed, because a hardcoded one is
+wrong from January.
+
+The four footer links carry `min-h-11`: A64-025.13 §35.3 measured this
+product's floor at 44px and found sixteen controls under it, and a row of
+17px text links is the same defect in a quieter place. The sweep below
+found them at 17px and this is the fix.
+
+### 40.10 `/` is two pages, and the chrome switches with them
+
+| | |
+| --- | --- |
+| `pages/root` | picks the page — `HomePage` when authenticated, `LandingPage` otherwise |
+| `app/router/routes`' `RootLayout` | picks the chrome — `AppShell`, or nothing at `/` when not authenticated |
+
+Two decisions one layer apart, because a page cannot remove a shell it is
+rendered inside.
+
+**No flicker, and no redirect.** `/` keeps its guard semantics: an anonymous
+visitor is shown a different page, never sent to `/login`, and deep links
+elsewhere are untouched. While the session bootstraps, `/` renders the
+landing — deliberately, and it is the cheaper of the two mistakes: a
+signed-in player sees their own home a moment later, and an anonymous
+visitor, who is the majority of this route's traffic, never sees a flash of
+product navigation they cannot use.
+
+`pages/home` lost the branches it carried for an anonymous visitor and
+gained a type guard instead. It is only ever reached authenticated now.
+
+### 40.11 Metadata, and the parts deliberately left empty
+
+`/` is the landing page, so `index.html`'s title and description **are** its
+metadata — this application has no per-route metadata layer, and adding half
+of one here would be a second place for it to live. The deeper work is
+A64-026.3.
+
+Added: a real title, a real description, `og:type`, `og:site_name`,
+`og:title`, `og:description`, `og:image`, `og:locale` and
+`twitter:card`. In Uzbek, matching the document's `lang` — that is the value
+a crawler and a share preview read, before any script has chosen a locale.
+
+**No `og:url` and no canonical.** Neither is knowable at build time: the
+bundle is served from whatever origin deploys it and there is no build-time
+origin to interpolate. A wrong canonical tells a crawler to index a page
+that is not there, which is worse than none.
+
+**`og:image` is the installed-application icon**, which is a real asset in
+this repository. A purpose-built social card is A64-026.2's, and pointing at
+one that does not exist yet would ship a broken preview rather than an early
+one.
+
+### 40.12 Measured
+
+| | |
+| --- | --- |
+| `tsc --noEmit` | clean |
+| `eslint` | 0 problems |
+| `prettier --check` | clean |
+| `vitest` | 244 passed, 37 files (238 before; **+6**) |
+| `vite build` | passes |
+
+**Ten renderings swept** — 360, 393, 768, 1024, 1280 and 1440, in light and
+dark, across uz, ru and en:
+
+| | |
+| --- | --- |
+| Clipped elements | **0** |
+| Page-level horizontal overflow | **0** |
+| Interactive targets under 44px | **0** (40 before the footer fix) |
+| `<h1>` per page | exactly 1 in all ten |
+| Landmarks | `header`, `main`, `footer` present in all ten |
+
+Reduced motion: `--motion-scale` resolves to `0` and a header transition
+computes to `0.001s`, so §34's scale covers this page without it declaring
+anything of its own. The page adds no animation beyond colour transitions,
+which is the honest answer to "hero motion" — a landing page that moves for
+its own sake is the template §8 of the brief warns about.
+
+### 40.13 What is deliberately absent
+
+No player count, no games-played counter, no testimonial, no logo wall, no
+award, no leaderboard, no pricing, no app-store badge, no community link, no
+background video, no cookie banner. §5 forbids inventing a statistic, and a
+landing page is where that rule is under the most pressure — "12,481 players
+online" is one line of copy away and would be false the moment it was
+written.
+
+Every capability named was verified against the repository before it was
+written down.

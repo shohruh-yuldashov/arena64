@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Square } from "@/entities/board";
 
 /**
- * The move a player has chosen but not yet played — A64-026 §38.
+ * The move a player has chosen but not yet played — A64-025.14 §38.
  *
  * ## Why the preference needs a step rather than a flag
  *

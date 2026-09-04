@@ -1124,5 +1124,82 @@
       }
     },
     "soon": "very soon"
+  },
+  "landing": {
+    "nav": {
+      "label": "Landing sections",
+      "toggle": "Open menu",
+      "play": "How it works",
+      "compete": "Compete",
+      "tournaments": "Tournaments"
+    },
+    "cta": {
+      "primary": "Create an account"
+    },
+    "hero": {
+      "eyebrow": "Russian draughts, 8×8",
+      "title": "Play draughts online, against people who are actually there",
+      "body": "Arena64 finds you an opponent near your level in seconds, runs both clocks, and records the result. Bullet to classical, rated or casual.",
+      "free": "Free to play. Nothing to download — it runs in your browser."
+    },
+    "showcase": {
+      "light": "Light",
+      "dark": "Dark",
+      "final": "Final"
+    },
+    "steps": {
+      "title": "From arriving to your first move",
+      "body": "Three steps, and none of them is a form you fill in twice.",
+      "one": {
+        "title": "Pick a clock",
+        "body": "One minute to thirty. Rated if you want the result to count, casual if you would rather it did not."
+      },
+      "two": {
+        "title": "Get paired",
+        "body": "The queue looks for somebody near your rating and opens the board for both of you at once."
+      },
+      "three": {
+        "title": "Play it out",
+        "body": "Moves and clocks travel live. The game ends when one of you wins, draws, or runs out of time."
+      }
+    },
+    "compete": {
+      "title": "A rating you can actually move",
+      "body": "Every rated game changes a number that means something, and the number is kept per speed — being sharp at one minute says nothing about how you play at thirty.",
+      "points": {
+        "rating": "Glicko-2, calculated per speed class rather than one score for everything",
+        "controls": "Four time controls, each with its own rating and its own feel",
+        "rated": "Casual games when you want the practice without the consequence",
+        "replay": "Every finished game kept in full, and steppable move by move"
+      }
+    },
+    "tournaments": {
+      "eyebrow": "Tournaments",
+      "title": "Brackets, not just a queue",
+      "body": "Enter a single-elimination tournament, watch the rounds fill in, and read the whole bracket afterwards. The connectors are drawn from the real pairing relationships, so what you see is what happened."
+    },
+    "social": {
+      "title": "Bring your own opponent",
+      "body": "Arena64 is not only strangers from a queue.",
+      "friends": {
+        "title": "Find and add players",
+        "body": "Search by name, send a request, and keep the people you like playing in one list."
+      },
+      "challenge": {
+        "title": "Challenge directly",
+        "body": "Pick the time control yourself and send it to a friend. No queue, no waiting for a stranger."
+      },
+      "messages": {
+        "title": "Say something mid-game",
+        "body": "A short set of ready phrases — enough to say good game or well played, without a chat box to police."
+      }
+    },
+    "closing": {
+      "title": "The board is set",
+      "body": "An account takes a minute. The first opponent takes seconds."
+    },
+    "footer": {
+      "label": "Footer"
+    }
   }
 }

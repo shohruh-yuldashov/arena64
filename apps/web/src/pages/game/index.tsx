@@ -60,7 +60,7 @@ export default function GamePage() {
   const { state, submit, command } = useGameRoom(matchId);
   const selection = useMoveSelection(state);
 
-  // A64-026 §38. The last of the five gameplay preferences that nothing
+  // A64-025.14 §38. The last of the five gameplay preferences that nothing
   // read. `usePreferences` is an account read, so a spectator's query
   // simply fails and `data` stays undefined — which falls back to `false`,
   // the API's own default, and is the right answer for somebody who is not

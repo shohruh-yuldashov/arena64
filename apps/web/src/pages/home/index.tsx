@@ -77,14 +77,19 @@ const DESTINATIONS: readonly {
 export default function HomePage() {
   const { t } = useTranslation();
   const { state } = useSession();
-  const signedIn = isAuthenticated(state);
+
+  // A64-026.1 §40.10. `pages/root` decides which page `/` is, so this one
+  // is only ever reached by a signed-in player and the branches it used to
+  // carry for an anonymous visitor are gone. The narrowing is a type
+  // guard rather than an assertion: an unauthenticated state reaching here
+  // is a routing defect, and rendering nothing says so more usefully than
+  // a crash in `displayNameOf`.
+  if (!isAuthenticated(state)) return null;
 
   return (
     <div className="flex flex-col gap-8">
-      {/* A floor under the hero so the two session states are the same
-          shape: signed out has two lines and two buttons where signed in
-          has three and one, and without it the anonymous card was squat
-          enough to cut the motif through the middle of a square. */}
+      {/* A floor under the hero, so the motif is never cut through the
+          middle of a square by a short card. */}
       <section className="border-border bg-card relative overflow-hidden rounded-xl border sm:min-h-60">
         {/* Bleeding off the corner rather than sitting in a column of its
             own: the art is the background of the section, so the text keeps
@@ -102,79 +107,59 @@ export default function HomePage() {
         <div className="relative flex flex-col items-start gap-5 p-6 sm:p-8">
           <div className="flex flex-col gap-2">
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-              {signedIn
-                ? t("home.greeting", { name: displayNameOf(state.user) })
-                : t("layout.title")}
+              {t("home.greeting", { name: displayNameOf(state.user) })}
             </h1>
-            <p className="text-muted-foreground max-w-prose text-sm">
-              {t(signedIn ? "home.subtitle" : "layout.description")}
-            </p>
+            <p className="text-muted-foreground max-w-prose text-sm">{t("home.subtitle")}</p>
           </div>
 
-          {signedIn && <StandingStrip />}
+          <StandingStrip />
 
           {/* The one thing this page exists to answer. First in the DOM
               after the heading and the only `default` variant on the page,
               sized so it is the largest target on any viewport — §3's "one
               to two seconds" is a layout requirement, not a copy one. */}
-          {signedIn ? (
-            <Button asChild size="lg" className="min-h-12 w-full sm:w-auto sm:min-w-44">
-              <Link to="/play">{t("home.playCta")}</Link>
-            </Button>
-          ) : (
-            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-              <Button asChild size="lg" className="min-h-12 sm:min-w-40">
-                <Link to="/register">{t("auth.register.submit")}</Link>
-              </Button>
-              <Button asChild size="lg" variant="outline" className="min-h-12">
-                <Link to="/login">{t("auth.login.submit")}</Link>
-              </Button>
-            </div>
-          )}
+          <Button asChild size="lg" className="min-h-12 w-full sm:w-auto sm:min-w-44">
+            <Link to="/play">{t("home.playCta")}</Link>
+          </Button>
         </div>
       </section>
 
-      {/* Only for a signed-in player: every destination below is behind the
-          verified-email guard, and offering a card that redirects to sign-in
-          is a link that lies about where it goes. */}
-      {signedIn && (
-        <section aria-labelledby="home-more" className="flex flex-col gap-4">
-          <h2 id="home-more" className="text-lg font-semibold tracking-tight">
-            {t("home.moreTitle")}
-          </h2>
-          <ul className="grid gap-3 sm:grid-cols-2">
-            {DESTINATIONS.map((destination) => {
-              const Icon = destination.icon;
-              return (
-                <li key={destination.to}>
-                  {/* `group` on the card and `after:inset-0` on the link:
+      <section aria-labelledby="home-more" className="flex flex-col gap-4">
+        <h2 id="home-more" className="text-lg font-semibold tracking-tight">
+          {t("home.moreTitle")}
+        </h2>
+        <ul className="grid gap-3 sm:grid-cols-2">
+          {DESTINATIONS.map((destination) => {
+            const Icon = destination.icon;
+            return (
+              <li key={destination.to}>
+                {/* `group` on the card and `after:inset-0` on the link:
                       the whole card is the click target, and there is still
                       exactly **one** link with the section's name as its
                       accessible name. A card-sized anchor wrapped round a
                       heading reads as one unlabelled link to a screen
                       reader; a second nested link reads as two. */}
-                  <div className="group border-border bg-card hover:border-primary/40 relative flex h-full items-start gap-4 rounded-xl border p-5 transition-colors duration-fast">
-                    <span className="bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary flex size-10 shrink-0 items-center justify-center rounded-lg transition-colors duration-fast">
-                      <Icon aria-hidden="true" className="size-5" />
-                    </span>
-                    <div className="flex min-w-0 flex-col gap-1">
-                      <h3 className="text-sm font-semibold">
-                        <Link
-                          to={destination.to}
-                          className="focus-visible:ring-ring rounded-sm after:absolute after:inset-0 focus-visible:ring-2 focus-visible:outline-none"
-                        >
-                          {t(destination.title)}
-                        </Link>
-                      </h3>
-                      <p className="text-muted-foreground text-sm">{t(destination.body)}</p>
-                    </div>
+                <div className="group border-border bg-card hover:border-primary/40 relative flex h-full items-start gap-4 rounded-xl border p-5 transition-colors duration-fast">
+                  <span className="bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary flex size-10 shrink-0 items-center justify-center rounded-lg transition-colors duration-fast">
+                    <Icon aria-hidden="true" className="size-5" />
+                  </span>
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <h3 className="text-sm font-semibold">
+                      <Link
+                        to={destination.to}
+                        className="focus-visible:ring-ring rounded-sm after:absolute after:inset-0 focus-visible:ring-2 focus-visible:outline-none"
+                      >
+                        {t(destination.title)}
+                      </Link>
+                    </h3>
+                    <p className="text-muted-foreground text-sm">{t(destination.body)}</p>
                   </div>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
     </div>
   );
 }

@@ -16,11 +16,48 @@
       the home indicator in standalone mode — A64-020.9 §24.
     -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Arena64</title>
+    <!--
+      A64-026.1 §40.11. `/` is the landing page for anybody without an
+      account, so this document's title and description **are** its
+      metadata — there is no per-route metadata layer in this application
+      and adding half of one here would be a second place for it to live.
+      The deeper work is A64-026.3.
+
+      In Uzbek, matching `lang="uz"` above and for the same reason: this is
+      the value a crawler and a share preview read, and both of them read
+      it before any script has chosen a locale.
+    -->
+    <title>Arena64 — onlayn shashka: reytingli o'yinlar va turnirlar</title>
     <meta
       name="description"
-      content="Onlayn shashka: real vaqt rejimidagi o'yinlar, reyting va musobaqalar."
+      content="Rus shashkasi onlayn. Bir necha soniyada raqib toping, reytingli yoki oddiy o'ynang, turnirlarda qatnashing. Bepul, brauzerda."
     />
+
+    <!--
+      The share preview. `og:image` is the installed-application icon,
+      which is a real asset in this repository — a purpose-built social
+      card is A64-026.2's, and pointing at one that does not exist yet
+      would be a broken preview rather than an early one.
+
+      No `og:url` and no canonical: neither is knowable at build time,
+      because this bundle is served from whatever origin deploys it and
+      there is no build-time origin to interpolate. Guessing one is worse
+      than omitting it — a wrong canonical tells a crawler to index a page
+      that is not there.
+    -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Arena64" />
+    <meta
+      property="og:title"
+      content="Arena64 — onlayn shashka: reytingli o'yinlar va turnirlar"
+    />
+    <meta
+      property="og:description"
+      content="Rus shashkasi onlayn. Bir necha soniyada raqib toping, reytingli yoki oddiy o'ynang, turnirlarda qatnashing."
+    />
+    <meta property="og:image" content="/icons/icon-512.png" />
+    <meta property="og:locale" content="uz" />
+    <meta name="twitter:card" content="summary" />
 
     <!--
       A64-020.9 §7. The installable-application metadata.

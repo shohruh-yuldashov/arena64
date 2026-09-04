@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import TournamentSettings
 from app.database.unit_of_work import SessionUnitOfWork
+from app.modules.game.application.services.match_abort_service import PersistentMatchAbort
 from app.modules.game.application.services.origin_match_service import GameOriginMatches
 from app.modules.game.domain.events import MatchCompleted
 from app.modules.game.domain.result import MatchOutcome, MatchResult, TerminationReason
@@ -190,6 +191,15 @@ def _no_show(session: AsyncSession, clock: MovableClock) -> TournamentNoShowServ
         session,
         matches=build_match_creation(session, events=RecordingPublisher(), clock=clock),
         origin_matches=GameOriginMatches(SqlAlchemyMatchRecordRepository(session)),
+        # The **real** adjudication too, for the reason the reader is real:
+        # what A64-025.13A §36 has to prove is that the sweep leaves no
+        # match open, and a fake would prove only that it asks something.
+        match_abort=PersistentMatchAbort(
+            matches=SqlAlchemyMatchRecordRepository(session),
+            events=RecordingPublisher(),
+            unit_of_work=SessionUnitOfWork(session),
+            clock=clock,
+        ),
         settings=TournamentSettings(no_show_seconds=NO_SHOW_SECONDS),
         events=RecordingPublisher(),
         clock=clock,
@@ -524,13 +534,31 @@ class TestSystemActivationAndNoShow:
         assert settled.outcome is AttemptOutcome.NO_SHOW
         assert settled.light_present_at == NOW
 
-        # The `game` match is untouched: nothing invented a result.
+        # The `game` match is **closed, with no result** — A64-025.13A §36.
+        #
+        # This assertion used to read `ACTIVE`, with the comment "the game
+        # match is untouched: nothing invented a result". The instinct was
+        # right and the proxy was wrong: leaving the row active is not how a
+        # result is avoided, and it left the player carrying a live match
+        # forever. `GET /matchmaking/matches/pending` reports it and the
+        # lobby sends that player to the game room rather than the queue
+        # form — so a player adjudicated a no-show could never queue again.
+        #
+        # Nothing is invented now either. `MatchOutcome.NONE` with
+        # `ABORT` is the taxonomy's own "a match that did not happen", and
+        # MT-11 keeps it out of every rating and statistic — which matters
+        # because these fixtures are rated and a win would move two
+        # Glicko-2 numbers for a game nobody played. The walkover stays
+        # where it belongs: the bracket node above, advanced by
+        # adjudication.
         record = await contract_session.scalar(
             select(MatchRecordModel).where(MatchRecordModel.id == waiting.match_id)
         )
         assert record is not None
-        assert record.status is MatchRecordStatus.ACTIVE
-        assert record.outcome is None
+        assert record.status is MatchRecordStatus.COMPLETED
+        assert record.outcome is MatchOutcome.NONE
+        assert record.termination_reason is TerminationReason.ABORT
+        assert record.winner is None
 
     async def test_neither_present_advances_the_higher_seed(
         self, contract_session: AsyncSession

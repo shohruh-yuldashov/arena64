@@ -1,5 +1,6 @@
-import { createContext, type ReactNode, use, useCallback, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useMemo, useState } from "react";
 
+import { I18nContext, type I18nContextValue } from "@/shared/i18n/context";
 import en from "@/shared/i18n/locales/en.json";
 import ru from "@/shared/i18n/locales/ru.json";
 import uz from "@/shared/i18n/locales/uz.json";
@@ -54,16 +55,6 @@ const LOCALE_NAMES: Record<Locale, string> = {
   ru: "Русский",
   en: "English",
 };
-
-interface I18nContextValue {
-  locale: Locale;
-  setLocale: (locale: Locale) => void;
-  /** Looks up `key`, interpolating `{name}` placeholders from `values`. */
-  t: (key: TranslationKey, values?: Record<string, string | number>) => string;
-  localeName: (locale: Locale) => string;
-}
-
-const I18nContext = createContext<I18nContextValue | null>(null);
 
 function isLocale(value: unknown): value is Locale {
   return typeof value === "string" && (LOCALES as readonly string[]).includes(value);
@@ -134,11 +125,6 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   return <I18nContext value={value}>{children}</I18nContext>;
 }
 
-/** Throws outside the provider — see `useTheme` on why not a silent default. */
-export function useTranslation(): I18nContextValue {
-  const value = use(I18nContext);
-  if (value === null) {
-    throw new Error("useTranslation must be used inside an I18nProvider.");
-  }
-  return value;
-}
+// A64-025.13B §37. The context and its hook live in `context.ts`, which
+// defines no component — see that module on why that matters at runtime.
+export { type I18nContextValue, useTranslation } from "@/shared/i18n/context";

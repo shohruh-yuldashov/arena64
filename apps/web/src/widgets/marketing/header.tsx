@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useRouterState } from "@tanstack/react-router";
 import { MenuIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -25,14 +25,24 @@ import { Brand } from "@/widgets/brand";
  *
  * ## The navigation points at sections, not at routes
  *
- * **Every product route is behind a guard.** `/tournaments`, `/play`,
- * `/friends` all redirect an anonymous visitor to sign-in — so a "Browse
- * tournaments" link in this header would be a link that lies about where it
- * goes, which is the defect A64-025.3 §2 refused to ship on the home page.
+ * `/play` and `/friends` are behind a guard, so a link to either in this
+ * header would be a link that lies about where it goes — the defect
+ * A64-025.3 §2 refused to ship on the home page. The links are in-page
+ * anchors to the sections that explain those features instead: a visitor
+ * gets taken to the explanation, and the CTA takes them to the account that
+ * unlocks the thing itself.
  *
- * So the links are in-page anchors to the sections that explain those
- * features. A visitor gets taken to the explanation; the CTA takes them to
- * the account that unlocks the thing itself.
+ * ## Off the landing page, an anchor points at nothing — A64-026.4 §43.5
+ *
+ * This header is no longer the landing page's alone. `/tournaments` opened
+ * to visitors without an account, and an anonymous visitor there needs
+ * chrome that is not the product shell's guarded navigation.
+ *
+ * `#play` on a page with no `#play` scrolls nowhere, so the anchors are
+ * rendered **only where their sections exist**. Everywhere else the nav is
+ * the one destination that is a real route, and the wordmark goes home. A
+ * shorter nav is the correct one; a nav of anchors to absent sections is
+ * the same lying link in a different costume.
  *
  * ## Sticky, and it earns it
  *
@@ -47,7 +57,13 @@ import { Brand } from "@/widgets/brand";
 export function MarketingHeader() {
   const { t } = useTranslation();
   const { state } = useSession();
+  const pathname = useRouterState({ select: (router) => router.location.pathname });
   const [scrolled, setScrolled] = useState(false);
+
+  // The sections this header's anchors point at live on `/` and nowhere
+  // else. Read from the router rather than passed in as a prop, because a
+  // caller could pass the wrong one and the router cannot.
+  const onLanding = pathname === "/";
 
   // The auth links appear only for `anonymous`, which is the one state that
   // actually means "there is no session" — A64-025.9B's rule, enforced by
@@ -80,16 +96,21 @@ export function MarketingHeader() {
 
         <nav aria-label={t("landing.nav.label")} className="ml-2 hidden md:block">
           <ul className="flex items-center gap-1">
-            {SECTIONS.map((section) => (
-              <li key={section.href}>
-                <a
-                  href={section.href}
-                  className="text-muted-foreground hover:text-foreground focus-visible:ring-ring flex min-h-11 items-center rounded-md px-3 text-sm font-medium transition-colors duration-fast focus-visible:ring-2 focus-visible:outline-none"
-                >
-                  {t(section.label)}
-                </a>
+            {onLanding ? (
+              SECTIONS.map((section) => (
+                <li key={section.href}>
+                  <a href={section.href} className={NAV_LINK}>
+                    {t(section.label)}
+                  </a>
+                </li>
+              ))
+            ) : (
+              <li>
+                <Link to="/tournaments" className={NAV_LINK}>
+                  {t("landing.nav.tournaments")}
+                </Link>
               </li>
-            ))}
+            )}
           </ul>
         </nav>
 
@@ -114,17 +135,23 @@ export function MarketingHeader() {
           {/* The mobile disclosure. A `<button>` with `aria-expanded` and
               `aria-controls`, not a checkbox hack: it has to be reachable
               by keyboard and announced as what it is. */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="md:hidden"
-            aria-expanded={menuOpen}
-            aria-controls="landing-menu"
-            aria-label={t("landing.nav.toggle")}
-            onClick={() => setMenuOpen((open) => !open)}
-          >
-            <MenuIcon aria-hidden="true" className="size-5" />
-          </Button>
+          {/* Off the landing page the panel would hold one link and, for a
+              signed-in reader, nothing at all — so the control that opens
+              it is not drawn. A disclosure button for an empty panel is a
+              button that appears to do nothing. */}
+          {(onLanding || offerAuth) && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="md:hidden"
+              aria-expanded={menuOpen}
+              aria-controls="landing-menu"
+              aria-label={t("landing.nav.toggle")}
+              onClick={() => setMenuOpen((open) => !open)}
+            >
+              <MenuIcon aria-hidden="true" className="size-5" />
+            </Button>
+          )}
         </div>
       </div>
 
@@ -138,24 +165,32 @@ export function MarketingHeader() {
           className="border-border bg-background border-t md:hidden"
         >
           <ul className="mx-auto flex max-w-6xl flex-col px-4 py-2">
-            {SECTIONS.map((section) => (
-              <li key={section.href}>
-                <a
-                  href={section.href}
+            {onLanding ? (
+              SECTIONS.map((section) => (
+                <li key={section.href}>
+                  <a
+                    href={section.href}
+                    onClick={() => setMenuOpen(false)}
+                    className={MENU_LINK}
+                  >
+                    {t(section.label)}
+                  </a>
+                </li>
+              ))
+            ) : (
+              <li>
+                <Link
+                  to="/tournaments"
                   onClick={() => setMenuOpen(false)}
-                  className="focus-visible:ring-ring flex min-h-11 items-center rounded-md text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
+                  className={MENU_LINK}
                 >
-                  {t(section.label)}
-                </a>
+                  {t("landing.nav.tournaments")}
+                </Link>
               </li>
-            ))}
+            )}
             {offerAuth && (
               <li className="sm:hidden">
-                <Link
-                  to="/login"
-                  onClick={() => setMenuOpen(false)}
-                  className="focus-visible:ring-ring flex min-h-11 items-center rounded-md text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
-                >
+                <Link to="/login" onClick={() => setMenuOpen(false)} className={MENU_LINK}>
                   {t("auth.login.submit")}
                 </Link>
               </li>
@@ -167,7 +202,15 @@ export function MarketingHeader() {
   );
 }
 
-/** In-page anchors. Every product route is guarded — see the docstring. */
+// Literal, because Tailwind v4 scans source text: a class name assembled at
+// runtime generates no CSS. Extracted only after the third identical copy.
+const NAV_LINK =
+  "text-muted-foreground hover:text-foreground focus-visible:ring-ring flex min-h-11 items-center rounded-md px-3 text-sm font-medium transition-colors duration-fast focus-visible:ring-2 focus-visible:outline-none";
+
+const MENU_LINK =
+  "focus-visible:ring-ring flex min-h-11 items-center rounded-md text-sm font-medium focus-visible:ring-2 focus-visible:outline-none";
+
+/** In-page anchors, rendered on `/` only — see the docstring. */
 const SECTIONS = [
   { href: "#play", label: "landing.nav.play" },
   { href: "#compete", label: "landing.nav.compete" },

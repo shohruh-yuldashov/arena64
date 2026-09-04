@@ -85,8 +85,15 @@ export default function HistoryPage() {
       {entries.length > 0 && viewerId !== null && (
         <>
           {/* A semantic list — §23. Each row is an item, so a screen reader
-              announces the count and the position without being told. */}
-          <ol aria-label={t("history.title")} className="flex flex-col">
+              announces the count and the position without being told.
+
+              In a card since A64-025.5C §23: it was the last list in the
+              product still floating on the page background with hairline
+              rules and nothing containing it. */}
+          <ol
+            aria-label={t("history.title")}
+            className="border-border bg-card divide-border flex flex-col divide-y overflow-hidden rounded-xl border"
+          >
             {entries.map((entry) => (
               <MatchRow key={entry.match_id} entry={entry} viewerId={viewerId} />
             ))}

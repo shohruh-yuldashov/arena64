@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.5B, the lobby and the board preferences |
+| **Last updated** | 2026-09-04 — A64-025.5C, match history and replay |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -458,6 +458,7 @@ tokens.
 | **A64-025.8** | Friends and social | .2 | Changing privacy or blocking rules |
 | **A64-025.9** | Profile and player | .2 | Changing privacy rules; inventing a statistic |
 | **A64-025.5B** | The lobby, and the board preferences that did nothing | .2, .5 | Changing what a preference means; the three still unread |
+| **A64-025.5C** | Match history and replay | .2, .5B | Changing what a replay reconstructs |
 | **A64-025.9B** | Home, and the account menu in the header | .2, .3 | Inventing a statistic the API does not return |
 | **A64-025.9C** | The four remaining settings surfaces | .2, .9 | Changing what any setting does |
 | **A64-025.10** | Notifications — the feed and the bell | .2 | Admin notification surfaces; what the preferences decide (.9C) |
@@ -2230,3 +2231,70 @@ out.
 Four board-and-piece combinations rendered and compared: classic/classic,
 wood/neo, marble/modern, midnight/neo. 213 tests pass, `tsc --noEmit` clean,
 eslint zero errors.
+
+---
+
+## 23. Match history and replay — A64-025.5C
+
+### 23.1 A history is scanned for results, and the result was fourth
+
+A row read: avatar, opponent, mode, clock, class — *then* the outcome, then
+a reason, then a date, then a "View replay" link. Somebody opening this page
+wants to know how their last five games went, and the answer was the fourth
+thing on each line.
+
+The outcome leads now, as a fixed-width chip, so results line up down the
+left edge and the page can be read without reading it. Same chip the
+tournament history uses.
+
+**Won was `--primary`.** A64-025.9 §18.7 gives the brand hue one job —
+*interaction* — and a finished result is not one. The profile's own
+win/loss/draw bar has been success-red-grey since that phase, so the two
+surfaces were colouring the same fact differently. Wins are `--success`
+here now; losses were already `--destructive`.
+
+### 23.2 Two tab stops per row, and an inert row
+
+Each row carried a separate "View replay" at its end, so twenty matches were
+forty stops — and the row itself did nothing: a player clicked the match
+they wanted and nothing happened. `after:inset-0` on the one anchor makes
+the whole row the target while leaving exactly **one** link in the
+accessibility tree, which is the construction the home page's destination
+cards already use. The link keeps its opponent-naming `aria-label`, so
+twenty rows are still twenty distinguishable links rather than twenty
+"Replay"s.
+
+Dates were `9/4/26`. They are relative now, with the instant on the
+element — §21's rule, and for the same reason.
+
+### 23.3 `blitz`, for the fourth time
+
+`Category: blitz` on the replay summary. The raw server enum, in every
+locale, on the fourth surface to have shipped one after the tournament card
+(§16), the ratings block (§18) and match history (§18.7).
+
+Four occurrences is not four accidents. The shape is always the same: a
+value arrives over the wire, somebody renders it because it *reads* like a
+word in English, and nothing fails. It is recorded here as a checklist item
+for §13's closing audit rather than as a fifth incident report.
+
+### 23.4 The replay had no heading and no way out
+
+The page opened on a board. Its `<h1>` was `sr-only`, which told a screen
+reader where it was and nobody else, and a player who arrived from match
+history had no route back except the browser's own button. There is a
+visible heading and an "All matches" link now.
+
+The move list was the only thing on the page sitting directly on the
+background; it is in a card, like the summary beside it.
+
+### 23.5 Measured
+
+| Surface | 1280 light | 360 dark |
+| --- | --- | --- |
+| `/games/history` | 0 | 0 |
+| `/games/{id}/replay` | 0 | 0 |
+
+213 tests pass, `tsc --noEmit` clean, eslint zero errors. No assertion
+changed: the row's accessible name is what the suite queries, and it is
+unchanged.

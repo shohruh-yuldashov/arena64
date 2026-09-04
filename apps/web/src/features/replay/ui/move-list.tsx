@@ -66,9 +66,12 @@ export function MoveList({ plies, view }: { plies: readonly ReplayPly[]; view: R
   }
 
   return (
+    // In a card, like the summary above it — A64-025.5C §23. The list was
+    // the only thing on this page sitting directly on the background, so
+    // the page read as one panel and a stray column of text.
     <ol
       aria-label={t("replay.moves.label")}
-      className="max-h-[22rem] overflow-y-auto text-sm lg:max-h-[32rem]"
+      className="border-border bg-card max-h-[22rem] overflow-y-auto rounded-xl border p-3 text-sm lg:max-h-[32rem]"
     >
       {rows.map((row) => (
         <li key={row.number} className="grid grid-cols-[2.5rem_1fr_1fr] items-stretch gap-1">

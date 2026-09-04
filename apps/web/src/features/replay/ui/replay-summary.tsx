@@ -1,6 +1,8 @@
-import { formatMillis } from "@/entities/time-control";
+import { formatMillis, speedClassKey } from "@/entities/time-control";
 import type { MatchReplay, ReplaySeat } from "@/features/replay/api";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
+import { cn } from "@/shared/lib/cn";
+import { speedAccent } from "@/shared/lib/speed-accent";
 import type { Side } from "@/shared/realtime";
 import { Card, CardContent } from "@/shared/ui";
 
@@ -132,7 +134,13 @@ export function ReplaySummary({ replay }: { replay: MatchReplay }) {
           {replay.speed_class !== null && (
             <>
               <dt className="text-muted-foreground">{t("play.waiting.speed")}</dt>
-              <dd className="font-medium">{replay.speed_class}</dd>
+              {/* A64-025.5C §23. The **raw enum** — `blitz`, in every
+                  locale — and the fourth surface to have shipped one after
+                  the tournament card, the ratings block and match history.
+                  Translated, and in the class's own colour. */}
+              <dd className={cn("font-medium", speedAccent(replay.speed_class).text)}>
+                {t(speedClassKey(replay.speed_class))}
+              </dd>
             </>
           )}
 

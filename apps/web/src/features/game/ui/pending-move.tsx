@@ -2,7 +2,7 @@ import { useTranslation } from "@/shared/i18n";
 import { Button } from "@/shared/ui";
 
 /**
- * The move a player has chosen, and the two answers to it — A64-026 §38.
+ * The move a player has chosen, and the two answers to it — A64-025.14 §38.
  *
  * ## Why it sits under the board rather than in the panel
  *

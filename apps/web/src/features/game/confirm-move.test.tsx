@@ -8,7 +8,7 @@ import { PendingMove } from "@/features/game/ui/pending-move";
 import { renderWithProviders } from "@/shared/test/render";
 
 /**
- * The move a player has chosen but not yet played — A64-026 §38.
+ * The move a player has chosen but not yet played — A64-025.14 §38.
  *
  * `confirm_move` is the one gameplay preference that changes *when a move
  * leaves the browser* rather than how something looks, so what has to be

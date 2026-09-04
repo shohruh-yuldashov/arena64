@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-026, the move a player has chosen but not yet played |
+| **Last updated** | 2026-09-04 — A64-025.14, the move a player has chosen but not yet played |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -477,6 +477,7 @@ tokens.
 | **A64-025.12A** | A throw inside the router reaches this app's error page | — | The unreproduced i18n context fault itself (§33.3) |
 | **A64-025.13A** | The match a no-show left open, and the port that closes it | .13 | A moderator's adjudication of a *played* game, which needs an audit trail |
 | **A64-025.13B** | Every context object in a module Fast Refresh will not swap | .12A | `features/auth`'s session context (§37.3) |
+| **A64-025.14** | `confirm_move`, the fifth gameplay preference | .6D | Editing a staged move (§38.5) |
 | **A64-025.12** | Motion and interaction system. Fixes P3-5 | .3–.10 | Adding motion for its own sake |
 | **A64-025.13** | Closing audit | all | New work |
 
@@ -2177,7 +2178,7 @@ than quietly left:
 | `piece_set` | **Closed** — three finishes, applied to every piece |
 | `show_coordinates` | **Closed** by A64-025.6D §28 |
 | `animation_speed` | Still unread. There is no move animation to speed up yet — A64-025.12's |
-| ~~`confirm_move`~~ | **Closed by A64-026** — §38. It does change move *submission* rather than presentation, which is why it needed a step rather than an attribute |
+| ~~`confirm_move`~~ | **Closed by A64-025.14** — §38. It does change move *submission* rather than presentation, which is why it needed a step rather than an attribute |
 
 ### 22.2 Tokens on the root, not props through four components
 
@@ -3441,7 +3442,7 @@ abandoned match is permanent, and a player carrying one cannot queue.
 
 | | |
 | --- | --- |
-| ~~`confirm_move`~~ | **Closed by A64-026** — §38. All five gameplay preferences are read now |
+| ~~`confirm_move`~~ | **Closed by A64-025.14** — §38. All five gameplay preferences are read now |
 | The `useTranslation` context fault | §33.3. Open, dev-only, not reproduced, now reported under `scope: "router"` |
 | ~~The stuck-match question~~ | **Answered and fixed** — §36. It was reachable, every unplayed tournament fixture hit it, and the player could not queue again |
 | ~~Three `react-refresh` warnings~~ | **Fixed** — §37. They were the rule reporting the §33.3 hazard, and lint is now at zero problems |
@@ -3665,7 +3666,13 @@ with three one-line extractions.
 | `prettier --check` | clean |
 | `vitest` | 231 passed, 35 files — no assertion changed |
 
-## 38. The move a player has chosen but not yet played — A64-026
+## 38. The move a player has chosen but not yet played — A64-025.14
+
+> **Renumbered.** This shipped as `A64-026`, which is wrong: the owner's
+> roadmap reserves that number for the landing, brand and marketing epic.
+> It belongs to A64-025 — it closes the last of the five gameplay
+> preferences that redesign phase found unread — so it is `.14`, and the
+> landing epic keeps `A64-026`.
 
 `confirm_move` was the last of the five gameplay preferences that nothing
 read. A player set it, the form saved it, the server stored it, and every

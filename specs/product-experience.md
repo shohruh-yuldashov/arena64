@@ -4444,6 +4444,7 @@ leave it until there is a server that can render a head.
 | `eslint`            | 0 errors (2 pre-existing fast-refresh warnings) |
 | `prettier --check`  | clean                                           |
 | `vitest`            | 269 passed, 39 files (260 before; **+9**)       |
+| `playwright`        | 16 passed, whole suite                          |
 
 Verified in a real browser against the running API, anonymous, at 360, 768
 and 1280 in both themes:

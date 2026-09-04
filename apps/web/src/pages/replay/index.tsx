@@ -1,4 +1,5 @@
 import { Link, useParams } from "@tanstack/react-router";
+import { ChevronLeftIcon } from "lucide-react";
 
 import { isAuthenticated } from "@/entities/session";
 import { useSession } from "@/features/auth/model/session-provider";
@@ -126,35 +127,49 @@ function Replay({
   useReplayShortcuts(view, true);
 
   return (
-    <section className="mx-auto flex w-full max-w-6xl flex-col gap-4 py-4 lg:flex-row lg:items-start">
-      <h1 className="sr-only">{t("replay.title")}</h1>
-
-      {/* Board first in the DOM on every width — it is the content, and on
-          a phone it is what should be under the thumb. */}
-      <div className="flex w-full min-w-0 flex-col gap-4 lg:max-w-[min(70vh,40rem)] lg:flex-1">
-        <GameBoard
-          board={view.position.board}
-          orientation={view.orientation}
-          // Read-only: nothing is movable, nothing is a destination, and
-          // `interactive={false}` disables every cell (§7).
-          movable={[]}
-          selected={[]}
-          destinations={[]}
-          captured={[]}
-          lastMove={
-            view.position.playedPath === null
-              ? null
-              : { path: view.position.playedPath, captured: view.position.captured }
-          }
-          interactive={false}
-          onSelect={() => undefined}
-        />
-        <ReplayControls view={view} />
+    <section className="mx-auto flex w-full max-w-6xl flex-col gap-4 py-4">
+      {/* A64-025.5C §23. The page opened on a board with no heading and no
+          way back: a player arrives here from match history and the only
+          route out was the browser's own button. The `h1` was `sr-only`,
+          which told a screen reader where it was and nobody else. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-xl font-semibold tracking-tight">{t("replay.title")}</h1>
+        <Button asChild variant="ghost" size="sm" className="min-h-11">
+          <Link to="/games/history">
+            <ChevronLeftIcon aria-hidden="true" className="size-4" />
+            {t("replay.backToHistory")}
+          </Link>
+        </Button>
       </div>
 
-      <div className="flex w-full flex-col gap-4 lg:w-80 lg:shrink-0">
-        <ReplaySummary replay={replay} />
-        <MoveList plies={replay.plies} view={view} />
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+        {/* Board first in the DOM on every width — it is the content, and on
+          a phone it is what should be under the thumb. */}
+        <div className="flex w-full min-w-0 flex-col gap-4 lg:max-w-[min(70vh,40rem)] lg:flex-1">
+          <GameBoard
+            board={view.position.board}
+            orientation={view.orientation}
+            // Read-only: nothing is movable, nothing is a destination, and
+            // `interactive={false}` disables every cell (§7).
+            movable={[]}
+            selected={[]}
+            destinations={[]}
+            captured={[]}
+            lastMove={
+              view.position.playedPath === null
+                ? null
+                : { path: view.position.playedPath, captured: view.position.captured }
+            }
+            interactive={false}
+            onSelect={() => undefined}
+          />
+          <ReplayControls view={view} />
+        </div>
+
+        <div className="flex w-full flex-col gap-4 lg:w-80 lg:shrink-0">
+          <ReplaySummary replay={replay} />
+          <MoveList plies={replay.plies} view={view} />
+        </div>
       </div>
     </section>
   );

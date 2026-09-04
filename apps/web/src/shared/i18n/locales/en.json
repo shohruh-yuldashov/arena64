@@ -699,7 +699,8 @@
       "title": "The replay could not be loaded",
       "body": "Something went wrong. Try again in a moment."
     },
-    "openReplay": "View replay"
+    "openReplay": "View replay",
+    "backToHistory": "All matches"
   },
   "history": {
     "title": "Match history",

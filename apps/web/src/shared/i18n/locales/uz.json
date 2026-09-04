@@ -699,7 +699,8 @@
       "title": "Takrorlashni yuklab bo'lmadi",
       "body": "Nimadir xato ketdi. Birozdan keyin qayta urinib ko'ring."
     },
-    "openReplay": "Takrorlashni ko'rish"
+    "openReplay": "Takrorlashni ko'rish",
+    "backToHistory": "Barcha o'yinlar"
   },
   "history": {
     "title": "O'yinlar tarixi",

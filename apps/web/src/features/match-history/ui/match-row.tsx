@@ -1,10 +1,10 @@
 import { Link } from "@tanstack/react-router";
 
-import { formatMillis } from "@/entities/time-control";
-import { speedClassKey } from "@/entities/time-control";
+import { formatMillis, speedClassKey } from "@/entities/time-control";
 import type { MatchHistoryEntry } from "@/features/match-history/api";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
+import { formatDateTime, formatRelativeTime } from "@/shared/lib/format";
 import { speedAccent } from "@/shared/lib/speed-accent";
 import { Avatar, AvatarFallback, AvatarImage } from "@/shared/ui";
 
@@ -93,68 +93,87 @@ export function MatchRow({ entry, viewerId }: { entry: MatchHistoryEntry; viewer
   const name =
     entry.opponent?.display_name ?? entry.opponent?.username ?? t("history.unknownOpponent");
 
+  const accent = speedClass === null ? null : speedAccent(speedClass);
+
   return (
-    <li className="border-border flex flex-col gap-3 border-b py-3 last:border-b-0 sm:flex-row sm:items-center sm:gap-4">
-      {/* Dense rows use the thumbnail, never a full avatar read — §17. */}
-      <Avatar className="size-9 shrink-0">
-        {entry.opponent?.avatar_thumbnail_url != null && (
-          <AvatarImage src={entry.opponent.avatar_thumbnail_url} alt="" />
-        )}
-        <AvatarFallback aria-hidden="true">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
-      </Avatar>
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-sm font-medium">
-          {t("history.versus", { opponent: name })}
-        </span>
-        <span className="text-muted-foreground truncate text-xs">
-          {t(entry.rated ? "play.mode.ranked" : "play.mode.casual")}
-          {clock !== null && ` · ${clock}`}
-          {/* A64-025.9 §18.7. This printed the **raw enum** — `blitz`, in
-              every locale — and now reads as the translated name in the
-              class's own colour, the same one the profile's cards use. */}
-          {speedClass !== null && (
-            <>
-              {" · "}
-              <span className={cn("font-medium", speedAccent(speedClass).text)}>
-                {t(speedClassKey(speedClass))}
-              </span>
-            </>
-          )}
-        </span>
-      </div>
-
-      <div className="flex flex-col sm:items-end">
-        {/* The word carries the meaning; the colour only reinforces it. */}
+    // One row, one link, one tab stop — A64-025.5C §23.
+    //
+    // The row carried a separate "View replay" at its end, so a list of
+    // twenty matches was forty stops and the row itself was inert: a player
+    // clicked the match they wanted and nothing happened. `after:inset-0`
+    // makes the whole row the target while leaving exactly one anchor in
+    // the accessibility tree, which is the same construction the home
+    // page's destination cards use.
+    <li className="relative">
+      <div className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/50 sm:gap-4 sm:px-5">
+        {/* The result leads. It is what somebody scans a history for, and
+            it was the fourth thing on the row behind an avatar, a name and
+            a clock. A fixed width so the outcomes line up down the edge —
+            the same chip the tournament history uses. */}
         <span
           className={cn(
-            "text-sm font-semibold",
-            won && "text-primary",
-            lost && "text-destructive",
+            "inline-flex h-8 w-16 shrink-0 items-center justify-center rounded-md text-xs font-semibold",
+            // `--success`, not `--primary`. A64-025.9 §18.7 gives the brand
+            // hue one job — *interaction* — and a finished result is not
+            // one; the profile's own win/loss bar has been success-red-grey
+            // since that phase and this row disagreed with it.
+            won && "bg-success/15 text-success",
+            lost && "bg-destructive/15 text-destructive",
+            !won && !lost && "bg-muted text-muted-foreground",
           )}
         >
           {t(result)}
         </span>
-        <span className="text-muted-foreground text-xs">
-          {t(reasonKey(entry.termination_reason))}
-        </span>
-      </div>
 
-      <div className="flex items-center gap-3 sm:w-40 sm:justify-end">
-        <time dateTime={played} className="text-muted-foreground text-xs tabular-nums">
-          {new Intl.DateTimeFormat(locale, { dateStyle: "short" }).format(new Date(played))}
-        </time>
-        {/* An unambiguous accessible name — §23. "Replay" repeated down a
-            list gives a screen reader twenty identical links; naming the
-            opponent makes each one distinguishable. */}
-        <Link
-          to="/games/$matchId/replay"
-          params={{ matchId: entry.match_id }}
-          aria-label={t("history.replayOf", { opponent: name })}
-          className="text-primary min-h-11 min-w-11 self-center px-2 py-2 text-sm underline-offset-4 hover:underline focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none"
+        {/* Dense rows use the thumbnail, never a full avatar read — §17. */}
+        <Avatar className="hidden size-9 shrink-0 sm:flex">
+          {entry.opponent?.avatar_thumbnail_url != null && (
+            <AvatarImage src={entry.opponent.avatar_thumbnail_url} alt="" />
+          )}
+          <AvatarFallback aria-hidden="true">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
+        </Avatar>
+
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <Link
+            to="/games/$matchId/replay"
+            params={{ matchId: entry.match_id }}
+            // An unambiguous accessible name — §23. "Replay" repeated down
+            // a list gives a screen reader twenty identical links; naming
+            // the opponent makes each one distinguishable.
+            aria-label={t("history.replayOf", { opponent: name })}
+            className="focus-visible:ring-ring truncate text-sm font-medium after:absolute after:inset-0 focus-visible:ring-2 focus-visible:outline-none"
+          >
+            {t("history.versus", { opponent: name })}
+          </Link>
+          <span className="text-muted-foreground truncate text-xs">
+            {t(entry.rated ? "play.mode.ranked" : "play.mode.casual")}
+            {clock !== null && ` · ${clock}`}
+            {/* A64-025.9 §18.7. This printed the **raw enum** — `blitz`, in
+                every locale — and now reads as the translated name in the
+                class's own colour, the same one the profile's cards use. */}
+            {speedClass !== null && accent !== null && (
+              <>
+                {" · "}
+                <span className={cn("font-medium", accent.text)}>
+                  {t(speedClassKey(speedClass))}
+                </span>
+              </>
+            )}
+            {" · "}
+            {t(reasonKey(entry.termination_reason))}
+          </span>
+        </div>
+
+        {/* Relative, with the instant on the element — A64-025.10 §21. A
+            history is scanned for "when", and `9/4/26` is a date somebody
+            has to decode. */}
+        <time
+          dateTime={played}
+          title={formatDateTime(played, locale) ?? ""}
+          className="text-muted-foreground shrink-0 text-xs"
         >
-          {t("replay.openReplay")}
-        </Link>
+          {formatRelativeTime(played, locale)}
+        </time>
       </div>
     </li>
   );

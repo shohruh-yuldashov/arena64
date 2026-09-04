@@ -880,7 +880,8 @@
       "unknown": "Unknown"
     },
     "unknownPlayer": "Unknown player",
-    "listError": "Tournaments could not be loaded."
+    "listError": "Tournaments could not be loaded.",
+    "deadlineOpenRelative": "Entries close {when}"
   },
   "pwa": {
     "region": "Application notices",
@@ -1101,6 +1102,27 @@
         "many": "{count} days ago",
         "other": "{count} days ago"
       }
-    }
+    },
+    "in": {
+      "minute": {
+        "one": "in {count} minute",
+        "few": "in {count} minutes",
+        "many": "in {count} minutes",
+        "other": "in {count} minutes"
+      },
+      "hour": {
+        "one": "in {count} hour",
+        "few": "in {count} hours",
+        "many": "in {count} hours",
+        "other": "in {count} hours"
+      },
+      "day": {
+        "one": "in {count} day",
+        "few": "in {count} days",
+        "many": "in {count} days",
+        "other": "in {count} days"
+      }
+    },
+    "soon": "very soon"
   }
 }

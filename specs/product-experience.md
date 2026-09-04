@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.5D, the surfaces read in Uzbek and Russian |
+| **Last updated** | 2026-09-04 — A64-025.7B, the tournament list and the browser's Uzbek |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -460,6 +460,7 @@ tokens.
 | **A64-025.5B** | The lobby, and the board preferences that did nothing | .2, .5 | Changing what a preference means; the three still unread |
 | **A64-025.5C** | Match history and replay | .2, .5B | Changing what a replay reconstructs |
 | **A64-025.5D** | The same surfaces, read in Uzbek and Russian | .5C, .10 | Retranslating; changing layout English needs |
+| **A64-025.7B** | The tournament list, and the browser's missing Uzbek | .7, .5D | Number formatting; hand-writing what ICU gets right |
 | **A64-025.9B** | Home, and the account menu in the header | .2, .3 | Inventing a statistic the API does not return |
 | **A64-025.9C** | The four remaining settings surfaces | .2, .9 | Changing what any setting does |
 | **A64-025.10** | Notifications — the feed and the bell | .2 | Admin notification surfaces; what the preferences decide (.9C) |
@@ -2388,3 +2389,88 @@ Recorded here so the next phase does not have to rediscover the method.
 Eight surfaces × three languages × two widths, zero clipped text. 215 tests
 pass (two more than §23: the formatter tests now read the real
 dictionaries), `tsc --noEmit` clean, eslint zero errors.
+
+---
+
+## 25. The tournament list, and the browser's Uzbek — A64-025.7B
+
+### 25.1 A list you choose from, not one you read
+
+The card was already a link and already carried the speed colour. What it
+did not do was help anybody **decide**, which is the only thing a list of
+open tournaments is for.
+
+| Was | Is |
+| --- | --- |
+| `Entrants: 27 of 32` | the same numbers, over a capacity bar |
+| `Entries close September 5, 2026` | `Entries close in 2 days`, and amber inside a day |
+| `Created: September 1, 2026` | removed |
+
+"27 of 32" is arithmetic; a bar answers *is this nearly full* without any.
+It is `aria-hidden` and the numbers stay beside it, because colour is never
+the only signal — and it is coloured **only while registration is open**:
+`--warning` from four fifths, `--destructive` when full. A full bar on a
+finished tournament is a fact, not a warning, and red would be telling a
+reader to hurry about something that ended last week.
+
+`formatRelativeTime` looks forward now as well as back. A deadline is the
+same question as a timestamp asked the other way round, and the two
+directions genuinely need different words under a minute: something that
+recent *just happened*; something that close is *about to*.
+
+The creation date was removed. Nobody picks a tournament by when it was
+opened, and it sat at the same weight as the deadline, which is the line a
+reader is actually there for. One line to restore if that judgement is
+wrong.
+
+### 25.2 The browser does not have Uzbek
+
+§24.2 found that `Intl.RelativeTimeFormat` reports `uz` as supported and has
+no patterns for it. That was not one gap. Every `Intl` API this product uses
+was then checked in the same browser:
+
+| API | Uzbek in Chromium | Full ICU (Node) | Done |
+| --- | --- | --- | --- |
+| `RelativeTimeFormat` | `-3 h`, and the English "yesterday" | `3 soat oldin` | our own strings — §24.2 |
+| `DateTimeFormat` dates | `2026 M09 3` | `3-sentabr, 2026` | our own month table |
+| `DateTimeFormat` weekday | `Thu` | `chorshanba` | our own weekday table |
+| `ListFormat` | `Bullet and Yozishma` | `Bullet va Yozishma` | our own conjunction |
+| `DateTimeFormat` time | `15:30` | `15:30` | **correct, left alone** |
+| `PluralRules` | `one`/`other` | same | **correct, left alone** |
+| `NumberFormat` | `1,684.5` | `1 684,5` | **not fixed — see below** |
+
+`M09` is CLDR's *root* month name. The browser resolves the locale, reports
+it as supported, and then answers from the fallback data — which is why none
+of this failed and none of it was visible in English.
+
+**The number format is knowingly left wrong.** Uzbek groups with a space and
+decimates with a comma, and Chromium gives the English form. Unlike `M09` or
+an English "and", `1,684.5` is *readable* by an Uzbek speaker — and
+hand-writing number formatting means owning percent signs, negatives and
+decimal places for three locales, which is the one thing in this table ICU
+is genuinely better at. Recorded rather than fixed.
+
+### 25.3 A test that passed while the product was broken
+
+`format.test.ts` asserted `formatDayHeading(…, "uz")` returned
+`"Chorshanba"` and passed — because **Vitest runs in Node, which has full
+ICU, and the product runs in a browser, which does not.** Green suite,
+broken screen, for exactly as long as nobody looked at the product in
+Uzbek.
+
+Removing the `Intl` dependency for Uzbek is what makes the suite honest
+again: with the values coming from a table in the repository, Node and the
+browser cannot disagree. That is the real argument for the tables — larger
+than the four defects they fix.
+
+The calendar names live beside the formatter rather than in `locales/`.
+Nothing in them is a sentence anybody wrote, and a translator asked to
+review "sentabr" would be being asked to check the Gregorian calendar. If
+Chromium ever ships the data they can be deleted with no visible change.
+
+### 25.4 Measured
+
+Eight surfaces plus the tournament list, in three languages at 360 and
+1280: zero clipped text, zero page overflow. 220 tests pass — seven more
+than §23, every one of them a locale the suite could not previously see.
+`tsc --noEmit` clean, eslint zero errors.

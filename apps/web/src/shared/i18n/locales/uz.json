@@ -880,7 +880,8 @@
       "unknown": "Noma'lum"
     },
     "unknownPlayer": "Noma'lum o'yinchi",
-    "listError": "Turnirlarni yuklab bo'lmadi."
+    "listError": "Turnirlarni yuklab bo'lmadi.",
+    "deadlineOpenRelative": "Ro'yxat {when} yopiladi"
   },
   "pwa": {
     "region": "Ilova bildirishnomalari",
@@ -1101,6 +1102,27 @@
         "many": "{count} kun oldin",
         "other": "{count} kun oldin"
       }
-    }
+    },
+    "in": {
+      "minute": {
+        "one": "{count} daqiqadan keyin",
+        "few": "{count} daqiqadan keyin",
+        "many": "{count} daqiqadan keyin",
+        "other": "{count} daqiqadan keyin"
+      },
+      "hour": {
+        "one": "{count} soatdan keyin",
+        "few": "{count} soatdan keyin",
+        "many": "{count} soatdan keyin",
+        "other": "{count} soatdan keyin"
+      },
+      "day": {
+        "one": "{count} kundan keyin",
+        "few": "{count} kundan keyin",
+        "many": "{count} kundan keyin",
+        "other": "{count} kundan keyin"
+      }
+    },
+    "soon": "juda tez orada"
   }
 }

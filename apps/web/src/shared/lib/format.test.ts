@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest";
 import en from "@/shared/i18n/locales/en.json";
 import ru from "@/shared/i18n/locales/ru.json";
 import uz from "@/shared/i18n/locales/uz.json";
-import { formatDayHeading, formatRelativeTime } from "@/shared/lib/format";
+import {
+  formatDate,
+  formatDayHeading,
+  formatList,
+  formatRelativeTime,
+} from "@/shared/lib/format";
 
 /**
  * The two clock-relative formatters — A64-025.5D.
@@ -18,8 +23,8 @@ import { formatDayHeading, formatRelativeTime } from "@/shared/lib/format";
  * reader means by "today" — so a UTC literal would make these assertions
  * depend on the machine's zone. CLAUDE.md §6.4.
  */
-const local = (year: number, month: number, day: number, hour = 12, minute = 0) =>
-  new Date(year, month - 1, day, hour, minute).toISOString();
+const local = (year: number, month: number, day: number, hour = 12, minute = 0, second = 0) =>
+  new Date(year, month - 1, day, hour, minute, second).toISOString();
 
 const NOW = new Date(2026, 8, 4, 10, 20);
 
@@ -95,11 +100,50 @@ describe("formatRelativeTime", () => {
     expect(formatRelativeTime(local(2026, 9, 4, 5, 20), "ru", t, NOW)).toBe("5 часов назад");
   });
 
+  it("looks forward as well as back", () => {
+    // A64-025.7B. A deadline is the same question asked the other way
+    // round, and a tournament list reading "Entries close September 5,
+    // 2026" made a reader work out whether that was worth hurrying for.
+    expect(formatRelativeTime(local(2026, 9, 6, 10, 20), "en", translator("en"), NOW)).toBe(
+      "in 2 days",
+    );
+    expect(formatRelativeTime(local(2026, 9, 4, 13, 20), "uz", translator("uz"), NOW)).toBe(
+      "3 soatdan keyin",
+    );
+    expect(formatRelativeTime(local(2026, 9, 4, 15, 20), "ru", translator("ru"), NOW)).toBe(
+      "через 5 часов",
+    );
+  });
+
+  it("says soon for a deadline about to pass, not just now", () => {
+    // The two directions genuinely need different words under a minute:
+    // something that recent just happened; something that close is about to.
+    expect(formatRelativeTime(local(2026, 9, 4, 10, 20, 30), "en", translator("en"), NOW)).toBe(
+      "very soon",
+    );
+  });
+
   it("returns null for an absent or unparseable instant", () => {
     const t = translator("en");
     expect(formatRelativeTime(null, "en", t, NOW)).toBeNull();
     expect(formatRelativeTime(undefined, "en", t, NOW)).toBeNull();
     expect(formatRelativeTime("not a date", "en", t, NOW)).toBeNull();
+  });
+});
+
+describe("formatList", () => {
+  it("joins with the Uzbek conjunction, not the English one", () => {
+    // Chromium's `ListFormat` answers `uz` with "and", so the ratings block
+    // read "Bullet and Yozishma" — a foreign word inside an Uzbek sentence.
+    expect(formatList(["Bullet", "Yozishma"], "uz")).toBe("Bullet va Yozishma");
+    expect(formatList(["A", "B", "C"], "uz")).toBe("A, B va C");
+    expect(formatList(["A"], "uz")).toBe("A");
+    expect(formatList([], "uz")).toBe("");
+  });
+
+  it("leaves the locales the browser gets right alone", () => {
+    expect(formatList(["A", "B"], "en")).toBe("A and B");
+    expect(formatList(["A", "B"], "ru")).toBe("A и B");
   });
 });
 
@@ -116,6 +160,19 @@ describe("formatDayHeading", () => {
     expect(formatDayHeading(local(2026, 9, 2, 12), "en", translator("en"), NOW)).toBe(
       "Wednesday",
     );
+    expect(formatDayHeading(local(2026, 9, 2, 12), "uz", translator("uz"), NOW)).toBe(
+      "Chorshanba",
+    );
+  });
+
+  it("spells Uzbek dates from our own table, not the browser's", () => {
+    // The reason this test exists: Chromium resolves `uz` and then answers
+    // from CLDR's **root** data — `2026 M09 3` for a date and `Thu` for a
+    // long weekday. Node's full ICU has the real values, so every earlier
+    // test of this file passed while the product showed `M09` to the
+    // language it is built for. Asserting the exact strings is what makes
+    // the suite and the browser agree.
+    expect(formatDate(local(2026, 9, 3, 12), "uz")).toBe("3-sentabr, 2026");
     expect(formatDayHeading(local(2026, 9, 2, 12), "uz", translator("uz"), NOW)).toBe(
       "Chorshanba",
     );

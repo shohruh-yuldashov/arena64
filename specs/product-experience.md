@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.4B, the front door |
+| **Last updated** | 2026-09-04 — A64-025.10E, one email shell for three messages |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -350,7 +350,7 @@ most, the clock can be off-screen.
 | # | Finding | Task |
 | --- | --- | --- |
 | ~~P2-1~~ | ~~Bracket has no visual parent-child relationship, though the relationship is authoritative and already on the wire (§3.6)~~ | **Fixed** — §16 |
-| P2-2 | Password-reset email is English-only and plain-text-only while the other two are trilingual HTML (§3.10) | A64-025.10 |
+| ~~P2-2~~ | ~~Password-reset email is English-only and plain-text-only~~ | **Closed by A64-025.10E** — trilingual, both parts, on the shared shell (§30) |
 | P2-3 | No shared empty/error/loading component — 74 hand-rolled live regions (§3.9) | **Foundation laid** — `ListState` promoted and `Notice` added (§10.7); the sweep across surfaces is A64-025.11/.12 |
 | ~~P2-4~~ | ~~No `aria-current` anywhere in navigation~~ | **Fixed** — §9.3 |
 | ~~P2-5~~ | ~~No brand colour, no semantic colours~~ | **Fixed** — §10.1, §10.3 |
@@ -2701,3 +2701,69 @@ left as it is rather than reclassified on a hunch.
 | six surfaces × 360 and 1280 | 0 | 0 | 0 |
 
 220 tests pass, `tsc --noEmit` clean, eslint zero errors.
+
+---
+
+## 30. One email shell for three messages — A64-025.10E
+
+This platform sends three messages. Each built its own HTML:
+
+| Message | Before | After |
+| --- | --- | --- |
+| Verification code | trilingual, both parts, its own `<div>` | the shared shell |
+| Notification | trilingual, both parts, its own `<div>` and button | the shared shell |
+| Password reset | **English only, plain text only, an f-string inside the service** | trilingual, both parts, the shared shell |
+
+Three shells meant three places to change a colour and one message that had
+been left out of the design entirely. **P2-2 is closed.**
+
+### 30.1 The reset mail already knew the language
+
+`PasswordResetService._deliver` receives a `UserRead`, and `UserRead` has
+carried `preferred_language` since A64-012.5. The message was English
+because nobody read the field, not because the information was missing —
+which is why closing this needed no plumbing, only a template.
+
+The one sentence in that message that does real work is
+*"if you did not ask for this, ignore it."* A reset email arriving
+unrequested is the first thing somebody sees when an attacker is probing
+their account, and the correct advice is genuinely to do nothing — saying so
+stops a worried person from clicking the link to "check", which is the one
+action that would spend their token for the attacker. That sentence is now
+in the reader's own language, which is the whole point of the defect being a
+defect.
+
+### 30.2 The brand gradient is deliberately not in email
+
+`globals.css` gives the product a gradient and §18.7 rations it to three
+places. **None of them is an email.** Gradients on a button are unevenly
+supported across mail clients, `oklch` is not supported at all, and a client
+that drops the background paints white text on white — a button nobody can
+read is worse than a plain one.
+
+So the email palette is a flat hex translation of the same brand, and
+`layout.py` says so at the top. A divergence that is written down is a
+decision; one that is not is drift.
+
+### 30.3 What each module kept
+
+The shell owns the frame, the button, the code block, the footnote and
+**all** the escaping. What stays in each module is the part that is
+genuinely its own: which lines a message is made of, in which language.
+
+`notifications/presentation/email/templates.py` had a docstring saying every
+user-controlled string is "escaped, once, **here**". It is not here any
+more, and the docstring says so — a comment that survives the code it
+describes is worse than no comment.
+
+### 30.4 Measured
+
+`ruff`, `mypy --strict` and `pyright` clean across 679 source files. The
+notification email's contract test asserts on **content rather than shape**
+— it says so in its own docstring — which is why the shell could move
+underneath it without a single assertion changing.
+
+### 30.5 Not done
+
+The three messages are the three that exist. §5 lists new email types as out
+of scope for this phase and they stay out.

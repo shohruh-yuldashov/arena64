@@ -26,11 +26,11 @@ their half-finished session in it.
 That also removes the one thing a phishing copy of this email would need.
 """
 
-from html import escape
 from typing import Final
 
 from app.core.enums import Locale
 from app.modules.auth.domain.otp import OTP_TTL_MINUTES
+from app.platform.email.layout import render_email_body
 
 _SUBJECTS: Final[dict[Locale, str]] = {
     Locale.EN: "Arena64 — your verification code",
@@ -72,42 +72,19 @@ def build_verification_code_email(
     the recipient — this function never sees an address, which is one fewer
     place one can be logged.
 
-    `recipient_name` is player-chosen and reaches an HTML document, so it is
-    escaped at the interpolation. The text part is deliberately **not**
-    escaped: `O'Brien` must read as `O'Brien` in a plain-text client, not as
-    `O&#x27;Brien`.
-
-    The code needs no escaping — it is six characters this platform
-    generated from `0123456789` — and is escaped anyway, because "this value
-    happens to be safe" is a property that survives until somebody changes
-    the generator.
+    Escaping is `render_email_body`'s — A64-025.10E §30 moved this message
+    onto the shared shell, so `O'Brien` still reaches a plain-text client as
+    `O'Brien` and an HTML one safely, and neither rule is restated here.
     """
-    greeting = _GREETING[locale].format(name=recipient_name)
-    return {
-        "subject": _SUBJECTS[locale],
-        "text_body": (
-            f"{greeting}\n\n"
-            f"{_LEAD[locale]}\n\n"
-            f"    {code}\n\n"
-            f"{_EXPIRY[locale]}\n\n"
-            f"{_IGNORE[locale]}\n"
-        ),
-        "html_body": (
-            '<div style="font-family:sans-serif;font-size:15px;line-height:1.5;color:#111">'
-            f'<p style="margin:0 0 12px 0">{escape(greeting)}</p>'
-            f'<p style="margin:0 0 12px 0">{escape(_LEAD[locale])}</p>'
-            # Letter-spaced and large, because the one thing a person does
-            # with this message is read six characters off it and type them
-            # somewhere else. Inline styles only — a `<style>` block is
-            # stripped by several major clients.
-            '<p style="margin:0 0 16px 0;font-size:30px;font-weight:700;'
-            f'letter-spacing:6px;font-family:monospace">{escape(code)}</p>'
-            f'<p style="margin:0 0 12px 0">{escape(_EXPIRY[locale])}</p>'
-            '<p style="margin:20px 0 0 0;font-size:13px;color:#666">'
-            f"{escape(_IGNORE[locale])}</p>"
-            "</div>"
-        ),
-    }
+    text_body, html_body = render_email_body(
+        paragraphs=[
+            _GREETING[locale].format(name=recipient_name),
+            _LEAD[locale],
+        ],
+        code=code,
+        footnote=f"{_EXPIRY[locale]} {_IGNORE[locale]}",
+    )
+    return {"subject": _SUBJECTS[locale], "text_body": text_body, "html_body": html_body}
 
 
 __all__ = ["build_verification_code_email"]

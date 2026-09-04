@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.11, one loading/failure/empty across the app |
+| **Last updated** | 2026-09-04 — A64-025.12A, the router's errors reach this app's error page |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -471,6 +471,7 @@ tokens.
 | **A64-025.10E** | Email design system. Fixes P2-2 | .2 (tokens only) | New email types |
 | **A64-025.10F** | The email shell, designed rather than merely shared | .10E | New email types; a dark variant |
 | **A64-025.11** | Global UI consistency and component cleanup. Fixes P2-3 | .3–.10 | Re-architecting layouts already designed mobile-first |
+| **A64-025.12A** | A throw inside the router reaches this app's error page | — | The unreproduced i18n context fault itself (§33.3) |
 | **A64-025.12** | Motion and interaction system. Fixes P3-5 | .3–.10 | Adding motion for its own sake |
 | **A64-025.13** | Closing audit | all | New work |
 
@@ -3057,3 +3058,108 @@ reads forced to fail, and against real empty accounts for the empty states.
 `prefers-reduced-motion` guard (P3-5), and that is where it belongs rather
 than here. The success-toast half of §3.9 has no surface asking for it yet
 and stays out.
+
+## 33. The half of the tree the error boundary could not reach — A64-025.12A
+
+Reported from a running browser, with two screenshots: a bold
+**"Something went wrong!"** beside a **"Hide Error"** toggle, and under it, in
+red monospace,
+
+```
+useTranslation must be used inside an I18nProvider.
+```
+
+That panel is TanStack Router's developer default. **It is not this app's
+error page**, which is `pages/unexpected-error` and says something a person
+can act on.
+
+### 33.1 What was wrong, and it was not the message
+
+`app/providers` wraps everything in one `ErrorBoundary`, and
+`createAppRouter` turned the router's own error UI off, with a comment:
+
+> The router's own error UI is deliberately off: errors belong to the one
+> boundary in `app/providers`, so there is a single place that reports them
+> and a single page a user can be shown.
+
+That was an intention, not a behaviour. **TanStack Router wraps every route
+in its own `CatchBoundary`, and a boundary inside the tree catches before one
+outside it can.** So a throw from `AppShell` or from any page never reached
+`app/providers` at all. The router said so, in the console, every time:
+
+> Warning: The following error wasn't caught by any route! At the very least,
+> consider setting an `errorComponent` in your RootRoute!
+
+Two consequences, and the second is worse than the first.
+
+**A user saw a raw error message.** CLAUDE.md §9.7 splits the two audiences:
+a user gets a sentence they can act on, an operator gets the detail. That
+split was being made in `UnexpectedErrorPage`, which was never rendered.
+
+**Nothing reported it.** `ErrorBoundary.componentDidCatch` calls
+`reportError`; it never ran. Every router-level failure this app has ever had
+was visible only in the browser it happened in — CLAUDE.md §2.7's silent
+failure, in the one place built to prevent it.
+
+### 33.2 The fix
+
+The root route names an `errorComponent`. It reports from an effect — a route
+re-renders for reasons that are not a new failure, and reporting from the
+render body would send the same error repeatedly — and then renders
+`UnexpectedErrorPage`.
+
+`UnexpectedErrorPage` carries hardcoded English rather than translated
+strings. That reads like an oversight until it is this page: one of the
+throws it must survive is `useTranslation` itself, and an error page that
+needs the context that just failed renders a second throw instead of a
+message. There is a test for exactly that case.
+
+The comment in `createAppRouter` was corrected rather than left. A comment
+describing an intention the code does not have is worse than no comment.
+
+### 33.3 What is still unexplained, stated plainly
+
+**Why `useTranslation` found no provider has not been reproduced, and this
+section does not claim it is fixed.**
+
+What the code establishes: `AppShell` is mounted from exactly one place, the
+root route, under `I18nProvider`, in a single React root. A `null` context
+there cannot mean a missing provider — it means the consumer and the provider
+are holding **two different `I18nContext` objects**, which requires two
+instances of `shared/i18n/index.tsx`. A production bundle has a static module
+graph and cannot do that. A Vite dev server, whose graph is re-fetched with
+`?v=` and `?t=` query hashes as modules are invalidated, can.
+
+The report is consistent with that: it appears on returning to a tab that has
+been in the background — the window in which the HMR socket reconnects and
+applies whatever changed while it was away — and it happened during a session
+in which files were being edited continuously.
+
+Three reproduction attempts failed: editing a locale file, editing
+`shared/i18n/index.tsx` itself, and doing so before navigating to a
+route whose chunk had not yet been imported. Each applied cleanly.
+
+So this is recorded as **open, dev-only, and now observable**. What changed is
+that the next occurrence renders the app's own page and calls `reportError`
+with `scope: "router"`, rather than printing a stack trace at whoever hit it.
+
+The `react-refresh/only-export-components` rule is off for
+`src/shared/i18n/**` and three other paths, with a comment arguing that
+splitting a provider from its hook "would make the source worse to read for
+no runtime benefit". If this recurs, that comment is the first thing to
+re-examine — a context module is the one file where the dev-server
+optimisation and the runtime are not independent.
+
+### 33.4 Measured
+
+| | |
+| --- | --- |
+| `tsc --noEmit` | clean |
+| `eslint` | 0 errors, 3 pre-existing warnings |
+| `vitest` | 228 passed, 34 files |
+
+Three new tests, and each fails without the fix: the app's page is shown
+instead of the router's panel, the error is reported, and the page survives a
+failure in the translation context itself. They mount the **real** `rootRoute`
+and give it one child that throws, so everything under test is production
+code and only the thing that fails is a fixture.

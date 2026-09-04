@@ -23,9 +23,17 @@ export function createAppRouter(history?: RouterHistory) {
     // perceived as a stutter rather than as progress.
     defaultPendingMs: 100,
     defaultPendingMinMs: 300,
-    // The router's own error UI is deliberately off: errors belong to the
-    // one boundary in `app/providers`, so there is a single place that
-    // reports them and a single page a user can be shown.
+    // No *default* error component, because the root route names one
+    // explicitly and a route error bubbles to the nearest ancestor that
+    // has one — see `RouteError` in `routes.tsx`.
+    //
+    // This used to be `undefined` with a comment saying errors belong to
+    // the single boundary in `app/providers`. They did not: the router
+    // wraps every route in its own `CatchBoundary`, which catches before
+    // anything outside the router can, so with no `errorComponent` a throw
+    // rendered TanStack's developer panel and warned in the console
+    // (A64-025.12A). A comment that describes an intention rather than the
+    // behaviour is worse than none.
     defaultErrorComponent: undefined,
   });
 }

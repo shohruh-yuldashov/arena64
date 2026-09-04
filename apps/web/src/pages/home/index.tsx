@@ -153,8 +153,8 @@ export default function HomePage() {
                       accessible name. A card-sized anchor wrapped round a
                       heading reads as one unlabelled link to a screen
                       reader; a second nested link reads as two. */}
-                  <div className="group border-border bg-card hover:border-primary/40 relative flex h-full items-start gap-4 rounded-xl border p-5 transition-colors">
-                    <span className="bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary flex size-10 shrink-0 items-center justify-center rounded-lg transition-colors">
+                  <div className="group border-border bg-card hover:border-primary/40 relative flex h-full items-start gap-4 rounded-xl border p-5 transition-colors duration-fast">
+                    <span className="bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary flex size-10 shrink-0 items-center justify-center rounded-lg transition-colors duration-fast">
                       <Icon aria-hidden="true" className="size-5" />
                     </span>
                     <div className="flex min-w-0 flex-col gap-1">

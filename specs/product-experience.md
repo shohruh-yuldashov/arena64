@@ -6,7 +6,7 @@
 | **Status** | Draft — .1 audit; .2 foundation; .3 shell; .4 auth; .5 lobby; .6…​.6C game room; .7 tournament; .8 social; .9 profile |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-10 |
-| **Last updated** | 2026-09-04 — A64-025.12A, the router's errors reach this app's error page |
+| **Last updated** | 2026-09-04 — A64-025.12, the motion system and `prefers-reduced-motion` |
 | **Related specs** | [`frontend.md`](./frontend.md) — the technical frontend spec |
 | **Related** | `docs/04-frontend/`, `docs/02-development/CLAUDE.md` |
 
@@ -364,7 +364,7 @@ most, the clock can be off-screen.
 | ~~P3-2~~ | ~~Hardcoded English in the shell~~ | **Fixed** — the skip link and the theme group are localised |
 | ~~P3-3~~ | ~~`session-menu` is misnamed~~ | **Fixed** — it is `AccountMenu` and holds only the account, §9.5 |
 | ~~P3-4~~ | ~~`form-demo` ships in the production bundle~~ | **Fixed** — deleted |
-| P3-5 | No `prefers-reduced-motion` handling — correct today, wrong once motion is added | A64-025.12 |
+| ~~P3-5~~ | ~~No `prefers-reduced-motion` handling — correct today, wrong once motion is added~~ | **Fixed** — one motion scale, two sources, the more conservative wins (§34) |
 | P3-6 | Eight primitives; Badge, Select, Tabs, Tooltip, Dropdown, Switch re-authored per feature | A64-025.2 |
 
 **Nothing was fixed in A64-025.1.** P0-1 is a one-line route change to make and a
@@ -3163,3 +3163,127 @@ instead of the router's panel, the error is reported, and the page survives a
 failure in the translation context itself. They mount the **real** `rootRoute`
 and give it one child that throws, so everything under test is production
 code and only the thing that fails is a fixture.
+
+## 34. The motion system — A64-025.12
+
+P3-5 read: *"No `prefers-reduced-motion` handling — correct today, wrong once
+motion is added."* Motion has since been added. One surface honoured the
+setting — the lobby's waiting card, with a `motion-reduce:animate-none` on
+its pulse — and every skeleton, every dialog, every hover transition in the
+product ignored it.
+
+### 34.1 One scale, not a duration per component
+
+Everything that moves reads its duration from `--motion-scale`, so there is
+one number to change and no component that can be forgotten. That matters
+more here than it does for colour: a colour that is missed looks wrong, and
+motion that is missed is a migraine trigger for somebody who asked for it to
+stop.
+
+| Token | Value | For |
+| --- | --- | --- |
+| `--duration-fast` | 120 ms × scale | a state change under the pointer — a hover tint, a border |
+| `--duration-base` | 200 ms × scale | something entering or leaving |
+| `--duration-slow` | 320 ms × scale | where the movement itself is the message |
+| `--ease-out` | `cubic-bezier(0.2, 0, 0, 1)` | asymmetric: arrive decelerating, leave at speed |
+
+They are wired to Tailwind's own defaults —
+`--default-transition-duration` and `--default-transition-timing-function` —
+so **every** `transition-*` utility already in the app inherits them. No
+component states a duration, and none can state one that ignores the scale.
+`duration-fast` and `duration-slow` are registered as real utilities rather
+than written as arbitrary values, because an unknown Tailwind class silently
+generates nothing.
+
+### 34.2 Whichever asks for less motion wins
+
+Two sources can ask. The operating system, through `prefers-reduced-motion`,
+and the player, through `animation_speed` in their gameplay preferences.
+
+**They are not ranked.** The more conservative of the two applies, which is
+why the reduced-motion block is last in the stylesheet and clamps to zero
+whatever the attribute said. A player who chose `slow` on a machine set to
+reduce motion gets none; moving that block above the attribute blocks would
+silently reverse it, so there is a test that fails if anybody does.
+
+`instant` is zero rather than a fourth speed. That is the API's own
+contract — *"`animation_speed: instant` disables motion rather than being a
+fourth speed — it is an accessibility setting"* — and it is why `instant`
+also has to stop the keyframe animations, which read no token.
+
+| | scale | `transition-colors` | `animate-pulse` |
+| --- | --- | --- | --- |
+| default | 1 | 0.2 s | 2 s, infinite |
+| `fast` | 0.6 | 0.12 s | 2 s, infinite |
+| `slow` | 1.6 | 0.32 s | 2 s, infinite |
+| `instant` | 0 | 0.001 s | **0.001 s, once** |
+| OS reduce | 0 | 0.001 s | **0.001 s, once** |
+| OS reduce **+** `slow` | 0 | 0.001 s | **0.001 s, once** |
+
+Every figure in that table was read off a running browser, not predicted.
+
+`1 ms` rather than `0 s`, because a zero-length animation never fires
+`animationend` in some engines and code waiting on that event waits forever.
+
+### 34.3 The spinner is exempt, and that is not an oversight
+
+The floor stops everything — except one thing.
+
+A spinner's rotation **is** the information: it says "still working". WCAG
+2.3.3 exempts motion essential to what a control communicates, and freezing
+it leaves a sighted reader with a static icon and no other signal, because
+`Spinner`'s label is written for screen readers. A 16px rotation is also far
+below the area that triggers vestibular symptoms, which is what the media
+query is for. Trading one accessibility win for another is not a win.
+
+Everything else stops. A still skeleton is still a skeleton, and a dialog
+that appears without fading is a dialog that appeared.
+
+The stop block is written twice — once in the media query, once for
+`[data-motion="instant"]` — because CSS cannot share a declaration block
+between a media query and a selector. The alternative is a script that
+listens to the media query and writes a third attribute, which puts an
+accessibility guarantee behind JavaScript that may not have loaded.
+
+### 34.4 The fourth write-only preference
+
+`animation_speed` has been on `PreferencesResponse` since A64-012.5 and was
+read by nothing. A player set "Instant", the form saved it, the server
+stored it, and every animation in the product ran exactly as before.
+
+It rides the same mechanism as `board_theme`, `piece_set` and
+`show_coordinates`: one data attribute on the root element, and the
+stylesheet does the rest. `BoardPreferences` became `GameplayPreferences`
+because motion is not a property of the board — the name moved with the
+responsibility rather than staying a name that had stopped being true.
+
+**Four of the five gameplay preferences are now honoured.** `confirm_move`
+is the one that remains, and it is a rule about submitting a move rather
+than anything CSS can express; it stays out of this phase, as §5 says.
+
+That component had **no test at all** before this, including for the three
+preferences .5B and .6D closed. Every test in the product would still have
+passed if the effect had stopped writing its attributes.
+
+### 34.5 Measured
+
+| | |
+| --- | --- |
+| `tsc --noEmit` | clean |
+| `eslint` | 0 errors, 3 pre-existing warnings |
+| `vitest` | 231 passed, 35 files |
+| `playwright` (`motion.spec.ts`) | 3 passed, against the built app |
+
+The Playwright suite is where P3-5 is actually closed, and it is there rather
+than in jsdom for one reason: **jsdom does not resolve a stylesheet.** A unit
+test can assert that `[data-motion="instant"] { --motion-scale: 0 }` is
+written; only a browser can say what a `transition-colors` element then
+computes to. Removing the reduced-motion block turns all three red.
+
+### 34.6 Not done
+
+No motion was *added*. This phase gives the movement that already existed a
+vocabulary and a way to switch it off; a page transition, a board-piece
+animation or a list reorder would each be a design decision with its own
+argument, and §5's principle 8 — "nothing animates because it can" — is the
+reason none of them is in this diff.

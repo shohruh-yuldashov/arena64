@@ -18,7 +18,7 @@ import { BoardSample } from "@/widgets/board-preview/board-sample";
  * ## It renders nothing of its own
  *
  * `BoardSample` is drawn with the same elements and the same classes the
- * game room's board uses, and `BoardPreferences` has already put the
+ * game room's board uses, and `GameplayPreferences` has already put the
  * player's choice on the document. So this preview is correct without
  * knowing which theme is selected, and it stays correct when a theme or a
  * piece set is added — which is the whole point of doing this in tokens

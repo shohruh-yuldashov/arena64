@@ -92,7 +92,7 @@ export function PlayerSeat({
   return (
     <div
       className={cn(
-        "flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-colors",
+        "flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-colors duration-fast",
         // The active seat is the brand; the idle one recedes into the page
         // rather than competing with the board it frames.
         active ? "border-primary bg-primary/10 shadow-sm" : "border-border bg-muted/30",

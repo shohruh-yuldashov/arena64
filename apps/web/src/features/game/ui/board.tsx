@@ -215,7 +215,7 @@ export function GameBoard({
                 })}
                 onClick={() => onSelect(square)}
                 className={cn(
-                  "relative flex aspect-square items-center justify-center transition-colors",
+                  "relative flex aspect-square items-center justify-center transition-colors duration-fast",
                   "bg-board-dark",
                   "focus-visible:ring-ring focus-visible:z-10 focus-visible:ring-2 focus-visible:outline-none",
                   // Mixed **into** the square rather than laid over it as a

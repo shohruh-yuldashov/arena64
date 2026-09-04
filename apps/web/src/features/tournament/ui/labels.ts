@@ -49,7 +49,7 @@ export function formatKey(format: string): TranslationKey {
 }
 
 /**
- * The variant and the speed class — A64-025.7.
+ * The variant — A64-025.7.
  *
  * Both were rendering the **raw server enum**: a tournament card said
  * `russian_8x8` and `classical` to a player, in every locale, on the lobby
@@ -57,11 +57,15 @@ export function formatKey(format: string): TranslationKey {
  * screen, which is the same failure the note above describes.
  *
  * The keys live under `play.*` because that is where this vocabulary already
- * was — `play.speed` has carried all five classes since the lobby was built,
- * and a second copy under `tournament.*` would be two places to add
- * `correspondence` when it ships. `play.variant` is new only because no
- * surface had ever needed to name a variant: the game room does not, since
- * a player who is playing knows what they are playing.
+ * was, and a second copy under `tournament.*` would be two places to change.
+ * `play.variant` is new only because no surface had ever needed to name a
+ * variant: the game room does not, since a player who is playing knows what
+ * they are playing.
+ *
+ * The speed class used to live here too. It moved to
+ * `entities/time-control` in A64-025.9 — the catalogue decides a control's
+ * class, so the name belongs beside the type rather than inside the one
+ * feature that happened to render it first.
  */
 const VARIANT: Record<string, TranslationKey> = {
   russian_8x8: "play.variant.russian_8x8",
@@ -69,18 +73,6 @@ const VARIANT: Record<string, TranslationKey> = {
 
 export function variantKey(variant: string): TranslationKey {
   return VARIANT[variant] ?? "play.variant.unknown";
-}
-
-const SPEED_CLASS: Record<string, TranslationKey> = {
-  bullet: "play.speed.bullet",
-  blitz: "play.speed.blitz",
-  rapid: "play.speed.rapid",
-  classical: "play.speed.classical",
-  correspondence: "play.speed.correspondence",
-};
-
-export function speedClassKey(speedClass: string): TranslationKey {
-  return SPEED_CLASS[speedClass] ?? "play.speed.unknown";
 }
 
 const ROUND_STATUS: Record<string, TranslationKey> = {

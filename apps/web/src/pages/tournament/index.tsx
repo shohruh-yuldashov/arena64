@@ -1,16 +1,19 @@
 import { Link, useParams } from "@tanstack/react-router";
 
 import { isAuthenticated } from "@/entities/session";
+import { speedClassKey } from "@/entities/time-control";
 import { useSession } from "@/features/auth/model/session-provider";
 import { useBracket, useStandings, useTournament } from "@/features/tournament/model/queries";
 import { BracketView } from "@/features/tournament/ui/bracket-view";
-import { formatKey, speedClassKey, variantKey } from "@/features/tournament/ui/labels";
+import { formatKey, variantKey } from "@/features/tournament/ui/labels";
 import { RegistrationPanel } from "@/features/tournament/ui/registration-panel";
 import { StandingsTable } from "@/features/tournament/ui/standings-table";
 import { TournamentStatusBadge } from "@/features/tournament/ui/status-badge";
 import { ApiError } from "@/shared/api/errors";
 import { useTranslation } from "@/shared/i18n";
+import { cn } from "@/shared/lib/cn";
 import { formatDate, formatDateTime } from "@/shared/lib/format";
+import { speedAccent } from "@/shared/lib/speed-accent";
 import { Button, Skeleton } from "@/shared/ui";
 
 /**
@@ -142,7 +145,9 @@ export default function TournamentPage() {
           </Fact>
           <Fact label={t("tournament.field.variant")}>{t(variantKey(tournament.variant))}</Fact>
           <Fact label={t("tournament.field.speed")}>
-            {t(speedClassKey(tournament.speed_class))}
+            <span className={cn("font-medium", speedAccent(tournament.speed_class).text)}>
+              {t(speedClassKey(tournament.speed_class))}
+            </span>
           </Fact>
           {/* Omitted rather than dashed when there is none, which is how
               `started_at` and `completed_at` below already behave. A

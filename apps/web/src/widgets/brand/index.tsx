@@ -21,6 +21,10 @@ import { useTranslation } from "@/shared/i18n";
  * that designs one — brand is A64-025.2's, and inventing a mark here would
  * be work the next task has to undo. Text set in the app's own type is the
  * honest placeholder.
+ *
+ * A64-025.9 §18.7 set that type in the brand gradient — one of the three
+ * places the gradient is allowed. It degrades to the solid brand colour
+ * where `background-clip: text` is unsupported, never to invisible text.
  */
 export function Brand() {
   const { t } = useTranslation();
@@ -28,10 +32,14 @@ export function Brand() {
   return (
     <Link
       to="/"
-      className="focus-visible:ring-ring flex min-h-11 items-center rounded-md pr-2 text-sm font-semibold tracking-tight focus-visible:ring-2 focus-visible:outline-none"
+      className="focus-visible:ring-ring flex min-h-11 items-center rounded-md pr-2 focus-visible:ring-2 focus-visible:outline-none"
       aria-label={t("layout.home")}
     >
-      {t("layout.title")}
+      {/* The gradient is on the text, not the link: the link keeps its own
+          focus ring, which a clipped background would otherwise swallow. */}
+      <span className="brand-gradient-text text-sm font-semibold tracking-tight">
+        {t("layout.title")}
+      </span>
     </Link>
   );
 }

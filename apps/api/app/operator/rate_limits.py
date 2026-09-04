@@ -80,6 +80,9 @@ from app.modules.friends.presentation.rate_limits import build_rules as friends_
 from app.modules.matchmaking.presentation.rate_limits import build_rules as matchmaking_rules
 from app.modules.notifications.presentation.rate_limits import build_rules as notification_rules
 from app.modules.profiles.presentation.rate_limits import build_rules as profile_rules
+from app.modules.tournament.presentation.rate_limits import (
+    build_rules as tournament_rules,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +119,7 @@ _POLICY_REGISTRIES = (
     friends_rules,
     avatar_rules,
     notification_rules,
+    tournament_rules,
 )
 
 

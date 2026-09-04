@@ -1,5 +1,8 @@
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
+import { isAuthenticated } from "@/entities/session";
+import { useSession } from "@/features/auth/model/session-provider";
 import type { Registration, Tournament } from "@/features/tournament/api";
 import { registrationErrorKey } from "@/features/tournament/model/errors";
 import {
@@ -54,8 +57,10 @@ import {
  */
 export function RegistrationPanel({ tournament }: { tournament: Tournament }) {
   const { t } = useTranslation();
+  const { state: session } = useSession();
   const [confirming, setConfirming] = useState(false);
 
+  const signedIn = isAuthenticated(session);
   const registration = useMyRegistration(tournament.id);
   const enter = useEnterTournament(tournament.id);
   const withdraw = useWithdrawFromTournament(tournament.id);
@@ -75,6 +80,32 @@ export function RegistrationPanel({ tournament }: { tournament: Tournament }) {
   // while one is in flight leaves the player unable to tell whether they
   // are registered. The update waits until the server has answered.
   useHoldAppUpdate(pending);
+
+  // A64-026.4 §43.4. A visitor with no account can read this tournament,
+  // so this panel has to answer them too — and the honest answer is what
+  // entering requires rather than a disabled button whose reason is
+  // invisible. `next` carries them back here afterwards, through the same
+  // `safeRedirect` every other sign-in link uses.
+  if (!signedIn) {
+    return (
+      <section
+        aria-labelledby="registration-heading"
+        className="border-border flex flex-col items-start gap-3 rounded-lg border p-4"
+      >
+        <h2 id="registration-heading" className="text-sm font-semibold">
+          {t("tournament.registration.signInTitle")}
+        </h2>
+        <p className="text-muted-foreground text-sm">
+          {t("tournament.registration.signInPrompt")}
+        </p>
+        <Button asChild className="min-h-11">
+          <Link to="/login" search={{ next: `/tournaments/${tournament.id}` }}>
+            {t("tournament.registration.signInCta")}
+          </Link>
+        </Button>
+      </section>
+    );
+  }
 
   return (
     <section

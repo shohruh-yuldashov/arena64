@@ -185,3 +185,58 @@ test("a player finds a tournament, enters it, and withdraws again", async ({
     await context.close();
   }
 });
+
+test("a visitor with no account reads a tournament and is asked to sign in to enter", async ({
+  browser,
+  request,
+}) => {
+  // A64-026.4 §43.5, end to end and through the real API — the half the
+  // component tests substitute. What is asserted here is that the *server*
+  // answers a browser carrying no cookie at all, which a mocked HTTP layer
+  // cannot tell you.
+  const reachable = await request
+    .get("http://localhost:8000/health")
+    .then((response) => response.ok())
+    .catch(() => false);
+  test.skip(!reachable, "apps/api is not running on :8000");
+
+  const created = await operator(
+    "create",
+    "--name",
+    "E2E Public",
+    "--capacity",
+    "8",
+    "--variant",
+    "russian_8x8",
+  );
+  const tournamentId = /created ([0-9a-f-]{36})/.exec(created)?.[1];
+  expect(tournamentId, `unexpected operator output: ${created}`).toBeTruthy();
+  await operator("open", tournamentId as string);
+
+  // No `storageState`: a genuinely fresh browser, which is the whole point.
+  const context = await browser.newContext();
+
+  try {
+    const page = await context.newPage();
+
+    await page.goto("/tournaments");
+    await expect(page).toHaveURL(/\/tournaments$/);
+    await expect(page.getByText("E2E Public").first()).toBeVisible();
+
+    await page.goto(`/tournaments/${tournamentId as string}`);
+    // Not redirected to sign-in, which is what the guard used to do.
+    await expect(page).toHaveURL(new RegExp(`/tournaments/${tournamentId as string}$`));
+    await expect(page.getByRole("heading", { name: "E2E Public" })).toBeVisible();
+
+    // Reading is open; entering is not, and the deep link survives it.
+    const cta = page.getByRole("link", { name: /sign in to enter/i });
+    await expect(cta).toBeVisible();
+    await expect(cta).toHaveAttribute("href", new RegExp(tournamentId as string));
+
+    // The guarded routes are still guarded, from the same fresh context.
+    await page.goto("/play");
+    await expect(page).toHaveURL(/\/login/);
+  } finally {
+    await context.close();
+  }
+});

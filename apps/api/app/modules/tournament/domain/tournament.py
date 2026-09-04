@@ -96,6 +96,30 @@ class TournamentStatus(StrEnum):
     def is_terminal(self) -> bool:
         return self in (TournamentStatus.COMPLETED, TournamentStatus.CANCELLED)
 
+    @property
+    def is_published(self) -> bool:
+        """Whether a viewer with no account may see a tournament in this
+        state — A64-026.4 §43.2.
+
+        Every state except `DRAFT`, and the enum member's own docstring is
+        the reason: *"Created, not yet advertised. Nothing may register."*
+        A tournament that has not been advertised is one whose operator has
+        not decided it exists yet, and publishing it to the open web is a
+        decision made on their behalf.
+
+        Deliberately **not** the inverse of `is_terminal`. A completed
+        tournament is the most useful thing on this platform to show
+        somebody without an account — a finished bracket is a record of
+        something that happened, and hiding it would answer "what happens
+        here?" with silence, which is the argument the lobby already makes
+        for showing finished tournaments to players.
+
+        This narrows nothing for an authenticated player: it is applied on
+        the anonymous path only, so the lobby a signed-in player has seen
+        since A64-020.0B is unchanged, drafts included.
+        """
+        return self is not TournamentStatus.DRAFT
+
 
 #: Every legal move, as data. See this module's docstring on why.
 _ALLOWED: Final[dict[TournamentStatus, frozenset[TournamentStatus]]] = {

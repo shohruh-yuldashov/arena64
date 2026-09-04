@@ -539,7 +539,12 @@ class TournamentDirectory(Protocol):
     """
 
     async def listing(
-        self, *, filters: TournamentFilter, after: TournamentListCursor | None, limit: int
+        self,
+        *,
+        filters: TournamentFilter,
+        after: TournamentListCursor | None,
+        limit: int,
+        published_only: bool = False,
     ) -> TournamentPage:
         """One page of the lobby, ordered `created_at DESC, id DESC`.
 
@@ -550,6 +555,14 @@ class TournamentDirectory(Protocol):
         Every status is included unless `filters` narrows it, completed and
         cancelled ones among them: a lobby that hid its finished
         tournaments would answer "what happened here?" with silence.
+
+        `published_only` is **not** a sixth filter and is deliberately not on
+        `TournamentFilter` — A64-026.4 §43.2. The five there come from a
+        query string and a caller may choose any of them; this one comes
+        from *who is asking*, and a caller who could set it could also unset
+        it. It excludes `DRAFT`, which is the one state the enum itself
+        describes as "not yet advertised", and it defaults to `False` so
+        every existing authenticated caller is unchanged.
         """
         ...
 

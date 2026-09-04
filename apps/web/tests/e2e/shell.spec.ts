@@ -23,7 +23,13 @@ test("the shell boots, splits its routes, and is reachable by keyboard", async (
 
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { level: 1, name: "Arena64" })).toBeVisible();
+  // A level-one heading, unnamed. `/` was the product shell with an
+  // "Arena64" heading when this was written; since A64-026.1 an anonymous
+  // visitor gets the landing page, whose `h1` is the hero's sentence — and
+  // since A64-026.4 the frame around it is `PublicShell` rather than the
+  // page itself. What this test is for is that the shell boots at all, and
+  // naming whichever page currently answers `/` is how it broke.
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
 
   // The home page arrived as its own chunk. If someone replaces the
   // dynamic import with a static one this drops to a single bundle, the

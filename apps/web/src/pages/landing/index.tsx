@@ -14,7 +14,7 @@ import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui";
 import { BoardShowcase } from "@/widgets/marketing/board-showcase";
 import { BracketShowcase } from "@/widgets/marketing/bracket-showcase";
-import { MarketingHeader } from "@/widgets/marketing/header";
+import { PublicShell } from "@/widgets/marketing/public-shell";
 
 /**
  * Arena64's front door — A64-026.1 §40.
@@ -50,28 +50,18 @@ import { MarketingHeader } from "@/widgets/marketing/header";
  * template, and a visitor recognises one.
  */
 export default function LandingPage() {
+  // The frame — skip link, header, footer — is `PublicShell`'s since
+  // A64-026.4 §43.5, shared with the pages a visitor without an account can
+  // now also read. This page is its six sections and nothing else.
   return (
-    <div className="bg-background text-foreground flex min-h-full flex-col">
-      <a
-        href="#landing-main"
-        className="bg-background focus-visible:ring-ring sr-only rounded-md px-4 py-2 text-sm font-medium focus-visible:not-sr-only focus-visible:absolute focus-visible:top-2 focus-visible:left-2 focus-visible:z-50 focus-visible:ring-2"
-      >
-        Skip to content
-      </a>
-
-      <MarketingHeader />
-
-      <main id="landing-main" tabIndex={-1} className="flex-1">
-        <Hero />
-        <HowItWorks />
-        <Competitive />
-        <Tournaments />
-        <Social />
-        <ClosingCta />
-      </main>
-
-      <MarketingFooter />
-    </div>
+    <PublicShell>
+      <Hero />
+      <HowItWorks />
+      <Competitive />
+      <Tournaments />
+      <Social />
+      <ClosingCta />
+    </PublicShell>
   );
 }
 
@@ -328,6 +318,15 @@ function Tournaments() {
           <p className="text-muted-foreground max-w-xl text-base leading-relaxed">
             {t("landing.tournaments.body")}
           </p>
+
+          {/* A64-026.4 §43.5. The one section of this page with something
+              real to point at: the lobby opened to visitors without an
+              account, so the argument can end at the thing itself rather
+              than at a sign-up form. Every other section still ends at
+              registration, because everything else needs one. */}
+          <Button asChild variant="outline" className="min-h-11 w-fit">
+            <Link to="/tournaments">{t("landing.tournaments.browse")}</Link>
+          </Button>
         </div>
 
         <BracketShowcase className="w-full" />
@@ -443,72 +442,5 @@ function ClosingCta() {
         </div>
       </div>
     </Section>
-  );
-}
-
-/**
- * The footer — §40.9.
- *
- * **Only real destinations.** There is no privacy page, no terms page, no
- * blog, no Discord and no official social account, so none of them is
- * linked. A footer column of dead links is worse than a short footer.
- *
- * The year is computed rather than written, because a hardcoded one is
- * wrong from January.
- */
-function MarketingFooter() {
-  const { t } = useTranslation();
-
-  return (
-    <footer className="border-border border-t">
-      <div className="text-muted-foreground mx-auto flex max-w-6xl flex-col gap-4 px-4 py-8 text-sm sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-col gap-1">
-          <span className="text-foreground font-semibold">{t("layout.title")}</span>
-          <span className="text-xs">
-            © {new Date().getFullYear()} {t("layout.title")}
-          </span>
-        </div>
-
-        {/* `min-h-11` on each link: A64-025.13 §35.3 measured the product's
-            floor at 44px and found sixteen controls under it. A footer row
-            of 17px text links is the same defect in a quieter place. */}
-        <nav aria-label={t("landing.footer.label")}>
-          <ul className="flex flex-wrap items-center gap-x-5 gap-y-2">
-            <li>
-              <a
-                href="#play"
-                className="hover:text-foreground focus-visible:ring-ring inline-flex min-h-11 items-center rounded-md transition-colors duration-fast focus-visible:ring-2 focus-visible:outline-none"
-              >
-                {t("landing.nav.play")}
-              </a>
-            </li>
-            <li>
-              <a
-                href="#tournaments"
-                className="hover:text-foreground focus-visible:ring-ring inline-flex min-h-11 items-center rounded-md transition-colors duration-fast focus-visible:ring-2 focus-visible:outline-none"
-              >
-                {t("landing.nav.tournaments")}
-              </a>
-            </li>
-            <li>
-              <Link
-                to="/login"
-                className="hover:text-foreground focus-visible:ring-ring inline-flex min-h-11 items-center rounded-md transition-colors duration-fast focus-visible:ring-2 focus-visible:outline-none"
-              >
-                {t("auth.login.submit")}
-              </Link>
-            </li>
-            <li>
-              <Link
-                to="/register"
-                className="hover:text-foreground focus-visible:ring-ring inline-flex min-h-11 items-center rounded-md transition-colors duration-fast focus-visible:ring-2 focus-visible:outline-none"
-              >
-                {t("landing.cta.primary")}
-              </Link>
-            </li>
-          </ul>
-        </nav>
-      </div>
-    </footer>
   );
 }

@@ -39,6 +39,22 @@ Disallow: /search
 Disallow: /play
 Disallow: /games/
 Disallow: /notifications
+
+# Tournaments are **public to read and shareable, and still not indexed** —
+# A64-026.4 §43.7. They stopped being behind authentication in that task, so
+# the paragraph above no longer covers them and this one says why they stay
+# on the list.
+#
+# Every route in this SPA serves the same `index.html`, with one title, one
+# description and a body of zero characters (§42.6, measured). Ten thousand
+# tournament URLs would enter an index as ten thousand copies of the landing
+# page's title — duplicate content that dilutes the one page here that is
+# meant to be found, and that describes none of them.
+#
+# The blocker is the missing per-route metadata layer, not the visibility.
+# When there is one — which needs the hydration path §42.6 records as an
+# ADR-sized decision — completed tournaments are the natural first thing to
+# open, and this is the line to change.
 Disallow: /tournaments
 
 # The API shares this origin in production. Nothing under it is a document.

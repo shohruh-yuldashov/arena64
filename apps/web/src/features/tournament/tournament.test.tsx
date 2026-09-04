@@ -340,7 +340,7 @@ it("lists tournaments, narrows them through the server, and pages by cursor", as
   const list = await screen.findByRole(
     "list",
     { name: /tournaments|turnirlar/i },
-    { timeout: 5000 },
+    { timeout: 3000 },
   );
   await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(2));
   expect(requests.filter((entry) => entry.startsWith("list:"))).toEqual(["list:all:first"]);
@@ -366,7 +366,7 @@ it("shows the authoritative participant state rather than inferring it", async (
 
   expect(
     await screen.findByText(/you have not entered|yozilmagansiz/i, undefined, {
-      timeout: 5000,
+      timeout: 3000,
     }),
   ).toBeVisible();
   expect(
@@ -412,12 +412,12 @@ it("registers once and shows the state the server confirmed", async () => {
   const enter = await screen.findByRole(
     "button",
     { name: /enter tournament|turnirga yozilish/i },
-    { timeout: 5000 },
+    { timeout: 3000 },
   );
   await user.dblClick(enter);
 
   expect(
-    await screen.findByText(/you are entered|siz yozilgansiz/i, undefined, { timeout: 5000 }),
+    await screen.findByText(/you are entered|siz yozilgansiz/i, undefined, { timeout: 3000 }),
   ).toBeVisible();
   expect(registrationWrites).toBe(1);
   // Server-confirmed, not optimistic: the withdraw control appears because
@@ -456,7 +456,7 @@ it("asks before withdrawing and reports the server's refusal by code", async () 
   renderApp({ path: `/tournaments/${OPEN_ID}` });
 
   await user.click(
-    await screen.findByRole("button", { name: /^withdraw$|^chiqish$/i }, { timeout: 5000 }),
+    await screen.findByRole("button", { name: /^withdraw$|^chiqish$/i }, { timeout: 3000 }),
   );
 
   // A confirmation, and one that promises only what the backend does.
@@ -481,7 +481,7 @@ it("renders bye, waiting, live and finished nodes as four different things", asy
   const bracketRegion = await screen.findByRole(
     "region",
     { name: /bracket rounds|setka bosqichlari/i },
-    { timeout: 5000 },
+    { timeout: 3000 },
   );
   const nodes = within(bracketRegion).getAllByRole("listitem");
   expect(nodes).toHaveLength(3);
@@ -522,7 +522,7 @@ it("shows a finished tournament's standings with tied ranks intact and a real re
   );
   renderApp({ path: `/tournaments/${DONE_ID}` });
 
-  const table = await screen.findByRole("table", undefined, { timeout: 5000 });
+  const table = await screen.findByRole("table", undefined, { timeout: 3000 });
   const rows = within(table).getAllByRole("row").slice(1);
   // The **leading** number: a shared rank also carries a screen-reader-only
   // "Tied for 3", so stripping every non-digit would read "33".
@@ -565,7 +565,7 @@ it("polls a moving tournament and leaves a finished one alone", async () => {
     await screen.findByRole(
       "region",
       { name: /bracket rounds|setka bosqichlari/i },
-      { timeout: 5000 },
+      { timeout: 3000 },
     );
 
     const before = requests.filter((entry) => entry === "bracket").length;
@@ -582,7 +582,7 @@ it("polls a moving tournament and leaves a finished one alone", async () => {
       { bracketBody: completedBracket(), standingsBody: standings() },
     );
     renderApp({ path: `/tournaments/${DONE_ID}` });
-    await screen.findByRole("table", undefined, { timeout: 5000 });
+    await screen.findByRole("table", undefined, { timeout: 3000 });
 
     const settled = requests.filter((entry) => entry === "bracket").length;
     await vi.advanceTimersByTimeAsync(30_000);
@@ -592,20 +592,97 @@ it("polls a moving tournament and leaves a finished one alone", async () => {
   }
 });
 
-it("turns an anonymous visitor away rather than rendering the lobby", async () => {
-  // The guard, asserted through the **real** router: a route added later
-  // without `protectedPage` renders a page that calls an authenticated
-  // endpoint, gets a `401`, and looks like a loading failure rather than a
-  // missing guard.
+/**
+ * The entry CTA's full label in each locale.
+ *
+ * Not `/sign in/i`: the public header offers "Sign in" as well, and a
+ * pattern that matches both would find two links and fail on the ambiguity
+ * rather than on the behaviour.
+ */
+const SIGN_IN_TO_ENTER = /sign in to enter|yozilish uchun kiring|войдите, чтобы записаться/i;
+
+/** No session: the refresh that bootstraps one is refused. */
+function serveAnonymous() {
   mswServer.use(
     http.post(url("/auth/browser/refresh"), () =>
       HttpResponse.json({ code: "invalid_token", message: "No." }, { status: 401 }),
     ),
   );
+}
+
+it("shows the lobby to a visitor with no account", async () => {
+  // A64-026.4 §43.5, and the **replacement** for a test that asserted the
+  // opposite. That test was right while every tournament handler took
+  // `CurrentUser`: an unguarded route would have rendered a page whose
+  // requests all took a `401`. The handlers now answer without one, so the
+  // requirement it encoded is the outdated half — not the code.
+  serveAnonymous();
+  serveLobby([tournament()]);
+
   const { unmount } = renderApp({ path: "/tournaments" });
 
-  expect(await screen.findByRole("heading", { name: /kirish|sign in|вход/i })).toBeVisible();
-  expect(screen.queryByRole("list", { name: /tournaments|turnirlar/i })).toBeNull();
+  expect(await screen.findByText("Sunday Open")).toBeVisible();
+  unmount();
+});
 
+it("asks a visitor with no account to sign in rather than offering to enter", async () => {
+  // The line the open route does not cross. Reading is open; entering is
+  // not, and the panel has to say so — a disabled button whose reason is
+  // invisible is the failure §22 named.
+  serveAnonymous();
+  serveDetail(tournament());
+
+  const { unmount } = renderApp({ path: `/tournaments/${OPEN_ID}` });
+
+  const cta = await screen.findByRole(
+    "link",
+    { name: SIGN_IN_TO_ENTER },
+    {
+      timeout: 3000,
+    },
+  );
+  expect(cta).toBeVisible();
+  // `next` carries them back to the tournament they were reading.
+  expect(cta).toHaveAttribute("href", expect.stringContaining(OPEN_ID));
+  expect(
+    screen.queryByRole("button", { name: /yozilish|enter tournament|записаться/i }),
+  ).toBeNull();
+
+  unmount();
+});
+
+it("offers no game link to a visitor who cannot open a game", async () => {
+  // The bracket's "Watch" and "Replay" go to `/games/…`, which stayed
+  // behind `protectedPage` when the tournament routes came out from behind
+  // it. Offering them to a visitor with no account would be a link that
+  // lies about where it goes — three of them per finished node.
+  serveAnonymous();
+  serveDetail(tournament({ status: "in_progress", current_round: 1 }));
+
+  const { unmount } = renderApp({ path: `/tournaments/${OPEN_ID}` });
+  await screen.findByRole("link", { name: SIGN_IN_TO_ENTER }, { timeout: 3000 });
+
+  // The bracket is there — otherwise this test would pass on an empty page.
+  expect(screen.getByText("Rival")).toBeVisible();
+
+  const links = screen.getAllByRole("link");
+  expect(links.filter((link) => link.getAttribute("href")?.includes("/games/"))).toHaveLength(
+    0,
+  );
+
+  unmount();
+});
+
+it("never asks the server whether an anonymous visitor is registered", async () => {
+  // `/registrations/me` keeps its token. Firing it anyway would spend a
+  // guaranteed `401` on every public tournament page — and the response
+  // would land in the panel as a failure rather than as "not signed in".
+  serveAnonymous();
+  serveDetail(tournament());
+
+  const { unmount } = renderApp({ path: `/tournaments/${OPEN_ID}` });
+  await screen.findByRole("link", { name: SIGN_IN_TO_ENTER }, { timeout: 3000 });
+
+  expect(requests).not.toContain("registration");
   unmount();
 });

@@ -15,7 +15,7 @@ import { useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
 import { formatDate, formatDateTime, formatRelativeTime } from "@/shared/lib/format";
 import { speedAccent } from "@/shared/lib/speed-accent";
-import { Button, LoadFailure, Skeleton } from "@/shared/ui";
+import { Button, LoadFailure, ShareButton, Skeleton } from "@/shared/ui";
 
 /**
  * One tournament — A64-020.6 §7, §17, §18, §22, §25.
@@ -138,6 +138,14 @@ export default function TournamentPage() {
           {/* The same badge the card that linked here drew, rather than the
               same fact buried in the line below it. */}
           <TournamentStatusBadge status={tournament.status} />
+
+          {/* A64-026.4 §43.8. This page opens for whoever the link reaches,
+              which is what makes a share control worth drawing — before it
+              did, the recipient got a sign-in form. It goes beside the
+              title because the title is what is being shared, and it is
+              pushed to the end of the row so it never sits between the
+              heading and its status. */}
+          <ShareButton title={tournament.name} className="ml-auto min-h-11" />
         </div>
         <p className="text-muted-foreground text-sm">
           {t(formatKey(tournament.format))} ·{" "}

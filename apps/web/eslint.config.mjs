@@ -143,7 +143,12 @@ export default tseslint.config(
     // program — `scripts/` is Node that runs before a build rather than
     // source that goes into one — so the type-aware rules have no type
     // information to work from and error out rather than reporting.
-    files: ["**/*.config.{ts,mjs}", "scripts/**/*.mjs"],
+    // `.d.mts` is in the list for the same reason and one step removed: it
+    // declares a `scripts/` module, so it is not in the program either, and
+    // a declaration file has nothing for a type-aware rule to check anyway.
+    // Omitting it failed the **whole** lint run rather than that one file,
+    // which is how A64-026.3 shipped a red `npm run lint`.
+    files: ["**/*.config.{ts,mjs}", "scripts/**/*.mjs", "scripts/**/*.d.mts"],
     extends: [tseslint.configs.disableTypeChecked],
     languageOptions: { globals: { ...globals.node } },
   },

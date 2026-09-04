@@ -32,7 +32,15 @@ const ORIGIN = "https://arena64.gg";
 // http URL under Vite, so `fileURLToPath` cannot be used here.
 const ROBOTS = readFileSync("public/robots.txt", "utf8");
 
-/** The route prefixes `public/robots.txt` must keep out. */
+/**
+ * The route prefixes `public/robots.txt` must keep out.
+ *
+ * Three different reasons, and they are not interchangeable: forms nobody
+ * should land on from a search result, routes behind authentication, and —
+ * since A64-026.4 — routes that are **public and shareable and still not
+ * indexed**. The two tests below pin the second and third by name, because
+ * a list alone cannot say which is which.
+ */
 const DISALLOWED = [
   "/login",
   "/register",
@@ -85,6 +93,19 @@ describe("the robots policy", () => {
     // engine". Removal from an index takes months, so the default that can
     // be reversed is the one that stays.
     expect(disallowedPaths(ROBOTS)).toContain("/players/");
+  });
+
+  it("keeps tournaments out even though they are public — §43.7", () => {
+    // The row most likely to be "fixed" by somebody who reads the router,
+    // sees an open route, and takes the entry for a leftover. It is not.
+    //
+    // Public, shareable and not indexed are three different things. Every
+    // route here serves one `index.html` with one title and one
+    // description, so an indexed tournament would enter the index as a
+    // copy of the landing page — thousands of duplicates diluting the one
+    // page meant to be found. The blocker is the missing per-route
+    // metadata layer, not the visibility.
+    expect(disallowedPaths(ROBOTS)).toContain("/tournaments");
   });
 });
 

@@ -804,6 +804,9 @@
     "cancelled": "This tournament was cancelled.",
     "registration": {
       "title": "Your entry",
+      "signInTitle": "Entering this tournament",
+      "signInPrompt": "Anyone can read a tournament here. Entering one needs an account, so the bracket knows who is playing.",
+      "signInCta": "Sign in to enter",
       "notRegistered": "You have not entered this tournament.",
       "registered": "You are entered.",
       "withdrawn": "You withdrew from this tournament.",
@@ -1176,7 +1179,8 @@
     "tournaments": {
       "eyebrow": "Tournaments",
       "title": "Brackets, not just a queue",
-      "body": "Enter a single-elimination tournament, watch the rounds fill in, and read the whole bracket afterwards. The connectors are drawn from the real pairing relationships, so what you see is what happened."
+      "body": "Enter a single-elimination tournament, watch the rounds fill in, and read the whole bracket afterwards. The connectors are drawn from the real pairing relationships, so what you see is what happened.",
+      "browse": "Browse tournaments"
     },
     "social": {
       "title": "Bring your own opponent",
@@ -1201,5 +1205,9 @@
     "footer": {
       "label": "Footer"
     }
+  },
+  "share": {
+    "action": "Share",
+    "copied": "Link copied"
   }
 }

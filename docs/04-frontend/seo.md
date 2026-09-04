@@ -6,7 +6,7 @@
 | **Owner**        | Shohruh                                       |
 | **Applies to**   | `apps/web`                                    |
 | **Decided in**   | A64-026.3 — `specs/product-experience.md` §42 |
-| **Last updated** | 2026-09-05                                    |
+| **Last updated** | 2026-09-05 (tournaments, A64-026.4 §43.7)     |
 
 ---
 
@@ -21,13 +21,14 @@ copy is the landing page's.
 
 **One page on this origin is meant to be found.**
 
-| Route                                                                                                                   | Crawlable       | Why                                                                                                                         |
-| ----------------------------------------------------------------------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `/` (anonymous landing)                                                                                                 | **Yes**         | The only page written to be read by somebody without an account                                                             |
-| `/login`, `/register`, `/verify-email`, `/forgot-password`, `/reset-password`                                           | No              | Forms. A search result landing a stranger on a password reset helped nobody                                                 |
-| `/players/{username}`                                                                                                   | **No** — see §3 | Public to view, not for indexing                                                                                            |
-| `/profile`, `/settings/*`, `/friends`, `/challenges`, `/search`, `/play`, `/games/*`, `/notifications`, `/tournaments*` | No              | Behind `protectedPage`. A crawler reaching one is redirected to sign-in, so the only thing it could index is the login form |
-| `/api/*`                                                                                                                | No              | Shares the origin in production. Nothing under it is a document                                                             |
+| Route                                                                                                  | Crawlable        | Why                                                                                                                         |
+| ------------------------------------------------------------------------------------------------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `/` (anonymous landing)                                                                                | **Yes**          | The only page written to be read by somebody without an account                                                             |
+| `/login`, `/register`, `/verify-email`, `/forgot-password`, `/reset-password`                          | No               | Forms. A search result landing a stranger on a password reset helped nobody                                                 |
+| `/players/{username}`                                                                                  | **No** — see §3  | Public to view, not for indexing                                                                                            |
+| `/tournaments`, `/tournaments/*`                                                                       | **No** — see §3a | Public to view and to share, not for indexing                                                                               |
+| `/profile`, `/settings/*`, `/friends`, `/challenges`, `/search`, `/play`, `/games/*`, `/notifications` | No               | Behind `protectedPage`. A crawler reaching one is redirected to sign-in, so the only thing it could index is the login form |
+| `/api/*`                                                                                               | No               | Shares the origin in production. Nothing under it is a document                                                             |
 
 The list lives in `apps/web/public/robots.txt` with the reasoning inline, and
 `src/app/seo.test.ts` asserts every row of it.
@@ -57,6 +58,23 @@ an opt-in later costs a setting.
 
 If profile indexing is ever wanted it needs a **new, explicit preference**,
 defaulting off, and a per-profile `noindex` that only a server can send.
+
+## 3a. Tournaments: public, shareable, and not indexed
+
+`/tournaments` and `/tournaments/{id}` stopped being behind authentication
+in A64-026.4. They stay disallowed, and that is a decision — `seo.test.ts`
+asserts it by name, because the entry now looks like something to clean up.
+
+Every route serves the same `index.html`: one title, one description, a body
+of zero characters (§6). An indexed tournament would enter a search index as
+a copy of the landing page's title, describing none of them and diluting the
+one page meant to be found.
+
+**The blocker is the missing per-route metadata layer, not the visibility.**
+When there is one — which needs the hydration path §6 records — completed
+tournaments are the natural first thing to open, and this is the line to
+change. The full picture of what is public, shareable and indexable lives in
+`docs/04-frontend/public-content.md`.
 
 ## 4. Canonical URLs and the origin
 
@@ -165,7 +183,7 @@ guessed one is nonsense.
 ## 9. Scale
 
 The sitemap lists one URL and needs no partitioning. If public content ever
-becomes indexable — tournaments, or profiles under an opt-in — the threshold
+becomes indexable — tournaments (§3a), or profiles under an opt-in — the threshold
 to watch is **50,000 URLs or 50 MB**, at which point a sitemap index and
 partitioned children are required rather than optional. Nothing here should
 be built before that is a real number.
@@ -183,5 +201,6 @@ that is written down.
 ## Related
 
 - `specs/product-experience.md` §42 — the decisions and measurements
+- `docs/04-frontend/public-content.md` — what is public, shareable and indexable, per surface
 - `specs/product-experience.md` §40 — the landing page this exists to expose
 - `docs/04-frontend/design-system.md` — brand and social asset rules

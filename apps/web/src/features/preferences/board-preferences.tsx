@@ -3,7 +3,8 @@ import { useEffect } from "react";
 import { usePreferences } from "@/features/profile/model/queries";
 
 /**
- * Applies `board_theme` and `piece_set` to the document — A64-025.5B §22.
+ * Applies `board_theme`, `piece_set` and `show_coordinates` to the
+ * document — A64-025.5B §22, A64-025.6D §28.
  *
  * ## Why this exists at all
  *
@@ -37,11 +38,17 @@ export function BoardPreferences() {
   const preferences = usePreferences();
   const boardTheme = preferences.data?.gameplay.board_theme;
   const pieceSet = preferences.data?.gameplay.piece_set;
+  // A64-025.6D §28. The third of the five write-only preferences, and the
+  // second to be closed. It rides the same attribute mechanism because the
+  // board that honours it is drawn on two routes and neither should have
+  // to ask for the preference itself.
+  const coordinates = preferences.data?.gameplay.show_coordinates;
 
   useEffect(() => {
     const root = document.documentElement;
     if (boardTheme !== undefined) root.dataset.boardTheme = boardTheme;
     if (pieceSet !== undefined) root.dataset.pieceSet = pieceSet;
+    if (coordinates !== undefined) root.dataset.coordinates = coordinates ? "on" : "off";
 
     // Cleared on unmount, which is what signing out does. Leaving the last
     // player's board on the document would show the next person who signs
@@ -49,8 +56,9 @@ export function BoardPreferences() {
     return () => {
       delete root.dataset.boardTheme;
       delete root.dataset.pieceSet;
+      delete root.dataset.coordinates;
     };
-  }, [boardTheme, pieceSet]);
+  }, [boardTheme, pieceSet, coordinates]);
 
   return null;
 }

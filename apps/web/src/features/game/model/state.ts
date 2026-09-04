@@ -112,6 +112,15 @@ export interface GameState {
   matchId: string;
   /** Which side this client plays. `null` until the snapshot names us. */
   side: Side | null;
+  /**
+   * Whether the result moves a rating — A64-025.6D §28.
+   *
+   * On the wire since the room was built and kept by nothing, so the one
+   * screen where a player is about to spend twenty minutes never said
+   * whether it counted. `null` until the first snapshot, because guessing
+   * before the server has spoken is exactly the invention §18 forbids.
+   */
+  rated: boolean | null;
   board: Board;
   /** The authoritative ply. Never advanced without a server frame. */
   sequence: number;
@@ -162,6 +171,7 @@ export function initialState(matchId: string): GameState {
     phase: "loading",
     matchId,
     side: null,
+    rated: null,
     board: new Map(),
     sequence: -1,
     sideToMove: null,
@@ -235,6 +245,7 @@ export function reduce(state: GameState, action: GameAction): GameState {
         side,
         board: boardFrom(snapshot.pieces),
         sequence: snapshot.sequence,
+        rated: snapshot.rated,
         sideToMove: snapshot.side_to_move,
         fingerprint: snapshot.fingerprint,
         participants: snapshot.participants,

@@ -112,19 +112,23 @@ it("renders every fact in one request and links each into a console", async () =
   // A64-027A moved the descriptive text onto the card and the destination
   // onto the link below it, which is what lets two cards point at two
   // different match filters without sharing one accessible name.
-  const cardFor = (label: RegExp) => {
+  // A64-027A.2 moved the attention items out of metric cards and into a
+  // panel of their own, so "the block this label belongs to" is a metric
+  // card *or* an attention row. The assertion is about the destination,
+  // not about which element carries it.
+  const blockFor = (label: RegExp) => {
     const heading = screen.getByText(label);
-    const card = heading.closest(".stat");
-    if (card === null) throw new Error(`no card for ${String(label)}`);
-    return card as HTMLElement;
+    const block = heading.closest(".stat, .attention-list li");
+    if (block === null) throw new Error(`no block for ${String(label)}`);
+    return block as HTMLElement;
   };
 
-  expect(within(cardFor(/^Jarayonda$|^Идут$|^In play$/)).getByRole("link")).toHaveAttribute(
+  expect(within(blockFor(/^Jarayonda$|^Идут$|^In play$/)).getByRole("link")).toHaveAttribute(
     "href",
     "/matches?status=active",
   );
 
-  const restrictions = cardFor(/Amaldagi cheklovlar|Действующие|Restrictions in force/);
+  const restrictions = blockFor(/Amaldagi cheklovlar|Действующие|Restrictions in force/);
   expect(within(restrictions).getByRole("link")).toHaveAttribute("href", "/moderation");
   // Asserted by **navigating** rather than by reading the href: the router
   // quotes a search value that would otherwise parse back as a boolean, so
@@ -132,7 +136,7 @@ it("renders every fact in one request and links each into a console", async () =
   // string `"true"` its `validateSearch` declares. What matters is that the
   // page understands the parameter (§21), not how it is spelled on the way.
   await person.click(
-    within(cardFor(/tugagan push|исчерпанными|out of retries/)).getByRole("link"),
+    within(blockFor(/tugagan push|исчерпанными|out of retries/)).getByRole("link"),
   );
   await waitFor(() => expect(router.state.location.pathname).toBe("/notifications"));
   expect(router.state.location.search).toMatchObject({ failed: "true" });

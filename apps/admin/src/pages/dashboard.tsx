@@ -12,6 +12,7 @@ import { ErrorNotice } from "@/shared/ui/error-notice";
 import { Icon } from "@/shared/ui/icon";
 import { PageHeader } from "@/shared/ui/page-header";
 import { Section } from "@/shared/ui/section";
+import type { IconName } from "@/shared/ui/icon";
 import { StatCard } from "@/shared/ui/stat-card";
 import { ErrorState, LoadingSkeleton } from "@/shared/ui/states";
 
@@ -34,7 +35,25 @@ import { ErrorState, LoadingSkeleton } from "@/shared/ui/states";
  * one. The single control on this page is its own refresh, and a test
  * asserts that count inside `<main>` rather than trusting the reading.
  *
- * ## What needs a person comes first — A64-027A §7
+ * ## The composition — A64-027A.2 §18
+ *
+ * Header, then the six-figure snapshot, then the trail beside what needs a
+ * person. A64-027A.1 stacked all three full width, which left six cards in
+ * a four-column grid with two orphans and put a half-page of nothing to the
+ * right of the activity list. The lower half is two columns now, which is
+ * what uses the canvas rather than merely occupying it.
+ *
+ * ## No chart, and the reason — §21
+ *
+ * The dashboard's read model returns **current counts and nothing else**:
+ * there is no time dimension in it. Every chart worth drawing here would be
+ * interpolated from a single point, which §21 and §28 both forbid and which
+ * would be the most convincing lie on the screen. The analytics endpoints
+ * *do* carry real time-bounded aggregates, but composing them into this
+ * page is a question about what the dashboard is for — it belongs to
+ * A64-027A.4, not to a visual foundation task.
+ *
+ * ## What needs a person — A64-027A §7
  *
  * The six platform figures are context; the attention band is the reason an
  * operator opened the console at 3am. It is rendered above them when there
@@ -59,6 +78,23 @@ import { ErrorState, LoadingSkeleton } from "@/shared/ui/states";
  * refresh failed. Replacing known-good data with zeros would be the one
  * lie this page must not tell.
  */
+/**
+ * Which glyph an audited action wears — A64-027A.2 §22.
+ *
+ * Keyed on the action's own prefix rather than on a per-action map: the
+ * trail is append-only and outlives this build, so an action nobody here
+ * has heard of still gets the icon of the thing it happened to. `audit` is
+ * the fallback, which is what an unrecognised privileged action *is*.
+ */
+function glyphFor(action: string): IconName {
+  if (action.startsWith("admin.sanction")) return "moderation";
+  if (action.startsWith("admin.role")) return "users";
+  if (action.startsWith("tournament.")) return "tournaments";
+  if (action.startsWith("notification.broadcast")) return "send";
+  if (action.startsWith("notification.")) return "notifications";
+  return "audit";
+}
+
 export function DashboardPage() {
   const { t, locale } = useTranslation();
 
@@ -123,15 +159,20 @@ export function DashboardPage() {
         description={t("dashboard.lede")}
         actions={
           state === "ready" && data !== null ? (
-            <button
-              type="button"
-              className="action"
-              disabled={refreshing}
-              onClick={() => void load(true)}
-            >
-              <Icon name="refresh" size={16} />
-              {t(refreshing ? "dashboard.refreshing" : "dashboard.refresh")}
-            </button>
+            <>
+              <span className="muted" style={{ fontSize: "var(--text-sm)" }}>
+                {t("dashboard.updatedAt", { at: when(data.generated_at) })}
+              </span>
+              <button
+                type="button"
+                className="action"
+                disabled={refreshing}
+                onClick={() => void load(true)}
+              >
+                <Icon name="refresh" size={16} />
+                {t(refreshing ? "dashboard.refreshing" : "dashboard.refresh")}
+              </button>
+            </>
           ) : undefined
         }
       />
@@ -147,54 +188,7 @@ export function DashboardPage() {
 
       {state === "ready" && data !== null && (
         <>
-          <p className="dashboard-freshness">
-            <span className="muted">
-              {t("dashboard.updatedAt", { at: when(data.generated_at) })}
-            </span>
-          </p>
-
           {refreshFailed && <ErrorNotice message={t("dashboard.error")} />}
-
-          <Section title={t("dashboard.sectionAttention")}>
-            {attentionTotal === 0 ? (
-              <p className="notice" data-tone="success" role="status">
-                <Icon name="success" size={17} />
-                <span>
-                  <strong>{t("dashboard.attentionClear")}</strong>{" "}
-                  <span className="muted">{t("dashboard.attentionClearHint")}</span>
-                </span>
-              </p>
-            ) : (
-              <ul className="kpi-grid">
-                {data.attention.restrictions_in_force > 0 && (
-                  <li>
-                    <StatCard
-                      label={t("dashboard.attentionRestrictions")}
-                      value={data.attention.restrictions_in_force}
-                      icon="moderation"
-                      tone="warning"
-                      foot={<Link to="/moderation">{t("dashboard.viewModeration")}</Link>}
-                    />
-                  </li>
-                )}
-                {data.attention.push_deliveries_retry_exhausted > 0 && (
-                  <li>
-                    <StatCard
-                      label={t("dashboard.attentionPush")}
-                      value={data.attention.push_deliveries_retry_exhausted}
-                      icon="notifications"
-                      tone="danger"
-                      foot={
-                        <Link to="/notifications" search={{ failed: "true" }}>
-                          {t("dashboard.viewNotifications")}
-                        </Link>
-                      }
-                    />
-                  </li>
-                )}
-              </ul>
-            )}
-          </Section>
 
           <Section title={t("dashboard.sectionOverview")}>
             <ul className="kpi-grid">
@@ -272,34 +266,97 @@ export function DashboardPage() {
             </ul>
           </Section>
 
-          <Section
-            title={t("dashboard.sectionActivity")}
-            aside={<Link to="/audit">{t("dashboard.viewAudit")}</Link>}
-          >
-            {data.recent_activity.length === 0 ? (
-              <p className="muted" role="status">
-                {t("dashboard.activityEmpty")}
-              </p>
-            ) : (
-              <ul className="timeline">
-                {data.recent_activity.map((entry) => (
-                  <li
-                    key={entry.id}
-                    data-tone={entry.outcome === "succeeded" ? "primary" : undefined}
-                  >
-                    <div className="cell-primary">
-                      <strong>{actionOf(entry)}</strong>
-                      <span>
-                        {actorOf(entry)}
-                        {" · "}
-                        <time dateTime={entry.created_at}>{when(entry.created_at)}</time>
+          <div className="dash-split">
+            <section className="panel dash-split__attention">
+              <div className="panel__head">
+                <h3>
+                  <Icon name="warning" size={16} />
+                  {t("dashboard.sectionAttention")}
+                </h3>
+              </div>
+              {attentionTotal === 0 ? (
+                <p className="attention-clear" role="status">
+                  <span className="attention-clear__glyph">
+                    <Icon name="success" size={18} />
+                  </span>
+                  <span>
+                    <strong>{t("dashboard.attentionClear")}</strong>
+                    {t("dashboard.attentionClearHint")}
+                  </span>
+                </p>
+              ) : (
+                <ul className="attention-list">
+                  {data.attention.restrictions_in_force > 0 && (
+                    <li data-tone="warning">
+                      <span className="attention__glyph" data-tone="warning">
+                        <Icon name="moderation" size={16} />
                       </span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Section>
+                      <span className="attention__body">
+                        <span className="attention__count">
+                          {data.attention.restrictions_in_force}
+                        </span>
+                        <span className="attention__label">
+                          {t("dashboard.attentionRestrictions")}
+                        </span>
+                        <Link to="/moderation">{t("dashboard.viewModeration")}</Link>
+                      </span>
+                    </li>
+                  )}
+                  {data.attention.push_deliveries_retry_exhausted > 0 && (
+                    <li data-tone="danger">
+                      <span className="attention__glyph" data-tone="danger">
+                        <Icon name="notifications" size={16} />
+                      </span>
+                      <span className="attention__body">
+                        <span className="attention__count">
+                          {data.attention.push_deliveries_retry_exhausted}
+                        </span>
+                        <span className="attention__label">{t("dashboard.attentionPush")}</span>
+                        <Link to="/notifications" search={{ failed: "true" }}>
+                          {t("dashboard.viewNotifications")}
+                        </Link>
+                      </span>
+                    </li>
+                  )}
+                </ul>
+              )}
+            </section>
+            <section className="panel dash-split__activity">
+              <div className="panel__head">
+                <h3>
+                  <Icon name="audit" size={16} />
+                  {t("dashboard.sectionActivity")}
+                </h3>
+                <Link to="/audit">{t("dashboard.viewAudit")}</Link>
+              </div>
+              {data.recent_activity.length === 0 ? (
+                <p className="muted panel__body" role="status">
+                  {t("dashboard.activityEmpty")}
+                </p>
+              ) : (
+                <ul className="timeline">
+                  {data.recent_activity.map((entry) => (
+                    <li key={entry.id}>
+                      <span
+                        className="timeline__glyph"
+                        data-tone={entry.outcome === "succeeded" ? "primary" : "danger"}
+                      >
+                        <Icon name={glyphFor(entry.action)} size={15} />
+                      </span>
+                      <span className="timeline__text">
+                        <strong>{actionOf(entry)}</strong>
+                        <span>
+                          {actorOf(entry)}
+                          {" · "}
+                          <time dateTime={entry.created_at}>{when(entry.created_at)}</time>
+                        </span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          </div>
         </>
       )}
     </>

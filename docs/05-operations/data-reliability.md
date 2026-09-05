@@ -384,3 +384,78 @@ tomorrow's schedule.
 - [`backup-restore.md`](./backup-restore.md)
 - [`../01-architecture/production-hardening.md`](../01-architecture/production-hardening.md)
 - [`../01-architecture/database.md`](../01-architecture/database.md), [`caching.md`](../01-architecture/caching.md)
+
+---
+
+## 11. Supported topology — A64-028.4
+
+**N API instances, one shared PostgreSQL, one shared Redis.** Proven with
+two, not asserted.
+
+A64-028.1's P1-2 said cross-node realtime did not exist and that
+"single-node is the only supported topology". That came from `bus.py`'s
+header, which still quotes A64-016.3. The transport was built by A64-016.5
+(`RedisStreamGatewayBus`, a stream per destination node with consumer
+groups) and connected by A64-016.8 (`GatewayForwarder`, which drains this
+node's own mailbox). Nothing tested it end to end, which is why it was
+possible to believe it was missing.
+
+### What was measured
+
+Two uvicorn processes, distinct `GATEWAY_NODE_ID`, one PostgreSQL and one
+Redis, real WebSocket clients:
+
+```
+A -> node-1, B -> node-2   (independent processes)
+node-1 -> node-2 delivery : YES   duplicates: 0
+node-2 -> node-1 delivery : YES   duplicates: 0
+durable move log          : plies [1, 2]
+match.ply_number          : 2
+```
+
+### Delivery contract
+
+| | |
+| --- | --- |
+| Guarantee | **At-least-once**, per destination node. `XREADGROUP` with `XACK` after delivery |
+| Ordering | **Not guaranteed by the transport.** The domain carries the order: every game frame has a ply, the room projection refuses to move backwards, and a client that sees a ply twice ignores the second |
+| Duplicates | Possible and safe, by the line above |
+| Subscriber down | Entries stay in that node's stream, capped by `MAXLEN` and a key TTL. A node that never returns leaves a bounded, expiring key |
+| Redis down | Publishing returns `False`; the move is **already committed** before anything is published, so a delivery failure never rolls one back |
+| Recovery | `game.resume` — the client names the sequence it has and gets a snapshot or the frames it missed. A lost frame costs a resync, never a game |
+
+### Scheduled work
+
+There is no scheduler leader and no distributed lock, and that is the
+design rather than a gap. Work is **claimed durably** instead:
+
+| Task | Mechanism | Class |
+| --- | --- | --- |
+| Outbox relay | `SELECT … FOR UPDATE SKIP LOCKED` | A — safe multi-run |
+| Pairing sweep | the same. Its own docstring: "correctness comes from `FOR UPDATE SKIP LOCKED`, not from knowing who claimed what" | A |
+| Queue expiry, challenge expiry, reconciliation | the same | A |
+| Clock adjudication | atomic Lua `ZRANGEBYSCORE` + `ZREM` | A |
+| Clock reconciliation | supersedes; one member per match | A |
+| Gateway forwarding | drains **this node's** stream | **per-node — must run everywhere** |
+| Metrics flush | flushes **this process's** counters | **per-node** |
+| Outbox / analytics retention | delete-older-than | B — idempotent, a second runner finds nothing |
+
+Two runners of a claiming task share the work; they do not repeat it. Two
+of the last two are *required*, and a global leader would have broken
+realtime by stopping the forwarder on every node but one.
+
+Measured, three concurrent workers against real infrastructure: every
+outbox event claimed exactly once, every clock deadline claimed exactly
+once, no work claimed twice and none left unclaimed.
+
+### Restart
+
+`SIGTERM` closes live sockets with **`1012 service restart`** — uvicorn's
+own shutdown, before the lifespan teardown runs, which is also the right
+order. Verified: the client sees the code, reconnects to the surviving
+instance, `game.resume` returns a snapshot, and the durable move log is
+unchanged. The requirement is that the **game** survives a restart, not
+that a socket does.
+
+**Deployment orchestration is A64-028.6's** — readiness routing, stop
+timeouts, rolling deploys. This section is what the application does.

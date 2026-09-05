@@ -57,7 +57,11 @@ log pipeline, a backup mechanism, a production compose/manifest.
 
 > **A64-028.2** closed P0-1, P1-1 and P2-4.
 > **A64-028.3** closed **P0-4, P2-1, P2-3 and P3-2**, and added two P2s and
-> one P3 it found on the way. Remaining: **2 P0, 6 P1, 6 P2, 3 P3**.
+> one P3 it found on the way.
+> **A64-028.4** found a **new P0** — the outbox relay had been dead — closed
+> it, disproved **P1-2**, reclassified **P1-3**, closed **P3-4** after
+> raising it to P1, and resolved the application half of **P1-6**.
+> Remaining: **2 P0, 3 P1, 6 P2, 2 P3**.
 > See `specs/authentication.md` "Rotation under concurrency" for the design.
 
 
@@ -156,10 +160,23 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 
 ### P1-2 — Realtime is silently broken above one instance
 
+> **DISPROVED — A64-028.4.** The finding came from `bus.py`'s header, which
+> still quotes A64-016.3. The transport was built by A64-016.5
+> (`RedisStreamGatewayBus`) and connected by A64-016.8
+> (`GatewayForwarder`); what was missing was any test of it end to end,
+> which is why it was possible to believe it was absent. Measured with two
+> uvicorn processes, distinct node ids, one PostgreSQL and one Redis:
+> delivery works in **both** directions with **zero** duplicates, and the
+> durable move log agrees. See `docs/05-operations/data-reliability.md` §11.
+>
+> The second stale header in two tasks — A64-028.3 found the same in
+> `live_match_store.py`. Both described a platform that no longer existed
+> and both were scarier than reality.
+
 | | |
 | --- | --- |
 | **Area** | Realtime |
-| **Status** | **FAIL** (as a scaling property) |
+| **Status** | ~~FAIL~~ → **PASS** — the claim was wrong |
 | **Evidence** | `app/gateway/bus.py`: a port, an envelope and an **in-process adapter**. The production adapter `RedisStreamGatewayBus` is named in the docstring as future work and does not exist. Quoted there from A64-016.3: "a deployment running more than one gateway node today has silently undelivered frames … single-node is the only supported topology". |
 | **Failure mode** | With two instances, a move made on node A never reaches an opponent held by node B. No error is raised on either side. |
 | **Impact** | Games freeze for one player with no visible cause. Silent, so it would reach users before it reached an operator. |
@@ -170,10 +187,23 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 
 ### P1-3 — Schedulers have no singleton guard
 
+> **RECLASSIFIED — A64-028.4.** The observation is true and the conclusion
+> does not follow. This platform does not coordinate schedulers; it
+> **claims work durably**, which is the stronger design: `FOR UPDATE SKIP
+> LOCKED` for the relay, the pairing sweep, queue and challenge expiry, and
+> an atomic Lua claim for clock deadlines. Two runners share work rather
+> than repeating it.
+>
+> Two tasks *must* run on every instance — the gateway forwarder drains that
+> node's own mailbox and the metrics flush drains that process's counters —
+> so a global scheduler leader would have broken realtime on every node but
+> one. Measured with three concurrent workers: every event and every
+> deadline claimed exactly once, none twice, none missed.
+
 | | |
 | --- | --- |
 | **Area** | Workers / deployment |
-| **Status** | **RISK** |
+| **Status** | ~~RISK~~ → **PASS** — by claim, not by lock |
 | **Evidence** | `PeriodicTaskScheduler` is a bare `asyncio` interval loop — no advisory lock, no leader election. `app_factory.build_task_schedulers` starts 16+ job types (plus one pairing scheduler **per pool**) in every process's lifespan. `deployment.md` §2: "a second replica … would run a second copy of the outbox relay, the pairing sweep and the clock adjudicator. Several claim work with `SKIP LOCKED` and would be safe; **that has never been tested**." |
 | **Failure mode** | N replicas → N executions per interval. The outbox relay is cooperative (`FOR UPDATE SKIP LOCKED`); the pairing sweep, clock adjudicator, tournament reconciliation, no-show sweep and retention prunes are **unverified**. |
 | **Impact** | Unknown per job. Candidates include double pairing, double adjudication of one clock, and duplicated tournament state transitions. |
@@ -214,8 +244,23 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 
 | | |
 | --- | --- |
+> **APPLICATION SIDE RESOLVED — A64-028.4; deployment side is A64-028.6's.**
+> `SIGTERM` closes live sockets with `1012 service restart` — uvicorn's own
+> shutdown, before the lifespan teardown, which is also the right order.
+> Verified end to end: the client sees the code, reconnects to the surviving
+> instance, `game.resume` returns a snapshot and the durable move log is
+> unchanged. **A game survives a process restart**, which is the requirement;
+> a socket surviving one is not. Readiness routing, stop timeouts and
+> rolling deploys remain open for A64-028.6.
+>
+> An application-level drain was written for this and then **removed**: it
+> found zero sockets, because uvicorn closes them first. Keeping it would
+> have been a comment claiming credit for the server's behaviour.
+
+| | |
+| --- | --- |
 | **Area** | Deployment / realtime |
-| **Status** | **RISK** (known, accepted for staging) |
+| **Status** | **application side PASS** · deployment side **OPEN** → A64-028.6 |
 | **Evidence** | `deployment.md` §1: "**Every live game is dropped** — one process holds the WebSocket connections and the schedulers alike". No socket drain exists in `lifespan`'s shutdown path, which stops schedulers, the sweeper and the outbox relay, then closes Redis and the database. |
 | **Failure mode** | A deploy severs every WebSocket mid-game. |
 | **Impact** | Players lose games in progress. With one instance there is no rolling window in which to avoid it. |
@@ -249,13 +294,30 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 | P2-5 | Capacity | UNKNOWN | One uvicorn worker; 15 PostgreSQL connections per process (`pool_size=10` + `max_overflow=5`); one instance. No load test has ever run. Every throughput figure is unknown | `main.py`, `engine.py` | **A64-028.5** |
 | P2-6 | Docs | RISK | The Dockerfile's `HEALTHCHECK` comment says the endpoint "reports the database and Redis". It calls `/api/v1/health`, which is liveness and reports neither. The behaviour is right; the comment describes `/health/ready` | `apps/api/Dockerfile` | **A64-028.6** |
 
+### Found by A64-028.4
+
+### P0-5 — The outbox relay was dead, and burned every event's retry budget
+
+> **RESOLVED in the same task.** Recorded because it was live in every
+> environment running the code and nothing had noticed for weeks.
+
+| | |
+| --- | --- |
+| **Area** | Background work |
+| **Status** | ~~FAIL~~ → **PASS** |
+| **Evidence** | `AnalyticsRetentionTask` — a `TaskHandler` — was appended to `build_outbox_worker`'s `EventHandler` list. The relay called `handles()` on it on every tick, inside the comprehension that builds its work list, so the `AttributeError` escaped before any consumer ran and failed the **whole pass**. A64-028.1 logged it as a side observation |
+| **Failure mode** | Nothing `platform.outbox` carries was delivered: notifications, rating application, analytics projections, tournament and social events. And `_claim` commits before `_dispatch` runs, so every failing tick incremented `attempt_count` and committed — within five ticks every claimable event hit `max_attempts` and was **permanently abandoned**. The development database holds 898 such events, all at exactly five attempts |
+| **Impact** | Total loss of event delivery, plus destruction of the retry path that would have recovered it |
+| **Action taken** | The registration moved to the dispatcher, where it also fixed a second silent failure: `analytics_prune_request` was scheduled with nothing answering to it, so the 400-day retention had never run. Both composition points now fail fast — `OutboxWorker` refuses a consumer that cannot answer the protocol, `PeriodicTaskScheduler` refuses a request its dispatcher cannot route. Two layers of type suppression (`list[TaskHandler \| object]` and a `# type: ignore[arg-type]`) removed |
+| **Verified** | Two running instances: `outbox_tick_failed` from 25 occurrences to 0 |
+
 ### Found by A64-028.3
 
 | ID | Area | Status | Finding | Owner |
 | --- | --- | --- | --- | --- |
 | P2-7 | Retention | RISK | `notifications.notification` has **no retention policy** and grows with activity — the only unbounded durable table that is not meant to be. (`admin.audit_entry` is also unbounded and that is deliberate.) Nothing breaks; the table grows for ever | **A64-028.4** |
 | P2-8 | Backup | RISK | **A dump is plaintext** and holds every email address and password hash on the platform. Encryption at rest is a property of where it is stored, which this repository does not own. Off-host storage must encrypt | **A64-028.6** |
-| P3-4 | Redis | RISK | `clock:v1:deadlines` is the one key family with no expiry backstop. Its bound is "matches being played" and `claim_expired` drains it, but a member whose match ended without being claimed or superseded stays for ever | **A64-028.4** |
+| ~~P3-4~~ **P1-8** | Redis | ~~RISK~~ → **PASS** | **Reclassified and resolved — A64-028.4.** Filed as a P3 about unbounded growth; the growth was the small half. The set has no durable backing, so a Redis loss took every active game's deadline with it — and `ClockAdjudicationService` has said since A64-018 that a lost deadline means "the match stops flagging … for a game nobody is moving in it stays open". A player who walks away never lost on time. `ClockDeadlineReconciliationTask` re-derives every active match's deadline from `clock_turn_started_at` and the side-to-move's remaining milliseconds — durable columns the move committed — so the queue is a cache of a derivation and a loss is a rebuild. Idempotent, so it is safe on every instance | A64-028.4 — **done** |
 
 ### P3 findings
 

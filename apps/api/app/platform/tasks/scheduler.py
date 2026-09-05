@@ -77,6 +77,27 @@ class PeriodicTaskScheduler:
         self._task: asyncio.Task[None] | None = None
         self._stopping = asyncio.Event()
 
+        # Fail at composition, not six hours later — A64-028.4 §19.
+        #
+        # A64-027.2's analytics retention was scheduled here and registered
+        # with the *relay* instead of the dispatcher. Nothing joined the two
+        # until the interval elapsed, and then the only symptom was
+        # `task_unroutable` on a process nobody was watching — once every
+        # six hours, for ever, while the 400-day prune it exists for never
+        # ran.
+        #
+        # A dispatcher that can enumerate what it routes can say so now, and
+        # a startup that raises is a deploy that rolls back. `registered` is
+        # optional on the port because a future Celery dispatcher cannot
+        # answer it locally; when it cannot, this check does not run and the
+        # scheduler behaves as before.
+        routes = getattr(dispatcher, "registered", None)
+        if routes is not None and request.name not in routes:
+            raise ValueError(
+                f"No handler is registered for the scheduled task {request.name!r}. "
+                f"This dispatcher routes: {sorted(routes)}."
+            )
+
     async def start(self) -> None:
         """Schedules the loop. Idempotent — starting twice is a no-op.
 

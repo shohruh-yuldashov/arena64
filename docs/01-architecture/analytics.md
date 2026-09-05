@@ -526,16 +526,16 @@ environments; the exclusions column names only what is additional.
 | M3  | Registrations             | How many accounts are created?           | `COUNT(*)`                                                                  | `user_registered`                        | Day                 | `utm_source` via the stitch          | —                                             | **Implemented** (A64-027.3, F-B stage 1). Authoritative                                                                 |
 | M4  | Registration completion   | Do people who intend to register finish? | M3 / M2a, joined through the identity stitch                                | both                                     | Day                 | `placement`                          | Registrations with no prior anonymous session | Cross-device journeys break the join (§9)                                                                               |
 | M5  | Verification rate         | Do accounts become usable?               | verified within 7 days / registered                                         | `email_verified`, `user_registered`      | Registration cohort | —                                    | Cohorts younger than 7 days                   | **Implemented** (A64-027.3). Deliverability and verification are conflated                                              |
-| M6  | Queue joins               | Is anyone looking for a game?            | `COUNT(*)`                                                                  | `queue_joined`                           | Day                 | `speed_class`, `rated`               | —                                             | Authoritative                                                                                                           |
-| M7  | Queue wait p50 / p95      | How long does pairing take?              | `percentile_cont(0.5\|0.95) WITHIN GROUP (ORDER BY waited_ms)`              | `match_found`                            | Day                 | `speed_class`, `rated`, `queue_type` | Tickets that never paired                     | **Measures successful pairs only.** Abandoned waits are M7b                                                             |
-| M7b | Queue abandonment rate    | How often does waiting fail?             | `queue_left` / (`queue_left` + `match_found`)                               | `queue_left`, `match_found`              | Day                 | `reason`, `speed_class`              | —                                             | The honest companion to M7 — without it, p95 flatters the product                                                       |
-| M8  | Match found rate          | Does joining a queue produce a pairing?  | distinct `match_found` seats / `queue_joined`                               | both                                     | Day                 | `speed_class`                        | —                                             | A ticket spanning midnight is counted in the day it joined                                                              |
-| M9  | Offer acceptance rate     | Do paired players show up?               | `resolution = both_accepted` / all `match_offer_resolved`                   | `match_offer_resolved`                   | Day                 | `speed_class`                        | —                                             | Authoritative                                                                                                           |
-| M10 | Match completion rate     | Do started games get played to an end?   | See §32 — the denominator is the whole definition                           | `match_started`, `match_completed`       | Day                 | `rated`, `speed_class`               | `termination_reason = abort`                  | §32                                                                                                                     |
-| M11 | Resignation rate          | How do games end?                        | `termination_reason = resignation` / completed                              | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | —                                                                                                                       |
-| M12 | Draw rate                 | How do games end?                        | `outcome = draw` / completed                                                | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | —                                                                                                                       |
-| M13 | Abandonment rate          | How often does somebody just leave?      | `termination_reason IN (abandonment, flag)` / completed                     | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | `flag` is a legitimate loss on time and is reported separately from `abandonment`                                       |
-| M14 | Rated share               | Do people play for rating?               | `rated = true` / completed                                                  | `match_completed`                        | Day                 | `speed_class`                        | Aborts                                        | —                                                                                                                       |
+| M6  | Queue joins               | Is anyone looking for a game?            | `COUNT(*)`                                                                  | `queue_joined`                           | Day                 | `speed_class`, `rated`               | —                                             | **Implemented** (A64-027.5). Authoritative                                                                              |
+| M7  | Queue wait p50 / p95      | How long does pairing take?              | `percentile_cont(0.5\|0.95) WITHIN GROUP (ORDER BY waited_ms)`              | `match_found`                            | Day                 | `speed_class`, `rated`, `queue_type` | Tickets that never paired                     | **Implemented** (A64-027.5). **Measures successful pairs only.** Abandoned waits are M7b                                |
+| M7b | Queue abandonment rate    | How often does waiting fail?             | `queue_left` / (`queue_left` + `match_found`)                               | `queue_left`, `match_found`              | Day                 | `reason`, `speed_class`              | —                                             | **Implemented** (A64-027.5). The honest companion to M7 — without it, p95 flatters the product                          |
+| M8  | Match found rate          | Does joining a queue produce a pairing?  | distinct `match_found` seats / `queue_joined`                               | both                                     | Day                 | `speed_class`                        | —                                             | **Implemented** (A64-027.5). A ticket spanning midnight is counted in the day it joined                                 |
+| M9  | Offer acceptance rate     | Do paired players show up?               | `resolution = both_accepted` / all `match_offer_resolved`                   | `match_offer_resolved`                   | Day                 | `speed_class`                        | —                                             | **Implemented** (A64-027.5). Authoritative                                                                              |
+| M10 | Match completion rate     | Do started games get played to an end?   | See §32 — the denominator is the whole definition                           | `match_started`, `match_completed`       | Day                 | `rated`, `speed_class`               | `termination_reason = abort`                  | **Implemented** (A64-027.5). §32                                                                                        |
+| M11 | Resignation rate          | How do games end?                        | `termination_reason = resignation` / completed                              | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | **Implemented** (A64-027.5). —                                                                                          |
+| M12 | Draw rate                 | How do games end?                        | `outcome = draw` / completed                                                | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | **Implemented** (A64-027.5). —                                                                                          |
+| M13 | Abandonment rate          | How often does somebody just leave?      | `termination_reason IN (abandonment, flag)` / completed                     | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | **Implemented** (A64-027.5). `flag` is a legitimate loss on time and is reported separately from `abandonment`          |
+| M14 | Rated share               | Do people play for rating?               | `rated = true` / completed                                                  | `match_completed`                        | Day                 | `speed_class`                        | Aborts                                        | **Implemented** (A64-027.5). —                                                                                          |
 | M15 | Tournament participation  | Do tournaments get used?                 | distinct actors with `tournament_entered` / active actors                   | `tournament_entered`                     | Week                | `format`                             | —                                             | **Implemented** (A64-027.4). A withdrawal still counts as participation in the week it happened                         |
 | M16 | Friend graph growth       | Is the social layer used?                | `COUNT(friendship_created)`                                                 | `friendship_created`                     | Week                | —                                    | —                                             | **Implemented** (A64-027.4). Authoritative                                                                              |
 | M17 | Challenge acceptance rate | Do friend challenges work?               | `resolution = accepted` / `challenge_sent`                                  | `challenge_sent`, `challenge_resolved`   | Week                | `speed_class`, `rated`               | —                                             | **Implemented** (A64-027.4). Expiry and decline are reported separately, not merged into failure                        |
@@ -1556,3 +1556,226 @@ is a real 30% and its D7 and D30 are absent rather than nought.
 3. The activity predicate, the cohort CTE and the maturity/coverage
    machinery, all reusable.
 4. D1 (consent) still open.
+
+---
+
+# Part V — Matchmaking and game health (A64-027.5)
+
+Parts III and IV measured people. This measures the **machine**: how long
+pairing takes, how often it fails, and how often a game that starts gets
+played to an end.
+
+## 83. Four more projections, and still no domain change
+
+| Analytics event        | Projected from                                                                  | Grain         |
+| ---------------------- | ------------------------------------------------------------------------------- | ------------- |
+| `queue_left`           | `matchmaking.queue_ticket_cancelled` + `_expired`                               | queue attempt |
+| `match_offer_resolved` | `game.match_activated` (accepted), `match_declined`, `match_acceptance_expired` | offer         |
+
+`_QueueTicketEvent` and `_MatchEvent` carry everything both needed. **Fifteen
+of sixteen** backend analytics events now project; the last is
+`tournament_withdrawn`, which has no domain event at all.
+
+### A matched ticket can never be an abandonment
+
+§13's warning — "match found, therefore the queue entry was removed,
+therefore abandoned" — is **structurally impossible** here: the pairing
+service publishes `PlayersPaired` and no ticket event, so there is no row to
+exclude. A projection test asserts it, because a mutation check showed the
+M7b query tests could not: they build their own fixtures and never run a
+projection.
+
+### `match_accepted_by_player` is deliberately not a resolution
+
+It is the state where one side has answered and the other has not.
+Projecting it would resolve an offer twice — once half-resolved — and M9's
+denominator would grow without its numerator.
+
+## 84. A correction to §18: who owns `match_offer_resolved`
+
+A64-027.1 gave it `ACTOR` identity, "the initiating player". A64-027.5
+corrects it to **`ENTITY`**:
+
+- A matchmaking offer is created by the **pairing scan**, not by either
+  player. There is no initiator to name.
+- An expiry has no actor at all.
+- M9's grain is the offer. Attributing it to a player would make a
+  match-grain rate look per-player, which is exactly the mistake §40 exists
+  to prevent.
+
+This is the second identity correction in the epic; A64-027.4 made the same
+kind for `challenge_resolved`, and for the same reason — the metric's grain
+decides whose row it is.
+
+## 85. Grain, on every result
+
+| Result        | Grain           | One unit is                                                         |
+| ------------- | --------------- | ------------------------------------------------------------------- |
+| `QueueHealth` | `QUEUE_ATTEMPT` | one ticket. A player who joins, leaves and joins again produced two |
+| `OfferHealth` | `OFFER`         | one pairing's acceptance outcome — both seats share it              |
+| `GameHealth`  | `MATCH`         | one game. **Never one seat**                                        |
+
+Declared as a field rather than left to prose, so a caller combining two
+results has to notice they count different things.
+
+**The trap is `match_started`.** It is projected per seat, so a `COUNT(*)`
+reports every match twice and halves every rate — into a percentage that
+looks entirely reasonable. The query uses `COUNT(DISTINCT match_id)`, not a
+division by two: a match with one projected seat would then be half a match.
+
+## 86. Queue health
+
+| Metric | Formula                                       | Denominator           |
+| ------ | --------------------------------------------- | --------------------- |
+| M6     | `COUNT(queue_joined)`                         | —                     |
+| M7     | `percentile_cont(0.5, 0.95)` over `waited_ms` | successful pairings   |
+| M7b    | `queue_left / (queue_left + match_found)`     | **resolved** attempts |
+| M8     | `match_found seats / queue_joined`            | **joins**             |
+
+M7b and M8 have different denominators on purpose. M7b asks how often a
+resolved wait ended badly; M8 asks what share of joins produced a pairing. A
+ticket still waiting has abandoned nothing, and counting it as a failure
+would make a busy minute look like an outage.
+
+### The wait is the server's own number
+
+`waited_ms` comes from `matchmaking.players_paired.waited_for_seconds`, which
+the pairing service measures. Never a client clock, never
+`paired_at − browser_clicked_at`.
+
+**The sample counts pairings, not seats.** Both seats carry the pair's own
+wait, so a percentile over rows is correct — doubling every value uniformly
+leaves quantiles where they were — and a sample size over rows is twice the
+truth. The inner `DISTINCT` fixes the second without touching the first.
+
+### Censored waits stay out
+
+An abandoned attempt has a wait, and it is **not** in M7's distribution.
+§51: mixing a censored wait into a pairing percentile — or worse, entering it
+as zero — makes a product where people give up look fast. M7b is where that
+population is measured.
+
+A **negative** wait is refused at projection time and counted as a rejection.
+Never clamped to zero: §50, and a clamp would put an impossible value into a
+distribution as a fast pairing.
+
+## 87. Offer health — M9
+
+`both_accepted / all match_offer_resolved`, at offer grain, with three
+exhaustive outcomes.
+
+**Expiry stays in the denominator.** Dropping the offers nobody answered
+would turn a product where a tenth of them time out into one with a perfect
+acceptance rate. And expiry is not decline (§52): somebody who never answered
+is not somebody who refused, and folding them reports indifference as
+rejection.
+
+## 88. Game health — M10 to M14
+
+The completion classification is **imported** from the funnels' module, not
+repeated: two copies of "did this game happen" is two answers.
+
+| Metric | Numerator                    | Denominator             |
+| ------ | ---------------------------- | ----------------------- |
+| M10    | completions, aborts excluded | starts, aborts excluded |
+| M11    | `resignation`                | completions             |
+| M12    | `outcome = draw`             | completions             |
+| M13    | `abandonment` + `flag`       | completions             |
+| M14    | `rated` completions          | completions             |
+
+M11–M14 are over **completions**, not starts, because a resignation is a
+completed game. M13 folds abandonment and flag and reports both separately:
+losing on time is a legitimate result and walking away is not, even though
+both end a game without a move.
+
+## 89. Segmentation, and both halves of every rate
+
+`rated` and `speed_class` are applied **inside every CTE**, so a segmented
+denominator is a segmented population rather than a filtered answer. §34's
+failure — a rated numerator over an all-mode denominator — is a number that
+means nothing and looks like a percentage; a mutation check confirms the test
+catches it.
+
+`speed_class` reaches the query as an **enum**, validated in the service, so
+nothing a caller types becomes SQL.
+
+**A limitation, stated:** `match_started` carries no speed class, so a
+speed-segmented M10 narrows the completions and not the starts. The
+completions are reported and the rate is not, until the additive field lands.
+
+## 90. Measured — TEST DATA, NOT PRODUCTION
+
+A deterministic fixture of 879 rows, run through the real queries:
+
+```
+QUEUE   grain: queue_attempt
+  joined 300 · paired 180 · abandoned 120 (cancelled 70, expired 50)
+  M7b abandonment 40.0%      M8 match-found 60.0%
+  M7 wait p50 15.5s / p95 30.0s   (n = 90 pairings, not 180 seats)
+
+OFFERS  grain: offer
+  resolved 90 · accepted 63 · declined 18 · expired 9
+  M9 acceptance 70.0%
+
+GAMES   grain: match
+  started 63 · completed 53 · aborted 10
+  M10 100.0% · M11 37.7% · M12 15.1% · M13 18.9% (abandonment 4, flag 6) · M14 66.0%
+  breakdown: resignation 20, no_legal_moves 15, abort 10, agreed_draw 8, flag 6, abandonment 4
+
+SEGMENT rated  started 42 completed 35 aborted 7
+SEGMENT casual started 21 completed 18 aborted 3
+        42 + 21 = 63 — both halves segmented, and they sum to the whole
+
+timings (local, warm): queue 2.3 ms · offers 0.9 ms · games 2.2 ms
+```
+
+63 starts against 126 seat rows is the grain working. 90 pairings against 180
+`match_found` rows is the same thing on the queue side.
+
+### The data-quality check caught the fixture
+
+The same run reported `completed_before_start: 12` — an artefact of the
+generator, which wrapped its hour arithmetic and put twelve completions
+before their own starts. That is the check doing exactly its job on data
+nobody had inspected, and it is recorded here rather than quietly regenerated.
+
+## 91. Data quality
+
+Three lifecycle impossibilities, counted and never repaired:
+
+| Check                       | Meaning                                                                             |
+| --------------------------- | ----------------------------------------------------------------------------------- |
+| `completions_without_start` | A completion whose match has no start row — usually coverage rather than corruption |
+| `completed_before_start`    | Physically impossible ordering                                                      |
+| `unknown_resolutions`       | An offer resolution outside the closed vocabulary                                   |
+
+Counts only. No match id, no subject key, no event id — a diagnostic that
+named the rows would be a per-match export with none of the store's
+protections.
+
+## 92. Architecture decisions, all unchanged
+
+| Decision          | State         | Evidence                                                                                            |
+| ----------------- | ------------- | --------------------------------------------------------------------------------------------------- |
+| New index         | **Not added** | The four from A64-027.2 cover every query; the plans hash-aggregate over them                       |
+| Partitioning      | **Deferred**  | No new evidence against A64-027.2's ~20M-row threshold                                              |
+| Materialised view | **Deferred**  | 0.9–2.3 ms on the fixture. Precomputation would stop a corrected projection from correcting history |
+| Aggregate table   | **Deferred**  | A64-027.6 may justify one against real query cost                                                   |
+| Redis cache       | **Deferred**  | Correctness over a stale cache nobody measured the need for                                         |
+| HTTP API          | **Not added** | Nothing consumes these yet                                                                          |
+
+A separate `MatchmakingReader` port rather than more methods on
+`FunnelReader`: these answer a different question at a different grain, and
+one port holding every analytics query is the god object §42 warns about.
+
+## 93. What A64-027.6 inherits
+
+1. **Every metric in §29 is implemented** — M1–M22, across Parts III, IV and V.
+2. Three read-model services (`FunnelService`, `EngagementService`,
+   `MatchmakingService`), each aggregate-only and each carrying provenance.
+3. Fifteen of sixteen backend events projected; `tournament_withdrawn` has no
+   domain event.
+4. The identity stitch's coverage gap (Part III §64), unchanged.
+5. `match_started` still carries no `speed_class`, so one segmentation is
+   unavailable.
+6. D1 (consent) still open.

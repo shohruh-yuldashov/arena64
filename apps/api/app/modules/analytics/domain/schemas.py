@@ -105,15 +105,24 @@ class QueueJoined(PropertySchema):
 
 
 class QueueLeft(PropertySchema):
-    """Not projected yet. `queue_ticket_cancelled` and `_expired` carry
-    `waited_for_seconds` and nothing else — no variant, no speed class, no
-    player. §19 records the additive fields."""
+    """A queue attempt that ended without a pairing — M7b.
+
+    `queue_type` and `rated` are here so the metric's numerator and its
+    denominator segment identically: M7b is `queue_left / (queue_left +
+    match_found)`, and `match_found` carries both. A rate whose two halves
+    are filtered by different dimensions is the defect §34 names.
+
+    `speed_class` is still absent: a ticket carries a variant and a queue
+    type, not a time control.
+    """
 
     reason: p.QueueExit
     #: The server's own measurement. Bounded above by a day: a longer wait
     #: is a stuck ticket, which is an incident rather than a data point.
     waited_ms: int = Field(ge=0, le=86_400_000)
     variant: p.Variant | None = None
+    queue_type: p.QueueType | None = None
+    rated: bool | None = None
     speed_class: p.SpeedClass | None = None
 
 

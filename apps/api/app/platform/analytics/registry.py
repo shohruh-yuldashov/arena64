@@ -80,10 +80,17 @@ class Identity(StrEnum):
     #: authenticated principal, never from a request body.
     ACTOR = "actor"
 
-    #: A match or a tournament, not a person. `match_completed` is the
-    #: example: it describes one game with two seats, and attributing it to
-    #: one of them would double-count or pick a side. Neither identity
-    #: field is set, and the event is counted by its own dimensions.
+    #: A match, an offer or a tournament — not a person. `match_completed`
+    #: is the example: it describes one game with two seats, and
+    #: attributing it to one of them would double-count or pick a side.
+    #: Neither identity field is set, and the event is counted by its own
+    #: dimensions.
+    #:
+    #: `match_offer_resolved` joined this class in A64-027.5, corrected
+    #: from `ACTOR`. A matchmaking offer is created by the pairing scan
+    #: rather than by either player, an expiry has no actor at all, and
+    #: M9's grain is the offer — so there is no "initiating" player to
+    #: name and naming one would make a match-grain rate look per-player.
     ENTITY = "entity"
 
 
@@ -172,7 +179,7 @@ REGISTRY: Final[Mapping[EventName, EventSpec]] = dict(
         _spec(EventName.QUEUE_JOINED, Owner.BACKEND, Identity.ACTOR),
         _spec(EventName.QUEUE_LEFT, Owner.BACKEND, Identity.ACTOR),
         _spec(EventName.MATCH_FOUND, Owner.BACKEND, Identity.ACTOR),
-        _spec(EventName.MATCH_OFFER_RESOLVED, Owner.BACKEND, Identity.ACTOR),
+        _spec(EventName.MATCH_OFFER_RESOLVED, Owner.BACKEND, Identity.ENTITY),
         _spec(EventName.MATCH_STARTED, Owner.BACKEND, Identity.ACTOR),
         _spec(EventName.MATCH_COMPLETED, Owner.BACKEND, Identity.ENTITY),
         _spec(EventName.RATING_CHANGED, Owner.BACKEND, Identity.ACTOR),

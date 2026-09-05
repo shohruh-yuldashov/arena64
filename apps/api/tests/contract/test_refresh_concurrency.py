@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from app.config.settings import SessionSettings
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
+from app.modules.admin.public import AccountRestriction
 from app.modules.auth.application.services.refresh_token_service import RefreshTokenService
 from app.modules.auth.application.services.session_service import SessionService
 from app.modules.auth.domain.exceptions import (
@@ -34,7 +35,6 @@ from app.modules.auth.domain.exceptions import (
     RevokedSession,
     SessionNotFound,
 )
-from app.modules.admin.public import AccountRestriction
 from app.modules.auth.domain.sessions import RevocationReason
 from app.modules.auth.infrastructure.repositories.session_repository import (
     SqlAlchemySessionRepository,

@@ -377,13 +377,20 @@ class TestRefresh:
 
         # The very first refresh consumed the token by rotating it; every
         # later one was refused before reaching the session. Presenting it
-        # from an unexhausted host must therefore be reuse detection —
-        # a 401 — rather than a success, and must not be a 500.
+        # from an unexhausted host must therefore be **refused** rather than
+        # succeed, and must not be a 500.
         replayed = await client.post(
             REFRESH_URL, json={"refresh_token": token}, headers=caller("203.0.113.113")
         )
 
-        assert replayed.status_code == 401
+        # `409`, not `401`, since A64-028.2: this presentation is inside the
+        # rotation concurrency window, so it reads as a client racing itself
+        # rather than as theft. Which refusal it is does not matter to what
+        # this test is about — that the limiter ran *before* the handler and
+        # the token was consumed exactly once. What matters is that it is a
+        # refusal and not a second rotation.
+        assert replayed.status_code == 409
+        assert replayed.json()["code"] == "session_rotation_conflict"
 
 
 class TestResetPassword:

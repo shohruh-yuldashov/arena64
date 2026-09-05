@@ -333,6 +333,14 @@ class ConcurrentRotation(TemporaryConflictError):
     A64-028.1 measured; refusing without burning is the whole change.
     """
 
+    default_code: ClassVar[ErrorCode] = ErrorCode.SESSION_ROTATION_CONFLICT
+    """Its own code, not the parent's bare `conflict`.
+
+    A client has to tell this conflict from every other one to know that
+    asking again will work — and a bare `conflict` is what every queue
+    cooldown and duplicate registration on the platform also answers with.
+    """
+
 
 # --- email verification (A64-011.6) ------------------------------------------
 

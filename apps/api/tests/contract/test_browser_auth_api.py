@@ -125,10 +125,24 @@ class TestBrowserSession:
             second = client.cookies[COOKIE_NAME]
             assert second != first
 
-            # Presenting the superseded token is indistinguishable from a
-            # replay, so it fails — and takes the chain with it.
+            # The superseded cookie is refused — and A64-028.2 changed
+            # *how*. It used to be indistinguishable from a replay, so it
+            # was one: `401`, and the chain went with it. That is the defect
+            # A64-028.1 measured, because a browser shares one cookie jar
+            # and a second tab presents exactly this.
+            #
+            # It is distinguishable, from three facts the row already
+            # carries: revoked by *rotation*, moments ago, and the family
+            # still has a live session. So the answer is `409` with a retry
+            # hint, no credential, and — the assertion that matters — the
+            # session the other tab is holding is still there.
             replay = await client.post(REFRESH_URL, cookies={COOKIE_NAME: first})
-            assert replay.status_code == 401, replay.text
+            assert replay.status_code == 409, replay.text
+            assert replay.json()["code"] == "session_rotation_conflict"
+            assert replay.headers["retry-after"]
+
+            still_signed_in = await client.post(REFRESH_URL)
+            assert still_signed_in.status_code == 200, still_signed_in.text
 
         # --- the CSRF half, on a deployment that names its front ends ---
         # Overridden through `Depends`, the way every other varied setting

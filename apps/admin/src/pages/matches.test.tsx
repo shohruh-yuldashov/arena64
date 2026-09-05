@@ -90,7 +90,12 @@ it("shows who played, the status, the result and the mode", async () => {
   renderAt("/matches");
 
   const table = await screen.findByRole("table");
-  expect(within(table).getByText(/alice — bob/)).toBeInTheDocument();
+  // A64-027A.3 renders the two seats as a matchup rather than a hyphenated
+  // pair, so both names are present and neither is a substring of one text
+  // node. The assertion is that the row says who played.
+  const matchup = within(table).getByRole("link", { name: /alice/i });
+  expect(matchup).toHaveTextContent(/alice/i);
+  expect(matchup).toHaveTextContent(/bob/i);
   // The translated word, not the enum. A64-027A: an administrator who did
   // not build Arena64 should never have to decode `completed` from a
   // column — and a test that asserted the raw value was the reason it

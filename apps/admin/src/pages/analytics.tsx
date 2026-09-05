@@ -554,9 +554,7 @@ function TerminationBreakdown({
       {breakdown.map((item) => (
         <Bar
           key={item.reason}
-          label={t(
-            `analytics.terminationReason.${item.reason}` as "analytics.terminationReason.abort",
-          )}
+          label={t(`vocab.termination.${item.reason}` as "vocab.termination.abort")}
           value={item.matches}
           max={max}
           display={formatCount(item.matches, locale)}

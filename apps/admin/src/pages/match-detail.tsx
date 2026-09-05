@@ -1,9 +1,17 @@
 import { Link, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
-import { type AdminMatchDetail, fetchMatch } from "@/shared/api/client";
+import {
+  type AdminMatchDetail,
+  type AdminMatchParticipant,
+  fetchMatch,
+} from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
-import { ErrorNotice } from "@/shared/ui/error-notice";
+import { useVocab } from "@/features/vocabulary";
+import { Icon } from "@/shared/ui/icon";
+import { PageHeader } from "@/shared/ui/page-header";
+import { StatusBadge, type Tone } from "@/shared/ui/status-badge";
+import { ErrorState, LoadingSkeleton } from "@/shared/ui/states";
 
 /**
  * One match — A64-024.4 §14.
@@ -22,6 +30,15 @@ import { ErrorNotice } from "@/shared/ui/error-notice";
  *
  * Read-only. No control on this page changes anything.
  */
+/** The same tones the listing uses, so a status reads identically in both. */
+const STATUS_TONES: Record<string, Tone> = {
+  active: "success",
+  completed: "neutral",
+  pending_acceptance: "info",
+  declined: "danger",
+  expired: "warning",
+};
+
 export function MatchDetailPage() {
   const { t, locale } = useTranslation();
   const { matchId } = useParams({ strict: false }) as { matchId: string };
@@ -44,114 +61,168 @@ export function MatchDetailPage() {
     return () => controller.abort();
   }, [matchId]);
 
+  const vocab = useVocab();
+
+  /** The conventional notation an operator reads, from the real values. */
+  const timeControl = (control: { initial_ms: number; increment_ms: number }) =>
+    `${String(Math.round(control.initial_ms / 60000))}+${String(Math.round(control.increment_ms / 1000))}`;
+
   const moment = (value: string | null) =>
     value === null ? t("matches.unknown") : new Date(value).toLocaleString(locale);
 
+  const seat = (player: AdminMatchParticipant) =>
+    player.display_name ?? player.username ?? player.player_id.slice(0, 8);
+
   return (
     <>
-      <p>
-        <Link to="/matches">{t("matches.back")}</Link>
+      <p className="detail-links">
+        <Link className="action subtle" to="/matches">
+          {t("matches.back")}
+        </Link>
       </p>
 
-      {state === "loading" && <p role="status">{t("matches.loading")}</p>}
-      {state === "error" && <ErrorNotice message={t("matches.error")} />}
+      {state === "loading" && <LoadingSkeleton rows={4} label={t("matches.loading")} />}
+      {state === "error" && <ErrorState title={t("matches.error")} />}
 
       {state === "ready" && match !== null && (
         <>
-          <h2>{t("matches.sectionMatch")}</h2>
-          <dl className="facts">
-            <dt>{t("matches.matchId")}</dt>
-            <dd>
-              <code>{match.match_id}</code>
-            </dd>
-            <dt>{t("matches.colStatus")}</dt>
-            <dd>{match.status}</dd>
-            <dt>{t("matches.origin")}</dt>
-            <dd>{match.origin}</dd>
-          </dl>
-
-          <section>
-            <h3>{t("matches.sectionParticipants")}</h3>
-            <dl className="facts">
-              {[match.light, match.dark].map((player) => (
-                <div key={player.side} style={{ display: "contents" }}>
-                  <dt>{t(player.side === "light" ? "matches.light" : "matches.dark")}</dt>
-                  <dd>
-                    <Link to="/users/$userId" params={{ userId: player.player_id }}>
-                      {player.display_name ?? player.username ?? player.player_id}
-                    </Link>
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          </section>
-
-          <section>
-            <h3>{t("matches.sectionConfig")}</h3>
-            <dl className="facts">
-              <dt>{t("matches.variant")}</dt>
-              <dd>{match.variant}</dd>
-              <dt>{t("matches.ratedLabel")}</dt>
-              <dd>{t(match.rated ? "matches.rated" : "matches.casual")}</dd>
-              {match.speed_class !== null && (
-                <>
-                  <dt>{t("matches.speed")}</dt>
-                  <dd>{match.speed_class}</dd>
-                </>
-              )}
-              {match.time_control !== null && (
-                <>
-                  <dt>{t("matches.timeControl")}</dt>
-                  <dd>
-                    {Math.round(match.time_control.initial_ms / 1000)}s +{" "}
-                    {Math.round(match.time_control.increment_ms / 1000)}s
-                  </dd>
-                </>
-              )}
-            </dl>
-          </section>
-
-          <section>
-            <h3>{t("matches.sectionResult")}</h3>
-            {match.outcome === null && match.winner === null ? (
-              <p className="muted">{t("matches.noResult")}</p>
-            ) : (
-              <dl className="facts">
-                {match.outcome !== null && (
-                  <>
-                    <dt>{t("matches.outcome")}</dt>
-                    <dd>{match.outcome}</dd>
-                  </>
+          {/* The page identifies the *game*, not the row: the matchup is the
+              heading and the id is metadata, which is the opposite of what
+              A64-024.4 shipped. */}
+          <PageHeader
+            title={`${seat(match.light)} ${t("matches.versus")} ${seat(match.dark)}`}
+            description={`${vocab("variant", match.variant)} · ${t(
+              match.rated ? "matches.rated" : "matches.casual",
+            )} · ${vocab("matchOrigin", match.origin)}`}
+            actions={
+              <StatusBadge
+                label={t(
+                  `matches.statusLabel.${match.status}` as "matches.statusLabel.completed",
                 )}
-                {match.winner !== null && (
-                  <>
-                    <dt>{t("matches.winner")}</dt>
-                    <dd>{t(match.winner === "light" ? "matches.light" : "matches.dark")}</dd>
-                  </>
-                )}
-                {match.termination_reason !== null && (
-                  <>
-                    <dt>{t("matches.reason")}</dt>
-                    <dd>{match.termination_reason}</dd>
-                  </>
-                )}
-              </dl>
-            )}
-          </section>
+                tone={STATUS_TONES[match.status] ?? "neutral"}
+              />
+            }
+          />
 
-          <section>
-            <h3>{t("matches.sectionTimeline")}</h3>
-            <dl className="facts">
-              <dt>{t("matches.created")}</dt>
-              <dd>{moment(match.created_at)}</dd>
-              <dt>{t("matches.settled")}</dt>
-              <dd>{moment(match.settled_at)}</dd>
-              <dt>{t("matches.ended")}</dt>
-              <dd>{moment(match.ended_at)}</dd>
-              <dt>{t("matches.plies")}</dt>
-              <dd>{match.ply_number}</dd>
-            </dl>
-          </section>
+          <div className="detail-grid">
+            <section className="panel">
+              <div className="panel__head">
+                <h3>
+                  <Icon name="users" size={16} />
+                  {t("matches.sectionParticipants")}
+                </h3>
+              </div>
+              <div className="panel__body">
+                <ul className="seats">
+                  {[match.light, match.dark].map((player) => (
+                    <li key={player.player_id}>
+                      <span
+                        className="matchup__pip"
+                        data-side={player.side}
+                        aria-hidden="true"
+                      />
+                      <span className="cell-primary">
+                        <Link to="/users/$userId" params={{ userId: player.player_id }}>
+                          <strong>{seat(player)}</strong>
+                        </Link>
+                        <span>{vocab("side", player.side)}</span>
+                      </span>
+                      {match.winner === player.side && (
+                        <StatusBadge label={t("matches.winner")} tone="success" />
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="panel__head">
+                <h3>
+                  <Icon name="success" size={16} />
+                  {t("matches.sectionResult")}
+                </h3>
+              </div>
+              <div className="panel__body">
+                {match.outcome === null && match.winner === null ? (
+                  <p className="muted">{t("matches.noResult")}</p>
+                ) : (
+                  <dl className="facts">
+                    {match.outcome !== null && (
+                      <>
+                        <dt>{t("matches.outcome")}</dt>
+                        <dd>{vocab("outcome", match.outcome)}</dd>
+                      </>
+                    )}
+                    {match.winner !== null && (
+                      <>
+                        <dt>{t("matches.winner")}</dt>
+                        <dd>{vocab("side", match.winner)}</dd>
+                      </>
+                    )}
+                    {match.termination_reason !== null && (
+                      <>
+                        <dt>{t("matches.termination")}</dt>
+                        <dd>{vocab("termination", match.termination_reason)}</dd>
+                      </>
+                    )}
+                  </dl>
+                )}
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="panel__head">
+                <h3>
+                  <Icon name="settings" size={16} />
+                  {t("matches.sectionConfig")}
+                </h3>
+              </div>
+              <div className="panel__body">
+                <dl className="facts">
+                  <dt>{t("matches.variant")}</dt>
+                  <dd>{vocab("variant", match.variant)}</dd>
+                  <dt>{t("matches.colMode")}</dt>
+                  <dd>{t(match.rated ? "matches.rated" : "matches.casual")}</dd>
+                  {match.speed_class !== null && (
+                    <>
+                      <dt>{t("matches.speed")}</dt>
+                      <dd>{vocab("speedClass", match.speed_class)}</dd>
+                    </>
+                  )}
+                  {match.time_control !== null && (
+                    <>
+                      <dt>{t("matches.timeControl")}</dt>
+                      <dd>{timeControl(match.time_control)}</dd>
+                    </>
+                  )}
+                  <dt>{t("matches.matchId")}</dt>
+                  <dd className="ref">{match.match_id}</dd>
+                </dl>
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="panel__head">
+                <h3>
+                  <Icon name="audit" size={16} />
+                  {t("matches.sectionTimeline")}
+                </h3>
+              </div>
+              <div className="panel__body">
+                <dl className="facts">
+                  <dt>{t("matches.created")}</dt>
+                  <dd>{moment(match.created_at)}</dd>
+                  <dt>{t("matches.accepted")}</dt>
+                  <dd>{moment(match.settled_at)}</dd>
+                  <dt>{t("matches.ended")}</dt>
+                  <dd>{moment(match.ended_at)}</dd>
+                  <dt>{t("matches.plies")}</dt>
+                  <dd>{match.ply_number}</dd>
+                </dl>
+              </div>
+            </section>
+          </div>
         </>
       )}
     </>

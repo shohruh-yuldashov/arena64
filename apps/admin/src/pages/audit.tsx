@@ -4,7 +4,10 @@ import { useCallback } from "react";
 import { AUDIT_ACTION_LABELS, AUDIT_SUBJECT_ROUTES } from "@/features/audit/vocabulary";
 import { type AdminAuditEntry, type AuditQuery, fetchAuditEntries } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
+import { useVocab } from "@/features/vocabulary";
 import { DataTable } from "@/shared/ui/data-table";
+import { Icon, type IconName } from "@/shared/ui/icon";
+import { StatusBadge } from "@/shared/ui/status-badge";
 import { EmptyState, ErrorState, LoadingSkeleton } from "@/shared/ui/states";
 import { PageHeader } from "@/shared/ui/page-header";
 import { Pagination } from "@/shared/ui/pagination";
@@ -33,8 +36,26 @@ import { useCursorPages } from "@/shared/ui/use-cursor-pages";
 
 type Search = { action?: string; actor?: string; subject?: string };
 
+/**
+ * Which glyph an audited action wears — A64-027A.3 §27.
+ *
+ * Keyed on the action's own prefix, like the dashboard's trail and for the
+ * same reason: the trail is append-only and outlives this build, so an
+ * action nobody here has heard of still gets the icon of the thing it
+ * happened to rather than a blank.
+ */
+function glyphFor(action: string): IconName {
+  if (action.startsWith("admin.sanction")) return "moderation";
+  if (action.startsWith("admin.role")) return "users";
+  if (action.startsWith("tournament.")) return "tournaments";
+  if (action.startsWith("notification.broadcast")) return "send";
+  if (action.startsWith("notification.")) return "notifications";
+  return "audit";
+}
+
 export function AuditPage() {
   const { t, locale } = useTranslation();
+  const vocab = useVocab();
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Search;
 
@@ -98,8 +119,9 @@ export function AuditPage() {
     const label = entry.subject.username ?? entry.subject.ref;
     if (route === undefined) {
       return (
-        <span>
-          {entry.subject.type} · {entry.subject.ref}
+        <span className="cell-primary">
+          <strong>{vocab("auditSubject", entry.subject.type)}</strong>
+          <span className="ref">{entry.subject.ref}</span>
         </span>
       );
     }
@@ -134,8 +156,22 @@ export function AuditPage() {
     );
   };
 
-  const outcomeOf = (entry: AdminAuditEntry) =>
-    entry.outcome === "succeeded" ? t("audit.outcomeSucceeded") : t("audit.outcomeFailed");
+  /**
+   * The outcome, as a badge — §28.
+   *
+   * A refused privileged action is the row an operator opened this page to
+   * find, and "Refused" as plain text in a column of plain text is the one
+   * thing that does not stand out. Colour is never the only signal: the
+   * badge carries a dot and the translated word.
+   */
+  const outcomeOf = (entry: AdminAuditEntry) => (
+    <StatusBadge
+      label={t(
+        entry.outcome === "succeeded" ? "audit.outcomeSucceeded" : "audit.outcomeFailed",
+      )}
+      tone={entry.outcome === "succeeded" ? "success" : "danger"}
+    />
+  );
 
   const details = (entry: AdminAuditEntry) => (
     <details>
@@ -209,10 +245,17 @@ export function AuditPage() {
                 <tr key={entry.id}>
                   <td>{when(entry.created_at)}</td>
                   <td>{actorOf(entry)}</td>
-                  <td>
-                    {actionOf(entry)}
-                    {details(entry)}
-                  </td>
+                  <th scope="row">
+                    <span className="audit-action">
+                      <span className="audit-action__glyph" data-outcome={entry.outcome}>
+                        <Icon name={glyphFor(entry.action)} size={15} />
+                      </span>
+                      <span className="cell-primary">
+                        <strong>{actionOf(entry)}</strong>
+                        {details(entry)}
+                      </span>
+                    </span>
+                  </th>
                   <td>{subjectOf(entry)}</td>
                   <td>{outcomeOf(entry)}</td>
                 </tr>

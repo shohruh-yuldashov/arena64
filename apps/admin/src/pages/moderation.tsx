@@ -9,6 +9,9 @@ import {
 } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
 import { DataTable } from "@/shared/ui/data-table";
+import { FilterToolbar, SelectField } from "@/shared/ui/filter-toolbar";
+import { Icon } from "@/shared/ui/icon";
+import { StatusBadge } from "@/shared/ui/status-badge";
 import { EmptyState, ErrorState, LoadingSkeleton } from "@/shared/ui/states";
 import { PageHeader } from "@/shared/ui/page-header";
 import { Pagination } from "@/shared/ui/pagination";
@@ -70,8 +73,20 @@ export function ModerationPage() {
   );
 
   // Text, never colour alone — §27.
-  const statusOf = (row: AdminSanction) =>
-    t(row.is_effective ? "moderation.statusActive" : "moderation.statusEnded");
+  const statusOf = (row: AdminSanction) => (
+    <StatusBadge
+      label={t(row.is_effective ? "moderation.statusActive" : "moderation.statusEnded")}
+      tone={row.is_effective ? "danger" : "neutral"}
+    />
+  );
+
+  /** Indefinite is a *state*, not a missing date — §22. */
+  const expiry = (row: AdminSanction) =>
+    row.expires_at === null ? (
+      <StatusBadge label={t("moderation.indefinite")} tone="warning" />
+    ) : (
+      <span>{when(row.expires_at)}</span>
+    );
 
   const expiryOf = (row: AdminSanction) =>
     row.expires_at === null ? t("moderation.indefinite") : when(row.expires_at);
@@ -80,19 +95,20 @@ export function ModerationPage() {
     <>
       <PageHeader title={t("moderation.title")} description={t("moderation.lede")} />
 
-      <div className="filters">
-        <p className="field">
-          <label htmlFor="moderation-scope">{t("moderation.colStatus")}</label>
-          <select
-            id="moderation-scope"
+      <FilterToolbar
+        filters={
+          <SelectField
+            label={t("moderation.scope")}
             value={effectiveOnly ? "effective" : "all"}
-            onChange={(event) => setEffectiveOnly(event.target.value === "effective")}
+            onChange={(value) => {
+              setEffectiveOnly(value === "effective");
+            }}
           >
-            <option value="effective">{t("moderation.showEffective")}</option>
-            <option value="all">{t("moderation.showAll")}</option>
-          </select>
-        </p>
-      </div>
+            <option value="effective">{t("moderation.scopeEffective")}</option>
+            <option value="all">{t("moderation.scopeAll")}</option>
+          </SelectField>
+        }
+      />
 
       {pages.state === "loading" && <LoadingSkeleton label={t("moderation.loading")} />}
       {pages.state === "error" && (
@@ -122,10 +138,15 @@ export function ModerationPage() {
             <tbody>
               {pages.rows.map((row) => (
                 <tr key={row.id}>
-                  <td>{accountOf(row)}</td>
-                  <td>{reasonOf(row)}</td>
+                  <th scope="row">{accountOf(row)}</th>
+                  <td>
+                    <span className="reason">
+                      <Icon name="moderation" size={15} />
+                      {reasonOf(row)}
+                    </span>
+                  </td>
                   <td>{when(row.starts_at)}</td>
-                  <td>{expiryOf(row)}</td>
+                  <td>{expiry(row)}</td>
                   <td>{row.case.opened_by_username ?? row.case.opened_by}</td>
                   <td>{statusOf(row)}</td>
                 </tr>

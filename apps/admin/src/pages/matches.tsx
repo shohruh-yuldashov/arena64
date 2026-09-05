@@ -3,7 +3,9 @@ import { useCallback } from "react";
 
 import { type AdminMatchSummary, fetchMatches, type MatchQuery } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
+import { useVocab } from "@/features/vocabulary";
 import { DataTable } from "@/shared/ui/data-table";
+import { FilterToolbar, SearchField, SelectField } from "@/shared/ui/filter-toolbar";
 import { StatusBadge, type Tone } from "@/shared/ui/status-badge";
 import { EmptyState, ErrorState, LoadingSkeleton } from "@/shared/ui/states";
 import { PageHeader } from "@/shared/ui/page-header";
@@ -59,6 +61,7 @@ function tri(value: string | undefined): boolean | undefined {
 
 export function MatchesPage() {
   const { t, locale } = useTranslation();
+  const vocab = useVocab();
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Search;
 
@@ -98,77 +101,83 @@ export function MatchesPage() {
   const seat = (player: AdminMatchSummary["light"]) =>
     player.display_name ?? player.username ?? player.player_id.slice(0, 8);
 
-  const result = (match: AdminMatchSummary) =>
-    match.winner
-      ? `${t(match.winner === "light" ? "matches.light" : "matches.dark")}`
-      : match.outcome
-        ? match.outcome
-        : t("matches.noResult");
+  /** The result, as a sentence. Never the raw `outcome` enum — §40. */
+  const result = (match: AdminMatchSummary) => {
+    // The side that won, said as a sentence. "Light" alone is a fact the
+    // reader has to finish themselves.
+    if (match.winner !== null) return t("matches.wonBy", { side: vocab("side", match.winner) });
+    if (match.outcome !== null) return vocab("outcome", match.outcome);
+    return t("matches.noResult");
+  };
 
   return (
     <>
-      <PageHeader title={t("matches.title")} />
+      <PageHeader title={t("matches.title")} description={t("matches.lede")} />
 
-      <div className="filters">
-        <p className="field">
-          <label htmlFor="match-status">{t("matches.status")}</label>
-          <select
-            id="match-status"
-            value={search.status ?? ""}
-            onChange={(event) => setFilter("status", event.target.value)}
-          >
-            <option value="">{t("matches.any")}</option>
-            {STATUSES.map((value) => (
-              <option key={value} value={value}>
-                {t(`matches.statusLabel.${value}` as "matches.statusLabel.completed")}
-              </option>
-            ))}
-          </select>
-        </p>
-
-        <p className="field">
-          <label htmlFor="match-rated">{t("matches.ratedLabel")}</label>
-          <select
-            id="match-rated"
-            value={search.rated ?? ""}
-            onChange={(event) => setFilter("rated", event.target.value)}
-          >
-            <option value="">{t("matches.any")}</option>
-            <option value="true">{t("matches.rated")}</option>
-            <option value="false">{t("matches.casual")}</option>
-          </select>
-        </p>
-
-        <p className="field">
-          <label htmlFor="match-origin">{t("matches.origin")}</label>
-          <select
-            id="match-origin"
-            value={search.origin ?? ""}
-            onChange={(event) => setFilter("origin", event.target.value)}
-          >
-            <option value="">{t("matches.any")}</option>
-            {ORIGINS.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </p>
-
-        <p className="field">
-          <label htmlFor="match-participant">{t("matches.participant")}</label>
-          <input
-            id="match-participant"
-            type="text"
-            defaultValue={search.participant ?? ""}
-            onBlur={(event) => setFilter("participant", event.target.value.trim())}
-            aria-describedby="match-participant-hint"
+      <FilterToolbar
+        activeCount={
+          [search.status, search.rated, search.origin, search.participant].filter(Boolean)
+            .length
+        }
+        onClear={() => {
+          void navigate({ to: "/matches", search: {}, replace: true });
+        }}
+        search={
+          <SearchField
+            label={t("matches.participant")}
+            hint={t("matches.participantHint")}
+            value={search.participant ?? ""}
+            onChange={(value) => {
+              setFilter("participant", value.trim());
+            }}
           />
-          <span id="match-participant-hint" className="muted">
-            {t("matches.participantHint")}
-          </span>
-        </p>
-      </div>
+        }
+        filters={
+          <>
+            <SelectField
+              label={t("matches.status")}
+              value={search.status ?? ""}
+              onChange={(value) => {
+                setFilter("status", value);
+              }}
+            >
+              <option value="">{t("matches.any")}</option>
+              {STATUSES.map((value) => (
+                <option key={value} value={value}>
+                  {t(`matches.statusLabel.${value}` as "matches.statusLabel.completed")}
+                </option>
+              ))}
+            </SelectField>
+
+            <SelectField
+              label={t("matches.ratedLabel")}
+              value={search.rated ?? ""}
+              onChange={(value) => {
+                setFilter("rated", value);
+              }}
+            >
+              <option value="">{t("matches.any")}</option>
+              <option value="true">{t("matches.rated")}</option>
+              <option value="false">{t("matches.casual")}</option>
+            </SelectField>
+
+            <SelectField
+              label={t("matches.origin")}
+              value={search.origin ?? ""}
+              onChange={(value) => {
+                setFilter("origin", value);
+              }}
+            >
+              <option value="">{t("matches.any")}</option>
+              {ORIGINS.map((value) => (
+                <option key={value} value={value}>
+                  {vocab("matchOrigin", value)}
+                </option>
+              ))}
+            </SelectField>
+          </>
+        }
+      />
 
       {pages.state === "loading" && <LoadingSkeleton label={t("matches.loading")} />}
       {pages.state === "error" && (
@@ -199,11 +208,26 @@ export function MatchesPage() {
             <tbody>
               {pages.rows.map((match) => (
                 <tr key={match.match_id}>
-                  <td>
-                    <Link to="/matches/$matchId" params={{ matchId: match.match_id }}>
-                      {seat(match.light)} — {seat(match.dark)}
+                  <th scope="row">
+                    {/* A matchup, not a hyphenated pair. The two seats are
+                        stacked with the side they played, so a row reads as
+                        a game rather than as two names. */}
+                    <Link
+                      className="matchup"
+                      to="/matches/$matchId"
+                      params={{ matchId: match.match_id }}
+                    >
+                      <span className="matchup__seat">
+                        <span className="matchup__pip" data-side="light" aria-hidden="true" />
+                        <span>{seat(match.light)}</span>
+                      </span>
+                      <span className="matchup__vs">{t("matches.versus")}</span>
+                      <span className="matchup__seat">
+                        <span className="matchup__pip" data-side="dark" aria-hidden="true" />
+                        <span>{seat(match.dark)}</span>
+                      </span>
                     </Link>
-                  </td>
+                  </th>
                   <td>
                     <StatusBadge
                       label={t(
@@ -214,7 +238,7 @@ export function MatchesPage() {
                   </td>
                   <td>{result(match)}</td>
                   <td>{t(match.rated ? "matches.rated" : "matches.casual")}</td>
-                  <td>{match.origin}</td>
+                  <td>{vocab("matchOrigin", match.origin)}</td>
                   <td>{new Date(match.created_at).toLocaleDateString(locale)}</td>
                 </tr>
               ))}
@@ -233,7 +257,8 @@ export function MatchesPage() {
                   · {result(match)} · {t(match.rated ? "matches.rated" : "matches.casual")}
                 </span>
                 <span className="muted">
-                  {match.origin} · {new Date(match.created_at).toLocaleDateString(locale)}
+                  {vocab("matchOrigin", match.origin)} ·{" "}
+                  {new Date(match.created_at).toLocaleDateString(locale)}
                 </span>
               </li>
             ))}

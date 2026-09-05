@@ -7,7 +7,11 @@ import {
   fetchTournament,
 } from "@/shared/api/client";
 import { TournamentActions } from "@/features/tournaments/tournament-actions";
+import { useVocab } from "@/features/vocabulary";
 import { useTranslation } from "@/shared/i18n";
+import { Icon } from "@/shared/ui/icon";
+import { PageHeader } from "@/shared/ui/page-header";
+import { StatusBadge, type Tone } from "@/shared/ui/status-badge";
 import { ErrorNotice } from "@/shared/ui/error-notice";
 
 /**
@@ -47,8 +51,19 @@ function feedsInto(
   return { round: pairing.round_number + 1, slot: pairing.slot >> 1 };
 }
 
+/** The tones the listing uses, so a status reads identically in both. */
+const STATUS_TONES: Record<string, Tone> = {
+  in_progress: "success",
+  registration_open: "info",
+  registration_closed: "warning",
+  completed: "neutral",
+  draft: "neutral",
+  cancelled: "danger",
+};
+
 export function TournamentDetailPage() {
   const { t, locale } = useTranslation();
+  const vocab = useVocab();
   const { tournamentId } = useParams({ strict: false }) as { tournamentId: string };
 
   const [detail, setDetail] = useState<AdminTournamentDetail | null>(null);
@@ -96,10 +111,40 @@ export function TournamentDetailPage() {
 
       {state === "ready" && detail !== null && (
         <>
-          <h2>{detail.tournament.name}</h2>
+          {/* The tournament's standing is the header's, not a row three
+              sections down: status, format and how full it is are what an
+              operator opened this page to see. */}
+          <PageHeader
+            title={detail.tournament.name}
+            description={`${vocab("tournamentFormat", detail.tournament.format)} · ${vocab(
+              "variant",
+              detail.tournament.variant,
+            )} · ${vocab("speedClass", detail.tournament.speed_class)}`}
+            actions={
+              <>
+                <StatusBadge
+                  label={t(
+                    `tournaments.statusLabel.${detail.tournament.status}` as "tournaments.statusLabel.completed",
+                  )}
+                  tone={STATUS_TONES[detail.tournament.status] ?? "neutral"}
+                />
+                <StatusBadge
+                  label={t(
+                    detail.tournament.rated ? "tournaments.rated" : "tournaments.casual",
+                  )}
+                  tone="neutral"
+                />
+              </>
+            }
+          />
 
-          <section>
-            <h3>{t("tournamentActions.actions")}</h3>
+          <section className="panel">
+            <div className="panel__head">
+              <h3>
+                <Icon name="settings" size={16} />
+                {t("tournamentActions.actions")}
+              </h3>
+            </div>
             {/* The server's status decides what is offered, and the
                 aggregate decides what is allowed — a button rendered from a
                 stale state still cannot do anything. After a transition the
@@ -118,13 +163,17 @@ export function TournamentDetailPage() {
             <h3>{t("tournaments.overview")}</h3>
             <dl className="facts">
               <dt>{t("tournaments.status")}</dt>
-              <dd>{detail.tournament.status}</dd>
+              <dd>
+                {t(
+                  `tournaments.statusLabel.${detail.tournament.status}` as "tournaments.statusLabel.completed",
+                )}
+              </dd>
               <dt>{t("tournaments.format")}</dt>
-              <dd>{detail.tournament.format}</dd>
+              <dd>{vocab("tournamentFormat", detail.tournament.format)}</dd>
               <dt>{t("tournaments.variant")}</dt>
-              <dd>{detail.tournament.variant}</dd>
+              <dd>{vocab("variant", detail.tournament.variant)}</dd>
               <dt>{t("tournaments.speed")}</dt>
-              <dd>{detail.tournament.speed_class}</dd>
+              <dd>{vocab("speedClass", detail.tournament.speed_class)}</dd>
               <dt>{t("tournaments.mode")}</dt>
               <dd>{t(detail.tournament.rated ? "tournaments.rated" : "tournaments.casual")}</dd>
               <dt>{t("tournaments.capacity")}</dt>
@@ -154,7 +203,7 @@ export function TournamentDetailPage() {
                       {name(entrant)}
                     </Link>
                     <span>
-                      {entrant.status}
+                      {vocab("entrantStatus", entrant.status)}
                       {entrant.seed_number !== null
                         ? ` · ${t("tournaments.seed")} ${entrant.seed_number}`
                         : ""}

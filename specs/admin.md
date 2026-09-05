@@ -1953,3 +1953,97 @@ Do not, in A64-027A.3 or .4:
 - reorder content with CSS `order` where `grid-template-areas` would keep
   reading order and visual order together;
 - add a control that is not backed by a real capability.
+
+---
+
+# 12. The operations workspaces — A64-027A.3
+
+A64-027A.2 built the visual foundation. This applies it to the eight
+management routes, and the shape every one of them now follows is:
+
+```
+page header    title · description · standing where the page is about one thing
+toolbar        search · filters · applied-filter count · primary action
+content        framed table, or panels on a detail page
+pagination
+```
+
+## 12.1 No summary cards, and why
+
+§5 offers `HEADER → SUMMARY CARDS → FILTER → TABLE` *where summary data is
+truthfully available*. It is not: every admin listing is keyset-paged and
+returns `{items, next_cursor}` with **no total** — A64-024 chose that
+deliberately, because a count over a growing table is an expensive query
+whose answer is stale before it renders.
+
+So the pages get a stronger composition instead of counts nobody computes.
+The dashboard's read model does hold real figures, and bolting it onto four
+listings would couple every page to one endpoint for a number that means
+"as of when the dashboard last composed". Deferred rather than faked.
+
+## 12.2 `FilterToolbar`
+
+One arrangement for five pages. Before it, each assembled its own and the
+search field's helper sentence sat *beside* the box — which is what pushed
+the filters onto a second row everywhere.
+
+| Rule | Why |
+| --- | --- |
+| Helper text sits **under** the field | Beside it, it competes with the control and breaks the row |
+| The label is visible, not `sr-only` | A placeholder disappears when somebody types, which is when they might look for it |
+| An applied filter is **counted**, with a clear control | An operator who cannot see a filter is on reads an empty table as "there is nothing here" |
+| Neither appears at zero | A permanent "clear (0)" is a control that does nothing |
+
+## 12.3 Enum localisation
+
+`vocab.*` is the one namespace, and `useVocab()` the one reader. Twelve
+backend `StrEnum`s reach the console; before this task five of them reached
+the *screen*: `queue`, `russian_8x8`, `swiss`, `blitz`, `account`.
+
+**The fallback is the identifier, never the key.** `t()` returns the key it
+was given when nothing resolves, so a built key printed
+`vocab.auditSubject.queue_ticket` for a member this build has not heard of —
+a raw translation key, which is strictly worse than the enum it replaced.
+`useVocab` compares and degrades to the value.
+
+`analytics` held a private copy of the termination labels; it now reads
+`vocab.termination.*`, because two answers to "what does `agreed_draw` say"
+is one too many.
+
+## 12.4 Responsive table strategy
+
+Documented once, applied everywhere: **deliberate horizontal scroll inside
+the framed container, with a card list below 48rem.**
+
+Not priority-column hiding: an operations table whose columns disappear at
+some widths teaches an operator that a column is absent when it is merely
+off-screen. Not card-only either — the column alignment is what makes a
+hundred rows scannable, and that is the whole reason these are tables.
+
+The `.table-scroll` container is `position: relative` so a `.sr-only`
+caption cannot escape to the initial containing block and grow `html`'s
+scroll width — the defect A64-027.6 found at 360px, fixed once for every
+table.
+
+## 12.5 The workspaces
+
+| Route | What changed |
+| --- | --- |
+| `/users` | Identity cell (initials · name · handle), status/verification/role as badges, shared toolbar |
+| `/users/{id}` | Standing moved into the header as badges; account, admin and moderation become panels; the duplicated "Restricted" row is gone |
+| `/matches` | A **matchup** cell — two seats with side pips, stacked — replacing `Alice — Bob`; origin and result translated; result reads "Light won" rather than "Light" |
+| `/matches/{id}` | Titled by the matchup with a status badge; four panels; every enum translated; time control as `3+2` rather than `180s + 2s` |
+| `/tournaments` | Entrant progress from the two real numbers, full turns the bar green; format and variant translated; Create is the row's trailing primary action |
+| `/tournaments/{id}` | Standing in the header; entrant status translated |
+| `/moderation` | Status and indefinite-expiry as badges; the reason carries its glyph; shared toolbar |
+| `/audit` | Action carries a category glyph tinted by outcome; outcome is a semantic badge; subject type translated; technical detail behind a disclosure |
+
+## 12.6 What A64-027A.3 did not do
+
+- No backend change. `git diff origin/main -- apps/api` is empty.
+- No new dependency.
+- No summary counts, no invented progress, no PII beyond the existing
+  contract.
+- Analytics and Notifications keep A64-027.6/A64-027A.1's composition —
+  **A64-027A.4** owns those.
+- Cross-product visual QA — **A64-027A.5**.

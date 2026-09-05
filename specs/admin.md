@@ -1676,3 +1676,133 @@ A future section adds its own route rather than filling in a placeholder.
 | OQ-1 | Does a narrower `moderator` role exist, and what does it exclude? | **Open** — waiting on the first surface that distinguishes them |
 | ~~OQ-2~~ | ~~Where does `apps/admin` deploy?~~ | **Closed by A64-024.2H.** `https://admin.arena64.gg`, same-origin with its own `/api` reverse proxy, listed in `BROWSER_SESSION_TRUSTED_ORIGINS`, no shared `Domain` cookie, no CORS. Network allowlisting is recorded as a production-hardening recommendation rather than a requirement (§6.3a) |
 | ~~OQ-3~~ | ~~Does the console need its own sign-in?~~ | **Closed by A64-024.2.** It has its own `/login`, posting ordinary credentials to the shared auth endpoints from its own origin — so the session is the console's without a second credential system |
+
+---
+
+# 10. The console, redesigned — A64-027A
+
+A64-024 built nine working sections. A64-027A rebuilt the product around
+them, on the premise §37 sets: **an administrator who did not build Arena64
+should be able to open the console and understand it.**
+
+## 10.1 Information architecture
+
+Nine destinations in six named groups, and the group names describe what an
+operator is trying to do rather than which backend module owns the route.
+
+| Group | Sections |
+| --- | --- |
+| Overview | Dashboard |
+| Management | Users · Matches · Tournaments |
+| Communication | Notifications |
+| Insights | Analytics |
+| Safety | Moderation · Audit log |
+
+`moderation` and `audit` live in different backend modules and in the same
+group here, because the person reaching for one is often about to reach for
+the other. Every entry is a real route backed by a real capability — §3
+forbids the menu item that exists because the sidebar looked unbalanced.
+
+There is no Settings section. The console has no administrator-editable
+setting to manage; adding the item to satisfy a template would be the dead
+control §41 names. It is recorded as deferred in §10.8.
+
+## 10.2 The shell
+
+Three regions, each answering one of the two questions §4 says an operator
+must never have to ask:
+
+| Region | Answers |
+| --- | --- |
+| Sidebar | where am I, and where else could I be |
+| Toolbar | what is this screen, and what is true of my session |
+| Workspace | what can I do here |
+
+The sidebar is **one element in two shapes** — a sheet below 64rem, a column
+above — so reading order never depends on the viewport and a keyboard
+operator reaches navigation before content on every device. The active item
+carries three signals rather than one: a tinted ground, the brand hue, and a
+bar in the margin.
+
+The theme control has three states, not two. A two-state toggle cannot
+express "follow my machine", which is the state most operators are already
+in; `system` removes the attribute rather than resolving it once, so a
+machine that changes at dusk takes the console with it.
+
+## 10.3 Colour
+
+The console's palette was GitHub's — `#1f6feb`, `#0d1117` — placeholders
+from A64-024.1 that outlived their task. Every token is now the value
+`apps/web/src/app/styles/globals.css` holds, in the same `oklch` space, so
+the two applications cannot drift into two different indigos.
+
+The four families keep the jobs `specs/product-experience.md` §18.7 gave
+them: `--primary` for interaction, the brand gradient for the wordmark and
+nowhere else, semantic colour that stays semantic, neutral for everything
+else. **Colour is never the only signal** — every status badge carries its
+translated word and a dot that survives forced-colours mode.
+
+## 10.4 Primitives
+
+| Primitive | Replaces |
+| --- | --- |
+| `DataTable` | five hand-built tables, one of which lacked the `position: relative` that stops a `.sr-only` caption growing the page's scroll width |
+| `StatCard` | the dashboard's `<dl>` blocks. No `delta` prop — see §10.5 |
+| `StatusBadge` | raw enums printed into cells |
+| `EmptyState` / `ErrorState` / `LoadingSkeleton` | four pages that rendered nothing when a section was empty |
+| `Section` | `<h3>` at the same weight as body text |
+| `ToastProvider` | inferring success from a row changing |
+| `Icon` | nothing — twenty inline paths, no library |
+
+## 10.5 What the console still refuses to show
+
+- **No trend arrows.** `StatCard` has no `delta` prop, because the platform
+  computes no previous period with matching completeness semantics. An arrow
+  would be decoration wearing the costume of a measurement.
+- **No invented recipient count.** The broadcast composer fetches it and
+  says "unknown" when it cannot.
+- **No raw enum.** Match and tournament status translate through a
+  `statusLabel` namespace, in the table *and* in the filter dropdown.
+- **No frontend metric.** Analytics still renders what the API computes;
+  A64-027.6's rule is unchanged.
+
+## 10.6 Broadcasts
+
+See ADR-006 for why an announcement stores its text. The console side:
+
+| Property | Behaviour |
+| --- | --- |
+| Workflow | audience first, content second, confirmation restating both |
+| Audience | all eligible players, or up to 100 named ids |
+| Channel | in-app only. Email and push are deferred, not hidden |
+| Preview | one preview, for the one real channel (§17) |
+| Idempotency | one key per composition, reused across retries |
+| Failure | the dialog stays open with the text intact |
+| History | title, audience, status, delivered/audience, sent |
+
+`delivered` is lower than `audience_size` by the number of players who muted
+the category. The history states that once, because an operator reading the
+gap as loss would go looking for an incident that did not happen. An
+audience the worker has not counted reads as "counting", never as zero.
+
+## 10.7 Authorization
+
+Unchanged, and deliberately so. There is one role, `AdminRole.ADMIN`, and no
+permission engine — A64-024.1 §2 forbids inventing one and §22 of this task
+repeats the instruction. Every broadcast route names `CurrentAdmin`, the
+same guard every other admin route uses.
+
+The console *displays* the signed-in administrator's role in the sidebar,
+because an operator who cannot see their own authority discovers its limits
+by being refused.
+
+## 10.8 Deferred
+
+| Item | Why |
+| --- | --- |
+| Notification templates | §21 permits deferral. A half-working template system is worse than none; ADR-006 explains why a catalogue cannot replace stored text |
+| Email and push broadcasts | A different risk class: provider cost, sender reputation, bounce handling, unsubscribe |
+| Richer announcement destinations | Needs a server-side entity picker. A free-text destination is an open redirect |
+| Per-language announcements | One announcement is written in one language; ADR-006 records the consequence |
+| A Settings section | No administrator-editable setting exists to manage |
+| Granular RBAC | OQ-1 is still open, and a UI redesign is not where a permission model gets invented |

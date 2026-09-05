@@ -2910,3 +2910,549 @@ a:focus-visible {
     grid-column: 1 / -1;
   }
 }
+
+/* ======================================================= analytics charts
+ *
+ * A64-027A.4 §9. No chart library: the four shapes this page needs are a
+ * width, a background and a table. Every figure a bar encodes is also
+ * written beside it, so nothing here is available only by hovering.
+ */
+
+/* --- funnel --- */
+
+.funnel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
+.funnel__stage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.funnel__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.funnel__label {
+  font-weight: 600;
+  font-size: var(--text-body);
+}
+
+.funnel__count {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  font-variant-numeric: tabular-nums;
+}
+
+.funnel__track {
+  block-size: 0.7rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--line);
+  overflow: hidden;
+}
+
+.funnel__fill {
+  display: block;
+  block-size: 100%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    var(--primary),
+    color-mix(in oklab, var(--primary) 72%, var(--brand-to))
+  );
+}
+
+.funnel__rates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1.1rem;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.funnel__drop {
+  color: var(--muted);
+}
+
+/* --- cohort grid --- */
+
+.cohort__cell {
+  position: relative;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  min-inline-size: 4.5rem;
+}
+
+/* The tint sits *behind* the figure rather than replacing it, so the value
+   stays legible at every intensity and survives forced-colours mode. */
+.cohort__tint {
+  position: absolute;
+  inset: 0.25rem 0.3rem;
+  border-radius: var(--radius-sm);
+  background: var(--primary);
+  pointer-events: none;
+}
+
+.cohort__value {
+  position: relative;
+  font-weight: 600;
+}
+
+.cohort__cell[data-unmeasured="true"] {
+  color: var(--muted);
+}
+
+/* --- distribution --- */
+
+.dist {
+  display: grid;
+  grid-template-columns: minmax(7rem, 13rem) 1fr auto;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: var(--text-sm);
+}
+
+.dist__label {
+  overflow-wrap: anywhere;
+}
+
+.dist__track {
+  block-size: 0.55rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--line);
+  overflow: hidden;
+  min-inline-size: 2rem;
+}
+
+.dist__fill {
+  display: block;
+  block-size: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+}
+
+.dist__fill[data-tone="success"] {
+  background: var(--success);
+}
+.dist__fill[data-tone="warning"] {
+  background: var(--warning);
+}
+.dist__fill[data-tone="danger"] {
+  background: var(--danger);
+}
+
+.dist__value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  min-inline-size: 3rem;
+  text-align: end;
+}
+
+.dists {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+@media (max-width: 40rem) {
+  .dist {
+    grid-template-columns: 1fr auto;
+  }
+
+  .dist__track {
+    grid-column: 1 / -1;
+    order: 3;
+  }
+}
+
+/* --- queue flow --- */
+
+.flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.9rem;
+}
+
+.flow__step {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--line);
+  min-inline-size: 7rem;
+}
+
+.flow__value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.flow__label {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.flow__link {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+  color: var(--muted);
+}
+
+.flow__arrow {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.flow__rate {
+  font-size: var(--text-xs);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--primary);
+}
+
+/* ---------------------------------------------------- metric groups
+ *
+ * A64-027A.4 §7. Four named panels rather than ten identical tiles: the
+ * reader should not have to work out which figures belong together. */
+.metric-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+  gap: 1rem;
+  margin-block-end: 2.25rem;
+}
+
+.metric-group {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.metric-group__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.75rem 1.05rem;
+  border-block-end: 1px solid var(--line);
+  background: color-mix(in oklab, var(--surface-sunken) 55%, var(--surface));
+  font-size: var(--text-sm);
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.metric-group__title .icon {
+  color: var(--primary);
+}
+
+.metric-group__body {
+  margin: 0;
+  padding: 0.9rem 1.05rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.9rem;
+}
+
+/* Inside a group a metric is a figure, not a card: the panel is already the
+   surface, and a card inside a card is the visual noise §10 warns about. */
+.metric-group__body .metric {
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  padding: 0;
+}
+
+.metric-group__body .metric__value {
+  font-size: 1.5rem;
+}
+
+.flow__note {
+  font-size: var(--text-sm);
+  margin: 0.6rem 0 1.25rem;
+}
+
+/* The accessible table behind a chart. Closed by default so the page is a
+   dashboard, open in one click so the numbers are never only a geometry. */
+.chart-table {
+  margin-block-end: 1.5rem;
+}
+
+.chart-table > summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: 550;
+  color: var(--muted);
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0;
+}
+
+.chart-table > summary::-webkit-details-marker {
+  display: none;
+}
+
+.chart-table > summary::before {
+  content: "▸";
+  display: inline-block;
+  transition: transform 0.14s ease;
+}
+
+.chart-table[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.chart-table > summary:hover {
+  color: var(--fg);
+}
+
+.chart-table .table-scroll {
+  margin-block-start: 0.6rem;
+}
+
+/* ------------------------------------------------- the composer's aside
+ *
+ * A64-027A.4 §21. Steps on the left, what the send *will do* on the right:
+ * the message as a player will read it, and the two facts that decide
+ * whether this is routine or platform-wide. Sticky on a desktop so both
+ * stay visible while the operator writes; static below 64rem, where it
+ * follows the steps rather than disappearing. */
+.composer {
+  display: grid;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+@media (min-width: 64rem) {
+  .composer {
+    grid-template-columns: minmax(0, 1.35fr) minmax(20rem, 0.65fr);
+  }
+}
+
+.composer__steps {
+  min-inline-size: 0;
+}
+
+.composer__steps .section:last-of-type {
+  margin-block-end: 0;
+}
+
+.composer__aside {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-inline-size: 0;
+}
+
+@media (min-width: 64rem) {
+  .composer__aside {
+    position: sticky;
+    inset-block-start: calc(var(--topbar-h) + 1.25rem);
+  }
+}
+
+.summary-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 1rem 1.15rem;
+}
+
+.summary-card__title {
+  margin: 0 0 0.75rem;
+  font-size: var(--text-sm);
+  font-weight: 650;
+  color: var(--muted);
+}
+
+.summary-card .facts {
+  margin-block-end: 0.85rem;
+  font-size: var(--text-sm);
+}
+
+.summary-card__note {
+  margin: 0;
+  padding-block-start: 0.85rem;
+  border-block-start: 1px solid var(--line);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+/* ------------------------------------------------------ audience choice
+ *
+ * A64-027A.4 §22. Cards rather than a segmented control: the two audiences
+ * differ by three orders of magnitude and the choice should not look like a
+ * view toggle. */
+.choices {
+  border: 0;
+  padding: 0;
+  margin: 0 0 1rem;
+  display: grid;
+  gap: 0.65rem;
+}
+
+@media (min-width: 40rem) {
+  .choices {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.choices legend {
+  margin-block-end: 0.4rem;
+}
+
+.choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  text-align: start;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition:
+    border-color 0.14s ease,
+    background-color 0.14s ease;
+}
+
+.choice:hover {
+  border-color: color-mix(in oklab, var(--primary) 45%, var(--line-strong));
+}
+
+.choice[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--primary-wash);
+  box-shadow:
+    var(--shadow-sm),
+    inset 0 0 0 1px var(--primary);
+}
+
+.choice__glyph {
+  inline-size: 2rem;
+  block-size: 2rem;
+  border-radius: 0.55rem;
+  display: grid;
+  place-items: center;
+  background: var(--surface-sunken);
+  color: var(--muted);
+  flex: none;
+}
+
+.choice[aria-pressed="true"] .choice__glyph {
+  background: var(--primary);
+  color: var(--primary-fg);
+}
+
+.choice__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-inline-size: 0;
+}
+
+.choice__text strong {
+  font-size: var(--text-body);
+  font-weight: 600;
+}
+
+.choice__text span {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+/* The scope of a platform-wide send. Attention, not alarm — a red panel
+   here would make the console cry wolf on a routine announcement. */
+.reach {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin: 0 0 1rem;
+  padding: 0.9rem 1.1rem;
+  border-radius: var(--radius);
+  background: var(--warning-wash);
+  border: 1px solid color-mix(in oklab, var(--warning) 28%, transparent);
+}
+
+.reach__glyph {
+  color: var(--warning);
+  flex: none;
+}
+
+.reach__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-inline-size: 0;
+}
+
+.reach__count {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.reach__label {
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+/* How far a broadcast has got. A display ratio of two direct backend
+   counts — §29 — never a product metric, and drawn only when the
+   denominator exists. */
+.delivered {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-inline-size: 7rem;
+}
+
+.delivered__count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 550;
+}
+
+.delivered__track {
+  block-size: 0.3rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--line);
+  overflow: hidden;
+}
+
+.delivered__fill {
+  display: block;
+  block-size: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+}
+
+.delivered__fill[data-complete="true"] {
+  background: var(--success);
+}

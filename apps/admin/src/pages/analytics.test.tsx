@@ -401,8 +401,14 @@ it("shows the funnel's own conversions rather than recomputing them", async () =
   });
   renderAnalytics();
 
-  const stage = await screen.findByText("Email verified");
-  const row = stage.closest("tr");
+  // A64-027A.4 renders the funnel twice on purpose — as bars, and as the
+  // accessible table behind them (§19). The table row is what carries the
+  // server's three rates.
+  const stage = (await screen.findAllByText("Email verified")).find(
+    (node) => node.closest("tr") !== null,
+  );
+  expect(stage).toBeDefined();
+  const row = stage?.closest("tr") ?? null;
   expect(row).not.toBeNull();
   expect(within(row as HTMLElement).getByText("60%")).toBeInTheDocument();
   expect(within(row as HTMLElement).getByText("55%")).toBeInTheDocument();
@@ -435,10 +441,13 @@ it("labels the matchmaking grain so no figure claims to be a count of players", 
   stubApi();
   renderAnalytics();
 
-  const joins = await screen.findByText("Queue joins");
-  expect(joins.closest(".metric")).toHaveTextContent(
-    "Grain: queue attempt — one player may join several times.",
-  );
+  // The grain note moved from the card to a line under the queue flow,
+  // where it qualifies all three figures rather than one. What matters is
+  // that it is on the page and says what a "join" counts.
+  await screen.findByText("Queue joins");
+  expect(
+    screen.getByText("Grain: queue attempt — one player may join several times."),
+  ).toBeInTheDocument();
 });
 
 it("says the period is empty rather than drawing an empty funnel", async () => {
@@ -526,6 +535,8 @@ it("renders the values a real seeded backend returned, unchanged", async () => {
   expect(valueOf("Completion rate")).toBe("80%");
   expect(valueOf("Resignations")).toBe("50%");
   expect(valueOf("Draws")).toBe("25%");
+  // `Rated share` and `Completion rate` are the section's headline figures
+  // and now live once, in the overview group.
   expect(valueOf("Rated share")).toBe("100%");
 
   // The capture is a young store over a 30-day request: partial window,

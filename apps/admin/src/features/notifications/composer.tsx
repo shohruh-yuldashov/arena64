@@ -165,125 +165,163 @@ export function BroadcastComposer({ onSent }: { onSent: (broadcast: BroadcastVie
 
   return (
     <>
-      <Section title={t("broadcast.step1")} description={t("broadcast.step1Hint")}>
-        <div className="field">
-          <span className="field__label" id="audience-label">
-            {t("broadcast.audience")}
-          </span>
-          <div className="segmented" role="group" aria-labelledby="audience-label">
-            <button
-              type="button"
-              aria-pressed={audience === "all_players"}
-              onClick={() => {
-                setAudience("all_players");
-              }}
-            >
-              {t("broadcast.audienceAll")}
-            </button>
-            <button
-              type="button"
-              aria-pressed={audience === "specific_players"}
-              onClick={() => {
-                setAudience("specific_players");
-              }}
-            >
-              {t("broadcast.audienceNamed")}
-            </button>
-          </div>
-        </div>
+      <div className="composer">
+        <div className="composer__steps">
+          <Section title={t("broadcast.step1")} description={t("broadcast.step1Hint")}>
+            {/* Cards rather than a segmented control: the two audiences
+                differ by three orders of magnitude, and a choice that
+                consequential should not look like a view toggle. */}
+            <fieldset className="choices">
+              <legend className="field__label">{t("broadcast.audience")}</legend>
+              <button
+                type="button"
+                className="choice"
+                aria-pressed={audience === "all_players"}
+                onClick={() => {
+                  setAudience("all_players");
+                }}
+              >
+                <span className="choice__glyph">
+                  <Icon name="users" size={17} />
+                </span>
+                <span className="choice__text">
+                  <strong>{t("broadcast.audienceAll")}</strong>
+                  <span>{t("broadcast.audienceAllHint")}</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                className="choice"
+                aria-pressed={audience === "specific_players"}
+                onClick={() => {
+                  setAudience("specific_players");
+                }}
+              >
+                <span className="choice__glyph">
+                  <Icon name="search" size={17} />
+                </span>
+                <span className="choice__text">
+                  <strong>{t("broadcast.audienceNamed")}</strong>
+                  <span>{t("broadcast.audienceNamedHint")}</span>
+                </span>
+              </button>
+            </fieldset>
 
-        {audience === "all_players" ? (
-          sizeFailed ? (
-            <InfoBanner tone="warning">{t("broadcast.audienceUnavailable")}</InfoBanner>
-          ) : (
-            <InfoBanner tone="info">{audienceLabel}</InfoBanner>
-          )
-        ) : (
-          <div className="field">
-            <label htmlFor="recipients">{t("broadcast.recipients")}</label>
-            <span className="field__hint">{t("broadcast.recipientsHint")}</span>
-            <textarea
-              id="recipients"
-              value={recipientsText}
-              aria-invalid={recipientProblem}
-              onChange={(event) => {
-                setRecipientsText(event.target.value);
-              }}
-            />
-            {recipientProblem ? (
-              <span className="field__error">
-                <Icon name="warning" size={15} />
-                {t("broadcast.recipientsInvalid")}
-              </span>
+            {audience === "all_players" ? (
+              sizeFailed ? (
+                <InfoBanner tone="warning">{t("broadcast.audienceUnavailable")}</InfoBanner>
+              ) : (
+                /* The scope of a platform-wide send, given the weight it
+                   has. Attention, not alarm: this is a consequential
+                   action, not an error, and a red panel here would make the
+                   console cry wolf on a routine announcement (§23). */
+                <p className="reach">
+                  <span className="reach__glyph">
+                    <Icon name="warning" size={18} />
+                  </span>
+                  <span className="reach__body">
+                    <span className="reach__count">
+                      {size === null
+                        ? t("broadcast.audienceAllUnknown")
+                        : formatCount(size, locale)}
+                    </span>
+                    <span className="reach__label">{t("broadcast.reachLabel")}</span>
+                  </span>
+                </p>
+              )
             ) : (
-              <span className="field__hint">{audienceLabel}</span>
+              <div className="field">
+                <label htmlFor="recipients">{t("broadcast.recipients")}</label>
+                <span className="field__hint">{t("broadcast.recipientsHint")}</span>
+                <textarea
+                  id="recipients"
+                  value={recipientsText}
+                  aria-invalid={recipientProblem}
+                  onChange={(event) => {
+                    setRecipientsText(event.target.value);
+                  }}
+                />
+                {recipientProblem ? (
+                  <span className="field__error">
+                    <Icon name="warning" size={15} />
+                    {t("broadcast.recipientsInvalid")}
+                  </span>
+                ) : (
+                  <span className="field__hint">{audienceLabel}</span>
+                )}
+              </div>
             )}
-          </div>
-        )}
-      </Section>
+          </Section>
 
-      <Section title={t("broadcast.step2")} description={t("broadcast.step2Hint")}>
-        <div className="composer">
-          <div>
-            <div className="field">
-              <span className="field__labelrow">
-                <label htmlFor={titleId} className="field__label">
-                  {t("broadcast.title")}
-                </label>
-                <span className="field__counter" data-over={title.length > MAX_TITLE}>
-                  {title.length}/{MAX_TITLE}
+          <Section title={t("broadcast.step2")} description={t("broadcast.step2Hint")}>
+            <div>
+              <div className="field">
+                <span className="field__labelrow">
+                  <label htmlFor={titleId} className="field__label">
+                    {t("broadcast.title")}
+                  </label>
+                  <span className="field__counter" data-over={title.length > MAX_TITLE}>
+                    {title.length}/{MAX_TITLE}
+                  </span>
                 </span>
-              </span>
-              <input
-                id={titleId}
-                value={title}
-                maxLength={MAX_TITLE + 20}
-                aria-invalid={title.length > MAX_TITLE}
-                onChange={(event) => {
-                  setTitle(event.target.value);
-                }}
-              />
+                <input
+                  id={titleId}
+                  value={title}
+                  maxLength={MAX_TITLE + 20}
+                  aria-invalid={title.length > MAX_TITLE}
+                  onChange={(event) => {
+                    setTitle(event.target.value);
+                  }}
+                />
+              </div>
+
+              <div className="field">
+                <span className="field__labelrow">
+                  <label htmlFor={bodyId} className="field__label">
+                    {t("broadcast.body")}
+                  </label>
+                  <span className="field__counter" data-over={body.length > MAX_BODY}>
+                    {body.length}/{MAX_BODY}
+                  </span>
+                </span>
+                <span className="field__hint">{t("broadcast.bodyHint")}</span>
+                <textarea
+                  id={bodyId}
+                  value={body}
+                  maxLength={MAX_BODY + 50}
+                  aria-invalid={body.length > MAX_BODY}
+                  onChange={(event) => {
+                    setBody(event.target.value);
+                  }}
+                />
+              </div>
             </div>
 
-            <div className="field">
-              <span className="field__labelrow">
-                <label htmlFor={bodyId} className="field__label">
-                  {t("broadcast.body")}
-                </label>
-                <span className="field__counter" data-over={body.length > MAX_BODY}>
-                  {body.length}/{MAX_BODY}
-                </span>
-              </span>
-              <span className="field__hint">{t("broadcast.bodyHint")}</span>
-              <textarea
-                id={bodyId}
-                value={body}
-                maxLength={MAX_BODY + 50}
-                aria-invalid={body.length > MAX_BODY}
-                onChange={(event) => {
-                  setBody(event.target.value);
+            <div className="dialog-actions">
+              <button
+                type="button"
+                className="action primary"
+                disabled={!ready || sending}
+                onClick={() => {
+                  setConfirming(true);
                 }}
-              />
+              >
+                <Icon name="send" size={16} />
+                {t("broadcast.review")}
+              </button>
             </div>
-          </div>
+          </Section>
+        </div>
 
+        {/* The right column is what the send *will do*: how it reads, who
+            it reaches, and on which channel. On a phone it follows the
+            steps rather than disappearing — an operator about to address
+            the platform should see the message before the button. */}
+        <aside className="composer__aside">
           <Preview title={title} body={body} />
-        </div>
-
-        <div className="dialog-actions">
-          <button
-            type="button"
-            className="action primary"
-            disabled={!ready || sending}
-            onClick={() => {
-              setConfirming(true);
-            }}
-          >
-            <Icon name="send" size={16} />
-            {t("broadcast.review")}
-          </button>
-        </div>
-      </Section>
+          <DeliverySummary audienceLabel={audienceLabel} />
+        </aside>
+      </div>
 
       <ConfirmDialog
         open={confirming}
@@ -317,6 +355,33 @@ export function BroadcastComposer({ onSent }: { onSent: (broadcast: BroadcastVie
         )}
       </ConfirmDialog>
     </>
+  );
+}
+
+/**
+ * What the send will do — A64-027A.4 §21, §26.
+ *
+ * Beside the preview rather than only inside the confirmation dialog: the
+ * audience and the channel are the two facts that decide whether this is a
+ * routine notice or a message to the whole platform, and an operator should
+ * see them while they are writing rather than after they have finished.
+ */
+function DeliverySummary({ audienceLabel }: { audienceLabel: string }) {
+  const { t } = useTranslation();
+  return (
+    <div className="summary-card">
+      <p className="summary-card__title">{t("broadcast.summaryTitle")}</p>
+      <dl className="facts">
+        <dt>{t("broadcast.audience")}</dt>
+        <dd>{audienceLabel}</dd>
+        <dt>{t("broadcast.channel")}</dt>
+        <dd>{t("broadcast.channelInApp")}</dd>
+      </dl>
+      {/* The preference rule, stated where the decision is made. §15: an
+          administrator does not get a way around a player's own choice, and
+          the gap between "eligible" and "delivered" is that choice. */}
+      <p className="summary-card__note">{t("broadcast.preferenceNote")}</p>
+    </div>
   );
 }
 

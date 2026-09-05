@@ -188,7 +188,11 @@ it("offers no retry for a device the server says is ineligible", async () => {
   });
   renderAt("/notifications/n-1");
 
-  await screen.findByRole("heading", { name: "tournament_round_published" });
+  // A64-027A.4 translates the notification type. The heading names the
+  // thing that happened, not the enum that records it.
+  await screen.findByRole("heading", {
+    name: /Turnir raundi|Раунд турнира|Tournament round paired/,
+  });
   expect(
     screen.getByText(/Qayta urinib bo'lmaydi|Повтор недоступен|Retry unavailable/),
   ).toBeInTheDocument();

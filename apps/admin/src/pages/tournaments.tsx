@@ -8,7 +8,9 @@ import {
 } from "@/shared/api/client";
 import { CreateTournament } from "@/features/tournaments/create-tournament";
 import { useTranslation } from "@/shared/i18n";
+import { useVocab } from "@/features/vocabulary";
 import { DataTable } from "@/shared/ui/data-table";
+import { FilterToolbar, SelectField } from "@/shared/ui/filter-toolbar";
 import { StatusBadge, type Tone } from "@/shared/ui/status-badge";
 import { EmptyState, ErrorState, LoadingSkeleton } from "@/shared/ui/states";
 import { PageHeader } from "@/shared/ui/page-header";
@@ -63,8 +65,38 @@ function tri(value: string | undefined): boolean | undefined {
   return undefined;
 }
 
+/**
+ * How full a tournament is — A64-027A.3 §18.
+ *
+ * Both numbers are the server's; the bar is their ratio and nothing else.
+ * It is `aria-hidden` with the figure beside it as real text, so the
+ * information is never available only to a sighted reader — the same rule
+ * the analytics bars follow.
+ *
+ * A capacity of zero would be a division by zero and is treated as "no bar
+ * to draw" rather than as a full one.
+ */
+function Entrants({ filled, capacity }: { filled: number; capacity: number }) {
+  const share = capacity > 0 ? Math.min(filled / capacity, 1) : 0;
+  return (
+    <span className="entrants">
+      <span className="entrants__count">
+        {filled} / {capacity}
+      </span>
+      <span className="entrants__track" aria-hidden="true">
+        <span
+          className="entrants__fill"
+          data-full={share >= 1 ? "true" : undefined}
+          style={{ inlineSize: `${String(share * 100)}%` }}
+        />
+      </span>
+    </span>
+  );
+}
+
 export function TournamentsPage() {
   const { t, locale } = useTranslation();
+  const vocab = useVocab();
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Search;
 
@@ -107,41 +139,49 @@ export function TournamentsPage() {
       {/* The create control sits beside the heading rather than below the
           filters: it is what an operator came to this page to do, and a
           primary action under a filter row reads as part of the filter. */}
-      <PageHeader
-        title={t("tournaments.title")}
+      <PageHeader title={t("tournaments.title")} description={t("tournaments.lede")} />
+
+      {/* The create control sits with the filters rather than beside the
+          heading, as the row's trailing action: it is the page's primary
+          action and the only filled button on the screen, so it reads as
+          the thing to do rather than as part of the filter set. */}
+      <FilterToolbar
+        activeCount={[search.status, search.rated].filter(Boolean).length}
+        onClear={() => {
+          void navigate({ to: "/tournaments", search: {}, replace: true });
+        }}
         actions={<CreateTournament onCreated={() => pages.reload()} />}
+        filters={
+          <>
+            <SelectField
+              label={t("tournaments.status")}
+              value={search.status ?? ""}
+              onChange={(value) => {
+                setFilter("status", value);
+              }}
+            >
+              <option value="">{t("tournaments.any")}</option>
+              {STATUSES.map((value) => (
+                <option key={value} value={value}>
+                  {t(`tournaments.statusLabel.${value}` as "tournaments.statusLabel.completed")}
+                </option>
+              ))}
+            </SelectField>
+
+            <SelectField
+              label={t("tournaments.mode")}
+              value={search.rated ?? ""}
+              onChange={(value) => {
+                setFilter("rated", value);
+              }}
+            >
+              <option value="">{t("tournaments.any")}</option>
+              <option value="true">{t("tournaments.rated")}</option>
+              <option value="false">{t("tournaments.casual")}</option>
+            </SelectField>
+          </>
+        }
       />
-
-      <div className="filters">
-        <p className="field">
-          <label htmlFor="tournament-status">{t("tournaments.status")}</label>
-          <select
-            id="tournament-status"
-            value={search.status ?? ""}
-            onChange={(event) => setFilter("status", event.target.value)}
-          >
-            <option value="">{t("tournaments.any")}</option>
-            {STATUSES.map((value) => (
-              <option key={value} value={value}>
-                {t(`tournaments.statusLabel.${value}` as "tournaments.statusLabel.completed")}
-              </option>
-            ))}
-          </select>
-        </p>
-
-        <p className="field">
-          <label htmlFor="tournament-rated">{t("tournaments.mode")}</label>
-          <select
-            id="tournament-rated"
-            value={search.rated ?? ""}
-            onChange={(event) => setFilter("rated", event.target.value)}
-          >
-            <option value="">{t("tournaments.any")}</option>
-            <option value="true">{t("tournaments.rated")}</option>
-            <option value="false">{t("tournaments.casual")}</option>
-          </select>
-        </p>
-      </div>
 
       {pages.state === "loading" && <LoadingSkeleton label={t("tournaments.loading")} />}
       {pages.state === "error" && (
@@ -187,11 +227,14 @@ export function TournamentsPage() {
                       tone={TONES[tournament.status] ?? "neutral"}
                     />
                   </td>
-                  <td>{tournament.format}</td>
+                  <td>{vocab("tournamentFormat", tournament.format)}</td>
                   <td>
-                    {tournament.entrant_count} / {tournament.capacity}
+                    <Entrants
+                      filled={tournament.entrant_count}
+                      capacity={tournament.capacity}
+                    />
                   </td>
-                  <td>{tournament.variant}</td>
+                  <td>{vocab("variant", tournament.variant)}</td>
                   <td>{day(tournament.started_at)}</td>
                 </tr>
               ))}
@@ -211,10 +254,11 @@ export function TournamentsPage() {
                   {t(
                     `tournaments.statusLabel.${tournament.status}` as "tournaments.statusLabel.completed",
                   )}{" "}
-                  · {tournament.format} · {tournament.entrant_count}/{tournament.capacity}
+                  · {vocab("tournamentFormat", tournament.format)} · {tournament.entrant_count}/
+                  {tournament.capacity}
                 </span>
                 <span className="muted">
-                  {tournament.variant} · {day(tournament.started_at)}
+                  {vocab("variant", tournament.variant)} · {day(tournament.started_at)}
                 </span>
               </li>
             ))}

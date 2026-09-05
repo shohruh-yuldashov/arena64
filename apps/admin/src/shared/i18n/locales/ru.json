@@ -78,19 +78,6 @@
     "stickinessHint": "DAU / MAU.",
     "subjects": "Людей",
     "termination": "Как заканчивались игры",
-    "terminationReason": {
-      "abandonment": "Уход",
-      "abort": "Прервано",
-      "adjudication": "Решение системы",
-      "agreed_draw": "Ничья по соглашению",
-      "all_pieces_captured": "Все шашки взяты",
-      "flag": "Время истекло",
-      "flag_insufficient_material": "Время, мало материала",
-      "move_limit": "Лимит ходов",
-      "no_legal_moves": "Нет ходов",
-      "repetition": "Повторение",
-      "resignation": "Сдача"
-    },
     "timeToActivation": "Время до активации",
     "timeToVerify": "Время до подтверждения",
     "title": "Продуктовая аналитика",
@@ -256,6 +243,9 @@
     "viewTournamentsRunning": "Показать идущие",
     "viewUsers": "Пользователи"
   },
+  "filters": {
+    "clear": "Сбросить фильтры ({count})"
+  },
   "login": {
     "email": "Электронная почта",
     "invalid": "Эти данные не приняты.",
@@ -268,6 +258,7 @@
     "title": "Вход"
   },
   "matches": {
+    "accepted": "Принята",
     "any": "Любой",
     "back": "К списку партий",
     "casual": "Товарищеская",
@@ -284,6 +275,7 @@
     "ended": "Завершена",
     "error": "Не удалось загрузить партии.",
     "filters": "Фильтры",
+    "lede": "Изучайте жизненный цикл партии, участников и результаты.",
     "light": "Белые",
     "loading": "Загрузка партий…",
     "matchId": "ID партии",
@@ -313,11 +305,14 @@
       "expired": "Истекла",
       "pending_acceptance": "Ожидает принятия"
     },
+    "termination": "Причина завершения",
     "timeControl": "Контроль времени",
     "title": "Партии",
     "unknown": "—",
     "variant": "Вариант",
-    "winner": "Победитель"
+    "versus": "vs",
+    "winner": "Победитель",
+    "wonBy": "Победа: {side}"
   },
   "moderation": {
     "cancel": "Отмена",
@@ -363,6 +358,9 @@
     "restrictBody": "{name} не сможет войти, все сессии будут отозваны.",
     "restrictTitle": "Подтвердите ограничение",
     "restricted": "Ограничен",
+    "scope": "Вид",
+    "scopeAll": "Все записи",
+    "scopeEffective": "Только действующие",
     "section": "Модерация",
     "showAll": "Показать историю",
     "showEffective": "Только действующие",
@@ -551,6 +549,7 @@
     "finalRound": "Финал — дальше нет",
     "finalStatus": "Итоговый статус",
     "format": "Формат",
+    "lede": "Управляйте регистрацией, ходом и результатами турниров.",
     "loading": "Загрузка турниров…",
     "mode": "Режим",
     "noEntrants": "Участники не записаны.",
@@ -605,6 +604,7 @@
     "grantedAt": "Роль выдана",
     "inactive": "Неактивен",
     "joined": "Регистрация",
+    "lede": "Управляйте аккаунтами игроков: состояние, подтверждение и права.",
     "loading": "Загрузка пользователей…",
     "notAnAdmin": "У аккаунта нет админ-роли.",
     "retry": "Повторить",
@@ -620,5 +620,77 @@
     "verified": "Подтверждён",
     "viewMatches": "Партии этого аккаунта",
     "viewModeration": "Все ограничения"
+  },
+  "vocab": {
+    "auditOutcome": {
+      "failed": "Отклонено",
+      "succeeded": "Выполнено"
+    },
+    "auditSubject": {
+      "account": "Аккаунт",
+      "match": "Партия",
+      "notification": "Уведомление",
+      "tournament": "Турнир"
+    },
+    "entrantStatus": {
+      "registered": "Зарегистрирован",
+      "withdrawn": "Снялся"
+    },
+    "matchMode": {
+      "casual": "Обычная",
+      "rated": "Рейтинговая"
+    },
+    "matchOrigin": {
+      "challenge": "По вызову",
+      "queue": "Из очереди",
+      "rematch": "Реванш",
+      "tournament": "Из турнира"
+    },
+    "outcome": {
+      "draw": "Ничья",
+      "none": "Без результата",
+      "win": "Победа"
+    },
+    "sanctionCategory": {
+      "abuse": "Злоупотребление",
+      "account_compromise": "Взлом аккаунта",
+      "cheating": "Читерство",
+      "other": "Другое",
+      "policy_violation": "Нарушение правил"
+    },
+    "sanctionKind": {
+      "suspended": "Приостановлен"
+    },
+    "side": {
+      "dark": "Чёрные",
+      "light": "Белые"
+    },
+    "speedClass": {
+      "blitz": "Блиц",
+      "bullet": "Пуля",
+      "classical": "Классика",
+      "correspondence": "По переписке",
+      "rapid": "Рапид"
+    },
+    "termination": {
+      "abandonment": "Покинута",
+      "abort": "Отменена",
+      "adjudication": "Решение судьи",
+      "agreed_draw": "Ничья по согласию",
+      "all_pieces_captured": "Все шашки взяты",
+      "flag": "Время вышло",
+      "flag_insufficient_material": "Время, недостаточно материала",
+      "move_limit": "Лимит ходов",
+      "no_legal_moves": "Нет ходов",
+      "repetition": "Повторение",
+      "resignation": "Сдача"
+    },
+    "tournamentFormat": {
+      "round_robin": "Круговая",
+      "swiss": "Швейцарская"
+    },
+    "variant": {
+      "russian_8x8": "Русские шашки 8×8"
+    }
   }
 }

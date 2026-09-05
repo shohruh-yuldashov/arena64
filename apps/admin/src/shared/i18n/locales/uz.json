@@ -78,19 +78,6 @@
     "stickinessHint": "DAU / MAU.",
     "subjects": "Soni",
     "termination": "Tugash sabablari",
-    "terminationReason": {
-      "abandonment": "Tashlab ketildi",
-      "abort": "Bekor qilindi",
-      "adjudication": "Hakam qarori",
-      "agreed_draw": "Kelishilgan durang",
-      "all_pieces_captured": "Barcha toshlar olindi",
-      "flag": "Vaqt tugadi",
-      "flag_insufficient_material": "Vaqt — material yetarli emas",
-      "move_limit": "Yurish limiti",
-      "no_legal_moves": "Yurish qolmadi",
-      "repetition": "Takrorlanish",
-      "resignation": "Taslim"
-    },
     "timeToActivation": "Aktivatsiyagacha vaqt",
     "timeToVerify": "Tasdiqlashgacha vaqt",
     "title": "Mahsulot analitikasi",
@@ -256,6 +243,9 @@
     "viewTournamentsRunning": "Davom etayotganlarni ko'rish",
     "viewUsers": "Foydalanuvchilar"
   },
+  "filters": {
+    "clear": "Filtrlarni tozalash ({count})"
+  },
   "login": {
     "email": "Elektron pochta",
     "invalid": "Bu ma'lumotlar qabul qilinmadi.",
@@ -268,6 +258,7 @@
     "title": "Kirish"
   },
   "matches": {
+    "accepted": "Qabul qilingan",
     "any": "Har qanday",
     "back": "O'yinlarga qaytish",
     "casual": "Do'stona",
@@ -284,6 +275,7 @@
     "ended": "Tugagan",
     "error": "O'yinlarni yuklab bo'lmadi.",
     "filters": "Filtrlar",
+    "lede": "O'yin hayot siklini, ishtirokchilarni va natijalarni ko'rib chiqing.",
     "light": "Oq",
     "loading": "O'yinlar yuklanmoqda…",
     "matchId": "O'yin ID",
@@ -313,11 +305,14 @@
       "expired": "Muddati o'tdi",
       "pending_acceptance": "Qabul kutilmoqda"
     },
+    "termination": "Tugash sababi",
     "timeControl": "Vaqt nazorati",
     "title": "O'yinlar",
     "unknown": "—",
     "variant": "Variant",
-    "winner": "G'olib"
+    "versus": "vs",
+    "winner": "G'olib",
+    "wonBy": "{side} yutdi"
   },
   "moderation": {
     "cancel": "Bekor qilish",
@@ -363,6 +358,9 @@
     "restrictBody": "{name} tizimga kira olmaydi va barcha sessiyalari bekor qilinadi.",
     "restrictTitle": "Hisobni cheklashni tasdiqlang",
     "restricted": "Cheklangan",
+    "scope": "Ko'rinish",
+    "scopeAll": "Barcha yozuvlar",
+    "scopeEffective": "Faqat amaldagilar",
     "section": "Moderatsiya",
     "showAll": "Tarixni ham ko'rsatish",
     "showEffective": "Faqat amaldagilar",
@@ -551,6 +549,7 @@
     "finalRound": "Final — keyingi raund yo'q",
     "finalStatus": "Yakuniy holat",
     "format": "Format",
+    "lede": "Turnir ro'yxatini, borishini va natijalarini boshqaring.",
     "loading": "Turnirlar yuklanmoqda…",
     "mode": "Rejim",
     "noEntrants": "Ishtirokchilar yozilmagan.",
@@ -605,6 +604,7 @@
     "grantedAt": "Rol berilgan",
     "inactive": "Faol emas",
     "joined": "Ro'yxatdan o'tgan",
+    "lede": "O'yinchi hisoblarini boshqaring: holat, tasdiqlash va admin huquqlari.",
     "loading": "Foydalanuvchilar yuklanmoqda…",
     "notAnAdmin": "Bu hisobda admin roli yo'q.",
     "retry": "Qayta urinish",
@@ -620,5 +620,77 @@
     "verified": "Tasdiqlangan",
     "viewMatches": "Bu hisobning o'yinlari",
     "viewModeration": "Barcha cheklovlar"
+  },
+  "vocab": {
+    "auditOutcome": {
+      "failed": "Rad etildi",
+      "succeeded": "Bajarildi"
+    },
+    "auditSubject": {
+      "account": "Hisob",
+      "match": "O'yin",
+      "notification": "Bildirishnoma",
+      "tournament": "Turnir"
+    },
+    "entrantStatus": {
+      "registered": "Ro'yxatda",
+      "withdrawn": "Chiqib ketgan"
+    },
+    "matchMode": {
+      "casual": "Oddiy",
+      "rated": "Reytingli"
+    },
+    "matchOrigin": {
+      "challenge": "Chaqiruvdan",
+      "queue": "Navbatdan",
+      "rematch": "Qayta o'yin",
+      "tournament": "Turnirdan"
+    },
+    "outcome": {
+      "draw": "Durang",
+      "none": "Natijasiz",
+      "win": "G'alaba"
+    },
+    "sanctionCategory": {
+      "abuse": "Suiiste'mol",
+      "account_compromise": "Hisob buzilgan",
+      "cheating": "Aldov",
+      "other": "Boshqa",
+      "policy_violation": "Qoida buzilishi"
+    },
+    "sanctionKind": {
+      "suspended": "To'xtatilgan"
+    },
+    "side": {
+      "dark": "Qora",
+      "light": "Oq"
+    },
+    "speedClass": {
+      "blitz": "Blits",
+      "bullet": "Bullet",
+      "classical": "Klassik",
+      "correspondence": "Yozishmali",
+      "rapid": "Tezkor"
+    },
+    "termination": {
+      "abandonment": "Tashlab ketildi",
+      "abort": "Bekor qilindi",
+      "adjudication": "Hakam qarori",
+      "agreed_draw": "Kelishilgan durang",
+      "all_pieces_captured": "Barcha donalar olindi",
+      "flag": "Vaqt tugadi",
+      "flag_insufficient_material": "Vaqt, material yetarli emas",
+      "move_limit": "Yurishlar chegarasi",
+      "no_legal_moves": "Yurish qolmadi",
+      "repetition": "Takrorlanish",
+      "resignation": "Taslim bo'ldi"
+    },
+    "tournamentFormat": {
+      "round_robin": "Aylanma",
+      "swiss": "Shveytsar tizimi"
+    },
+    "variant": {
+      "russian_8x8": "Rus shashkasi 8×8"
+    }
   }
 }

@@ -112,10 +112,20 @@ it("renders an unknown subject type as text rather than a broken link", async ()
   renderAt("/audit");
 
   const table = await screen.findByRole("table");
-  expect(within(table).getByText(/queue_ticket · q-9/)).toBeInTheDocument();
+  // A64-027A.3 translates known subject types. An unknown one keeps its
+  // identifier — never a translation key, which is what a bare `t()` on a
+  // built key would have printed and which is worse than the enum it
+  // replaced.
+  expect(within(table).getByText("queue_ticket")).toBeInTheDocument();
+  expect(within(table).getByText("q-9")).toBeInTheDocument();
   expect(within(table).queryByRole("link", { name: /q-9/ })).not.toBeInTheDocument();
   // And the unphraseable action keeps its identifier instead of vanishing.
   expect(within(table).getByText("moderation.note.add")).toBeInTheDocument();
+
+  // §44 A — no raw translation key anywhere on the page.
+  expect(document.body.textContent ?? "").not.toMatch(
+    /\b(vocab|audit|matches|tournaments)\.[a-zA-Z]+\./,
+  );
 });
 
 it("sends the subject filter as a type and ref together", async () => {

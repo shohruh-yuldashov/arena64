@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { type AdminUserSummary, fetchUsers, type UserQuery } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
 import { DataTable } from "@/shared/ui/data-table";
-import { Icon } from "@/shared/ui/icon";
+import { FilterToolbar, SearchField, SelectField } from "@/shared/ui/filter-toolbar";
 import { StatusBadge } from "@/shared/ui/status-badge";
 import { EmptyState, ErrorState, LoadingSkeleton } from "@/shared/ui/states";
 import { PageHeader } from "@/shared/ui/page-header";
@@ -100,55 +100,50 @@ export function UsersPage() {
 
   return (
     <>
-      <PageHeader title={t("users.title")} />
+      <PageHeader title={t("users.title")} description={t("users.lede")} />
 
-      <div className="toolbar">
-        <span className="search">
-          <Icon name="search" size={16} />
-          <label htmlFor="user-search" className="sr-only">
-            {t("users.search")}
-          </label>
-          <input
-            id="user-search"
-            type="search"
+      <FilterToolbar
+        activeCount={[search.q, search.active, search.verified].filter(Boolean).length}
+        onClear={() => {
+          setTerm("");
+          void navigate({ to: "/users", search: {}, replace: true });
+        }}
+        search={
+          <SearchField
+            label={t("users.search")}
+            hint={t("users.searchHint")}
             value={term}
-            placeholder={t("users.search")}
-            onChange={(event) => setTerm(event.target.value)}
-            aria-describedby="user-search-hint"
+            onChange={setTerm}
           />
-        </span>
-        <span id="user-search-hint" className="muted">
-          {t("users.searchHint")}
-        </span>
-      </div>
+        }
+        filters={
+          <>
+            <SelectField
+              label={t("users.colStatus")}
+              value={search.active ?? ""}
+              onChange={(value) => {
+                setFilter("active", value);
+              }}
+            >
+              <option value="">{t("users.any")}</option>
+              <option value="true">{t("users.active")}</option>
+              <option value="false">{t("users.inactive")}</option>
+            </SelectField>
 
-      <div className="filters">
-        <p className="field">
-          <label htmlFor="filter-active">{t("users.colStatus")}</label>
-          <select
-            id="filter-active"
-            value={search.active ?? ""}
-            onChange={(event) => setFilter("active", event.target.value)}
-          >
-            <option value="">{t("users.any")}</option>
-            <option value="true">{t("users.active")}</option>
-            <option value="false">{t("users.inactive")}</option>
-          </select>
-        </p>
-
-        <p className="field">
-          <label htmlFor="filter-verified">{t("users.colVerified")}</label>
-          <select
-            id="filter-verified"
-            value={search.verified ?? ""}
-            onChange={(event) => setFilter("verified", event.target.value)}
-          >
-            <option value="">{t("users.any")}</option>
-            <option value="true">{t("users.verified")}</option>
-            <option value="false">{t("users.unverified")}</option>
-          </select>
-        </p>
-      </div>
+            <SelectField
+              label={t("users.colVerified")}
+              value={search.verified ?? ""}
+              onChange={(value) => {
+                setFilter("verified", value);
+              }}
+            >
+              <option value="">{t("users.any")}</option>
+              <option value="true">{t("users.verified")}</option>
+              <option value="false">{t("users.unverified")}</option>
+            </SelectField>
+          </>
+        }
+      />
 
       {pages.state === "loading" && <LoadingSkeleton label={t("users.loading")} />}
 
@@ -179,13 +174,17 @@ export function UsersPage() {
               {pages.rows.map((user) => (
                 <tr key={user.id}>
                   <th scope="row">
-                    <Link
-                      className="cell-primary"
-                      to="/users/$userId"
-                      params={{ userId: user.id }}
-                    >
-                      <strong>{user.display_name ?? user.username}</strong>
-                      <span>@{user.username}</span>
+                    <Link className="identity" to="/users/$userId" params={{ userId: user.id }}>
+                      {/* Initials, not an avatar image: the admin API
+                          exposes no avatar for a listing and inventing one
+                          would be decoration standing in for a fact. */}
+                      <span className="identity__avatar" aria-hidden="true">
+                        {(user.display_name ?? user.username).slice(0, 2).toUpperCase()}
+                      </span>
+                      <span className="cell-primary">
+                        <strong>{user.display_name ?? user.username}</strong>
+                        <span>@{user.username}</span>
+                      </span>
                     </Link>
                   </th>
                   <td>{user.email}</td>

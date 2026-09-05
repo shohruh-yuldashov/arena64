@@ -9,7 +9,10 @@ import {
   type ModerationCategory,
 } from "@/shared/api/client";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
-import { ErrorNotice } from "@/shared/ui/error-notice";
+import { Icon } from "@/shared/ui/icon";
+import { PageHeader } from "@/shared/ui/page-header";
+import { StatusBadge } from "@/shared/ui/status-badge";
+import { ErrorState, LoadingSkeleton } from "@/shared/ui/states";
 
 /**
  * One account — A64-024.3 §13.
@@ -88,117 +91,160 @@ export function UserDetailPage() {
         <Link to="/users">{t("users.back")}</Link>
       </p>
 
-      {state === "loading" && <p role="status">{t("users.loading")}</p>}
-      {state === "error" && <ErrorNotice message={t("users.error")} />}
+      {state === "loading" && <LoadingSkeleton rows={4} label={t("users.loading")} />}
+      {state === "error" && <ErrorState title={t("users.error")} />}
 
       {state === "ready" && user !== null && (
         <>
-          <h2>{user.display_name ?? user.username}</h2>
+          {/* The account's standing is in the header, not three sections
+              down: whether this person is active, verified and restricted
+              is the reason an operator opened the page. */}
+          <PageHeader
+            title={user.display_name ?? user.username}
+            description={`@${user.username}`}
+            actions={
+              <>
+                <StatusBadge
+                  label={t(user.is_active ? "users.active" : "users.inactive")}
+                  tone={user.is_active ? "success" : "neutral"}
+                />
+                <StatusBadge
+                  label={t(user.is_verified ? "users.verified" : "users.unverified")}
+                  tone={user.is_verified ? "success" : "warning"}
+                />
+                {user.is_admin && <StatusBadge label={t("users.roleAdmin")} tone="primary" />}
+                {user.moderation.is_restricted && (
+                  <StatusBadge label={t("moderation.restricted")} tone="danger" />
+                )}
+              </>
+            }
+          />
 
-          <section>
-            <h3>{t("users.sectionAccount")}</h3>
-            <dl className="facts">
-              <dt>{t("users.colUser")}</dt>
-              <dd>{user.username}</dd>
-              <dt>{t("users.colEmail")}</dt>
-              <dd>{user.email}</dd>
-              <dt>{t("users.colStatus")}</dt>
-              {/* Text, not a colour — status must not be carried by hue
+          <div className="detail-grid">
+            <section className="panel">
+              <div className="panel__head">
+                <h3>
+                  <Icon name="users" size={16} />
+                  {t("users.sectionAccount")}
+                </h3>
+              </div>
+              <div className="panel__body">
+                <dl className="facts">
+                  <dt>{t("users.colUser")}</dt>
+                  <dd>{user.username}</dd>
+                  <dt>{t("users.colEmail")}</dt>
+                  <dd>{user.email}</dd>
+                  <dt>{t("users.colStatus")}</dt>
+                  {/* Text, not a colour — status must not be carried by hue
                   alone (§17). */}
-              <dd>{t(user.is_active ? "users.active" : "users.inactive")}</dd>
-              <dt>{t("users.colVerified")}</dt>
-              <dd>{t(user.is_verified ? "users.verified" : "users.unverified")}</dd>
-              <dt>{t("users.joined")}</dt>
-              <dd>{new Date(user.created_at).toLocaleString(locale)}</dd>
-              <dt>{t("users.userId")}</dt>
-              <dd>
-                <code>{user.id}</code>
-              </dd>
-            </dl>
-          </section>
+                  <dd>{t(user.is_active ? "users.active" : "users.inactive")}</dd>
+                  <dt>{t("users.colVerified")}</dt>
+                  <dd>{t(user.is_verified ? "users.verified" : "users.unverified")}</dd>
+                  <dt>{t("users.joined")}</dt>
+                  <dd>{new Date(user.created_at).toLocaleString(locale)}</dd>
+                  <dt>{t("users.userId")}</dt>
+                  <dd className="ref">{user.id}</dd>
+                </dl>
+              </div>
+            </section>
 
-          <section>
-            <h3>{t("users.sectionAdmin")}</h3>
-            {user.is_admin ? (
-              <dl className="facts">
-                <dt>{t("users.colRole")}</dt>
-                <dd>{t("users.roleAdmin")}</dd>
-                {user.admin_role_granted_at !== null && (
-                  <>
-                    <dt>{t("users.grantedAt")}</dt>
-                    <dd>{new Date(user.admin_role_granted_at).toLocaleString(locale)}</dd>
-                  </>
+            <section className="panel">
+              <div className="panel__head">
+                <h3>
+                  <Icon name="settings" size={16} />
+                  {t("users.sectionAdmin")}
+                </h3>
+              </div>
+              <div className="panel__body">
+                {user.is_admin ? (
+                  <dl className="facts">
+                    <dt>{t("users.colRole")}</dt>
+                    <dd>{t("users.roleAdmin")}</dd>
+                    {user.admin_role_granted_at !== null && (
+                      <>
+                        <dt>{t("users.grantedAt")}</dt>
+                        <dd>{new Date(user.admin_role_granted_at).toLocaleString(locale)}</dd>
+                      </>
+                    )}
+                  </dl>
+                ) : (
+                  // No grant control here, deliberately — §7 forbids a
+                  // privilege-escalation button existing merely because a
+                  // Users page does. Roles are granted by operator command.
+                  <p className="muted">{t("users.notAnAdmin")}</p>
                 )}
-              </dl>
-            ) : (
-              // No grant control here, deliberately — §7 forbids a
-              // privilege-escalation button existing merely because a
-              // Users page does. Roles are granted by operator command.
-              <p className="muted">{t("users.notAnAdmin")}</p>
-            )}
-          </section>
+              </div>
+            </section>
 
-          <section>
-            <h3>{t("moderation.section")}</h3>
-            {/* Status as text, never colour alone — §27. */}
-            <dl className="facts">
-              <dt>{t("moderation.colStatus")}</dt>
-              <dd>
-                {t(
-                  user.moderation.is_restricted
-                    ? "moderation.restricted"
-                    : "moderation.notRestricted",
+            <section className="panel panel--wide">
+              <div className="panel__head">
+                <h3>
+                  <Icon name="moderation" size={16} />
+                  {t("moderation.section")}
+                </h3>
+              </div>
+              <div className="panel__body">
+                {/* The standing itself is the header's badge — repeating
+                    it here was the same word twice on one screen. What
+                    belongs in the panel is *why*, *since when* and *until
+                    when*. */}
+                {restriction === null && (
+                  <p className="muted">{t("moderation.notRestricted")}</p>
                 )}
-              </dd>
-              {restriction !== null && (
-                <>
-                  <dt>{t("moderation.reason")}</dt>
-                  <dd>{reasonOf(restriction)}</dd>
-                  <dt>{t("moderation.since")}</dt>
-                  <dd>{new Date(restriction.starts_at).toLocaleString(locale)}</dd>
-                  <dt>{t("moderation.expires")}</dt>
-                  <dd>
-                    {restriction.expires_at === null
-                      ? t("moderation.indefinite")
-                      : new Date(restriction.expires_at).toLocaleString(locale)}
-                  </dd>
-                  <dt>{t("moderation.decidedBy")}</dt>
-                  <dd>{restriction.case.opened_by_username ?? restriction.case.opened_by}</dd>
-                  <dt>{t("moderation.note")}</dt>
-                  <dd>{restriction.case.reasoning}</dd>
-                </>
-              )}
-            </dl>
+                <dl className="facts">
+                  {restriction !== null && (
+                    <>
+                      <dt>{t("moderation.reason")}</dt>
+                      <dd>{reasonOf(restriction)}</dd>
+                      <dt>{t("moderation.since")}</dt>
+                      <dd>{new Date(restriction.starts_at).toLocaleString(locale)}</dd>
+                      <dt>{t("moderation.expires")}</dt>
+                      <dd>
+                        {restriction.expires_at === null
+                          ? t("moderation.indefinite")
+                          : new Date(restriction.expires_at).toLocaleString(locale)}
+                      </dd>
+                      <dt>{t("moderation.decidedBy")}</dt>
+                      <dd>
+                        {restriction.case.opened_by_username ?? restriction.case.opened_by}
+                      </dd>
+                      <dt>{t("moderation.note")}</dt>
+                      <dd>{restriction.case.reasoning}</dd>
+                    </>
+                  )}
+                </dl>
 
-            {/* A64-024 hardening §7. The one deep link this page was
+                {/* A64-024 hardening §7. The one deep link this page was
                 missing, and the destination declares the parameter:
                 `/matches`'s `validateSearch` takes `participant`. No
                 guessed query strings — a link the destination ignores is a
                 filter an operator believes is applied. */}
-            <p className="detail-links">
-              <Link to="/matches" search={{ participant: user.id }}>
-                {t("users.viewMatches")}
-              </Link>
-              {/* The restrictions list, not this account's restriction —
+                <p className="detail-links">
+                  <Link to="/matches" search={{ participant: user.id }}>
+                    {t("users.viewMatches")}
+                  </Link>
+                  {/* The restrictions list, not this account's restriction —
                   the effective one is already above. This is where an
                   operator goes to see the whole picture, and it is the
                   console that owns the history. */}
-              <Link to="/moderation">{t("users.viewModeration")}</Link>
-            </p>
+                  <Link to="/moderation">{t("users.viewModeration")}</Link>
+                </p>
 
-            <ModerationActions
-              userId={user.id}
-              displayName={user.display_name ?? user.username}
-              isRestricted={user.moderation.is_restricted}
-              onChanged={applyChange}
-            />
+                <ModerationActions
+                  userId={user.id}
+                  displayName={user.display_name ?? user.username}
+                  isRestricted={user.moderation.is_restricted}
+                  onChanged={applyChange}
+                />
 
-            {notice !== null && (
-              <p role="status" className="notice">
-                {t(notice)}
-              </p>
-            )}
-          </section>
+                {notice !== null && (
+                  <p role="status" className="notice">
+                    {t(notice)}
+                  </p>
+                )}
+              </div>
+            </section>
+          </div>
         </>
       )}
     </>

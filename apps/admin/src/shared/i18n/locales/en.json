@@ -78,19 +78,6 @@
     "stickinessHint": "DAU / MAU.",
     "subjects": "People",
     "termination": "How games ended",
-    "terminationReason": {
-      "abandonment": "Abandonment",
-      "abort": "Aborted",
-      "adjudication": "Adjudication",
-      "agreed_draw": "Agreed draw",
-      "all_pieces_captured": "All pieces captured",
-      "flag": "Lost on time",
-      "flag_insufficient_material": "Time, insufficient material",
-      "move_limit": "Move limit",
-      "no_legal_moves": "No legal moves",
-      "repetition": "Repetition",
-      "resignation": "Resignation"
-    },
     "timeToActivation": "Time to activation",
     "timeToVerify": "Time to verify",
     "title": "Product analytics",
@@ -256,6 +243,9 @@
     "viewTournamentsRunning": "View those in progress",
     "viewUsers": "Users"
   },
+  "filters": {
+    "clear": "Clear filters ({count})"
+  },
   "login": {
     "email": "Email",
     "invalid": "Those credentials were not accepted.",
@@ -268,6 +258,7 @@
     "title": "Sign in"
   },
   "matches": {
+    "accepted": "Accepted",
     "any": "Any",
     "back": "Back to matches",
     "casual": "Casual",
@@ -284,6 +275,7 @@
     "ended": "Ended",
     "error": "Could not load matches.",
     "filters": "Filters",
+    "lede": "Inspect match lifecycle, participants and outcomes.",
     "light": "Light",
     "loading": "Loading matches…",
     "matchId": "Match ID",
@@ -313,11 +305,14 @@
       "expired": "Expired",
       "pending_acceptance": "Awaiting acceptance"
     },
+    "termination": "How it ended",
     "timeControl": "Time control",
     "title": "Matches",
     "unknown": "—",
     "variant": "Variant",
-    "winner": "Winner"
+    "versus": "vs",
+    "winner": "Winner",
+    "wonBy": "{side} won"
   },
   "moderation": {
     "cancel": "Cancel",
@@ -363,6 +358,9 @@
     "restrictBody": "{name} will not be able to sign in, and every session will be revoked.",
     "restrictTitle": "Confirm restriction",
     "restricted": "Restricted",
+    "scope": "View",
+    "scopeAll": "All records",
+    "scopeEffective": "In force only",
     "section": "Moderation",
     "showAll": "Include history",
     "showEffective": "Effective only",
@@ -551,6 +549,7 @@
     "finalRound": "Final — no further round",
     "finalStatus": "Final status",
     "format": "Format",
+    "lede": "Operate tournament registration, progress and results.",
     "loading": "Loading tournaments…",
     "mode": "Mode",
     "noEntrants": "No entrants recorded.",
@@ -605,6 +604,7 @@
     "grantedAt": "Role granted",
     "inactive": "Inactive",
     "joined": "Joined",
+    "lede": "Manage player accounts, verification and account state.",
     "loading": "Loading users…",
     "notAnAdmin": "This account holds no admin role.",
     "retry": "Try again",
@@ -620,5 +620,77 @@
     "verified": "Verified",
     "viewMatches": "Matches for this account",
     "viewModeration": "All restrictions"
+  },
+  "vocab": {
+    "auditOutcome": {
+      "failed": "Refused",
+      "succeeded": "Succeeded"
+    },
+    "auditSubject": {
+      "account": "Account",
+      "match": "Match",
+      "notification": "Notification",
+      "tournament": "Tournament"
+    },
+    "entrantStatus": {
+      "registered": "Registered",
+      "withdrawn": "Withdrawn"
+    },
+    "matchMode": {
+      "casual": "Casual",
+      "rated": "Rated"
+    },
+    "matchOrigin": {
+      "challenge": "From challenge",
+      "queue": "From queue",
+      "rematch": "Rematch",
+      "tournament": "From tournament"
+    },
+    "outcome": {
+      "draw": "Draw",
+      "none": "No result",
+      "win": "Win"
+    },
+    "sanctionCategory": {
+      "abuse": "Abuse",
+      "account_compromise": "Account compromise",
+      "cheating": "Cheating",
+      "other": "Other",
+      "policy_violation": "Policy violation"
+    },
+    "sanctionKind": {
+      "suspended": "Suspended"
+    },
+    "side": {
+      "dark": "Dark",
+      "light": "Light"
+    },
+    "speedClass": {
+      "blitz": "Blitz",
+      "bullet": "Bullet",
+      "classical": "Classical",
+      "correspondence": "Correspondence",
+      "rapid": "Rapid"
+    },
+    "termination": {
+      "abandonment": "Abandonment",
+      "abort": "Aborted",
+      "adjudication": "Adjudication",
+      "agreed_draw": "Agreed draw",
+      "all_pieces_captured": "All pieces captured",
+      "flag": "Lost on time",
+      "flag_insufficient_material": "Time, insufficient material",
+      "move_limit": "Move limit",
+      "no_legal_moves": "No legal moves",
+      "repetition": "Repetition",
+      "resignation": "Resignation"
+    },
+    "tournamentFormat": {
+      "round_robin": "Round robin",
+      "swiss": "Swiss"
+    },
+    "variant": {
+      "russian_8x8": "Russian draughts 8×8"
+    }
   }
 }

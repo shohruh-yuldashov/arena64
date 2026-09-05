@@ -13,6 +13,7 @@ fail mysteriously on the ten-thousandth request.
 
 from functools import lru_cache
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from pydantic.fields import FieldInfo
@@ -76,6 +77,23 @@ _LOCAL_JWT_SECRET_KEY = (
 #: The frontend a developer runs. Refused in a deployed tier by the guard on
 #: `Settings`, for the reason that guard gives.
 _LOCAL_PUBLIC_APP_URL = "http://localhost:3000"
+#: The frontend routes a transactional email links to — A64-028.2 §17.
+#:
+#: Held beside `_LOCAL_PUBLIC_APP_URL` rather than inside `EmailSettings`
+#: because they exist to be composed *with* `PUBLIC_APP_URL`, which is a
+#: different section: the origin is configured once, and these say which
+#: page on it. A template may still be set explicitly — a mobile build
+#: pointing at a deep link is the case that keeps them overridable — but
+#: nothing has to be set for the links to be right.
+_VERIFICATION_PATH = "/verify-email?token={token}"
+_PASSWORD_RESET_PATH = "/reset-password?token={token}"
+#: Hosts that mean "this machine" — A64-028.2 §16.
+#:
+#: A deployed tier that links to any of them sends mail nobody can act on,
+#: and does it silently. Checked by host rather than by whole-string
+#: comparison so that a port, a scheme or a path cannot smuggle one past.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", "[::1]"})
+
 _LOCAL_OTP_SECRET = (
     # Same shape and same reasoning as `_LOCAL_JWT_SECRET_KEY`: the literal
     # words are load-bearing, so a deployed tier that somehow reached it is
@@ -664,7 +682,7 @@ class EmailSettings(SectionSettings):
     #: `{token}` is substituted with the raw token. Validated below,
     #: because a template missing the placeholder produces links that
     #: cannot possibly work and does so silently.
-    verification_url_template: str = "http://localhost:3000/verify-email?token={token}"
+    verification_url_template: str = _LOCAL_PUBLIC_APP_URL + _VERIFICATION_PATH
 
     #: **One hour**, against verification's twenty-four, and the asymmetry
     #: is the decision rather than an inconsistency. Both links sit in the
@@ -698,7 +716,7 @@ class EmailSettings(SectionSettings):
     #: link opens a page that collects the new password and posts it to
     #: `POST /auth/password/reset`. The token must never be submitted to
     #: this API as a query parameter; see `ResetPasswordRequest`.
-    password_reset_url_template: str = "http://localhost:3000/reset-password?token={token}"
+    password_reset_url_template: str = _LOCAL_PUBLIC_APP_URL + _PASSWORD_RESET_PATH
 
     otp_secret: SecretStr = Field(
         default=SecretStr(_LOCAL_OTP_SECRET),
@@ -3195,6 +3213,75 @@ class Settings(BaseModel):
     #: Defaulted for the same reason as `analytics`: one operational number,
     #: no secret, no construction site that should have to know about it.
     broadcast: BroadcastSettings = Field(default_factory=BroadcastSettings)
+
+    @model_validator(mode="after")
+    def _resolve_email_links(self) -> "Settings":
+        """One origin, two links — A64-028.2 §16, §17, §18.
+
+        ## The failure this closes
+
+        Both templates defaulted to `http://localhost:3000` and were the
+        **only** local defaults `_forbid_local_defaults_outside_local` did
+        not refuse. A deployed tier that set `PUBLIC_APP_URL` and nothing
+        else — which is what `infrastructure/staging/compose.yml` does —
+        started normally and sent every verification and password-reset
+        link to a machine the recipient does not have. Nothing raised, the
+        mail was delivered, and the links were dead: registration and
+        account recovery both silently broken (A64-028.1 P0-1).
+
+        ## Why derivation rather than a second guard
+
+        A guard would have made the misconfiguration loud. Composing the
+        links from the origin that is *already* required makes it
+        unreachable: there is one place the platform's public origin is
+        configured, `PUBLIC_APP_URL` is refused at its local default in
+        every deployed tier, and these two links are now downstream of that
+        single decision. A tier cannot be right about its origin and wrong
+        about its links.
+
+        An explicit template still wins, because the reason it is a
+        template has not changed — a mobile build points the same link at a
+        deep link, and the frontend can move a route without a backend
+        deploy. What it may not be is a loopback address in a deployed
+        tier, which is the one thing the check below refuses.
+        """
+        paths = {
+            "verification_url_template": _VERIFICATION_PATH,
+            "password_reset_url_template": _PASSWORD_RESET_PATH,
+        }
+        # `model_fields_set` is what makes this a *default* rather than an
+        # override: a template the operator wrote is theirs, and one they
+        # never mentioned follows the origin. Comparing against the local
+        # default instead would silently recompose an explicit localhost —
+        # which is a value a deployed tier must be told about, not have
+        # quietly corrected.
+        resolved = {
+            field: self.app.public_url + path
+            for field, path in paths.items()
+            if field not in self.email.model_fields_set
+        }
+        resolved |= {
+            field: getattr(self.email, field)
+            for field in paths
+            if field in self.email.model_fields_set
+        }
+
+        if self.environment.is_production_like:
+            variables = {
+                "verification_url_template": "EMAIL_VERIFICATION_URL_TEMPLATE",
+                "password_reset_url_template": "EMAIL_PASSWORD_RESET_URL_TEMPLATE",
+            }
+            for field, variable in variables.items():
+                host = urlsplit(resolved[field]).hostname
+                if host is not None and host.lower() in _LOOPBACK_HOSTS:
+                    raise ValueError(
+                        f"{variable} points at {host} in {self.environment} — a link "
+                        "nobody who receives it can open. Leave it unset to derive it "
+                        "from PUBLIC_APP_URL, or set it to a real origin"
+                    )
+
+        object.__setattr__(self, "email", self.email.model_copy(update=resolved))
+        return self
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":

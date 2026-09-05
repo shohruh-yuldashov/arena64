@@ -1004,6 +1004,47 @@ class PushSettings(SectionSettings):
     retry_base_seconds: int = Field(default=60, ge=1)
     retry_max_seconds: int = Field(default=6 * 60 * 60, ge=60)
 
+    @model_validator(mode="after")
+    def _the_pair_is_whole_or_absent(self) -> "PushSettings":
+        """Both keys, or neither — A64-028.2 §20.
+
+        The class above says "absent is allowed; wrong is not", and until
+        A64-028.1 P2-4 that was only two-thirds true. A *malformed* pair
+        raised, because `VapidKeyPair.from_base64` refused it. A **half**
+        pair did not: `build_vapid_keys` returns `None` the moment either
+        key is missing, so a tier that set `VAPID_PUBLIC_KEY` and forgot its
+        private half started cleanly, reported push unavailable, and refused
+        every subscription — with nothing anywhere saying why.
+
+        That is the worst of the three states. Absent is a decision; wrong
+        is caught; half is somebody who *intended* to enable push, got it
+        wrong, and is told nothing. It is also invisible in exactly the
+        place it matters: the settings screen reports the channel off, which
+        is true, so nobody looks at the configuration.
+
+        Unconditional rather than deployed-only. A half pair is never
+        intentional, on a laptop or in production, and an operator who set
+        one key on their machine will set one key on a server.
+        """
+        public = self.vapid_public_key
+        private = self.vapid_private_key
+        if (public is None) == (private is None):
+            return self
+
+        missing, present = (
+            ("VAPID_PRIVATE_KEY", "VAPID_PUBLIC_KEY")
+            if private is None
+            else ("VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY")
+        )
+        # The names, never the values: one of them is the signing key, and a
+        # configuration error must not be the thing that prints it.
+        raise ValueError(
+            f"{present} is set but {missing} is not. Web Push needs both — a half "
+            "pair silently disables the channel. Set both, or neither to leave push "
+            "off (python -m app.operator.push_keys generate)"
+        )
+
+
 class StorageSettings(SectionSettings):
     """`storage` — where binary objects live (A64-012.2).
 

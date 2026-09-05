@@ -108,3 +108,49 @@ class EngagementReader(Protocol):
     ) -> dict[str, Any]:
         """M15, M16, M17 and M22's raw counts over one week."""
         ...
+
+
+class MatchmakingReader(Protocol):
+    """A64-027.5's data-access boundary — queue, offer and game health.
+
+    A reader of its own rather than more methods on `FunnelReader`: these
+    answer a different question at a different grain, and one port holding
+    every analytics query would be the god object §42 warns about.
+    """
+
+    async def queue_health(
+        self,
+        *,
+        environment: str,
+        since: date,
+        until: date,
+        include_synthetic: bool,
+        rated: bool | None = None,
+    ) -> dict[str, Any]:
+        """M6, M7, M7b and M8's raw counts, at queue-attempt grain."""
+        ...
+
+    async def offer_health(
+        self, *, environment: str, since: date, until: date, include_synthetic: bool
+    ) -> dict[str, int]:
+        """M9's three outcomes, at offer grain."""
+        ...
+
+    async def game_health(
+        self,
+        *,
+        environment: str,
+        since: date,
+        until: date,
+        include_synthetic: bool,
+        rated: bool | None = None,
+        speed_class: str | None = None,
+    ) -> dict[str, Any]:
+        """M10 – M14's raw counts, at **match** grain."""
+        ...
+
+    async def data_quality(
+        self, *, environment: str, since: date, until: date, include_synthetic: bool
+    ) -> dict[str, int]:
+        """Lifecycle anomalies, counted and never repaired."""
+        ...

@@ -11,6 +11,7 @@ import { useEffect, useRef } from "react";
 
 import { useAdminAuth } from "@/app/use-admin-auth";
 import { AuditPage } from "@/pages/audit";
+import { AnalyticsPage } from "@/pages/analytics";
 import { DashboardPage } from "@/pages/dashboard";
 import { LoginPage } from "@/pages/login";
 import { MatchDetailPage } from "@/pages/match-detail";
@@ -45,6 +46,7 @@ import { type TranslationKey, useTranslation } from "@/shared/i18n";
  */
 
 const SECTIONS = [
+  { path: "/analytics", label: "nav.analytics" },
   { path: "/users", label: "nav.users" },
   { path: "/matches", label: "nav.matches" },
   { path: "/tournaments", label: "nav.tournaments" },
@@ -221,6 +223,12 @@ const dashboardRoute = createRoute({
 // A64-024.3. `/users` was the first real section. Every section in
 // `SECTIONS` is now built — A64-024.10 removed the placeholder route and
 // its page, which had become unreachable.
+const analyticsRoute = createRoute({
+  getParentRoute: () => protectedRoute,
+  path: "/analytics",
+  component: AnalyticsPage,
+});
+
 const usersRoute = createRoute({
   getParentRoute: () => protectedRoute,
   path: "/users",
@@ -320,6 +328,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   protectedRoute.addChildren([
     dashboardRoute,
+    analyticsRoute,
     usersRoute,
     userDetailRoute,
     matchesRoute,

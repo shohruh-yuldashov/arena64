@@ -43,14 +43,6 @@ class _RecordingPruner:
         return len(doomed)
 
 
-class _RecordingEraser:
-    def __init__(self, known: set[UUID]) -> None:
-        self.known = known
-
-    async def erase(self, player_id: UUID) -> bool:
-        return self.known.discard(player_id) is None and player_id not in self.known
-
-
 class TestTheHorizon:
     def test_it_is_four_hundred_days(self) -> None:
         """D2, frozen. 365 would delete the oldest cohort on the day it

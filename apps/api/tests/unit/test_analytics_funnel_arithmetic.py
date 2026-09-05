@@ -20,6 +20,7 @@ from app.modules.analytics.application.read_models.funnels import (
 )
 from app.modules.analytics.application.services.funnels import (
     ACTIVATION_STAGES,
+    FunnelService,
     build_funnel,
     rate,
 )
@@ -201,8 +202,7 @@ class TestWindows:
 class TestMaturity:
     """§58, through the service's own clock."""
 
-    def _service(self, oldest: date | None = None):  # type: ignore[no-untyped-def]
-        from app.modules.analytics.application.services.funnels import FunnelService
+    def _service(self, oldest: date | None = None) -> FunnelService:
 
         class _Reader:
             async def acquisition_counts(self, **_: object) -> dict[str, int]:
@@ -220,6 +220,9 @@ class TestMaturity:
 
             async def data_quality(self, **_: object) -> DataQuality:
                 return DataQuality(out_of_order_subjects=0, completions_without_start=0)
+
+            async def registrations_total(self, **_: object) -> int:
+                return 0
 
             async def oldest_retained_day(self) -> date | None:
                 return oldest

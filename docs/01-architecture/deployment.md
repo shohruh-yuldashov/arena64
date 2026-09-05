@@ -185,6 +185,12 @@ and this stack has only ever run on `localhost`.
 
 ## 6. What a production definition must decide, and this one does not
 
+Each row below is now carried, with a severity and an owning task, in
+[`production-hardening.md`](./production-hardening.md) — A64-028.1's risk
+register. This table stays as the record of where each question was first
+asked.
+
+
 | # | Question | Why staging does not answer it |
 | --- | --- | --- |
 | P-1 | How to deploy without dropping live games | Needs AD-02's `gateway` split first |
@@ -199,3 +205,4 @@ and this stack has only ever run on `localhost`.
 - [`architecture.md`](./architecture.md) — AD-02 and AD-03, which §2 deviates from
 - [`docs/03-backend/dependency-injection.md`](../03-backend/dependency-injection.md) — the configuration layering §3 relies on
 - [`infrastructure/staging/compose.yml`](../../infrastructure/staging/compose.yml) — the definition itself
+- [`production-hardening.md`](./production-hardening.md) — the production risk register §6 feeds

@@ -157,6 +157,7 @@
    | Engineering process and conventions | `docs/02-development/` |
    | Backend layer guidance | `docs/03-backend/` |
    | Frontend layer guidance | `docs/04-frontend/` |
+   | Operating the platform — backup, restore, runbooks | `docs/05-operations/` |
    | Decision records | `docs/07-decisions/` |
    | Per-feature behaviour and contracts | `specs/` |
    | Reusable document skeletons | `templates/` |

@@ -178,6 +178,42 @@ class RedisStreamGatewayBus:
                 streams={self._key(node_id): ">"},
                 count=limit,
             )
+        except ResponseError as error:
+            # `NOGROUP` — A64-028.5. The stream key carries a TTL refreshed
+            # only on publish, so a node that receives no cross-node traffic
+            # for that long loses its key *and the consumer group with it*.
+            # `_ensure_group` had already recorded the group as created, so
+            # it returned without doing anything and every subsequent read
+            # failed the same way — **for ever, until the process
+            # restarted**. A quiet node stopped receiving realtime frames
+            # and said so only in a warning nobody was reading: 4812 of them
+            # in one instance's log before a load run noticed.
+            #
+            # Forgetting the cache entry and asking again is the whole fix.
+            # It is idempotent (`BUSYGROUP` is already tolerated) and costs
+            # one extra round trip on a path that has just failed anyway.
+            if "NOGROUP" not in str(error):
+                logger.warning(
+                    "gateway_stream_consume_failed", extra={"error": type(error).__name__}
+                )
+                return ()
+
+            logger.info("gateway_stream_group_recreated", extra={"node": node_id})
+            self._groups.discard(node_id)
+            try:
+                await self._ensure_group(node_id)
+                entries = await self._redis.xreadgroup(
+                    groupname=_GROUP,
+                    consumername=node_id,
+                    streams={self._key(node_id): ">"},
+                    count=limit,
+                )
+            except Exception as retry_error:  # noqa: BLE001 — must not stop the loop
+                logger.warning(
+                    "gateway_stream_consume_failed",
+                    extra={"error": type(retry_error).__name__},
+                )
+                return ()
         except Exception as exc:  # noqa: BLE001 — a consumer must not stop its loop
             logger.warning("gateway_stream_consume_failed", extra={"error": type(exc).__name__})
             return ()

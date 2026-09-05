@@ -61,7 +61,9 @@ log pipeline, a backup mechanism, a production compose/manifest.
 > **A64-028.4** found a **new P0** — the outbox relay had been dead — closed
 > it, disproved **P1-2**, reclassified **P1-3**, closed **P3-4** after
 > raising it to P1, and resolved the application half of **P1-6**.
-> Remaining: **2 P0, 3 P1, 6 P2, 2 P3**.
+> **A64-028.5** partially resolved **P2-5** (capacity), found a **new P1** in
+> the realtime bus, and left most of its scenario matrix unrun.
+> Remaining: **2 P0, 4 P1, 5 P2, 2 P3**.
 > See `specs/authentication.md` "Rotation under concurrency" for the design.
 
 
@@ -291,8 +293,22 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 | P2-2 | Logging | RISK | No redaction filter at the logging boundary. `_JsonFormatter` emits whatever `extra={…}` a call site passed. `CLAUDE.md` §8.3 requires redaction *at the boundary* "so redaction cannot be forgotten"; today it is call-site discipline. That discipline is currently good (`session_service` logs identifiers only, never the token, user agent or IP) | `app/common/logging.py` | **A64-028.6** |
 | P2-3 | Migrations | ~~RISK~~ → **PASS** | **Resolved — A64-028.3, and the finding was understated.** Not three migrations but **thirty-nine**: `op.create_index` cannot be concurrent inside Alembic's transaction, so every index in the schema is built in a lock. All thirty-nine run at `t=0` — Arena64 has not launched and a production database is built from empty — so none is unsafe. Eleven index a table an *earlier* migration created, which is the shape that would matter after launch; they are declared in `tests/unit/test_migration_policy.py`, which fails when a new one appears undeclared. Live-migration rules are in `docs/05-operations/data-reliability.md` §5 | `tests/unit/test_migration_policy.py` | A64-028.3 — **done** |
 | P2-4 | Notifications | ~~RISK~~ → **PASS** | **Resolved — A64-028.2.** The audit sharpened the finding: absent is a supported decision and a malformed pair already raised, but a **half** pair was silently treated as "push not configured" — an operator who set one key got a tier that refused every subscription and said nothing. `PushSettings` now refuses a half pair at startup, naming the missing variable and never the value | `settings.py`, `tests/unit/test_push_config.py` | A64-028.2 — **done** |
-| P2-5 | Capacity | UNKNOWN | One uvicorn worker; 15 PostgreSQL connections per process (`pool_size=10` + `max_overflow=5`); one instance. No load test has ever run. Every throughput figure is unknown | `main.py`, `engine.py` | **A64-028.5** |
+| P2-5 | Capacity | ~~UNKNOWN~~ → **PARTIAL** | **A64-028.5.** A reproducible harness exists and a baseline is measured: the bottleneck is **one Python process on one core** (104 % CPU at saturation while the DB pool never waited and Redis served 26 ops/s), reads peak at 400–580 ops/s on one instance, and two instances scale at **0.81** once the load generator itself stops being the limit. Outbox sustains ~90–97 events/s. Correctness invariants held throughout. **Most of the matrix is unrun** — live games, idle sockets, mixed workload, reconnect storm and the soak are implemented and not executed — so capacity for the game paths is still unknown. See `docs/05-operations/performance.md` | `tests/load/`, `performance.md` | A64-028.5 → remaining scenarios **A64-029** |
 | P2-6 | Docs | RISK | The Dockerfile's `HEALTHCHECK` comment says the endpoint "reports the database and Redis". It calls `/api/v1/health`, which is liveness and reports neither. The behaviour is right; the comment describes `/health/ready` | `apps/api/Dockerfile` | **A64-028.6** |
+
+### Found by A64-028.5
+
+### P1-9 — A quiet instance stops receiving realtime frames
+
+| | |
+| --- | --- |
+| **Area** | Realtime |
+| **Status** | **PARTIAL** — one cause fixed, at least one remains |
+| **Evidence** | `gwbus:v1:<node>` carries a TTL refreshed only on publish. A node with no cross-node traffic for that long loses the key **and its consumer group**, while `_ensure_group` has already cached the group as created — so every `XREADGROUP` fails `NOGROUP` for ever, until restart. One instance's log held **4812** `gateway_stream_consume_failed` warnings before a benchmark noticed |
+| **Failure mode** | Silent. The publisher succeeds, the frame is trimmed, and the opponent's moves simply stop arriving — the exact symptom A64-028.1 feared and A64-028.4 disproved, by a different route |
+| **Impact** | Cross-instance realtime degrades to nothing on an idle node. Durable state is unaffected: PostgreSQL is authoritative and `game.resume` resyncs |
+| **Action taken** | `consume` now forgets the cached group on `NOGROUP` and recreates it. **Not claimed verified**: after the fix, a reproduction still left 20 of 30 frames undelivered without the new path triggering, so at least one further cause exists |
+| **Owner** | **A64-028.6** for the alert that would have caught it; **A64-029** for the remaining cause |
 
 ### Found by A64-028.4
 

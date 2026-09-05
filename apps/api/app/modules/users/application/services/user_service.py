@@ -40,6 +40,7 @@ from app.modules.users.application.commands import (
 )
 from app.modules.users.application.ports import UserRepository
 from app.modules.users.domain.entities import User
+from app.modules.users.domain.events import UserRegistered
 from app.modules.users.domain.exceptions import (
     EmailAlreadyExists,
     UsernameAlreadyExists,
@@ -54,6 +55,7 @@ from app.modules.users.domain.value_objects import (
     Timezone,
     Username,
 )
+from app.platform.outbox import EventPublisher
 
 if TYPE_CHECKING:
     # Deferred for the reason `users.application.ports` records: importing
@@ -74,10 +76,17 @@ class UserService:
         users: UserRepository,
         unit_of_work: UnitOfWork,
         clock: Clock,
+        events: EventPublisher | None = None,
     ) -> None:
         self._users = users
         self._uow = unit_of_work
         self._clock = clock
+        # A64-027.2 §11. Optional so that every construction site that
+        # existed before this task keeps working — a service reached by an
+        # operator command or a test fixture has nothing to publish into,
+        # and requiring one would have made this change touch a dozen call
+        # sites for an event none of them cares about.
+        self._events = events
 
     # --- retrieval ----------------------------------------------------------
 
@@ -198,6 +207,14 @@ class UserService:
 
         async with self._uow:
             created = await self._users.create(user)
+            # **Inside the transaction, before the commit** — AD-16. The
+            # account and the fact that it exists are one write, so an
+            # account cannot be created without the event and the event
+            # cannot outlive a rollback.
+            if self._events is not None:
+                await self._events.publish(
+                    UserRegistered(occurred_at=created.created_at, user_id=created.id)
+                )
             await self._uow.commit()
 
         logger.info("user_created", extra={"user_id": str(created.id)})

@@ -94,8 +94,9 @@ from app.modules.auth.domain.verification import (
     EmailVerificationToken,
     VerificationChallengeKind,
 )
-from app.modules.users.public import EmailVerifier, UserProfileReader, UserRead
+from app.modules.users.public import EmailVerified, EmailVerifier, UserProfileReader, UserRead
 from app.platform.email import EmailMessage, EmailProvider
+from app.platform.outbox import EventPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,7 @@ class EmailVerificationService:
         unit_of_work: UnitOfWork,
         clock: Clock,
         settings: EmailSettings,
+        events: EventPublisher | None = None,
     ) -> None:
         self._tokens = tokens
         self._factory = token_factory
@@ -140,6 +142,9 @@ class EmailVerificationService:
         self._email = email
         self._uow = unit_of_work
         self._clock = clock
+        # A64-027.2 §11. Optional for the reason `UserService`'s is: every
+        # construction site that predates this task keeps working.
+        self._events = events
         self._settings = settings
 
     # --- issuing -------------------------------------------------------------
@@ -280,6 +285,23 @@ class EmailVerificationService:
             # write.
             await self._tokens.invalidate_active_for_user(token.user_id, at=now)
             verified = await self._verifier.mark_email_verified(token.user_id)
+            # Inside the same transaction as the state change (AD-16), so a
+            # rollback takes the event with it and a verification cannot
+            # happen unrecorded.
+            if self._events is not None:
+                await self._events.publish(
+                    EmailVerified(
+                        occurred_at=now,
+                        user_id=token.user_id,
+                        # Computed here rather than joined later: a consumer
+                        # reading this must not have to read the account
+                        # back, and the number answers M5's "how long does
+                        # verification take" on its own.
+                        hours_since_registration=max(
+                            int((now - verified.created_at).total_seconds() // 3600), 0
+                        ),
+                    )
+                )
             await self._uow.commit()
 
         logger.info(

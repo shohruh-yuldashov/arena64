@@ -74,6 +74,9 @@ from redis.asyncio import Redis
 from app.common.logging import configure_logging
 from app.config.settings import Settings, get_settings
 from app.core.rate_limiting import KEY_PREFIX, KEY_VERSION, RateLimitProfile, scaled
+from app.modules.analytics.presentation.rate_limits import (
+    build_rules as analytics_rules,
+)
 from app.modules.auth.presentation.rate_limits import build_rules as auth_rules
 from app.modules.avatars.presentation.rate_limits import build_rules as avatar_rules
 from app.modules.friends.presentation.rate_limits import build_rules as friends_rules
@@ -113,6 +116,7 @@ _SCAN_COUNT = 500
 #: `tests/unit/test_rate_limit_operator.py` now asserts this tuple covers
 #: every module that declares policy.
 _POLICY_REGISTRIES = (
+    analytics_rules,
     auth_rules,
     profile_rules,
     matchmaking_rules,

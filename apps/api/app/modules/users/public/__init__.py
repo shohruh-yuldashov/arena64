@@ -128,7 +128,12 @@ from uuid import UUID
 from app.modules.users.application.services.user_profile_service import (
     UserProfileService,
 )
-from app.modules.users.domain.events import PresenceOffline, PresenceOnline
+from app.modules.users.domain.events import (
+    EmailVerified,
+    PresenceOffline,
+    PresenceOnline,
+    UserRegistered,
+)
 from app.modules.users.domain.exceptions import (
     EmailAlreadyExists,
     InvalidBio,
@@ -250,6 +255,8 @@ __all__ = [
     "Presence",
     "PresenceOffline",
     "PresenceOnline",
+    "UserRegistered",
+    "EmailVerified",
     "LapsedPresence",
     "PresenceProvider",
     "PresenceRecorder",

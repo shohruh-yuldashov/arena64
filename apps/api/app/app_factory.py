@@ -22,7 +22,7 @@ from app.api.router import api_router
 from app.api.v1.health import health_router
 from app.common.logging import configure_logging
 from app.common.middleware import CorrelationIdMiddleware, RequestIdMiddleware
-from app.config.environment import describe_env_file
+from app.config.environment import current_environment, describe_env_file
 from app.config.settings import Settings, get_settings
 from app.core.clock import SystemClock
 from app.core.constants import API_PREFIX
@@ -41,6 +41,25 @@ from app.gateway.matchmaking_offers import GatewayPendingMatchSink
 from app.gateway.node import resolve_node_id
 from app.gateway.notifications import GatewayNotificationSink
 from app.gateway.router import gateway_router
+from app.modules.analytics.application.services.projections import (
+    PROJECTIONS as ANALYTICS_PROJECTIONS,
+)
+from app.modules.analytics.application.services.projector import (
+    CONSUMER as ANALYTICS_CONSUMER,
+)
+from app.modules.analytics.application.services.projector import (
+    AnalyticsProjector,
+)
+from app.modules.analytics.application.services.retention_task import (
+    AnalyticsRetentionTask,
+)
+from app.modules.analytics.application.services.retention_task import (
+    prune_request as analytics_prune_request,
+)
+from app.modules.analytics.infrastructure.repositories.analytics_repository import (
+    SqlAlchemyAnalyticsEventStore,
+    SqlAlchemySubjectDirectory,
+)
 from app.modules.friends.application.ports import SocialGraphCache
 from app.modules.friends.infrastructure.cache import (
     NoSocialGraphCache,
@@ -625,6 +644,15 @@ def build_outbox_worker(
     # notifier has already handled can still reach the acceptance-failure
     # policy, and neither can mark the other's work done.
     handlers: list[TaskHandler | object] = [handler]
+    # A64-027.2 §47. Raw analytics retention — 400 days, on the mechanism
+    # `platform.outbox` already uses rather than a second scheduler.
+    handlers.append(
+        AnalyticsRetentionTask(
+            session_factory=db.session_factory,
+            clock=clock,
+            metrics=_metrics(),
+        )
+    )
     handlers.append(
         SessionScopedNotificationHandler(
             session_factory=db.session_factory,
@@ -787,6 +815,18 @@ def build_outbox_worker(
             event_types=CHALLENGE_NOTIFICATION_EVENTS,
         )
     )
+    # A64-027.2. The analytics projector — the ninth consumer, and the first
+    # that subscribes to events from five different modules at once. Its own
+    # `processed_event` partition like every other: `game.match_completed`
+    # now has five subscribers and none may mark another's work done.
+    handlers.append(
+        SessionScopedNotificationHandler(
+            session_factory=db.session_factory,
+            dispatcher_factory=lambda session: _analytics_projector_for(session, clock, settings),
+            consumer=ANALYTICS_CONSUMER,
+            event_types=frozenset(ANALYTICS_PROJECTIONS),
+        )
+    )
     if settings.matchmaking.realtime_delivery_enabled:
         handlers.append(
             SessionScopedNotificationHandler(
@@ -917,6 +957,27 @@ def _rating_consumer_for(session: AsyncSession, clock: SystemClock) -> MatchComp
             unit_of_work=SessionUnitOfWork(session),
             clock=clock,
         )
+    )
+
+
+def _analytics_projector_for(
+    session: AsyncSession, clock: SystemClock, settings: Settings
+) -> AnalyticsProjector:
+    """The analytics consumer over one session — A64-027.2 §15.
+
+    The store, the subject directory and the unit of work all hold the
+    **same** session, so a batch's subject resolutions and its event inserts
+    are one transaction. A subject created for events that were then lost
+    would leave a row in the one table erasure operates on for somebody with
+    no history — harmless, and still wrong.
+    """
+    return AnalyticsProjector(
+        store=SqlAlchemyAnalyticsEventStore(session),
+        subjects=SqlAlchemySubjectDirectory(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+        environment=current_environment(),
+        metrics=_metrics(),
     )
 
 
@@ -1355,6 +1416,14 @@ def build_task_schedulers(
                 dispatcher=dispatcher,
                 request=prune_request(),
                 interval_seconds=settings.outbox.prune_interval_seconds,
+            )
+        )
+    if settings.analytics.retention_enabled:
+        schedulers.append(
+            PeriodicTaskScheduler(
+                dispatcher=dispatcher,
+                request=analytics_prune_request(),
+                interval_seconds=settings.analytics.prune_interval_seconds,
             )
         )
     if settings.matchmaking.expiry_enabled:

@@ -797,3 +797,341 @@ The next task implements, and nothing more:
 - `docs/01-architecture/domain-model.md` DM-06, AC-5 — `PlayerId`, and erasure
 - `docs/01-architecture/database.md` §297 — `arena64_readonly`
 - `app/platform/analytics/registry.py` — the taxonomy, in code
+
+---
+
+# Part II — The implementation (A64-027.2)
+
+§1–§45 froze the semantics. This half records what was built, what changed
+in the contract and why, and what a later task must not assume.
+
+## 46. Storage
+
+Two tables in an `analytics` schema, and the split between them is the
+privacy design rather than normalisation.
+
+| Table               | Holds                                                | Erasure     |
+| ------------------- | ---------------------------------------------------- | ----------- |
+| `analytics.subject` | `player_id -> subject_key`, plus `is_synthetic`      | **Deleted** |
+| `analytics.event`   | One row per fact. `subject_key`, never a `player_id` | Untouched   |
+
+### The envelope is columns; the properties are `jsonb`
+
+Every metric filters and groups on the envelope — by day, by name, by
+environment, by subject — so those are typed columns with indexes. The
+properties differ per event, so they are one `jsonb` column.
+
+What makes the `jsonb` half safe is that **nothing untyped reaches it**: a
+property map is validated against its event's closed Pydantic schema before
+an `AnalyticsEvent` exists, on both paths. The column holds only values some
+schema admitted.
+
+### Constraints
+
+| Constraint                     | Why it is in the database rather than only in Python                        |
+| ------------------------------ | --------------------------------------------------------------------------- |
+| `PRIMARY KEY (id)`             | **This is the deduplication.** See §48                                      |
+| `CHECK (event_version >= 1)`   | Cheap, and the one envelope rule SQL can state without knowing the taxonomy |
+| `UNIQUE (subject.subject_key)` | Two players sharing a key would merge two people into one subject           |
+
+The per-event identity rule (§18's `ACTOR` / `ANONYMOUS` / `ENTITY`) is
+enforced in `AnalyticsEvent.__post_init__` and **not** duplicated in SQL: it
+depends on the taxonomy, and a check constraint listing twenty event names
+would be a second taxonomy to keep in step.
+
+### Indexes, each by the query that needs it
+
+| Index                                     | Serves                                                              |
+| ----------------------------------------- | ------------------------------------------------------------------- |
+| `(environment, event_name, occurred_at)`  | Every metric in §29. Environment leads because all of them carry it |
+| `(subject_key, occurred_at)` **partial**  | Retention, activation, time-to-first-match, matches-per-player      |
+| `(anonymous_id, occurred_at)` **partial** | F-A, which walks one browser to the registration that ended it      |
+| `(occurred_at)`                           | The retention prune's only predicate                                |
+
+Both per-identity indexes are partial. An authenticated product event never
+has an anonymous id and a landing view never has a subject, so each index
+carries roughly half the table rather than all of it. **No index on any
+`jsonb` property** — a dimension queried often enough to need one is a
+dimension that should be promoted to a column.
+
+## 47. Partitioning — deferred, with a threshold
+
+**Not implemented.** `occurred_at` leads the retention index and is the
+partition key this table will take, so the preparation is done and the
+operational weight is not bought yet — the same position `platform.outbox`
+holds (DB-18).
+
+**Revisit at roughly 20 million rows**, or when a prune run consistently
+reports `exhausted`. At that point the prune becomes a `DETACH` rather than
+a bounded `DELETE`, which is the whole benefit.
+
+Arena64 today produces on the order of a handful of events per match and a
+few per visitor. The threshold is years away at any plausible early volume,
+and partitioning a table with one partition is complexity with no reader.
+
+## 48. Deduplication, as built
+
+`event_id` **is** the primary key of `analytics.event`, and the insert is
+`ON CONFLICT (id) DO NOTHING`.
+
+That makes at-least-once delivery an exactly-once _effect_ without depending
+on the ledger, on transaction ordering, or on two workers not racing:
+
+| Scenario                                                 | Result  |
+| -------------------------------------------------------- | ------- |
+| The relay redelivers a batch                             | One row |
+| The consumer crashes after the insert, before the ledger | One row |
+| Two workers claim the same entry                         | One row |
+| A client retries a request that timed out                | One row |
+
+`platform.processed_event` is still written, and is now an **optimisation**
+rather than the correctness mechanism: it stops the work being done twice,
+not the row being written twice.
+
+### The one contract change: `source_event_id`
+
+§5 said `event_id` is `outbox.id`. Two events project **one outbox row into
+two analytics rows** — `match_found` and `match_started` are per seat — and
+one id cannot be the primary key of two rows.
+
+So a fan-out projection derives its ids: `uuid5(namespace, f"{outbox_id}:{seat}")`.
+Deterministic, so a redelivery derives the same pair and conflicts on both;
+distinct, so the key holds. The outbox id itself is kept in
+`source_event_id`, which is what an operator follows from an incident back
+to the row that caused it.
+
+This is the only place A64-027.2 extends §5's envelope.
+
+### Client event ids
+
+Derived from the client's `idempotency_key` **and** the identity the server
+resolved. A retry after a timeout produces the same id and deduplicates; two
+browsers sending the same key produce different ids, so the key confers no
+ability to suppress anybody else's event.
+
+## 49. What is projected, and what is not
+
+Nine domain events are projected today. §19's table said sixteen analytics
+events were reachable; the honest count after implementation is lower,
+because a projection may read **only the payload and the envelope** — no
+match read, no tournament read — and several payloads do not carry what the
+taxonomy wants.
+
+| Analytics event        | Status                                                                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `user_registered`      | **Implemented.** New domain event `users.registered`                                                                           |
+| `email_verified`       | **Implemented.** New domain event `users.email_verified`                                                                       |
+| `match_found`          | **Implemented**, per seat, with the server's own `waited_ms`                                                                   |
+| `match_completed`      | **Implemented**, with `variant`, `rated`, `outcome`, `termination_reason`, `winner_side`, `ply_count`, `speed_class`, `origin` |
+| `rating_changed`       | **Implemented**, with both ratings and the rating key                                                                          |
+| `tournament_entered`   | **Implemented.** `format`, `capacity`, `variant` absent — they live on the tournament, not the registration                    |
+| `tournament_completed` | **Implemented.** `entrant_count` absent for the same reason. `winner_id` deliberately dropped                                  |
+| `friend_request_sent`  | **Implemented**                                                                                                                |
+| `friendship_created`   | **Implemented**                                                                                                                |
+| `queue_joined`         | **Projectable, not projected.** `queue_ticket_enqueued` carries no player, variant or speed class                              |
+| `queue_left`           | Same                                                                                                                           |
+| `match_offer_resolved` | **Projectable, not projected.** Three domain events to fold, none carrying the match's dimensions                              |
+| `match_started`        | **Projectable, not projected.** `match_activated` carries no seats, so there is no player to attribute a seat row to           |
+| `tournament_withdrawn` | **No domain event exists.** Withdrawal is unrecorded today                                                                     |
+| `challenge_sent`       | **Projectable, not projected.** Needs `speed_class` derived from `time_control_id`                                             |
+| `challenge_resolved`   | Same, folding four events                                                                                                      |
+
+**Nothing was faked to close the gap.** A property the payload cannot supply
+is optional in the schema and absent in the row, and the metrics that wait
+on one are named in §29's limitations rather than reported as though they
+were available.
+
+The additive domain fields §19 asked for remain the way to close this, and
+they are A64-027.3's to add alongside the funnels that need them.
+
+## 50. Failure isolation, as built
+
+| Failure                       | Effect on the product | Effect on analytics                                        |
+| ----------------------------- | --------------------- | ---------------------------------------------------------- |
+| The analytics store is down   | **None**              | The relay retries with backoff                             |
+| A payload cannot be read      | **None**              | **Skipped, not retried** — counted and logged at `WARNING` |
+| An unsupported event version  | **None**              | Same. Never interpreted with the wrong reader              |
+| An untracked domain event     | **None**              | Ignored. Not an error (§17)                                |
+| The collector is unreachable  | **None**              | The client's events are lost, as contracted                |
+| A malformed client submission | **None**              | `422`, nothing stored                                      |
+
+A registration cannot fail because a measurement did not land: the event is
+an outbox insert in the same transaction, and everything after it is
+asynchronous.
+
+**A poison event cannot block the consumer.** A tracked event whose payload
+cannot be read is skipped and marked handled — the rule `statistics` already
+follows — so it never sits at the head of the backlog costing a retry a
+second forever. The `analytics.events_rejected_total{reason}` counter is the
+alert.
+
+## 51. The collector
+
+`POST /api/v1/analytics/events`.
+
+| Property       | Value                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------------ |
+| Auth           | Optional. The acquisition funnel's first steps happen before there is an account                 |
+| Batch          | 1–10 events                                                                                      |
+| Client may set | `event_name`, `properties`, `idempotency_key`, `anonymous_id`, `session_id`                      |
+| Server decides | `event_id`, `source`, `environment`, `occurred_at`, `received_at`, `subject_key`, `is_synthetic` |
+| Rate limit     | 120/min per address; 240/min per account when there is one                                       |
+| Response       | `202` with a count. No ids, no totals, no stack traces                                           |
+| Refusals       | `422`, with the **same message** for an unknown name and a server-owned one                      |
+
+The forbidden envelope fields are **unrepresentable**, not stripped:
+`extra="forbid"` on the request schema means a body carrying `actor_id`,
+`environment` or `is_synthetic` is a `422` before any handler runs.
+
+The rate limit reads the caller's address and analytics stores none —
+transient use by security infrastructure is not collection (§12).
+
+## 52. Erasure, as built — D3
+
+**One `DELETE` from `analytics.subject`.**
+
+`subject_key` is a **random** value, not a hash of the player id, not a
+ciphertext, not a derivation of anything. The only function from a player to
+their key was that row; deleting it leaves no way from the person to the
+rows and none from the rows back to the person.
+
+    before   player_id -> subject_key -> events
+    after                  subject_key -> events
+
+This is why the design does not store `PlayerId`: it is the platform's
+primary key everywhere else, so a raw analytics store holding one would be
+joinable to the product database by anybody with both — which is precisely
+what D3 rules out.
+
+What survives is the grouping and the dimensions. A cohort's retention does
+not shift when a member erases, and per-player counts still count their
+matches as one player's. What is gone is _which_ player. That is the
+aggregate-preserving half D3 explicitly allows.
+
+### Not wired to an erasure workflow, because there is not one
+
+**Arena64 has no account deletion or erasure implementation.** The audit
+found the lifecycle documented (`domain-model.md` AC-4, AC-5) and no code
+that performs it.
+
+So the analytics half is a service and a port with tests, ready for the
+transaction that will call it. This is stated rather than left as a
+surprise: **the analytics side of erasure is complete and the product side
+does not exist.** Whoever builds account deletion calls
+`AnalyticsErasureService.erase(player_id)` inside it.
+
+## 53. Retention, as built — D2
+
+400 days, on `occurred_at`, deleted in bounded batches by a scheduled task
+using the platform's existing mechanism.
+
+| Decision     | Value                                                                               |
+| ------------ | ----------------------------------------------------------------------------------- |
+| Horizon      | **400 days.** A constant, not a setting — see below                                 |
+| Boundary     | `occurred_at < now - 400 days`. **Exactly 400 days old survives**                   |
+| Clock        | `occurred_at`, not `received_at` — a relay backlog must not change a row's lifetime |
+| Batching     | 5 000 rows per statement, 20 statements per run, one commit per batch               |
+| Cutoff       | Computed **once per run**, so a run spanning midnight deletes one day's worth       |
+| Interval     | Six hours                                                                           |
+| Resumability | By construction: the cutoff is recomputed and the oldest rows are still the oldest  |
+
+**The horizon is a constant and the batching is configuration.** A shorter
+window is a product decision; a longer one is a privacy decision, and a
+setting would let a deployment quietly keep more than the policy allows.
+
+A run that hits its ceiling reports `exhausted`, which is the signal that
+the ceiling is below the arrival rate — the table then grows despite a prune
+that looks like it is working.
+
+## 54. Operational metrics, as built
+
+Three counters on `app/platform/metrics`, all with closed-enum labels:
+
+    analytics.events_ingested_total{result}    stored | duplicate
+    analytics.events_rejected_total{reason}    unreadable_payload |
+                                               not_client_emittable |
+                                               invalid_properties
+    analytics.retention_deleted_total          no labels
+
+**No `event_name` label.** Twenty names times three results is sixty series
+for a question the `WARNING` log line already answers with more detail and
+without unbounded growth if the taxonomy grows. No actor, no subject, no
+event id — a per-identity label would be a second analytics store with no
+retention policy and no erasure path.
+
+Raw payloads are **not logged**. A rejection logs the event name and the
+error type; a projection failure logs the event type and the outbox id.
+
+## 55. The frontend tracker
+
+| Property           | Value                                                                            |
+| ------------------ | -------------------------------------------------------------------------------- |
+| API                | `track(name, properties)`, **typed per event**. No `capture(string, any)`        |
+| Events             | The four `CLIENT_EMITTABLE` names, and nothing else                              |
+| Transport          | `sendBeacon`, falling back to `fetch` with `keepalive`                           |
+| Batching           | Up to 10, flushed on a 5s timer and on `visibilitychange`                        |
+| Failure            | Swallowed. Never thrown into a render, never awaited by a navigation             |
+| Identity           | `anonymous_id` in `localStorage` (30 days, D4), `session_id` in `sessionStorage` |
+| Sign-out           | Rotates both                                                                     |
+| Storage on failure | A fresh id per page. Undercounts, which §36 already states                       |
+
+`visibilitychange` rather than `pagehide`: the latter does not fire reliably
+on mobile, where a tab is frozen rather than unloaded, and a CTA click is
+exactly the event that needs to survive the page going away.
+
+### View events fire once per mount
+
+React's StrictMode mounts, unmounts and remounts every component in
+development, so a naive `useEffect` counts every view twice and the number
+looks plausible. `useViewEvent` guards on a key: a changed key is a new view
+(two tournaments), an unchanged one is a rerender (none). Tested under
+StrictMode, under a forced rerender, and across a key change.
+
+## 56. Queryability
+
+The eight queries §26 requires are answerable against the schema as built.
+Verified by writing them, not by assertion:
+
+```sql
+-- registrations per day
+SELECT date_trunc('day', occurred_at) AS day, count(*)
+FROM analytics.event
+WHERE event_name = 'user_registered' AND environment = 'production' AND NOT is_synthetic
+GROUP BY day;
+
+-- active players per day (§30's definition)
+SELECT date_trunc('day', occurred_at) AS day, count(DISTINCT subject_key)
+FROM analytics.event
+WHERE event_name IN ('match_started', 'tournament_entered', 'challenge_sent')
+  AND environment = 'production' AND NOT is_synthetic
+GROUP BY day;
+
+-- queue wait p50/p95 (§35)
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY (properties->>'waited_ms')::int),
+       percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'waited_ms')::int)
+FROM analytics.event
+WHERE event_name = 'match_found' AND environment = 'production';
+
+-- rated vs casual completions (§32 excludes aborts from both sides)
+SELECT properties->>'rated' AS rated, count(*)
+FROM analytics.event
+WHERE event_name = 'match_completed'
+  AND properties->>'termination_reason' <> 'abort'
+  AND environment = 'production'
+GROUP BY rated;
+```
+
+The first two use `ix_analytics_event__environment_name_occurred`; a cohort
+query uses the partial subject index. **Measured against a test-sized table
+only** — the planner's choices there say nothing about production, and this
+records the intent rather than a benchmark nobody can reproduce.
+
+## 57. What A64-027.3 inherits
+
+1. A store that answers §26's eight queries.
+2. Nine projections, and a named list of what is not yet projected (§49).
+3. Three additive domain fields still owed — `speed_class` and seats on
+   `match_activated`, dimensions on `tournament.player_registered`, and a
+   withdrawal event.
+4. An erasure service with no caller, because account deletion does not exist.
+5. D1 still open.

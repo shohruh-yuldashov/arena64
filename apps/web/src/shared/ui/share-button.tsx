@@ -1,6 +1,7 @@
 import { CheckIcon, Share2Icon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { track } from "@/shared/analytics";
 import { useTranslation } from "@/shared/i18n";
 import { reportError } from "@/shared/lib/report-error";
 import { Button } from "@/shared/ui/button";
@@ -61,6 +62,10 @@ export function ShareButton({ title, className }: { title: string; className?: s
     if (canShare()) {
       try {
         await navigator.share({ title, url });
+        // A64-027.2 §38. **After it succeeded**, and never the URL: the
+        // taxonomy's properties are the surface and the mechanism, so the
+        // two paths can be compared without storing what was shared.
+        track("share_clicked", { surface: "tournament", mechanism: "share_sheet" });
         return;
       } catch (error) {
         if (isAbort(error)) return;
@@ -75,6 +80,7 @@ export function ShareButton({ title, className }: { title: string; className?: s
 
     try {
       await navigator.clipboard.writeText(url);
+      track("share_clicked", { surface: "tournament", mechanism: "clipboard" });
       setCopied(true);
       clearTimer(timer);
       timer.current = setTimeout(() => setCopied(false), CONFIRMATION_MS);

@@ -35,6 +35,7 @@ from app.modules.admin.presentation.routers.moderation import admin_moderation_r
 from app.modules.admin.presentation.routers.notifications import admin_notifications_router
 from app.modules.admin.presentation.routers.tournaments import admin_tournaments_router
 from app.modules.admin.presentation.routers.users import admin_users_router
+from app.modules.analytics.presentation.router import analytics_router
 from app.modules.auth.presentation.browser_router import browser_auth_router
 from app.modules.auth.presentation.router import auth_router
 from app.modules.avatars.presentation.router import avatar_router
@@ -98,6 +99,9 @@ v1_router.include_router(admin_dashboard_router)
 # therefore belongs to `profiles` — so this ordering cannot be enforced by
 # their decorators, only here. `tests/contract/test_user_search_api.py` asserts
 # the resolution rather than trusting this comment.
+# A64-027.2. The behavioural event collector — the only analytics
+# surface a browser touches, and it accepts four event names.
+v1_router.include_router(analytics_router)
 v1_router.include_router(user_search_router)
 v1_router.include_router(users_router)
 v1_router.include_router(auth_router)

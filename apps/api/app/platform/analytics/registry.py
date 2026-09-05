@@ -61,6 +61,32 @@ class Trust(StrEnum):
     BEHAVIOURAL = "behavioural"
 
 
+class Identity(StrEnum):
+    """Whose event this is — analytics.md §18's "Identity" column.
+
+    The document specified this per event from the start; A64-027.1's
+    registry did not encode it, so nothing could check it. A64-027.2 needs
+    it, because "a row belonging to nobody" is a real category and
+    "a row that lost its identity" is a defect, and without this they look
+    identical in a table.
+    """
+
+    #: A browser, before there is an account. `anonymous_id` is required;
+    #: a `subject_key` may also be present when a signed-in player fires a
+    #: behavioural event.
+    ANONYMOUS = "anonymous"
+
+    #: A person. `subject_key` is required — the server derives it from the
+    #: authenticated principal, never from a request body.
+    ACTOR = "actor"
+
+    #: A match or a tournament, not a person. `match_completed` is the
+    #: example: it describes one game with two seats, and attributing it to
+    #: one of them would double-count or pick a side. Neither identity
+    #: field is set, and the event is counted by its own dimensions.
+    ENTITY = "entity"
+
+
 class EventName(StrEnum):
     """The complete taxonomy — analytics.md §18.
 
@@ -109,6 +135,7 @@ class EventSpec:
 
     name: EventName
     owner: Owner
+    identity: Identity
 
     #: analytics.md §7. Bumped when a reader cannot detect the change —
     #: a removed property, a changed unit, a changed trigger. Adding an
@@ -127,8 +154,8 @@ class EventSpec:
         return Trust.AUTHORITATIVE if self.owner is Owner.BACKEND else Trust.BEHAVIOURAL
 
 
-def _spec(name: EventName, owner: Owner) -> tuple[EventName, EventSpec]:
-    return name, EventSpec(name=name, owner=owner)
+def _spec(name: EventName, owner: Owner, identity: Identity) -> tuple[EventName, EventSpec]:
+    return name, EventSpec(name=name, owner=owner, identity=identity)
 
 
 #: The taxonomy. Totality over `EventName` is asserted by a test, so an
@@ -136,26 +163,26 @@ def _spec(name: EventName, owner: Owner) -> tuple[EventName, EventSpec]:
 #: reaching a collector that cannot classify it.
 REGISTRY: Final[Mapping[EventName, EventSpec]] = dict(
     [
-        _spec(EventName.LANDING_VIEWED, Owner.FRONTEND),
-        _spec(EventName.REGISTER_CTA_CLICKED, Owner.FRONTEND),
-        _spec(EventName.PUBLIC_TOURNAMENT_VIEWED, Owner.FRONTEND),
-        _spec(EventName.SHARE_CLICKED, Owner.FRONTEND),
-        _spec(EventName.USER_REGISTERED, Owner.BACKEND),
-        _spec(EventName.EMAIL_VERIFIED, Owner.BACKEND),
-        _spec(EventName.QUEUE_JOINED, Owner.BACKEND),
-        _spec(EventName.QUEUE_LEFT, Owner.BACKEND),
-        _spec(EventName.MATCH_FOUND, Owner.BACKEND),
-        _spec(EventName.MATCH_OFFER_RESOLVED, Owner.BACKEND),
-        _spec(EventName.MATCH_STARTED, Owner.BACKEND),
-        _spec(EventName.MATCH_COMPLETED, Owner.BACKEND),
-        _spec(EventName.RATING_CHANGED, Owner.BACKEND),
-        _spec(EventName.TOURNAMENT_ENTERED, Owner.BACKEND),
-        _spec(EventName.TOURNAMENT_WITHDRAWN, Owner.BACKEND),
-        _spec(EventName.TOURNAMENT_COMPLETED, Owner.BACKEND),
-        _spec(EventName.FRIEND_REQUEST_SENT, Owner.BACKEND),
-        _spec(EventName.FRIENDSHIP_CREATED, Owner.BACKEND),
-        _spec(EventName.CHALLENGE_SENT, Owner.BACKEND),
-        _spec(EventName.CHALLENGE_RESOLVED, Owner.BACKEND),
+        _spec(EventName.LANDING_VIEWED, Owner.FRONTEND, Identity.ANONYMOUS),
+        _spec(EventName.REGISTER_CTA_CLICKED, Owner.FRONTEND, Identity.ANONYMOUS),
+        _spec(EventName.PUBLIC_TOURNAMENT_VIEWED, Owner.FRONTEND, Identity.ANONYMOUS),
+        _spec(EventName.SHARE_CLICKED, Owner.FRONTEND, Identity.ANONYMOUS),
+        _spec(EventName.USER_REGISTERED, Owner.BACKEND, Identity.ACTOR),
+        _spec(EventName.EMAIL_VERIFIED, Owner.BACKEND, Identity.ACTOR),
+        _spec(EventName.QUEUE_JOINED, Owner.BACKEND, Identity.ACTOR),
+        _spec(EventName.QUEUE_LEFT, Owner.BACKEND, Identity.ACTOR),
+        _spec(EventName.MATCH_FOUND, Owner.BACKEND, Identity.ACTOR),
+        _spec(EventName.MATCH_OFFER_RESOLVED, Owner.BACKEND, Identity.ACTOR),
+        _spec(EventName.MATCH_STARTED, Owner.BACKEND, Identity.ACTOR),
+        _spec(EventName.MATCH_COMPLETED, Owner.BACKEND, Identity.ENTITY),
+        _spec(EventName.RATING_CHANGED, Owner.BACKEND, Identity.ACTOR),
+        _spec(EventName.TOURNAMENT_ENTERED, Owner.BACKEND, Identity.ACTOR),
+        _spec(EventName.TOURNAMENT_WITHDRAWN, Owner.BACKEND, Identity.ACTOR),
+        _spec(EventName.TOURNAMENT_COMPLETED, Owner.BACKEND, Identity.ENTITY),
+        _spec(EventName.FRIEND_REQUEST_SENT, Owner.BACKEND, Identity.ACTOR),
+        _spec(EventName.FRIENDSHIP_CREATED, Owner.BACKEND, Identity.ACTOR),
+        _spec(EventName.CHALLENGE_SENT, Owner.BACKEND, Identity.ACTOR),
+        _spec(EventName.CHALLENGE_RESOLVED, Owner.BACKEND, Identity.ACTOR),
     ]
 )
 

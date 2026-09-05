@@ -3,6 +3,7 @@ import { MenuIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { useSession } from "@/features/auth/model/session-provider";
+import { track } from "@/shared/analytics";
 import { useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui";
@@ -127,7 +128,12 @@ export function MarketingHeader() {
                 <Link to="/login">{t("auth.login.submit")}</Link>
               </Button>
               <Button asChild size="sm">
-                <Link to="/register">{t("landing.cta.primary")}</Link>
+                <Link
+                  to="/register"
+                  onClick={() => track("register_cta_clicked", { placement: "header" })}
+                >
+                  {t("landing.cta.primary")}
+                </Link>
               </Button>
             </>
           )}

@@ -83,7 +83,7 @@ def _service(unit_of_work: _RecordingUnitOfWork, repository: _Repository) -> Bro
         repository=repository,  # type: ignore[arg-type]
         audience=_Audience(),
         clock=_Clock(),
-        unit_of_work=unit_of_work,  # type: ignore[arg-type]
+        unit_of_work=unit_of_work,
     )
 
 

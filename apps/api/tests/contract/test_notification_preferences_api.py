@@ -33,6 +33,8 @@ import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.notifications.domain.preference import DeliveryChannel
+from app.modules.notifications.domain.record import NotificationCategory
 from app.modules.notifications.infrastructure import SqlAlchemyNotificationRepository
 from tests.contract.contract_app import build_contract_app, contract_client
 from tests.contract.test_notifications_api import (
@@ -75,9 +77,19 @@ class TestReadingAndWriting:
         alice = await register(client, contract_session)
 
         initial = (await client.get(PREFERENCES_URL, headers=alice.auth)).json()["data"]
-        # Four categories on three channels, with nothing stored — a player
+        # Every category on every channel, with nothing stored — a player
         # who has never opened this screen still receives the whole grid.
-        assert len(initial["settings"]) == 12
+        #
+        # Derived rather than hardcoded: the count was `12` and A64-027A's
+        # fifth category made it `15`, which is the grid growing correctly
+        # rather than a regression. A literal here fails on the *right*
+        # change and says nothing about the invariant.
+        assert len(initial["settings"]) == len(NotificationCategory) * len(DeliveryChannel)
+        assert {(setting["category"], setting["channel"]) for setting in initial["settings"]} == {
+            (category.value, channel.value)
+            for category in NotificationCategory
+            for channel in DeliveryChannel
+        }
         assert cell(initial, "social", "in_app")["enabled"] is True
         assert cell(initial, "social", "email") == {
             "category": "social",
@@ -101,6 +113,34 @@ class TestReadingAndWriting:
         # Only the named pair moved. A `PATCH` that reset the rest would be
         # a save that undoes a switch the client never rendered.
         assert cell(reread, "game", "in_app")["enabled"] is True
+
+    async def test_an_announcement_is_on_by_default_and_a_player_may_mute_it(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """A64-027A, ADR-006 — the safety property of the fifth category.
+
+        An administrative broadcast reaches a player because they have not
+        said otherwise, not because the platform refuses to let them. If
+        this cell were ever locked, one dropdown value in the console would
+        reach every muted inbox — which is why `ANNOUNCEMENT` is absent from
+        `preference.LOCKED` and why that absence is asserted here rather
+        than trusted.
+        """
+        alice = await register(client, contract_session)
+
+        initial = (await client.get(PREFERENCES_URL, headers=alice.auth)).json()["data"]
+        announcement = cell(initial, "announcement", "in_app")
+        assert announcement["enabled"] is True
+        assert announcement["editable"] is True
+        assert announcement["locked_reason"] is None
+
+        saved = await client.patch(
+            PREFERENCES_URL,
+            headers=alice.auth,
+            json={"changes": [{"category": "announcement", "channel": "in_app", "enabled": False}]},
+        )
+        assert saved.status_code == 200, saved.text
+        assert cell(saved.json()["data"], "announcement", "in_app")["enabled"] is False
 
     async def test_a_locked_change_is_refused_and_nothing_is_written(
         self, client: AsyncClient, contract_session: AsyncSession

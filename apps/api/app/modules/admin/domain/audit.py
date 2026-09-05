@@ -101,6 +101,24 @@ class AuditAction(StrEnum):
     tournament was not in a state to make, and `expected_from` says which.
     Three near-identical members would be three filters nobody uses."""
 
+    NOTIFICATION_BROADCAST_SENT = "notification.broadcast.send"
+    """A64-027A §23. An administrator addressed the platform.
+
+    The highest-reach action the console offers — one form submission can
+    write a row into every eligible inbox — so it is recorded with the same
+    weight as a sanction.
+
+    `subject_ref` is the **broadcast's id**, never a recipient. The audience
+    is recorded as its category (`all_players`, `specific_players`) and its
+    size; §23 forbids copying recipient identities into the trail, and a
+    named audience of a hundred players would put a hundred ids into a table
+    an operator greps.
+
+    The title travels and the body does not. An operator reviewing "what was
+    sent to everyone on Tuesday" needs to recognise it; the full prose is on
+    the broadcast row, which is the system of record and is still there.
+    """
+
     NOTIFICATION_DELIVERY_RETRIED = "notification.delivery.retry"
     """A64-024.7 — an exhausted push delivery was re-armed.
 

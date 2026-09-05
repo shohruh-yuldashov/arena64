@@ -197,6 +197,10 @@ class LockedReason(StrEnum):
 #: Only `IN_APP` is locked even for `system`, because it is the only channel
 #: that delivers. A locked-on `system` email would be a promise this build
 #: cannot keep.
+#: `ANNOUNCEMENT` is deliberately **absent**. A64-027A §15: a broadcast an
+#: administrator composes is not an account or security matter, so a player
+#: who has muted the category receives nothing. Adding it here would turn
+#: one dropdown value into a way of reaching every muted inbox at once.
 LOCKED: Final[frozenset[tuple[NotificationCategory, DeliveryChannel]]] = frozenset(
     {(NotificationCategory.SYSTEM, DeliveryChannel.IN_APP)}
 )

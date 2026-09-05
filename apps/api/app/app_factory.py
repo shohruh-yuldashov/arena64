@@ -165,12 +165,15 @@ from app.modules.notifications.infrastructure import (
     SessionScopedNotificationHandler,
 )
 from app.modules.notifications.infrastructure.tasks import (
+    NotificationBroadcastTask,
     NotificationEmailDeliveryTask,
     NotificationPushDeliveryTask,
+    broadcast_delivery_request,
     email_delivery_request,
     push_delivery_request,
 )
 from app.modules.notifications.presentation.dependencies import (
+    build_broadcast_expander,
     build_challenge_notification_dispatcher,
     build_durable_notification_writer,
     build_email_delivery_service,
@@ -1378,6 +1381,26 @@ def build_task_schedulers(
         # API reports email unavailable from the same value.
         logger.info("notification_email_disabled", extra={"reason": "configuration"})
 
+    # A64-027A §19. Unconditional, unlike the two above it: in-app delivery
+    # has no provider to be missing, so a process that can serve the admin
+    # API can always finish the broadcasts that API queues.
+    handlers.append(
+        NotificationBroadcastTask(
+            session_factory=db.session_factory,
+            # No announcer, like the email and push services beside it.
+            # The process-wide `GatewayNotificationSink` is built in the
+            # request-serving factory and holds the fleet fan-out; a second
+            # instance here would be a second transport. A broadcast
+            # therefore arrives on a client's next refetch rather than as a
+            # live frame — which A64-021.2's own note allows, since the
+            # list and the unread badge refetch on focus regardless.
+            service_factory=lambda session: build_broadcast_expander(
+                session,
+                clock=clock,
+            ),
+        )
+    )
+
     # A64-021.6 §18. Registered only when this process holds a VAPID key
     # pair, for the same reason as email: a handler claiming deliveries in a
     # process that cannot send them would mark every one
@@ -1458,6 +1481,13 @@ def build_task_schedulers(
                 interval_seconds=settings.push.poll_interval_seconds,
             )
         )
+    schedulers.append(
+        PeriodicTaskScheduler(
+            dispatcher=dispatcher,
+            request=broadcast_delivery_request(),
+            interval_seconds=settings.broadcast.poll_interval_seconds,
+        )
+    )
     if settings.gateway.forwarding_enabled:
         schedulers.append(
             PeriodicTaskScheduler(

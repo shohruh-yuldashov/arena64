@@ -519,31 +519,31 @@ production event, because the answer changes the schema.
 refers to. Every metric excludes synthetic actors and non-production
 environments; the exclusions column names only what is additional.
 
-| #   | Metric                    | Question                                 | Formula                                                                     | Events                                   | Window              | Dimensions                           | Exclusions                                    | Limitations                                                                       |
-| --- | ------------------------- | ---------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------- | ------------------- | ------------------------------------ | --------------------------------------------- | --------------------------------------------------------------------------------- |
-| M1  | Landing visitors          | How many people arrive?                  | `COUNT(DISTINCT anonymous_id)`                                              | `landing_viewed`                         | Day                 | `utm_source`                         | —                                             | Per browser, not per person. Cleared storage counts twice                         |
-| M2  | Registration intent rate  | Does the landing page persuade?          | M2a / M1, where M2a = distinct `anonymous_id` with `register_cta_clicked`   | `register_cta_clicked`, `landing_viewed` | Day                 | `placement`, `utm_source`            | —                                             | Behavioural; ad-blockers and lost beacons undercount                              |
-| M3  | Registrations             | How many accounts are created?           | `COUNT(*)`                                                                  | `user_registered`                        | Day                 | `utm_source` via the stitch          | —                                             | Authoritative                                                                     |
-| M4  | Registration completion   | Do people who intend to register finish? | M3 / M2a, joined through the identity stitch                                | both                                     | Day                 | `placement`                          | Registrations with no prior anonymous session | Cross-device journeys break the join (§9)                                         |
-| M5  | Verification rate         | Do accounts become usable?               | verified within 7 days / registered                                         | `email_verified`, `user_registered`      | Registration cohort | —                                    | Cohorts younger than 7 days                   | Deliverability and verification are conflated                                     |
-| M6  | Queue joins               | Is anyone looking for a game?            | `COUNT(*)`                                                                  | `queue_joined`                           | Day                 | `speed_class`, `rated`               | —                                             | Authoritative                                                                     |
-| M7  | Queue wait p50 / p95      | How long does pairing take?              | `percentile_cont(0.5\|0.95) WITHIN GROUP (ORDER BY waited_ms)`              | `match_found`                            | Day                 | `speed_class`, `rated`, `queue_type` | Tickets that never paired                     | **Measures successful pairs only.** Abandoned waits are M7b                       |
-| M7b | Queue abandonment rate    | How often does waiting fail?             | `queue_left` / (`queue_left` + `match_found`)                               | `queue_left`, `match_found`              | Day                 | `reason`, `speed_class`              | —                                             | The honest companion to M7 — without it, p95 flatters the product                 |
-| M8  | Match found rate          | Does joining a queue produce a pairing?  | distinct `match_found` seats / `queue_joined`                               | both                                     | Day                 | `speed_class`                        | —                                             | A ticket spanning midnight is counted in the day it joined                        |
-| M9  | Offer acceptance rate     | Do paired players show up?               | `resolution = both_accepted` / all `match_offer_resolved`                   | `match_offer_resolved`                   | Day                 | `speed_class`                        | —                                             | Authoritative                                                                     |
-| M10 | Match completion rate     | Do started games get played to an end?   | See §32 — the denominator is the whole definition                           | `match_started`, `match_completed`       | Day                 | `rated`, `speed_class`               | `termination_reason = abort`                  | §32                                                                               |
-| M11 | Resignation rate          | How do games end?                        | `termination_reason = resignation` / completed                              | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | —                                                                                 |
-| M12 | Draw rate                 | How do games end?                        | `outcome = draw` / completed                                                | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | —                                                                                 |
-| M13 | Abandonment rate          | How often does somebody just leave?      | `termination_reason IN (abandonment, flag)` / completed                     | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | `flag` is a legitimate loss on time and is reported separately from `abandonment` |
-| M14 | Rated share               | Do people play for rating?               | `rated = true` / completed                                                  | `match_completed`                        | Day                 | `speed_class`                        | Aborts                                        | —                                                                                 |
-| M15 | Tournament participation  | Do tournaments get used?                 | distinct actors with `tournament_entered` / active actors                   | `tournament_entered`                     | Week                | `format`                             | —                                             | A withdrawal still counts as participation in the week it happened                |
-| M16 | Friend graph growth       | Is the social layer used?                | `COUNT(friendship_created)`                                                 | `friendship_created`                     | Week                | —                                    | —                                             | Authoritative                                                                     |
-| M17 | Challenge acceptance rate | Do friend challenges work?               | `resolution = accepted` / `challenge_sent`                                  | `challenge_sent`, `challenge_resolved`   | Week                | `speed_class`, `rated`               | —                                             | Expiry and decline are reported separately, not merged into failure               |
-| M18 | Active players            | How many people actually play?           | See §30                                                                     | §30                                      | D / W / M           | —                                    | Synthetic accounts                            | §30                                                                               |
-| M19 | Activation rate           | Do new accounts reach a first game?      | activated within 7 days / registered                                        | `user_registered`, `match_completed`     | Registration cohort | —                                    | Cohorts younger than 7 days                   | §31                                                                               |
-| M20 | Time to first match       | How long does activation take?           | `percentile_cont(0.5\|0.95)` over `first match_completed − user_registered` | both                                     | Registration cohort | —                                    | Never-activated accounts                      | **Survivor bias by construction** — it describes those who activated              |
-| M21 | D1 / D7 / D30 retention   | Do people come back?                     | See §33                                                                     | §30, §31                                 | Cohort              | —                                    | Cohorts younger than the window               | §33                                                                               |
-| M22 | Matches per active player | How engaged are the people who play?     | `match_started` seats / M18 (weekly)                                        | `match_started`                          | Week                | `speed_class`                        | Synthetic accounts                            | A mean over a skewed distribution — report p50 alongside                          |
+| #   | Metric                    | Question                                 | Formula                                                                     | Events                                   | Window              | Dimensions                           | Exclusions                                    | Limitations                                                                                                             |
+| --- | ------------------------- | ---------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------- | ------------------- | ------------------------------------ | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| M1  | Landing visitors          | How many people arrive?                  | `COUNT(DISTINCT anonymous_id)`                                              | `landing_viewed`                         | Day                 | `utm_source`                         | —                                             | Per browser, not per person. Cleared storage counts twice                                                               |
+| M2  | Registration intent rate  | Does the landing page persuade?          | M2a / M1, where M2a = distinct `anonymous_id` with `register_cta_clicked`   | `register_cta_clicked`, `landing_viewed` | Day                 | `placement`, `utm_source`            | —                                             | Behavioural; ad-blockers and lost beacons undercount                                                                    |
+| M3  | Registrations             | How many accounts are created?           | `COUNT(*)`                                                                  | `user_registered`                        | Day                 | `utm_source` via the stitch          | —                                             | **Implemented** (A64-027.3, F-B stage 1). Authoritative                                                                 |
+| M4  | Registration completion   | Do people who intend to register finish? | M3 / M2a, joined through the identity stitch                                | both                                     | Day                 | `placement`                          | Registrations with no prior anonymous session | Cross-device journeys break the join (§9)                                                                               |
+| M5  | Verification rate         | Do accounts become usable?               | verified within 7 days / registered                                         | `email_verified`, `user_registered`      | Registration cohort | —                                    | Cohorts younger than 7 days                   | **Implemented** (A64-027.3). Deliverability and verification are conflated                                              |
+| M6  | Queue joins               | Is anyone looking for a game?            | `COUNT(*)`                                                                  | `queue_joined`                           | Day                 | `speed_class`, `rated`               | —                                             | Authoritative                                                                                                           |
+| M7  | Queue wait p50 / p95      | How long does pairing take?              | `percentile_cont(0.5\|0.95) WITHIN GROUP (ORDER BY waited_ms)`              | `match_found`                            | Day                 | `speed_class`, `rated`, `queue_type` | Tickets that never paired                     | **Measures successful pairs only.** Abandoned waits are M7b                                                             |
+| M7b | Queue abandonment rate    | How often does waiting fail?             | `queue_left` / (`queue_left` + `match_found`)                               | `queue_left`, `match_found`              | Day                 | `reason`, `speed_class`              | —                                             | The honest companion to M7 — without it, p95 flatters the product                                                       |
+| M8  | Match found rate          | Does joining a queue produce a pairing?  | distinct `match_found` seats / `queue_joined`                               | both                                     | Day                 | `speed_class`                        | —                                             | A ticket spanning midnight is counted in the day it joined                                                              |
+| M9  | Offer acceptance rate     | Do paired players show up?               | `resolution = both_accepted` / all `match_offer_resolved`                   | `match_offer_resolved`                   | Day                 | `speed_class`                        | —                                             | Authoritative                                                                                                           |
+| M10 | Match completion rate     | Do started games get played to an end?   | See §32 — the denominator is the whole definition                           | `match_started`, `match_completed`       | Day                 | `rated`, `speed_class`               | `termination_reason = abort`                  | §32                                                                                                                     |
+| M11 | Resignation rate          | How do games end?                        | `termination_reason = resignation` / completed                              | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | —                                                                                                                       |
+| M12 | Draw rate                 | How do games end?                        | `outcome = draw` / completed                                                | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | —                                                                                                                       |
+| M13 | Abandonment rate          | How often does somebody just leave?      | `termination_reason IN (abandonment, flag)` / completed                     | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | `flag` is a legitimate loss on time and is reported separately from `abandonment`                                       |
+| M14 | Rated share               | Do people play for rating?               | `rated = true` / completed                                                  | `match_completed`                        | Day                 | `speed_class`                        | Aborts                                        | —                                                                                                                       |
+| M15 | Tournament participation  | Do tournaments get used?                 | distinct actors with `tournament_entered` / active actors                   | `tournament_entered`                     | Week                | `format`                             | —                                             | A withdrawal still counts as participation in the week it happened                                                      |
+| M16 | Friend graph growth       | Is the social layer used?                | `COUNT(friendship_created)`                                                 | `friendship_created`                     | Week                | —                                    | —                                             | Authoritative                                                                                                           |
+| M17 | Challenge acceptance rate | Do friend challenges work?               | `resolution = accepted` / `challenge_sent`                                  | `challenge_sent`, `challenge_resolved`   | Week                | `speed_class`, `rated`               | —                                             | Expiry and decline are reported separately, not merged into failure                                                     |
+| M18 | Active players            | How many people actually play?           | See §30                                                                     | §30                                      | D / W / M           | —                                    | Synthetic accounts                            | §30                                                                                                                     |
+| M19 | Activation rate           | Do new accounts reach a first game?      | activated within 7 days / registered                                        | `user_registered`, `match_completed`     | Registration cohort | —                                    | Cohorts younger than 7 days                   | **Implemented** (A64-027.3). §31                                                                                        |
+| M20 | Time to first match       | How long does activation take?           | `percentile_cont(0.5\|0.95)` over `first match_completed − user_registered` | both                                     | Registration cohort | —                                    | Never-activated accounts                      | **Implemented** (A64-027.3) as time to activation. **Survivor bias by construction** — it describes those who activated |
+| M21 | D1 / D7 / D30 retention   | Do people come back?                     | See §33                                                                     | §30, §31                                 | Cohort              | —                                    | Cohorts younger than the window               | §33                                                                                                                     |
+| M22 | Matches per active player | How engaged are the people who play?     | `match_started` seats / M18 (weekly)                                        | `match_started`                          | Week                | `speed_class`                        | Synthetic accounts                            | A mean over a skewed distribution — report p50 alongside                                                                |
 
 ## 30. Active player — frozen
 
@@ -1135,3 +1135,282 @@ records the intent rather than a benchmark nobody can reproduce.
    withdrawal event.
 4. An erasure service with no caller, because account deletion does not exist.
 5. D1 still open.
+
+---
+
+# Part III — Acquisition and activation (A64-027.3)
+
+§46–§57 built the store. This half reads it: two funnels, computed from raw
+facts on request, with the provenance that makes their numbers safe to
+compare.
+
+## 58. A correction to Part II's event status
+
+A64-027.2 recorded six events as "projectable, not projected", and **three
+of those six were wrong**. The audit read each event subclass's `payload()`
+and missed that `_match_payload()` and `_ticket_payload()` — the base
+classes — already carry the player ids and the dimensions it reported
+missing.
+
+| Event           | A64-027.2 said                   | Actually                                                    |
+| --------------- | -------------------------------- | ----------------------------------------------------------- |
+| `queue_joined`  | No player, variant or queue type | `_ticket_payload` carries all three                         |
+| `match_started` | No seats                         | `_match_payload` carries both                               |
+| `queue_left`    | Same as `queue_joined`           | Same correction — still unprojected, no metric needs it yet |
+
+So the two funnel-critical events needed **no domain change at all**. Eleven
+of sixteen backend analytics events are now projected, and the three that
+remain (`queue_left`, `match_offer_resolved`, the two challenge events) are
+unprojected because no metric in §29 reads them yet — not because a payload
+is missing.
+
+`tournament_withdrawn` still has no domain event. That is unchanged.
+
+## 59. Activation needs a join, because a completion has no player
+
+`match_completed` is entity-level by §18: one game has two perspectives, and
+attributing it to one seat would count the game for one player and lose it
+for the other. It knows **what happened**, not **to whom**.
+
+`match_started` supplies the other half — one row per seat, so a
+`(subject, match_id)` pair. Activation is the earliest completion whose match
+this subject started, with an abort excluded:
+
+```
+match_started (subject, match_id)  ⋈  match_completed (match_id, termination_reason)
+    → MIN(completed.occurred_at) per subject, where termination_reason ≠ 'abort'
+```
+
+**Derived at query time, never stored.** A `user_activated` event caching
+this would be a number nobody can recompute and one that disagrees with its
+own inputs the first time the classification changes.
+
+## 60. Qualifying terminations — the frozen matrix
+
+Built by **exclusion**: everything but `abort` qualifies, so a termination
+reason added later counts by default and appears in the numbers where
+somebody can see it. The enum mapping test keeps a new member from arriving
+unnoticed.
+
+| `termination_reason`         | Completed? | Activates? | In the completion rate?             |
+| ---------------------------- | ---------- | ---------- | ----------------------------------- |
+| `no_legal_moves`             | Yes        | Yes        | Yes                                 |
+| `all_pieces_captured`        | Yes        | Yes        | Yes                                 |
+| `resignation`                | Yes        | **Yes**    | Yes                                 |
+| `agreed_draw`                | Yes        | Yes        | Yes                                 |
+| `repetition`                 | Yes        | Yes        | Yes                                 |
+| `move_limit`                 | Yes        | Yes        | Yes                                 |
+| `flag`                       | Yes        | Yes        | Yes                                 |
+| `flag_insufficient_material` | Yes        | Yes        | Yes                                 |
+| `adjudication`               | Yes        | Yes        | Yes                                 |
+| `abandonment`                | Yes        | **Yes**    | Yes, and reported separately as M13 |
+| `abort`                      | **No**     | **No**     | **Excluded from both sides**        |
+
+A resignation is the row somebody reads as a failure. It is a result: the
+game ended, a rating moved, and a player who resigned has seen what Arena64
+is. `abort` is `MatchOutcome.NONE` — no result, no rating change, a match
+that did not happen.
+
+## 61. The two funnels
+
+### F-A — acquisition, over browsers
+
+| Stage                  | Counted over                                 |
+| ---------------------- | -------------------------------------------- |
+| `landing_viewed`       | distinct `anonymous_id`                      |
+| `register_cta_clicked` | browsers that were seen landing first        |
+| `user_registered`      | browsers the identity stitch could attribute |
+
+Ranged by **event date**, because an anonymous visitor has no cohort to
+belong to until they register.
+
+### F-B — activation, over a registration cohort
+
+| Stage             | Counted over                                                      |
+| ----------------- | ----------------------------------------------------------------- |
+| `user_registered` | distinct `subject_key`                                            |
+| `email_verified`  | those subjects, at or after their registration, inside the window |
+| `queue_joined`    | same                                                              |
+| `match_started`   | same                                                              |
+| `activated`       | the join in §59                                                   |
+
+Ranged by **registration cohort** in UTC. An activation in March by somebody
+who registered in January is January's; a range over event dates would credit
+it to March and leave January looking worse than it was.
+
+## 62. Strict nesting, and why it is not five counts
+
+A funnel is not five independent `COUNT`s. Counting `email_verified` rows
+would include somebody whose registration is outside the range, or absent, or
+later than their verification — and the number would look reasonable.
+
+The query starts from **one row per registered subject** and joins each later
+stage onto it under three constraints: same subject, at or after the
+registration instant, inside the conversion window. Every stage is therefore
+a subset of the one before it **by construction**, which is why `drop_off` is
+non-negative without a `GREATEST(0, …)` hiding a defect.
+
+## 63. Unique subjects
+
+A funnel counts people. Twenty queue joins is one person at the queue stage;
+three completed matches is one activation. Every stage aggregates by
+`subject_key` (F-B) or `anonymous_id` (F-A) and takes `MIN(occurred_at)`.
+
+## 64. The identity stitch, and its coverage
+
+A64-027.1 §9 froze it: resolve at query time, **never rewrite raw history**.
+
+`user_registered` is a backend projection carrying a subject and no browser —
+the server never saw one. The only rows holding both identities are client
+events fired by a signed-in player, which the collector stamps with the
+session's subject and the body's browser id. The link is derived from those.
+
+**Its coverage is currently near zero, and that is reported rather than
+hidden.** The taxonomy has no client event that a player fires shortly after
+registering: `share_clicked` is the only candidate and it is rare. So F-A's
+third stage counts the registrations that could be attributed, and
+`FunnelMeta.registrations_in_range` counts all of them. The difference **is**
+the coverage.
+
+Closing it needs a client event fired on the first authenticated page, which
+is new taxonomy and belongs to whoever decides the acquisition funnel is
+worth it. Inventing an association would be the false precision §14 forbids.
+
+## 65. Cross-device, and what is not built
+
+An `anonymous_id` is browser-local. Landing on a phone and registering on a
+laptop cannot be stitched, and **nothing here tries**: no IP matching, no
+User-Agent matching, no fingerprinting of any kind. Stated as a limitation,
+as A64-027.1 §36 already does.
+
+## 66. Windows, cohorts and ranges
+
+| Decision           | Value                                               |
+| ------------------ | --------------------------------------------------- |
+| Activation window  | **365 days** from registration                      |
+| Acquisition window | **1 day** from the landing view                     |
+| Cohort             | The UTC calendar date of the registration           |
+| F-B range          | Applies to the **cohort**, not to event dates       |
+| F-A range          | Applies to **event dates** — there is no cohort yet |
+| Boundaries         | Half-open, `[00:00:00, next 00:00:00)` in UTC       |
+
+365 rather than 400: a cohort must become mature _before_ its own events are
+pruned, or no cohort is ever both readable and complete. A test asserts the
+inequality.
+
+## 67. Maturity and coverage
+
+Every result carries both, because a number without them gets compared
+against one that meant something else.
+
+| Field                 | Meaning                                                                                                                                                                                   |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maturity: PARTIAL`   | At least one cohort is still inside its window. The numbers can only rise — a cohort registered this morning has not failed to activate, it is unfinished                                 |
+| `coverage: TRUNCATED` | Part of the requested range is older than the 400-day retention horizon. The result covers what survives, and says so rather than reporting nought conversions from a deleted denominator |
+
+## 68. Conventions
+
+| Convention            | Choice                                                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| A rate                | A fraction, `0.0`–`1.0`. Never a percentage, so a rate of a rate is still a rate                                          |
+| An undefined rate     | `None`, never `0.0`. Nought out of nought is a question with no answer, and `0%` would show a failure that did not happen |
+| A duration            | Seconds, platform-wide, as `MetricsRecorder` already requires                                                             |
+| A percentile          | PostgreSQL's `percentile_cont`. Never an average of anything                                                              |
+| An empty distribution | `None`, with the sample size reported — a p95 over three people is a number to disbelieve                                 |
+
+## 69. Filters that are never optional
+
+Both are explicit parameters on every port method, defaulted nowhere: a
+default is a thing somebody overrides once and never checks again.
+
+- **Environment.** Applied in _every_ CTE, not only the cohort. A subject is
+  not scoped to an environment, so a production registration with staging
+  stages is representable — and a mutation check found that a cohort-only
+  filter passed the test suite.
+- **Synthetic.** Excluded by default; `include_synthetic=True` is the only
+  way in, and the result's meta says which it was.
+
+## 70. Data quality — counted, never repaired
+
+Raw events are never edited. A journey the query cannot believe is excluded
+by the ordering constraint that already exists, and counted so the exclusion
+is visible rather than looking like a conversion nobody made.
+
+| Check                                     | Handling                                                                      |
+| ----------------------------------------- | ----------------------------------------------------------------------------- |
+| A stage event before its own registration | Excluded from every stage; counted as `out_of_order_subjects`                 |
+| A completion whose match has no start row | Cannot activate anybody; counted as `completions_without_start`               |
+| A negative duration                       | Impossible by construction — the ordering constraint precedes the subtraction |
+| An unsupported event version              | Never reaches the store (A64-027.2 §50)                                       |
+
+Counts only. No subject key, no browser id, no event id: a diagnostic that
+named the rows would be a per-person export with none of the protections the
+event store has.
+
+## 71. Erasure, and what it costs a funnel
+
+Erasure deletes the `analytics.subject` row and leaves the events. The funnel
+groups by `subject_key`, which still groups them as one person — it simply no
+longer names which person.
+
+**So an erased player's history keeps counting in aggregate, and stops being
+attributable.** A cohort's activation rate does not shift when a member
+leaves, which is D3's aggregate-preserving half working exactly as designed.
+No accuracy was traded for it, and none would have been worth trading.
+
+## 72. Architecture
+
+Direct indexed SQL through a repository behind a `FunnelReader` port. **No
+views, no materialised views, no aggregate tables, no cache.**
+
+The measurement is in §73: 13 ms for the whole activation funnel over 28,510
+rows. Building a materialised view against that number would be complexity
+bought before there was a reader for it — and every layer of precomputation
+is a place where a corrected projection stops correcting history.
+
+The port returns counts and distributions; the service does the arithmetic.
+That split is where the subtle mistakes live — a zero denominator, a drop-off
+against the wrong stage — and it puts them somewhere testable without a
+database.
+
+**No `run_sql(...)` port**, because a general query surface would make every
+caller a place where the environment filter can be forgotten.
+
+**No HTTP endpoint.** Nothing consumes these yet; A64-027.6's dashboard adds
+an authenticated admin API when there is a reader. Raw analytics stays
+unreachable through any product API.
+
+## 73. Performance, measured on a deterministic fixture
+
+**Test data. Not production numbers.** 4,000 synthetic players, 28,510 rows,
+one local PostgreSQL, warmed.
+
+| Query                                       | Time        |
+| ------------------------------------------- | ----------- |
+| `activation_counts` (5 stages)              | **13.1 ms** |
+| `acquisition_counts` (3 stages)             | **6.2 ms**  |
+| `activation_durations` (2 percentile pairs) | **9.4 ms**  |
+| `data_quality`                              | **7.2 ms**  |
+
+The cohort CTE uses `ix_analytics_event__environment_name_occurred` through a
+bitmap heap scan (721 buffers, 4,000 rows). The stage join hash-joins against
+it (1,403 buffers). Both are what the index was added for in A64-027.2.
+
+**No index was added by this task.** The four that exist cover every query,
+and a fifth would have been speculation.
+
+What this does **not** show: behaviour at production scale, on production
+hardware, with a cold cache, under concurrent ingestion. A 28,510-row fixture
+says the shape of the plan is right and nothing about the number of
+milliseconds a year of real traffic would take.
+
+## 74. What A64-027.4 inherits
+
+1. Two funnels, and the SQL patterns retention will reuse — cohort CTE,
+   per-subject `MIN`, strict nesting.
+2. The active-player definition (§30) implemented nowhere yet: retention is
+   its first consumer.
+3. Three unprojected backend events, none blocking retention.
+4. The identity stitch's coverage gap, which retention does not depend on —
+   every retention stage is subject-keyed.
+5. D1 (consent) still open.

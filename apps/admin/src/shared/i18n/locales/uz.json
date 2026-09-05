@@ -165,7 +165,8 @@
     "attentionPush": "Qayta urinish tugagan push'lar",
     "attentionRestrictions": "Amaldagi cheklovlar",
     "error": "Boshqaruv panelini yuklab bo'lmadi.",
-    "lede": "Platformaning hozirgi holati. Bu Grafana o'rnini bosmaydi — bu yerda faqat operator harakat qila oladigan faktlar.",
+    "errorHint": "Ma'lumotlarni olishning iloji bo'lmadi. Ulanishni tekshiring va qayta urinib ko'ring.",
+    "lede": "Platformaning hozirgi holati va e'tibor talab qiladigan ishlar. Har bir raqam o'sha ish bajariladigan bo'limga olib boradi.",
     "loading": "Yuklanmoqda…",
     "matches": "O'yinlar",
     "matchesActive": "Jarayonda",
@@ -183,9 +184,13 @@
     "updatedAt": "Yangilangan: {at}",
     "viewAudit": "Audit jurnali",
     "viewMatches": "O'yinlar",
+    "viewMatchesActive": "Faol o'yinlarni ko'rish",
+    "viewMatchesAwaiting": "Qabul kutayotganlarni ko'rish",
     "viewModeration": "Moderatsiya",
     "viewNotifications": "Bildirishnomalar",
     "viewTournaments": "Turnirlar",
+    "viewTournamentsOpen": "Ro'yxat ochiqlarini ko'rish",
+    "viewTournamentsRunning": "Davom etayotganlarni ko'rish",
     "viewUsers": "Foydalanuvchilar"
   },
   "login": {

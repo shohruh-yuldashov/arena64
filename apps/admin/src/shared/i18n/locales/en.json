@@ -165,7 +165,8 @@
     "attentionPush": "Push deliveries out of retries",
     "attentionRestrictions": "Restrictions in force",
     "error": "Could not load the dashboard.",
-    "lede": "How the platform is doing right now. Not a Grafana replacement — only facts an operator can act on.",
+    "errorHint": "The figures could not be fetched. Check the connection and try again.",
+    "lede": "How the platform is doing right now, and what is waiting for a person. Every figure links to the section that owns the work.",
     "loading": "Loading…",
     "matches": "Matches",
     "matchesActive": "In play",
@@ -183,9 +184,13 @@
     "updatedAt": "Updated {at}",
     "viewAudit": "Audit log",
     "viewMatches": "Matches",
+    "viewMatchesActive": "View active matches",
+    "viewMatchesAwaiting": "View those awaiting acceptance",
     "viewModeration": "Moderation",
     "viewNotifications": "Notifications",
     "viewTournaments": "Tournaments",
+    "viewTournamentsOpen": "View those open for registration",
+    "viewTournamentsRunning": "View those in progress",
     "viewUsers": "Users"
   },
   "login": {

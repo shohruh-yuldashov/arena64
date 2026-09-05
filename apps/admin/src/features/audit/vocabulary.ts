@@ -25,6 +25,7 @@ export const AUDIT_ACTION_LABELS: Record<string, TranslationKey> = {
   "admin.role.revoke": "audit.actionRoleRevoke",
   "admin.sanction.apply": "audit.actionSanctionApply",
   "admin.sanction.lift": "audit.actionSanctionLift",
+  "notification.broadcast.send": "audit.actionBroadcastSend",
   "notification.delivery.retry": "audit.actionDeliveryRetry",
   "tournament.create": "audit.actionTournamentCreate",
   "tournament.registration_open": "audit.actionTournamentOpen",

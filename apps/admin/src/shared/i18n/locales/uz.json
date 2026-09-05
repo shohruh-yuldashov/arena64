@@ -107,6 +107,7 @@
     "title": "Arena64 Admin"
   },
   "audit": {
+    "actionBroadcastSend": "platformaga bildirishnoma yubordi",
     "actionDeliveryRetry": "push yetkazishni qayta navbatga qo'ydi",
     "actionRoleGrant": "admin roli berdi",
     "actionRoleRevoke": "admin rolini olib tashladi",

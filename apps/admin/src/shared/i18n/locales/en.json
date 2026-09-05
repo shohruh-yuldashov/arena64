@@ -107,6 +107,7 @@
     "title": "Arena64 Admin"
   },
   "audit": {
+    "actionBroadcastSend": "sent a notification to the platform",
     "actionDeliveryRetry": "queued the push delivery again",
     "actionRoleGrant": "granted the admin role",
     "actionRoleRevoke": "revoked the admin role",

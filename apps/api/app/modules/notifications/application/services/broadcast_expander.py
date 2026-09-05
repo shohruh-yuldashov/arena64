@@ -106,7 +106,12 @@ class BroadcastExpander:
                 return 0
 
             try:
-                return await self._deliver_batch(broadcast)
+                written = await self._deliver_batch(broadcast)
+                # As above: the scope does not commit for us, and a batch
+                # that wrote rows and did not commit is a batch the next
+                # pass repeats forever.
+                await self._unit_of_work.commit()
+                return written
             except Exception as error:
                 # Marked failed rather than left claimed. A broadcast that
                 # stayed `SENDING` after an unrecoverable error would be
@@ -116,6 +121,10 @@ class BroadcastExpander:
                     "broadcast_failed",
                     extra={"broadcast_id": str(broadcast.id)},
                 )
+                # The session is dirty from the failed batch; roll it back
+                # before recording the failure, or the `UPDATE` is written
+                # into a transaction that cannot commit.
+                await self._unit_of_work.rollback()
                 await self._broadcasts.finish(
                     broadcast.id,
                     status=BroadcastStatus.FAILED,
@@ -125,6 +134,7 @@ class BroadcastExpander:
                     # is rendered in a console.
                     failure_reason=type(error).__name__,
                 )
+                await self._unit_of_work.commit()
                 return 0
 
     async def _deliver_batch(self, broadcast: Broadcast) -> int:

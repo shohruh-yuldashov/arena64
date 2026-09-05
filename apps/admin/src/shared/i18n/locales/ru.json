@@ -107,6 +107,7 @@
     "title": "Arena64 Админ"
   },
   "audit": {
+    "actionBroadcastSend": "отправил уведомление платформе",
     "actionDeliveryRetry": "поставил push-доставку в очередь заново",
     "actionRoleGrant": "выдал роль администратора",
     "actionRoleRevoke": "снял роль администратора",

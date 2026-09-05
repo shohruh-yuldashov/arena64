@@ -84,7 +84,13 @@ class BroadcastService:
             recipients=request.recipients,
         )
         async with self._unit_of_work:
-            return await self._repository.create(broadcast)
+            stored = await self._repository.create(broadcast)
+            # `SessionUnitOfWork` rolls back on an exception and commits
+            # **nothing** on its own — repositories.md §5.1: "exiting the
+            # scope without an explicit commit rolls back". Without this the
+            # endpoint answers `202` with a broadcast id and stores no row.
+            await self._unit_of_work.commit()
+            return stored
 
     async def get(self, broadcast_id: UUID) -> Broadcast | None:
         return await self._repository.get(broadcast_id)

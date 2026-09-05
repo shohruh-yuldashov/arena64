@@ -536,14 +536,14 @@ environments; the exclusions column names only what is additional.
 | M12 | Draw rate                 | How do games end?                        | `outcome = draw` / completed                                                | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | —                                                                                                                       |
 | M13 | Abandonment rate          | How often does somebody just leave?      | `termination_reason IN (abandonment, flag)` / completed                     | `match_completed`                        | Day                 | `rated`, `speed_class`               | Aborts                                        | `flag` is a legitimate loss on time and is reported separately from `abandonment`                                       |
 | M14 | Rated share               | Do people play for rating?               | `rated = true` / completed                                                  | `match_completed`                        | Day                 | `speed_class`                        | Aborts                                        | —                                                                                                                       |
-| M15 | Tournament participation  | Do tournaments get used?                 | distinct actors with `tournament_entered` / active actors                   | `tournament_entered`                     | Week                | `format`                             | —                                             | A withdrawal still counts as participation in the week it happened                                                      |
-| M16 | Friend graph growth       | Is the social layer used?                | `COUNT(friendship_created)`                                                 | `friendship_created`                     | Week                | —                                    | —                                             | Authoritative                                                                                                           |
-| M17 | Challenge acceptance rate | Do friend challenges work?               | `resolution = accepted` / `challenge_sent`                                  | `challenge_sent`, `challenge_resolved`   | Week                | `speed_class`, `rated`               | —                                             | Expiry and decline are reported separately, not merged into failure                                                     |
-| M18 | Active players            | How many people actually play?           | See §30                                                                     | §30                                      | D / W / M           | —                                    | Synthetic accounts                            | §30                                                                                                                     |
+| M15 | Tournament participation  | Do tournaments get used?                 | distinct actors with `tournament_entered` / active actors                   | `tournament_entered`                     | Week                | `format`                             | —                                             | **Implemented** (A64-027.4). A withdrawal still counts as participation in the week it happened                         |
+| M16 | Friend graph growth       | Is the social layer used?                | `COUNT(friendship_created)`                                                 | `friendship_created`                     | Week                | —                                    | —                                             | **Implemented** (A64-027.4). Authoritative                                                                              |
+| M17 | Challenge acceptance rate | Do friend challenges work?               | `resolution = accepted` / `challenge_sent`                                  | `challenge_sent`, `challenge_resolved`   | Week                | `speed_class`, `rated`               | —                                             | **Implemented** (A64-027.4). Expiry and decline are reported separately, not merged into failure                        |
+| M18 | Active players            | How many people actually play?           | See §30                                                                     | §30                                      | D / W / M           | —                                    | Synthetic accounts                            | **Implemented** (A64-027.4). §30                                                                                        |
 | M19 | Activation rate           | Do new accounts reach a first game?      | activated within 7 days / registered                                        | `user_registered`, `match_completed`     | Registration cohort | —                                    | Cohorts younger than 7 days                   | **Implemented** (A64-027.3). §31                                                                                        |
 | M20 | Time to first match       | How long does activation take?           | `percentile_cont(0.5\|0.95)` over `first match_completed − user_registered` | both                                     | Registration cohort | —                                    | Never-activated accounts                      | **Implemented** (A64-027.3) as time to activation. **Survivor bias by construction** — it describes those who activated |
-| M21 | D1 / D7 / D30 retention   | Do people come back?                     | See §33                                                                     | §30, §31                                 | Cohort              | —                                    | Cohorts younger than the window               | §33                                                                                                                     |
-| M22 | Matches per active player | How engaged are the people who play?     | `match_started` seats / M18 (weekly)                                        | `match_started`                          | Week                | `speed_class`                        | Synthetic accounts                            | A mean over a skewed distribution — report p50 alongside                                                                |
+| M21 | D1 / D7 / D30 retention   | Do people come back?                     | See §33                                                                     | §30, §31                                 | Cohort              | —                                    | Cohorts younger than the window               | **Implemented** (A64-027.4). §33                                                                                        |
+| M22 | Matches per active player | How engaged are the people who play?     | `match_started` seats / M18 (weekly)                                        | `match_started`                          | Week                | `speed_class`                        | Synthetic accounts                            | **Implemented** (A64-027.4). A mean over a skewed distribution — report p50 alongside                                   |
 
 ## 30. Active player — frozen
 
@@ -1414,3 +1414,145 @@ milliseconds a year of real traffic would take.
 4. The identity stitch's coverage gap, which retention does not depend on —
    every retention stage is subject-keyed.
 5. D1 (consent) still open.
+
+---
+
+# Part IV — Engagement and retention (A64-027.4)
+
+Part III measured the journey to a first game. This measures what happens
+afterwards: who keeps playing, and who comes back.
+
+## 75. Two more projections, again with no domain change
+
+`challenge_sent` and `challenge_resolved` now project. `_ChallengeEvent`
+carries both parties on every payload, so — as in A64-027.3 — the events
+A64-027.2 recorded as blocked were readable all along.
+
+This one was not optional. **A64-027.1 §30 defines an active player as
+somebody who started a match, entered a tournament _or sent a challenge_,**
+so without `challenge_sent` the definition was two-thirds implementable and
+DAU would have silently undercounted anybody whose day was a challenge.
+
+Thirteen of sixteen backend analytics events are now projected. The three
+that remain — `queue_left`, `match_offer_resolved`, `tournament_withdrawn` —
+are unprojected because no metric reads them; the last has no domain event
+at all.
+
+## 76. A correction to §18: who owns `challenge_resolved`
+
+A64-027.1 described this event's identity as **the resolver**. A64-027.4
+attributes it to the **challenger** instead, for two reasons:
+
+- **An expiry has no resolver.** Nobody acted; the window closed. The event
+  is `ACTOR`-identified, and inventing a subject would attribute an absence
+  to a person.
+- **M17 is a ratio.** `accepted / challenge_sent`, and `challenge_sent` is
+  the challenger's event. Attributing acceptance to the recipient would make
+  the numerator and the denominator count different people.
+
+The recipient's decision is still measured — it is exactly what `resolution`
+says. What changed is whose row it is.
+
+## 77. The activity predicate lives in one place
+
+`ACTIVITY_EVENTS` is defined once and interpolated into every query that
+needs it. Three copies would be three places for DAU, retention and weekly
+engagement to disagree about what activity is — and they would disagree
+**silently**, because all three numbers would still look plausible.
+
+| Counts as activity   | Does not                                                                                         |
+| -------------------- | ------------------------------------------------------------------------------------------------ |
+| `match_started`      | `landing_viewed` — DAU would measure the landing page, and a campaign would look like engagement |
+| `tournament_entered` | signing in — the cost of entry, not a use of the product                                         |
+| `challenge_sent`     | `match_completed` — it is entity-level and names nobody, which is also why §30 chose the start   |
+
+## 78. Active players
+
+DAU, WAU and MAU in **one statement**, all three ending on the same day.
+Three statements would let an event land between two of them and make
+`daily / monthly` exceed 1 on a busy boundary.
+
+`as_of` defaults to **yesterday**. A partial day rises all day and looks like
+a collapse every morning — the same mistake as a partial cohort.
+
+`stickiness` is `daily / monthly`, and `None` when nobody was active in the
+month: `0.0` would read as an audience that never returns rather than one
+that does not exist yet.
+
+## 79. Retention
+
+A64-027.1 §33's semantics, unchanged, and the one distinction a reader
+assumes wrongly:
+
+> **D7 is that calendar day, not "within seven days".**
+
+Each column is a join over a one-day range offset from the cohort day, in
+UTC. The cohort is the **registration** day, not activation — a player who
+never activates is retention's most important data point, and an activation
+cohort excludes them silently.
+
+### `NULL` is not zero, and this is the feature
+
+| Value       | Means                                                                |
+| ----------- | -------------------------------------------------------------------- |
+| `d7 = 0`    | The window elapsed and nobody came back. A measured number           |
+| `d7 = None` | The window has not elapsed. **Not a decline** — nothing was measured |
+
+Computed in SQL against the injected clock rather than filtered afterwards,
+so a partial cohort is never a zero that a caller has to remember to ignore.
+`RetentionTable.mature_rows(day)` is how a caller averages without averaging
+in the cohorts that have not finished.
+
+Maturity is **per row**, not per table: a cohort can have its D1 and D7 and
+not its D30, and one maturity for the whole table would either hide a
+finished number or publish an unfinished one.
+
+## 80. Weekly engagement
+
+M15, M16, M17 and M22 in one statement over one calendar week, because all
+four share a window and an active-player denominator — four statements would
+let three dashboards disagree about which week they meant.
+
+A calendar week rather than a rolling seven days: two adjacent rolling
+readings share six days of data, which makes a trend out of an overlap.
+
+**M22 reports the mean and the median.** A64-027.1 §29's limitation, made
+concrete: in the fixture below one heavy player and nine light ones give a
+mean of 2.10 and a median of 1.00. The mean describes nobody.
+
+**M17's three refusals stay apart.** Decline, expiry and cancellation are
+different product problems, and merging them into "not accepted" loses which
+one is happening.
+
+## 81. Measured — TEST DATA, NOT PRODUCTION
+
+A deterministic local fixture, run through the real queries:
+
+```
+cohort           n         D1         D7        D30
+2026-07-01     200      40.0%      25.0%      10.0%
+2026-09-02      40      30.0% — (partial) — (partial)
+maturity: partial   coverage: complete
+
+week 2026-08-24 — 2026-08-30
+  active players           10
+  match starts             21
+  matches / active (mean)  2.10
+  matches / active (p50)   1.00
+  tournament participation 40.0% (4)
+  friendships created      6
+  challenge acceptance     50.0%  (sent 8, accepted 4, declined 2, expired 1, cancelled 1)
+```
+
+The second cohort registered three days before the fixture's "today": its D1
+is a real 30% and its D7 and D30 are absent rather than nought.
+
+## 82. What A64-027.5 inherits
+
+1. Every metric in §29 except M6–M14 — the matchmaking and game metrics,
+   which are its subject.
+2. `queue_left` and `match_offer_resolved` still unprojected; **M7b and M9
+   need both**, and both are readable from existing payloads.
+3. The activity predicate, the cohort CTE and the maturity/coverage
+   machinery, all reusable.
+4. D1 (consent) still open.

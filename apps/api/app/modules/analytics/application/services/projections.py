@@ -276,6 +276,70 @@ def _rating_updated(ctx: ProjectionContext) -> Sequence[PendingEvent]:
     ]
 
 
+def _challenge_created(ctx: ProjectionContext) -> Sequence[PendingEvent]:
+    """A friend challenge was sent — and the third of §30's activity signals.
+
+    A64-027.1 §30 defines an active player as somebody who started a match,
+    entered a tournament **or sent a challenge**. Without this projection
+    that definition was two-thirds implementable, so DAU would have
+    undercounted anybody whose day was a challenge.
+
+    `speed_class` is absent: the event carries a `time_control_id`, and
+    mapping one to a speed class is `rating`'s knowledge rather than a
+    projection's. Optional in the schema, and recorded in §49.
+    """
+    return [
+        PendingEvent(
+            event_id=ctx.entry.id,
+            name=EventName.CHALLENGE_SENT,
+            properties={
+                "variant": str(ctx.require("variant")),
+                "rated": bool(ctx.require("rated")),
+            },
+            player_id=_uuid(ctx.require("challenger_id"), "challenger_id"),
+        )
+    ]
+
+
+def _challenge_resolution(resolution: str) -> Callable[[ProjectionContext], Sequence[PendingEvent]]:
+    """Four domain events folded into one analytics event — M17.
+
+    ## Attributed to the **challenger**, not the resolver
+
+    A64-027.1 §18 described this event's identity as "the resolver", and
+    A64-027.4 corrects it. Two reasons, and the second is arithmetic:
+
+        an expiry has no resolver     nobody acted; the window closed. An
+                                      `ACTOR` event needs a subject, and
+                                      inventing one would attribute an
+                                      absence to a person
+        M17 is a ratio               `accepted / challenge_sent`, and
+                                      `challenge_sent` is the challenger's
+                                      event. Attributing acceptance to the
+                                      recipient would make the numerator and
+                                      the denominator count different people
+
+    So all four resolutions belong to the person whose challenge it was. The
+    recipient's decision is still measured — it is what `resolution` says.
+    """
+
+    def build(ctx: ProjectionContext) -> Sequence[PendingEvent]:
+        properties: dict[str, Any] = {"resolution": resolution}
+        match_id = ctx.optional("match_id")
+        if match_id is not None:
+            properties["match_id"] = str(_uuid(match_id, "match_id"))
+        return [
+            PendingEvent(
+                event_id=ctx.entry.id,
+                name=EventName.CHALLENGE_RESOLVED,
+                properties=properties,
+                player_id=_uuid(ctx.require("challenger_id"), "challenger_id"),
+            )
+        ]
+
+    return build
+
+
 def _friend_request_sent(ctx: ProjectionContext) -> Sequence[PendingEvent]:
     return [
         PendingEvent(
@@ -370,6 +434,31 @@ PROJECTIONS: Final[dict[str, Projection]] = {
             source_type="rating.updated",
             supported_versions=frozenset({1}),
             build=_rating_updated,
+        ),
+        Projection(
+            source_type="matchmaking.friend_challenge_created",
+            supported_versions=frozenset({1}),
+            build=_challenge_created,
+        ),
+        Projection(
+            source_type="matchmaking.friend_challenge_accepted",
+            supported_versions=frozenset({1}),
+            build=_challenge_resolution("accepted"),
+        ),
+        Projection(
+            source_type="matchmaking.friend_challenge_declined",
+            supported_versions=frozenset({1}),
+            build=_challenge_resolution("declined"),
+        ),
+        Projection(
+            source_type="matchmaking.friend_challenge_cancelled",
+            supported_versions=frozenset({1}),
+            build=_challenge_resolution("cancelled"),
+        ),
+        Projection(
+            source_type="matchmaking.friend_challenge_expired",
+            supported_versions=frozenset({1}),
+            build=_challenge_resolution("expired"),
         ),
         Projection(
             source_type="friends.friend_request_sent",

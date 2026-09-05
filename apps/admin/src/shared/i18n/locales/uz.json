@@ -154,6 +154,10 @@
     "signOut": "Chiqish",
     "signedInAs": "{name} sifatida kirdingiz"
   },
+  "brand": {
+    "console": "Admin Console",
+    "name": "Arena64"
+  },
   "broadcast": {
     "audience": "Auditoriya",
     "audienceAll": "Barcha mos foydalanuvchilar",
@@ -473,6 +477,7 @@
     "breadcrumb": "Joylashuv",
     "closeMenu": "Menyuni yopish",
     "collapseNav": "Yon panelni yig'ish",
+    "envLocal": "Lokal",
     "openMenu": "Menyuni ochish"
   },
   "state": {

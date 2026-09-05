@@ -197,6 +197,57 @@ def _queue_ticket_enqueued(ctx: ProjectionContext) -> Sequence[PendingEvent]:
     ]
 
 
+def _queue_exit(reason: str) -> Callable[[ProjectionContext], Sequence[PendingEvent]]:
+    """A queue attempt that ended without a pairing — M7b's numerator.
+
+    ## Why a matched ticket can never reach here
+
+    §13 of A64-027.5 warns against counting "match found, therefore the
+    queue entry was removed" as abandonment. It cannot happen: the pairing
+    service publishes `PlayersPaired` and **no ticket event at all**, so the
+    only producers of these two are the player leaving and the sweep
+    finding an expired window. Structural rather than filtered — there is
+    no row to exclude.
+
+    ## Two reasons, kept apart
+
+    `cancelled` is a decision and `expired` is a timeout. M7b's dimension
+    list names `reason` for exactly that: a product whose queue is
+    abandoned by choice has a different problem from one whose queue times
+    out, and merging them hides which.
+
+    Grain: **one queue attempt** — one ticket, one row. A player who joins,
+    leaves and joins again produced two attempts, which is what the metric
+    counts (§15).
+    """
+
+    def build(ctx: ProjectionContext) -> Sequence[PendingEvent]:
+        queue_type = str(ctx.require("queue_type"))
+        waited_seconds = float(ctx.require("waited_for_seconds"))
+        if waited_seconds < 0:
+            # §50: never silently clamped. A negative wait is impossible and
+            # is a contract failure, so the entry is skipped and counted as
+            # a rejection rather than entering a distribution as a zero.
+            raise ProjectionError(f"{ctx.entry.event_type} has a negative wait")
+
+        return [
+            PendingEvent(
+                event_id=ctx.entry.id,
+                name=EventName.QUEUE_LEFT,
+                properties={
+                    "reason": reason,
+                    "waited_ms": int(waited_seconds * 1000),
+                    "variant": str(ctx.require("variant")),
+                    "queue_type": queue_type,
+                    "rated": queue_type == "ranked",
+                },
+                player_id=_uuid(ctx.require("player_id"), "player_id"),
+            )
+        ]
+
+    return build
+
+
 def _match_activated(ctx: ProjectionContext) -> Sequence[PendingEvent]:
     """F-B's fourth stage, per seat — and the join key activation needs.
 
@@ -218,7 +269,7 @@ def _match_activated(ctx: ProjectionContext) -> Sequence[PendingEvent]:
         "variant": str(ctx.require("variant")),
         "rated": bool(ctx.require("rated")),
     }
-    return [
+    seats: list[PendingEvent] = [
         PendingEvent(
             event_id=seat_event_id(ctx.entry.id, seat),
             name=EventName.MATCH_STARTED,
@@ -227,6 +278,51 @@ def _match_activated(ctx: ProjectionContext) -> Sequence[PendingEvent]:
         )
         for seat in ("light", "dark")
     ]
+
+    # **And the offer's resolution.** A match activates when both players
+    # accepted, so this event is `both_accepted` — M9's numerator — at
+    # match grain. It carries no seat, which is why its id is the outbox
+    # id itself and cannot collide with either derived seat id.
+    return [
+        *seats,
+        PendingEvent(
+            event_id=ctx.entry.id,
+            name=EventName.MATCH_OFFER_RESOLVED,
+            properties={"match_id": common["match_id"], "resolution": "both_accepted"},
+        ),
+    ]
+
+
+def _offer_refused(resolution: str) -> Callable[[ProjectionContext], Sequence[PendingEvent]]:
+    """An offer that did not become a match — M9's other outcomes.
+
+    Grain: **one offer**, which is one match. Entity-identified, because a
+    matchmaking offer is created by the pairing scan rather than by either
+    player, and an expiry has no actor at all — see the registry's
+    `Identity.ENTITY` on why A64-027.5 corrected this.
+
+    `declined` and `expired` stay apart. §52: an expiry is a real product
+    outcome — somebody was offered a game and never answered — and folding
+    it into "declined" would report indifference as refusal.
+
+    `MatchAcceptedByPlayer` is deliberately **not** a resolution: it is the
+    partial state where one side has answered and the other has not.
+    Projecting it would count an offer twice, once half-resolved.
+    """
+
+    def build(ctx: ProjectionContext) -> Sequence[PendingEvent]:
+        return [
+            PendingEvent(
+                event_id=ctx.entry.id,
+                name=EventName.MATCH_OFFER_RESOLVED,
+                properties={
+                    "match_id": str(_uuid(ctx.require("match_id"), "match_id")),
+                    "resolution": resolution,
+                },
+            )
+        ]
+
+    return build
 
 
 def _match_completed(ctx: ProjectionContext) -> Sequence[PendingEvent]:
@@ -419,6 +515,26 @@ PROJECTIONS: Final[dict[str, Projection]] = {
             source_type="game.match_activated",
             supported_versions=frozenset({1}),
             build=_match_activated,
+        ),
+        Projection(
+            source_type="matchmaking.queue_ticket_cancelled",
+            supported_versions=frozenset({1}),
+            build=_queue_exit("cancelled"),
+        ),
+        Projection(
+            source_type="matchmaking.queue_ticket_expired",
+            supported_versions=frozenset({1}),
+            build=_queue_exit("expired"),
+        ),
+        Projection(
+            source_type="game.match_declined",
+            supported_versions=frozenset({1}),
+            build=_offer_refused("declined"),
+        ),
+        Projection(
+            source_type="game.match_acceptance_expired",
+            supported_versions=frozenset({1}),
+            build=_offer_refused("expired"),
         ),
         Projection(
             source_type="matchmaking.players_paired",

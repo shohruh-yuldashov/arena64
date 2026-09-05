@@ -171,6 +171,64 @@ def _players_paired(ctx: ProjectionContext) -> Sequence[PendingEvent]:
     ]
 
 
+def _queue_ticket_enqueued(ctx: ProjectionContext) -> Sequence[PendingEvent]:
+    """F-B's third stage, and **server-accepted** rather than clicked.
+
+    A64-027.1 §6 draws the line this projection sits on: a button press is
+    intent, and the fact is the server persisting a ticket. `queue_joined`
+    is projected from the ticket event and never from the client, which is
+    why the taxonomy owns it to the backend.
+
+    `speed_class` is absent — the ticket carries a variant and a queue type
+    and not a time control. The schema makes it optional and §49 records it
+    as the additive field `matchmaking` owes.
+    """
+    return [
+        PendingEvent(
+            event_id=ctx.entry.id,
+            name=EventName.QUEUE_JOINED,
+            properties={
+                "variant": str(ctx.require("variant")),
+                "queue_type": str(ctx.require("queue_type")),
+                "rated": str(ctx.require("queue_type")) == "ranked",
+            },
+            player_id=_uuid(ctx.require("player_id"), "player_id"),
+        )
+    ]
+
+
+def _match_activated(ctx: ProjectionContext) -> Sequence[PendingEvent]:
+    """F-B's fourth stage, per seat — and the join key activation needs.
+
+    `match_completed` is entity-level by A64-027.1 §18: one game has two
+    perspectives and attributing it to one seat would count the game for
+    one player and lose it for the other. So the completion knows *what
+    happened* and not *to whom*, and these rows are what supply the second
+    half — a `(subject, match_id)` pair per seat.
+
+    Activation is then the join, computed at query time rather than stored:
+    the earliest completion whose match this player started. §44 of the
+    task is explicit that a derived fact must not become a raw event.
+
+    Two rows from one outbox row, with ids derived by `seat_event_id`, so a
+    redelivery conflicts on both and stores neither twice.
+    """
+    common = {
+        "match_id": str(_uuid(ctx.require("match_id"), "match_id")),
+        "variant": str(ctx.require("variant")),
+        "rated": bool(ctx.require("rated")),
+    }
+    return [
+        PendingEvent(
+            event_id=seat_event_id(ctx.entry.id, seat),
+            name=EventName.MATCH_STARTED,
+            properties=dict(common),
+            player_id=_uuid(ctx.require(f"{seat}_player_id"), f"{seat}_player_id"),
+        )
+        for seat in ("light", "dark")
+    ]
+
+
 def _match_completed(ctx: ProjectionContext) -> Sequence[PendingEvent]:
     """Match-level: no seat, no actor.
 
@@ -287,6 +345,16 @@ PROJECTIONS: Final[dict[str, Projection]] = {
             source_type="users.email_verified",
             supported_versions=frozenset({1}),
             build=_email_verified,
+        ),
+        Projection(
+            source_type="matchmaking.queue_ticket_enqueued",
+            supported_versions=frozenset({1}),
+            build=_queue_ticket_enqueued,
+        ),
+        Projection(
+            source_type="game.match_activated",
+            supported_versions=frozenset({1}),
+            build=_match_activated,
         ),
         Projection(
             source_type="matchmaking.players_paired",

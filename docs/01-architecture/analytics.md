@@ -1779,3 +1779,200 @@ one port holding every analytics query is the god object §42 warns about.
 5. `match_started` still carries no `speed_class`, so one segmentation is
    unavailable.
 6. D1 (consent) still open.
+
+---
+
+# Part VI — The dashboard and the epic's close (A64-027.6)
+
+The read models of Parts III–V had no reader. Part VI gives them one: an
+admin-only aggregate API and the console section that renders it, plus the
+audit that closes A64-027.
+
+## 94. The API surface
+
+Five `GET` endpoints under `/api/v1/admin/analytics`, all guarded by
+`CurrentAdmin`:
+
+| Path           | Answers                                            | Service               |
+| -------------- | -------------------------------------------------- | --------------------- |
+| `/overview`    | Five sections in one call — the console's landing  | all three             |
+| `/acquisition` | The browser-to-account funnel, with its stitch gap | `FunnelService`       |
+| `/retention`   | D1 / D7 / D30 by cohort day                        | `EngagementService`   |
+| `/matchmaking` | Queue, wait and offer health                       | `MatchmakingService`  |
+| `/games`       | Starts, completions and terminations               | `MatchmakingService`  |
+
+Three properties hold across all five, and each is asserted rather than
+intended:
+
+1. **Aggregate only.** Every response model is `frozen=True, extra="forbid"`,
+   and no field carries an identifier. A recursive key check against a
+   forbidden-name set runs over both an empty and a populated response, and
+   the populated case also asserts the seeded `match_id` and `subject_key`
+   do not appear anywhere in the response body.
+2. **Bounded.** `MAX_RANGE_DAYS = 90`. A reversed or oversized range is a
+   422, not a table scan. The default is the last 30 complete days ending
+   yesterday — an administrator holds credentials, so an unbounded range is
+   a denial of service with a valid token.
+3. **Production only.** `environment` and `include_synthetic` are fixed
+   server-side. They are not query parameters, and passing them changes
+   nothing — which is a test, because a filter that can be turned off is a
+   filter that will be.
+
+The range dependency takes the injected `ClockDep` rather than
+`date.today()`: the latter is the process's local date, and a deployment in
+any non-UTC timezone would silently shift every window by a day.
+
+## 95. The console section
+
+`apps/admin/src/pages/analytics.tsx`, reachable at `/analytics` as a child
+of `ProtectedLayout`.
+
+**It renders; it does not compute.** No rate, share or conversion is derived
+in the frontend. A `completed / started` there would be a second definition
+of M10 without M10's abort semantics, in a layer with no tests for it — so
+the page formats what the API sends and nothing more. A mutation check
+covers this: replacing a stage's server conversion with a client-side
+division turns the funnel test red.
+
+**Three requests, never polled.** Overview, retention and acquisition, fired
+on mount, on a range change and on an explicit refresh. Verified on a
+production build: five requests total including auth, and zero after four
+idle seconds. The extra pair seen in development is React `StrictMode`
+double-invoking the effect, not the page.
+
+**A failed refresh keeps the numbers.** Replacing known-good figures with
+zeros is the one lie this page must not tell, and it matters more here than
+on the operator dashboard because zero is a *meaningful value* for most of
+these metrics.
+
+**No trend arrows.** §15. The backend computes no previous period with
+matching completeness semantics, so there is nothing honest to point an
+arrow at.
+
+**No chart dependency.** The console's entire dependency list is React and a
+router. Bars are a CSS grid and a width; the track is `aria-hidden` and the
+figure beside it is real text, so nothing is available only to a sighted
+mouse user.
+
+## 96. `null` is a dash, and it is not nought
+
+The single behaviour the whole section turns on. A rate of `null` means the
+question has no answer — an empty denominator, or a retention window that
+has not elapsed. Rendered as `0%` it becomes a decline that did not happen.
+
+`formatRate(null)` returns `null`, which `Metric` renders as an em dash with
+an `sr-only` explanation and a `data-unmeasured` attribute; `formatRate(0)`
+returns `0%`. Both directions are asserted, in the same table, so the dash
+is provably about the data and not about the renderer.
+
+## 97. Two corrections found by this task
+
+**The label maps were unreachable.** The stage and termination names were
+first written as flat keys containing dots — `"stage.activated"` inside the
+`analytics` object. The translator walks the key by splitting on `.`, and
+`analytics.stage` is already the string `"Stage"`, so every funnel and
+termination label resolved to its own raw key. Nested under `stageName` and
+`terminationReason`, and a test now fails if any `analytics.*` key reaches
+the DOM unresolved.
+
+**"Coverage limited" claimed a cause it cannot know.** `_range` computes
+`floor = max(horizon, oldest_retained_day)`, so a range is reported
+`TRUNCATED` both when it predates the 400-day horizon **and** when the store
+simply holds nothing that old. The badge's first copy named only pruning,
+which would tell a three-day-old environment its data had been deleted. It
+now states the effect and the period actually answered. **No formula
+changed** — the backend was right; the sentence beside it was not.
+
+## 98. Layout defects found in the browser, and fixed
+
+Verified with Playwright at 360, 393, 768, 1024, 1280 and 1440 px, in light
+and dark. Both were real, and neither is visible in a unit test:
+
+| Defect                                                     | Cause                                                                                                             | Fix                                          |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| 24–59 px horizontal overflow at 360 / 393 / 768             | The funnel table — five columns and a bar — was not inside a scroll container                                      | Wrapped in `.table-scroll`                   |
+| 28 px overflow at 360, with `body.scrollWidth` **clean**    | `.sr-only` is `position: absolute`; with no positioned ancestor it resolves against the initial containing block at a static position *inside* the scrolled table, growing `html`'s scroll width | `.table-scroll { position: relative }`       |
+
+A third, cosmetic: the narrow-screen bar rule stacked the track under the
+label inside table rows too, shredding "Viewed the landing page" across
+three broken lines. Scoped to `.bars .bar`, so funnel rows keep their label
+on one line and the table scrolls instead.
+
+Final state: no horizontal overflow and no console errors at any of the
+twelve viewport/theme combinations.
+
+## 99. Numbers proved end to end
+
+A hand-written fixture proves the renderer against itself. So the reconcili-
+ation uses a **recorded real response**: five matches seeded into real
+PostgreSQL (four completed — two resignations, one agreed draw, one flag),
+`GET /admin/analytics/overview` captured verbatim, checked in at
+`apps/admin/src/pages/__fixtures__/analytics-overview.captured.json`, and
+asserted as rendered strings.
+
+| Metric          | Backend value | Rendered |
+| --------------- | ------------- | -------- |
+| Matches started | `5`           | `5`      |
+| Completed       | `4`           | `4`      |
+| Completion rate | `0.8`         | `80%`    |
+| Resignations    | `0.5`         | `50%`    |
+| Draws           | `0.25`        | `25%`    |
+| Rated share     | `1.0`         | `100%`   |
+| Maturity        | `partial`     | badge    |
+| Coverage        | `truncated`   | badge naming `2026-09-02` |
+
+A change to the wire contract now breaks a test rather than a number on a
+screen — which is exactly what the hand-written fixtures could not do: one
+of them had invented `start` / `end` field names the API never sends, and
+passed regardless.
+
+## 100. Self-tracking
+
+The console does not pollute the metrics it reports:
+
+- `apps/admin` never calls the client ingest endpoint. It has no analytics
+  client at all.
+- The projector consumes outbox domain events in `PROJECTIONS`. Admin reads
+  publish no domain event, so an operator opening this page writes nothing
+  to `analytics.event`.
+- Every read is filtered to `production` and `is_synthetic = false`, and an
+  administrator's own play is ordinary play — counted as a player's, which
+  is correct, and not as an operator's.
+
+## 101. Architecture decisions, still unchanged
+
+| Decision          | State         | Reason at the close of the epic                                                    |
+| ----------------- | ------------- | ---------------------------------------------------------------------------------- |
+| New index         | **Not added** | The four from A64-027.2 still cover every query the dashboard issues               |
+| Aggregate table   | **Deferred**  | §92 held this open for A64-027.6. Three aggregate reads per page view, on a page nobody polls, does not justify one |
+| Materialised view | **Deferred**  | Unchanged — precomputation would stop a corrected projection from correcting history |
+| Partitioning      | **Deferred**  | Unchanged — no new evidence against the ~20M-row threshold                         |
+| Redis cache       | **Deferred**  | Unchanged — a cache without a measured need is a stale-data source                 |
+| Chart library     | **Not added** | Four bar shapes do not justify a dependency in an app whose list is React and a router |
+
+## 102. Known limitations, carried forward unsolved
+
+None of these is hidden by the dashboard; each is stated on the surface that
+would otherwise mislead.
+
+| # | Limitation                                                        | Where it shows                                           |
+| - | ----------------------------------------------------------------- | -------------------------------------------------------- |
+| 1 | Identity-stitch coverage is near zero, so the acquisition funnel's registration stage is not all registrations | A "Limited measurement" badge and the period's true registration count beside the funnel |
+| 2 | Cross-device journeys are unavailable                             | Not claimed anywhere                                      |
+| 3 | D1 (consent gate) remains open                                    | Part I §77; unchanged by this task                        |
+| 4 | `tournament_withdrawn` has no domain event, so it is unprojected  | Part V; no metric depends on it                           |
+| 5 | `match_started` carries no `speed_class`                          | **No per-speed completion rate is displayed**, and a test asserts none appears |
+| 6 | Performance evidence is local only                                | Part V §90; no production figure is claimed               |
+| 7 | Raw retention is 400 days                                         | The "Coverage limited" badge, naming the period answered  |
+
+## 103. The epic, closed
+
+| Deliverable                                | State                                                    |
+| ------------------------------------------ | -------------------------------------------------------- |
+| 19-event taxonomy (§18)                    | Frozen; 15 of 16 backend events projected (§102 #4)      |
+| 22 metrics M1–M22 (§29)                    | All implemented, all reachable from the console          |
+| Event store and projector                  | A64-027.2; exactly-once effect on at-least-once delivery |
+| Funnels, engagement, retention, matchmaking | A64-027.3 – .5, tested against real PostgreSQL          |
+| Admin aggregate API                        | This task; 33 contract tests                             |
+| Console dashboard                          | This task; 16 page tests, 6 mutation checks              |
+| No PII, no fingerprinting, no third party  | Held throughout; asserted, not assumed                   |

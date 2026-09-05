@@ -118,6 +118,42 @@ export async function signIn(email: string, password: string): Promise<Outcome<s
  * navigation to `/users` into a signed-in session rather than a login form.
  */
 export async function refresh(): Promise<Outcome<string>> {
+  // Single-flight — A64-027A.5 §19.
+  //
+  // The refresh token **rotates on use**, and the server refuses a token it
+  // has already spent. Two refreshes issued before the first response's
+  // `Set-Cookie` lands therefore both present the same value: one rotates
+  // it, the second is reuse and the session is destroyed.
+  //
+  // React `StrictMode` reproduces exactly that on every page load — the
+  // effect is mounted, unmounted and mounted again, and `cancelled` guards
+  // the state update rather than the request already in flight. Measured on
+  // the dev server: two refreshes per reload, and the session lost on the
+  // third. The production build fires one and survives, which is why this
+  // was invisible until it was looked for.
+  //
+  // Sharing the in-flight promise makes a second caller await the first
+  // instead of spending the token twice. It is per-tab; two *tabs* are two
+  // JavaScript contexts and could still race, which is recorded as an
+  // A64-028 consideration rather than fixed here — that needs a grace
+  // window in the server's rotation, and this task does not change auth.
+  inFlight ??= exchangeRefreshCookie().finally(() => {
+    inFlight = null;
+  });
+  return inFlight;
+}
+
+/** The in-flight exchange, shared by every caller in this tab. */
+let inFlight: Promise<Outcome<string>> | null = null;
+
+// A pending exchange belongs to the session that started it. Ending that
+// session — a sign-out, a refused token, a test tearing down — abandons it,
+// so the next session never awaits a promise resolved against the last.
+accessToken.onClear(() => {
+  inFlight = null;
+});
+
+async function exchangeRefreshCookie(): Promise<Outcome<string>> {
   const response = await send("/auth/browser/refresh", { method: "POST" });
   if (response === null) return { status: "unavailable" };
   if (response.status === 401) return { status: "unauthenticated" };

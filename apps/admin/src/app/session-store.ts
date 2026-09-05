@@ -10,9 +10,19 @@
  * whether that account may administer anything is `GET /admin/me`'s answer
  * and is re-asked on every protected navigation. Nothing here caches a
  * role, and there is deliberately no `isAdmin` to set.
+ *
+ * ## Clearing is an event, not just an assignment — A64-027A.5 §19
+ *
+ * A refresh exchange can be in flight when a session ends: on sign-out, on
+ * a refused token, and between two tests. Its result belongs to the session
+ * that started it, so ending that session must abandon it — otherwise the
+ * next session awaits a promise resolved against the old one. The listener
+ * is how `shared/api/client` hears that without either module reaching into
+ * the other.
  */
 
 let token: string | null = null;
+const onCleared = new Set<() => void>();
 
 export const accessToken = {
   get: (): string | null => token,
@@ -21,5 +31,11 @@ export const accessToken = {
   },
   clear: (): void => {
     token = null;
+    for (const listener of onCleared) listener();
+  },
+  /** Runs when the session is cleared. Returns an unsubscribe. */
+  onClear: (listener: () => void): (() => void) => {
+    onCleared.add(listener);
+    return () => onCleared.delete(listener);
   },
 };

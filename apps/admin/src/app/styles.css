@@ -1357,6 +1357,18 @@ h4 {
     box-shadow 0.14s ease;
 }
 
+/* The magnifier's gutter — A64-027A.5 §36.
+   `.search input` and `.field input` have the same specificity, so the
+   later of the two wins. A64-027A.3 wrapped the search box in `.field` to
+   give it a visible label and, with that one class, handed the padding to
+   the rule below: the text slid back under the icon and every search box in
+   the console rendered its placeholder as `Ⓐccount id`. Naming both is what
+   keeps the gutter, and it must stay below the rule it is correcting. */
+.field .search input,
+.search input {
+  padding-inline-start: 2.3rem;
+}
+
 .field input:hover,
 .field select:hover,
 .field textarea:hover {

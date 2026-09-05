@@ -71,6 +71,7 @@ Proposed ──▶ Accepted ──▶ Superseded
 | [ADR-003](./ADR-003-pwa-service-worker.md)                  | Arena64 owns its service worker; Workbox is not adopted                           | Accepted | 2026-08-06 |
 | [ADR-004](./ADR-004-quick-messages-not-free-text-chat.md)   | Arena64 has no free-text chat; in-match communication is a predefined catalogue   | Accepted | 2026-08-09 |
 | [ADR-005](./ADR-005-first-party-analytics-on-the-outbox.md) | Product analytics is first-party, on the existing outbox; no third-party provider | Accepted | 2026-09-05 |
+| [ADR-006](./ADR-006-administrative-broadcasts.md)           | Administrative broadcasts store their text and keep the closed destination set    | Accepted | 2026-09-05 |
 
 ## TODO
 

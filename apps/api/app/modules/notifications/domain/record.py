@@ -69,6 +69,24 @@ class NotificationCategory(StrEnum):
     TOURNAMENT = "tournament"
     SYSTEM = "system"
 
+    ANNOUNCEMENT = "announcement"
+    """A message an administrator wrote — A64-027A §15.
+
+    A fifth family, added because a producer now exists. The docstring above
+    argues that `marketing` is absent because "a category nothing produces
+    is a preference that silently does nothing"; the converse is what
+    justifies this one, and it is the whole reason a broadcast does not
+    simply reuse `SYSTEM`.
+
+    **Deliberately not `SYSTEM`.** `SYSTEM` is locked on for in-app delivery
+    because `preference.LOCKED` reserves it for "an account or security
+    matter" a player is not entitled to silence. A platform announcement is
+    not that. Filing broadcasts under `SYSTEM` would let an administrator
+    reach every muted inbox on the platform by choosing a dropdown value,
+    which is exactly the preference bypass §15 forbids. This category is
+    mutable, defaults on, and an opted-out player receives nothing.
+    """
+
 
 class NotificationType(StrEnum):
     """What happened, and therefore which sentence the client renders.
@@ -132,6 +150,27 @@ class NotificationType(StrEnum):
     target is the live game rather than a list.
     """
 
+    PLATFORM_ANNOUNCEMENT = "platform_announcement"
+    """An administrator addressed the platform — A64-027A §12.
+
+    The one type on this platform whose text is **stored rather than
+    translated**, and the exception is worth stating plainly because the
+    rule it breaks is a good one.
+
+    Every other type is a *fact* — "your challenge was accepted" — which the
+    backend states and the client renders in uz, ru or en. An announcement
+    is not a fact with a known shape; it is prose an administrator wrote,
+    and there is no translation key for a sentence nobody has seen yet.
+    Storing it is therefore not a shortcut around §15.2, it is the only
+    representation the content has.
+
+    What does **not** change: no HTML, no markup and no URL. The body is
+    plain text, and the destination is the closed `NavigationTargetType`
+    set like every other type — an administrator cannot write a link into a
+    row, which is what keeps `NavigationTargetType`'s open-redirect argument
+    true for this type too.
+    """
+
     GAME_COMPLETED = "game_completed"
     """A game you played has finished — A64-021.4.
 
@@ -155,6 +194,7 @@ CATEGORY_OF: Final[Mapping[NotificationType, NotificationCategory]] = {
     NotificationType.GAME_COMPLETED: NotificationCategory.GAME,
     NotificationType.FRIEND_CHALLENGE_RECEIVED: NotificationCategory.SOCIAL,
     NotificationType.FRIEND_CHALLENGE_ACCEPTED: NotificationCategory.SOCIAL,
+    NotificationType.PLATFORM_ANNOUNCEMENT: NotificationCategory.ANNOUNCEMENT,
 }
 
 
@@ -195,6 +235,20 @@ class NavigationTargetType(StrEnum):
     interval say `friends`, and deleting the member would make them raise on
     the way out. It is now readable and unproducible, which is the correct
     end state for a target that was honest when it was written.
+    """
+
+    HOME = "home"
+    """Arena64's own front page. `ref` is `None`.
+
+    Where a platform announcement points, and the reason it points anywhere
+    at all: `NotificationRecord.target` is required, and the alternative
+    would be a nullable column whose only user is one type.
+
+    Richer targeting — letting an administrator send readers to a named
+    tournament, say — is **deferred** rather than approximated. It needs a
+    picker that resolves a real entity server-side, because the moment a
+    destination is free text it is an open redirect, and A64-027A did not
+    have the scope to build the picker properly.
     """
 
     CHALLENGES = "challenges"
@@ -377,7 +431,31 @@ class ChallengeSummary:
 #: dispatches on: a stored row is decoded against its own `type`, so a
 #: payload written by a producer that no longer exists fails at the row
 #: rather than reaching a client half-rendered.
-NotificationPayload = ActorSummary | TournamentSummary | GameResultSummary | ChallengeSummary
+@dataclass(frozen=True, slots=True)
+class AnnouncementSummary:
+    """The text of a platform announcement — A64-027A §16.
+
+    Two fields, both plain text, both authored by an administrator and
+    validated at the boundary that accepts them. There is no `html`, no
+    `markdown` and no `url`: a client renders these as text, so a payload
+    that carried markup would either be escaped (pointless) or rendered
+    (an injection vector reachable from a form).
+
+    `locale` records **which language it was written in**, and it is here so
+    a client can mark the text as being in a language the reader may not
+    have chosen (`lang` on the element, which is what a screen reader needs
+    to pronounce it). It is not a translation key and nothing translates
+    this text — see `NotificationType.PLATFORM_ANNOUNCEMENT`.
+    """
+
+    title: str
+    body: str
+    locale: str
+
+
+NotificationPayload = (
+    ActorSummary | TournamentSummary | GameResultSummary | ChallengeSummary | AnnouncementSummary
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -477,6 +555,8 @@ def payload_as_json(payload: NotificationPayload) -> dict[str, Any]:
     Dispatched on the payload's own type rather than on the notification's,
     so encoding and decoding cannot disagree about which shape a row holds.
     """
+    if isinstance(payload, AnnouncementSummary):
+        return {"title": payload.title, "body": payload.body, "locale": payload.locale}
     if isinstance(payload, ActorSummary):
         return _actor_as_json(payload)
     if isinstance(payload, TournamentSummary):
@@ -533,6 +613,7 @@ _PAYLOAD_SHAPE: Final[Mapping[NotificationType, str]] = {
     NotificationType.GAME_COMPLETED: "game",
     NotificationType.FRIEND_CHALLENGE_RECEIVED: "challenge",
     NotificationType.FRIEND_CHALLENGE_ACCEPTED: "challenge",
+    NotificationType.PLATFORM_ANNOUNCEMENT: "announcement",
 }
 
 
@@ -553,10 +634,23 @@ def payload_of(type_: NotificationType, stored: Mapping[str, Any]) -> Notificati
         return _game_result_of(stored)
     if shape == "challenge":
         return _challenge_of(stored)
+    if shape == "announcement":
+        return _announcement_of(stored)
     # Unreachable while every member is mapped. Kept so that adding a type
     # without a decoder fails at the row rather than silently returning the
     # wrong shape.
     raise MalformedNotification(f"no payload decoder for {type_}")
+
+
+def _announcement_of(stored: Mapping[str, Any]) -> AnnouncementSummary:
+    try:
+        return AnnouncementSummary(
+            title=str(stored["title"]),
+            body=str(stored["body"]),
+            locale=str(stored["locale"]),
+        )
+    except KeyError as error:
+        raise MalformedNotification(f"announcement payload is missing {error}") from error
 
 
 def _tournament_of(stored: Mapping[str, Any]) -> TournamentSummary:
@@ -634,6 +728,7 @@ def _optional_uuid(value: Any) -> UUID | None:
 __all__ = [
     "CATEGORY_OF",
     "ActorSummary",
+    "AnnouncementSummary",
     "ChallengeSummary",
     "GameResultSummary",
     "TournamentSummary",

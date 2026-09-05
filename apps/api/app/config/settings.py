@@ -3108,6 +3108,26 @@ class AnalyticsSettings(BaseModel):
     prune_max_batches: int = Field(default=20, ge=1)
 
 
+class BroadcastSettings(BaseModel):
+    """Administrative broadcast delivery — A64-027A §19.
+
+    `BaseModel` rather than `BaseSettings`, matching `AnalyticsSettings`
+    beside it: one operational number, no secret, and nothing a deployment
+    has to set for the feature to work.
+
+    In-app delivery has no third party to be unavailable, so the broadcast
+    worker is registered unconditionally — unlike email and push, which are
+    registered only when this process can actually send.
+    """
+
+    #: How often the expander looks for an unfinished broadcast. Faster than
+    #: the email worker's thirty seconds because a broadcast is a deliberate
+    #: act somebody is watching the console for, and slower than a second
+    #: because the claim query runs against a partial index that is empty
+    #: almost all the time.
+    poll_interval_seconds: float = Field(default=5.0, ge=1.0, le=600.0)
+
+
 class Settings(BaseModel):
     """The composed, immutable configuration for this process."""
 
@@ -3138,6 +3158,9 @@ class Settings(BaseModel):
     #: none is a secret, so requiring every construction site to pass one
     #: would be churn for a group that is entirely operational tuning.
     analytics: AnalyticsSettings = Field(default_factory=AnalyticsSettings)
+    #: Defaulted for the same reason as `analytics`: one operational number,
+    #: no secret, no construction site that should have to know about it.
+    broadcast: BroadcastSettings = Field(default_factory=BroadcastSettings)
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":

@@ -167,6 +167,7 @@ from app.modules.users.public.administration import (
     AdminUserPage,
     AdminUserRecord,
 )
+from app.modules.users.public.audience import NotificationAudienceDirectory
 from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import (
     AvatarReference,
@@ -260,6 +261,7 @@ __all__ = [
     "LapsedPresence",
     "PresenceProvider",
     "PresenceRecorder",
+    "NotificationAudienceDirectory",
     "PresenceRoster",
     "PrivacyEdits",
     "PrivacySettingsEditor",

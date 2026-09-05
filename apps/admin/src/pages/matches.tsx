@@ -3,7 +3,9 @@ import { useCallback } from "react";
 
 import { type AdminMatchSummary, fetchMatches, type MatchQuery } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
-import { ErrorNotice } from "@/shared/ui/error-notice";
+import { DataTable } from "@/shared/ui/data-table";
+import { StatusBadge, type Tone } from "@/shared/ui/status-badge";
+import { EmptyState, ErrorState, LoadingSkeleton } from "@/shared/ui/states";
 import { PageHeader } from "@/shared/ui/page-header";
 import { Pagination } from "@/shared/ui/pagination";
 import { useCursorPages } from "@/shared/ui/use-cursor-pages";
@@ -30,6 +32,22 @@ import { useCursorPages } from "@/shared/ui/use-cursor-pages";
 
 const STATUSES = ["pending_acceptance", "active", "completed", "declined", "expired"] as const;
 const ORIGINS = ["queue", "challenge", "rematch", "tournament"] as const;
+
+/**
+ * How each state reads at a glance — A64-027A §9, §24.
+ *
+ * The hue is an accelerant for somebody scanning a hundred rows. The
+ * translated word beside it is what carries the meaning, which is why
+ * the enum itself never reaches the screen: an administrator who did
+ * not build Arena64 should not have to decode `registration_open`.
+ */
+const TONES: Record<string, Tone> = {
+  active: "success",
+  completed: "neutral",
+  pending_acceptance: "info",
+  declined: "danger",
+  expired: "warning",
+};
 
 type Search = { status?: string; rated?: string; origin?: string; participant?: string };
 
@@ -102,7 +120,7 @@ export function MatchesPage() {
             <option value="">{t("matches.any")}</option>
             {STATUSES.map((value) => (
               <option key={value} value={value}>
-                {value}
+                {t(`matches.statusLabel.${value}` as "matches.statusLabel.completed")}
               </option>
             ))}
           </select>
@@ -152,19 +170,22 @@ export function MatchesPage() {
         </p>
       </div>
 
-      {pages.state === "loading" && <p role="status">{t("matches.loading")}</p>}
-      {pages.state === "error" && <ErrorNotice message={t("matches.error")} />}
+      {pages.state === "loading" && <LoadingSkeleton label={t("matches.loading")} />}
+      {pages.state === "error" && (
+        <ErrorState title={t("matches.error")} onRetry={pages.reload} />
+      )}
 
       {pages.state === "ready" && pages.rows.length === 0 && (
-        <>
-          <p role="status">{t("matches.empty")}</p>
-          <p className="muted">{t("matches.emptyHint")}</p>
-        </>
+        <EmptyState
+          icon="matches"
+          title={t("matches.empty")}
+          description={t("matches.emptyHint")}
+        />
       )}
 
       {pages.state === "ready" && pages.rows.length > 0 && (
         <>
-          <table className="users-table">
+          <DataTable caption={t("matches.title")} minWidth="52rem">
             <thead>
               <tr>
                 <th scope="col">{t("matches.colPlayers")}</th>
@@ -183,7 +204,14 @@ export function MatchesPage() {
                       {seat(match.light)} — {seat(match.dark)}
                     </Link>
                   </td>
-                  <td>{match.status}</td>
+                  <td>
+                    <StatusBadge
+                      label={t(
+                        `matches.statusLabel.${match.status}` as "matches.statusLabel.completed",
+                      )}
+                      tone={TONES[match.status] ?? "neutral"}
+                    />
+                  </td>
                   <td>{result(match)}</td>
                   <td>{t(match.rated ? "matches.rated" : "matches.casual")}</td>
                   <td>{match.origin}</td>
@@ -191,7 +219,7 @@ export function MatchesPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </DataTable>
 
           {/* Narrow: the same rows as cards, nothing dropped. */}
           <ul className="users-cards">
@@ -201,8 +229,8 @@ export function MatchesPage() {
                   {seat(match.light)} — {seat(match.dark)}
                 </Link>
                 <span>
-                  {match.status} · {result(match)} ·{" "}
-                  {t(match.rated ? "matches.rated" : "matches.casual")}
+                  {t(`matches.statusLabel.${match.status}` as "matches.statusLabel.completed")}{" "}
+                  · {result(match)} · {t(match.rated ? "matches.rated" : "matches.casual")}
                 </span>
                 <span className="muted">
                   {match.origin} · {new Date(match.created_at).toLocaleDateString(locale)}

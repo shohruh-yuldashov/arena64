@@ -30,6 +30,7 @@ from app.core.constants import API_V1_PREFIX
 from app.modules.admin.presentation.router import admin_router
 from app.modules.admin.presentation.routers.analytics import admin_analytics_router
 from app.modules.admin.presentation.routers.audit import admin_audit_router
+from app.modules.admin.presentation.routers.broadcasts import admin_broadcasts_router
 from app.modules.admin.presentation.routers.dashboard import admin_dashboard_router
 from app.modules.admin.presentation.routers.matches import admin_matches_router
 from app.modules.admin.presentation.routers.moderation import admin_moderation_router
@@ -93,6 +94,7 @@ v1_router.include_router(admin_dashboard_router)
 # A64-027.6. Five aggregate analytics reads. Admin-only, bounded range,
 # production environment, synthetic traffic excluded — and no raw endpoint.
 v1_router.include_router(admin_analytics_router)
+v1_router.include_router(admin_broadcasts_router)
 
 # **Before `users_router`, and the order is load-bearing.** `GET /users/search`
 # and `GET /users/{user_id}` both match the path `/users/search`; Starlette

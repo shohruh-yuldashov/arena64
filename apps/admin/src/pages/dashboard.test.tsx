@@ -108,33 +108,31 @@ it("renders every fact in one request and links each into a console", async () =
   expect(screen.getByText("4")).toBeInTheDocument();
   expect(screen.getByText("11")).toBeInTheDocument();
 
-  // Scoped to the cards: the sidebar and the shortcut list name the same
-  // sections, and an unscoped query would match whichever came first.
-  const overview = (
-    await screen.findByRole("heading", { level: 3, name: /Umumiy holat|Обзор|Overview/ })
-  ).closest("section") as HTMLElement;
-  expect(
-    within(overview).getByRole("link", { name: /O'yinlar|Партии|^Matches$/ }),
-  ).toHaveAttribute("href", "/matches?status=active");
+  // Located by the card's own label, then by the one link inside it.
+  // A64-027A moved the descriptive text onto the card and the destination
+  // onto the link below it, which is what lets two cards point at two
+  // different match filters without sharing one accessible name.
+  const cardFor = (label: RegExp) => {
+    const heading = screen.getByText(label);
+    const card = heading.closest(".stat");
+    if (card === null) throw new Error(`no card for ${String(label)}`);
+    return card as HTMLElement;
+  };
 
-  const attention = screen
-    .getByRole("heading", {
-      level: 3,
-      name: /E'tibor talab qiladi|Требует внимания|Needs attention/,
-    })
-    .closest("section") as HTMLElement;
-  expect(
-    within(attention).getByRole("link", {
-      name: /Amaldagi cheklovlar|Действующие|Restrictions in force/,
-    }),
-  ).toHaveAttribute("href", "/moderation");
+  expect(within(cardFor(/^Jarayonda$|^Идут$|^In play$/)).getByRole("link")).toHaveAttribute(
+    "href",
+    "/matches?status=active",
+  );
+
+  const restrictions = cardFor(/Amaldagi cheklovlar|Действующие|Restrictions in force/);
+  expect(within(restrictions).getByRole("link")).toHaveAttribute("href", "/moderation");
   // Asserted by **navigating** rather than by reading the href: the router
   // quotes a search value that would otherwise parse back as a boolean, so
   // the URL reads `failed=%22true%22` while the destination receives the
   // string `"true"` its `validateSearch` declares. What matters is that the
   // page understands the parameter (§21), not how it is spelled on the way.
   await person.click(
-    within(attention).getByRole("link", { name: /tugagan push|исчерпанными|out of retries/ }),
+    within(cardFor(/tugagan push|исчерпанными|out of retries/)).getByRole("link"),
   );
   await waitFor(() => expect(router.state.location.pathname).toBe("/notifications"));
   expect(router.state.location.search).toMatchObject({ failed: "true" });

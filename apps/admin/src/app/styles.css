@@ -1,31 +1,159 @@
-/* The admin console's styling — A64-024.1 §7.
+/* Arena64 Admin Console — A64-027A.
  *
- * Plain CSS with system fonts and no design-system dependency. `apps/web`
- * uses Tailwind and a component library; importing either here would make
- * this app depend on the player client, which AD-04 forbids, or duplicate a
- * build pipeline for a shell with four elements in it.
+ * Plain CSS, still: `apps/web` uses Tailwind and a component library, and
+ * importing either here would make the console depend on the player client
+ * (AD-04 forbids it) or duplicate a build pipeline. What changed in A64-027A
+ * is not the technology, it is that the console now looks like Arena64.
  *
- * Responsive by using flow layout and one breakpoint rather than a grid
- * system: the shell is a header and two columns that become one.
+ * ## The palette is Arena64's, not GitHub's
+ *
+ * A64-024.1 shipped `--accent: #1f6feb` and `--bg: #0d1117` — GitHub's
+ * colours. They were placeholders that outlived their task: the platform has
+ * had a brand since A64-025.2 and the console was the one surface still
+ * ignoring it. Every token below is the value `apps/web/src/app/styles/
+ * globals.css` holds, in the same `oklch` space, so the two applications
+ * cannot drift into two different indigos.
+ *
+ * ## Four colour families, one job each
+ *
+ * The rules `specs/product-experience.md` §18.7 sets for the player client
+ * hold here too:
+ *
+ *   --primary            interaction: active nav, focus, selected control
+ *   --brand-from/-to     Arena64 itself: the wordmark, and nowhere else
+ *   semantic             success / warning / destructive, never decorative
+ *   neutral              everything else
+ *
+ * No surface uses more than two families at once, and colour is never the
+ * only signal — every status carries its translated name beside the hue
+ * (WCAG 1.4.1).
+ *
+ * ## Theme
+ *
+ * Three states. `[data-theme]` on the root wins in both directions so the
+ * switch in the toolbar works; without it `prefers-color-scheme` decides.
+ * Dark is authored, not inverted: the surfaces lift *toward* the viewer on a
+ * near-black page rather than darkening, which is the opposite of what an
+ * inversion does.
  */
 
 :root {
-  color-scheme: light dark;
-  --bg: #ffffff;
-  --fg: #111418;
-  --muted: #5b6572;
-  --line: #d9dee5;
-  --accent: #1f6feb;
+  color-scheme: light;
+
+  /* Not pure white. A trace of the brand hue, far below the threshold at
+     which anyone would call the page coloured, so a white card reads as a
+     raised surface instead of dissolving into its background. */
+  --bg: oklch(0.99 0.004 300);
+  --surface: oklch(1 0 0);
+  --surface-sunken: oklch(0.972 0.004 300);
+  --surface-raised: oklch(1 0 0);
+
+  --fg: oklch(0.145 0 0);
+  --muted: oklch(0.512 0 0);
+  --line: oklch(0.917 0.002 300);
+  --line-strong: oklch(0.86 0.003 300);
+
+  /* Arena64 indigo — 6.12:1 on white, 6.39:1 on the page. */
+  --primary: oklch(0.5 0.19 275);
+  --primary-fg: oklch(0.985 0 0);
+  --primary-wash: oklch(0.5 0.19 275 / 8%);
+  --primary-wash-strong: oklch(0.5 0.19 275 / 14%);
+
+  /* The wordmark, and nothing else. */
+  --brand-from: oklch(0.5 0.19 275);
+  --brand-to: oklch(0.48 0.2 330);
+
+  --success: oklch(0.52 0.13 150);
+  --success-wash: oklch(0.52 0.13 150 / 12%);
+  --warning: oklch(0.55 0.13 75);
+  --warning-wash: oklch(0.62 0.14 75 / 16%);
+  --danger: oklch(0.55 0.22 27);
+  --danger-wash: oklch(0.577 0.245 27 / 12%);
+  --info: oklch(0.52 0.13 245);
+  --info-wash: oklch(0.52 0.13 245 / 12%);
+
+  --radius: 0.625rem;
+  --radius-sm: 0.4rem;
+  --radius-lg: 0.9rem;
+
+  /* Deliberately shallow. A console is read for hours; the "giant shadow"
+     §6 forbids is fatiguing long before it is impressive. */
+  --shadow: 0 1px 2px oklch(0.145 0 0 / 6%);
+  --shadow-raised: 0 4px 16px oklch(0.145 0 0 / 8%);
+
+  --sidebar-w: 16.25rem;
+  --topbar-h: 3.75rem;
+  --workspace-max: 84rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0d1117;
-    --fg: #e6edf3;
-    --muted: #8b949e;
-    --line: #30363d;
-    --accent: #58a6ff;
+:root:not([data-theme="light"]) {
+  @media (prefers-color-scheme: dark) {
+    color-scheme: dark;
+
+    --bg: oklch(0.15 0.008 300);
+    --surface: oklch(0.205 0 0);
+    --surface-sunken: oklch(0.178 0.004 300);
+    --surface-raised: oklch(0.238 0 0);
+
+    --fg: oklch(0.985 0 0);
+    --muted: oklch(0.708 0 0);
+    --line: oklch(1 0 0 / 11%);
+    --line-strong: oklch(1 0 0 / 20%);
+
+    --primary: oklch(0.68 0.16 275);
+    --primary-fg: oklch(0.16 0.02 275);
+    --primary-wash: oklch(0.68 0.16 275 / 14%);
+    --primary-wash-strong: oklch(0.68 0.16 275 / 22%);
+
+    --brand-from: oklch(0.68 0.16 275);
+    --brand-to: oklch(0.66 0.18 330);
+
+    --success: oklch(0.7 0.14 150);
+    --success-wash: oklch(0.7 0.14 150 / 16%);
+    --warning: oklch(0.78 0.13 75);
+    --warning-wash: oklch(0.75 0.14 75 / 18%);
+    --danger: oklch(0.72 0.19 22);
+    --danger-wash: oklch(0.704 0.191 22 / 18%);
+    --info: oklch(0.7 0.13 245);
+    --info-wash: oklch(0.7 0.13 245 / 16%);
+
+    --shadow: 0 1px 2px oklch(0 0 0 / 40%);
+    --shadow-raised: 0 4px 16px oklch(0 0 0 / 45%);
   }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: oklch(0.15 0.008 300);
+  --surface: oklch(0.205 0 0);
+  --surface-sunken: oklch(0.178 0.004 300);
+  --surface-raised: oklch(0.238 0 0);
+
+  --fg: oklch(0.985 0 0);
+  --muted: oklch(0.708 0 0);
+  --line: oklch(1 0 0 / 11%);
+  --line-strong: oklch(1 0 0 / 20%);
+
+  --primary: oklch(0.68 0.16 275);
+  --primary-fg: oklch(0.16 0.02 275);
+  --primary-wash: oklch(0.68 0.16 275 / 14%);
+  --primary-wash-strong: oklch(0.68 0.16 275 / 22%);
+
+  --brand-from: oklch(0.68 0.16 275);
+  --brand-to: oklch(0.66 0.18 330);
+
+  --success: oklch(0.7 0.14 150);
+  --success-wash: oklch(0.7 0.14 150 / 16%);
+  --warning: oklch(0.78 0.13 75);
+  --warning-wash: oklch(0.75 0.14 75 / 18%);
+  --danger: oklch(0.72 0.19 22);
+  --danger-wash: oklch(0.704 0.191 22 / 18%);
+  --info: oklch(0.7 0.13 245);
+  --info-wash: oklch(0.7 0.13 245 / 16%);
+
+  --shadow: 0 1px 2px oklch(0 0 0 / 40%);
+  --shadow-raised: 0 4px 16px oklch(0 0 0 / 45%);
 }
 
 * {
@@ -37,515 +165,29 @@ body {
   background: var(--bg);
   color: var(--fg);
   font:
-    16px/1.5 system-ui,
+    15px/1.55 ui-sans-serif,
+    system-ui,
     -apple-system,
     "Segoe UI",
     sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  letter-spacing: -0.011em;
 }
 
 .muted {
   color: var(--muted);
 }
 
-.gate {
-  max-width: 28rem;
-  margin: 0 auto;
-  padding: 3rem 1.25rem;
+.icon {
+  flex: none;
+  vertical-align: -0.2em;
 }
-
-.action {
-  display: inline-flex;
-  align-items: center;
-  /* 44px — a touch target that works on a phone, which an operator may
-     well be using when something is on fire. */
-  min-height: 2.75rem;
-  padding: 0 1rem;
-  border: 1px solid var(--line);
-  border-radius: 0.375rem;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  text-decoration: none;
-}
-
-.action:hover {
-  border-color: var(--accent);
-}
-
-/* Never removed, only replaced: a focus ring that disappears makes the
-   console unusable with a keyboard. */
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.shell__header {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding: 1.25rem;
-  border-bottom: 1px solid var(--line);
-}
-
-.shell__header h1 {
-  margin: 0;
-  font-size: 1.125rem;
-}
-
-.shell__header p {
-  margin: 0.125rem 0 0;
-  font-size: 0.875rem;
-}
-
-.shell__identity {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  align-items: center;
-  font-size: 0.875rem;
-}
-
-.shell__body {
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-  padding: 1.25rem;
-}
-
-@media (min-width: 48rem) {
-  .shell__body {
-    flex-direction: row;
-  }
-
-  .shell__body nav {
-    flex: 0 0 14rem;
-  }
-}
-
-.shell__body nav ul {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.shell__body nav button {
-  width: 100%;
-  min-height: 2.75rem;
-  padding: 0 0.75rem;
-  border: 0;
-  border-radius: 0.375rem;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.shell__body nav button[aria-current="page"] {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  font-weight: 600;
-}
-
-.shell__body nav button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.shell__body main {
-  flex: 1;
-  min-width: 0;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  margin: 0 0 1rem;
-}
-
-.field input {
-  min-height: 2.75rem;
-  padding: 0 0.75rem;
-  border: 1px solid var(--line);
-  border-radius: 0.375rem;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-}
-
-.error {
-  margin: 0 0 1rem;
-  color: #d1242f;
-}
-
-@media (prefers-color-scheme: dark) {
-  .error {
-    color: #ff7b72;
-  }
-}
-
-.shell__body nav a {
-  display: block;
-  min-height: 2.75rem;
-  padding: 0.6rem 0.75rem;
-  border-radius: 0.375rem;
-  color: inherit;
-  text-decoration: none;
-}
-
-.shell__body nav a[data-status="active"] {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  font-weight: 600;
-}
-
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
-  align-items: flex-end;
-}
-
-.filters .field {
-  min-width: 12rem;
-  flex: 1 1 12rem;
-}
-
-.filters select {
-  min-height: 2.75rem;
-  padding: 0 0.5rem;
-  border: 1px solid var(--line);
-  border-radius: 0.375rem;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-}
-
-.users-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.9375rem;
-}
-
-.users-table th,
-.users-table td {
-  padding: 0.6rem 0.5rem;
-  border-bottom: 1px solid var(--line);
-  text-align: left;
-  vertical-align: top;
-}
-
-.users-cards {
-  display: none;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.users-cards li {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  padding: 0.75rem 0;
-  border-bottom: 1px solid var(--line);
-}
-
-/* One table above the breakpoint, the same rows as cards below it. Six
-   columns at 360px is either a horizontal scroll nobody finds or a font
-   nobody reads. */
-@media (max-width: 47.99rem) {
-  .users-table {
-    display: none;
-  }
-
-  .users-cards {
-    display: block;
-  }
-}
-
-.facts {
-  display: grid;
-  grid-template-columns: minmax(8rem, max-content) 1fr;
-  gap: 0.35rem 1rem;
-  margin: 0 0 1.5rem;
-}
-
-.facts dt {
-  color: var(--muted);
-}
-
-.facts dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.load-more {
-  margin: 1rem 0 0;
-}
-
-/* A64-024.8. The `before`/`after` slice of one audit entry, folded away by
-   default: it is what somebody reconstructing an incident opens, not what
-   somebody scanning the trail reads. */
-.audit-details {
-  display: grid;
-  grid-template-columns: minmax(6rem, max-content) 1fr;
-  gap: 0.2rem 0.75rem;
-  margin: 0.4rem 0 0;
-  font-size: 0.85rem;
-}
-
-.audit-details dt {
-  color: var(--muted);
-}
-
-.audit-details dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-/* A64-024.6. The confirmation modal. Native `<dialog>`, so the backdrop,
-   the focus trap and Escape are the browser's — this is only its look. */
-dialog {
-  max-width: min(32rem, calc(100vw - 2rem));
-  padding: 1.25rem;
-  border: 1px solid var(--line);
-  border-radius: 0.5rem;
-  background: var(--surface, #fff);
-  color: inherit;
-}
-
-dialog::backdrop {
-  background: rgb(0 0 0 / 45%);
-}
-
-dialog h3 {
-  margin: 0 0 0.5rem;
-}
-
-dialog .field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  margin: 0.75rem 0 0;
-}
-
-dialog textarea {
-  width: 100%;
-  font: inherit;
-  resize: vertical;
-}
-
-.dialog-actions {
-  display: flex;
-  gap: 0.5rem;
-  justify-content: flex-end;
-  margin: 1.25rem 0 0;
-}
-
-/* A destructive action reads as one. Named as well as coloured — hue alone
-   carries nothing for an operator who cannot see it. */
-.action.danger {
-  background: var(--danger, #a4243b);
-  border-color: var(--danger, #a4243b);
-  color: #fff;
-}
-
-.moderation-actions {
-  margin: 1rem 0 0;
-}
-
-.notice {
-  margin: 0.75rem 0 0;
-  color: var(--muted);
-}
-
-/* A64-024.7. One row per device, with its action beside it — a list rather
-   than a seventh table column, so the button is never adjacent to the
-   column an operator is scanning. */
-.delivery-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  margin: 1rem 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.delivery-actions li {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-}
-
-/* A64-024.9. The operator overview. A grid that collapses to one column
-   rather than a table that scrolls sideways — six numbers do not need a
-   table, and a table of them is unusable at 360px. */
-.dashboard-freshness {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-  margin: 0 0 1.5rem;
-}
-
-.kpi-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
-  gap: 1rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.kpi-grid li {
-  padding: 0.9rem 1rem;
-  border: 1px solid var(--line);
-  border-radius: 0.5rem;
-}
-
-.kpi-grid dl {
-  display: grid;
-  grid-template-columns: 1fr max-content;
-  align-items: baseline;
-  gap: 0.2rem 0.75rem;
-  margin: 0.6rem 0 0;
-}
-
-.kpi-grid dt {
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
-.kpi-grid dd {
-  margin: 0;
-  text-align: right;
-}
-
-/* The number carries weight, not colour — a figure an operator cannot read
-   at a glance is one they misread (§23). */
-.kpi-value {
-  font-size: 1.35rem;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.attention-list,
-.activity-list,
-.shortcut-list {
-  margin: 0 0 1rem;
-  padding: 0;
-  list-style: none;
-}
-
-.attention-list li {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  padding: 0.5rem 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.activity-list li {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-  padding: 0.45rem 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.shortcut-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem 1.25rem;
-}
-
-/* A64-024.5H. The lifecycle commands, above the facts they act on. */
-.tournament-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin: 0 0 1rem;
-}
-
-/* A64-024 hardening. Previous / page / Next — see `shared/ui/pagination`
-   on why there are no numbered jumps behind a keyset listing. */
-.pagination {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  margin: 1.25rem 0 0;
-  flex-wrap: wrap;
-}
-
-.pagination button {
-  font: inherit;
-  padding: 0.4rem 0.9rem;
-  border: 1px solid var(--line);
-  border-radius: 0.35rem;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-.pagination button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.pagination span {
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-
-/* A64-024 hardening. One heading shape for every console page. */
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  flex-wrap: wrap;
-  margin: 0 0 1.25rem;
-}
-
-.page-header h2 {
-  margin: 0;
-}
-
-.page-header p {
-  margin: 0.35rem 0 0;
-}
-
-.page-header-actions {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-/* A64-024 hardening. The cross-console links on a detail page, together
-   rather than one per paragraph. */
-.detail-links {
-  display: flex;
-  gap: 1.25rem;
-  flex-wrap: wrap;
-  margin: 1rem 0 0;
-}
-
-/* --- product analytics — A64-027.6 -----------------------------------------
- *
- * The console's own vocabulary, extended rather than replaced: the same
- * tokens, the same one breakpoint, the same plain CSS. There is no chart
- * dependency — bars are two spans and a width, which is enough for the four
- * things this page draws and costs nothing in a bundle whose whole
- * dependency list is React and a router.
- */
 
 .sr-only {
   position: absolute;
@@ -559,28 +201,1436 @@ dialog textarea {
   border: 0;
 }
 
-.range {
-  display: flex;
-  gap: 0.5rem;
-  padding: 0;
-  margin: 0;
-  border: 0;
+/* Never removed, only replaced: a focus ring that disappears makes the
+   console unusable with a keyboard. */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
-.range .action[aria-pressed="true"] {
-  border-color: var(--accent);
-  color: var(--accent);
+/* ============================================================ controls */
+
+.action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  /* 40px. Still a comfortable touch target, and the console is dense
+     enough that 44 made every toolbar look like a phone keyboard. */
+  min-height: 2.5rem;
+  padding: 0 0.85rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.action:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.action.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-fg);
+}
+
+.action.primary:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--primary) 88%, black);
+  border-color: color-mix(in oklab, var(--primary) 88%, black);
+  color: var(--primary-fg);
+}
+
+.action.danger {
+  border-color: color-mix(in oklab, var(--danger) 45%, var(--line));
+  color: var(--danger);
+}
+
+.action.danger:hover:not(:disabled) {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--primary-fg);
+}
+
+.action.subtle {
+  border-color: transparent;
+  background: transparent;
+}
+
+.action.subtle:hover:not(:disabled) {
+  background: var(--surface-sunken);
+  border-color: var(--line);
+  color: inherit;
+}
+
+.action.icon-only {
+  padding: 0;
+  inline-size: 2.5rem;
+}
+
+/* ============================================================ the shell */
+
+.shell {
+  min-block-size: 100dvh;
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 64rem) {
+  .shell {
+    grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  }
+
+  .shell[data-rail="true"] {
+    --sidebar-w: 4.25rem;
+  }
+}
+
+/* --- sidebar --- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  background: var(--surface-sunken);
+  border-inline-end: 1px solid var(--line);
+  padding: 0.9rem 0.75rem 1rem;
+}
+
+@media (min-width: 64rem) {
+  .sidebar {
+    position: sticky;
+    inset-block-start: 0;
+    block-size: 100dvh;
+    overflow-y: auto;
+  }
+}
+
+/* On a phone the sidebar is a sheet, off-canvas until asked for. Its
+   contents stay in the DOM so the navigation is reachable by keyboard and
+   by a screen reader in the order the markup states. */
+@media (max-width: 63.99rem) {
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 40;
+    inline-size: min(18rem, 86vw);
+    transform: translateX(-101%);
+    transition: transform 0.18s ease;
+    box-shadow: var(--shadow-raised);
+  }
+
+  .sidebar[data-open="true"] {
+    transform: none;
+  }
+}
+
+.sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.5rem 0.9rem;
+  text-decoration: none;
+  color: inherit;
+}
+
+/* The one gradient in the console. `specs/product-experience.md` §18.7
+   rations it to the wordmark, the primary button and the auth panel; a
+   console is not a marketing surface, so it gets the wordmark only. */
+.sidebar__mark {
+  inline-size: 2rem;
+  block-size: 2rem;
+  border-radius: 0.55rem;
+  background-image: linear-gradient(135deg, var(--brand-from), var(--brand-to));
+  color: oklch(0.985 0 0);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: -0.03em;
+  flex: none;
+}
+
+.sidebar__name {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+}
+
+.sidebar__name strong {
+  font-size: 0.95rem;
+  letter-spacing: -0.015em;
+}
+
+.sidebar__name span {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.sidebar__group {
+  padding: 0.75rem 0.5rem 0.3rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sidebar nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.sidebar nav a {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.sidebar nav a:hover {
+  background: var(--surface);
+}
+
+/* Active state carries three signals, not one: a tinted ground, the brand
+   hue, and a bar in the margin. Colour alone would fail 1.4.1 and would
+   vanish for anyone who has turned contrast up. */
+.sidebar nav a[data-status="active"] {
+  background: var(--primary-wash);
+  color: var(--primary);
   font-weight: 600;
 }
 
+.sidebar nav a[data-status="active"]::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: -0.75rem;
+  inset-block: 0.35rem;
+  inline-size: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--primary);
+}
+
+.sidebar nav a .count {
+  margin-inline-start: auto;
+  min-inline-size: 1.35rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.sidebar nav a .count[data-tone="warning"] {
+  background: var(--warning-wash);
+  border-color: transparent;
+  color: var(--warning);
+}
+
+.sidebar__footer {
+  margin-block-start: auto;
+  padding-block-start: 0.75rem;
+  border-block-start: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sidebar__account {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0.5rem;
+  min-inline-size: 0;
+}
+
+.sidebar__avatar {
+  inline-size: 2rem;
+  block-size: 2rem;
+  border-radius: 50%;
+  background: var(--primary-wash-strong);
+  color: var(--primary);
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: 0.8rem;
+  flex: none;
+}
+
+.sidebar__who {
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.sidebar__who strong {
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__who span {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+/* Collapsed rail: labels leave, the icon and its accessible name stay. */
+@media (min-width: 64rem) {
+  .shell[data-rail="true"] .sidebar__group,
+  .shell[data-rail="true"] .sidebar__name,
+  .shell[data-rail="true"] .sidebar__who,
+  .shell[data-rail="true"] .sidebar nav a span:not(.count),
+  .shell[data-rail="true"] .sidebar__footer .action span {
+    display: none;
+  }
+
+  .shell[data-rail="true"] .sidebar nav a,
+  .shell[data-rail="true"] .sidebar__account {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .shell[data-rail="true"] .sidebar nav a .count {
+    position: absolute;
+    inset-block-start: 0.15rem;
+    inset-inline-end: 0.35rem;
+    margin: 0;
+  }
+}
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: oklch(0.145 0 0 / 45%);
+  border: 0;
+  padding: 0;
+}
+
+@media (min-width: 64rem) {
+  .scrim {
+    display: none;
+  }
+}
+
+/* --- topbar --- */
+
+.topbar {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-block-size: var(--topbar-h);
+  padding: 0.5rem 1rem;
+  background: color-mix(in oklab, var(--bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-block-end: 1px solid var(--line);
+}
+
+@media (min-width: 64rem) {
+  .topbar {
+    padding-inline: 1.75rem;
+  }
+}
+
+.topbar__crumbs {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-inline-size: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.topbar__crumbs a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.topbar__crumbs a:hover {
+  color: var(--fg);
+}
+
+.topbar__crumbs strong {
+  color: var(--fg);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar__spacer {
+  margin-inline-start: auto;
+}
+
+/* --- workspace --- */
+
+.workspace {
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace > main {
+  inline-size: 100%;
+  max-inline-size: var(--workspace-max);
+  margin-inline: auto;
+  padding: 1.5rem 1rem 4rem;
+  min-inline-size: 0;
+}
+
+@media (min-width: 64rem) {
+  .workspace > main {
+    padding: 2rem 1.75rem 5rem;
+  }
+}
+
+/* ============================================================ page header */
+
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-block-end: 1.5rem;
+}
+
+.page-header h2 {
+  margin: 0 0 0.3rem;
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+}
+
+.page-header p {
+  margin: 0;
+  color: var(--muted);
+  max-inline-size: 60ch;
+  font-size: 0.9rem;
+}
+
+.page-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* A titled band inside a page. The rule under the heading is what stops a
+   long console page reading as one undifferentiated column. */
+.section {
+  margin-block-end: 2rem;
+}
+
+.section__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-block-end: 0.85rem;
+}
+
+.section__head h3 {
+  margin: 0;
+  font-size: 1.0625rem;
+}
+
+.section__head p {
+  margin: 0.15rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* ============================================================ surfaces */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.card__body {
+  padding: 1rem 1.15rem;
+}
+
+/* ============================================================ stat cards */
+
+.kpi-grid {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13.5rem, 1fr));
+  gap: 0.85rem;
+  margin: 0 0 1.5rem;
+  padding: 0;
+}
+
+.kpi-grid li {
+  margin: 0;
+}
+
+.kpi-grid dl {
+  margin: 0;
+}
+
+.kpi-grid dt {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.kpi-grid dd {
+  margin: 0;
+}
+
+.stat {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 1rem 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  min-inline-size: 0;
+  block-size: 100%;
+}
+
+.stat__top {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.stat__glyph {
+  inline-size: 1.75rem;
+  block-size: 1.75rem;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  background: var(--primary-wash);
+  color: var(--primary);
+  flex: none;
+}
+
+.stat__glyph[data-tone="success"] {
+  background: var(--success-wash);
+  color: var(--success);
+}
+
+.stat__glyph[data-tone="warning"] {
+  background: var(--warning-wash);
+  color: var(--warning);
+}
+
+.stat__glyph[data-tone="danger"] {
+  background: var(--danger-wash);
+  color: var(--danger);
+}
+
+.stat__glyph[data-tone="info"] {
+  background: var(--info-wash);
+  color: var(--info);
+}
+
+.kpi-value,
+.stat__value {
+  font-size: 1.75rem;
+  font-weight: 650;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  word-break: break-word;
+}
+
+.stat__foot {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  margin-block-start: auto;
+}
+
+.stat__foot a {
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.stat__foot a:hover {
+  text-decoration: underline;
+}
+
+/* ============================================================ badges */
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.55rem 0.15rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-sunken);
+  color: var(--muted);
+  font-size: 0.775rem;
+  font-weight: 550;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+/* The dot is redundant with the hue on purpose: it survives a monochrome
+   print, a colour-blind reader and a forced-colours mode. The label beside
+   it is what actually carries the meaning. */
+.status::before {
+  content: "";
+  inline-size: 0.4rem;
+  block-size: 0.4rem;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.status[data-tone="success"] {
+  background: var(--success-wash);
+  border-color: transparent;
+  color: var(--success);
+}
+
+.status[data-tone="warning"] {
+  background: var(--warning-wash);
+  border-color: transparent;
+  color: var(--warning);
+}
+
+.status[data-tone="danger"] {
+  background: var(--danger-wash);
+  border-color: transparent;
+  color: var(--danger);
+}
+
+.status[data-tone="info"] {
+  background: var(--info-wash);
+  border-color: transparent;
+  color: var(--info);
+}
+
+.status[data-tone="primary"] {
+  background: var(--primary-wash);
+  border-color: transparent;
+  color: var(--primary);
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+}
+
+.badge {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.775rem;
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.badge[data-kind="partial"] {
+  border-color: transparent;
+  background: var(--warning-wash);
+  color: var(--warning);
+}
+
+/* ============================================================ toolbar */
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-block-end: 1rem;
+}
+
+.toolbar__spacer {
+  margin-inline-start: auto;
+}
+
+.search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 15rem;
+  min-inline-size: 0;
+  max-inline-size: 24rem;
+}
+
+.search .icon {
+  position: absolute;
+  inset-inline-start: 0.65rem;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.search input {
+  inline-size: 100%;
+  min-block-size: 2.5rem;
+  padding: 0 0.75rem 0 2.25rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: flex-end;
+  margin-block-end: 1rem;
+}
+
+.filters .field {
+  margin: 0;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-block-end: 0.9rem;
+  min-inline-size: 0;
+}
+
+.field > label,
+.field__label {
+  font-size: 0.8125rem;
+  font-weight: 550;
+  color: var(--fg);
+}
+
+.field__hint {
+  font-size: 0.775rem;
+  color: var(--muted);
+}
+
+.field input,
+.field select,
+.field textarea {
+  inline-size: 100%;
+  min-block-size: 2.5rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+}
+
+.field textarea {
+  min-block-size: 7rem;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.field input:focus-visible,
+.field select:focus-visible,
+.field textarea:focus-visible,
+.search input:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+  border-color: var(--primary);
+}
+
+.field [aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.field__error {
+  font-size: 0.8rem;
+  color: var(--danger);
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.field__counter {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  margin-inline-start: auto;
+}
+
+.field__counter[data-over="true"] {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.field__labelrow {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+/* Segmented control — a small, closed set of choices where a select would
+   hide the options that matter. */
+.segmented {
+  display: inline-flex;
+  padding: 0.2rem;
+  gap: 0.15rem;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  max-inline-size: 100%;
+  overflow-x: auto;
+}
+
+.segmented button {
+  min-block-size: 2rem;
+  padding: 0 0.7rem;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 0.15rem);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.segmented button[aria-pressed="true"],
+.segmented button[aria-selected="true"] {
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: var(--shadow);
+}
+
+.range {
+  display: inline-flex;
+  padding: 0.2rem;
+  gap: 0.15rem;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  margin: 0;
+}
+
+.range .action {
+  min-height: 2rem;
+  padding: 0 0.7rem;
+  border-color: transparent;
+  background: transparent;
+  font-size: 0.85rem;
+}
+
+.range .action[aria-pressed="true"] {
+  background: var(--surface);
+  border-color: transparent;
+  color: var(--fg);
+  box-shadow: var(--shadow);
+}
+
+/* Tabs — a real tablist, so arrow keys work and the panel is labelled. */
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-block-end: 1px solid var(--line);
+  margin-block-end: 1.5rem;
+  overflow-x: auto;
+}
+
+.tabs button {
+  position: relative;
+  min-block-size: 2.6rem;
+  padding: 0 0.85rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.tabs button[aria-selected="true"] {
+  color: var(--primary);
+}
+
+.tabs button[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0.3rem;
+  inset-block-end: -1px;
+  block-size: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--primary);
+}
+
+/* ============================================================ tables */
+
+.table-scroll {
+  overflow-x: auto;
+  /* Contains the `.sr-only` caption and hidden hints in unmeasured cells:
+     they are absolutely positioned, and without a positioned ancestor they
+     resolve against the initial containing block at a static position
+     inside the scrolled table, growing `html`'s scroll width while `body`
+     measures clean. */
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  margin: 0 0 1.25rem;
+}
+
+.data-table,
+.users-table,
+.analytics-table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.data-table th,
+.data-table td,
+.users-table th,
+.users-table td,
+.analytics-table th,
+.analytics-table td {
+  text-align: start;
+  padding: 0.7rem 0.9rem;
+  border-block-end: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.data-table thead th,
+.users-table thead th,
+.analytics-table thead th {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  background: var(--surface-sunken);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.775rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.data-table tbody tr:last-child td,
+.users-table tbody tr:last-child td,
+.analytics-table tbody tr:last-child td {
+  border-block-end: 0;
+}
+
+.data-table tbody tr:hover,
+.users-table tbody tr:hover {
+  background: var(--surface-sunken);
+}
+
+.data-table td,
+.analytics-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.analytics-table td {
+  white-space: nowrap;
+}
+
+.data-table td[data-unmeasured="true"],
+.analytics-table td[data-unmeasured="true"] {
+  color: var(--muted);
+}
+
+.table-scroll .analytics-table,
+.table-scroll .data-table,
+.table-scroll .users-table {
+  margin: 0;
+  min-inline-size: 26rem;
+}
+
+.table-scroll .analytics-table:has(.bar) {
+  min-inline-size: 34rem;
+}
+
+.cell-primary {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.35;
+  min-inline-size: 0;
+}
+
+.cell-primary strong {
+  font-weight: 600;
+}
+
+.cell-primary span {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.cell-actions {
+  display: flex;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+
+/* A monospace identifier, shortened. An operator copies these; they should
+   never be mistaken for prose. */
+.ref {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.users-cards {
+  list-style: none;
+  margin: 0 0 1.25rem;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.users-cards li {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 0.9rem 1rem;
+}
+
+@media (max-width: 47.99rem) {
+  .users-table {
+    display: none;
+  }
+}
+
+@media (min-width: 48rem) {
+  .users-cards {
+    display: none;
+  }
+}
+
+/* ============================================================ lists */
+
+.facts {
+  display: grid;
+  grid-template-columns: minmax(8rem, auto) minmax(0, 1fr);
+  gap: 0.5rem 1rem;
+  margin: 0 0 1.25rem;
+  font-size: 0.9rem;
+}
+
+.facts dt {
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.attention-list,
+.activity-list,
+.shortcut-list,
+.delivery-actions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.attention-list li,
+.activity-list li,
+.delivery-actions li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 1.05rem;
+  border-block-end: 1px solid var(--line);
+  font-size: 0.9rem;
+}
+
+.attention-list li:last-child,
+.activity-list li:last-child,
+.delivery-actions li:last-child {
+  border-block-end: 0;
+}
+
+.activity-list time,
+.attention-list time {
+  margin-inline-start: auto;
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.shortcut-list {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 1.15rem;
+  border-inline-start: 2px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
+.timeline li {
+  position: relative;
+}
+
+.timeline li::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: -1.55rem;
+  inset-block-start: 0.4rem;
+  inline-size: 0.55rem;
+  block-size: 0.55rem;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--line-strong);
+}
+
+.timeline li[data-tone="primary"]::before {
+  border-color: var(--primary);
+}
+
+.detail-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-block-end: 1.25rem;
+}
+
+/* ============================================================ states */
+
+/* Empty, error and loading are first-class, because §28 forbids the blank
+   screen that all three otherwise become. */
+.state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.6rem;
+  padding: 3rem 1.5rem;
+  background: var(--surface);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+}
+
+.state__glyph {
+  inline-size: 2.75rem;
+  block-size: 2.75rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--surface-sunken);
+  color: var(--muted);
+}
+
+.state__glyph[data-tone="danger"] {
+  background: var(--danger-wash);
+  color: var(--danger);
+}
+
+.state h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.state p {
+  margin: 0;
+  color: var(--muted);
+  max-inline-size: 44ch;
+  font-size: 0.9rem;
+}
+
+.error,
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  margin-block-end: 1rem;
+  font-size: 0.9rem;
+}
+
+.error {
+  background: var(--danger-wash);
+  border-color: color-mix(in oklab, var(--danger) 30%, transparent);
+  color: var(--danger);
+}
+
+.notice {
+  background: var(--info-wash);
+  border-color: color-mix(in oklab, var(--info) 25%, transparent);
+  color: var(--info);
+}
+
+.notice[data-tone="warning"] {
+  background: var(--warning-wash);
+  border-color: color-mix(in oklab, var(--warning) 30%, transparent);
+  color: var(--warning);
+}
+
+.notice[data-tone="success"] {
+  background: var(--success-wash);
+  border-color: color-mix(in oklab, var(--success) 30%, transparent);
+  color: var(--success);
+}
+
+.skeleton {
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    90deg,
+    var(--surface-sunken) 25%,
+    color-mix(in oklab, var(--surface-sunken) 55%, var(--line)) 37%,
+    var(--surface-sunken) 63%
+  );
+  background-size: 400% 100%;
+  animation: skeleton 1.4s ease infinite;
+  block-size: 1rem;
+}
+
+@keyframes skeleton {
+  from {
+    background-position: 100% 50%;
+  }
+  to {
+    background-position: 0 50%;
+  }
+}
+
+/* ============================================================ toast */
+
+.toasts {
+  position: fixed;
+  inset-block-end: 1rem;
+  inset-inline: 1rem auto;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-inline-size: min(26rem, calc(100vw - 2rem));
+}
+
+@media (min-width: 48rem) {
+  .toasts {
+    inset-inline: auto 1.25rem;
+    inset-block-end: 1.25rem;
+  }
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-raised);
+  font-size: 0.9rem;
+  animation: toast-in 0.18s ease;
+}
+
+.toast[data-tone="success"] {
+  border-color: color-mix(in oklab, var(--success) 40%, transparent);
+}
+
+.toast[data-tone="danger"] {
+  border-color: color-mix(in oklab, var(--danger) 40%, transparent);
+}
+
+.toast__glyph[data-tone="success"] {
+  color: var(--success);
+}
+
+.toast__glyph[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.toast button {
+  margin-inline-start: auto;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+}
+
+/* ============================================================ dialog */
+
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-block-start: 1.25rem;
+}
+
+dialog {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  color: var(--fg);
+  box-shadow: var(--shadow-raised);
+  padding: 1.35rem;
+  max-inline-size: min(34rem, calc(100vw - 2rem));
+  inline-size: 100%;
+}
+
+dialog::backdrop {
+  background: oklch(0.145 0 0 / 45%);
+  backdrop-filter: blur(2px);
+}
+
+dialog h2,
+dialog h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+}
+
+/* ============================================================ misc kept */
+
+.gate {
+  max-width: 26rem;
+  margin: 0 auto;
+  padding: 4rem 1.25rem;
+}
+
+.dashboard-freshness {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-block-end: 1.25rem;
+  font-size: 0.85rem;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-block-start: 1rem;
+}
+
+.pagination span {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.load-more {
+  display: flex;
+  justify-content: center;
+  margin-block-start: 1rem;
+}
+
+.audit-details {
+  display: grid;
+  grid-template-columns: minmax(7rem, auto) minmax(0, 1fr);
+  gap: 0.4rem 1rem;
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+}
+
+.audit-details dt {
+  color: var(--muted);
+}
+
+.audit-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.moderation-actions,
+.tournament-actions,
+.delivery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.delivery-actions {
+  flex-direction: column;
+}
+
+/* ============================================================ analytics */
+
 .metric {
   border: 1px solid var(--line);
-  border-radius: 0.6rem;
-  padding: 0.9rem 1rem;
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 0.95rem 1.1rem;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
   min-inline-size: 0;
+  block-size: 100%;
 }
 
 .metric dt,
@@ -602,13 +1652,15 @@ dialog textarea {
 
 .metric__value {
   font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
   line-height: 1.15;
   word-break: break-word;
 }
 
-/* An unmeasured figure is a muted dash, never a zero — the one rule this
-   page turns on. See `shared/ui/metric.tsx`. */
+/* An unmeasured figure is a muted dash, never a zero — the rule the whole
+   analytics page turns on. See `shared/ui/metric.tsx`. */
 .metric__value[data-unmeasured="true"] {
   color: var(--muted);
 }
@@ -625,7 +1677,7 @@ dialog textarea {
   justify-content: center;
   inline-size: 1.05rem;
   block-size: 1.05rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: 50%;
   font-size: 0.6875rem;
   color: var(--muted);
@@ -633,30 +1685,10 @@ dialog textarea {
   flex: none;
 }
 
-.badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin: 0 0 1rem;
-}
-
-.badge {
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 0.15rem 0.6rem;
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-
-.badge[data-kind="partial"] {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 .bars {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.5rem;
   margin: 0 0 1.5rem;
 }
 
@@ -677,7 +1709,8 @@ dialog textarea {
 .bar__track {
   block-size: 0.5rem;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--line) 70%, transparent);
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
   overflow: hidden;
   min-inline-size: 2rem;
 }
@@ -685,7 +1718,7 @@ dialog textarea {
 .bar__fill {
   display: block;
   block-size: 100%;
-  background: var(--accent);
+  background: var(--primary);
   border-radius: inherit;
 }
 
@@ -694,63 +1727,9 @@ dialog textarea {
   font-variant-numeric: tabular-nums;
 }
 
-.analytics-table {
-  inline-size: 100%;
-  border-collapse: collapse;
-  margin: 0 0 1.5rem;
-  font-size: 0.875rem;
-}
-
-.analytics-table th,
-.analytics-table td {
-  text-align: start;
-  padding: 0.55rem 0.6rem;
-  border-block-end: 1px solid var(--line);
-  vertical-align: middle;
-}
-
-.analytics-table thead th {
-  color: var(--muted);
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.analytics-table td {
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.analytics-table td[data-unmeasured="true"] {
-  color: var(--muted);
-}
-
-/* The cohort table is the one surface that legitimately scrolls: five
-   columns of numbers do not fold, and stacking them loses the comparison
-   the table exists for. */
-.table-scroll {
-  overflow-x: auto;
-  margin: 0 0 1.5rem;
-  /* Contains the `.sr-only` caption and the hidden hints in unmeasured
-     cells. They are `position: absolute`, so without a positioned ancestor
-     they resolve against the initial containing block at a static position
-     *inside* the scrolled table — which grows `html`'s scroll width and
-     gives the whole page a horizontal scrollbar at 360px, while `body`
-     measures clean. */
-  position: relative;
-}
-
-.table-scroll .analytics-table {
-  margin: 0;
-  min-inline-size: 26rem;
-}
-
-.table-scroll .analytics-table:has(.bar) {
-  min-inline-size: 34rem;
-}
-
 /* A bar in a funnel row keeps its label on one line. The table scrolls, so
-   there is room; letting the narrow-screen rule below apply here instead
-   shreds "Viewed the landing page" into three broken lines. */
+   there is room; letting the narrow-screen rule below apply here shreds
+   "Viewed the landing page" into three broken lines. */
 .analytics-table .bar {
   grid-template-columns: minmax(9rem, 1fr) minmax(3rem, 8rem);
 }
@@ -769,7 +1748,184 @@ dialog textarea {
     order: 3;
   }
 
-  .metric__value {
-    font-size: 1.25rem;
+  .metric__value,
+  .kpi-value,
+  .stat__value {
+    font-size: 1.375rem;
   }
+}
+
+/* ============================================================ motion */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  .sidebar {
+    transition: none;
+  }
+}
+
+/* The two shell toggles are each meaningful on exactly one side of the
+   layout breakpoint: there is no drawer to open on a desktop, and no room
+   to spare on a phone. Hidden rather than disabled — a control that cannot
+   do anything is noise, and `display:none` also takes it out of the tab
+   order, which `disabled` alone would not do reliably across browsers. */
+@media (min-width: 64rem) {
+  .menu-toggle {
+    display: none;
+  }
+}
+
+@media (max-width: 63.99rem) {
+  .rail-toggle {
+    display: none;
+  }
+}
+
+/* The sidebar is `position: sticky` and one viewport tall, so on a long
+   page its grid cell outlives its own background and the column appears to
+   stop halfway down. Painting the ground on the grid instead of on the
+   element keeps the two columns reading as two columns for the whole
+   scroll. */
+@media (min-width: 64rem) {
+  .shell {
+    background: linear-gradient(
+        to right,
+        var(--surface-sunken) 0 var(--sidebar-w),
+        var(--bg) var(--sidebar-w)
+      )
+      no-repeat;
+  }
+
+  .sidebar {
+    background: transparent;
+  }
+}
+
+/* ============================================================ composer */
+
+/* The form and the preview side by side above 60rem, stacked below it. The
+   preview is not decoration: it is how an administrator checks what a
+   player will read before sending something that cannot be recalled, so on
+   a narrow screen it follows the fields rather than disappearing. */
+.composer {
+  display: grid;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+@media (min-width: 60rem) {
+  .composer {
+    grid-template-columns: minmax(0, 1.2fr) minmax(18rem, 0.8fr);
+  }
+}
+
+.preview {
+  position: sticky;
+  inset-block-start: calc(var(--topbar-h) + 1rem);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+
+@media (max-width: 59.99rem) {
+  .preview {
+    position: static;
+  }
+}
+
+.preview__caption {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.preview__frame {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  padding: 0.85rem;
+}
+
+.preview__row {
+  display: flex;
+  gap: 0.7rem;
+  padding: 0.8rem 0.9rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+}
+
+.preview__glyph {
+  inline-size: 2rem;
+  block-size: 2rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--primary-wash);
+  color: var(--primary);
+  flex: none;
+}
+
+.preview__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-inline-size: 0;
+}
+
+.preview__text strong {
+  font-size: 0.9rem;
+}
+
+/* The body is prose an administrator typed. It wraps, it keeps the line
+   breaks they entered, and it never runs outside the frame — which is the
+   whole point of previewing it. */
+.preview__text span {
+  font-size: 0.85rem;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.preview__note {
+  margin: 0;
+  font-size: 0.775rem;
+}
+
+/* Links carry the brand hue, not the user agent's blue — the console had
+   been mixing Arena64 indigo with `#0000EE` on every table. Underlined on
+   hover rather than always: a dense table of underlined names is harder to
+   scan than one where the weight and colour carry the affordance, and the
+   underline is still there the moment a pointer or focus lands. */
+a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+a:hover,
+a:focus-visible {
+  text-decoration: underline;
+}
+
+.data-table a,
+.users-table a,
+.analytics-table a {
+  font-weight: 550;
+}
+
+/* A link that is a whole cell of two lines keeps its secondary line muted
+   rather than inheriting the accent. */
+.cell-primary span {
+  color: var(--muted);
+  font-weight: 400;
 }

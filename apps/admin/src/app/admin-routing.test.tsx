@@ -91,6 +91,16 @@ afterEach(() => {
   accessToken.clear();
 });
 
+/**
+ * The sidebar, by its accessible name.
+ *
+ * A64-027A gave the shell a second navigation landmark — the breadcrumb in
+ * the toolbar — so "the navigation" is now ambiguous. Both are labelled,
+ * which is what makes them distinguishable to a screen reader as well as
+ * to these tests.
+ */
+const NAV = /admin sections|bo'limlari|разделы админки/i;
+
 describe("the protected route boundary", () => {
   it("sends an unauthenticated visitor to the login form, remembering where they were going", async () => {
     // §17.1 and §8. A bookmark to a protected section must not 404 and must
@@ -116,7 +126,7 @@ describe("the protected route boundary", () => {
     await user.click(screen.getByRole("button", { name: /sign in|kirish|войти/i }));
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/matches"));
-    expect(await screen.findByRole("navigation")).toBeInTheDocument();
+    expect(await screen.findByRole("navigation", { name: NAV })).toBeInTheDocument();
   });
 
   it("never renders the shell to a valid non-administrator", async () => {
@@ -150,7 +160,9 @@ describe("the protected route boundary", () => {
     accessToken.clear();
     const router = renderAt("/tournaments");
 
-    await waitFor(() => expect(screen.getByRole("navigation")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole("navigation", { name: NAV })).toBeInTheDocument(),
+    );
     expect(router.state.location.pathname).toBe("/tournaments");
     expect(calls.some((url) => url.endsWith("/auth/browser/refresh"))).toBe(true);
   });
@@ -161,7 +173,9 @@ describe("the protected route boundary", () => {
     // saying yes, and the next protected navigation is refused.
     const api = stubApi({ signedIn: true, admin: true });
     const router = renderAt("/");
-    await waitFor(() => expect(screen.getByRole("navigation")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole("navigation", { name: NAV })).toBeInTheDocument(),
+    );
 
     api.state.admin = false;
     const user = userEvent.setup();
@@ -180,7 +194,9 @@ describe("the protected route boundary", () => {
     // machine leaks an admin session.
     const { calls } = stubApi({ signedIn: true, admin: true });
     const router = renderAt("/");
-    await waitFor(() => expect(screen.getByRole("navigation")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole("navigation", { name: NAV })).toBeInTheDocument(),
+    );
 
     await userEvent
       .setup()
@@ -199,7 +215,7 @@ describe("the protected route boundary", () => {
     stubApi({ signedIn: true, admin: true });
     renderAt("/moderation");
 
-    const navigation = await screen.findByRole("navigation");
+    const navigation = await screen.findByRole("navigation", { name: NAV });
     const active = within(navigation)
       .getAllByRole("link")
       .filter((link) => link.getAttribute("aria-current") === "page");

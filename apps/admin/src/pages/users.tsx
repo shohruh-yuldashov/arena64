@@ -3,7 +3,10 @@ import { useCallback, useEffect, useState } from "react";
 
 import { type AdminUserSummary, fetchUsers, type UserQuery } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
-import { ErrorNotice } from "@/shared/ui/error-notice";
+import { DataTable } from "@/shared/ui/data-table";
+import { Icon } from "@/shared/ui/icon";
+import { StatusBadge } from "@/shared/ui/status-badge";
+import { EmptyState, ErrorState, LoadingSkeleton } from "@/shared/ui/states";
 import { PageHeader } from "@/shared/ui/page-header";
 import { Pagination } from "@/shared/ui/pagination";
 import { useCursorPages } from "@/shared/ui/use-cursor-pages";
@@ -99,21 +102,27 @@ export function UsersPage() {
     <>
       <PageHeader title={t("users.title")} />
 
-      <div className="filters">
-        <p className="field">
-          <label htmlFor="user-search">{t("users.search")}</label>
+      <div className="toolbar">
+        <span className="search">
+          <Icon name="search" size={16} />
+          <label htmlFor="user-search" className="sr-only">
+            {t("users.search")}
+          </label>
           <input
             id="user-search"
             type="search"
             value={term}
+            placeholder={t("users.search")}
             onChange={(event) => setTerm(event.target.value)}
             aria-describedby="user-search-hint"
           />
-          <span id="user-search-hint" className="muted">
-            {t("users.searchHint")}
-          </span>
-        </p>
+        </span>
+        <span id="user-search-hint" className="muted">
+          {t("users.searchHint")}
+        </span>
+      </div>
 
+      <div className="filters">
         <p className="field">
           <label htmlFor="filter-active">{t("users.colStatus")}</label>
           <select
@@ -141,22 +150,21 @@ export function UsersPage() {
         </p>
       </div>
 
-      {pages.state === "loading" && <p role="status">{t("users.loading")}</p>}
+      {pages.state === "loading" && <LoadingSkeleton label={t("users.loading")} />}
 
-      {pages.state === "error" && <ErrorNotice message={t("users.error")} />}
+      {pages.state === "error" && (
+        <ErrorState title={t("users.error")} onRetry={pages.reload} />
+      )}
 
       {pages.state === "ready" && pages.rows.length === 0 && (
-        <>
-          <p role="status">{t("users.empty")}</p>
-          <p className="muted">{t("users.emptyHint")}</p>
-        </>
+        <EmptyState icon="users" title={t("users.empty")} description={t("users.emptyHint")} />
       )}
 
       {pages.state === "ready" && pages.rows.length > 0 && (
         <>
           {/* Wide: a table with real headers, so a screen reader can
               announce the column a cell belongs to. */}
-          <table className="users-table">
+          <DataTable caption={t("users.title")} minWidth="52rem">
             <thead>
               <tr>
                 <th scope="col">{t("users.colUser")}</th>
@@ -170,20 +178,44 @@ export function UsersPage() {
             <tbody>
               {pages.rows.map((user) => (
                 <tr key={user.id}>
-                  <td>
-                    <Link to="/users/$userId" params={{ userId: user.id }}>
-                      {user.display_name ?? user.username}
+                  <th scope="row">
+                    <Link
+                      className="cell-primary"
+                      to="/users/$userId"
+                      params={{ userId: user.id }}
+                    >
+                      <strong>{user.display_name ?? user.username}</strong>
+                      <span>@{user.username}</span>
                     </Link>
-                  </td>
+                  </th>
                   <td>{user.email}</td>
-                  <td>{t(user.is_active ? "users.active" : "users.inactive")}</td>
-                  <td>{t(user.is_verified ? "users.verified" : "users.unverified")}</td>
-                  <td>{t(user.is_admin ? "users.roleAdmin" : "users.roleNone")}</td>
+                  {/* A word and a hue, not a hue: an operator scanning a
+                      hundred rows uses the colour, everybody else uses the
+                      word, and forced-colours mode keeps the dot. */}
+                  <td>
+                    <StatusBadge
+                      label={t(user.is_active ? "users.active" : "users.inactive")}
+                      tone={user.is_active ? "success" : "neutral"}
+                    />
+                  </td>
+                  <td>
+                    <StatusBadge
+                      label={t(user.is_verified ? "users.verified" : "users.unverified")}
+                      tone={user.is_verified ? "success" : "warning"}
+                    />
+                  </td>
+                  <td>
+                    {user.is_admin ? (
+                      <StatusBadge label={t("users.roleAdmin")} tone="primary" />
+                    ) : (
+                      <span className="muted">{t("users.roleNone")}</span>
+                    )}
+                  </td>
                   <td>{new Date(user.created_at).toLocaleDateString(locale)}</td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </DataTable>
 
           {/* Narrow: the same rows as cards. Nothing is dropped — every
               column above appears here as a labelled line. */}
@@ -194,10 +226,16 @@ export function UsersPage() {
                   {user.display_name ?? user.username}
                 </Link>
                 <span className="muted">{user.email}</span>
-                <span>
-                  {t(user.is_active ? "users.active" : "users.inactive")} ·{" "}
-                  {t(user.is_verified ? "users.verified" : "users.unverified")}
-                  {user.is_admin ? ` · ${t("users.roleAdmin")}` : ""}
+                <span className="badges">
+                  <StatusBadge
+                    label={t(user.is_active ? "users.active" : "users.inactive")}
+                    tone={user.is_active ? "success" : "neutral"}
+                  />
+                  <StatusBadge
+                    label={t(user.is_verified ? "users.verified" : "users.unverified")}
+                    tone={user.is_verified ? "success" : "warning"}
+                  />
+                  {user.is_admin && <StatusBadge label={t("users.roleAdmin")} tone="primary" />}
                 </span>
                 <span className="muted">
                   {t("users.joined")}: {new Date(user.created_at).toLocaleDateString(locale)}

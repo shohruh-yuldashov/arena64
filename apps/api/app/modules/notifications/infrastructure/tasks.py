@@ -21,6 +21,9 @@ from typing import Any, Final, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.modules.notifications.application.services.broadcast_expander import (
+    BroadcastExpander,
+)
 from app.modules.notifications.application.services.email_delivery_service import (
     EmailDeliveryService,
 )
@@ -125,11 +128,60 @@ def push_delivery_request() -> TaskRequest:
     return TaskRequest(name=PUSH_DELIVERY_TASK, queue=MAINTENANCE_QUEUE)
 
 
+#: The broadcast expander's key — A64-027A §19.
+#:
+#: A third handler on the same scheduler, for the same reason push is not a
+#: pass inside email: a platform-wide announcement is the longest-running of
+#: the three, and folding it into either would put an audience-sized write
+#: in front of every email and every push in the batch.
+BROADCAST_DELIVERY_TASK: Final = "notifications.broadcast_delivery"
+
+
+class BroadcastExpanderFactory(Protocol):
+    def __call__(self, session: AsyncSession) -> BroadcastExpander: ...
+
+
+class NotificationBroadcastTask:
+    """`platform.tasks.TaskHandler` — one broadcast batch, one session."""
+
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        service_factory: BroadcastExpanderFactory,
+    ) -> None:
+        self._session_factory = session_factory
+        self._service_factory = service_factory
+
+    @property
+    def name(self) -> str:
+        return BROADCAST_DELIVERY_TASK
+
+    async def run(self, payload: Mapping[str, Any]) -> None:
+        """Ignores the payload. One batch; the scheduler decides how often.
+
+        Deliberately not a loop to completion — a handler that ran until a
+        platform-wide broadcast finished would be a handler that ignores
+        shutdown, and this is the job most likely to be running when a
+        deploy happens.
+        """
+        async with self._session_factory() as session:
+            await self._service_factory(session).run_once()
+
+
+def broadcast_delivery_request() -> TaskRequest:
+    """The request that asks for one broadcast batch."""
+    return TaskRequest(name=BROADCAST_DELIVERY_TASK, queue=MAINTENANCE_QUEUE)
+
+
 __all__ = [
+    "BROADCAST_DELIVERY_TASK",
     "EMAIL_DELIVERY_TASK",
     "PUSH_DELIVERY_TASK",
+    "NotificationBroadcastTask",
     "NotificationEmailDeliveryTask",
     "NotificationPushDeliveryTask",
+    "broadcast_delivery_request",
     "email_delivery_request",
     "push_delivery_request",
 ]

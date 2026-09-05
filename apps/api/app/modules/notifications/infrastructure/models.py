@@ -89,6 +89,10 @@ NOTIFICATIONS_SCHEMA: Final = "notifications"
 #: at the exact moment a redelivery happened.
 NOTIFICATION_SOURCE_UNIQUE: Final = "uq_notification__recipient_source_type"
 
+#: The broadcast idempotency constraint's name, referenced by the
+#: repository's `ON CONFLICT`. A constant for the same reason as above.
+BROADCAST_IDEMPOTENCY_UNIQUE: Final = "uq_notification_broadcast__admin_key"
+
 
 class NotificationModel(UUIDPrimaryKeyMixin, Base):
     """One durable notification — `domain.record.NotificationRecord`.
@@ -178,6 +182,94 @@ class NotificationModel(UUIDPrimaryKeyMixin, Base):
     read_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     """When the recipient read it, or `NULL`. Server time, set once: a
     second mark-read keeps the original instant."""
+
+
+class NotificationBroadcastModel(UUIDPrimaryKeyMixin, Base):
+    """One administrative announcement — `domain.broadcast.Broadcast`.
+
+    The **system of record**, unlike `NotificationModel` above: nothing else
+    holds what an administrator sent, so this table is the answer to "who
+    told the platform that, and when". §23 requires that answer to survive
+    the notifications it produced.
+
+    ## Why the recipients are a column and not a table
+
+    `SPECIFIC_PLAYERS` carries at most `MAX_NAMED_RECIPIENTS` ids and the
+    list is written once and read once. A join table would be the right
+    shape for an unbounded audience that is queried, filtered and reported
+    on; for a bounded array nothing indexes, it would be a second table to
+    migrate, to clean up and to keep in step for no query it makes possible.
+
+    `ALL_PLAYERS` stores nothing here at all — the audience is resolved by
+    the expander at delivery time, which is what makes an account created
+    mid-broadcast either included or not on a rule rather than by accident.
+    """
+
+    __tablename__ = "notification_broadcast"
+
+    __table_args__ = (
+        # A double-submitted composer is the same broadcast, not a second
+        # one. Scoped to the administrator so two of them cannot collide on
+        # a client-generated value.
+        UniqueConstraint(
+            "created_by",
+            "idempotency_key",
+            name=BROADCAST_IDEMPOTENCY_UNIQUE,
+        ),
+        # The worker's claim query: the oldest unfinished broadcast.
+        # Partial, so the index holds only work and shrinks to nothing when
+        # there is none.
+        Index(
+            "ix_notification_broadcast__pending",
+            "created_at",
+            postgresql_where=text("status IN ('queued', 'sending')"),
+        ),
+        # The console's history: newest first, over everything.
+        Index(
+            "ix_notification_broadcast__created_at_id",
+            text("created_at DESC"),
+            text("id DESC"),
+        ),
+        {"schema": NOTIFICATIONS_SCHEMA},
+    )
+
+    title: Mapped[str] = mapped_column(String(120), nullable=False)
+    body: Mapped[str] = mapped_column(String(600), nullable=False)
+
+    locale: Mapped[str] = mapped_column(String(8), nullable=False)
+    """Which language the administrator wrote in. Not a translation key —
+    nothing translates this text; a client marks it with `lang` so a screen
+    reader pronounces it correctly."""
+
+    audience: Mapped[str] = mapped_column(String(32), nullable=False)
+    channel: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    created_by: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    """The administrator. Opaque `player_id` — DM-06, no foreign key."""
+
+    idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    recipients: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+
+    audience_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """`NULL` until counted. Never a zero standing in for "not counted yet",
+    which would read as a broadcast that reached nobody."""
+
+    delivered: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
+
+    failure_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    cursor: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    """The last recipient written. A keyset rather than an offset: accounts
+    are created while a broadcast is delivering, and an offset would skip or
+    repeat them."""
 
 
 class NotificationPreferenceModel(Base):
@@ -536,8 +628,10 @@ class NotificationPushDeliveryModel(Base):
 
 
 __all__ = [
+    "BROADCAST_IDEMPOTENCY_UNIQUE",
     "NOTIFICATIONS_SCHEMA",
     "NOTIFICATION_SOURCE_UNIQUE",
+    "NotificationBroadcastModel",
     "NotificationEmailDeliveryModel",
     "NotificationModel",
     "NotificationPreferenceModel",

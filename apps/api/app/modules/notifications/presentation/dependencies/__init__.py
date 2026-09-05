@@ -72,6 +72,9 @@ from app.modules.notifications.application.services import (
     SocialNotificationDispatcher,
     TournamentNotificationDispatcher,
 )
+from app.modules.notifications.application.services.broadcast_expander import (
+    BroadcastExpander,
+)
 from app.modules.notifications.application.services.email_delivery_service import (
     EmailDeliveryService,
 )
@@ -94,9 +97,15 @@ from app.modules.notifications.infrastructure.repositories import (
     SqlAlchemyPushDeliveryRepository,
     SqlAlchemyPushSubscriptionRepository,
 )
+from app.modules.notifications.infrastructure.repositories.broadcast_repository import (
+    SqlAlchemyBroadcastRepository,
+)
 from app.modules.notifications.presentation.email import TemplateEmailRenderer
 from app.modules.profiles.application.services.profile_renderer import BatchProfileRenderer
 from app.modules.tournament.public import TournamentNotificationReader
+from app.modules.users.infrastructure.repositories.audience_directory import (
+    SqlAlchemyNotificationAudienceDirectory,
+)
 from app.modules.users.infrastructure.repositories.email_recipient_directory import (
     SqlAlchemyEmailRecipientDirectory,
 )
@@ -286,6 +295,39 @@ def get_push_subscription_service(
 PushSubscriptionServiceDep = Annotated[
     PushSubscriptionService, Depends(get_push_subscription_service)
 ]
+
+
+def build_broadcast_expander(
+    session: AsyncSession,
+    *,
+    clock: Clock,
+    announcer: NotificationAnnouncer | None = None,
+    availability: ChannelAvailability = IN_APP_ONLY,
+) -> BroadcastExpander:
+    """The worker half of an administrative broadcast — A64-027A §19.
+
+    Built per tick over the worker's session, like the writer below it and
+    for the same reason: it holds repositories, repositories hold a session,
+    and a session must not outlive its unit of work.
+
+    The delivery policy has no switch here either. §15 requires that an
+    administrator cannot reach a player who muted announcements, and the
+    only way to guarantee that is for there to be no way to assemble an
+    expander that does not ask.
+    """
+    return BroadcastExpander(
+        broadcasts=SqlAlchemyBroadcastRepository(session),
+        notifications=SqlAlchemyNotificationRepository(session),
+        audience=SqlAlchemyNotificationAudienceDirectory(session),
+        policy=PreferenceDeliveryPolicy(
+            preferences=SqlAlchemyNotificationPreferenceRepository(
+                session, availability=availability
+            )
+        ),
+        announcer=announcer if announcer is not None else NullNotificationAnnouncer(),
+        clock=clock,
+        unit_of_work=SessionUnitOfWork(session),
+    )
 
 
 def build_durable_notification_writer(

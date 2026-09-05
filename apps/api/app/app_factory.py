@@ -66,6 +66,12 @@ from app.modules.friends.infrastructure.cache import (
     RedisSocialGraphCache,
 )
 from app.modules.game.application.services import ClockAdjudicationService
+from app.modules.game.application.services.clock_reconciliation import (
+    ClockDeadlineReconciliationTask,
+)
+from app.modules.game.application.services.clock_reconciliation import (
+    reconcile_request as clock_reconcile_request,
+)
 from app.modules.game.application.services.match_abort_service import PersistentMatchAbort
 from app.modules.game.application.services.origin_match_service import GameOriginMatches
 from app.modules.game.infrastructure import (
@@ -1285,6 +1291,23 @@ def build_task_schedulers(
                 ),
             )
         )
+        # A64-028.4, P3-4 reclassified. The queue this adjudicator reads is
+        # a Redis sorted set with no durable backing, and
+        # `ClockAdjudicationService` has said since A64-018 that a lost
+        # deadline means "the match stops flagging … for a game nobody is
+        # moving in it stays open". A64-028.3 proved the set does not
+        # survive a Redis loss and filed the missing backstop as a P3 about
+        # growth; the growth is the small half. This is the sweep that
+        # docstring names, re-deriving every active match's deadline from
+        # the columns the move committed.
+        handlers.append(
+            ClockDeadlineReconciliationTask(
+                session_factory=db.session_factory,
+                deadlines=RedisClockDeadlineStore(redis_pools.live),
+                clock=clock,
+                metrics=_metrics(),
+            )
+        )
     else:
         # `WARNING`: with it off, moves still charge time and the move log
         # still records it, and **no match ever flags**. That is a game
@@ -1487,6 +1510,13 @@ def build_task_schedulers(
                 dispatcher=dispatcher,
                 request=adjudication_request(),
                 interval_seconds=settings.game.clock_interval_seconds,
+            )
+        )
+        schedulers.append(
+            PeriodicTaskScheduler(
+                dispatcher=dispatcher,
+                request=clock_reconcile_request(),
+                interval_seconds=settings.game.clock_reconcile_interval_seconds,
             )
         )
     if email_channel_available(settings):

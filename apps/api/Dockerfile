@@ -23,9 +23,11 @@
 
 # --- build -------------------------------------------------------------------
 # Python 3.13, matching `requires-python`, `[tool.ruff] target-version`,
-# `[tool.mypy] python_version` and `[tool.pyright] pythonVersion`. The
-# development venv runs 3.14 and nothing pins it, which is recorded as a gap;
-# the image does not inherit that ambiguity.
+# `[tool.mypy] python_version`, `[tool.pyright] pythonVersion` — and, since
+# A64-028.3 closed P3-2, `.python-version`, which is what `uv` reads to build
+# a developer's virtualenv and CI's. The gap that file closes was real: the
+# suite ran on 3.14 everywhere except here, so a green build said nothing
+# about the interpreter that ships.
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS build
 
 ENV UV_COMPILE_BYTECODE=1 \
@@ -53,10 +55,35 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # --- runtime -----------------------------------------------------------------
 FROM python:3.13-slim-bookworm AS runtime
 
-# `curl` for the healthcheck below, and nothing else. Every package in a
-# runtime image is a package somebody has to patch.
+# Two packages, and each earns its place. Every package in a runtime image
+# is a package somebody has to patch.
+#
+#   curl               the healthcheck below
+#   postgresql-client-17  `pg_dump`, `pg_restore` and `psql`, for
+#                      `python -m app.operator.backup` — A64-028.3. This is
+#                      already the image that runs `alembic upgrade` as the
+#                      migration job, so it is the platform's operational
+#                      image rather than only its API; a second image for one
+#                      command would be a second thing to build, tag and keep
+#                      in step with the schema it dumps.
+#
+# **17, not whatever Debian ships.** Bookworm's `postgresql-client` is 15,
+# and `pg_dump` refuses a server newer than itself — so the default package
+# produces a version-mismatch error at the first backup rather than at build
+# time, which is the worst place to find out. PGDG is PostgreSQL's own apt
+# repository and is where the matching major comes from.
 RUN apt-get update \
-    && apt-get install --no-install-recommends --yes curl \
+    && apt-get install --no-install-recommends --yes curl ca-certificates gnupg \
+    && curl --fail --silent --show-error --location \
+        https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        | gpg --dearmor --output /usr/share/keyrings/pgdg.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] \
+https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install --no-install-recommends --yes postgresql-client-17 \
+    && apt-get purge --yes gnupg \
+    && apt-get autoremove --yes \
     && rm -rf /var/lib/apt/lists/*
 
 # A non-root user, created before the copy so the application files are

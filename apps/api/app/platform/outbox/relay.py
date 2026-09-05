@@ -422,6 +422,10 @@ class OutboxRelay:
         )
 
         async with self._unit_of_work:
+            # Every lock this tick needs, in one agreed order, before any
+            # write — see `lock_in_order`. Two relays overlapping used to
+            # deadlock here and abandon the events they were recording.
+            await self._outbox.lock_in_order([entry.id for entry in entries])
             published = await self._outbox.mark_published(succeeded, at=at)
             for entry in entries:
                 reason = failures.get(entry.id)

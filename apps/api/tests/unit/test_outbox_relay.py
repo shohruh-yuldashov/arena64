@@ -550,3 +550,53 @@ class TestTheRelaySessionIsNotShared:
         assert tick.failed == 0
         for consumer in ("alpha", "beta", "gamma"):
             assert any(record[0] == consumer for record in processed.records)
+
+
+class TestLockOrdering:
+    """Why a tick takes all its locks before it writes any — A64-028.5A §26.
+
+    Two instances running a matchmaking burst produced
+    `DeadlockDetectedError` three times each, and PostgreSQL resolved every
+    one of them by killing a relay mid-record. Each kill counted as a failed
+    attempt against rows that had in fact been delivered, and 809 presence
+    events reached the five-attempt ceiling and were abandoned for good.
+
+    The cycle came from writing a tick in two shapes: successes as one
+    batched update and failures one row at a time. Two relays whose claims
+    overlapped therefore locked the same rows in opposite orders. The relay
+    now asks for every row it is about to write, once, in ascending id
+    order, so the second relay waits instead of dying.
+    """
+
+    async def test_every_written_entry_is_locked_first(
+        self, outbox: InMemoryOutbox, processed: InMemoryProcessedEvents, clock: MovableClock
+    ) -> None:
+        published = await _enqueue(outbox)
+        refused = await _enqueue(outbox)
+
+        await _relay(outbox, processed, clock, _Handler(fail_ids={refused.id})).run_once()
+
+        (asked,) = outbox.locked_in_order
+        assert sorted(asked) == sorted([published.id, refused.id])
+
+    async def test_every_entry_is_asked_for_whatever_the_outcomes_were(
+        self, outbox: InMemoryOutbox, processed: InMemoryProcessedEvents, clock: MovableClock
+    ) -> None:
+        """The property that removes the cycle.
+
+        Sorting each group on its own would not have been enough: a success
+        and a failure are written by different statements, and it is the
+        order *between* the groups that differed between relays. The order
+        asked for has to come from the ids alone, so that two relays holding
+        overlapping claims agree on it without knowing each other's
+        outcomes. The relay's half of that is asking for all of them in one
+        call; the ascending order itself is the adapter's, and is proven
+        against a real database in the repository's contract tests.
+        """
+        entries = [await _enqueue(outbox) for _ in range(4)]
+        failed = {entries[0].id, entries[3].id}
+
+        await _relay(outbox, processed, clock, _Handler(fail_ids=failed)).run_once()
+
+        (asked,) = outbox.locked_in_order
+        assert sorted(asked) == sorted(entry.id for entry in entries)

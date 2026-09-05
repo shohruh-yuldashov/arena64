@@ -7,8 +7,9 @@ import {
   useNavigate,
   useRouterState,
 } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { type Theme, useTheme } from "@/app/theme";
 import { useAdminAuth } from "@/app/use-admin-auth";
 import { AuditPage } from "@/pages/audit";
 import { AnalyticsPage } from "@/pages/analytics";
@@ -25,6 +26,8 @@ import { UserDetailPage } from "@/pages/user-detail";
 import { UsersPage } from "@/pages/users";
 import { signOut as revokeSession } from "@/shared/api/client";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
+import { Icon, type IconName } from "@/shared/ui/icon";
+import { ToastProvider } from "@/shared/ui/toast";
 
 /**
  * The admin console's routes — A64-024.2 §6, §7.
@@ -45,15 +48,78 @@ import { type TranslationKey, useTranslation } from "@/shared/i18n";
  * rather than a child.
  */
 
-const SECTIONS = [
-  { path: "/analytics", label: "nav.analytics" },
-  { path: "/users", label: "nav.users" },
-  { path: "/matches", label: "nav.matches" },
-  { path: "/tournaments", label: "nav.tournaments" },
-  { path: "/moderation", label: "nav.moderation" },
-  { path: "/notifications", label: "nav.notifications" },
-  { path: "/audit", label: "nav.audit" },
-] as const;
+/**
+ * The console's map — A64-027A §3.
+ *
+ * Nine destinations in six named groups, and the grouping is the point. A
+ * flat list of nine asks the reader to hold the whole console in their head
+ * to find anything; "Safety" containing moderation and the audit log tells
+ * an administrator who has never seen Arena64's source where to look when
+ * something is wrong.
+ *
+ * The group names describe **what an operator is trying to do**, not which
+ * module owns the route. `audit` and `moderation` live in different backend
+ * modules and belong in the same group here, because the person reaching
+ * for one is often about to reach for the other.
+ *
+ * Every entry is a real route backed by a real capability. §3 forbids the
+ * menu item that exists because the sidebar looked unbalanced without it.
+ */
+interface NavItem {
+  path: string;
+  label: TranslationKey;
+  icon: IconName;
+}
+
+interface NavGroup {
+  label: TranslationKey;
+  items: NavItem[];
+}
+
+const NAVIGATION: NavGroup[] = [
+  {
+    label: "nav.group.overview",
+    items: [{ path: "/", label: "nav.dashboard", icon: "dashboard" }],
+  },
+  {
+    label: "nav.group.management",
+    items: [
+      { path: "/users", label: "nav.users", icon: "users" },
+      { path: "/matches", label: "nav.matches", icon: "matches" },
+      { path: "/tournaments", label: "nav.tournaments", icon: "tournaments" },
+    ],
+  },
+  {
+    label: "nav.group.communication",
+    items: [{ path: "/notifications", label: "nav.notifications", icon: "notifications" }],
+  },
+  {
+    label: "nav.group.insights",
+    items: [{ path: "/analytics", label: "nav.analytics", icon: "analytics" }],
+  },
+  {
+    label: "nav.group.safety",
+    items: [
+      { path: "/moderation", label: "nav.moderation", icon: "moderation" },
+      { path: "/audit", label: "nav.audit", icon: "audit" },
+    ],
+  },
+];
+
+/**
+ * Which navigation entry a path belongs to, for the toolbar's context line.
+ *
+ * Longest match wins, so `/users/{id}` resolves to Users rather than to the
+ * dashboard's `/`. Without the length ordering every detail page would
+ * claim to be the dashboard, since every path starts with `/`.
+ */
+function sectionFor(pathname: string): NavItem | null {
+  const all = NAVIGATION.flatMap((group) => group.items);
+  const matches = all
+    .filter((item) => (item.path === "/" ? pathname === "/" : pathname.startsWith(item.path)))
+    .sort((left, right) => right.path.length - left.path.length);
+  return matches[0] ?? null;
+}
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
@@ -144,56 +210,229 @@ function ProtectedLayout() {
     );
   }
 
-  const identity = auth.session.display_name ?? auth.session.username;
+  return (
+    <ToastProvider>
+      <ConsoleShell
+        identity={auth.session.display_name ?? auth.session.username}
+        username={auth.session.username}
+        roles={auth.session.roles}
+        pathname={pathname}
+        onSignOut={() => {
+          // Revoke server-side first, then forget locally. The order
+          // matters: forgetting first would leave a live session on the
+          // server that nothing here can reach to end.
+          void revokeSession().then(() => {
+            forget();
+            void navigate({ to: "/login", replace: true });
+          });
+        }}
+      />
+    </ToastProvider>
+  );
+}
+
+/**
+ * The console frame — A64-027A §4.
+ *
+ * Three regions, and each answers one of the two questions §4 says an
+ * administrator must never have to ask:
+ *
+ *     sidebar     "where am I, and where else could I be"
+ *     toolbar     "what is this screen, and what is true of my session"
+ *     workspace   "what can I do here"
+ *
+ * ## The sidebar is one element in two shapes
+ *
+ * Below 64rem it is a sheet over the page; above, a column beside it. Both
+ * shapes are the *same markup* — the difference is transform and position —
+ * so the reading order a screen reader gets never depends on the viewport,
+ * and a keyboard operator tabs through navigation before content on every
+ * device.
+ *
+ * ## The rail
+ *
+ * Collapsing to icons is a real preference on a 13-inch laptop, and a real
+ * accessibility hazard if the labels simply vanish: `title` plus the
+ * button's own accessible name keep every destination announceable. The
+ * state is deliberately not persisted — it is a momentary "give me more
+ * width for this table", not a setting.
+ */
+function ConsoleShell({
+  identity,
+  username,
+  roles,
+  pathname,
+  onSignOut,
+}: {
+  identity: string;
+  username: string;
+  roles: string[];
+  pathname: string;
+  onSignOut: () => void;
+}) {
+  const { t } = useTranslation();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [rail, setRail] = useState(false);
+  const current = sectionFor(pathname);
+
+  // A navigation closes the sheet. Without this, following a link on a
+  // phone leaves the destination hidden behind the menu that opened it.
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDrawerOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [drawerOpen]);
 
   return (
-    <div className="shell">
-      <header className="shell__header">
-        <div>
-          <h1>{t("app.title")}</h1>
-          <p className="muted">{t("app.subtitle")}</p>
-        </div>
-        <div className="shell__identity">
-          <span>{t("auth.signedInAs", { name: identity })}</span>
-          <button
-            type="button"
-            className="action"
-            onClick={() => {
-              // Revoke server-side first, then forget locally. The order
-              // matters: forgetting first would leave a live session on the
-              // server that nothing here can reach to end.
-              void revokeSession().then(() => {
-                forget();
-                void navigate({ to: "/login", replace: true });
-              });
-            }}
-          >
-            {t("auth.signOut")}
+    <div className="shell" data-rail={rail ? "true" : undefined}>
+      <aside className="sidebar" data-open={drawerOpen ? "true" : undefined}>
+        <Link className="sidebar__brand" to="/">
+          <span className="sidebar__mark" aria-hidden="true">
+            A64
+          </span>
+          <span className="sidebar__name">
+            <strong>{t("app.title")}</strong>
+            <span>{t("app.subtitle")}</span>
+          </span>
+        </Link>
+
+        <nav aria-label={t("nav.label")}>
+          {NAVIGATION.map((group) => (
+            <div key={group.label}>
+              <p className="sidebar__group">{t(group.label)}</p>
+              <ul>
+                {group.items.map((item) => (
+                  <li key={item.path}>
+                    <Link
+                      to={item.path}
+                      title={t(item.label)}
+                      activeOptions={item.path === "/" ? { exact: true } : undefined}
+                    >
+                      <Icon name={item.icon} size={17} />
+                      <span>{t(item.label)}</span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </nav>
+
+        <div className="sidebar__footer">
+          <div className="sidebar__account">
+            <span className="sidebar__avatar" aria-hidden="true">
+              {identity.slice(0, 2).toUpperCase()}
+            </span>
+            <span className="sidebar__who">
+              <strong>{identity}</strong>
+              {/* The role is shown because it is the answer to "may I do
+                  this", and an operator who cannot see their own authority
+                  discovers its limits by being refused. */}
+              <span>{roles.length > 0 ? roles.join(", ") : `@${username}`}</span>
+            </span>
+          </div>
+          <button type="button" className="action subtle" onClick={onSignOut}>
+            <Icon name="signOut" size={16} />
+            <span>{t("auth.signOut")}</span>
           </button>
         </div>
-      </header>
+      </aside>
 
-      <div className="shell__body">
-        <nav aria-label={t("nav.label")}>
-          <ul>
-            <li>
-              <Link to="/" activeOptions={{ exact: true }}>
-                {t("nav.dashboard")}
-              </Link>
-            </li>
-            {SECTIONS.map((section) => (
-              <li key={section.path}>
-                <Link to={section.path}>{t(section.label as TranslationKey)}</Link>
-              </li>
-            ))}
-          </ul>
-        </nav>
+      {drawerOpen && (
+        <button
+          type="button"
+          className="scrim"
+          aria-label={t("shell.closeMenu")}
+          onClick={() => {
+            setDrawerOpen(false);
+          }}
+        />
+      )}
+
+      <div className="workspace">
+        <header className="topbar">
+          <button
+            type="button"
+            className="action subtle icon-only menu-toggle"
+            aria-label={t("shell.openMenu")}
+            aria-expanded={drawerOpen}
+            onClick={() => {
+              setDrawerOpen(true);
+            }}
+          >
+            <Icon name="menu" size={18} />
+          </button>
+
+          <nav className="topbar__crumbs" aria-label={t("shell.breadcrumb")}>
+            <Link to="/">{t("app.title")}</Link>
+            <Icon name="chevronRight" size={14} aria-hidden="true" />
+            <strong>{current === null ? t("nav.dashboard") : t(current.label)}</strong>
+          </nav>
+
+          <div className="topbar__spacer" />
+
+          <button
+            type="button"
+            className="action subtle icon-only rail-toggle"
+            aria-label={t("shell.collapseNav")}
+            aria-pressed={rail}
+            onClick={() => {
+              setRail((value) => !value);
+            }}
+          >
+            <Icon name="panel" size={18} />
+          </button>
+
+          <ThemeSwitch />
+        </header>
 
         <main>
           <Outlet />
         </main>
       </div>
     </div>
+  );
+}
+
+/**
+ * The theme control — three states, one button.
+ *
+ * A two-state toggle cannot express "follow my machine", which is the state
+ * most operators are already in and the one a console has no business
+ * overriding. Cycling through three is a smaller control than a menu and
+ * the current state is always announced, so nobody has to guess which of
+ * the three they are in.
+ */
+function ThemeSwitch() {
+  const { t } = useTranslation();
+  const { theme, setTheme } = useTheme();
+  const order: Theme[] = ["system", "light", "dark"];
+  const next = order[(order.indexOf(theme) + 1) % order.length] ?? "system";
+
+  return (
+    <button
+      type="button"
+      className="action subtle icon-only"
+      onClick={() => {
+        setTheme(next);
+      }}
+      aria-label={t("theme.switch", { current: t(`theme.${theme}` as TranslationKey) })}
+      title={t(`theme.${theme}` as TranslationKey)}
+    >
+      <Icon
+        name={theme === "dark" ? "moon" : theme === "light" ? "sun" : "settings"}
+        size={18}
+      />
+    </button>
   );
 }
 

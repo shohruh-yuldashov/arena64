@@ -344,3 +344,112 @@ contract test that reads the code out of the delivered message.
 `kind` (`'link'` | `'otp'`, defaulting to `'link'`) and `attempt_count`
 (defaulting to `0`). Both carry server defaults, so rows written before this
 migration are valid links and remain redeemable.
+
+---
+
+## Rotation under concurrency — A64-028.2
+
+### The failure
+
+A browser shares one cookie jar across its tabs. Two tabs whose access
+tokens expire together both present the **same** refresh token, because the
+second request is sent before the first response's `Set-Cookie` has been
+applied.
+
+A64-028.1 reproduced what happened next, against real PostgreSQL:
+
+```
+tab A: OK -> new session
+tab B: RevokedSession
+family rows: 2  live: 0
+```
+
+Tab B found a row this server had revoked itself, milliseconds earlier, with
+reason `rotated`. Reuse detection treated it as theft and burned the whole
+family — **including the successor tab A had just been issued**. Both tabs
+were signed out, and `refresh_token_reuse_detected` fired on entirely
+ordinary traffic, which is what made an alert on that signal unusable.
+
+### The rule
+
+A presented token whose session is revoked is a **concurrent rotation**, not
+a reuse, when all three hold:
+
+| Condition | What it excludes |
+| --- | --- |
+| `revoked_reason` is `rotated` | Sign-out, password change, suspension and a previous reuse detection were all deliberate. Presenting one of those again is exactly what they exist to refuse |
+| revoked within `SESSION_ROTATION_GRACE_SECONDS` (default 10) | Outside the window a rotated token being replayed is a credential somebody kept |
+| the family still has a live session | A race means there is a successor in use. A chain already signed out or burned is not a tab losing a race |
+
+Anything else takes the reuse path, unchanged: the family is revoked and the
+alarm fires.
+
+### What a concurrent rotation is answered with
+
+**`409`, and never a credential.** `ConcurrentRotation` is a
+`TemporaryConflictError`, so transport already renders it with `Retry-After`
+and the gateway already renders it as a frame.
+
+Returning the successor's token instead would require storing the raw value
+to hand back later, and a refresh token that can be read out of the database
+is not a refresh token. So the loser is told to ask again — and by then the
+winner's `Set-Cookie` has put the successor in the shared jar, which is the
+whole reason a retry works.
+
+The window therefore costs **alarm latency, never authority**: a stolen
+token replayed inside it yields a retry instruction and no session.
+
+### Ten seconds
+
+The window covers one round trip on a bad connection plus the client's own
+scheduling, and nothing else — the two requests leave milliseconds apart and
+what separates them is how long the first takes to come back. `0` disables
+it and restores the pre-A64-028.2 behaviour.
+
+### One successor per token
+
+`rotate_refresh_token` reads the row `FOR UPDATE`. The read and both writes
+share one transaction, so concurrent rotations of the same token serialise:
+one wins, the rest find it revoked and take the path above. Without the lock
+both callers can read the row live and mint a successor each — not a
+security failure, but two devices in a session list that holds one.
+
+One row, by unique index, for a two-statement transaction. `EXPLAIN`
+confirms an index scan under `LockRows`; there is no table lock and nothing
+to deadlock against.
+
+### What the client does
+
+Both clients retry a `409` twice, on a short backoff, then give up and let
+the caller sign in. The server remains authoritative: the retry is a
+convenience, and a client that does not implement it is refused rather than
+endangered.
+
+### Signals
+
+| Event | Level | Means |
+| --- | --- | --- |
+| `session_rotated` | INFO | A refresh succeeded |
+| `refresh_rotation_conflict` | INFO | A tab lost a race. **Not a security event** |
+| `refresh_rejected` | INFO | Denied — no matching session, expired, or restricted |
+| `refresh_token_reuse_detected` | WARNING | A token was replayed out of policy. The family was revoked |
+
+A64-028.6 builds counters from these four; the rate of the last is the one
+worth alerting on, and it is now free of the false positives that made it
+meaningless.
+
+### Public links
+
+`EMAIL_VERIFICATION_URL_TEMPLATE` and `EMAIL_PASSWORD_RESET_URL_TEMPLATE`
+are **derived from `PUBLIC_APP_URL`** when unset, so a tier cannot be right
+about its origin and wrong about its links. An explicit template still wins
+— a mobile build pointing at a deep link is why they are templates — but a
+deployed tier refuses one whose host is a loopback address.
+
+### Web Push configuration
+
+Both VAPID keys or neither. A half pair used to disable the channel
+silently, which is the worst of the three states: absent is a decision,
+malformed is caught, and half is somebody who intended to enable push, got
+it wrong, and was told nothing while the settings screen truthfully showed
+the channel off.

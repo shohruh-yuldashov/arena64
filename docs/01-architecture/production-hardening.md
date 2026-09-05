@@ -55,15 +55,27 @@ log pipeline, a backup mechanism, a production compose/manifest.
 
 ## 3. Risk register
 
+> **A64-028.2 closed P0-1, P1-1 and P2-4.** Remaining: 3 P0, 6 P1, 5 P2, 3 P3.
+> See `specs/authentication.md` "Rotation under concurrency" for the design.
+
+
 Severity: **P0** launch blocker · **P1** serious reliability/operational risk ·
 **P2** hardening · **P3** improvement.
 
 ### P0-1 — Email links point at `localhost` in any deployed tier
 
+> **RESOLVED — A64-028.2.** Both templates are now *derived* from
+> `PUBLIC_APP_URL` when unset, so the misconfiguration is unreachable rather
+> than merely loud: there is one place the public origin is configured, it
+> is already refused at its local default in every deployed tier, and both
+> links are downstream of that single decision. An explicit template still
+> wins, and a deployed tier refuses one whose host is a loopback address.
+> `tests/unit/test_email_link_config.py` — 24 tests, mutation-checked.
+
 | | |
 | --- | --- |
 | **Area** | Configuration |
-| **Status** | **FAIL** |
+| **Status** | ~~FAIL~~ → **PASS** |
 | **Evidence** | `settings.py:632,666` default both templates to `http://localhost:3000/...`. `EmailSettings._url_templates_must_carry_the_token` checks only that `{token}` is present. `Settings._forbid_local_defaults_outside_local` guards `POSTGRES_DSN`, five `REDIS_*`, `PUBLIC_APP_URL`, `EMAIL_VERIFICATION_OTP_SECRET`, `JWT_SECRET_KEY` and `BROWSER_SESSION_TRUSTED_ORIGINS` — **and neither template**. `infrastructure/staging/compose.yml` sets neither; `staging.env.example` names neither. |
 | **Failure mode** | The process starts normally and sends email verification and password-reset links pointing at `http://localhost:3000`. Nothing raises; the mail is delivered; the links are dead. |
 | **Impact** | No new account can be verified and no password can be recovered. Registration and account recovery are both broken, silently. |
@@ -119,14 +131,15 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 | | |
 | --- | --- |
 | **Area** | Auth / session |
-| **Status** | **FAIL** — reproduced |
+| **Status** | ~~FAIL~~ → **PASS** — A64-028.2 |
 | **Evidence** | Deterministic probe, two independent connections, one token, real PostgreSQL: tab A rotated successfully; tab B found the row revoked with reason `rotated`, `_handle_reuse` fired and revoked the **whole family including A's new successor**. Result: `family rows: 2, live: 0`, and a `refresh_token_reuse_detected` WARNING. A64-027A.5's frontend single-flight is per-tab and cannot see the other tab. |
 | **Failure mode** | Two tabs whose refreshes overlap → both signed out at random, plus a false security alert. |
 | **Impact** | Users signed out mid-session with no explanation. Worse: the platform's **only** token-theft signal fires on benign multi-tab use, so any alert on that rate is unusable. |
 | **Likelihood** | High — any user with two tabs and overlapping token expiry. |
 | **Action** | A server-side rotation grace window. The seam already exists in the data: `revoked_reason = 'rotated'` distinguishes a benign rotation from a sign-out or a prior reuse. Within a short window, a token revoked *by rotation* and presented once should return the successor (or a retry signal) rather than burning the family. **Reuse detection must not be weakened for any other revocation reason, for a second presentation, or outside the window.** |
-| **Owner** | **A64-028.2** |
-| **Blocker?** | No — but it should not survive to launch |
+| **Owner** | A64-028.2 — **done** |
+| **Resolution** | A revoked token is a *concurrent rotation* rather than a reuse when three conditions hold together: the reason is `rotated`, it was revoked within `SESSION_ROTATION_GRACE_SECONDS` (10), and the family still has a live session. That case is answered `409` with a retry hint and **never with a credential**, so the window costs alarm latency and not authority. Everything else takes the reuse path unchanged. `rotate_refresh_token` also reads `FOR UPDATE`, so one token yields exactly one successor. Proven by `tests/contract/test_refresh_concurrency.py` (16 tests, real PostgreSQL, each guard individually mutation-checked) and in a real browser: three simultaneous two-tab races → 3 × `409`, 0 sign-outs, family `live=1 reuse_detected=0`. |
+| **Blocker?** | No — resolved |
 
 ### P1-2 — Realtime is silently broken above one instance
 
@@ -219,7 +232,7 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 | P2-1 | PostgreSQL | RISK | No `pool_pre_ping` and no `pool_recycle`. Behaviour after a PostgreSQL restart is untested — SQLAlchemy invalidates a pool generation on a detected disconnect, so the expected cost is a small burst of errors, but that is inference, not measurement | `app/database/engine.py` sets `pool_size`, `max_overflow`, `pool_timeout`, `statement_timeout` and nothing else | **A64-028.3** |
 | P2-2 | Logging | RISK | No redaction filter at the logging boundary. `_JsonFormatter` emits whatever `extra={…}` a call site passed. `CLAUDE.md` §8.3 requires redaction *at the boundary* "so redaction cannot be forgotten"; today it is call-site discipline. That discipline is currently good (`session_service` logs identifiers only, never the token, user agent or IP) | `app/common/logging.py` | **A64-028.6** |
 | P2-3 | Migrations | RISK | Three migrations create indexes non-concurrently; one uses `CONCURRENTLY`. A plain `CREATE INDEX` blocks writes to the table for its duration — harmless on an empty first deploy, not harmless on a populated `analytics.event` | `alembic/versions/` | **A64-028.3** |
-| P2-4 | Notifications | RISK | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` default to `None` with no deployed-tier guard, unlike `RESEND_API_KEY` whose absence refuses to start. Push is therefore silently unavailable if unset | `settings.py` `PushSettings` | **A64-028.2** |
+| P2-4 | Notifications | ~~RISK~~ → **PASS** | **Resolved — A64-028.2.** The audit sharpened the finding: absent is a supported decision and a malformed pair already raised, but a **half** pair was silently treated as "push not configured" — an operator who set one key got a tier that refused every subscription and said nothing. `PushSettings` now refuses a half pair at startup, naming the missing variable and never the value | `settings.py`, `tests/unit/test_push_config.py` | A64-028.2 — **done** |
 | P2-5 | Capacity | UNKNOWN | One uvicorn worker; 15 PostgreSQL connections per process (`pool_size=10` + `max_overflow=5`); one instance. No load test has ever run. Every throughput figure is unknown | `main.py`, `engine.py` | **A64-028.5** |
 | P2-6 | Docs | RISK | The Dockerfile's `HEALTHCHECK` comment says the endpoint "reports the database and Redis". It calls `/api/v1/health`, which is liveness and reports neither. The behaviour is right; the comment describes `/health/ready` | `apps/api/Dockerfile` | **A64-028.6** |
 

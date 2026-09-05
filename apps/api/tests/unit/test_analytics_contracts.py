@@ -396,6 +396,81 @@ class TestProjectionsReadOnlyThePayload:
         assert events[0].event_id != events[1].event_id
         assert all(event.properties["waited_ms"] == 4250 for event in events)
 
+    def test_a_pairing_never_produces_a_queue_abandonment(self) -> None:
+        """A64-027.5 §13, asserted structurally.
+
+        "Match found, therefore the queue entry was removed, therefore
+        abandoned" is the way M7b goes quietly wrong. It cannot happen —
+        the pairing service publishes `PlayersPaired` and no ticket event —
+        and this pins the projection so a future edit cannot reintroduce
+        it. A mutation check found that the M7b query tests could not:
+        they build their own fixtures and never run a projection.
+        """
+        entry = self._entry(
+            "matchmaking.players_paired",
+            {
+                "match_id": str(uuid4()),
+                "variant": "russian_8x8",
+                "queue_type": "ranked",
+                "light_player_id": str(uuid4()),
+                "dark_player_id": str(uuid4()),
+                "waited_for_seconds": 2.0,
+            },
+        )
+
+        produced = {event.name for event in project(entry)}
+
+        assert produced == {EventName.MATCH_FOUND}
+        assert EventName.QUEUE_LEFT not in produced
+
+    def test_a_partial_acceptance_is_not_an_offer_resolution(self) -> None:
+        """`match_accepted_by_player` is the state where one side has
+        answered and the other has not. Projecting it would resolve an
+        offer twice — once half-resolved — and M9's denominator would grow
+        without its numerator."""
+        assert project(self._entry("game.match_accepted_by_player", {})) == ()
+
+    def test_an_activation_yields_two_seats_and_one_offer_resolution(self) -> None:
+        """One outbox row, three analytics rows at two different grains:
+        the seats are per player and the resolution is per match."""
+        entry = self._entry(
+            "game.match_activated",
+            {
+                "match_id": str(uuid4()),
+                "variant": "russian_8x8",
+                "rated": True,
+                "light_player_id": str(uuid4()),
+                "dark_player_id": str(uuid4()),
+            },
+        )
+
+        produced = project(entry)
+
+        assert [event.name for event in produced].count(EventName.MATCH_STARTED) == 2
+        resolutions = [e for e in produced if e.name is EventName.MATCH_OFFER_RESOLVED]
+        assert len(resolutions) == 1
+        assert resolutions[0].properties["resolution"] == "both_accepted"
+        assert resolutions[0].player_id is None
+        # Three distinct ids from one outbox row, so a redelivery conflicts
+        # on each rather than doubling any of them.
+        assert len({event.event_id for event in produced}) == 3
+
+    def test_a_negative_queue_wait_is_refused_rather_than_clamped(self) -> None:
+        """§50. Clamping to zero would put an impossible value into a
+        distribution as a fast pairing."""
+        with pytest.raises(ProjectionError, match="negative"):
+            project(
+                self._entry(
+                    "matchmaking.queue_ticket_cancelled",
+                    {
+                        "player_id": str(uuid4()),
+                        "variant": "russian_8x8",
+                        "queue_type": "ranked",
+                        "waited_for_seconds": -1.0,
+                    },
+                )
+            )
+
     def test_a_tournament_name_is_never_projected(self) -> None:
         """§14: an unbounded string that answers no question
         `tournament_id` does not."""

@@ -206,24 +206,44 @@ async def seeded_cohort(size: int, *, prefix: str = "") -> list[Player]:
     from app.core.clock import SystemClock
     from app.modules.auth.domain.tokens import TokenType
     from app.modules.auth.infrastructure.jwt_token_provider import JwtTokenProvider
+    from app.modules.auth.infrastructure.password_hasher import Argon2idPasswordHasher
 
     settings = get_settings()
     run = secrets.token_hex(3)
     engine = create_async_engine(settings.postgres.dsn.get_secret_value())
     provider = JwtTokenProvider(settings.jwt, SystemClock())
 
+    # A real Argon2 digest of `PASSWORD`, hashed **once** and reused. Every
+    # seeded account can then sign in through the ordinary endpoint when a
+    # scenario needs a browser session — and the alternative found a small
+    # defect worth recording: a stored hash that is not a valid Argon2
+    # string makes `/auth/browser/login` answer **500** rather than 401.
+    password_hash = await Argon2idPasswordHasher(settings.auth).hash(PASSWORD)
+
     players: list[Player] = []
     try:
         async with engine.begin() as connection:
             for index in range(size):
-                username = f"{PREFIX}{prefix}{run}{index}"
+                # `users.user.username` is `varchar(20)`, and a cohort of
+                # 2000 overflowed it at the old scheme. Built to fit rather
+                # than truncated, because truncation collides: two accounts
+                # differing only in their index would become one name and
+                # the insert would fail halfway through a cohort. `lt` plus
+                # four characters of scenario, the run tag and the index is
+                # 16 at a cohort of 2000, and stays identifiable.
+                username = f"lt{prefix[:4]}{run}{index}"
                 user_id = str(uuid.uuid4())
                 await connection.execute(
                     text(
                         "INSERT INTO users.user (id, email, username, password_hash, is_verified) "
-                        "VALUES (:i, :e, :u, 'x', true)"
+                        "VALUES (:i, :e, :u, :h, true)"
                     ),
-                    {"i": user_id, "e": f"{username}@example.test", "u": username},
+                    {
+                        "i": user_id,
+                        "e": f"{username}@example.test",
+                        "u": username,
+                        "h": password_hash,
+                    },
                 )
                 token, _ = provider.issue(
                     subject=user_id, token_type=TokenType.ACCESS, lifetime_seconds=3600

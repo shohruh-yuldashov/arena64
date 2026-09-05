@@ -157,7 +157,13 @@ async def matchmaking_burst(
                 response = await client.post(
                     "/api/v1/matchmaking/queue",
                     headers=player.auth,
-                    json={"variant": "russian_8x8", "speed_class": "blitz", "rated": False},
+                    # The contract, not a guess at it — A64-028.5A §15.
+                    # A64-028.5 posted `variant`/`speed_class`/`rated`, and
+                    # every join in the ladder came back `422`. The harness
+                    # counted those as failures rather than hiding them, so
+                    # nothing false was published, but it also meant
+                    # matchmaking was never measured at all.
+                    json={"queue_type": "casual", "time_control_id": "blitz_3_2"},
                 )
                 if response.status_code < 400:
                     joined_at[player.user_id] = time.perf_counter()
@@ -201,6 +207,8 @@ async def matchmaking_burst(
         scenario=f"matchmaking burst x{users}",
         concurrency=users,
         duration_s=time.perf_counter() - started,
+        started_at=started,
+        ended_at=time.perf_counter(),
         samples=samples,
     )
     result.notes = {
@@ -331,6 +339,8 @@ async def live_games(
         scenario=f"live games x{games}",
         concurrency=games,
         duration_s=time.perf_counter() - started,
+        started_at=started,
+        ended_at=time.perf_counter(),
         samples=samples,
     )
     result.notes = {
@@ -397,6 +407,8 @@ async def idle_sockets(base_url: str, *, count: int, hold_s: float) -> Result:
         scenario=f"idle sockets x{count}",
         concurrency=count,
         duration_s=time.perf_counter() - started,
+        started_at=started,
+        ended_at=time.perf_counter(),
         samples=samples,
     )
     result.notes = {
@@ -491,6 +503,8 @@ async def frame_latency(engine: AsyncEngine, *, node_urls: Sequence[str], rounds
         scenario="cross-instance frame",
         concurrency=1,
         duration_s=time.perf_counter() - started,
+        started_at=started,
+        ended_at=time.perf_counter(),
         samples=samples,
     )
     result.notes = {
@@ -560,6 +574,8 @@ async def outbox_drain(engine: AsyncEngine, *, events: int, patience_s: float) -
         scenario=f"outbox drain {events}",
         concurrency=1,
         duration_s=elapsed,
+        started_at=started,
+        ended_at=time.perf_counter(),
         samples=[Sample(elapsed_s=elapsed / events)] * (events if drained_at else 0),
     )
     result.notes = {
@@ -570,3 +586,159 @@ async def outbox_drain(engine: AsyncEngine, *, events: int, patience_s: float) -
         "max_attempt_count": max_attempts,
     }
     return result
+
+
+# --- P17: reconnect storm ----------------------------------------------------
+
+
+async def reconnect_storm(base_url: str, *, count: int, waves: int) -> Result:
+    """Every socket drops at once, and every one of them comes back at once
+    — §23.
+
+    The realistic failure, not a synthetic one: a load balancer restarts, a
+    deploy rolls, a phone network hands a cell over, and the platform is
+    asked to authenticate and re-establish N sessions inside one second
+    rather than spread over an hour. It is also the moment a ticket store,
+    a rate limiter and a connection pool are all hit hardest at once.
+
+    Measured across several waves, because the first reconnect after a
+    fresh start is the cheapest one there will ever be — anything that
+    accumulates per cycle shows up in the later waves or nowhere.
+    """
+    players = await seeded_cohort(count, prefix="rc")
+    samples: list[Sample] = []
+    per_wave: list[float] = []
+    started = time.perf_counter()
+
+    async with httpx.AsyncClient(
+        base_url=base_url, timeout=60.0, limits=httpx.Limits(max_connections=count + 20)
+    ) as client:
+        for wave in range(waves):
+            sockets: list[Any] = []
+            wave_started = time.perf_counter()
+
+            async def reconnect(player: Player, into: list[Any]) -> None:
+                async def open_socket() -> int | None:
+                    ticket = await ws_ticket(client, player)
+                    socket = await websockets.connect(f"{ws_url(base_url)}?ticket={ticket}")
+                    await _read_until(socket, {"connection.ready"})
+                    into.append(socket)
+                    return None
+
+                samples.append(await timed(open_socket))
+
+            await asyncio.gather(*(reconnect(player, sockets) for player in players))
+            per_wave.append(time.perf_counter() - wave_started)
+
+            # Dropped without a close frame on the last wave but one, so the
+            # server is made to notice a *lost* connection rather than a
+            # polite goodbye — the two take different paths out of the
+            # connection registry and only one of them is the storm.
+            abrupt = wave < waves - 1
+            for socket in sockets:
+                if abrupt:
+                    socket.transport.close()
+                else:
+                    await socket.close()
+            await asyncio.sleep(0.5)
+
+    result = Result(
+        scenario=f"reconnect storm x{count}",
+        concurrency=count,
+        duration_s=time.perf_counter() - started,
+        started_at=started,
+        ended_at=time.perf_counter(),
+        samples=samples,
+    )
+    result.notes = {
+        "sockets": count,
+        "waves": waves,
+        "reconnects_attempted": len(samples),
+        "reconnects_failed": sum(1 for s in samples if not s.ok),
+        # The number that says whether anything leaked: a later wave that
+        # is materially slower than the first is the signal.
+        "wave_seconds": [round(value, 2) for value in per_wave],
+    }
+    return result
+
+
+# --- P18: mixed realistic workload -------------------------------------------
+
+
+async def mixed_workload(
+    engine: AsyncEngine,
+    *,
+    node_urls: Sequence[str],
+    readers: int,
+    games: int,
+    idle: int,
+    duration_s: float,
+) -> Result:
+    """Everything at once, for as long as asked — §26 and §28.
+
+    Every other scenario here measures one thing with the machine otherwise
+    quiet, which is the only way to attribute a number to a cause and is
+    also the one workload production never runs. This one holds live games,
+    idle sockets and HTTP readers open together across both instances, so
+    the scheduled work — the outbox relay, the gateway forwarder, the clock
+    reconciliation, the metrics flush — competes with request handling the
+    way it will in service.
+
+    Run long, it is also the soak: the samples carry timestamps, so the
+    caller can compare the first minutes with the last rather than reading
+    one average over both.
+    """
+    samples: list[Sample] = []
+    started = time.perf_counter()
+    deadline = started + duration_s
+    reader_cohort = await seeded_cohort(readers, prefix="mixr")
+
+    async def read_loop(player: Player, base_url: str) -> None:
+        async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as client:
+            while time.perf_counter() < deadline:
+                samples.append(
+                    await timed(
+                        lambda: _status(client.get("/api/v1/profile/me", headers=player.auth))
+                    )
+                )
+
+    async def game_loop() -> None:
+        while time.perf_counter() < deadline:
+            result = await live_games(engine, node_urls=node_urls, games=games, moves_per_game=6)
+            samples.extend(result.samples)
+
+    async def idle_loop() -> None:
+        while time.perf_counter() < deadline:
+            result = await idle_sockets(node_urls[0], count=idle, hold_s=20.0)
+            samples.extend(result.samples)
+
+    await asyncio.gather(
+        *(
+            read_loop(player, node_urls[index % len(node_urls)])
+            for index, player in enumerate(reader_cohort)
+        ),
+        game_loop(),
+        idle_loop(),
+    )
+
+    ended = time.perf_counter()
+    result = Result(
+        scenario=f"mixed workload {round(duration_s / 60)}m",
+        concurrency=readers + games + idle,
+        duration_s=ended - started,
+        started_at=started,
+        ended_at=ended,
+        samples=samples,
+    )
+    result.notes = {
+        "readers": readers,
+        "concurrent_games": games,
+        "idle_sockets": idle,
+        "instances": len(node_urls),
+    }
+    return result
+
+
+async def _status(pending: Any) -> int:
+    response = await pending
+    return int(response.status_code)

@@ -31,6 +31,18 @@ class Snapshot:
     redis_used_memory_mb: float
     api_cpu_percent: float
     api_rss_mb: float
+    harness_cpu_percent: float = 0.0
+    """The load generator's own CPU — A64-028.5A §11.
+
+    Reported beside the API's so a reader can tell which side of the
+    measurement ran out of room. A result taken while the generator is
+    pinned is not a reading of the server, and A64-028.5 published a
+    scaling efficiency of 0.52 that turned out to be exactly that."""
+    at: float = 0.0
+    """`perf_counter` when this reading was taken, so a peak can be
+    attributed to the level that caused it — A64-028.5A §21. Without it the
+    only honest thing to report was the peak over the whole ladder, which
+    made a per-connection memory figure impossible to derive."""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -67,6 +79,7 @@ async def observe(engine: AsyncEngine, redis: Redis, *, process_match: str) -> S
 
     info = await redis.info()
     cpu, rss = _process_totals(process_match)
+    harness_cpu = _own_cpu()
 
     return Snapshot(
         db_total=row["total"],
@@ -78,7 +91,32 @@ async def observe(engine: AsyncEngine, redis: Redis, *, process_match: str) -> S
         redis_used_memory_mb=float(info.get("used_memory", 0)) / 1024 / 1024,
         api_cpu_percent=cpu,
         api_rss_mb=rss,
+        harness_cpu_percent=harness_cpu,
+        at=time.perf_counter(),
     )
+
+
+def _own_cpu() -> float:
+    """This process's CPU, as `ps` reports it — §11.
+
+    Deliberately the *generator's* own figure and nothing else's: the
+    question it answers is whether a number was limited by the thing being
+    measured or by the thing doing the measuring.
+    """
+    try:
+        output = subprocess.run(  # noqa: S603
+            ["/bin/ps", "-o", "pcpu=", "-p", str(os.getpid())],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return float("nan")
+    try:
+        return float(output.strip())
+    except ValueError:
+        return float("nan")
 
 
 def _process_totals(match: str) -> tuple[float, float]:
@@ -269,18 +307,59 @@ class Sampler:
                 )
             await asyncio.sleep(0.5)
 
+    def trend_between(self, start: float, end: float) -> dict[str, Any]:
+        """First quarter against last quarter — A64-028.5A §29.
+
+        A peak cannot tell a leak from a busy minute. What distinguishes
+        them is direction: memory that rises and stays up across a long
+        run is a leak, memory that rises and returns is the allocator
+        doing its job. Quarters rather than endpoints, because a single
+        first and last reading is one garbage collection away from saying
+        anything at all.
+        """
+        window = [s for s in self._samples if start <= s.at <= end]
+        if len(window) < 8:
+            return {}
+        quarter = max(1, len(window) // 4)
+        opening = window[:quarter]
+        closing = window[-quarter:]
+        first = sum(s.api_rss_mb for s in opening) / len(opening)
+        last = sum(s.api_rss_mb for s in closing) / len(closing)
+        return {
+            "rss_first_quarter_mb": round(first, 1),
+            "rss_last_quarter_mb": round(last, 1),
+            "rss_growth_mb": round(last - first, 1),
+            "rss_growth_percent": round((last - first) / first * 100, 1) if first else None,
+            "trend_readings": len(window),
+        }
+
+    def peak_between(self, start: float, end: float) -> dict[str, Any]:
+        """The peak over one level's own window.
+
+        Falls back to the whole run when the window caught no reading —
+        a level shorter than the sampling interval is a real case, and a
+        missing figure is better reported as the run's than as absent.
+        """
+        window = [s for s in self._samples if start <= s.at <= end]
+        return self._peak_of(window or self._samples)
+
     def peak(self) -> dict[str, Any]:
         """The worst reading of each resource, which is what saturation is
         about — an average CPU hides the second it spent pinned."""
-        if not self._samples:
+        return self._peak_of(self._samples)
+
+    @staticmethod
+    def _peak_of(samples: list[Snapshot]) -> dict[str, Any]:
+        if not samples:
             return {}
         return {
-            "db_connections_peak": max(s.db_total for s in self._samples),
-            "db_active_peak": max(s.db_active for s in self._samples),
-            "db_waiting_peak": max(s.db_waiting for s in self._samples),
-            "redis_clients_peak": max(s.redis_clients for s in self._samples),
-            "redis_ops_peak": round(max(s.redis_ops_per_s for s in self._samples), 1),
-            "api_cpu_peak": round(max(s.api_cpu_percent for s in self._samples), 1),
-            "api_rss_peak_mb": round(max(s.api_rss_mb for s in self._samples), 1),
-            "readings": len(self._samples),
+            "db_connections_peak": max(s.db_total for s in samples),
+            "db_active_peak": max(s.db_active for s in samples),
+            "db_waiting_peak": max(s.db_waiting for s in samples),
+            "redis_clients_peak": max(s.redis_clients for s in samples),
+            "redis_ops_peak": round(max(s.redis_ops_per_s for s in samples), 1),
+            "api_cpu_peak": round(max(s.api_cpu_percent for s in samples), 1),
+            "api_rss_peak_mb": round(max(s.api_rss_mb for s in samples), 1),
+            "harness_cpu_peak": round(max(s.harness_cpu_percent for s in samples), 1),
+            "readings": len(samples),
         }

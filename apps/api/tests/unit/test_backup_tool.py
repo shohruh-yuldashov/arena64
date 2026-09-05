@@ -208,4 +208,9 @@ class TestTheCredentialStaysOutOfSight:
         ).lower()
 
         assert "hunter2" not in rendered
-        assert "postgresql" not in rendered
+        # The DSN's *scheme*, not the product's name: "PostgreSQL client
+        # tools" is a legitimate sentence in a legitimate error, and a check
+        # for the bare word failed on a machine without `pg_dump` — which is
+        # the machine most likely to hit that error.
+        for scheme in ("postgresql://", "postgresql+", "postgres://"):
+            assert scheme not in rendered

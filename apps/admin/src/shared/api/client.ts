@@ -180,9 +180,7 @@ async function exchangeRefreshCookie(): Promise<Outcome<string>> {
     // client's own other tab rotated the token first, and the successor is
     // in the cookie jar we are about to read again.
     if (response.status === 409 && attempt < ROTATION_RETRY_DELAYS_MS.length) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, ROTATION_RETRY_DELAYS_MS[attempt]),
-      );
+      await new Promise((resolve) => setTimeout(resolve, ROTATION_RETRY_DELAYS_MS[attempt]));
       continue;
     }
     if (!response.ok) return { status: "unavailable" };

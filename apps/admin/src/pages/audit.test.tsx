@@ -142,7 +142,9 @@ it("offers the action filter as phrases, never as identifiers", async () => {
   for (const option of options) {
     expect(option.textContent ?? "").not.toMatch(/^[a-z]+(\.[a-z_]+)+$/);
   }
-  expect(within(filter).getByRole("option", { name: "granted the admin role" })).toBeInTheDocument();
+  expect(
+    within(filter).getByRole("option", { name: "granted the admin role" }),
+  ).toBeInTheDocument();
 });
 
 it("sends the subject filter as a type and ref together", async () => {

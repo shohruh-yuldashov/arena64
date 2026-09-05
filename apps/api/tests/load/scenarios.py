@@ -19,7 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from tests.load.harness import Result, Sample, run_for, timed
-from tests.load.workload import OPENING, Player, frame, seeded_cohort, ws_ticket
+from tests.load.workload import LegalGame, Player, frame, seeded_cohort, ws_ticket
 
 
 def ws_url(base_url: str) -> str:
@@ -290,27 +290,32 @@ async def live_games(
                 )
                 await _read_until(socket, {"game.snapshot", "game.resumed", "error"})
 
+            game = LegalGame()
             for ply in range(moves_per_game):
+                candidate = game.next_path()
+                if candidate is None:
+                    break
+                next_path: list[str] = candidate
                 mover = light_ws if ply % 2 == 0 else dark_ws
-                origin, target = OPENING[ply % len(OPENING)]
 
-                async def submit(
-                    socket: Any = mover, origin: str = origin, target: str = target
-                ) -> int | None:
+                async def submit(socket: Any = mover, path: list[str] = next_path) -> int | None:
                     await socket.send(
                         frame(
                             "game.move.submit",
                             "game",
-                            {"match_id": str(match_id), "path": [origin, target]},
+                            {"match_id": str(match_id), "path": path},
                             request_id=secrets.token_hex(4),
                         )
                     )
                     answer, _ = await _read_until(
                         socket, {"game.move.accepted", "game.move.rejected", "error"}
                     )
+                    # A rejection is the harness's fault, not the server's,
+                    # and `500` marks it as a failure rather than a latency.
                     return None if answer and answer["type"] == "game.move.accepted" else 500
 
                 samples.append(await timed(submit))
+                game.advance()
 
     await asyncio.gather(*(play(index) for index in range(games)))
 
@@ -413,69 +418,74 @@ async def frame_latency(engine: AsyncEngine, *, node_urls: Sequence[str], rounds
     (§17). What it measures is the whole path: command, commit, publish to
     the addressee's stream, the forwarder's next pass, and the socket.
 
-    ## Why fresh sockets per match
+    ## Rejected moves are a harness failure, not a missing frame
 
-    `OPENING` is a fixed **legal** sequence six plies long. Playing more
-    than that on one match would submit an illegal move and measure the
-    rejection path (§13), and reusing one socket pair across matches leaves
-    frames from the previous room in the receive queue, which desynchronises
-    the reader. Both were tried; both produced a scenario that reported the
-    platform as broken when the harness was.
+    A64-028.5 reported 20 of 30 frames "missing" and filed it as a realtime
+    defect. They were **illegal moves**: the server refused them, no
+    broadcast was ever published, and the harness counted the silence as
+    loss. So a rejection now aborts with a distinct error rather than
+    entering the latency table — see `LegalGame`.
     """
-    per_match = len(OPENING)
-    matches_needed = max(1, -(-rounds // per_match))
-    players = await seeded_cohort(2 * matches_needed, prefix="fl")
+    players = await seeded_cohort(2, prefix="fl")
+    light, dark = players[0], players[1]
+    match_id = await _seed_match(engine, light.user_id, dark.user_id)
+    game = LegalGame()
+
+    async with (
+        httpx.AsyncClient(base_url=node_urls[0], timeout=30.0) as first,
+        httpx.AsyncClient(base_url=node_urls[-1], timeout=30.0) as second,
+    ):
+        light_ticket = await ws_ticket(first, light)
+        dark_ticket = await ws_ticket(second, dark)
 
     samples: list[Sample] = []
+    rejected = 0
     started = time.perf_counter()
 
-    for index in range(matches_needed):
-        light, dark = players[2 * index], players[2 * index + 1]
-        match_id = await _seed_match(engine, light.user_id, dark.user_id)
+    async with (
+        websockets.connect(f"{ws_url(node_urls[0])}?ticket={light_ticket}") as light_ws,
+        websockets.connect(f"{ws_url(node_urls[-1])}?ticket={dark_ticket}") as dark_ws,
+    ):
+        for socket in (light_ws, dark_ws):
+            await _read_until(socket, {"connection.ready"})
+            await socket.send(
+                frame("game.resume", "game", {"match_id": str(match_id), "last_known_sequence": 0})
+            )
+            await _read_until(socket, {"game.snapshot", "game.resumed", "error"})
 
-        async with (
-            httpx.AsyncClient(base_url=node_urls[0], timeout=30.0) as first,
-            httpx.AsyncClient(base_url=node_urls[-1], timeout=30.0) as second,
-        ):
-            light_ticket = await ws_ticket(first, light)
-            dark_ticket = await ws_ticket(second, dark)
+        for ply in range(rounds):
+            path = game.next_path()
+            if path is None:
+                break
+            mover, watcher = (light_ws, dark_ws) if ply % 2 == 0 else (dark_ws, light_ws)
+            sent = time.perf_counter()
+            await mover.send(
+                frame(
+                    "game.move.submit",
+                    "game",
+                    {"match_id": str(match_id), "path": path},
+                    request_id=secrets.token_hex(4),
+                )
+            )
+            seen, _ = await _read_until(watcher, {"game.move.applied"}, patience_s=15.0)
+            elapsed = time.perf_counter() - sent
+            ack, _ = await _read_until(
+                mover, {"game.move.accepted", "game.move.rejected"}, patience_s=15.0
+            )
 
-        async with (
-            websockets.connect(f"{ws_url(node_urls[0])}?ticket={light_ticket}") as light_ws,
-            websockets.connect(f"{ws_url(node_urls[-1])}?ticket={dark_ticket}") as dark_ws,
-        ):
-            for socket in (light_ws, dark_ws):
-                await _read_until(socket, {"connection.ready"})
-                await socket.send(
-                    frame(
-                        "game.resume",
-                        "game",
-                        {"match_id": str(match_id), "last_known_sequence": 0},
-                    )
-                )
-                await _read_until(socket, {"game.snapshot", "game.resumed", "error"})
+            if ack is not None and ack["type"] == "game.move.rejected":
+                # The harness sent something the engine refused. Not a
+                # transport result, and it must never look like one.
+                rejected += 1
+                samples.append(Sample(elapsed_s=elapsed, error="HarnessIllegalMove"))
+                break
 
-            for ply in range(min(per_match, rounds - len(samples))):
-                mover, watcher = (light_ws, dark_ws) if ply % 2 == 0 else (dark_ws, light_ws)
-                origin, target = OPENING[ply]
-                sent = time.perf_counter()
-                await mover.send(
-                    frame(
-                        "game.move.submit",
-                        "game",
-                        {"match_id": str(match_id), "path": [origin, target]},
-                        request_id=secrets.token_hex(4),
-                    )
-                )
-                seen, _ = await _read_until(watcher, {"game.move.applied"}, patience_s=15.0)
-                samples.append(
-                    Sample(elapsed_s=time.perf_counter() - sent)
-                    if seen
-                    else Sample(elapsed_s=0.0, error="FrameNotDelivered")
-                )
-                await _read_until(
-                    mover, {"game.move.accepted", "game.move.rejected"}, patience_s=15.0
-                )
+            samples.append(
+                Sample(elapsed_s=elapsed)
+                if seen
+                else Sample(elapsed_s=elapsed, error="FrameNotDelivered")
+            )
+            game.advance()
 
     result = Result(
         scenario="cross-instance frame",
@@ -486,8 +496,8 @@ async def frame_latency(engine: AsyncEngine, *, node_urls: Sequence[str], rounds
     result.notes = {
         "instances": len(set(node_urls)),
         "rounds": len(samples),
-        "matches": matches_needed,
-        "undelivered": sum(1 for s in samples if not s.ok),
+        "undelivered": sum(1 for s in samples if s.error == "FrameNotDelivered"),
+        "harness_illegal_moves": rejected,
     }
     return result
 

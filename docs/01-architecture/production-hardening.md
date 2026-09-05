@@ -55,7 +55,9 @@ log pipeline, a backup mechanism, a production compose/manifest.
 
 ## 3. Risk register
 
-> **A64-028.2 closed P0-1, P1-1 and P2-4.** Remaining: 3 P0, 6 P1, 5 P2, 3 P3.
+> **A64-028.2** closed P0-1, P1-1 and P2-4.
+> **A64-028.3** closed **P0-4, P2-1, P2-3 and P3-2**, and added two P2s and
+> one P3 it found on the way. Remaining: **2 P0, 6 P1, 6 P2, 3 P3**.
 > See `specs/authentication.md` "Rotation under concurrency" for the design.
 
 
@@ -114,10 +116,21 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 
 ### P0-4 — No backups and no tested restore
 
+> **RESOLVED — A64-028.3.** `python -m app.operator.backup` takes, verifies
+> and restores a `pg_dump -Fc` backup, and a drill against real PostgreSQL
+> restores a seeded database into a clean one and counts every row back
+> (`tests/contract/test_backup_restore.py`). A partial backup cannot look
+> finished; a checksum mismatch is refused; the password never reaches
+> `argv` or a log. **Off-host storage and scheduling remain A64-028.6's** —
+> the command is ready and tested, and where it runs and where its output
+> goes are deployment decisions. PITR is deliberately deferred with the
+> residual risk stated (24 hours). See
+> `docs/05-operations/backup-restore.md`.
+
 | | |
 | --- | --- |
 | **Area** | Data reliability |
-| **Status** | **FAIL** |
+| **Status** | ~~FAIL~~ → **PASS** (mechanism) · off-host wiring → A64-028.6 |
 | **Evidence** | No `pg_dump`, backup script, cron, retention policy or restore procedure exists anywhere in `infrastructure/`, `docker/`, `.github/` or the docs. PostgreSQL and MinIO hold named Docker volumes on one host. `deployment.md` §6 P-3: "A named volume is not a backup, and an untested restore is not one either." |
 | **Failure mode** | Any volume loss, host loss or destructive migration is unrecoverable. |
 | **Impact** | Total, permanent loss of every account, match, rating, tournament and audit record. |
@@ -229,19 +242,27 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 
 | ID | Area | Status | Finding | Evidence | Owner |
 | --- | --- | --- | --- | --- | --- |
-| P2-1 | PostgreSQL | RISK | No `pool_pre_ping` and no `pool_recycle`. Behaviour after a PostgreSQL restart is untested — SQLAlchemy invalidates a pool generation on a detected disconnect, so the expected cost is a small burst of errors, but that is inference, not measurement | `app/database/engine.py` sets `pool_size`, `max_overflow`, `pool_timeout`, `statement_timeout` and nothing else | **A64-028.3** |
+| P2-1 | PostgreSQL | ~~RISK~~ → **PASS** | **Resolved — A64-028.3.** Measured rather than inferred: killing a pooled backend and making three requests gives `1:InterfaceError 2:ok 3:ok` without `pool_pre_ping` and `1:ok 2:ok 3:ok` with it — up to one failed request per pooled connection after a database restart. `pool_pre_ping` is now on, and an explicit 10s `connect_timeout` replaces asyncpg's 60s default. `pool_recycle` was evaluated and **not** added: pre-ping covers the failure it would address and there is no idle-timeout middlebox between the app and the server | `tests/contract/test_pool_resilience.py` | A64-028.3 — **done** |
 | P2-2 | Logging | RISK | No redaction filter at the logging boundary. `_JsonFormatter` emits whatever `extra={…}` a call site passed. `CLAUDE.md` §8.3 requires redaction *at the boundary* "so redaction cannot be forgotten"; today it is call-site discipline. That discipline is currently good (`session_service` logs identifiers only, never the token, user agent or IP) | `app/common/logging.py` | **A64-028.6** |
-| P2-3 | Migrations | RISK | Three migrations create indexes non-concurrently; one uses `CONCURRENTLY`. A plain `CREATE INDEX` blocks writes to the table for its duration — harmless on an empty first deploy, not harmless on a populated `analytics.event` | `alembic/versions/` | **A64-028.3** |
+| P2-3 | Migrations | ~~RISK~~ → **PASS** | **Resolved — A64-028.3, and the finding was understated.** Not three migrations but **thirty-nine**: `op.create_index` cannot be concurrent inside Alembic's transaction, so every index in the schema is built in a lock. All thirty-nine run at `t=0` — Arena64 has not launched and a production database is built from empty — so none is unsafe. Eleven index a table an *earlier* migration created, which is the shape that would matter after launch; they are declared in `tests/unit/test_migration_policy.py`, which fails when a new one appears undeclared. Live-migration rules are in `docs/05-operations/data-reliability.md` §5 | `tests/unit/test_migration_policy.py` | A64-028.3 — **done** |
 | P2-4 | Notifications | ~~RISK~~ → **PASS** | **Resolved — A64-028.2.** The audit sharpened the finding: absent is a supported decision and a malformed pair already raised, but a **half** pair was silently treated as "push not configured" — an operator who set one key got a tier that refused every subscription and said nothing. `PushSettings` now refuses a half pair at startup, naming the missing variable and never the value | `settings.py`, `tests/unit/test_push_config.py` | A64-028.2 — **done** |
 | P2-5 | Capacity | UNKNOWN | One uvicorn worker; 15 PostgreSQL connections per process (`pool_size=10` + `max_overflow=5`); one instance. No load test has ever run. Every throughput figure is unknown | `main.py`, `engine.py` | **A64-028.5** |
 | P2-6 | Docs | RISK | The Dockerfile's `HEALTHCHECK` comment says the endpoint "reports the database and Redis". It calls `/api/v1/health`, which is liveness and reports neither. The behaviour is right; the comment describes `/health/ready` | `apps/api/Dockerfile` | **A64-028.6** |
+
+### Found by A64-028.3
+
+| ID | Area | Status | Finding | Owner |
+| --- | --- | --- | --- | --- |
+| P2-7 | Retention | RISK | `notifications.notification` has **no retention policy** and grows with activity — the only unbounded durable table that is not meant to be. (`admin.audit_entry` is also unbounded and that is deliberate.) Nothing breaks; the table grows for ever | **A64-028.4** |
+| P2-8 | Backup | RISK | **A dump is plaintext** and holds every email address and password hash on the platform. Encryption at rest is a property of where it is stored, which this repository does not own. Off-host storage must encrypt | **A64-028.6** |
+| P3-4 | Redis | RISK | `clock:v1:deadlines` is the one key family with no expiry backstop. Its bound is "matches being played" and `claim_expired` drains it, but a member whose match ended without being claimed or superseded stays for ever | **A64-028.4** |
 
 ### P3 findings
 
 | ID | Finding | Owner |
 | --- | --- | --- |
 | P3-1 | `apps/web/.env.example` does not document `VITE_PUBLIC_ORIGIN`, which the SEO build reads | **A64-028.6** |
-| P3-2 | Runtime version ambiguity: `requires-python >= 3.13`, the image is 3.13, the development venv is 3.14, and nothing pins it | **A64-028.3** |
+| P3-2 | ~~Runtime version ambiguity~~ → **RESOLVED — A64-028.3.** `apps/api/.python-version` pins **3.13**, which `uv` reads for the developer's virtualenv and CI's, and which the image already ran. The suite, ruff, mypy, pyright and import-linter all pass under it. 3.13 rather than 3.14 because the image runs it and every checker already targets it — upgrading a runtime because a newer one exists is not a reason | A64-028.3 — **done** |
 | P3-3 | `compose.yml` gives `RESEND_API_KEY` an empty default, implying it is optional. It is not — `ConsoleEmailProvider` refuses to construct in a deployed tier, so the stack fails to boot | **A64-028.6** |
 
 ---

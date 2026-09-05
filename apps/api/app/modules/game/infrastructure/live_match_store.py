@@ -8,12 +8,19 @@ Registered in `caching.md` §3 (C-1), versioned (C-2), expiring (C-3) via
 `PEXPIRE` inside the script that writes it.
 
 architecture.md AD-18 assigns exactly this: "Live position lives in Redis.
-Moves are appended durably to PostgreSQL." **The second half is not built.**
-Until the durable move log exists, a Redis primary failure loses an in-flight
-game with no replay path — which is the mitigation AD-19 depends on, and is
-therefore the headline gap of A64-016.3 rather than an implementation detail.
-It is acceptable only because no rated game is played yet. See
-`docs/01-architecture/websocket.md` §16.
+Moves are appended durably to PostgreSQL."
+
+**Both halves are built.** A64-016.3 shipped only the first, and this
+docstring carried its warning — that a Redis failure would lose an in-flight
+game — for three tasks after it stopped being true. A64-016.4 built the
+durable log: `LiveMoveService` appends the move row and advances the match in
+one PostgreSQL transaction, and `_rebuild` replays that log to reconstruct
+the aggregate. What lives here is a **cache of a replay**.
+
+So losing this key costs an O(plies) rebuild, not a game, and Redis holds no
+authoritative state — which A64-028.3 §3 establishes for the whole platform
+and `tests/contract/test_redis_recovery.py` keeps true. See
+`docs/05-operations/data-reliability.md` §2.
 
 ## Why the `live` role and not `cache`
 

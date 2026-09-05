@@ -313,6 +313,43 @@ class PostgresSettings(SectionSettings):
     pool_size: int = 10
     max_overflow: int = 5
     pool_timeout_seconds: int = 30
+    pool_pre_ping: bool = True
+    """Check a pooled connection before handing it out — A64-028.3, P2-1.
+
+    ## Measured, not assumed
+
+    A connection that has been returned to the pool and whose backend then
+    dies — a PostgreSQL restart, a failover, an operator's
+    `pg_terminate_backend` — is still in the pool, and looks fine. The
+    deterministic probe in `tests/contract/test_pool_resilience.py` kills a
+    pooled backend and then makes three requests:
+
+        pool_pre_ping=False  ->  1:InterfaceError  2:ok  3:ok
+        pool_pre_ping=True   ->  1:ok              2:ok  3:ok
+
+    SQLAlchemy recovers on its own — it invalidates the pool generation once
+    it sees a disconnect — so the cost without this is *one failed request
+    per stale connection*, not an outage. With `pool_size` 10 and
+    `max_overflow` 5 that is up to fifteen requests answered with a 500
+    after a database restart, each one somebody's move or sign-in.
+
+    ## What it costs
+
+    One `SELECT 1` per checkout, on a connection the pool is about to hand
+    to a query that will do more work than that. It is the standard remedy
+    and SQLAlchemy documents it as such.
+    """
+
+    connect_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    """How long a *new* connection may take to establish.
+
+    asyncpg's default is 60 seconds, which is out of proportion to every
+    other bound on this path: a statement gets 5 seconds and a caller
+    waiting for a pool slot gets 30. A database that has not answered a TCP
+    connection in ten seconds is not going to answer this request either,
+    and holding the caller for a minute converts a database outage into a
+    pile of requests nobody has answered.
+    """
     statement_timeout_ms: int = 5000
     echo: bool = False
 

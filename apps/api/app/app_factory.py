@@ -66,6 +66,12 @@ from app.modules.friends.infrastructure.cache import (
     RedisSocialGraphCache,
 )
 from app.modules.game.application.services import ClockAdjudicationService
+from app.modules.game.application.services.clock_reconciliation import (
+    ClockDeadlineReconciliationTask,
+)
+from app.modules.game.application.services.clock_reconciliation import (
+    reconcile_request as clock_reconcile_request,
+)
 from app.modules.game.application.services.match_abort_service import PersistentMatchAbort
 from app.modules.game.application.services.origin_match_service import GameOriginMatches
 from app.modules.game.infrastructure import (
@@ -259,6 +265,7 @@ from app.platform.metrics import (
 from app.platform.outbox import (
     ConsumerPolicies,
     ConsumerPolicy,
+    EventHandler,
     OutboxEventPublisher,
     OutboxRetentionTask,
     OutboxWorker,
@@ -646,16 +653,23 @@ def build_outbox_worker(
     # them independently idempotent — a redelivery that the realtime
     # notifier has already handled can still reach the acceptance-failure
     # policy, and neither can mark the other's work done.
-    handlers: list[TaskHandler | object] = [handler]
-    # A64-027.2 §47. Raw analytics retention — 400 days, on the mechanism
-    # `platform.outbox` already uses rather than a second scheduler.
-    handlers.append(
-        AnalyticsRetentionTask(
-            session_factory=db.session_factory,
-            clock=clock,
-            metrics=_metrics(),
-        )
-    )
+    # `EventHandler`, and stated as such — A64-028.4 §18, §19.
+    #
+    # This was `list[TaskHandler | object]`, and the `| object` was not a
+    # convenience: it turned off the one check that would have caught what
+    # happened next. `AnalyticsRetentionTask` is a `TaskHandler` — it has
+    # `name` and `run`, the scheduler's protocol — and it was appended here,
+    # to the *relay's* handlers, which need `handles` and `handle`.
+    #
+    # The relay then called `handles()` on it on **every tick**, raised
+    # `AttributeError`, and failed the whole pass. Not one consumer: the
+    # pass. So nothing the outbox carries — notifications, rating
+    # application, analytics projections, tournament and social events — was
+    # delivered by any process running this code.
+    #
+    # With the annotation honest, mypy refuses the same mistake at the line
+    # that makes it.
+    handlers: list[EventHandler] = [handler]
     handlers.append(
         SessionScopedNotificationHandler(
             session_factory=db.session_factory,
@@ -879,7 +893,7 @@ def build_outbox_worker(
         # consumer — moderation, audit, statistics — is an entry here and
         # its own `processed_event` partition, with nothing above it
         # changing.
-        handlers=handlers,  # type: ignore[arg-type]
+        handlers=handlers,
         settings=settings.outbox,
         clock=clock,
     )
@@ -1128,6 +1142,22 @@ def build_task_schedulers(
     """
     clock = SystemClock()
     handlers: list[TaskHandler] = []
+    # A64-027.2 §47's analytics retention, registered where the thing that
+    # calls it lives — A64-028.4 §18.
+    #
+    # It was appended to `build_outbox_worker`'s list instead, which broke
+    # the relay *and* left this unrouteable: `build_task_schedulers` below
+    # schedules `analytics_prune_request` every six hours, and with no
+    # handler answering to that name the dispatcher logs `task_unroutable`
+    # and raises. So the 400-day retention this task exists for had never
+    # run once.
+    handlers.append(
+        AnalyticsRetentionTask(
+            session_factory=db.session_factory,
+            clock=clock,
+            metrics=_metrics(),
+        )
+    )
     schedulers: list[PeriodicTaskScheduler] = []
 
     # A64-021.5. Built once for this process rather than per pass: the
@@ -1259,6 +1289,23 @@ def build_task_schedulers(
                 service_factory=lambda session: _clock_adjudication_for(
                     session, redis_pools, settings, clock
                 ),
+            )
+        )
+        # A64-028.4, P3-4 reclassified. The queue this adjudicator reads is
+        # a Redis sorted set with no durable backing, and
+        # `ClockAdjudicationService` has said since A64-018 that a lost
+        # deadline means "the match stops flagging … for a game nobody is
+        # moving in it stays open". A64-028.3 proved the set does not
+        # survive a Redis loss and filed the missing backstop as a P3 about
+        # growth; the growth is the small half. This is the sweep that
+        # docstring names, re-deriving every active match's deadline from
+        # the columns the move committed.
+        handlers.append(
+            ClockDeadlineReconciliationTask(
+                session_factory=db.session_factory,
+                deadlines=RedisClockDeadlineStore(redis_pools.live),
+                clock=clock,
+                metrics=_metrics(),
             )
         )
     else:
@@ -1463,6 +1510,13 @@ def build_task_schedulers(
                 dispatcher=dispatcher,
                 request=adjudication_request(),
                 interval_seconds=settings.game.clock_interval_seconds,
+            )
+        )
+        schedulers.append(
+            PeriodicTaskScheduler(
+                dispatcher=dispatcher,
+                request=clock_reconcile_request(),
+                interval_seconds=settings.game.clock_reconcile_interval_seconds,
             )
         )
     if email_channel_available(settings):

@@ -3,9 +3,17 @@
 A64-016.3 built `RemoteNodePublisher` and put a log line behind it, recording
 plainly what that cost: "a deployment running more than one gateway node
 today has silently undelivered frames … single-node is the only supported
-topology". This is the seam that replaces the log line, and §9 is equally
+topology". This is the seam that replaced the log line, and §9 was equally
 plain about how far to take it — "do not deploy or fully design a distributed
 broker in this task".
+
+**That quotation is history, not the current state, and reading it as the
+current state cost a production audit a false finding.** A64-016.5 built the
+production adapter (`RedisStreamGatewayBus`) and A64-016.8 connected it
+(`GatewayForwarder`), and A64-028.4 proved the whole path across two real
+processes: delivery in both directions, zero duplicates, the durable move log
+in agreement. Multi-instance is the supported topology — see
+`docs/05-operations/data-reliability.md` §11.
 
 So what is here is a **port, an envelope and an in-process adapter**. The
 production adapter is one class against the same port, and this file names
@@ -178,12 +186,11 @@ class InProcessGatewayBus:
     do is cross a process boundary — which is the one thing a single-node
     deployment does not need.
 
-    That makes it the correct production adapter for **single-node**, which
-    is the supported topology today, and the honest one: a deployment with
-    two nodes gets no delivery and `gateway.remote_publish_failures_total`
-    stays at zero, so §9's "clear production adapter seam" is a real seam
-    rather than a silent downgrade. See this module's docstring for where
-    the multi-node adapter goes.
+    It is **not** what a deployment builds. `get_gateway_bus_for` returns
+    `RedisStreamGatewayBus` on the `bus` Redis role, and has since
+    A64-016.5; this is what a test holds when the transport is not the
+    subject. A process wired to this one and run twice gets no cross-node
+    delivery, which is exactly why it is not the production adapter.
 
     Bounded per node, because an unbounded queue for a node nobody consumes
     is a memory leak with a plausible-looking name. The oldest is dropped,

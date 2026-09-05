@@ -52,7 +52,7 @@ from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
 from app.platform.outbox.isolation import ConsumerPolicies
 from app.platform.outbox.ports import EventHandler
-from app.platform.outbox.relay import OutboxRelay
+from app.platform.outbox.relay import OutboxRelay, require_event_handlers
 from app.platform.outbox.repository import (
     SqlAlchemyOutboxRepository,
     SqlAlchemyProcessedEventStore,
@@ -90,6 +90,12 @@ class OutboxWorker:
         worker_id: str | None = None,
         policies: ConsumerPolicies | None = None,
     ) -> None:
+        # A64-028.4 §19. Composition time, so a consumer that cannot behave
+        # as one fails the process at startup rather than on the first tick
+        # — the relay is built per tick, and a `TypeError` six seconds into
+        # a deploy is a rollback while the same one at 3am is an incident.
+        require_event_handlers(handlers)
+
         self._session_factory = session_factory
         self._handlers = handlers
         self._settings = settings

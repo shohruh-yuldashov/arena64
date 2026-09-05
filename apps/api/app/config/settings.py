@@ -2682,6 +2682,19 @@ class GameSettings(SectionSettings):
     """
 
     clock_interval_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
+    clock_reconcile_interval_seconds: float = Field(default=60.0, gt=0)
+    """How often deadlines are re-derived from the durable match —
+    A64-028.4, P3-4.
+
+    A minute, and the number is a bound on **how long a lost queue stays
+    lost** rather than on adjudication latency: `clock_interval_seconds`
+    still decides how promptly a flag is noticed, and this only decides how
+    promptly the queue it reads is rebuilt after a Redis restart.
+
+    Cheap enough to run that often — one indexed read of active matches and
+    an idempotent supersede each — and short enough that a Redis loss
+    costs a minute of flagging rather than a game that never ends.
+    """
     """How often expired deadlines are claimed.
 
     **The resolution of the flag**, not a tuning knob: a player whose time

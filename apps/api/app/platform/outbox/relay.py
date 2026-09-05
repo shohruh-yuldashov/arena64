@@ -93,6 +93,43 @@ class RelayTick:
         return self.claimed == 0
 
 
+def require_event_handlers(handlers: Sequence[EventHandler]) -> None:
+    """Refuses anything registered as a consumer that cannot behave as one —
+    A64-028.4 §19.
+
+    ## Why this is a check and not a type annotation
+
+    It is both. The annotation is the first line and mypy enforces it; this
+    is the second, and it exists because the first was defeated once. A
+    `TaskHandler` was appended to the relay's list behind
+    `list[TaskHandler | object]` and a `# type: ignore[arg-type]`, and the
+    relay then called `handles()` on it **on every tick**. `_dispatch`
+    builds its work list in a comprehension, so the `AttributeError` escaped
+    before any consumer ran — one misregistered object stopped every outbox
+    event on the platform, and the symptom was a log line.
+
+    ## Why `hasattr` and not `isinstance`
+
+    `EventHandler` is a structural `Protocol` and is not
+    `runtime_checkable`. Making it so would be a decorator added to a port
+    to serve a check, and it would still only compare method *names*, which
+    is what this does directly and visibly.
+
+    Called from `OutboxWorker.__init__` — composition time, so a
+    misregistration fails the process at startup — and from `OutboxRelay`,
+    which is constructed per tick and is the type's own invariant.
+    """
+    for consumer in handlers:
+        missing = [
+            name for name in ("consumer", "handles", "handle") if not hasattr(consumer, name)
+        ]
+        if missing:
+            raise TypeError(
+                f"{type(consumer).__name__} was registered as an outbox consumer and is "
+                f"missing {', '.join(missing)}. The relay calls these on every tick."
+            )
+
+
 class OutboxRelay:
     """Delivers one batch of outbox entries to its registered consumers.
 
@@ -117,6 +154,8 @@ class OutboxRelay:
         retry_max_seconds: int,
         policies: ConsumerPolicies | None = None,
     ) -> None:
+        require_event_handlers(handlers)
+
         self._outbox = outbox
         self._processed = processed
         self._handlers = handlers

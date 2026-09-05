@@ -169,12 +169,19 @@ class TestScheduler:
         await scheduler.stop()
 
     async def test_the_loop_outlives_a_failing_dispatch(self) -> None:
-        """The dispatcher raises `UnknownTask` on every tick and the loop
-        keeps running: a schedule that exited on the first failure would
-        need a human to notice, and nothing about a job that quietly stops
-        is visible until the thing it was preventing has happened."""
+        """The handler raises on every tick and the loop keeps running: a
+        schedule that exited on the first failure would need a human to
+        notice, and nothing about a job that quietly stops is visible until
+        the thing it was preventing has happened.
+
+        The failure is now a **handler that raises** rather than a task with
+        nowhere to go. A64-028.4 made the second impossible to construct —
+        an unroutable schedule fails at composition — so producing one here
+        would test a state the platform can no longer reach.
+        """
+        handler = RecordingHandler("test.work", fails=True)
         scheduler = PeriodicTaskScheduler(
-            dispatcher=InlineTaskDispatcher([RecordingHandler("test.other")]),
+            dispatcher=InlineTaskDispatcher([handler]),
             request=TaskRequest(name="test.work"),
             interval_seconds=0.01,
         )
@@ -182,3 +189,20 @@ class TestScheduler:
         await scheduler.start()
         await asyncio.sleep(0.05)
         await scheduler.stop()
+
+        assert len(handler.payloads) > 1, "the loop stopped after the first failure"
+
+    def test_a_schedule_with_nowhere_to_go_is_refused_at_construction(self) -> None:
+        """A64-028.4 §19, and the second half of the analytics defect.
+
+        `analytics_prune_request` was scheduled while its handler sat in the
+        outbox relay's list. Nothing joined the two until the interval
+        elapsed — six hours — and then the only symptom was one log line per
+        interval while the 400-day prune never ran.
+        """
+        with pytest.raises(ValueError, match="test.work"):
+            PeriodicTaskScheduler(
+                dispatcher=InlineTaskDispatcher([RecordingHandler("test.other")]),
+                request=TaskRequest(name="test.work"),
+                interval_seconds=0.01,
+            )

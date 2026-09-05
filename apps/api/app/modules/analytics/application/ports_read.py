@@ -16,7 +16,7 @@ and never checks again.
 """
 
 from datetime import date
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.modules.analytics.application.read_models.funnels import DataQuality
 
@@ -78,4 +78,33 @@ class FunnelReader(Protocol):
         whose beginning was pruned as though it never converted. `None`
         when the store is empty.
         """
+        ...
+
+
+class EngagementReader(Protocol):
+    """A64-027.4's data-access boundary. Counts in, arithmetic elsewhere."""
+
+    async def active_players(
+        self, *, environment: str, as_of: date, include_synthetic: bool
+    ) -> dict[str, int]:
+        """`daily`, `weekly` and `monthly` over A64-027.1 §30's activity
+        definition, all three ending on `as_of` so they are comparable."""
+        ...
+
+    async def retention(
+        self, *, environment: str, since: date, until: date, include_synthetic: bool, today: date
+    ) -> list[dict[str, Any]]:
+        """One mapping per registration cohort day: `cohort_day`, `cohort`,
+        `d1`, `d7`, `d30`.
+
+        `today` is passed in rather than read from the database clock, so
+        which cohorts count as mature is decided by the application's
+        injected clock and a test can freeze it.
+        """
+        ...
+
+    async def engagement(
+        self, *, environment: str, week_start: date, week_end: date, include_synthetic: bool
+    ) -> dict[str, Any]:
+        """M15, M16, M17 and M22's raw counts over one week."""
         ...

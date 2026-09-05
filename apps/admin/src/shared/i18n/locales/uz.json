@@ -717,6 +717,7 @@
     },
     "tournamentFormat": {
       "round_robin": "Aylanma",
+      "single_elimination": "Chiqaruv (bir marta yutqazish)",
       "swiss": "Shveytsar tizimi"
     },
     "variant": {

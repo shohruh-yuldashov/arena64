@@ -717,6 +717,7 @@
     },
     "tournamentFormat": {
       "round_robin": "Round robin",
+      "single_elimination": "Single elimination",
       "swiss": "Swiss"
     },
     "variant": {

@@ -2197,6 +2197,7 @@ change and this epic is frozen: **A64-028**.
 | 4 | `/audit`, Deliveries | No applied-filter count, no clear control | Four management pages got both in A64-027A.3; a filtered log that returns nothing otherwise reads as "nothing happened" |
 | 5 | Deliveries | Bare paragraphs where every other listing draws a designed panel | The History tab beside it was redesigned and this one was not — one page, two treatments |
 | 6 | `/` breadcrumb | The root crumb linked to the page it was on, duplicating `aria-current` | Two "current page" markers in one landmark |
+| 7 | `/login` | **No design pass at all** — a bare form at the top of an empty page, no card, no brand, its only action wearing the secondary treatment | Four tasks redesigned the routes *behind* the guard and none reached the one in front of it, which is the first surface an operator sees and the only one with no shell to say where they are |
 
 ## 14.3 Route inventory
 
@@ -2216,7 +2217,7 @@ live API: `/login`, `/`, `/users`, `/users/{id}`, `/matches`,
 | Keyboard | Focus ring visible on every tab stop; reduced-motion neutralises every transition |
 | Raw enums in primary UI | None (technical identifiers remain inside disclosures, which §28 permits) |
 | Dead links, unnamed buttons | None |
-| Bundle vs A64-027A.4 | JS 457.19 → 457.17 kB · CSS 46.87 → 46.93 kB |
+| Bundle vs A64-027A.4 | JS 457.19 → 457.41 kB · CSS 46.87 → 47.51 kB |
 | Backend diff | Empty |
 
 ## 14.5 Decisions re-evaluated once
@@ -2242,7 +2243,7 @@ errors.
 ## 14.6 Known limitations
 
 - **CSS cascade regressions are not covered by the test suite.** Defect 1
-  was invisible to all 109 passing tests because jsdom does not apply the
+  was invisible to all 110 passing tests because jsdom does not apply the
   stylesheet; it was found by measuring the rendered box in a real browser.
   The suite guards behaviour, not paint.
 - **Two browser tabs can still race a token rotation** — §14.1.

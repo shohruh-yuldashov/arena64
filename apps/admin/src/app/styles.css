@@ -2182,10 +2182,59 @@ dialog h3 {
 
 /* ============================================================ misc kept */
 
+/* Sign-in — A64-027A.5 §36.
+   The one route with no shell around it, and the only one this epic did
+   not reach: it rendered a bare form glued to the top of an empty page.
+   The card is the same surface, hairline and radius every panel behind the
+   guard uses, so the console looks like itself before an operator is in
+   it. */
 .gate {
-  max-width: 26rem;
-  margin: 0 auto;
-  padding: 4rem 1.25rem;
+  display: grid;
+  place-items: center;
+  min-block-size: 100dvh;
+  padding: 2rem 1.25rem;
+}
+
+.gate__card {
+  inline-size: 100%;
+  max-inline-size: 24rem;
+  padding: 2rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-raised);
+}
+
+.gate__brand {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin-block-end: 1.75rem;
+}
+
+.gate__wordmark {
+  display: grid;
+  line-height: 1.25;
+}
+
+.gate__wordmark strong {
+  font-size: var(--text-body);
+  font-weight: 650;
+}
+
+.gate__wordmark span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* A single-action form: the button spans the field it follows rather than
+   sitting as a small control beside nothing. */
+.gate__submit {
+  inline-size: 100%;
+  margin-block-start: 0.5rem;
 }
 
 .dashboard-freshness {

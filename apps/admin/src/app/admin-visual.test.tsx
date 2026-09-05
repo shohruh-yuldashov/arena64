@@ -148,3 +148,17 @@ it("shows Arena64's own mark in the rail", async () => {
   const mark = await screen.findByRole("img", { name: "Arena64" });
   expect(mark.closest(".sidebar")).not.toBeNull();
 });
+
+it("gives sign-in the console's own identity and one primary action", async () => {
+  // Four tasks of A64-027A redesigned the routes behind the guard and none
+  // reached the page in front of it: a bare form at the top of an empty
+  // page, its only action wearing the secondary treatment — A64-027A.5 §36.
+  stubApi();
+  renderAt("/login");
+
+  const mark = await screen.findByRole("img", { name: "Arena64" });
+  expect(mark.closest(".gate__card")).not.toBeNull();
+
+  const submit = screen.getByRole("button", { name: /sign in/i });
+  expect(submit).toHaveClass("primary");
+});

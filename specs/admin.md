@@ -2047,3 +2047,105 @@ table.
 - Analytics and Notifications keep A64-027.6/A64-027A.1's composition —
   **A64-027A.4** owns those.
 - Cross-product visual QA — **A64-027A.5**.
+
+---
+
+# 13. Insights and Communication — A64-027A.4
+
+A64-027A.3 applied the foundation to the management routes. This applies it
+to the two workspaces that are about *reading the product* and *speaking to
+it*, and both were the flattest pages left: ten identical metric tiles, and
+a form beside a table.
+
+## 13.1 No chart library
+
+| Option | Cost | Verdict |
+| --- | --- | --- |
+| `recharts` | ~100 kB | Rejected — 22% of the bundle for four shapes |
+| `chart.js` | ~70 kB | Rejected — canvas; an operator cannot select the numbers |
+| CSS + SVG + `<table>` | 0 kB | **Chosen** |
+
+The four shapes this page needs — funnel, cohort grid, distribution, flow —
+are a width, a background and a table. This is the third time the console
+has reached this conclusion (A64-027.6 for analytics, A64-027A.2 for icons)
+and the reasoning has not changed.
+
+## 13.2 The frontend/backend metric boundary
+
+**Frozen, and restated because this task added arithmetic to the page:**
+
+| Allowed here | Forbidden here |
+| --- | --- |
+| `value / max` for a bar's width | Recomputing any rate the backend returns |
+| `rate → opacity` for a cohort tint | Deriving a rate from counts beside it |
+| Summing a returned breakdown for a share | Inventing a denominator |
+| `delivered / audience_size` as a **display** ratio | Treating that ratio as a metric |
+
+Two display-derived percentages exist and are named here so they are never
+mistaken for product metrics: a termination reason's **share of the reasons
+shown**, and a broadcast's **delivery progress**. Both are ratios of two
+direct backend counts, both are display-only, and neither enters M1–M22.
+
+The funnel's rates are the server's `conversion_from_previous` and
+`conversion_from_start`. The queue flow's two rates are `match_found_rate`
+and `offer_acceptance`, not divisions of the counts they sit between.
+
+## 13.3 Analytics composition
+
+```
+header      title · range · refresh · updated · coverage badges
+groups      Player activity · Activation · Matchmaking · Game health
+acquisition funnel bars + accessible table + the stitching limitation
+activation  funnel bars + accessible table + duration figures
+engagement  four figures, uncharted — §13 forbids over-charting four numbers
+retention   cohort grid, tinted by the returned rate
+matchmaking joins → paired → accepted, with the server's rates between
+games       counts, then the termination distribution
+```
+
+**The cohort tint has a floor.** `0.1 + rate × 0.55`, and it is a legibility
+device rather than a value: a measured 2% and an unmeasured cell would
+otherwise be the same untinted rectangle, and those mean opposite things.
+It stays monotonic in the rate and the number beside it is the authority.
+
+**Every chart has a text equivalent.** The funnels carry a `<details>` table
+of the same figures; the cohort grid *is* a table; every bar's value is
+written beside it. §19: a chart whose data lives in its geometry is a chart
+half the readers cannot use.
+
+## 13.4 Notifications composition
+
+```
+send        ┌ steps: audience · content ┬ preview            ┐
+            └                           ┴ delivery summary   ┘
+history     title · snippet · audience · status · delivered/eligible · sent
+deliveries  the A64-024.7 operations console, with its enums translated
+```
+
+The audience is **cards, not a segmented control**: the two options differ
+by three orders of magnitude and that choice should not look like a view
+toggle. The recipient count is given its own panel with attention treatment
+— warning, not alarm; a red panel on a routine announcement teaches an
+operator to ignore red.
+
+The delivery summary sits beside the composer rather than only inside the
+confirmation dialog, because the audience and the channel are what decide
+whether this is routine or platform-wide, and an operator should see them
+while writing.
+
+## 13.5 Delivery semantics, unchanged
+
+`sent` / `delivered` still reads **"accepted by the push service"**. Web
+Push reports that a service took the request and nothing downstream ever
+says a device showed anything. A green "Delivered" would be a claim the
+platform cannot support and an operator would use it to close an
+investigation that should stay open. A test asserts the phrase and the
+absence of both "Delivered" and "Read".
+
+## 13.6 What A64-027A.4 did not do
+
+- No backend change. `git diff origin/main -- apps/api` is empty.
+- No new dependency.
+- No channel, template, trend, chart point or count that the platform does
+  not produce.
+- Final cross-console visual QA — **A64-027A.5**.

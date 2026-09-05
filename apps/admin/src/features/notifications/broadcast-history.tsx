@@ -121,16 +121,36 @@ export function BroadcastHistory({ reloadToken }: { reloadToken: number }) {
                 />
               </td>
               <td>
-                {t("broadcast.deliveredOf", {
-                  delivered: count(item.delivered),
-                  // "Counting", never a zero: `null` means the worker has
-                  // not counted yet, and a zero would read as a broadcast
-                  // that reached nobody.
-                  total:
-                    item.audience_size === null
-                      ? t("broadcast.deliveredUnknown")
-                      : count(item.audience_size),
-                })}
+                <span className="delivered">
+                  <span className="delivered__count">
+                    {t("broadcast.deliveredOf", {
+                      delivered: count(item.delivered),
+                      // "Counting", never a zero: `null` means the worker
+                      // has not counted yet, and a zero would read as a
+                      // broadcast that reached nobody.
+                      total:
+                        item.audience_size === null
+                          ? t("broadcast.deliveredUnknown")
+                          : count(item.audience_size),
+                    })}
+                  </span>
+                  {/* A **display** ratio of two direct backend counts —
+                      §29. It is not a product metric, enters none, and is
+                      drawn only when the denominator exists. */}
+                  {item.audience_size !== null && item.audience_size > 0 && (
+                    <span className="delivered__track" aria-hidden="true">
+                      <span
+                        className="delivered__fill"
+                        data-complete={item.status === "completed" ? "true" : undefined}
+                        style={{
+                          inlineSize: `${String(
+                            Math.min(item.delivered / item.audience_size, 1) * 100,
+                          )}%`,
+                        }}
+                      />
+                    </span>
+                  )}
+                </span>
               </td>
               <td>
                 <time dateTime={item.created_at}>{when(item.created_at)}</time>

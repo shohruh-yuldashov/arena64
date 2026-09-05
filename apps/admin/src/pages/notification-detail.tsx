@@ -11,6 +11,7 @@ import {
   fetchNotification,
   retryNotificationDelivery,
 } from "@/shared/api/client";
+import { useVocab } from "@/features/vocabulary";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { ErrorNotice } from "@/shared/ui/error-notice";
 import { ConfirmDialog } from "@/shared/ui/confirm-dialog";
@@ -39,6 +40,7 @@ import { ConfirmDialog } from "@/shared/ui/confirm-dialog";
  */
 export function NotificationDetailPage() {
   const { t, locale } = useTranslation();
+  const vocab = useVocab();
   const { notificationId } = useParams({ strict: false }) as { notificationId: string };
 
   const [detail, setDetail] = useState<AdminNotificationDetail | null>(null);
@@ -128,7 +130,7 @@ export function NotificationDetailPage() {
 
       {state === "ready" && detail !== null && (
         <>
-          <h2>{detail.type}</h2>
+          <h2>{vocab("notificationType", detail.type)}</h2>
 
           <section>
             <h3>{t("notifications.sectionOverview")}</h3>
@@ -140,7 +142,7 @@ export function NotificationDetailPage() {
                 </Link>
               </dd>
               <dt>{t("notifications.colCategory")}</dt>
-              <dd>{detail.category}</dd>
+              <dd>{vocab("notificationCategory", detail.category)}</dd>
               <dt>{t("notifications.colInApp")}</dt>
               <dd>
                 {t(detail.read_at === null ? "notifications.unread" : "notifications.read")}

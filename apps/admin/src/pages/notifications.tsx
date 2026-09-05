@@ -9,6 +9,7 @@ import {
 } from "@/shared/api/client";
 import { BroadcastComposer } from "@/features/notifications/composer";
 import { BroadcastHistory } from "@/features/notifications/broadcast-history";
+import { useVocab } from "@/features/vocabulary";
 import { useTranslation } from "@/shared/i18n";
 import { ErrorNotice } from "@/shared/ui/error-notice";
 import { Icon } from "@/shared/ui/icon";
@@ -57,6 +58,7 @@ function tabOf(value: string | undefined): Tab {
 
 export function NotificationsPage() {
   const { t, locale } = useTranslation();
+  const vocab = useVocab();
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Search;
 
@@ -238,7 +240,7 @@ export function NotificationsPage() {
                         </Link>
                       </td>
                       <td>{recipientOf(row)}</td>
-                      <td>{row.type}</td>
+                      <td>{vocab("notificationType", row.type)}</td>
                       {/* Text, never colour alone — §24. */}
                       <td>
                         {t(
@@ -259,7 +261,7 @@ export function NotificationsPage() {
                       to="/notifications/$notificationId"
                       params={{ notificationId: row.id }}
                     >
-                      {row.type}
+                      {vocab("notificationType", row.type)}
                     </Link>
                     <span>{recipientOf(row)}</span>
                     <span className="muted">

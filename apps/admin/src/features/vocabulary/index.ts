@@ -36,6 +36,8 @@ export type VocabNamespace =
   | "termination"
   | "tournamentFormat"
   | "entrantStatus"
+  | "notificationType"
+  | "notificationCategory"
   | "sanctionKind"
   | "sanctionCategory"
   | "auditSubject"

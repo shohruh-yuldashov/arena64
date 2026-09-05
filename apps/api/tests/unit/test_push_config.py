@@ -9,7 +9,6 @@ truthfully showing the channel off so nobody looked at the configuration.
 """
 
 import pytest
-from pydantic import SecretStr
 from pydantic import ValidationError as PydanticValidationError
 
 from app.config.settings import PushSettings

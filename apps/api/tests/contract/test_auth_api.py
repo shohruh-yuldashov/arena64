@@ -36,6 +36,7 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config.settings import get_settings
 from tests.contract.contract_app import build_contract_app, contract_client
 
 REGISTER_URL = "/api/v1/auth/register"
@@ -46,6 +47,24 @@ LOGOUT_ALL_URL = "/api/v1/auth/logout-all"
 ME_URL = "/api/v1/auth/me"
 
 PASSWORD = "CorrectHorse1!"
+
+
+@pytest.fixture
+def no_rotation_grace(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Refresh with `SESSION_ROTATION_GRACE_SECONDS=0` — A64-028.2.
+
+    These tests assert the *reuse* path end to end, and a contract test runs
+    on the real clock: it cannot wait out a ten-second concurrency window,
+    and sleeping through one would be ten seconds added to every run for
+    nothing. Turning the window off is the same behaviour a replay outside
+    it gets, and the window's own boundary is asserted on an injected clock
+    in `test_refresh_concurrency.py`.
+
+    Must be requested **before** `client`, which builds the app: settings
+    are read once at construction.
+    """
+    monkeypatch.setenv("SESSION_ROTATION_GRACE_SECONDS", "0")
+    get_settings.cache_clear()
 
 
 @pytest_asyncio.fixture
@@ -264,8 +283,15 @@ class TestRefresh:
         assert refreshed["refresh_token"] != tokens["refresh_token"]
         assert (await client.get(ME_URL, headers=bearer(refreshed))).status_code == 200
 
-    async def test_the_old_refresh_token_stops_working(self, client: AsyncClient) -> None:
-        """Rotation on every use — database.md §14.3."""
+    async def test_the_old_refresh_token_stops_working(
+        self, no_rotation_grace: None, client: AsyncClient
+    ) -> None:
+        """Rotation on every use — database.md §14.3.
+
+        With the concurrency window off, so this is the answer a replay gets
+        once the window has passed. Inside it the same request is a `409`;
+        that case has its own test below.
+        """
         body = credentials()
         await register(client, body)
         tokens = await sign_in(client, body)
@@ -276,7 +302,38 @@ class TestRefresh:
         assert replay.status_code == 401
         assert replay.json()["code"] == "invalid_session"
 
-    async def test_replaying_burns_the_whole_chain(self, client: AsyncClient) -> None:
+    async def test_a_replay_inside_the_window_is_a_conflict_and_spares_the_chain(
+        self, client: AsyncClient
+    ) -> None:
+        """A64-028.2, at the endpoint. No `no_rotation_grace` here — the
+        default window is the point.
+
+        The same request the two tests around this one make, answered
+        differently because it arrives while the rotation that superseded it
+        is still seconds old. It is refused, it carries no token, and the
+        session the client already holds is untouched.
+        """
+        body = credentials()
+        await register(client, body)
+        tokens = await sign_in(client, body)
+        successor = await client.post(REFRESH_URL, json={"refresh_token": tokens["refresh_token"]})
+        assert successor.status_code == 200, successor.text
+
+        replay = await client.post(REFRESH_URL, json={"refresh_token": tokens["refresh_token"]})
+
+        assert replay.status_code == 409
+        assert replay.json()["code"] == "session_rotation_conflict"
+        assert replay.headers["retry-after"]
+        assert "refresh_token" not in replay.text
+        # The successor still works — which is the whole difference.
+        again = await client.post(
+            REFRESH_URL, json={"refresh_token": successor.json()["data"]["refresh_token"]}
+        )
+        assert again.status_code == 200, again.text
+
+    async def test_replaying_burns_the_whole_chain(
+        self, no_rotation_grace: None, client: AsyncClient
+    ) -> None:
         """The reason rotation exists. A token used twice was captured, and
         since the platform cannot tell the attacker from the legitimate
         user, both lose the session."""

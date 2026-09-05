@@ -268,6 +268,7 @@ class TestQueueHealth:
         health = await queue_health(contract_session)
 
         assert health.wait.sample == 5
+        assert health.wait.p50_seconds is not None
         assert health.wait.p50_seconds == pytest.approx(3.0)
         assert health.wait.p95_seconds is not None
         assert health.wait.p95_seconds > health.wait.p50_seconds

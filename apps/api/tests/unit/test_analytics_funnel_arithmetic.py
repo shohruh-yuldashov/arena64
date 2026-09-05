@@ -107,7 +107,7 @@ class TestTheFunnelShape:
         assert result.overall_conversion == pytest.approx(0.40)
 
     def test_an_empty_funnel_reports_no_conversion_rather_than_zero(self) -> None:
-        empty = dict.fromkeys(ACTIVATION_STAGES, 0)
+        empty: dict[str, int] = dict.fromkeys(ACTIVATION_STAGES, 0)
         result = FunnelResult(stages=build_funnel(ACTIVATION_STAGES, empty), meta=_meta())
 
         assert result.overall_conversion is None

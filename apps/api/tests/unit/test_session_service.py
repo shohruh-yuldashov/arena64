@@ -24,6 +24,7 @@ from app.modules.auth.application.services import (
     SessionService,
 )
 from app.modules.auth.domain.exceptions import (
+    ConcurrentRotation,
     ExpiredRefreshToken,
     InvalidRefreshToken,
     RevokedSession,
@@ -321,7 +322,11 @@ class TestReuseDetection:
     """database.md §14.3's core security property."""
 
     async def test_presenting_a_revoked_token_revokes_the_whole_family(
-        self, service: SessionService, repository: FakeSessionRepository, clock: MovableClock
+        self,
+        service: SessionService,
+        repository: FakeSessionRepository,
+        clock: MovableClock,
+        settings: SessionSettings,
     ) -> None:
         """The doc's reasoning: "the attacker and the legitimate user now
         both hold links in the same chain, and there is no way to tell
@@ -581,14 +586,27 @@ class TestRotateRefreshToken:
             await service.validate_refresh_token(rotated.refresh_token)
         ).id == rotated.session.id
 
-    async def test_the_presented_token_stops_working(self, service: SessionService) -> None:
+    async def test_the_presented_token_stops_working(
+        self, service: SessionService, clock: MovableClock, settings: SessionSettings
+    ) -> None:
         """The half that makes rotation a security mechanism rather than
         churn. A successor issued *without* invalidating its predecessor
-        would leave every old token valid forever."""
+        would leave every old token valid forever.
+
+        A64-028.2 split *how* it stops working in two, and the token is
+        refused either way. Straight after the rotation it is this client's
+        own other tab arriving late, so the refusal is a `409` that leaves
+        the chain alone; once the concurrency window has passed it is a
+        credential somebody kept, and the family goes.
+        """
         issued = await service.create_session(USER_ID)
 
         await service.rotate_refresh_token(issued.refresh_token)
 
+        with pytest.raises(ConcurrentRotation):
+            await service.validate_refresh_token(issued.refresh_token)
+
+        clock.instant += timedelta(seconds=settings.rotation_grace_seconds + 1)
         with pytest.raises(RevokedSession):
             await service.validate_refresh_token(issued.refresh_token)
 
@@ -681,13 +699,23 @@ class TestRotateRefreshToken:
             await service.rotate_refresh_token(issued.refresh_token)
 
     async def test_replaying_a_rotated_token_burns_the_whole_chain(
-        self, service: SessionService, repository: FakeSessionRepository
+        self,
+        service: SessionService,
+        repository: FakeSessionRepository,
+        clock: MovableClock,
+        settings: SessionSettings,
     ) -> None:
         """§14.3's reason for rotating at all. Presenting an
         already-rotated token means it was captured, so the family goes —
         including the successor the legitimate user is holding."""
         issued = await service.create_session(USER_ID)
         rotated = await service.rotate_refresh_token(issued.refresh_token)
+
+        # Past the concurrency window first — A64-028.2. Inside it the same
+        # presentation is this client's own second tab, and treating that as
+        # theft is the defect A64-028.1 measured. What makes this *reuse* is
+        # that the token was kept.
+        clock.instant += timedelta(seconds=settings.rotation_grace_seconds + 1)
 
         with pytest.raises(RevokedSession):
             await service.validate_refresh_token(issued.refresh_token)

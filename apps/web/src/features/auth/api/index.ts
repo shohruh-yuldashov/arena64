@@ -1,5 +1,6 @@
 import type { BrowserSession } from "@/entities/session";
 import { api } from "@/shared/api";
+import { ApiError } from "@/shared/api/errors";
 import type { components } from "@/shared/api/generated/schema";
 
 /**
@@ -34,9 +35,28 @@ export function register(payload: Schemas["RegisterRequest"]): Promise<BrowserSe
  * and a parameter here would be a way for the page to supply one — which
  * would mean the page could hold one.
  */
-export function refresh(): Promise<BrowserSession> {
-  return api.post<BrowserSession>(`${BROWSER}/refresh`);
+export async function refresh(): Promise<BrowserSession> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await api.post<BrowserSession>(`${BROWSER}/refresh`);
+    } catch (error) {
+      // A64-028.2 §14. `409` from this endpoint has exactly one cause:
+      // another tab of this browser rotated the same cookie first. The
+      // successor is in the shared jar — or a few milliseconds from it —
+      // so the answer is to present it again rather than to sign out.
+      //
+      // Short waits rather than the server's `Retry-After: 1`: that header
+      // is the conservative contract for a client that does not know which
+      // conflict it hit, and this one does. Two attempts, then the caller
+      // signs in; a third would be indistinguishable from a loop.
+      const conflicted = error instanceof ApiError && error.status === 409;
+      if (!conflicted || attempt >= ROTATION_RETRY_DELAYS_MS.length) throw error;
+      await new Promise((resolve) => setTimeout(resolve, ROTATION_RETRY_DELAYS_MS[attempt]));
+    }
+  }
 }
+
+const ROTATION_RETRY_DELAYS_MS = [120, 360];
 
 export function logout(): Promise<void> {
   return api.post<void>(`${BROWSER}/logout`);

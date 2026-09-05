@@ -306,6 +306,42 @@ class SessionNotFound(InvalidRefreshToken):
     """
 
 
+class ConcurrentRotation(TemporaryConflictError):
+    """The presented refresh token was rotated by a concurrent request from
+    the same client — 409, with a retry hint. A64-028.2 §3.
+
+    ## Not an authentication failure, which is why it is not a 401
+
+    Every sibling in `InvalidRefreshToken` means "I do not know who you
+    are". This one does not: the token was genuine, the session is alive,
+    and what failed was a race between two tabs sharing one cookie jar. The
+    caller recovers by asking again — the browser's jar now holds the
+    successor — and `TemporaryConflictError` is the platform's existing name
+    for a conflict that resolves on its own, so transport already renders it
+    with `Retry-After` and the gateway already renders it as a frame.
+
+    ## What it is not permitted to be
+
+    A replay inside the grace window is answered with **this and never with
+    a credential**. Returning the successor's token would require storing
+    the raw value to hand back later, and a refresh token that can be read
+    out of the database is not a refresh token — see
+    `OpaqueTokenService`, which stores a SHA-256 digest for exactly that
+    reason.
+
+    Nor does it revoke anything. Burning the family here is the defect
+    A64-028.1 measured; refusing without burning is the whole change.
+    """
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.SESSION_ROTATION_CONFLICT
+    """Its own code, not the parent's bare `conflict`.
+
+    A client has to tell this conflict from every other one to know that
+    asking again will work — and a bare `conflict` is what every queue
+    cooldown and duplicate registration on the platform also answers with.
+    """
+
+
 # --- email verification (A64-011.6) ------------------------------------------
 
 

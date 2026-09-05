@@ -13,6 +13,7 @@ fail mysteriously on the ten-thousandth request.
 
 from functools import lru_cache
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from pydantic.fields import FieldInfo
@@ -76,6 +77,22 @@ _LOCAL_JWT_SECRET_KEY = (
 #: The frontend a developer runs. Refused in a deployed tier by the guard on
 #: `Settings`, for the reason that guard gives.
 _LOCAL_PUBLIC_APP_URL = "http://localhost:3000"
+#: The frontend routes a transactional email links to — A64-028.2 §17.
+#:
+#: Held beside `_LOCAL_PUBLIC_APP_URL` rather than inside `EmailSettings`
+#: because they exist to be composed *with* `PUBLIC_APP_URL`, which is a
+#: different section: the origin is configured once, and these say which
+#: page on it. A template may still be set explicitly — a mobile build
+#: pointing at a deep link is the case that keeps them overridable — but
+#: nothing has to be set for the links to be right.
+_VERIFICATION_PATH = "/verify-email?token={token}"
+_PASSWORD_RESET_PATH = "/reset-password?token={token}"
+#: Hosts that mean "this machine" — A64-028.2 §16.
+#:
+#: A deployed tier that links to any of them sends mail nobody can act on,
+#: and does it silently. Checked by host rather than by whole-string
+#: comparison so that a port, a scheme or a path cannot smuggle one past.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", "[::1]"})
 
 _LOCAL_OTP_SECRET = (
     # Same shape and same reasoning as `_LOCAL_JWT_SECRET_KEY`: the literal
@@ -569,6 +586,42 @@ class SessionSettings(SectionSettings):
     #: it is a disabled one.
     idle_timeout_days: int = Field(default=14, ge=1, le=90)
 
+    rotation_grace_seconds: int = Field(default=10, ge=0, le=120)
+    """How long after a rotation the token it replaced may be presented
+    again without being treated as theft — A64-028.2 §9.
+
+    ## The failure this exists for
+
+    A browser shares one cookie jar across its tabs. Two tabs whose access
+    tokens expire together both present the *same* refresh token, because
+    the second was sent before the first response's `Set-Cookie` was
+    applied. The second presentation then finds a row this server revoked
+    itself, moments ago, with reason `rotated` — and A64-028.1 proved what
+    happened next: reuse detection burned the whole family, including the
+    successor the first tab had just been issued, and **both tabs were
+    signed out**.
+
+    ## Why ten seconds
+
+    The window has to cover one round trip on a bad connection plus the
+    client's own scheduling, and nothing else: the two requests are sent
+    within milliseconds of each other, and what separates them is how long
+    the first takes to come back. Ten seconds is a large multiple of a slow
+    mobile round trip and a small fraction of any interval over which a
+    stolen credential is worth replaying.
+
+    ## Why a generous value is not a generous concession
+
+    **A replay inside this window is never answered with a credential.** It
+    is answered with `ConcurrentRotation` — a 409 and a retry hint — so what
+    the window buys an attacker is not access but *silence*: no theft signal
+    for its duration. It costs alarm latency, never authority. See
+    `SessionService.validate_refresh_token`.
+
+    `0` disables the grace entirely and restores A64-028.1's behaviour,
+    which is what the boundary test sets.
+    """
+
     #: Bytes drawn from the OS CSPRNG per token. The floor is a security
     #: boundary, not a tuning knob — see `REFRESH_TOKEN_MIN_ENTROPY_BYTES`.
     token_entropy_bytes: int = Field(
@@ -629,7 +682,7 @@ class EmailSettings(SectionSettings):
     #: `{token}` is substituted with the raw token. Validated below,
     #: because a template missing the placeholder produces links that
     #: cannot possibly work and does so silently.
-    verification_url_template: str = "http://localhost:3000/verify-email?token={token}"
+    verification_url_template: str = _LOCAL_PUBLIC_APP_URL + _VERIFICATION_PATH
 
     #: **One hour**, against verification's twenty-four, and the asymmetry
     #: is the decision rather than an inconsistency. Both links sit in the
@@ -663,7 +716,7 @@ class EmailSettings(SectionSettings):
     #: link opens a page that collects the new password and posts it to
     #: `POST /auth/password/reset`. The token must never be submitted to
     #: this API as a query parameter; see `ResetPasswordRequest`.
-    password_reset_url_template: str = "http://localhost:3000/reset-password?token={token}"
+    password_reset_url_template: str = _LOCAL_PUBLIC_APP_URL + _PASSWORD_RESET_PATH
 
     otp_secret: SecretStr = Field(
         default=SecretStr(_LOCAL_OTP_SECRET),
@@ -950,6 +1003,46 @@ class PushSettings(SectionSettings):
 
     retry_base_seconds: int = Field(default=60, ge=1)
     retry_max_seconds: int = Field(default=6 * 60 * 60, ge=60)
+
+    @model_validator(mode="after")
+    def _the_pair_is_whole_or_absent(self) -> "PushSettings":
+        """Both keys, or neither — A64-028.2 §20.
+
+        The class above says "absent is allowed; wrong is not", and until
+        A64-028.1 P2-4 that was only two-thirds true. A *malformed* pair
+        raised, because `VapidKeyPair.from_base64` refused it. A **half**
+        pair did not: `build_vapid_keys` returns `None` the moment either
+        key is missing, so a tier that set `VAPID_PUBLIC_KEY` and forgot its
+        private half started cleanly, reported push unavailable, and refused
+        every subscription — with nothing anywhere saying why.
+
+        That is the worst of the three states. Absent is a decision; wrong
+        is caught; half is somebody who *intended* to enable push, got it
+        wrong, and is told nothing. It is also invisible in exactly the
+        place it matters: the settings screen reports the channel off, which
+        is true, so nobody looks at the configuration.
+
+        Unconditional rather than deployed-only. A half pair is never
+        intentional, on a laptop or in production, and an operator who set
+        one key on their machine will set one key on a server.
+        """
+        public = self.vapid_public_key
+        private = self.vapid_private_key
+        if (public is None) == (private is None):
+            return self
+
+        missing, present = (
+            ("VAPID_PRIVATE_KEY", "VAPID_PUBLIC_KEY")
+            if private is None
+            else ("VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY")
+        )
+        # The names, never the values: one of them is the signing key, and a
+        # configuration error must not be the thing that prints it.
+        raise ValueError(
+            f"{present} is set but {missing} is not. Web Push needs both — a half "
+            "pair silently disables the channel. Set both, or neither to leave push "
+            "off (python -m app.operator.push_keys generate)"
+        )
 
 
 class StorageSettings(SectionSettings):
@@ -3161,6 +3254,75 @@ class Settings(BaseModel):
     #: Defaulted for the same reason as `analytics`: one operational number,
     #: no secret, no construction site that should have to know about it.
     broadcast: BroadcastSettings = Field(default_factory=BroadcastSettings)
+
+    @model_validator(mode="after")
+    def _resolve_email_links(self) -> "Settings":
+        """One origin, two links — A64-028.2 §16, §17, §18.
+
+        ## The failure this closes
+
+        Both templates defaulted to `http://localhost:3000` and were the
+        **only** local defaults `_forbid_local_defaults_outside_local` did
+        not refuse. A deployed tier that set `PUBLIC_APP_URL` and nothing
+        else — which is what `infrastructure/staging/compose.yml` does —
+        started normally and sent every verification and password-reset
+        link to a machine the recipient does not have. Nothing raised, the
+        mail was delivered, and the links were dead: registration and
+        account recovery both silently broken (A64-028.1 P0-1).
+
+        ## Why derivation rather than a second guard
+
+        A guard would have made the misconfiguration loud. Composing the
+        links from the origin that is *already* required makes it
+        unreachable: there is one place the platform's public origin is
+        configured, `PUBLIC_APP_URL` is refused at its local default in
+        every deployed tier, and these two links are now downstream of that
+        single decision. A tier cannot be right about its origin and wrong
+        about its links.
+
+        An explicit template still wins, because the reason it is a
+        template has not changed — a mobile build points the same link at a
+        deep link, and the frontend can move a route without a backend
+        deploy. What it may not be is a loopback address in a deployed
+        tier, which is the one thing the check below refuses.
+        """
+        paths = {
+            "verification_url_template": _VERIFICATION_PATH,
+            "password_reset_url_template": _PASSWORD_RESET_PATH,
+        }
+        # `model_fields_set` is what makes this a *default* rather than an
+        # override: a template the operator wrote is theirs, and one they
+        # never mentioned follows the origin. Comparing against the local
+        # default instead would silently recompose an explicit localhost —
+        # which is a value a deployed tier must be told about, not have
+        # quietly corrected.
+        resolved = {
+            field: self.app.public_url + path
+            for field, path in paths.items()
+            if field not in self.email.model_fields_set
+        }
+        resolved |= {
+            field: getattr(self.email, field)
+            for field in paths
+            if field in self.email.model_fields_set
+        }
+
+        if self.environment.is_production_like:
+            variables = {
+                "verification_url_template": "EMAIL_VERIFICATION_URL_TEMPLATE",
+                "password_reset_url_template": "EMAIL_PASSWORD_RESET_URL_TEMPLATE",
+            }
+            for field, variable in variables.items():
+                host = urlsplit(resolved[field]).hostname
+                if host is not None and host.lower() in _LOOPBACK_HOSTS:
+                    raise ValueError(
+                        f"{variable} points at {host} in {self.environment} — a link "
+                        "nobody who receives it can open. Leave it unset to derive it "
+                        "from PUBLIC_APP_URL, or set it to a real origin"
+                    )
+
+        object.__setattr__(self, "email", self.email.model_copy(update=resolved))
+        return self
 
     @model_validator(mode="after")
     def _forbid_local_defaults_outside_local(self) -> "Settings":

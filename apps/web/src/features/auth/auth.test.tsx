@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { refresh } from "@/features/auth/api";
 import type { AuthChannel } from "@/features/auth/model/auth-channel";
 import { safeRedirect } from "@/features/auth/model/safe-redirect";
 import { api } from "@/shared/api";
@@ -272,6 +273,75 @@ describe("the next redirect", () => {
 
     expect(safeRedirect(null)).toBe("/");
     expect(safeRedirect("")).toBe("/");
+  });
+});
+
+describe("a rotation lost to another tab", () => {
+  // A64-028.2 §14. A browser shares one cookie jar across its tabs, so two
+  // tabs refreshing together present the same token and the server answers
+  // the loser with `409`. The successor is in that shared jar, so the loser
+  // asks again — which is the difference between a tab that stays signed in
+  // and the sign-out A64-028.1 measured.
+  it("presents the cookie again and stays signed in", async () => {
+    let attempts = 0;
+    mswServer.use(
+      http.post(REFRESH, () => {
+        attempts += 1;
+        return attempts === 1
+          ? HttpResponse.json(
+              {
+                code: "session_rotation_conflict",
+                message: "This session was refreshed by another request.",
+                request_id: null,
+                correlation_id: null,
+              },
+              { status: 409, headers: { "Retry-After": "1" } },
+            )
+          : HttpResponse.json(sessionBody("token-after-the-race"));
+      }),
+    );
+
+    await expect(refresh()).resolves.toMatchObject({
+      access_token: "token-after-the-race",
+    });
+    expect(attempts).toBe(2);
+  });
+
+  it("gives up rather than looping when the conflict does not clear", async () => {
+    let attempts = 0;
+    mswServer.use(
+      http.post(REFRESH, () => {
+        attempts += 1;
+        return HttpResponse.json(
+          {
+            code: "session_rotation_conflict",
+            message: "Conflict.",
+            request_id: null,
+            correlation_id: null,
+          },
+          { status: 409 },
+        );
+      }),
+    );
+
+    await expect(refresh()).rejects.toMatchObject({ status: 409 });
+    expect(attempts).toBe(3);
+  });
+
+  it("does not retry a 401 — a missing cookie is not a race", async () => {
+    let attempts = 0;
+    mswServer.use(
+      http.post(REFRESH, () => {
+        attempts += 1;
+        return HttpResponse.json(
+          { code: "invalid_session", message: "No.", request_id: null, correlation_id: null },
+          { status: 401 },
+        );
+      }),
+    );
+
+    await expect(refresh()).rejects.toMatchObject({ status: 401 });
+    expect(attempts).toBe(1);
   });
 });
 

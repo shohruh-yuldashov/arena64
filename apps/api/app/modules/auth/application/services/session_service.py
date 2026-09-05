@@ -58,7 +58,7 @@ with nothing recording that it was detected.
 
 import logging
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from app.config.settings import SessionSettings
@@ -69,6 +69,7 @@ from app.modules.auth.application.ports import SessionRepository
 from app.modules.auth.application.services.refresh_token_service import RefreshTokenService
 from app.modules.auth.domain.exceptions import (
     AccountRestricted,
+    ConcurrentRotation,
     ExpiredRefreshToken,
     RevokedSession,
     SessionNotFound,
@@ -76,6 +77,15 @@ from app.modules.auth.domain.exceptions import (
 from app.modules.auth.domain.sessions import RevocationReason, SessionDevice, UserSession
 
 logger = logging.getLogger(__name__)
+
+#: What a client racing itself is told to wait — A64-028.2 §3.
+#:
+#: The successor is already in the browser's cookie jar by the time this
+#: answer is written; what the caller is waiting for is its own other tab's
+#: response to have been *applied*, which has either happened or is about to.
+#: A second is long enough for that and short enough that a person does not
+#: see it.
+_ROTATION_RETRY_AFTER_SECONDS = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +181,9 @@ class SessionService:
 
     # --- validation ---------------------------------------------------------
 
-    async def validate_refresh_token(self, refresh_token: str) -> UserSession:
+    async def validate_refresh_token(
+        self, refresh_token: str, *, for_update: bool = False
+    ) -> UserSession:
         """Exchanges a presented token for the session it identifies.
 
         Raises `SessionNotFound` when nothing matches, `RevokedSession`
@@ -185,7 +197,7 @@ class SessionService:
         "is this token currently exchangeable, and for which session".
         """
         presented_hash = self._tokens.hash_refresh_token(refresh_token)
-        session = await self._sessions.get_session(presented_hash)
+        session = await self._sessions.get_session(presented_hash, for_update=for_update)
 
         if session is None:
             # No row matched the digest. Either a forged token, or one
@@ -207,6 +219,17 @@ class SessionService:
             raise SessionNotFound("The refresh token is not valid.")
 
         if session.is_revoked:
+            # A64-028.2 §3. Two questions, not one: *was* this token rotated
+            # away, and is this the client's own tab arriving a moment late?
+            if await self._is_concurrent_rotation(session, at=self._clock.now()):
+                logger.info(
+                    "refresh_rotation_conflict",
+                    extra={"token_family": str(session.token_family)},
+                )
+                raise ConcurrentRotation(
+                    "This session was refreshed by another request. Try again.",
+                    retry_after_seconds=_ROTATION_RETRY_AFTER_SECONDS,
+                )
             await self._handle_reuse(session)
             raise RevokedSession("The refresh token is not valid.")
 
@@ -223,6 +246,55 @@ class SessionService:
             raise ExpiredRefreshToken("The session has expired. Sign in again.")
 
         return session
+
+    async def _is_concurrent_rotation(self, session: UserSession, *, at: datetime) -> bool:
+        """Whether a revoked token is this client racing itself — §3, §4.
+
+        A64-028.1 proved the failure this answers: a browser shares one
+        cookie jar across its tabs, so two tabs refreshing together present
+        the *same* token, the second arrives after the first has rotated it,
+        and reuse detection burned the family — including the successor the
+        first tab had just been issued. Both tabs were signed out and the
+        platform's only theft signal fired on entirely ordinary traffic.
+
+        Three conditions, and each excludes a case §4 requires to stay
+        rejected:
+
+          `ROTATED`      only a rotation is a race. A token revoked by
+                         sign-out, password change, suspension or a previous
+                         reuse detection was revoked *on purpose*, and
+                         presenting it again is exactly what those
+                         revocations exist to refuse (cases C and E)
+          within grace   the two requests are milliseconds apart; what
+                         separates them is one round trip. Outside the
+                         window a rotated token being replayed is case B —
+                         a credential someone kept — and takes the reuse
+                         path unchanged
+          live family    a race means there is a successor in use. If the
+                         chain has already been signed out or burned, a
+                         replay of one of its links is not a tab losing a
+                         race
+
+        **This grants nothing.** The caller is refused either way; the only
+        difference is whether the refusal also destroys a live session and
+        raises a security alert. Reuse detection is not relaxed — it is
+        stopped from firing on a case that was never reuse.
+        """
+        if session.revoked_reason is not RevocationReason.ROTATED:
+            return False
+
+        grace = timedelta(seconds=self._settings.rotation_grace_seconds)
+        if grace <= timedelta(0):
+            return False
+
+        revoked_at = session.revoked_at
+        # Belt and braces: `is_revoked` is `revoked_at is not None`, so this
+        # cannot be None here — but a row written by a future path that set
+        # only the reason must not be read as "revoked at the epoch".
+        if revoked_at is None or at - revoked_at > grace:
+            return False
+
+        return await self._sessions.family_has_live_session(session.token_family)
 
     async def _handle_reuse(self, session: UserSession) -> None:
         """database.md §14.3's reuse response, in full.
@@ -313,7 +385,18 @@ class SessionService:
         boundary. `domain-model.md` DM-12 names both: the sanction is read
         "on every sign-in".
         """
-        session = await self.validate_refresh_token(refresh_token)
+        # `for_update` — A64-028.2 §29, §30. The read and the two writes
+        # below share one transaction (`SessionUnitOfWork` opens none of its
+        # own), so locking the row here serialises concurrent rotations of
+        # the same token: one succeeds, the rest find it revoked and take
+        # §3's benign-race path. Without it both callers can read the row
+        # live and mint a successor each, which is not a security failure
+        # but does put two devices in a session list that holds one.
+        #
+        # One row, by unique index, for the length of a two-statement
+        # transaction. No table lock, and nothing to deadlock against: a
+        # rotation only ever locks the single row it presented.
+        session = await self.validate_refresh_token(refresh_token, for_update=True)
 
         now = self._clock.now()
 

@@ -153,16 +153,42 @@ accessToken.onClear(() => {
   inFlight = null;
 });
 
-async function exchangeRefreshCookie(): Promise<Outcome<string>> {
-  const response = await send("/auth/browser/refresh", { method: "POST" });
-  if (response === null) return { status: "unavailable" };
-  if (response.status === 401) return { status: "unauthenticated" };
-  if (response.status === 403) return { status: "forbidden" };
-  if (!response.ok) return { status: "unavailable" };
+/**
+ * How long to wait before presenting the cookie again after a `409`, and
+ * how many times — A64-028.2 §14.
+ *
+ * The server answers `409` when another tab rotated this token first. By
+ * the time that answer arrives the winner's `Set-Cookie` is either already
+ * in the shared jar or a few milliseconds away, so what the retry waits for
+ * is propagation and not the server's `Retry-After: 1` — that header is the
+ * conservative public contract for a client that does not know which
+ * conflict it hit, and this one does.
+ *
+ * Two attempts, then give up and let the caller sign in. A third would be
+ * indistinguishable from a loop.
+ */
+const ROTATION_RETRY_DELAYS_MS = [120, 360];
 
-  const body = unwrap<LoginBody>(await response.json().catch(() => null));
-  if (typeof body?.access_token !== "string") return { status: "unavailable" };
-  return { status: "ok", value: body.access_token };
+async function exchangeRefreshCookie(): Promise<Outcome<string>> {
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await send("/auth/browser/refresh", { method: "POST" });
+    if (response === null) return { status: "unavailable" };
+    if (response.status === 401) return { status: "unauthenticated" };
+    if (response.status === 403) return { status: "forbidden" };
+
+    // The refresh endpoint has exactly one conflict condition: this
+    // client's own other tab rotated the token first, and the successor is
+    // in the cookie jar we are about to read again.
+    if (response.status === 409 && attempt < ROTATION_RETRY_DELAYS_MS.length) {
+      await new Promise((resolve) => setTimeout(resolve, ROTATION_RETRY_DELAYS_MS[attempt]));
+      continue;
+    }
+    if (!response.ok) return { status: "unavailable" };
+
+    const body = unwrap<LoginBody>(await response.json().catch(() => null));
+    if (typeof body?.access_token !== "string") return { status: "unavailable" };
+    return { status: "ok", value: body.access_token };
+  }
 }
 
 /** Revokes the session server-side. Never throws — see `signOut` in the shell. */

@@ -87,3 +87,45 @@ it("abandons an exchange belonging to a session that ended", async () => {
   expect(calls).toHaveLength(1);
   expect(after).toHaveLength(1);
 });
+
+it("presents the cookie again when another tab rotated it first", async () => {
+  // A64-028.2 §14. The server answers 409 when this client's own other tab
+  // won the rotation; the successor is in the shared cookie jar, so the
+  // answer is to ask again rather than to sign the operator out.
+  const calls: string[] = [];
+  vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
+    calls.push(String(input));
+    return Promise.resolve(
+      calls.length === 1
+        ? json({ error: { code: "session_rotation_conflict" } }, 409)
+        : json({ data: { access_token: "after-the-race" } }),
+    );
+  });
+
+  await expect(refresh()).resolves.toEqual({ status: "ok", value: "after-the-race" });
+  expect(calls).toHaveLength(2);
+});
+
+it("stops retrying rather than looping when the conflict persists", async () => {
+  // Three 409s is not a race any more. Whatever it is, the operator is
+  // better served by a sign-in than by a client that never stops asking.
+  let calls = 0;
+  vi.stubGlobal("fetch", () => {
+    calls += 1;
+    return Promise.resolve(json({ error: { code: "session_rotation_conflict" } }, 409));
+  });
+
+  await expect(refresh()).resolves.toEqual({ status: "unavailable" });
+  expect(calls).toBe(3);
+});
+
+it("does not retry a 401 — a missing cookie is not a race", async () => {
+  let calls = 0;
+  vi.stubGlobal("fetch", () => {
+    calls += 1;
+    return Promise.resolve(json({}, 401));
+  });
+
+  await expect(refresh()).resolves.toEqual({ status: "unauthenticated" });
+  expect(calls).toBe(1);
+});

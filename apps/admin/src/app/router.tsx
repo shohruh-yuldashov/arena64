@@ -26,6 +26,7 @@ import { UserDetailPage } from "@/pages/user-detail";
 import { UsersPage } from "@/pages/users";
 import { signOut as revokeSession } from "@/shared/api/client";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
+import { BrandMark } from "@/shared/ui/brand-mark";
 import { Icon, type IconName } from "@/shared/ui/icon";
 import { ToastProvider } from "@/shared/ui/toast";
 
@@ -296,12 +297,13 @@ function ConsoleShell({
     <div className="shell" data-rail={rail ? "true" : undefined}>
       <aside className="sidebar" data-open={drawerOpen ? "true" : undefined}>
         <Link className="sidebar__brand" to="/">
-          <span className="sidebar__mark" aria-hidden="true">
-            A64
-          </span>
+          {/* The platform's own mark. A64-027A.1 drew an "A64" monogram
+              here — a third brand treatment beside the wordmark and the
+              favicon, and the only one this repository invented. */}
+          <BrandMark className="sidebar__mark" size={34} />
           <span className="sidebar__name">
-            <strong>{t("app.title")}</strong>
-            <span>{t("app.subtitle")}</span>
+            <strong>{t("brand.name")}</strong>
+            <span>{t("brand.console")}</span>
           </span>
         </Link>
 
@@ -337,7 +339,7 @@ function ConsoleShell({
               {/* The role is shown because it is the answer to "may I do
                   this", and an operator who cannot see their own authority
                   discovers its limits by being refused. */}
-              <span>{roles.length > 0 ? roles.join(", ") : `@${username}`}</span>
+              <span>{roles.length > 0 ? roles.join(" · ") : `@${username}`}</span>
             </span>
           </div>
           <button type="button" className="action subtle" onClick={onSignOut}>
@@ -380,6 +382,8 @@ function ConsoleShell({
 
           <div className="topbar__spacer" />
 
+          <EnvironmentBadge />
+
           <button
             type="button"
             className="action subtle icon-only rail-toggle"
@@ -400,6 +404,31 @@ function ConsoleShell({
         </main>
       </div>
     </div>
+  );
+}
+
+/**
+ * Which deployment this console is pointed at — A64-027A.2 §9.
+ *
+ * Real, and read from the browser rather than invented: an administrator
+ * with a staging console and a production one open in two tabs has no other
+ * way to tell them apart, and the consequences of confusing them are the
+ * reason this task refuses a decorative toolbar.
+ *
+ * `localhost` reads as "local"; anything else is named by its host, which
+ * is what an operator actually recognises. Nothing here calls the API — the
+ * origin the console was served from *is* the answer.
+ */
+function EnvironmentBadge() {
+  const { t } = useTranslation();
+  const host = typeof window === "undefined" ? "" : window.location.hostname;
+  if (host === "") return null;
+
+  const local = host === "localhost" || host === "127.0.0.1" || host.endsWith(".localhost");
+  return (
+    <span className="topbar__env" title={host}>
+      {local ? t("shell.envLocal") : host}
+    </span>
   );
 }
 

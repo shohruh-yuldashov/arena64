@@ -154,6 +154,10 @@
     "signOut": "Sign out",
     "signedInAs": "Signed in as {name}"
   },
+  "brand": {
+    "console": "Admin Console",
+    "name": "Arena64"
+  },
   "broadcast": {
     "audience": "Audience",
     "audienceAll": "All eligible users",
@@ -473,6 +477,7 @@
     "breadcrumb": "Location",
     "closeMenu": "Close menu",
     "collapseNav": "Collapse sidebar",
+    "envLocal": "Local",
     "openMenu": "Open menu"
   },
   "state": {

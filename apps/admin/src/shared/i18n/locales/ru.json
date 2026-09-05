@@ -154,6 +154,10 @@
     "signOut": "Выйти",
     "signedInAs": "Вы вошли как {name}"
   },
+  "brand": {
+    "console": "Admin Console",
+    "name": "Arena64"
+  },
   "broadcast": {
     "audience": "Аудитория",
     "audienceAll": "Все подходящие пользователи",
@@ -473,6 +477,7 @@
     "breadcrumb": "Расположение",
     "closeMenu": "Закрыть меню",
     "collapseNav": "Свернуть панель",
+    "envLocal": "Локально",
     "openMenu": "Открыть меню"
   },
   "state": {

@@ -1806,3 +1806,150 @@ by being refused.
 | Per-language announcements | One announcement is written in one language; ADR-006 records the consequence |
 | A Settings section | No administrator-editable setting exists to manage |
 | Granular RBAC | OQ-1 is still open, and a UI redesign is not where a permission model gets invented |
+
+---
+
+# 11. The visual source of truth — A64-027A.2
+
+A64-027A.1 made the console *work* like a product. It still looked like an
+internal tool: a near-white rail on a near-white page, six identical cards,
+and a table under every heading.
+
+**This section is the source of truth for A64-027A.3 and A64-027A.4.** Those
+tasks apply what is written here to the management, analytics and
+notification pages; they do not re-decide it.
+
+## 11.1 Art direction
+
+| Target | Explicitly not |
+| --- | --- |
+| Premium, calm, confident | Neon gaming, casino, crypto dashboard |
+| Dense where density helps | Cramped enterprise grid |
+| Arena64-specific | A recognisable clone of another product's admin |
+| Brand present, never loud | Everything purple |
+
+The console reads as **two zones**: a dark branded rail that is navigation
+and identity, and a light-or-dark workspace that is content. That single
+separation is what makes it a control centre rather than a page with links
+down the side.
+
+## 11.2 Brand
+
+Arena64's mark is `apps/web/public/icons/favicon.svg` — a two-by-two board
+with a piece on a dark square. Its two colours are the console's:
+
+| Mark element | `oklch` | Console token |
+| --- | --- | --- |
+| Light square `#494fcc` | `0.499 0.19 275` | `--primary`, `--brand-mark` |
+| Dark square `#202268` | `0.300 0.12 275` | `--nav-bg` |
+
+The light square **is** `--primary` to three decimals. That is why the rail
+and the interaction colour can come from one source without a second
+palette, and it is the check to apply before adding any new brand value: if
+it is not in the mark or in `apps/web`'s tokens, it is invented.
+
+`apps/admin` draws the mark itself (`shared/ui/brand-mark.tsx`) rather than
+importing it — AD-04 keeps the console deployable without the player client.
+
+A64-027A.1's "A64" monogram is **retired**. It was a third brand treatment
+beside the wordmark and the favicon, and the only one this repository had
+invented.
+
+## 11.3 Surface hierarchy
+
+Four levels, with steps large enough to see. A64-027A.1 shipped level 0 at
+`0.99` and level 2 at `1.0` — a one-percent step, which meant every card was
+carried by its border alone.
+
+| Level | Token | Light | Dark | Used by |
+| --- | --- | --- | --- | --- |
+| 0 | `--bg` | `0.962` | `0.165` | the workspace |
+| 1 | `--surface-sunken` | `0.940` | `0.195` | table headers, wells, segmented tracks |
+| 2 | `--surface` | `1.000` | `0.225` | cards, panels, tables |
+| 3 | `--surface-raised` | `1.000` | `0.260` | dialogs, popovers, toasts |
+
+Depth is **surface contrast plus a hairline**, never a large shadow:
+`--shadow` is two layers, and the wider one is at 10% alpha. A console is
+read for hours.
+
+The rail has its own scale (`--nav-*`) because it is dark in both themes and
+must not inherit the workspace's.
+
+## 11.4 Typography
+
+| Token | Size | Used by |
+| --- | --- | --- |
+| `--text-display` | 2.125rem / 700 | a KPI figure |
+| `--text-title` | 1.6rem / 680 | the page title |
+| `--text-section` | 1.0625rem / 650 | a section or panel heading |
+| `--text-body` | 0.9375rem | body, nav labels, inputs |
+| `--text-sm` | 0.85rem | metadata, helper text, table cells |
+| `--text-xs` | 0.775rem | badges, timestamps |
+| `--text-micro` | 0.6875rem / 650 / uppercase | rail group labels, table headers |
+
+The figure is the largest thing on a dashboard because it is what the page
+exists to show. In A64-027A.1 it was 1.17× the page title.
+
+Uppercase is rationed to two places: rail group labels and table column
+headers. Both are furniture.
+
+## 11.5 Cards and panels
+
+Two shapes, not fifteen variants.
+
+**`.stat`** — one figure. Icon in a tinted container, label, value, and a
+link out. It lifts one pixel on hover *only when it contains a link*, so the
+affordance is never a lie. It has **no trend slot**, and that is structural:
+the platform computes no comparable previous period, so an arrow would be
+decoration in the costume of a measurement.
+
+**`.panel`** — a region that is a place rather than a figure: a heading bar
+over a list. The attention list and the administrative trail are panels.
+
+## 11.6 Dashboard composition
+
+```
+header  (title · description · updated · refresh)
+overview  6 × .stat        3 across ≥1200px · 2 across ≤768px
+dash-split
+  ├─ activity   .panel   the trail          (left,  1.7fr)
+  └─ attention  .panel   what needs a person (right, 1fr)
+```
+
+Attention is **first in the markup** and placed right by `grid-template-
+areas`. On a phone that is the difference between the alarm arriving before
+the six metric cards and after them, and doing it with areas rather than
+`order` keeps the reading order identical to the visual one.
+
+**No chart.** The dashboard's read model returns current counts and has no
+time dimension; anything drawn here would be interpolated from a single
+point. The analytics endpoints do carry real time-bounded aggregates, and
+composing them into this page is A64-027A.4's question.
+
+## 11.7 Light and dark
+
+Neither is the other inverted. In light the rail is the mark's dark square
+and the workspace is a tinted off-white; in dark the rail goes *deeper* than
+the workspace and the surfaces lift toward the viewer, which is the same
+relationship stated the other way round.
+
+Dark needs one thing light does not: `--nav-edge`, a seam between two dark
+zones that contrast alone no longer separates.
+
+Measured after the redesign: 24 text/background pairs across both themes,
+lowest 5.65:1, all above 4.5:1.
+
+## 11.8 Anti-patterns
+
+Do not, in A64-027A.3 or .4:
+
+- add a trend, a delta or a sparkline to a metric the backend does not
+  compute over two periods;
+- add a chart whose points are derived from one number;
+- introduce a colour that is not in `apps/web`'s tokens or the mark;
+- put a border on everything — surface contrast is the first tool, the
+  hairline the second;
+- use uppercase outside rail group labels and table headers;
+- reorder content with CSS `order` where `grid-template-areas` would keep
+  reading order and visual order together;
+- add a control that is not backed by a real capability.

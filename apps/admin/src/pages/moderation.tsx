@@ -8,7 +8,8 @@ import {
   type ModerationCategory,
 } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
-import { ErrorNotice } from "@/shared/ui/error-notice";
+import { DataTable } from "@/shared/ui/data-table";
+import { EmptyState, ErrorState, LoadingSkeleton } from "@/shared/ui/states";
 import { PageHeader } from "@/shared/ui/page-header";
 import { Pagination } from "@/shared/ui/pagination";
 import { useCursorPages } from "@/shared/ui/use-cursor-pages";
@@ -93,18 +94,21 @@ export function ModerationPage() {
         </p>
       </div>
 
-      {pages.state === "loading" && <p role="status">{t("moderation.loading")}</p>}
-      {pages.state === "error" && <ErrorNotice message={t("moderation.error")} />}
+      {pages.state === "loading" && <LoadingSkeleton label={t("moderation.loading")} />}
+      {pages.state === "error" && (
+        <ErrorState title={t("moderation.error")} onRetry={pages.reload} />
+      )}
       {pages.state === "ready" && pages.rows.length === 0 && (
-        <>
-          <p role="status">{t("moderation.empty")}</p>
-          <p className="muted">{t("moderation.emptyHint")}</p>
-        </>
+        <EmptyState
+          icon="moderation"
+          title={t("moderation.empty")}
+          description={t("moderation.emptyHint")}
+        />
       )}
 
       {pages.state === "ready" && pages.rows.length > 0 && (
         <>
-          <table className="users-table">
+          <DataTable caption={t("moderation.title")} minWidth="46rem">
             <thead>
               <tr>
                 <th scope="col">{t("moderation.colAccount")}</th>
@@ -127,7 +131,7 @@ export function ModerationPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </DataTable>
 
           <ul className="users-cards">
             {pages.rows.map((row) => (

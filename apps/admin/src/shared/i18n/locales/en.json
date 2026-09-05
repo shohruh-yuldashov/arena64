@@ -301,6 +301,13 @@
     "side": "Side",
     "speed": "Speed",
     "status": "Status",
+    "statusLabel": {
+      "active": "In play",
+      "completed": "Completed",
+      "declined": "Declined",
+      "expired": "Expired",
+      "pending_acceptance": "Awaiting acceptance"
+    },
     "timeControl": "Time control",
     "title": "Matches",
     "unknown": "—",
@@ -560,6 +567,14 @@
     "standings": "Standings",
     "started": "Started",
     "status": "Status",
+    "statusLabel": {
+      "cancelled": "Cancelled",
+      "completed": "Completed",
+      "draft": "Draft",
+      "in_progress": "In progress",
+      "registration_closed": "Registration closed",
+      "registration_open": "Registration open"
+    },
     "title": "Tournaments",
     "unknown": "—",
     "variant": "Variant",

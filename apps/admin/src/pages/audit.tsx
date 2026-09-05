@@ -4,7 +4,8 @@ import { useCallback } from "react";
 import { AUDIT_ACTION_LABELS, AUDIT_SUBJECT_ROUTES } from "@/features/audit/vocabulary";
 import { type AdminAuditEntry, type AuditQuery, fetchAuditEntries } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
-import { ErrorNotice } from "@/shared/ui/error-notice";
+import { DataTable } from "@/shared/ui/data-table";
+import { EmptyState, ErrorState, LoadingSkeleton } from "@/shared/ui/states";
 import { PageHeader } from "@/shared/ui/page-header";
 import { Pagination } from "@/shared/ui/pagination";
 import { useCursorPages } from "@/shared/ui/use-cursor-pages";
@@ -183,18 +184,17 @@ export function AuditPage() {
         </p>
       </div>
 
-      {pages.state === "loading" && <p role="status">{t("audit.loading")}</p>}
-      {pages.state === "error" && <ErrorNotice message={t("audit.error")} />}
+      {pages.state === "loading" && <LoadingSkeleton label={t("audit.loading")} />}
+      {pages.state === "error" && (
+        <ErrorState title={t("audit.error")} onRetry={pages.reload} />
+      )}
       {pages.state === "ready" && pages.rows.length === 0 && (
-        <>
-          <p role="status">{t("audit.empty")}</p>
-          <p className="muted">{t("audit.emptyHint")}</p>
-        </>
+        <EmptyState icon="audit" title={t("audit.empty")} description={t("audit.emptyHint")} />
       )}
 
       {pages.state === "ready" && pages.rows.length > 0 && (
         <>
-          <table className="users-table">
+          <DataTable caption={t("audit.title")} minWidth="54rem">
             <thead>
               <tr>
                 <th scope="col">{t("audit.colWhen")}</th>
@@ -218,7 +218,7 @@ export function AuditPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </DataTable>
 
           <ul className="users-cards">
             {pages.rows.map((entry) => (

@@ -1901,3 +1901,31 @@ dialog h3 {
   margin: 0;
   font-size: 0.775rem;
 }
+
+/* Links carry the brand hue, not the user agent's blue — the console had
+   been mixing Arena64 indigo with `#0000EE` on every table. Underlined on
+   hover rather than always: a dense table of underlined names is harder to
+   scan than one where the weight and colour carry the affordance, and the
+   underline is still there the moment a pointer or focus lands. */
+a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+a:hover,
+a:focus-visible {
+  text-decoration: underline;
+}
+
+.data-table a,
+.users-table a,
+.analytics-table a {
+  font-weight: 550;
+}
+
+/* A link that is a whole cell of two lines keeps its secondary line muted
+   rather than inheriting the accent. */
+.cell-primary span {
+  color: var(--muted);
+  font-weight: 400;
+}

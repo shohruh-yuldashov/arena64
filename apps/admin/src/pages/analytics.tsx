@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
 import {
   type AnalyticsAcquisition,
@@ -184,6 +184,23 @@ export function AnalyticsPage() {
   );
 }
 
+/**
+ * A band heading, matching the rest of the console — A64-027A §6.
+ *
+ * The analytics page predates `Section` and its bands are not wrappable
+ * without restructuring the page: several of them are a heading followed by
+ * two sibling elements that share a grid. So the heading alone adopts the
+ * shared treatment, which is what the reader actually sees.
+ */
+function SectionHeading({ children, level = 3 }: { children: ReactNode; level?: 3 | 4 }) {
+  const Tag = level === 3 ? "h3" : "h4";
+  return (
+    <div className="section__head">
+      <Tag>{children}</Tag>
+    </div>
+  );
+}
+
 function Sections({ data, locale }: { data: Loaded; locale: string }) {
   const { t } = useTranslation();
   const { overview, retention, acquisition } = data;
@@ -193,7 +210,7 @@ function Sections({ data, locale }: { data: Loaded; locale: string }) {
     <>
       <PeriodBadge meta={overview.meta} />
 
-      <h3>{t("analytics.sectionOverview")}</h3>
+      <SectionHeading>{t("analytics.sectionOverview")}</SectionHeading>
       <dl className="kpi-grid">
         <Metric
           label={t("analytics.dau")}
@@ -242,10 +259,10 @@ function Sections({ data, locale }: { data: Loaded; locale: string }) {
         />
       </dl>
 
-      <h3>{t("analytics.sectionAcquisition")}</h3>
+      <SectionHeading>{t("analytics.sectionAcquisition")}</SectionHeading>
       <Acquisition acquisition={acquisition} locale={locale} />
 
-      <h3>{t("analytics.sectionActivation")}</h3>
+      <SectionHeading>{t("analytics.sectionActivation")}</SectionHeading>
       <Funnel stages={activation.stages} locale={locale} />
       <dl className="kpi-grid">
         <Metric
@@ -259,7 +276,7 @@ function Sections({ data, locale }: { data: Loaded; locale: string }) {
         />
       </dl>
 
-      <h3>{t("analytics.sectionEngagement")}</h3>
+      <SectionHeading>{t("analytics.sectionEngagement")}</SectionHeading>
       <dl className="kpi-grid">
         <Metric
           label={`${t("analytics.matchesPerPlayer")} · ${t("analytics.mean")}`}
@@ -298,11 +315,11 @@ function Sections({ data, locale }: { data: Loaded; locale: string }) {
         />
       </dl>
 
-      <h3>{t("analytics.sectionRetention")}</h3>
+      <SectionHeading>{t("analytics.sectionRetention")}</SectionHeading>
       <PeriodBadge meta={retention.meta} />
       <RetentionTable rows={retention.rows} locale={locale} />
 
-      <h3>{t("analytics.sectionMatchmaking")}</h3>
+      <SectionHeading>{t("analytics.sectionMatchmaking")}</SectionHeading>
       <dl className="kpi-grid">
         <Metric
           label={t("analytics.queueJoins")}
@@ -328,7 +345,7 @@ function Sections({ data, locale }: { data: Loaded; locale: string }) {
         />
       </dl>
 
-      <h3>{t("analytics.sectionGames")}</h3>
+      <SectionHeading>{t("analytics.sectionGames")}</SectionHeading>
       <dl className="kpi-grid">
         <Metric
           label={t("analytics.matchesStarted")}
@@ -357,7 +374,7 @@ function Sections({ data, locale }: { data: Loaded; locale: string }) {
         />
       </dl>
 
-      <h4>{t("analytics.termination")}</h4>
+      <SectionHeading level={4}>{t("analytics.termination")}</SectionHeading>
       <TerminationBreakdown breakdown={games.termination_breakdown} locale={locale} />
     </>
   );

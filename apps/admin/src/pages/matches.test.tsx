@@ -91,7 +91,12 @@ it("shows who played, the status, the result and the mode", async () => {
 
   const table = await screen.findByRole("table");
   expect(within(table).getByText(/alice — bob/)).toBeInTheDocument();
-  expect(within(table).getByText("completed")).toBeInTheDocument();
+  // The translated word, not the enum. A64-027A: an administrator who did
+  // not build Arena64 should never have to decode `completed` from a
+  // column — and a test that asserted the raw value was the reason it
+  // stayed on screen.
+  expect(within(table).getByText(/Tugallandi|Завершен|Completed/)).toBeInTheDocument();
+  expect(within(table).queryByText("completed")).not.toBeInTheDocument();
   expect(within(table).getByText(/rated|reytingli|рейтинговая/i)).toBeInTheDocument();
 });
 

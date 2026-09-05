@@ -8,7 +8,9 @@ import {
 } from "@/shared/api/client";
 import { CreateTournament } from "@/features/tournaments/create-tournament";
 import { useTranslation } from "@/shared/i18n";
-import { ErrorNotice } from "@/shared/ui/error-notice";
+import { DataTable } from "@/shared/ui/data-table";
+import { StatusBadge, type Tone } from "@/shared/ui/status-badge";
+import { EmptyState, ErrorState, LoadingSkeleton } from "@/shared/ui/states";
 import { PageHeader } from "@/shared/ui/page-header";
 import { Pagination } from "@/shared/ui/pagination";
 import { useCursorPages } from "@/shared/ui/use-cursor-pages";
@@ -35,6 +37,23 @@ const STATUSES = [
   "completed",
   "cancelled",
 ] as const;
+
+/**
+ * How each state reads at a glance — A64-027A §9, §24.
+ *
+ * The hue is an accelerant for somebody scanning a hundred rows. The
+ * translated word beside it is what carries the meaning, which is why
+ * the enum itself never reaches the screen: an administrator who did
+ * not build Arena64 should not have to decode `registration_open`.
+ */
+const TONES: Record<string, Tone> = {
+  in_progress: "success",
+  registration_open: "info",
+  registration_closed: "warning",
+  completed: "neutral",
+  draft: "neutral",
+  cancelled: "danger",
+};
 
 type Search = { status?: string; rated?: string };
 
@@ -104,7 +123,7 @@ export function TournamentsPage() {
             <option value="">{t("tournaments.any")}</option>
             {STATUSES.map((value) => (
               <option key={value} value={value}>
-                {value}
+                {t(`tournaments.statusLabel.${value}` as "tournaments.statusLabel.completed")}
               </option>
             ))}
           </select>
@@ -124,18 +143,21 @@ export function TournamentsPage() {
         </p>
       </div>
 
-      {pages.state === "loading" && <p role="status">{t("tournaments.loading")}</p>}
-      {pages.state === "error" && <ErrorNotice message={t("tournaments.error")} />}
+      {pages.state === "loading" && <LoadingSkeleton label={t("tournaments.loading")} />}
+      {pages.state === "error" && (
+        <ErrorState title={t("tournaments.error")} onRetry={pages.reload} />
+      )}
       {pages.state === "ready" && pages.rows.length === 0 && (
-        <>
-          <p role="status">{t("tournaments.empty")}</p>
-          <p className="muted">{t("tournaments.emptyHint")}</p>
-        </>
+        <EmptyState
+          icon="tournaments"
+          title={t("tournaments.empty")}
+          description={t("tournaments.emptyHint")}
+        />
       )}
 
       {pages.state === "ready" && pages.rows.length > 0 && (
         <>
-          <table className="users-table">
+          <DataTable caption={t("tournaments.title")} minWidth="50rem">
             <thead>
               <tr>
                 <th scope="col">{t("tournaments.colName")}</th>
@@ -157,7 +179,14 @@ export function TournamentsPage() {
                       {tournament.name}
                     </Link>
                   </td>
-                  <td>{tournament.status}</td>
+                  <td>
+                    <StatusBadge
+                      label={t(
+                        `tournaments.statusLabel.${tournament.status}` as "tournaments.statusLabel.completed",
+                      )}
+                      tone={TONES[tournament.status] ?? "neutral"}
+                    />
+                  </td>
                   <td>{tournament.format}</td>
                   <td>
                     {tournament.entrant_count} / {tournament.capacity}
@@ -167,7 +196,7 @@ export function TournamentsPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </DataTable>
 
           <ul className="users-cards">
             {pages.rows.map((tournament) => (
@@ -179,8 +208,10 @@ export function TournamentsPage() {
                   {tournament.name}
                 </Link>
                 <span>
-                  {tournament.status} · {tournament.format} · {tournament.entrant_count}/
-                  {tournament.capacity}
+                  {t(
+                    `tournaments.statusLabel.${tournament.status}` as "tournaments.statusLabel.completed",
+                  )}{" "}
+                  · {tournament.format} · {tournament.entrant_count}/{tournament.capacity}
                 </span>
                 <span className="muted">
                   {tournament.variant} · {day(tournament.started_at)}

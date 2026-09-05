@@ -301,6 +301,13 @@
     "side": "Tomon",
     "speed": "Tezlik",
     "status": "Holat",
+    "statusLabel": {
+      "active": "Jarayonda",
+      "completed": "Tugallandi",
+      "declined": "Rad etildi",
+      "expired": "Muddati o'tdi",
+      "pending_acceptance": "Qabul kutilmoqda"
+    },
     "timeControl": "Vaqt nazorati",
     "title": "O'yinlar",
     "unknown": "—",
@@ -560,6 +567,14 @@
     "standings": "Yakuniy o'rinlar",
     "started": "Boshlangan",
     "status": "Holat",
+    "statusLabel": {
+      "cancelled": "Bekor qilindi",
+      "completed": "Tugallandi",
+      "draft": "Qoralama",
+      "in_progress": "Davom etmoqda",
+      "registration_closed": "Ro'yxat yopiq",
+      "registration_open": "Ro'yxat ochiq"
+    },
     "title": "Turnirlar",
     "unknown": "—",
     "variant": "Variant",

@@ -301,6 +301,13 @@
     "side": "Сторона",
     "speed": "Скорость",
     "status": "Статус",
+    "statusLabel": {
+      "active": "Идёт",
+      "completed": "Завершена",
+      "declined": "Отклонена",
+      "expired": "Истекла",
+      "pending_acceptance": "Ожидает принятия"
+    },
     "timeControl": "Контроль времени",
     "title": "Партии",
     "unknown": "—",
@@ -560,6 +567,14 @@
     "standings": "Итоги",
     "started": "Начат",
     "status": "Статус",
+    "statusLabel": {
+      "cancelled": "Отменён",
+      "completed": "Завершён",
+      "draft": "Черновик",
+      "in_progress": "Идёт",
+      "registration_closed": "Регистрация закрыта",
+      "registration_open": "Регистрация открыта"
+    },
     "title": "Турниры",
     "unknown": "—",
     "variant": "Вариант",

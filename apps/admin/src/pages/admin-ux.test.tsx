@@ -184,6 +184,10 @@ it("announces a load failure through the shared error element", async () => {
   // Thirteen copies of this element agreed until one of them stopped. The
   // property worth keeping is the `role` — an error that renders silently
   // is one the operator does not know happened.
+  //
+  // A64-027A replaced the bare notice on this page with `ErrorState`, which
+  // also offers a retry. The class is no longer the thing being asserted;
+  // the announcement and the absence of a half-rendered table are.
   vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("/auth/browser/refresh")) {
@@ -195,6 +199,6 @@ it("announces a load failure through the shared error element", async () => {
   renderAt("/users");
 
   const alert = await screen.findByRole("alert");
-  expect(alert).toHaveClass("error");
+  expect(alert).toHaveTextContent(/\S/);
   await waitFor(() => expect(screen.queryByRole("table")).toBeNull());
 });

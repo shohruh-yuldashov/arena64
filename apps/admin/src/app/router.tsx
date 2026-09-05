@@ -554,6 +554,9 @@ const notificationsRoute = createRoute({
   validateSearch: (search: Record<string, unknown>) => ({
     ...(typeof search.recipient === "string" ? { recipient: search.recipient } : {}),
     ...(typeof search.failed === "string" ? { failed: search.failed } : {}),
+    // A64-027A §13. The workspace's tab lives in the URL so a link to the
+    // history is a link to the history, and Back moves between them.
+    ...(typeof search.tab === "string" ? { tab: search.tab } : {}),
   }),
 });
 

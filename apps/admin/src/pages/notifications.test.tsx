@@ -136,13 +136,17 @@ afterEach(() => {
   accessToken.clear();
 });
 
-it("never claims a push was delivered, and offers no way to send one", async () => {
+it("never claims a push was delivered, and cannot send from the delivery console", async () => {
   // Web Push reports that a service accepted a request and nothing more, so
   // "Delivered" would be a claim the platform cannot support — an operator
-  // would use it to close an investigation that should stay open. And there
-  // is no composer: this console cannot create a notification.
+  // would use it to close an investigation that should stay open.
+  //
+  // A64-027A added a composer to this workspace, on its own tab. The
+  // delivery console still has none: the retry route takes two identifiers
+  // and no body, and a send control beside a failed delivery would be one
+  // clicked without reading which delivery it was.
   stubApi({ items: [summary({ push_summary: "sent" })] });
-  renderAt("/notifications");
+  renderAt("/notifications?tab=deliveries");
 
   const table = await screen.findByRole("table");
   expect(
@@ -151,13 +155,16 @@ it("never claims a push was delivered, and offers no way to send one", async () 
   ).toBeGreaterThan(0);
   expect(within(table).queryByText(/^Delivered$/)).not.toBeInTheDocument();
 
-  expect(screen.queryByRole("button", { name: /send|yubor|отправ/i })).not.toBeInTheDocument();
+  const panel = document.getElementById("panel-deliveries") as HTMLElement;
+  expect(
+    within(panel).queryByRole("button", { name: /send|yubor|отправ/i }),
+  ).not.toBeInTheDocument();
 });
 
 it("sends the failed-push filter and resets the accumulated rows", async () => {
   const stub = stubApi();
   const person = userEvent.setup();
-  const router = renderAt("/notifications");
+  const router = renderAt("/notifications?tab=deliveries");
 
   await screen.findByRole("table");
   await person.selectOptions(screen.getByLabelText(/Ko'rinish|Вид|View/), "failed");

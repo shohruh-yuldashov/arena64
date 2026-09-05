@@ -999,3 +999,75 @@ export async function fetchAnalyticsAcquisition(
 ): Promise<Outcome<AnalyticsAcquisition>> {
   return authorizedRead<AnalyticsAcquisition>(analyticsPath("acquisition", range), signal);
 }
+
+// --- administrative broadcasts — A64-027A ------------------------------------
+
+/**
+ * The audiences a broadcast may address.
+ *
+ * Two, matching the backend's `BroadcastAudience` exactly. §14 forbids
+ * inventing segmentation, so there is no "lapsed players" or "high rated"
+ * here — a segment arrives when the platform has agreed a definition
+ * somebody can defend, and it arrives on the server first.
+ */
+export type BroadcastAudience = "all_players" | "specific_players";
+
+export interface BroadcastView {
+  id: string;
+  title: string;
+  body: string;
+  locale: string;
+  audience: string;
+  channel: string;
+  /** `queued` | `sending` | `completed` | `failed`. */
+  status: string;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  /**
+   * How many accounts the audience resolved to. `null` until the worker has
+   * counted — **never** a zero standing in for "not counted yet", which
+   * would read as a broadcast that reached nobody.
+   */
+  audience_size: number | null;
+  /**
+   * Rows written. Lower than `audience_size` by the number of players who
+   * muted the category, which is a suppression rather than a failure.
+   */
+  delivered: number;
+  /** How many were named. Never **who** — §20, §23. */
+  named_recipients: number;
+  failure_reason: string | null;
+}
+
+export interface BroadcastDraft {
+  title: string;
+  body: string;
+  locale: string;
+  audience: BroadcastAudience;
+  recipients: string[];
+  /**
+   * Minted once per composition, client-side. Two submissions of one form
+   * carry one key and the server returns the first broadcast rather than
+   * creating a second — §18's protection against the double-click that
+   * reaches every inbox twice.
+   */
+  idempotency_key: string;
+}
+
+export async function fetchAudienceSize(
+  audience: BroadcastAudience,
+  signal?: AbortSignal,
+): Promise<Outcome<{ audience: string; size: number }>> {
+  return authorizedRead(`/admin/broadcasts/audience/${audience}`, signal);
+}
+
+export async function fetchBroadcasts(
+  signal?: AbortSignal,
+): Promise<Outcome<{ items: BroadcastView[] }>> {
+  return authorizedRead("/admin/broadcasts", signal);
+}
+
+export async function sendBroadcast(draft: BroadcastDraft): Promise<Outcome<BroadcastView>> {
+  return authorizedWrite<BroadcastView>("/admin/broadcasts", draft);
+}

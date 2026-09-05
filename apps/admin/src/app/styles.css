@@ -1807,3 +1807,97 @@ dialog h3 {
     background: transparent;
   }
 }
+
+/* ============================================================ composer */
+
+/* The form and the preview side by side above 60rem, stacked below it. The
+   preview is not decoration: it is how an administrator checks what a
+   player will read before sending something that cannot be recalled, so on
+   a narrow screen it follows the fields rather than disappearing. */
+.composer {
+  display: grid;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+@media (min-width: 60rem) {
+  .composer {
+    grid-template-columns: minmax(0, 1.2fr) minmax(18rem, 0.8fr);
+  }
+}
+
+.preview {
+  position: sticky;
+  inset-block-start: calc(var(--topbar-h) + 1rem);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+
+@media (max-width: 59.99rem) {
+  .preview {
+    position: static;
+  }
+}
+
+.preview__caption {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.preview__frame {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  padding: 0.85rem;
+}
+
+.preview__row {
+  display: flex;
+  gap: 0.7rem;
+  padding: 0.8rem 0.9rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+}
+
+.preview__glyph {
+  inline-size: 2rem;
+  block-size: 2rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--primary-wash);
+  color: var(--primary);
+  flex: none;
+}
+
+.preview__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-inline-size: 0;
+}
+
+.preview__text strong {
+  font-size: 0.9rem;
+}
+
+/* The body is prose an administrator typed. It wraps, it keeps the line
+   breaks they entered, and it never runs outside the frame — which is the
+   whole point of previewing it. */
+.preview__text span {
+  font-size: 0.85rem;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.preview__note {
+  margin: 0;
+  font-size: 0.775rem;
+}

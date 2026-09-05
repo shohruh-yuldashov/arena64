@@ -1,5 +1,5 @@
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 
 import { PUSH_SUMMARY_LABELS } from "@/features/notifications/vocabulary";
 import {
@@ -7,19 +7,31 @@ import {
   fetchNotifications,
   type NotificationQuery,
 } from "@/shared/api/client";
+import { BroadcastComposer } from "@/features/notifications/composer";
+import { BroadcastHistory } from "@/features/notifications/broadcast-history";
 import { useTranslation } from "@/shared/i18n";
 import { ErrorNotice } from "@/shared/ui/error-notice";
+import { Icon } from "@/shared/ui/icon";
 import { PageHeader } from "@/shared/ui/page-header";
 import { Pagination } from "@/shared/ui/pagination";
 import { useCursorPages } from "@/shared/ui/use-cursor-pages";
 
 /**
- * The Notification Operations console — A64-024.7 §17, §18.
+ * The Notifications workspace — A64-027A §13, and A64-024.7 §17, §18.
  *
- * **There is no composer.** No send button, no recipient picker, no message
- * field, and no disabled "coming soon" control either: this platform has no
- * endpoint that creates a notification, and a screen implying otherwise
- * would be the first thing somebody asked for.
+ * Three tabs over one concern: composing an announcement, the history of
+ * what was sent, and the delivery operations console this page has been
+ * since A64-024.7.
+ *
+ * **A64-024.7's docstring opened "there is no composer", and that has
+ * changed.** It was true of a platform with no endpoint that creates a
+ * notification; A64-027A built one, deliberately and narrowly — see
+ * `app/modules/notifications/domain/broadcast.py` for what it can and
+ * cannot choose. The delivery console below is unchanged: it still reads
+ * deliveries and re-arms them, and it still cannot compose anything.
+ *
+ * The tab lives in the URL, so a link to the history is a link to the
+ * history and the browser's back button works between them.
  *
  * ## The columns say what the platform actually knows
  *
@@ -34,7 +46,14 @@ import { useCursorPages } from "@/shared/ui/use-cursor-pages";
  * opened this page to find.
  */
 
-type Search = { recipient?: string; failed?: string };
+type Search = { recipient?: string; failed?: string; tab?: string };
+
+const TABS = ["send", "history", "deliveries"] as const;
+type Tab = (typeof TABS)[number];
+
+function tabOf(value: string | undefined): Tab {
+  return TABS.includes(value as Tab) ? (value as Tab) : "send";
+}
 
 export function NotificationsPage() {
   const { t, locale } = useTranslation();
@@ -62,7 +81,11 @@ export function NotificationsPage() {
         fetchNotifications({ ...query, ...(cursor ? { cursor } : {}) }, signal),
       [key],
     ),
-    key,
+    // Keyed on the tab as well as the filters, so opening the workspace on
+    // the composer does not fetch a page of deliveries nobody is looking
+    // at. Three requests become two on the common visit.
+    `${key}:${tabOf(search.tab)}`,
+    tabOf(search.tab) === "deliveries",
   );
 
   const setFilter = (name: keyof Search, value: string) => {
@@ -88,110 +111,179 @@ export function NotificationsPage() {
     </Link>
   );
 
+  const tab = tabOf(search.tab);
+  // Bumped when a send succeeds, so the history refetches once — rather
+  // than polling, which this console does nowhere.
+  const [sentAt, setSentAt] = useState(0);
+
+  const select = (next: Tab) => {
+    void navigate({
+      to: "/notifications",
+      search: (current: Search) => ({ ...current, tab: next }),
+      replace: true,
+    });
+  };
+
   return (
     <>
       <PageHeader title={t("notifications.title")} description={t("notifications.lede")} />
 
-      <div className="filters">
-        <p className="field">
-          <label htmlFor="notification-recipient">{t("notifications.filterRecipient")}</label>
-          <input
-            id="notification-recipient"
-            type="search"
-            value={search.recipient ?? ""}
-            placeholder={t("notifications.recipientPlaceholder")}
-            onChange={(event) => setFilter("recipient", event.target.value.trim())}
-          />
-        </p>
-
-        <p className="field">
-          <label htmlFor="notification-scope">{t("notifications.filterScope")}</label>
-          <select
-            id="notification-scope"
-            value={search.failed === "true" ? "failed" : "all"}
-            onChange={(event) =>
-              setFilter("failed", event.target.value === "failed" ? "true" : "")
-            }
+      <div className="tabs" role="tablist" aria-label={t("notifications.title")}>
+        {TABS.map((name) => (
+          <button
+            key={name}
+            type="button"
+            role="tab"
+            id={`tab-${name}`}
+            aria-selected={tab === name}
+            aria-controls={`panel-${name}`}
+            onClick={() => {
+              select(name);
+            }}
           >
-            <option value="all">{t("notifications.scopeAll")}</option>
-            <option value="failed">{t("notifications.scopeFailed")}</option>
-          </select>
-        </p>
+            <Icon
+              name={name === "send" ? "send" : name === "history" ? "audit" : "notifications"}
+              size={16}
+            />
+            {t(
+              name === "send"
+                ? "broadcast.tabSend"
+                : name === "history"
+                  ? "broadcast.tabHistory"
+                  : "broadcast.tabDeliveries",
+            )}
+          </button>
+        ))}
       </div>
 
-      {pages.state === "loading" && <p role="status">{t("notifications.loading")}</p>}
-      {pages.state === "error" && <ErrorNotice message={t("notifications.error")} />}
-      {pages.state === "ready" && pages.rows.length === 0 && (
-        <>
-          <p role="status">{t("notifications.empty")}</p>
-          <p className="muted">{t("notifications.emptyHint")}</p>
-        </>
+      {tab === "send" && (
+        <div role="tabpanel" id="panel-send" aria-labelledby="tab-send">
+          <BroadcastComposer
+            onSent={() => {
+              setSentAt((value) => value + 1);
+              select("history");
+            }}
+          />
+        </div>
       )}
 
-      {pages.state === "ready" && pages.rows.length > 0 && (
-        <>
-          <table className="users-table">
-            <thead>
-              <tr>
-                <th scope="col">{t("notifications.colWhen")}</th>
-                <th scope="col">{t("notifications.colRecipient")}</th>
-                <th scope="col">{t("notifications.colType")}</th>
-                <th scope="col">{t("notifications.colInApp")}</th>
-                <th scope="col">{t("notifications.colPush")}</th>
-                <th scope="col">{t("notifications.colDevices")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pages.rows.map((row) => (
-                <tr key={row.id}>
-                  <td>
+      {tab === "history" && (
+        <div role="tabpanel" id="panel-history" aria-labelledby="tab-history">
+          <BroadcastHistory reloadToken={sentAt} />
+        </div>
+      )}
+
+      {tab !== "deliveries" ? null : (
+        <div role="tabpanel" id="panel-deliveries" aria-labelledby="tab-deliveries">
+          <div className="filters">
+            <p className="field">
+              <label htmlFor="notification-recipient">
+                {t("notifications.filterRecipient")}
+              </label>
+              <input
+                id="notification-recipient"
+                type="search"
+                value={search.recipient ?? ""}
+                placeholder={t("notifications.recipientPlaceholder")}
+                onChange={(event) => setFilter("recipient", event.target.value.trim())}
+              />
+            </p>
+
+            <p className="field">
+              <label htmlFor="notification-scope">{t("notifications.filterScope")}</label>
+              <select
+                id="notification-scope"
+                value={search.failed === "true" ? "failed" : "all"}
+                onChange={(event) =>
+                  setFilter("failed", event.target.value === "failed" ? "true" : "")
+                }
+              >
+                <option value="all">{t("notifications.scopeAll")}</option>
+                <option value="failed">{t("notifications.scopeFailed")}</option>
+              </select>
+            </p>
+          </div>
+
+          {pages.state === "loading" && <p role="status">{t("notifications.loading")}</p>}
+          {pages.state === "error" && <ErrorNotice message={t("notifications.error")} />}
+          {pages.state === "ready" && pages.rows.length === 0 && (
+            <>
+              <p role="status">{t("notifications.empty")}</p>
+              <p className="muted">{t("notifications.emptyHint")}</p>
+            </>
+          )}
+
+          {pages.state === "ready" && pages.rows.length > 0 && (
+            <>
+              <table className="users-table">
+                <thead>
+                  <tr>
+                    <th scope="col">{t("notifications.colWhen")}</th>
+                    <th scope="col">{t("notifications.colRecipient")}</th>
+                    <th scope="col">{t("notifications.colType")}</th>
+                    <th scope="col">{t("notifications.colInApp")}</th>
+                    <th scope="col">{t("notifications.colPush")}</th>
+                    <th scope="col">{t("notifications.colDevices")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pages.rows.map((row) => (
+                    <tr key={row.id}>
+                      <td>
+                        <Link
+                          to="/notifications/$notificationId"
+                          params={{ notificationId: row.id }}
+                        >
+                          {when(row.created_at)}
+                        </Link>
+                      </td>
+                      <td>{recipientOf(row)}</td>
+                      <td>{row.type}</td>
+                      {/* Text, never colour alone — §24. */}
+                      <td>
+                        {t(
+                          row.read_at === null ? "notifications.unread" : "notifications.read",
+                        )}
+                      </td>
+                      <td>{pushOf(row)}</td>
+                      <td>{row.delivery_count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <ul className="users-cards">
+                {pages.rows.map((row) => (
+                  <li key={row.id}>
                     <Link
                       to="/notifications/$notificationId"
                       params={{ notificationId: row.id }}
                     >
-                      {when(row.created_at)}
+                      {row.type}
                     </Link>
-                  </td>
-                  <td>{recipientOf(row)}</td>
-                  <td>{row.type}</td>
-                  {/* Text, never colour alone — §24. */}
-                  <td>
-                    {t(row.read_at === null ? "notifications.unread" : "notifications.read")}
-                  </td>
-                  <td>{pushOf(row)}</td>
-                  <td>{row.delivery_count}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    <span>{recipientOf(row)}</span>
+                    <span className="muted">
+                      {when(row.created_at)} ·{" "}
+                      {t(row.read_at === null ? "notifications.unread" : "notifications.read")}
+                    </span>
+                    <span className="muted">
+                      {t("notifications.colPush")}: {pushOf(row)} · {row.delivery_count}
+                    </span>
+                  </li>
+                ))}
+              </ul>
 
-          <ul className="users-cards">
-            {pages.rows.map((row) => (
-              <li key={row.id}>
-                <Link to="/notifications/$notificationId" params={{ notificationId: row.id }}>
-                  {row.type}
-                </Link>
-                <span>{recipientOf(row)}</span>
-                <span className="muted">
-                  {when(row.created_at)} ·{" "}
-                  {t(row.read_at === null ? "notifications.unread" : "notifications.read")}
-                </span>
-                <span className="muted">
-                  {t("notifications.colPush")}: {pushOf(row)} · {row.delivery_count}
-                </span>
-              </li>
-            ))}
-          </ul>
-
-          <Pagination
-            page={pages.page}
-            hasPrevious={pages.hasPrevious}
-            hasNext={pages.hasNext}
-            busy={pages.busy}
-            onPrevious={pages.previous}
-            onNext={pages.next}
-          />
-        </>
+              <Pagination
+                page={pages.page}
+                hasPrevious={pages.hasPrevious}
+                hasNext={pages.hasNext}
+                busy={pages.busy}
+                onPrevious={pages.previous}
+                onNext={pages.next}
+              />
+            </>
+          )}
+        </div>
       )}
     </>
   );

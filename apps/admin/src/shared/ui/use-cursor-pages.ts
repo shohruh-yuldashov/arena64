@@ -60,6 +60,19 @@ export interface CursorPages<T> {
 export function useCursorPages<T>(
   fetchPage: (cursor: string | null, signal?: AbortSignal) => Promise<Outcome<CursorPage<T>>>,
   key: string,
+  /**
+   * Whether to fetch at all — A64-027A §34.
+   *
+   * Defaulted to `true`, so every existing caller is unchanged. The one
+   * caller that passes it is the Notifications workspace, whose delivery
+   * listing lives on a tab: fetching a page nobody has opened is a request
+   * per visit for a table that is not on screen.
+   *
+   * A parameter rather than a conditional hook call, because a hook cannot
+   * be called conditionally — and rather than unmounting the component,
+   * because the walk's position should survive a trip to another tab.
+   */
+  enabled = true,
 ): CursorPages<T> {
   const [rows, setRows] = useState<T[]>([]);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -115,12 +128,13 @@ export function useCursorPages<T>(
   }, []);
 
   useEffect(() => {
+    if (!enabled) return;
     history.current = [null];
     setIndex(0);
     setNextCursor(null);
     void load(0, { navigating: false });
     return () => controller.current?.abort();
-  }, [key, load]);
+  }, [enabled, key, load]);
 
   return {
     rows,

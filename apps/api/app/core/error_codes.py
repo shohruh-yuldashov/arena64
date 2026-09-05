@@ -59,6 +59,20 @@ class ErrorCode(StrEnum):
     hide the replay control, which `conflict` alone could not say."""
 
     INVALID_CURSOR = "invalid_cursor"
+    SESSION_ROTATION_CONFLICT = "session_rotation_conflict"
+    """Two requests from one client presented the same refresh token.
+
+    Distinct on the wire, against the rule that every *refresh failure*
+    answers alike (`InvalidRefreshToken`). It earns the exception because
+    this is not a refresh failure: the caller is who they say they are and
+    their token was valid — it lost a race with their own other tab, and
+    being told to try again is the only way they recover.
+
+    What it discloses is that the presented token was rotated within the
+    grace window. A legitimate client already knows that, having started the
+    rotation; anybody else learns nothing they can use, because the answer
+    carries no credential.
+    """
     """A pagination cursor this API did not issue. Distinct from a generic
     validation error because the client's recovery is specific — ask for
     the first page — and it must not be confused with a bad filter."""

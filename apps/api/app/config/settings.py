@@ -76,7 +76,6 @@ _LOCAL_JWT_SECRET_KEY = (
 #: The frontend a developer runs. Refused in a deployed tier by the guard on
 #: `Settings`, for the reason that guard gives.
 _LOCAL_PUBLIC_APP_URL = "http://localhost:3000"
-
 _LOCAL_OTP_SECRET = (
     # Same shape and same reasoning as `_LOCAL_JWT_SECRET_KEY`: the literal
     # words are load-bearing, so a deployed tier that somehow reached it is
@@ -569,6 +568,42 @@ class SessionSettings(SectionSettings):
     #: it is a disabled one.
     idle_timeout_days: int = Field(default=14, ge=1, le=90)
 
+    rotation_grace_seconds: int = Field(default=10, ge=0, le=120)
+    """How long after a rotation the token it replaced may be presented
+    again without being treated as theft — A64-028.2 §9.
+
+    ## The failure this exists for
+
+    A browser shares one cookie jar across its tabs. Two tabs whose access
+    tokens expire together both present the *same* refresh token, because
+    the second was sent before the first response's `Set-Cookie` was
+    applied. The second presentation then finds a row this server revoked
+    itself, moments ago, with reason `rotated` — and A64-028.1 proved what
+    happened next: reuse detection burned the whole family, including the
+    successor the first tab had just been issued, and **both tabs were
+    signed out**.
+
+    ## Why ten seconds
+
+    The window has to cover one round trip on a bad connection plus the
+    client's own scheduling, and nothing else: the two requests are sent
+    within milliseconds of each other, and what separates them is how long
+    the first takes to come back. Ten seconds is a large multiple of a slow
+    mobile round trip and a small fraction of any interval over which a
+    stolen credential is worth replaying.
+
+    ## Why a generous value is not a generous concession
+
+    **A replay inside this window is never answered with a credential.** It
+    is answered with `ConcurrentRotation` — a 409 and a retry hint — so what
+    the window buys an attacker is not access but *silence*: no theft signal
+    for its duration. It costs alarm latency, never authority. See
+    `SessionService.validate_refresh_token`.
+
+    `0` disables the grace entirely and restores A64-028.1's behaviour,
+    which is what the boundary test sets.
+    """
+
     #: Bytes drawn from the OS CSPRNG per token. The floor is a security
     #: boundary, not a tuning knob — see `REFRESH_TOKEN_MIN_ENTROPY_BYTES`.
     token_entropy_bytes: int = Field(
@@ -950,7 +985,6 @@ class PushSettings(SectionSettings):
 
     retry_base_seconds: int = Field(default=60, ge=1)
     retry_max_seconds: int = Field(default=6 * 60 * 60, ge=60)
-
 
 class StorageSettings(SectionSettings):
     """`storage` — where binary objects live (A64-012.2).

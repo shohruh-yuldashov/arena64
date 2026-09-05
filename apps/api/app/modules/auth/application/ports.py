@@ -178,7 +178,9 @@ class SessionRepository(Protocol):
         """Persists a new session and returns it."""
         ...
 
-    async def get_session(self, refresh_token_hash: bytes) -> UserSession | None:
+    async def get_session(
+        self, refresh_token_hash: bytes, *, for_update: bool = False
+    ) -> UserSession | None:
         """The refresh path's lookup: hash the presented token, find its
         session.
 
@@ -239,6 +241,22 @@ class SessionRepository(Protocol):
         One statement, not a loop over `revoke_session`: a loop is N round
         trips at the moment of a suspension or a detected compromise,
         which is exactly when latency is least affordable.
+        """
+        ...
+
+    async def family_has_live_session(self, token_family: UUID) -> bool:
+        """Whether any session in this rotation chain is still live —
+        A64-028.2 §5.
+
+        The second half of the benign-race test. A token revoked by
+        rotation moments ago is only a *race* if the chain it belongs to
+        still has a successor somebody is using; if the family has already
+        been signed out, suspended or burned, then a replay of one of its
+        links is not a tab losing a race, and it takes the reuse path.
+
+        Served by `ix_user_sessions__token_family`, and an `EXISTS` rather
+        than a count because the question is "any", and asking for a number
+        would make the database scan a chain to answer a boolean.
         """
         ...
 

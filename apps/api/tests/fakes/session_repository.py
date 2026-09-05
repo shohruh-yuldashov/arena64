@@ -109,11 +109,25 @@ class FakeSessionRepository:
 
     # --- reads --------------------------------------------------------------
 
-    async def get_session(self, refresh_token_hash: bytes) -> UserSession | None:
+    async def get_session(
+        self, refresh_token_hash: bytes, *, for_update: bool = False
+    ) -> UserSession | None:
+        # `for_update` is accepted and ignored: a dictionary has no rows to
+        # lock, and the property it buys — one successor per token under
+        # concurrency — is a real-database question that
+        # `tests/contract/test_refresh_concurrency.py` asks of real
+        # PostgreSQL. Pretending to honour it here would be a fake that
+        # passes while the system is broken.
         for session in self._sessions.values():
             if session.refresh_token_hash == refresh_token_hash:
                 return copy.deepcopy(session)
         return None
+
+    async def family_has_live_session(self, token_family: UUID) -> bool:
+        return any(
+            session.token_family == token_family and not session.is_revoked
+            for session in self._sessions.values()
+        )
 
     async def get_by_id(self, session_id: UUID) -> UserSession | None:
         found = self._sessions.get(session_id)

@@ -36,7 +36,7 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, exists, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -184,12 +184,27 @@ class SqlAlchemySessionRepository:
 
     # --- reads --------------------------------------------------------------
 
-    async def get_session(self, refresh_token_hash: bytes) -> UserSession | None:
-        row = await self._session.scalar(
-            select(UserSessionModel).where(
-                UserSessionModel.refresh_token_hash == refresh_token_hash
+    async def family_has_live_session(self, token_family: UUID) -> bool:
+        return bool(
+            await self._session.scalar(
+                select(
+                    exists().where(
+                        UserSessionModel.token_family == token_family,
+                        UserSessionModel.revoked_at.is_(None),
+                    )
+                )
             )
         )
+
+    async def get_session(
+        self, refresh_token_hash: bytes, *, for_update: bool = False
+    ) -> UserSession | None:
+        statement = select(UserSessionModel).where(
+            UserSessionModel.refresh_token_hash == refresh_token_hash
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        row = await self._session.scalar(statement)
         return self._to_domain(row) if row is not None else None
 
     async def get_by_id(self, session_id: UUID) -> UserSession | None:

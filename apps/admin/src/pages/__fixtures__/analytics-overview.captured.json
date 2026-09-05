@@ -1,0 +1,186 @@
+{
+  "activation": {
+    "meta": {
+      "coverage": "truncated",
+      "environment": "production",
+      "generated_at": "2026-09-05T07:06:12.963277Z",
+      "include_synthetic": false,
+      "maturity": "partial",
+      "period_end": "2026-09-04",
+      "period_start": "2026-09-02",
+      "requested_end": "2026-09-04",
+      "requested_start": "2026-08-06"
+    },
+    "overall_conversion": null,
+    "stages": [
+      {
+        "conversion_from_previous": null,
+        "conversion_from_start": null,
+        "drop_off": 0,
+        "drop_off_rate": null,
+        "stage": "user_registered",
+        "subjects": 0
+      },
+      {
+        "conversion_from_previous": null,
+        "conversion_from_start": null,
+        "drop_off": 0,
+        "drop_off_rate": null,
+        "stage": "email_verified",
+        "subjects": 0
+      },
+      {
+        "conversion_from_previous": null,
+        "conversion_from_start": null,
+        "drop_off": 0,
+        "drop_off_rate": null,
+        "stage": "queue_joined",
+        "subjects": 0
+      },
+      {
+        "conversion_from_previous": null,
+        "conversion_from_start": null,
+        "drop_off": 0,
+        "drop_off_rate": null,
+        "stage": "match_started",
+        "subjects": 0
+      },
+      {
+        "conversion_from_previous": null,
+        "conversion_from_start": null,
+        "drop_off": 0,
+        "drop_off_rate": null,
+        "stage": "activated",
+        "subjects": 0
+      }
+    ],
+    "time_to_activation": {
+      "median_seconds": null,
+      "p95_seconds": null,
+      "sample": 0
+    },
+    "time_to_verify": {
+      "median_seconds": null,
+      "p95_seconds": null,
+      "sample": 0
+    }
+  },
+  "active_players": {
+    "as_of": "2026-09-04",
+    "daily": 0,
+    "monthly": 5,
+    "stickiness": 0.0,
+    "weekly": 5
+  },
+  "engagement": {
+    "active_players": 5,
+    "challenge_acceptance": null,
+    "challenges_accepted": 0,
+    "challenges_cancelled": 0,
+    "challenges_declined": 0,
+    "challenges_expired": 0,
+    "challenges_sent": 0,
+    "friendships_created": 0,
+    "match_starts": 5,
+    "matches_per_active_player": 1.0,
+    "median_matches_per_active_player": 1.0,
+    "meta": {
+      "coverage": "complete",
+      "environment": "production",
+      "generated_at": "2026-09-05T07:06:12.965295Z",
+      "include_synthetic": false,
+      "maturity": "mature",
+      "period_end": "2026-09-04",
+      "period_start": "2026-08-29",
+      "requested_end": "2026-09-04",
+      "requested_start": "2026-08-29"
+    },
+    "tournament_entrants": 0,
+    "tournament_participation": 0.0,
+    "week_end": "2026-09-04",
+    "week_start": "2026-08-29"
+  },
+  "games": {
+    "abandonment_rate": 0.25,
+    "abandonments": 0,
+    "aborted": 0,
+    "completed": 4,
+    "completion_rate": 0.8,
+    "draw_rate": 0.25,
+    "draws": 1,
+    "flags": 1,
+    "grain": "match",
+    "meta": {
+      "coverage": "complete",
+      "environment": "production",
+      "generated_at": "2026-09-05T07:06:12.968938Z",
+      "include_synthetic": false,
+      "maturity": "mature",
+      "period_end": "2026-09-04",
+      "period_start": "2026-08-06",
+      "requested_end": "2026-09-04",
+      "requested_start": "2026-08-06"
+    },
+    "rated_completions": 4,
+    "rated_share": 1.0,
+    "resignation_rate": 0.5,
+    "resignations": 2,
+    "started": 5,
+    "termination_breakdown": [
+      {
+        "matches": 2,
+        "reason": "resignation"
+      },
+      {
+        "matches": 1,
+        "reason": "agreed_draw"
+      },
+      {
+        "matches": 1,
+        "reason": "flag"
+      }
+    ]
+  },
+  "matchmaking": {
+    "abandoned_attempts": 0,
+    "abandonment_rate": null,
+    "cancelled_attempts": 0,
+    "expired_attempts": 0,
+    "grain": "queue_attempt",
+    "match_found_rate": null,
+    "meta": {
+      "coverage": "complete",
+      "environment": "production",
+      "generated_at": "2026-09-05T07:06:12.966316Z",
+      "include_synthetic": false,
+      "maturity": "mature",
+      "period_end": "2026-09-04",
+      "period_start": "2026-08-06",
+      "requested_end": "2026-09-04",
+      "requested_start": "2026-08-06"
+    },
+    "offer_acceptance": null,
+    "offers_accepted": 0,
+    "offers_declined": 0,
+    "offers_expired": 0,
+    "offers_resolved": 0,
+    "paired_attempts": 0,
+    "queue_joins": 0,
+    "wait": {
+      "p50_seconds": null,
+      "p95_seconds": null,
+      "sample": 0
+    }
+  },
+  "meta": {
+    "coverage": "truncated",
+    "environment": "production",
+    "generated_at": "2026-09-05T07:06:12.963277Z",
+    "include_synthetic": false,
+    "maturity": "partial",
+    "period_end": "2026-09-04",
+    "period_start": "2026-09-02",
+    "requested_end": "2026-09-04",
+    "requested_start": "2026-08-06"
+  }
+}

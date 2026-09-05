@@ -809,3 +809,193 @@ export async function commandTournament(
     {},
   );
 }
+
+// --- admin analytics — A64-027.6 ---------------------------------------------
+
+/**
+ * The dashboard's read models, exactly as the server composed them.
+ *
+ * **Every rate is `number | null`, and the console must keep the two
+ * apart.** `null` means the question has no answer — an empty denominator,
+ * or a window that has not elapsed — and rendering it as `0%` would show a
+ * decline that did not happen (A64-027.4 §33).
+ *
+ * **Nothing here is recomputed in the browser.** The formulas are canonical
+ * and tested against real PostgreSQL; a `completed / started` in a component
+ * would be a second definition of M10 without M10's abort semantics.
+ */
+export interface AnalyticsPeriodMeta {
+  environment: string;
+  include_synthetic: boolean;
+  period_start: string;
+  period_end: string;
+  requested_start: string;
+  requested_end: string;
+  /** `mature` | `partial`. */
+  maturity: string;
+  /** `complete` | `truncated`. */
+  coverage: string;
+  generated_at: string;
+}
+
+export interface AnalyticsFunnelStage {
+  stage: string;
+  subjects: number;
+  conversion_from_previous: number | null;
+  conversion_from_start: number | null;
+  drop_off: number;
+  drop_off_rate: number | null;
+}
+
+export interface AnalyticsDuration {
+  sample: number;
+  median_seconds: number | null;
+  p95_seconds: number | null;
+}
+
+export interface AnalyticsActivation {
+  stages: AnalyticsFunnelStage[];
+  overall_conversion: number | null;
+  time_to_activation: AnalyticsDuration;
+  time_to_verify: AnalyticsDuration;
+  meta: AnalyticsPeriodMeta;
+}
+
+export interface AnalyticsAcquisition {
+  stages: AnalyticsFunnelStage[];
+  overall_conversion: number | null;
+  /**
+   * Every registration in the window, against the ones the identity stitch
+   * could attribute. The difference **is** the coverage gap, and the
+   * console shows both rather than the funnel's third stage alone.
+   */
+  registrations_in_range: number | null;
+  meta: AnalyticsPeriodMeta;
+}
+
+export interface AnalyticsActivePlayers {
+  as_of: string;
+  daily: number;
+  weekly: number;
+  monthly: number;
+  stickiness: number | null;
+}
+
+export interface AnalyticsRetentionRow {
+  cohort_day: string;
+  cohort: number;
+  /** `null` where the day has not arrived. **Never** a zero. */
+  d1: number | null;
+  d7: number | null;
+  d30: number | null;
+  d1_rate: number | null;
+  d7_rate: number | null;
+  d30_rate: number | null;
+}
+
+export interface AnalyticsRetention {
+  rows: AnalyticsRetentionRow[];
+  meta: AnalyticsPeriodMeta;
+}
+
+export interface AnalyticsEngagement {
+  week_start: string;
+  week_end: string;
+  active_players: number;
+  match_starts: number;
+  matches_per_active_player: number | null;
+  median_matches_per_active_player: number | null;
+  tournament_entrants: number;
+  tournament_participation: number | null;
+  friendships_created: number;
+  challenges_sent: number;
+  challenges_accepted: number;
+  challenges_declined: number;
+  challenges_expired: number;
+  challenges_cancelled: number;
+  challenge_acceptance: number | null;
+  meta: AnalyticsPeriodMeta;
+}
+
+export interface AnalyticsMatchmaking {
+  /** `queue_attempt`. On the wire so a label cannot claim "of players". */
+  grain: string;
+  queue_joins: number;
+  paired_attempts: number;
+  abandoned_attempts: number;
+  cancelled_attempts: number;
+  expired_attempts: number;
+  abandonment_rate: number | null;
+  match_found_rate: number | null;
+  wait: { sample: number; p50_seconds: number | null; p95_seconds: number | null };
+  offers_accepted: number;
+  offers_declined: number;
+  offers_expired: number;
+  offers_resolved: number;
+  offer_acceptance: number | null;
+  meta: AnalyticsPeriodMeta;
+}
+
+export interface AnalyticsGames {
+  /** `match`. Never a seat. */
+  grain: string;
+  started: number;
+  completed: number;
+  aborted: number;
+  completion_rate: number | null;
+  resignation_rate: number | null;
+  draw_rate: number | null;
+  abandonment_rate: number | null;
+  rated_share: number | null;
+  resignations: number;
+  draws: number;
+  abandonments: number;
+  flags: number;
+  rated_completions: number;
+  termination_breakdown: { reason: string; matches: number }[];
+  meta: AnalyticsPeriodMeta;
+}
+
+export interface AnalyticsOverview {
+  active_players: AnalyticsActivePlayers;
+  activation: AnalyticsActivation;
+  matchmaking: AnalyticsMatchmaking;
+  games: AnalyticsGames;
+  engagement: AnalyticsEngagement;
+  meta: AnalyticsPeriodMeta;
+}
+
+/** The window every analytics read takes. Bounded server-side at 90 days. */
+export interface AnalyticsRange {
+  start?: string;
+  end?: string;
+}
+
+function analyticsPath(section: string, range: AnalyticsRange): string {
+  const params = new URLSearchParams();
+  if (range.start) params.set("start", range.start);
+  if (range.end) params.set("end", range.end);
+  const query = params.toString();
+  return `/admin/analytics/${section}${query ? `?${query}` : ""}`;
+}
+
+export async function fetchAnalyticsOverview(
+  range: AnalyticsRange = {},
+  signal?: AbortSignal,
+): Promise<Outcome<AnalyticsOverview>> {
+  return authorizedRead<AnalyticsOverview>(analyticsPath("overview", range), signal);
+}
+
+export async function fetchAnalyticsRetention(
+  range: AnalyticsRange = {},
+  signal?: AbortSignal,
+): Promise<Outcome<AnalyticsRetention>> {
+  return authorizedRead<AnalyticsRetention>(analyticsPath("retention", range), signal);
+}
+
+export async function fetchAnalyticsAcquisition(
+  range: AnalyticsRange = {},
+  signal?: AbortSignal,
+): Promise<Outcome<AnalyticsAcquisition>> {
+  return authorizedRead<AnalyticsAcquisition>(analyticsPath("acquisition", range), signal);
+}

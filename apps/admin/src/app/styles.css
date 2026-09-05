@@ -537,3 +537,239 @@ dialog textarea {
   flex-wrap: wrap;
   margin: 1rem 0 0;
 }
+
+/* --- product analytics — A64-027.6 -----------------------------------------
+ *
+ * The console's own vocabulary, extended rather than replaced: the same
+ * tokens, the same one breakpoint, the same plain CSS. There is no chart
+ * dependency — bars are two spans and a width, which is enough for the four
+ * things this page draws and costs nothing in a bundle whose whole
+ * dependency list is React and a router.
+ */
+
+.sr-only {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.range {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0;
+  margin: 0;
+  border: 0;
+}
+
+.range .action[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.metric {
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-inline-size: 0;
+}
+
+.metric dt,
+.kpi-grid .metric dt {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+.metric dd {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.metric__value {
+  font-size: 1.5rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  word-break: break-word;
+}
+
+/* An unmeasured figure is a muted dash, never a zero — the one rule this
+   page turns on. See `shared/ui/metric.tsx`. */
+.metric__value[data-unmeasured="true"] {
+  color: var(--muted);
+}
+
+.metric__detail {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.metric__hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 1.05rem;
+  block-size: 1.05rem;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-size: 0.6875rem;
+  color: var(--muted);
+  cursor: help;
+  flex: none;
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+}
+
+.badge {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.badge[data-kind="partial"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.bars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0 0 1.5rem;
+}
+
+.bar {
+  display: grid;
+  grid-template-columns: minmax(7rem, 12rem) 1fr auto;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.875rem;
+  font-weight: 400;
+}
+
+.bar__label {
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.bar__track {
+  block-size: 0.5rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 70%, transparent);
+  overflow: hidden;
+  min-inline-size: 2rem;
+}
+
+.bar__fill {
+  display: block;
+  block-size: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+}
+
+.bar__value {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.analytics-table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  margin: 0 0 1.5rem;
+  font-size: 0.875rem;
+}
+
+.analytics-table th,
+.analytics-table td {
+  text-align: start;
+  padding: 0.55rem 0.6rem;
+  border-block-end: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.analytics-table thead th {
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.analytics-table td {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.analytics-table td[data-unmeasured="true"] {
+  color: var(--muted);
+}
+
+/* The cohort table is the one surface that legitimately scrolls: five
+   columns of numbers do not fold, and stacking them loses the comparison
+   the table exists for. */
+.table-scroll {
+  overflow-x: auto;
+  margin: 0 0 1.5rem;
+  /* Contains the `.sr-only` caption and the hidden hints in unmeasured
+     cells. They are `position: absolute`, so without a positioned ancestor
+     they resolve against the initial containing block at a static position
+     *inside* the scrolled table — which grows `html`'s scroll width and
+     gives the whole page a horizontal scrollbar at 360px, while `body`
+     measures clean. */
+  position: relative;
+}
+
+.table-scroll .analytics-table {
+  margin: 0;
+  min-inline-size: 26rem;
+}
+
+.table-scroll .analytics-table:has(.bar) {
+  min-inline-size: 34rem;
+}
+
+/* A bar in a funnel row keeps its label on one line. The table scrolls, so
+   there is room; letting the narrow-screen rule below apply here instead
+   shreds "Viewed the landing page" into three broken lines. */
+.analytics-table .bar {
+  grid-template-columns: minmax(9rem, 1fr) minmax(3rem, 8rem);
+}
+
+.analytics-table .bar__label {
+  overflow-wrap: normal;
+}
+
+@media (max-width: 640px) {
+  .bars .bar {
+    grid-template-columns: 1fr auto;
+  }
+
+  .bars .bar__track {
+    grid-column: 1 / -1;
+    order: 3;
+  }
+
+  .metric__value {
+    font-size: 1.25rem;
+  }
+}

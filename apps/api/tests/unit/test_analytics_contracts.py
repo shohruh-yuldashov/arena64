@@ -29,6 +29,7 @@ from app.modules.analytics.application.services.collector import (
 )
 from app.modules.analytics.application.services.projections import (
     ProjectionError,
+    finalise,
     project,
 )
 from app.modules.analytics.domain import properties as ap
@@ -39,8 +40,11 @@ from app.modules.analytics.domain.subject import SubjectKey
 from app.modules.game.domain.result import MatchOutcome as DomainOutcome
 from app.modules.game.domain.result import TerminationReason as DomainTermination
 from app.modules.game.domain.variants import MatchOrigin as DomainOrigin
+from app.modules.game.domain.variants import ProductVariant
 from app.modules.game.domain.variants import ProductVariant as DomainVariant
 from app.modules.game.public.metrics import MatchOutcome as DomainOfferOutcome
+from app.modules.matchmaking.domain.events import QueueTicketEnqueued
+from app.modules.matchmaking.domain.queue_pool import QueueType, Region
 from app.modules.matchmaking.domain.queue_pool import QueueType as DomainQueueType
 from app.modules.rating.domain.keys import SpeedClass as DomainSpeedClass
 from app.modules.tournament.domain.tournament import TournamentFormat as DomainFormat
@@ -525,3 +529,54 @@ class TestTheIdentityInvariant:
         from app.platform.analytics import Identity, spec_for
 
         assert all(spec_for(name).identity is Identity.ANONYMOUS for name in CLIENT_EMITTABLE)
+
+
+class TestAProjectionSatisfiesItsOwnSchema:
+    """The half of the contract that was never checked — A64-028.5A §25.
+
+    `finalise` validates a projection's output against the schema, which is
+    the right place for it: a projection is repository code and can be
+    wrong. What nothing checked was whether a projection *could* satisfy
+    its schema at all, and `queue_joined` could not — `QueueJoined` required
+    `speed_class` and the ticket event has never carried a time control to
+    derive one from.
+
+    The cost was not a warning. Every queue join in every environment
+    produced an outbox entry that failed validation, retried five times and
+    was abandoned: the third stage of funnel F-B was empty, permanently,
+    and the poisoned rows accumulated. A load run found 1,850 of them.
+    """
+
+    def test_a_queue_ticket_projects_into_a_valid_event(self) -> None:
+        entry = OutboxEntry.of(
+            QueueTicketEnqueued(
+                ticket_id=uuid4(),
+                player_id=uuid4(),
+                queue_type=QueueType.CASUAL,
+                variant=ProductVariant.RUSSIAN_8X8,
+                region=Region.GLOBAL,
+                rating_snapshot=1500,
+                expires_at=datetime(2026, 9, 5, tzinfo=UTC),
+                occurred_at=datetime(2026, 9, 5, tzinfo=UTC),
+            )
+        )
+
+        (pending,) = project(entry)
+
+        # The assertion is that this does not raise: `finalise` is where the
+        # schema runs, and where every one of those 1,850 entries died.
+        sealed = finalise(
+            pending,
+            subject_key=SubjectKey(uuid4()),
+            occurred_at=datetime(2026, 9, 5, tzinfo=UTC),
+            received_at=datetime(2026, 9, 5, tzinfo=UTC),
+            environment=Environment.TEST,
+            is_synthetic=False,
+            source_event_id=entry.id,
+        )
+
+        assert sealed.event_name is EventName.QUEUE_JOINED
+        # Absent rather than null: the field is owed additively by
+        # matchmaking, and an explicit `None` in the store would read as
+        # "measured, and unknown".
+        assert "speed_class" not in sealed.properties

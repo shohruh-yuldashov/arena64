@@ -98,10 +98,29 @@ class EmailVerified(PropertySchema):
 
 
 class QueueJoined(PropertySchema):
+    """F-B's third stage — the server accepting a queue ticket.
+
+    `speed_class` is **optional, and was not** — A64-028.5A §25.
+
+    A ticket carries a variant and a queue type; it does not carry a time
+    control, so `_queue_ticket_enqueued` has never had a speed class to
+    put here and its own docstring said this schema made the field
+    optional. It did not. Every queue join therefore produced an outbox
+    entry that failed validation, retried five times and was abandoned:
+    the `queue_joined` stage of the funnel was empty in every environment
+    that has ever run, and the poisoned rows accumulated permanently.
+    `QueueLeft` beside it already had the correct shape, which is what
+    made the mismatch invisible — the pair looked consistent in review.
+
+    The field stays declared rather than deleted because matchmaking still
+    owes it additively (A64-027.1 §49); when a ticket learns its time
+    control this becomes populated rather than reintroduced.
+    """
+
     variant: p.Variant
-    speed_class: p.SpeedClass
     rated: bool
     queue_type: p.QueueType
+    speed_class: p.SpeedClass | None = None
 
 
 class QueueLeft(PropertySchema):

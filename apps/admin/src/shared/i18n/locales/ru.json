@@ -717,6 +717,7 @@
     },
     "tournamentFormat": {
       "round_robin": "Круговая",
+      "single_elimination": "Олимпийская система",
       "swiss": "Швейцарская"
     },
     "variant": {

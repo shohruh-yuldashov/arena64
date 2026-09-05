@@ -375,7 +375,20 @@ function ConsoleShell({
           </button>
 
           <nav className="topbar__crumbs" aria-label={t("shell.breadcrumb")}>
-            <Link to="/">{t("app.title")}</Link>
+            {/* On the dashboard the root and the crumb are the same place,
+                so the root is plain text there rather than a link back to
+                the page you are on — A64-027A.5 §5.
+                
+                The wordmark above keeps its `aria-current` on `/`, and
+                that is left alone deliberately: the router spreads its own
+                active props last, so no caller can override them, and
+                hand-rolling navigation for one link to remove a *valid*
+                (if verbose) attribute is a worse trade than the noise. */}
+            {pathname === "/" ? (
+              <span>{t("app.title")}</span>
+            ) : (
+              <Link to="/">{t("app.title")}</Link>
+            )}
             <Icon name="chevronRight" size={14} aria-hidden="true" />
             <strong>{current === null ? t("nav.dashboard") : t(current.label)}</strong>
           </nav>

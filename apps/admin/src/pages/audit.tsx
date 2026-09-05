@@ -6,6 +6,7 @@ import { type AdminAuditEntry, type AuditQuery, fetchAuditEntries } from "@/shar
 import { useTranslation } from "@/shared/i18n";
 import { useVocab } from "@/features/vocabulary";
 import { DataTable } from "@/shared/ui/data-table";
+import { FilterToolbar, SearchField, SelectField } from "@/shared/ui/filter-toolbar";
 import { Icon, type IconName } from "@/shared/ui/icon";
 import { StatusBadge } from "@/shared/ui/status-badge";
 import { EmptyState, ErrorState, LoadingSkeleton } from "@/shared/ui/states";
@@ -191,34 +192,50 @@ export function AuditPage() {
     <>
       <PageHeader title={t("audit.title")} description={t("audit.lede")} />
 
-      <div className="filters">
-        <p className="field">
-          <label htmlFor="audit-action">{t("audit.filterAction")}</label>
-          <select
-            id="audit-action"
+      {/* The same toolbar the four management pages use — A64-027A.5 §36.
+          A64-027A.3 gave Users, Matches, Tournaments and Moderation an
+          applied-filter count and a clear control; Audit and Deliveries kept
+          the loose row and so kept the failure §7 named: a filtered log that
+          returns nothing reads as "nothing happened", which in an incident
+          review is the most expensive sentence the console can say. */}
+      <FilterToolbar
+        search={
+          <SearchField
+            label={t("audit.filterSubject")}
+            placeholder={t("audit.subjectPlaceholder")}
+            value={search.subject ?? ""}
+            onChange={(next) => {
+              setFilter("subject", next.trim());
+            }}
+          />
+        }
+        filters={
+          <SelectField
+            label={t("audit.filterAction")}
             value={search.action ?? ""}
-            onChange={(event) => setFilter("action", event.target.value)}
+            onChange={(next) => {
+              setFilter("action", next);
+            }}
           >
             <option value="">{t("audit.any")}</option>
-            {Object.keys(AUDIT_ACTION_LABELS).map((value) => (
+            {/* The phrase, not the identifier — A64-027A.5 §28. This filter
+                was the last place in the console that printed a raw enum,
+                and it printed the very strings the map beside it exists to
+                translate: the table said "granted the admin role" while the
+                control above it said `admin.role.grant`. One vocabulary. */}
+            {Object.entries(AUDIT_ACTION_LABELS).map(([value, label]) => (
               <option key={value} value={value}>
-                {value}
+                {t(label)}
               </option>
             ))}
-          </select>
-        </p>
-
-        <p className="field">
-          <label htmlFor="audit-subject">{t("audit.filterSubject")}</label>
-          <input
-            id="audit-subject"
-            type="search"
-            value={search.subject ?? ""}
-            placeholder={t("audit.subjectPlaceholder")}
-            onChange={(event) => setFilter("subject", event.target.value.trim())}
-          />
-        </p>
-      </div>
+          </SelectField>
+        }
+        activeCount={[search.action, search.subject].filter(Boolean).length}
+        onClear={() => {
+          setFilter("action", "");
+          setFilter("subject", "");
+        }}
+      />
 
       {pages.state === "loading" && <LoadingSkeleton label={t("audit.loading")} />}
       {pages.state === "error" && (

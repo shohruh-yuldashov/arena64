@@ -2149,3 +2149,110 @@ absence of both "Delivered" and "Read".
 - No channel, template, trend, chart point or count that the platform does
   not produce.
 - Final cross-console visual QA — **A64-027A.5**.
+
+---
+
+# 14. Final Visual QA and Epic Closure — A64-027A.5
+
+A64-027A redesigned the console over four tasks, each owning a group of
+routes. This task owns none of them: it reads all thirteen against each
+other, in a real session, and decides whether the epic is finished.
+
+**Nothing here is a feature.** Every change below is a defect the epic
+itself introduced or left, found by comparing one surface with another.
+
+## 14.1 The session bug
+
+The console dropped its session on some page loads, unpredictably, since
+A64-024.2. The cause was not in the console's session handling but in how
+often it asked:
+
+- The refresh token **rotates on use**, and the server treats a second
+  presentation of a spent token as reuse — it destroys the session, which is
+  the correct and deliberate defence.
+- Two refreshes issued before the first response's `Set-Cookie` lands both
+  present the same value. The first rotates it; the second is reuse.
+- React `StrictMode` double-invokes effects in development, so the guarded
+  route fired exactly that pair on every load.
+
+`shared/api/client` now holds **one in-flight exchange per tab**, and
+`session-store` publishes a clear event so an exchange belonging to an ended
+session is abandoned rather than awaited by the next one. Twelve
+consecutive reloads, two tabs racing, back/forward, and sign-out-then-login
+all hold the session.
+
+**Not fixed here, and deliberately:** two *tabs* can still race, because
+each has its own module state. Both survived every attempt to break them —
+the loser retries and the server issues a fresh token — but the guarantee
+belongs on the server, as a short rotation grace window. That is a backend
+change and this epic is frozen: **A64-028**.
+
+## 14.2 Defects found and fixed
+
+| # | Surface | Defect | Why it mattered |
+| --- | --- | --- | --- |
+| 1 | every search box | The magnifier sat on the placeholder's first characters — `Ⓐccount id` | `.field input` and `.search input` have equal specificity; A64-027A.3 wrapped the search in `.field` for a visible label and the later rule silently took the icon's gutter |
+| 2 | `/tournaments` | Format rendered as `single_elimination` | It is the platform's **only** supported format, so every row on the page printed an enum |
+| 3 | `/audit` | The action filter listed raw identifiers | The table said "granted the admin role" while the control above it said `admin.role.grant` |
+| 4 | `/audit`, Deliveries | No applied-filter count, no clear control | Four management pages got both in A64-027A.3; a filtered log that returns nothing otherwise reads as "nothing happened" |
+| 5 | Deliveries | Bare paragraphs where every other listing draws a designed panel | The History tab beside it was redesigned and this one was not — one page, two treatments |
+| 6 | `/` breadcrumb | The root crumb linked to the page it was on, duplicating `aria-current` | Two "current page" markers in one landmark |
+| 7 | `/login` | **No design pass at all** — a bare form at the top of an empty page, no card, no brand, its only action wearing the secondary treatment | Four tasks redesigned the routes *behind* the guard and none reached the one in front of it, which is the first surface an operator sees and the only one with no shell to say where they are |
+
+## 14.3 Route inventory
+
+Thirteen routes, all verified in a real administrator session against a
+live API: `/login`, `/`, `/users`, `/users/{id}`, `/matches`,
+`/matches/{id}`, `/tournaments`, `/tournaments/{id}`, `/notifications`
+(Send · History · Deliveries), `/notifications/{id}`, `/analytics`,
+`/moderation`, `/audit`.
+
+## 14.4 What was measured
+
+| Check | Result |
+| --- | --- |
+| Cross-page shell geometry | Identical on all 10 shell routes — h2 26px/680, main padding 28px, max-width 1408px, sidebar 264px, topbar 62px |
+| Overflow and console errors | Clean across 9 pages × 6 widths × 2 themes |
+| Text contrast | 22 samples, no failure, both themes |
+| Keyboard | Focus ring visible on every tab stop; reduced-motion neutralises every transition |
+| Raw enums in primary UI | None (technical identifiers remain inside disclosures, which §28 permits) |
+| Dead links, unnamed buttons | None |
+| Bundle vs A64-027A.4 | JS 457.19 → 457.41 kB · CSS 46.87 → 47.51 kB |
+| Backend diff | Empty |
+
+## 14.5 Decisions re-evaluated once
+
+**No broadcast detail page.** The History row already renders every field
+the operator acts on. `GET /admin/broadcasts/{id}` adds only `locale` and
+`channel`, and `channel` is always in-app. The one thing a detail page could
+usefully add — that broadcast's own deliveries — is not reachable: the
+deliveries endpoint filters by recipient and failure, not by broadcast. A
+route that repeats its own row is a click that returns nothing.
+
+**Two feedback mechanisms, one rule.** The broadcast composer confirms with
+a toast; tournament actions and sanctions confirm inline. That is not an
+inconsistency to erase: **inline where the control stays on screen and keeps
+its context, a toast where the surface that issued the action resets.** The
+composer clears on send and would otherwise confirm into an empty form.
+
+**`ErrorNotice` vs `ErrorState`.** A banner for a *refresh* that failed
+while good data stays on screen; a full state for a surface that has
+nothing to show. Both remain, and the split is the rule above applied to
+errors.
+
+## 14.6 Known limitations
+
+- **CSS cascade regressions are not covered by the test suite.** Defect 1
+  was invisible to all 110 passing tests because jsdom does not apply the
+  stylesheet; it was found by measuring the rendered box in a real browser.
+  The suite guards behaviour, not paint.
+- **Two browser tabs can still race a token rotation** — §14.1.
+- Detail pages use `ErrorNotice` where listings use `ErrorState`; both are
+  accessible and honest, and the difference is not visible to an operator
+  who is not comparing source.
+
+## 14.7 What A64-027A.5 did not do
+
+- No backend change. `git diff` against A64-027A.4 for `apps/api` is empty.
+- No new dependency.
+- No new page, route, control, metric or field.

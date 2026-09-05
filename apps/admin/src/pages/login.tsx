@@ -2,6 +2,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { type FormEvent, useId, useRef, useState } from "react";
 
 import { accessToken } from "@/app/session-store";
+import { BrandMark } from "@/shared/ui/brand-mark";
 import { safeRedirect } from "@/app/safe-redirect";
 import { signIn } from "@/shared/api/client";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
@@ -83,45 +84,61 @@ export function LoginPage() {
 
   return (
     <main className="gate">
-      <h1>{t("login.title")}</h1>
-      <p className="muted">{t("login.subtitle")}</p>
-
-      <form onSubmit={(event) => void onSubmit(event)} noValidate>
-        <p className="field">
-          <label htmlFor={emailId}>{t("login.email")}</label>
-          <input
-            ref={emailField}
-            id={emailId}
-            name="email"
-            type="email"
-            autoComplete="username"
-            required
-            aria-describedby={failure ? errorId : undefined}
-          />
+      <div className="gate__card">
+        {/* The console's identity on the one screen that has no shell to
+            carry it — A64-027A.5 §36. Four tasks of this epic redesigned
+            the routes behind the guard and none of them reached the page
+            in front of it, which is the first surface an operator sees and
+            the only one that has to say where they are. */}
+        <p className="gate__brand">
+          <BrandMark size={40} />
+          <span className="gate__wordmark">
+            <strong>{t("brand.name")}</strong>
+            <span>{t("brand.console")}</span>
+          </span>
         </p>
 
-        <p className="field">
-          <label htmlFor={passwordId}>{t("login.password")}</label>
-          <input
-            id={passwordId}
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            required
-            aria-describedby={failure ? errorId : undefined}
-          />
-        </p>
+        <h1>{t("login.title")}</h1>
+        <p className="muted">{t("login.subtitle")}</p>
 
-        {failure !== null && (
-          <p id={errorId} role="alert" className="error">
-            {t(failure)}
+        <form onSubmit={(event) => void onSubmit(event)} noValidate>
+          <p className="field">
+            <label htmlFor={emailId}>{t("login.email")}</label>
+            <input
+              ref={emailField}
+              id={emailId}
+              name="email"
+              type="email"
+              autoComplete="username"
+              required
+              aria-describedby={failure ? errorId : undefined}
+            />
           </p>
-        )}
 
-        <button type="submit" className="action" disabled={busy}>
-          {t(busy ? "login.submitting" : "login.submit")}
-        </button>
-      </form>
+          <p className="field">
+            <label htmlFor={passwordId}>{t("login.password")}</label>
+            <input
+              id={passwordId}
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              required
+              aria-describedby={failure ? errorId : undefined}
+            />
+          </p>
+
+          {failure !== null && (
+            <p id={errorId} role="alert" className="error">
+              {t(failure)}
+            </p>
+          )}
+
+          {/* The page's only action, styled as the page's only action. */}
+          <button type="submit" className="action primary gate__submit" disabled={busy}>
+            {t(busy ? "login.submitting" : "login.submit")}
+          </button>
+        </form>
+      </div>
     </main>
   );
 }

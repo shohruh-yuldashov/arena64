@@ -1,5 +1,6 @@
 import { createMemoryHistory } from "@tanstack/react-router";
 import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { App } from "@/app/App";
@@ -128,6 +129,22 @@ it("renders an unknown subject type as text rather than a broken link", async ()
   );
 });
 
+it("offers the action filter as phrases, never as identifiers", async () => {
+  // The filter listed the raw keys of the very map that translates them, so
+  // the table read "granted the admin role" while the control above it read
+  // `admin.role.grant` — A64-027A.5 §28. One vocabulary, both places.
+  stubApi([entry()]);
+  renderAt("/audit");
+
+  const filter = await screen.findByLabelText(/action/i);
+  const options = within(filter).getAllByRole("option");
+  expect(options.length).toBeGreaterThan(1);
+  for (const option of options) {
+    expect(option.textContent ?? "").not.toMatch(/^[a-z]+(\.[a-z_]+)+$/);
+  }
+  expect(within(filter).getByRole("option", { name: "granted the admin role" })).toBeInTheDocument();
+});
+
 it("sends the subject filter as a type and ref together", async () => {
   // The server refuses a bare `subject_ref`, because the index it needs
   // leads with the type. Sending one alone would be a `400` an operator
@@ -140,4 +157,24 @@ it("sends the subject filter as a type and ref together", async () => {
   );
   expect(queries.at(-1)).toContain("subject_type=account");
   expect(router.state.location.search).toMatchObject({ subject: "u-2" });
+});
+
+it("says a filter is applied and can clear it", async () => {
+  // The failure this prevents is a silent one: a filtered audit log returns
+  // no rows, the operator reads "nothing happened", and the entry they were
+  // looking for is one filter away — A64-027A.5 §36.
+  const queries = stubApi([]);
+  const router = renderAt("/audit?subject=u-2");
+
+  const clear = await screen.findByRole("button", { name: /clear/i });
+  expect(clear).toHaveTextContent("1");
+
+  await userEvent.click(clear);
+  await waitFor(() => {
+    expect(router.state.location.search).toEqual({});
+  });
+  // And the next request actually drops the filter, rather than only the URL.
+  await waitFor(() => {
+    expect(queries.at(-1)).not.toContain("subject_ref=");
+  });
 });

@@ -11,7 +11,8 @@ import { BroadcastComposer } from "@/features/notifications/composer";
 import { BroadcastHistory } from "@/features/notifications/broadcast-history";
 import { useVocab } from "@/features/vocabulary";
 import { useTranslation } from "@/shared/i18n";
-import { ErrorNotice } from "@/shared/ui/error-notice";
+import { FilterToolbar, SearchField, SelectField } from "@/shared/ui/filter-toolbar";
+import { EmptyState, ErrorState, LoadingSkeleton } from "@/shared/ui/states";
 import { Icon } from "@/shared/ui/icon";
 import { PageHeader } from "@/shared/ui/page-header";
 import { Pagination } from "@/shared/ui/pagination";
@@ -177,42 +178,59 @@ export function NotificationsPage() {
 
       {tab !== "deliveries" ? null : (
         <div role="tabpanel" id="panel-deliveries" aria-labelledby="tab-deliveries">
-          <div className="filters">
-            <p className="field">
-              <label htmlFor="notification-recipient">
-                {t("notifications.filterRecipient")}
-              </label>
-              <input
-                id="notification-recipient"
-                type="search"
-                value={search.recipient ?? ""}
+          {/* The management pages' toolbar — A64-027A.5 §36. See the note
+              in `pages/audit.tsx`: a filtered list that returns nothing must
+              say that a filter is why. */}
+          <FilterToolbar
+            search={
+              <SearchField
+                label={t("notifications.filterRecipient")}
                 placeholder={t("notifications.recipientPlaceholder")}
-                onChange={(event) => setFilter("recipient", event.target.value.trim())}
+                value={search.recipient ?? ""}
+                onChange={(next) => {
+                  setFilter("recipient", next.trim());
+                }}
               />
-            </p>
-
-            <p className="field">
-              <label htmlFor="notification-scope">{t("notifications.filterScope")}</label>
-              <select
-                id="notification-scope"
+            }
+            filters={
+              <SelectField
+                label={t("notifications.filterScope")}
                 value={search.failed === "true" ? "failed" : "all"}
-                onChange={(event) =>
-                  setFilter("failed", event.target.value === "failed" ? "true" : "")
-                }
+                onChange={(next) => {
+                  setFilter("failed", next === "failed" ? "true" : "");
+                }}
               >
                 <option value="all">{t("notifications.scopeAll")}</option>
                 <option value="failed">{t("notifications.scopeFailed")}</option>
-              </select>
-            </p>
-          </div>
+              </SelectField>
+            }
+            activeCount={
+              [search.recipient, search.failed === "true" ? "failed" : ""].filter(Boolean)
+                .length
+            }
+            onClear={() => {
+              setFilter("recipient", "");
+              setFilter("failed", "");
+            }}
+          />
 
-          {pages.state === "loading" && <p role="status">{t("notifications.loading")}</p>}
-          {pages.state === "error" && <ErrorNotice message={t("notifications.error")} />}
+          {/* The same three states the rest of the console draws —
+              A64-027A.5 §24. The History tab beside this one was redesigned
+              in A64-027A and this one was not, so a single page showed a
+              designed empty panel under one tab and a bare sentence under
+              the next. */}
+          {pages.state === "loading" && (
+            <LoadingSkeleton rows={4} label={t("notifications.loading")} />
+          )}
+          {pages.state === "error" && (
+            <ErrorState title={t("notifications.error")} onRetry={pages.reload} />
+          )}
           {pages.state === "ready" && pages.rows.length === 0 && (
-            <>
-              <p role="status">{t("notifications.empty")}</p>
-              <p className="muted">{t("notifications.emptyHint")}</p>
-            </>
+            <EmptyState
+              icon="notifications"
+              title={t("notifications.empty")}
+              description={t("notifications.emptyHint")}
+            />
           )}
 
           {pages.state === "ready" && pages.rows.length > 0 && (

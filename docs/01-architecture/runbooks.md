@@ -121,9 +121,18 @@ chmod 600 production.env
 
 openssl rand -hex 32          # JWT_SECRET_KEY
 openssl rand -hex 32          # EMAIL_VERIFICATION_OTP_SECRET
+openssl rand -hex 32          # POSTGRES_PASSWORD
+openssl rand -hex 32          # REDIS_PASSWORD          ← hex, not base64
 openssl rand -base64 32       # OPS_TOKEN
 openssl rand -base64 32       # OPS_BACKUP_ENCRYPTION_KEY  ← store this elsewhere
 ```
+
+**`REDIS_PASSWORD` must be hex.** It is written into the userinfo of five
+`redis://…` URLs and nothing percent-encodes it, so a base64 value
+containing `/` or `+` produces a URL that parses into the wrong host — and
+does so silently, at startup, in a tier that then cannot reach Redis.
+`POSTGRES_PASSWORD` is hex for the same reason: it is interpolated into
+`POSTGRES_DSN`.
 
 **The backup key goes in a secret manager, not only in this file.** Losing
 it loses every backup taken with it, and keeping the only copy on the host
@@ -192,8 +201,15 @@ docker compose --env-file production.env up -d api-1 api-2 worker
 ### 10. Monitoring and backup
 
 ```bash
-docker compose --env-file production.env up -d node-exporter backup
+docker compose --env-file production.env up -d node-exporter prometheus backup
 ```
+
+`prometheus` is what arms `infrastructure/observability/alerts.yml`. It
+publishes no port: reach it with `docker compose exec prometheus wget -qO-
+http://localhost:9090/api/v1/targets` or by forwarding the port over SSH.
+Confirm every target is `up` before treating an absent alert as good news —
+a scrape that never succeeded and a metric that is healthy look identical
+from a dashboard.
 
 ### 11. Smoke tests
 
@@ -213,9 +229,16 @@ exercises the WebSocket, the gateway and the durable move log together.
 ### 12. First backup, by hand
 
 ```bash
-docker compose --env-file production.env run --rm backup \
-  python -m app.operator.backup create --into /var/backups/arena64
+docker compose --env-file production.env run --rm --entrypoint python backup \
+  -m app.operator.backup create --into /var/backups/arena64
 ```
+
+**`--entrypoint python` is not optional.** `docker compose run` overrides a
+service's *command*, and the `backup` service overrides its *entrypoint* —
+to `["/bin/sh", "-c", "<the daily loop>"]`. Without the flag the arguments
+above land as unread positional parameters of that loop, and what runs is
+the daily schedule in the foreground rather than one backup. A64-030.2
+(B-1b) found this command in this runbook doing exactly that.
 
 Then confirm it reached the remote — the object should be in the bucket, and
 `arena64_backup_last_offsite_timestamp_seconds` should exist. **A backup

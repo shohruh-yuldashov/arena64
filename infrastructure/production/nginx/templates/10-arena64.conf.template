@@ -48,6 +48,31 @@ server {
         return 404;
     }
 
+    # --- Is the edge itself up? — A64-030.2 (NB-2) ----------------------------
+    #
+    # Answered by nginx, reaching nothing. The container's own healthcheck
+    # asked `/health`, which is **proxied to the API**, so nginx reported
+    # `unhealthy` for the whole window between the edge starting and the
+    # first API replica starting — which is the order `runbooks.md` first
+    # boot deliberately uses, and a window a deploy re-enters every time.
+    # A healthcheck that is red while the thing it checks is green is a
+    # signal that teaches an operator to ignore signals.
+    #
+    # The application's readiness stays where it was: `/health` and
+    # `/health/ready` are the API's, they answer for PostgreSQL and Redis,
+    # and they are what an external uptime check and the deploy's drain step
+    # read. This one answers a different question and is not a substitute.
+    #
+    # No `add_header`, deliberately: a location that sets one discards every
+    # inherited header, and there is nothing here worth protecting — four
+    # bytes, no state read, no upstream touched. `access_log off` because a
+    # probe every fifteen seconds is the whole of this line's traffic.
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
     # --- The realtime gateway — §12 -------------------------------------------
     #
     # `= /ws` exactly, which is the path `app/gateway/router.py` declares.
@@ -102,10 +127,29 @@ server {
         # name here is resolved at parse time, so a MinIO container that is
         # down or has moved would stop nginx from starting at all.
         #
-        # `/media/avatar.png` is stored as `avatar.png`, so the prefix is
-        # stripped — the equivalent of the Caddyfile's `handle_path`.
+        # ## The bucket is part of the path — A64-030.2 (B-3)
+        #
+        # This rewrote `/media/<key>` to `/<key>`, and every such request
+        # 404ed. MinIO addresses objects **path-style** unless `MINIO_DOMAIN`
+        # is set, which it is not, so the object at `<key>` in bucket
+        # `arena64-media` is `/arena64-media/<key>` — and `/<key>` asked
+        # MinIO for an object in a bucket named after the key's first
+        # segment. `S3StorageProvider._path` builds `/{bucket}/{key}` for
+        # exactly this reason; `get_public_url` composes the public form,
+        # which carries no bucket, and this line is where the two meet.
+        #
+        # The bucket name is written here and in `compose.yml`'s
+        # `STORAGE_S3_BUCKET`. `tests/unit/test_edge_policy.py` asserts the
+        # two agree, so there is one source of truth even though there are
+        # two files — the alternative, a third envsubst variable, would put
+        # the name in three.
+        #
+        # The public URL is unchanged and stays `https://<domain>/media/<key>`:
+        # nothing about MinIO's address, port or bucket layout reaches a
+        # client, and nginx replaces the upstream's `Server` header with its
+        # own.
         set $arena64_media http://minio:9000;
-        rewrite ^/media/(.*)$ /$1 break;
+        rewrite ^/media/(.*)$ /arena64-media/$1 break;
         proxy_pass $arena64_media;
     }
 

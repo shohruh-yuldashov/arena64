@@ -183,8 +183,30 @@ per replica, compete with request handling for the event loop, and stop
 when the process does.
 
 It is a command, and something outside runs it: a cron entry, a systemd
-timer, or the deployment's scheduler. Wiring that up is **A64-028.6**. The
-command is ready and tested now.
+timer, or the deployment's scheduler. In production that is the `backup`
+service in `infrastructure/production/compose.yml` — a container whose whole
+job is a sleep loop around this command, so it keeps running when the
+application does not.
+
+**Running one by hand, against the production tier:**
+
+```bash
+docker compose --env-file production.env run --rm --entrypoint python backup \
+    -m app.operator.backup create --into /var/backups/arena64
+```
+
+`--entrypoint python` is required, because `docker compose run` replaces the
+command and that service replaces the entrypoint. Without it the daily loop
+runs in the foreground and the arguments are read by nothing — A64-030.2
+(B-1b).
+
+**A failure is a log line, never silence.** The loop reports a non-zero exit
+and retries at the next interval rather than discarding the status; it used
+to end in `|| true`, and it was also calling a flag the CLI does not define,
+so it had taken no backup at all and said nothing about it (A64-030.2, B-1).
+Nothing about a failure moves `arena64_backup_last_success_timestamp_seconds`,
+so `BackupStale` and `BackupNeverSucceeded` remain the authority on whether
+a backup exists.
 
 ---
 
@@ -233,7 +255,8 @@ confirmation, and the password appearing in a log or in `argv`.
 | --- | --- |
 | Database password | `PGPASSWORD` to the subprocess. Never `argv`, never a log line, never metadata |
 | Backup credentials | Environment, like every other secret. Nothing in this repository |
-| Encryption at rest | **A deployment requirement, not implemented here.** A dump is plaintext: it holds every email address and password hash on the platform. Off-host storage must encrypt it — A64-028.6 |
+| Encryption at rest | **Implemented — A64-028.7, closing P2-8.** `app/operator/backup_crypto.py` seals the archive as `pg_dump` streams it, so a plaintext dump never touches a disk. The key is `OPS_BACKUP_ENCRYPTION_KEY` and a production-like tier refuses to start without it (`Settings._guard_production_backup`). It is **not** stored with the archive and must live in a secret manager off this host: losing it loses every backup taken with it |
+| Off-host copy | **Implemented — A64-028.7.** `app/operator/backup_offsite.py` uploads over the S3 REST API with SigV4, to any S3-compatible provider named by `OPS_BACKUP_OFFSITE_ENDPOINT`. All four `OPS_BACKUP_OFFSITE_*` values are required together; a half-configured target is refused rather than half-used |
 | Test data | The drill's corpus is generated. **No production data is in this repository** |
 | Backup artefacts | Never world-readable. `0600`, on a path only the operator account can read |
 

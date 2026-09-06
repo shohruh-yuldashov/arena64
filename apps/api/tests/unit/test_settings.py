@@ -9,6 +9,7 @@ from app.config.settings import (
     JWT_SECRET_MIN_LENGTH,
     REFRESH_TOKEN_MIN_ENTROPY_BYTES,
     SUPPORTED_JWT_ALGORITHMS,
+    AnalyticsSettings,
     AppSettings,
     AuthSettings,
     BrowserSessionSettings,
@@ -779,3 +780,71 @@ class TestProductionProxyTrust:
         """No proxy, and the socket peer is the client — which is exactly
         what a count of zero means and is correct there."""
         assert RateLimitSettings().trusted_proxy_count == 0
+
+
+class TestAnalyticsSettingsReadsItsEnvironment:
+    """A64-030.2, F-3 — a flag a deployment set and nothing read.
+
+    `AnalyticsSettings` was a plain `BaseModel`. That was defensible on its
+    own terms — none of its fields is a secret and no deployment has to set
+    one for the feature to work — and it was wrong, because a deployment
+    *was* setting one: `infrastructure/production/compose.yml` writes
+    `ANALYTICS_RETENTION_ENABLED: "false"` on both API replicas as one of the
+    eleven flags that make the api/worker split real.
+
+    A `BaseModel` has no environment source, so the variable landed nowhere
+    and `retention_enabled` stayed `True` on every process. The retention
+    sweep therefore ran on all three, which is the "N replicas run N copies
+    of every sweep" trap A64-028.1 filed as P1-3.
+
+    The consequence today is mild — the horizon is 400 days and nothing has
+    reached it. The shape is what matters: a flag written down in one file
+    and honoured by nothing reads as a decision that has been made.
+    """
+
+    def test_the_variable_the_production_replicas_set_turns_the_sweep_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ANALYTICS_RETENTION_ENABLED", "false")
+        assert AnalyticsSettings().retention_enabled is False
+
+    def test_it_is_on_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The worker's shape, and the one a local process should get with no
+        configuration at all."""
+        monkeypatch.delenv("ANALYTICS_RETENTION_ENABLED", raising=False)
+        assert AnalyticsSettings().retention_enabled is True
+
+    def test_the_other_knobs_are_configurable_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ANALYTICS_PRUNE_BATCH_SIZE", "250")
+        assert AnalyticsSettings().prune_batch_size == 250
+
+    def test_a_typo_is_ignored_here_exactly_as_it_is_everywhere_else(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Recorded because it is surprising, and because A64-030.2 found the
+        opposite written down.
+
+        `SectionSettings` said a typo'd `POSTGRES_DSNN` in a deployed tier
+        was "still a refusal to start (DI-06)". It is not:
+        `EnvSettingsSource` looks up `<prefix><field>` for each declared
+        field and never scans the environment for unknown keys, so a
+        misspelled variable is invisible to `extra="forbid"` and the setting
+        silently stays at its default.
+
+        Asserted rather than merely noted, so that the day pydantic-settings
+        does start reporting these, this test fails and the docstring gets
+        corrected back.
+        """
+        monkeypatch.setenv("ANALYTICS_RETENTION_ENABLEDD", "false")
+        assert AnalyticsSettings().retention_enabled is True
+
+        misspelled = "postgresql+asyncpg://nobody@nowhere/none"
+        monkeypatch.setenv("POSTGRES_DSNN", misspelled)
+        assert PostgresSettings().dsn.get_secret_value() != misspelled
+
+    def test_the_horizon_is_still_not_configurable(self) -> None:
+        """`RETENTION_DAYS` stays a constant in the retention service: 400
+        days is a product and privacy decision (D2), and a setting would let
+        a deployment quietly keep more than the policy allows. Making this
+        class read the environment must not have opened that door."""
+        assert "retention_days" not in AnalyticsSettings.model_fields

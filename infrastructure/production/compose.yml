@@ -62,11 +62,31 @@ x-api-env: &api-env
   # counters arrive in steps at all.
   APP_METRICS_FLUSH_INTERVAL_SECONDS: "15"
   POSTGRES_DSN: postgresql+asyncpg://arena64:${POSTGRES_PASSWORD}@postgres:5432/arena64
-  REDIS_LIVE_URL: redis://redis:6379/0
-  REDIS_BUS_URL: redis://redis:6379/1
-  REDIS_BROKER_URL: redis://redis:6379/2
-  REDIS_CACHE_URL: redis://redis:6379/3
-  REDIS_LIMITS_URL: redis://redis:6379/4
+  # Sized for this host rather than left on the code default of 10 + 5 —
+  # A64-030.2 (B-4), and `deployment.md` §9.2's connection-budget row.
+  #
+  # One uvicorn process per container, single-threaded, with a 5-second
+  # statement timeout: it cannot usefully hold fifteen backends, and every
+  # idle backend costs PostgreSQL five to ten megabytes of a container now
+  # capped at 1280M. Ten apiece bounds the whole tier at
+  #
+  #   api-1 10 + api-2 10 + worker 10           = 30 steady
+  #   + migrate 1 + backup's pg_dump 1          = 32 during a deploy
+  #
+  # against `max_connections` 100 with three reserved for a superuser, so
+  # an operator can always get in. The code default stays 10 + 5 — this is
+  # host sizing, not a platform decision.
+  POSTGRES_POOL_SIZE: "5"
+  POSTGRES_MAX_OVERFLOW: "5"
+  # One instance, five logical databases, one password — see the `redis`
+  # service on why the instance is shared and why it is authenticated.
+  # `REDIS_PASSWORD` must be hex or otherwise URL-safe: it is userinfo in
+  # these URLs and nothing percent-encodes it.
+  REDIS_LIVE_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+  REDIS_BUS_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+  REDIS_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/2
+  REDIS_CACHE_URL: redis://:${REDIS_PASSWORD}@redis:6379/3
+  REDIS_LIMITS_URL: redis://:${REDIS_PASSWORD}@redis:6379/4
   # One proxy in front of the application. This number and the Caddyfile's
   # `header_up X-Forwarded-For` must agree: a limiter that trusts the wrong
   # hop either rate-limits the proxy as one client or accepts a spoofed
@@ -99,9 +119,9 @@ x-api-env: &api-env
   OPS_BACKUP_OFFSITE_SECRET_ACCESS_KEY: ${OPS_BACKUP_OFFSITE_SECRET_ACCESS_KEY}
 
 # Everything the two API replicas share. Split from the image anchor so the
-# replicas differ in nothing but their name and alias — a difference between
-# them is a difference nobody would find until traffic landed on the wrong
-# one.
+# replicas differ in nothing but their name, their alias and their node id —
+# a difference between them is a difference nobody would find until traffic
+# landed on the wrong one.
 x-api-common: &api-common
   restart: unless-stopped
   # `stop_grace_period` is the window between SIGTERM and SIGKILL. The deploy
@@ -112,23 +132,6 @@ x-api-common: &api-common
   # rather than a measured requirement.
   stop_grace_period: 30s
   expose: ["8000"]
-  environment:
-    <<: *api-env
-    OUTBOX_WORKER_ENABLED: "false"
-    MATCHMAKING_PAIRING_ENABLED: "false"
-    MATCHMAKING_EXPIRY_ENABLED: "false"
-    MATCHMAKING_RECONCILIATION_ENABLED: "false"
-    MATCHMAKING_RETENTION_ENABLED: "false"
-    MATCHMAKING_CHALLENGE_EXPIRY_ENABLED: "false"
-    OUTBOX_RETENTION_ENABLED: "false"
-    ANALYTICS_RETENTION_ENABLED: "false"
-    PRESENCE_SWEEPER_ENABLED: "false"
-    GAME_CLOCK_ENABLED: "false"
-    # **On, on every replica, deliberately.** The gateway forwarder drains
-    # this node's own cross-instance mailbox; a node that does not run it
-    # receives no frames from anywhere else. A64-028.4 established that this
-    # is one of the two tasks a leader election would break.
-    GATEWAY_FORWARDING_ENABLED: "true"
   depends_on:
     postgres:
       condition: service_healthy
@@ -136,6 +139,30 @@ x-api-common: &api-common
       condition: service_healthy
     migrate:
       condition: service_completed_successfully
+
+# The replicas' environment, separated from `x-api-common` so each service
+# can add the one key that must differ between them — `GATEWAY_NODE_ID`.
+# YAML merge keys do not merge nested maps: a service declaring its own
+# `environment:` would *replace* an inherited one rather than extend it, so
+# the block a replica overrides has to be this one and not the whole of
+# `x-api-common`.
+x-api-replica-env: &api-replica-env
+  <<: *api-env
+  OUTBOX_WORKER_ENABLED: "false"
+  MATCHMAKING_PAIRING_ENABLED: "false"
+  MATCHMAKING_EXPIRY_ENABLED: "false"
+  MATCHMAKING_RECONCILIATION_ENABLED: "false"
+  MATCHMAKING_RETENTION_ENABLED: "false"
+  MATCHMAKING_CHALLENGE_EXPIRY_ENABLED: "false"
+  OUTBOX_RETENTION_ENABLED: "false"
+  ANALYTICS_RETENTION_ENABLED: "false"
+  PRESENCE_SWEEPER_ENABLED: "false"
+  GAME_CLOCK_ENABLED: "false"
+  # **On, on every replica, deliberately.** The gateway forwarder drains
+  # this node's own cross-instance mailbox; a node that does not run it
+  # receives no frames from anywhere else. A64-028.4 established that this
+  # is one of the two tasks a leader election would break.
+  GATEWAY_FORWARDING_ENABLED: "true"
 
 
 # Log rotation — A64-028.7 §30, and it was missing.
@@ -160,6 +187,89 @@ x-logging: &logging
       max-file: "5"
 
 
+# Resource bounds — A64-030.2 (B-4), closing `deployment.md` §9.2's
+# "Container memory and CPU limits: **unset**".
+#
+# ## Why they were unset until now, and why they are set now
+#
+# §9.2 refused to invent them before the machine existed, and it was right
+# to: a wrong limit turns a busy hour into an OOM kill. The machine now
+# exists — netcup RS 1000 G12, **4 vCPU, 7.75 GiB, 4 GiB swap** — so the
+# numbers below are host sizing rather than guesswork.
+#
+# ## The envelope
+#
+#   3.13 GiB   reservations — what the tier is expected to occupy, so
+#              ~3.6 GiB is left for the OS and the page cache, which is
+#              doing most of PostgreSQL's caching work because
+#              `shared_buffers` is deliberately small
+#   6.00 GiB   every container ceiling added together
+#   1.00 GiB   Ubuntu, the Docker daemon and containerd
+#
+# Ceilings are oversubscribed against reservations on purpose: the gap is
+# what absorbs a spike without anything being killed. What matters is that
+# ceilings **plus** the OS reserve still sum to less than RAM — 7.0 of
+# 7.75 GiB — so the thing that acts first under pressure is a per-container
+# limit and not the kernel's OOM killer, which is not obliged to choose a
+# good victim.
+#
+# **Swap is not application capacity.** Nothing here is sized expecting to
+# page. The 4 GiB is emergency protection, and `memswap_limit` is
+# deliberately *not* pinned to `mem_limit` — converting a transient spike
+# into an OOM kill of PostgreSQL is worse than a second of paging. Keeping
+# the host off swap in normal operation is `vm.swappiness`, which is a host
+# setting and not this file's to make.
+#
+# ## What Compose actually applies, and what it silently ignores
+#
+# Verified on this host against Compose v5.5.1 by creating a container and
+# reading `HostConfig` back:
+#
+#   deploy.resources.limits.memory        -> Memory              APPLIED
+#   deploy.resources.limits.cpus          -> NanoCpus            APPLIED
+#   deploy.resources.reservations.memory  -> MemoryReservation   APPLIED
+#   deploy.resources.reservations.cpus    -> nothing             IGNORED
+#
+# The last one is a Swarm scheduling hint with no meaning in the local
+# runtime, and Compose neither applies nor complains about it. So the CPU
+# half of the reservation envelope is expressed as `cpu_shares`, which is a
+# real cgroup control — the relative weight a container gets **only when
+# the host is saturated**, which is exactly what a CPU reservation means.
+# It is never a cap: an idle host still lets any container reach its
+# `limits.cpus`.
+#
+# The mapping is one rule: `cpu_shares = round(reserved cores × 1024)`.
+#
+# **Every resident service carries one, including the small ones, and that
+# is not tidiness.** An unset `cpu_shares` is not "no weight", it is the
+# Docker default of 1024 — so a service left out would outweigh PostgreSQL
+# at 768 under exactly the contention this exists to arbitrate. Partial
+# application would be worse than none. The eleven weights sum to 4 096,
+# which is this host's four cores at that scale.
+#
+# The one-shot services — `migrate`, `web`, `admin`, `certbot-init`,
+# `minio-provision` — are deliberately left at the default. They are
+# transient, they run during a deploy rather than during steady state, and
+# finishing them quickly is the goal.
+#
+# Only the API replicas share an anchor, because they are the only pair
+# that must stay identical. Every other service states its own numbers
+# where a reader is already looking at it.
+#
+# 390 MB steady under A64-028.5A's mixed load, plus the measured ~100 KB
+# per idle WebSocket, puts 832M at roughly four thousand concurrent sockets
+# before the ceiling becomes the binding constraint.
+x-api-resources: &api-resources
+  cpu_shares: 768
+  deploy:
+    resources:
+      limits:
+        cpus: "1.5"
+        memory: 832M
+      reservations:
+        memory: 512M
+
+
 services:
   # --- One-shot schema step -------------------------------------------------
   migrate:
@@ -168,6 +278,13 @@ services:
     command: ["alembic", "upgrade", "head"]
     environment:
       <<: *api-env
+    # A ceiling rather than a budget: this container is transient and holds
+    # one connection, but it runs during a deploy, when the two replicas it
+    # is about to release are still serving on their own reservations.
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     depends_on:
       postgres:
         condition: service_healthy
@@ -179,14 +296,27 @@ services:
   # and both replicas carry the network alias `api`, so that name returns
   # every running container and DNS round-robins between them. Their
   # individual names are what a deploy addresses: draining is per instance.
+  #
+  # `GATEWAY_NODE_ID` is the one key that differs, and the only reason the
+  # replica environment is a separate anchor. `app/gateway/node.py` draws a
+  # random identifier when it is unset, which is *correct* — a restart
+  # genuinely is a different process instance — and illegible: a route
+  # resolving to `d4f1a2b8` says the connection is elsewhere just as well as
+  # `api-2` does, but only the second can be found in a log search.
   api-1:
-    <<: [*api-image, *api-common, *logging]
+    <<: [*api-image, *api-common, *logging, *api-resources]
+    environment:
+      <<: *api-replica-env
+      GATEWAY_NODE_ID: api-1
     networks:
       default:
         aliases: [api]
 
   api-2:
-    <<: [*api-image, *api-common, *logging]
+    <<: [*api-image, *api-common, *logging, *api-resources]
+    environment:
+      <<: *api-replica-env
+      GATEWAY_NODE_ID: api-2
     networks:
       default:
         aliases: [api]
@@ -196,8 +326,6 @@ services:
     <<: [*api-image, *logging]
     restart: unless-stopped
     stop_grace_period: 60s
-    deploy:
-      replicas: 1
     environment:
       <<: *api-env
       OUTBOX_WORKER_ENABLED: "true"
@@ -222,6 +350,22 @@ services:
       # The same shape as the backup destination above and for the same
       # reason: the container that owns the file cannot answer a scrape.
       OPS_CERTIFICATE_PATH: /etc/letsencrypt/live/${ARENA64_DOMAIN}/fullchain.pem
+      # Named for the same reason as the replicas'. This process holds no
+      # WebSocket, so nothing routes to its identifier — what a stable name
+      # buys here is a log line an operator can attribute.
+      GATEWAY_NODE_ID: worker
+    cpu_shares: 512
+    deploy:
+      # **Exactly one, and that is the whole api/worker split.** Kept here
+      # rather than beside the resource block because it is a correctness
+      # constraint and not a sizing one: a second worker doubles every sweep.
+      replicas: 1
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 640M
+        reservations:
+          memory: 384M
     volumes:
       - backup_data:/var/backups/arena64:ro
       - letsencrypt:/etc/letsencrypt:ro
@@ -235,10 +379,27 @@ services:
 
   # --- Clients, built to files ----------------------------------------------
   #
-  # Both build to a `scratch` image whose only content is `dist/`, and the
+  # Both build to a minimal image whose only content is `dist/`, and the
   # edge serves it from the volume below. `restart: "no"` because there is
   # nothing to run: the container exits immediately and the volume keeps
   # what it copied.
+  #
+  # ## Why the copy clears first — A64-030.2 (N-8)
+  #
+  # The volume is persistent and the copy was additive, so a file **deleted**
+  # in a later release survived in it for ever. That is not a cosmetic leak:
+  # a stale `sw.js` is a service worker the browser keeps honouring, and a
+  # stale hashed asset is a bundle the new `index.html` no longer references
+  # but the old one still does.
+  #
+  # `find -mindepth 1 -maxdepth 1 -exec rm -rf {} +` rather than `rm -rf
+  # /srv/web/*`: it removes dotfiles too, and it never names the mount point
+  # itself, so there is no shape of this command that can delete the volume
+  # rather than its contents. `cp -a` rather than `cp -r` so modes and
+  # timestamps survive the copy — nginx serves these files directly.
+  #
+  # Both capabilities were verified against `busybox:1.37.0-musl`, which is
+  # the shell these images actually carry.
   web:
     <<: *logging
     build:
@@ -250,7 +411,10 @@ services:
     command: ["true"]
     volumes:
       - web_dist:/srv/web
-    entrypoint: ["/bin/sh", "-c", "cp -r /dist/. /srv/web/"]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - set -eu; find /srv/web -mindepth 1 -maxdepth 1 -exec rm -rf {} +; cp -a /dist/. /srv/web/
 
   admin:
     <<: *logging
@@ -261,7 +425,10 @@ services:
     command: ["true"]
     volumes:
       - admin_dist:/srv/admin
-    entrypoint: ["/bin/sh", "-c", "cp -r /dist/. /srv/admin/"]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - set -eu; find /srv/admin -mindepth 1 -maxdepth 1 -exec rm -rf {} +; cp -a /dist/. /srv/admin/
 
   # --- The only container with published ports ------------------------------
   #
@@ -287,6 +454,14 @@ services:
       - "443:443/udp"
     environment:
       ARENA64_DOMAIN: ${ARENA64_DOMAIN}
+    cpu_shares: 256
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 128M
+        reservations:
+          memory: 64M
     volumes:
       - web_dist:/srv/web:ro
       - admin_dist:/srv/admin:ro
@@ -342,19 +517,98 @@ services:
       # step with the certificate name — CLAUDE.md §3.4.
       - ./certbot/issue.sh:/usr/local/bin/issue.sh:ro
     entrypoint: ["/bin/sh", "/usr/local/bin/renew.sh"]
+    cpu_shares: 51
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+        reservations:
+          memory: 32M
     depends_on:
       certbot-init:
         condition: service_completed_successfully
 
   # --- Stateful dependencies, none of them published ------------------------
+  # ## Tuning — A64-030.2 (B-4), closing `deployment.md` §9.2's
+  # "`shared_buffers`, `work_mem`: server defaults".
+  #
+  # A `command:` override rather than a mounted `postgresql.conf`, for the
+  # reason the nginx image gives about baking its configuration: a mounted
+  # file is a thing on the host that nothing versions and nothing reviews.
+  # These flags are read in the same diff as the memory limit they are
+  # sized against.
+  #
+  # **`shared_buffers` is deliberately not maximised.** The usual rule of
+  # thumb is a quarter of RAM; a quarter of *this host's* RAM would be
+  # 2 GiB, inside a container capped at 1280M, and PostgreSQL would be
+  # killed before it filled it. 256MB is a quarter of the **container**,
+  # and the rest of the caching is the OS page cache — which the envelope
+  # above reserves 1.5 GiB for, and which `effective_cache_size` tells the
+  # planner about without allocating a byte.
+  #
+  # `work_mem` is per **sort node**, not per connection, so it multiplies by
+  # plan complexity as well as by concurrency. 4MB against the 32-connection
+  # ceiling is 128 MB in the ordinary case. It is deliberately conservative:
+  # an admin analytics query that wants more should say so with
+  # `SET LOCAL work_mem`, which is bounded to that transaction.
+  #
+  # `random_page_cost` and `effective_io_concurrency` are the only two
+  # numbers here derived from a measurement on this host: fio put 4 KiB
+  # random reads at ~61.9k IOPS with a p99 of 1.16 ms, which is NVMe. The
+  # stock `random_page_cost` of 4.0 describes a spinning disk and makes the
+  # planner avoid index scans it should prefer.
+  #
+  # **Nothing here weakens durability.** `fsync`, `synchronous_commit` and
+  # `full_page_writes` keep their defaults and are not listed, so no future
+  # edit to this block can turn one off by looking like the others.
   postgres:
     <<: *logging
     image: postgres:17
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=2GB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=96MB
+      - -c
+      - autovacuum_max_workers=2
+      - -c
+      - max_connections=100
+      - -c
+      - wal_buffers=16MB
+      - -c
+      - max_wal_size=1GB
+      - -c
+      - min_wal_size=128MB
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - log_min_duration_statement=500ms
+      - -c
+      - log_checkpoints=on
+      - -c
+      - timezone=UTC
     environment:
       POSTGRES_USER: arena64
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: arena64
+    cpu_shares: 768
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1280M
+        reservations:
+          memory: 768M
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -363,11 +617,66 @@ services:
       timeout: 5s
       retries: 10
 
+  # ## One instance, five logical databases, one eviction policy
+  #
+  # `data-reliability.md` §3 states the deployment requirement as
+  # `allkeys-lru` on `cache` and `noeviction` on `limits` and `live`. One
+  # instance cannot express that — `maxmemory-policy` is instance-wide —
+  # and splitting into five is five processes pretending to be five
+  # machines on a 4-vCPU host. `deployment.md` §2 records the deviation.
+  #
+  # **So the tie is broken towards the failure that is loud.** With
+  # `noeviction`, memory pressure fails writes: the rate limiter then fails
+  # open **and increments `rate_limit_unavailable_total{failed_open}`**,
+  # which is an alert. With `volatile-lru` — every key family here except
+  # `clock:v1:deadlines` carries a TTL, so almost everything is a candidate
+  # — Redis would instead silently evict `rl:` counters under exactly the
+  # traffic spike the limiter exists for. A limit that quietly stops
+  # applying is the failure `data-reliability.md` §3 names as unacceptable;
+  # a degraded write that says so is not.
+  #
+  # `maxmemory` at all is the point. It was **unset**, which is unbounded,
+  # on a host with 7.75 GiB. 256mb is far above any realistic beta working
+  # set; the container ceiling is 768M because an AOF rewrite forks and
+  # copy-on-write can approach a second copy of the dataset.
+  #
+  # `requirepass` is defence in depth — A64-030.2 (S-1). The instance
+  # publishes no port and is reachable only on this network, but every
+  # other container on it (certbot, minio-provision, node-exporter) could
+  # otherwise read live match state and rate-limit counters. `REDISCLI_AUTH`
+  # rather than `redis-cli -a` in the healthcheck: the flag prints a warning
+  # to stderr on every invocation and puts the password in the container's
+  # own `ps` output twice a second, which is a log nobody wanted.
   redis:
     <<: *logging
     image: redis:8
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - noeviction
+      - --auto-aof-rewrite-percentage
+      - "100"
+      - --auto-aof-rewrite-min-size
+      - 64mb
+      - --requirepass
+      - ${REDIS_PASSWORD}
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    cpu_shares: 256
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 768M
+        reservations:
+          memory: 256M
     volumes:
       - redis_data:/data
     healthcheck:
@@ -384,6 +693,14 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    cpu_shares: 154
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 384M
+        reservations:
+          memory: 192M
     volumes:
       - minio_data:/data
     healthcheck:
@@ -451,6 +768,88 @@ services:
       - --collector.filesystem.fs-types-exclude=^(autofs|:binfmt_misc|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|mqueue|nsfs|overlay|proc|procfs|pstore|securityfs|selinuxfs|squashfs|sysfs|tracefs)$$
     expose: ["9100"]
     pid: host
+    cpu_shares: 51
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+        reservations:
+          memory: 32M
+
+  # --- The thing that reads all of the above — A64-030.2 --------------------
+  #
+  # `infrastructure/observability/` has held a Prometheus configuration and
+  # twenty-nine alert rules since A64-028.7, `node-exporter` has been
+  # publishing host metrics into a compose network, `runbooks.md` says
+  # "Prometheus runs on the same host as everything it watches", and every
+  # runbook links an alert by name. **No compose file ran it.** Every one of
+  # those rules was unarmed, including the two that would have caught the
+  # backup defect above.
+  #
+  # Adding it is small because the configuration was already finished:
+  # `promtool check config` accepts `prometheus.yml` against this image
+  # unchanged, and `promtool check rules` reads all twenty-nine.
+  #
+  # ## Three things worth stating
+  #
+  # **No published port.** Prometheus holds the operator's whole view of the
+  # platform and authenticates nobody. It is reachable on this network and
+  # from `docker compose exec`, and from nowhere else — `deployment.md` §8.8
+  # already names it in the list of things that must be unreachable.
+  #
+  # **The scrape credential is a file, not an environment variable**, because
+  # `prometheus.yml` asks for `credentials_file` — the shape that keeps a
+  # bearer token out of the process's own environment. It is delivered as a
+  # compose `config` so the token has exactly one source, `production.env`,
+  # and no second copy on the host filesystem to fall out of step. Mode 0444
+  # rather than 0400 because this image runs as uid 65534 and a config is
+  # mounted root-owned; the file's audience is one container that already
+  # holds the token.
+  #
+  # **Retention is bounded twice.** Fifteen days is the answer to "how far
+  # back does an incident review look"; the size bound is the answer to
+  # "what happens if the series count grows", and it is the half that stops
+  # `DiskWillFillSoon` being an alert about the alerting.
+  prometheus:
+    <<: *logging
+    image: prom/prometheus:v3.5.5
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=4GB
+      # No `--web.enable-lifecycle` and no `--web.enable-admin-api`: both
+      # add unauthenticated endpoints that reload configuration or delete
+      # series, on a service with no authentication of its own.
+      - --web.console.libraries=/usr/share/prometheus/console_libraries
+      - --web.console.templates=/usr/share/prometheus/consoles
+    expose: ["9090"]
+    cpu_shares: 256
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
+        reservations:
+          memory: 384M
+    volumes:
+      - prometheus_data:/prometheus
+      - ../observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # `rule_files: [alerts.yml]` in that file is resolved relative to it,
+      # so this path is not a free choice.
+      - ../observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+    configs:
+      - source: ops_token
+        target: /etc/prometheus/ops-token
+        mode: 0444
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
 
   # --- Backup, on a schedule outside the application ------------------------
   #
@@ -464,12 +863,52 @@ services:
   # `production-hardening.md` P2-8 owns encryption at rest and off-host
   # storage; this makes the backups exist and makes their age observable,
   # which is the part that was missing.
+  #
+  # ## What A64-030.2 found here — B-1
+  #
+  # This loop invoked `create --destination`, and the CLI's flag is
+  # `--into`. `--destination` is the name of an internal Python parameter
+  # and has never been an argument. Every run therefore died in argparse
+  # with exit 2, `|| true` discarded it, and the container slept for a day
+  # and did it again — **for ever, on a container reporting `Up`.**
+  #
+  # No archive was written, so `arena64_backup_last_success_timestamp_seconds`
+  # was never published; the alerts that fire on its absence are
+  # `BackupNeverSucceeded` and `BackupNeverCopiedOffHost`, and they evaluate
+  # in a Prometheus that A64-030.2 also found was not deployed. Two silent
+  # failures in series is how a platform arrives at a restore with nothing
+  # to restore from.
+  #
+  # ## Why the loop still survives a failure, and what changed
+  #
+  # Surviving is right: this is a resident service, the next interval is a
+  # real chance to succeed, and a container that exits on a transient
+  # `pg_dump` error would restart-loop against a database that is merely
+  # busy. What was wrong was `|| true`, which is *silence* rather than
+  # survival. The status is captured and reported instead, so a failure is
+  # a line in the log with a non-zero code in it — and `create` itself
+  # never records success it did not have, so the metrics stay true whether
+  # this succeeds or not.
   backup:
     <<: [*api-image, *logging]
     restart: unless-stopped
     environment:
       <<: *api-env
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    cpu_shares: 256
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 384M
+        reservations:
+          memory: 64M
+    # The image's own healthcheck curls `/api/v1/health`, which this
+    # container does not serve — it is a backup loop, not the API. Left in
+    # place it reports `unhealthy` for ever on a container that is working,
+    # which is a signal that trains an operator to ignore signals.
+    healthcheck:
+      disable: true
     volumes:
       - backup_data:/var/backups/arena64
     entrypoint:
@@ -477,17 +916,29 @@ services:
       - -c
       - |
         while true; do
-          python -m app.operator.backup create --destination /var/backups/arena64 || true
+          python -m app.operator.backup create --into /var/backups/arena64
+          status=$$?
+          if [ "$$status" -ne 0 ]; then
+            echo "backup: create FAILED with exit $$status — no new archive and no off-host copy. The last-success and last-offsite metrics are unchanged, so BackupStale and BackupNotCopiedOffHost fire on their age. Retrying at the next interval." >&2
+          fi
           sleep "${BACKUP_INTERVAL_SECONDS:-86400}"
         done
     depends_on:
       postgres:
         condition: service_healthy
 
+configs:
+  # The operator bearer token, delivered to Prometheus as a file because
+  # that is the shape `prometheus.yml`'s `credentials_file` asks for. One
+  # source — `production.env` — and no second copy to keep in step.
+  ops_token:
+    content: ${OPS_TOKEN}
+
 volumes:
   postgres_data:
   redis_data:
   minio_data:
+  prometheus_data:
   letsencrypt:
   certbot_webroot:
   web_dist:

@@ -95,6 +95,19 @@ EXPOSE 80 443 443/udp
 # the foreground, which is what makes `SIGTERM` reach the master and
 # graceful shutdown work. Restating it would only be a chance to get it
 # wrong.
+# `/healthz`, not `/health` — A64-030.2 (NB-2).
+#
+# `/health` is proxied to the API, so this reported the *application's*
+# health under the edge's name. On a first boot nginx starts before any API
+# replica exists, by design, so the edge spent that whole window marked
+# `unhealthy` while serving the ACME challenge correctly. `/healthz` is
+# answered by nginx itself and asks only "did this process start and can it
+# terminate TLS", which is the one question a container healthcheck on the
+# edge can answer.
+#
+# `--no-check-certificate` because the certificate names the domain and this
+# connects to `localhost`; the probe is inside the container and is not
+# authenticating anything.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
 	CMD wget --quiet --tries=1 --spider --no-check-certificate \
-		https://localhost/health || exit 1
+		https://localhost/healthz || exit 1

@@ -414,6 +414,28 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 | **Failure mode** | `latest` is not a version: a rebuild silently changes what runs, a rollback cannot name what to return to, and a compromised upstream tag is pulled on the next restart — on the certificate client and the object store, which is where it would matter most |
 | **Action taken** | Pinned to `v5.8.0` and the two current MinIO release tags. The API image stays `${ARENA64_TAG}`, which is the one tag that *should* move — it is the release being deployed |
 
+### Found by A64-030.2
+
+> The pre-deployment audit of `infrastructure/production/` against the real
+> host. Every finding below was **silent**: the tier would have come up, the
+> containers would have reported `Up`, and each defect would have surfaced
+> as an absence — a backup that was never taken, an image that never loaded,
+> an alert that never fired. All are resolved in the same task.
+
+| ID | Area | Status | Finding, and what was done |
+| --- | --- | --- | --- |
+| **B-1** | Backup | ~~FAIL~~ → **PASS** | **No backup could ever be taken.** The resident `backup` loop invoked `create --destination`; the CLI defines `--into`, and `--destination` is the name of an internal Python parameter that has never been an argument. Every run died in argparse with exit 2, `\|\| true` discarded it, and the container slept for a day and repeated — on a container reporting `Up`. Nothing was written, so `arena64_backup_last_success_timestamp_seconds` was never published, so `BackupNeverSucceeded` had nothing to fire on — in a Prometheus that B-5 found was not deployed. **Two silent failures in series is how a platform arrives at a restore with nothing to restore from.** Fixed to `--into`; the exit status is now captured and logged instead of discarded, and the loop still survives a failure because a resident service should. Covered by feeding the compose invocation to the **real parser**, so a rename on either side fails the test |
+| **B-1b** | Backup | ~~FAIL~~ → **PASS** | `runbooks.md` §12's manual backup passed its arguments as the *command*, which `docker compose run` overrides — but the service overrides its *entrypoint*, so the arguments were read by nothing and the daily loop ran in the foreground. `--entrypoint python` added, with the reason stated |
+| **B-2** | Secrets | ~~FAIL~~ → **PASS** | **There was no `.gitignore` anywhere in the repository**, and two files claimed otherwise: `production.env.example` said "`production.env` is gitignored" and `apps/api/.env.example` said "`.env` is gitignored". `git check-ignore` matched nothing, and `.DS_Store` was tracked. A filled-in `production.env` on the production host was one `git add -A` from publishing every secret on the platform. A root `.gitignore` now refuses `.env`, `.env.*`, `*.env`, `*.pem` and `*.key` while keeping `*.env.example`; the two `.DS_Store` files are out of the index |
+| **B-3** | Edge | ~~FAIL~~ → **PASS** | **Every media URL 404ed.** The edge rewrote `/media/<key>` to `/<key>`, and MinIO is path-style, so the object at `<key>` in bucket `arena64-media` lives at `/arena64-media/<key>` — the request asked for a bucket named after the key's first segment. Nothing tested the rewrite. Fixed, with a test that ties the rewrite's bucket to `STORAGE_S3_BUCKET` so the two files cannot drift |
+| **B-4** | Capacity | ~~RISK~~ → **PASS** | No container memory or CPU limit, PostgreSQL on server defaults, Redis `maxmemory` unset — that is, unbounded — on a 4-vCPU, 7.75 GiB host. Closed by `deployment.md` §9.2–§9.4, which the machine's existence made answerable |
+| **B-5** | Observability | ~~FAIL~~ → **PASS** | **Every alert rule in this repository was unarmed.** `infrastructure/observability/` had held `prometheus.yml` and twenty-nine rules since A64-028.7, `node-exporter` published into the compose network, and `runbooks.md` stated that "Prometheus runs on the same host as everything it watches" — and no compose file ran it. Added, unpublished, pinned, with a bounded volume and the scrape token delivered as a `config` from the one `OPS_TOKEN` |
+| **F-3** | Configuration | ~~FAIL~~ → **PASS** | A reappearance of **P1-3** in a new shape. `AnalyticsSettings` was a plain `BaseModel` with no environment source, so the `ANALYTICS_RETENTION_ENABLED: "false"` the compose file writes on both API replicas was read by nothing and the retention sweep ran on all three processes. It is now a `SectionSettings`, and every one of the eleven scheduler flags is asserted to reach a real settings field |
+| **NB-2** | Edge | ~~RISK~~ → **PASS** | The edge's container healthcheck asked `/health`, which is proxied to the API, so nginx reported `unhealthy` for the whole window between the edge starting and the first replica starting — the order first boot deliberately uses. An edge-local `/healthz` answers for the edge; the application's readiness is unchanged |
+| **N-8** | Edge | ~~RISK~~ → **PASS** | `web` and `admin` copied `dist/` into a persistent volume without clearing it, so a file deleted in a later release was served for ever. A stale `sw.js` is a service worker the browser keeps honouring |
+| **S-1** | Redis | ~~RISK~~ → **PASS** | Redis had no `requirepass`. Unpublished, so this is defence in depth — what it closes is every *other* container on the compose network being able to read live match state and rate-limit counters |
+| — | Configuration | **Documentation corrected** | `SectionSettings` claimed a typo'd `POSTGRES_DSNN` was "still a refusal to start". It is not: `EnvSettingsSource` looks up `<prefix><field>` per declared field and never scans for unknown keys, so `extra="forbid"` has nothing to refuse and a misspelled variable is silently ignored. Verified, corrected in the docstring, and asserted in `test_settings.py` so the day the library changes, the claim gets restored rather than rotting |
+
 ### P3 findings
 
 | ID | Finding | Owner |
@@ -558,7 +580,7 @@ degrades, and the finding is the degradation point and its first symptom.
 | DB | Restore performed and recorded | **TODO** (P0-4) |
 | DB | `pool_pre_ping`; restart behaviour measured | **TODO** (P2-1) |
 | DB | Migrations verified zero → head → base → head | **DONE** (this task) |
-| REDIS | Persistence decision per role, recorded | **TODO** |
+| REDIS | Persistence decision per role, recorded | **DONE** — `data-reliability.md` §3 records the per-role verdict; `deployment.md` §9.4 records what the single production instance can and cannot express, and why the eviction policy is `noeviction` (A64-030.2) |
 | WORKERS | Scheduler singleton or proven per-job idempotency | **TODO** (P1-3) |
 | REALTIME | Multi-node bus, or a single-instance pin that is enforced | **TODO** (P1-2) |
 | REALTIME | Deploy procedure for live games | **TODO** (P1-6) |

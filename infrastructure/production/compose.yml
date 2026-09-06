@@ -348,6 +348,50 @@ services:
         mc mb --ignore-existing local/arena64-media &&
         mc anonymous set download local/arena64-media
 
+  # --- Host metrics — A64-028.7, closing half of P3-4 ------------------------
+  #
+  # The application reports its own RSS and nothing about the machine it is
+  # on, so `disk pressure` had a runbook and no alert. A disk that fills
+  # takes PostgreSQL, the WAL, the backups and the logs at once, and the
+  # first symptom is a database that will not write.
+  #
+  # `node_exporter` rather than anything larger: it is the maintained
+  # standard, it is one static binary, and it publishes exactly the seven
+  # things §9 asks for. No published port — Prometheus reaches it on the
+  # compose network and nothing else can.
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    restart: unless-stopped
+    # Read-only host mounts. The exporter needs to see the host's `/proc`,
+    # `/sys` and filesystems; it needs to write nothing anywhere.
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      # Only the collectors the alerts read. The default set includes a
+      # dozen this deployment has no use for, and every one of them is more
+      # series to store and more surface to reason about.
+      - --collector.disable-defaults
+      - --collector.cpu
+      - --collector.loadavg
+      - --collector.meminfo
+      - --collector.filesystem
+      - --collector.diskstats
+      - --collector.netdev
+      - --collector.uname
+      - --collector.time
+      - --collector.os
+      # The container's own view of these is not the host's, and a
+      # filesystem alert on an overlay is an alert about nothing.
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|rootfs/var/lib/docker/.+)($$|/)
+      - --collector.filesystem.fs-types-exclude=^(autofs|:binfmt_misc|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|mqueue|nsfs|overlay|proc|procfs|pstore|securityfs|selinuxfs|squashfs|sysfs|tracefs)$$
+    expose: ["9100"]
+    pid: host
+
   # --- Backup, on a schedule outside the application ------------------------
   #
   # A64-028.3 built the command and said the interval was A64-028.6's. It is

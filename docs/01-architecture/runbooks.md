@@ -606,21 +606,93 @@ numbers.
 
 ## Disk pressure
 
-**Alert:** none — see the residual risk.
+**Alert:** `DiskNearlyFull`, `DiskWillFillSoon`, `InodesNearlyExhausted` —
+A64-028.7, closing half of P3-4.
 
-**Confirm.** `df -h` on the host, and the sizes of the `postgres_data`,
-`backup_data` and `caddy_data` volumes.
+**Confirm.** The host dashboard, or on the machine:
 
-**Mitigate.** Backups are the usual growth: `DEFAULT_KEEP` retains seven
-generations and prunes on every successful run, so an unpruned destination
-means backups have been failing.
+```bash
+df -h ; df -i
+docker system df
+du -sh /var/lib/docker/volumes/* 2>/dev/null | sort -h | tail -5
+```
 
-**Recover.** Retention for the durable tables is documented in
-`data-reliability.md` §4 and runs on the worker.
+**What fills it, in the order it usually happens.**
 
-**Residual risk.** **No disk metric is collected.** The exporter reports the
-application's own memory and nothing about the host. A node exporter is the
-obvious answer and is open work.
+| Consumer | Bound |
+| --- | --- |
+| Backups | `DEFAULT_KEEP` = 7 generations, pruned on every **successful** run |
+| Prometheus | its own retention, set at deploy |
+| PostgreSQL | table retention (outbox, analytics, matchmaking, notifications) |
+| WAL | checkpoints, unless a replication slot is stuck |
+| Redis AOF | rewritten as it grows |
+| Docker images | **unbounded** — nothing prunes old layers |
+| Container logs | `json-file` with rotation, see [log rotation](#log-rotation) |
+
+**Mitigate.** `docker image prune -a --filter "until=168h"` is the safest
+first move: it touches no volume and no running container.
+
+**Recover.** An unpruned backup destination means backups have been
+*failing* — pruning only runs after a successful one, so
+[a stale backup](#backup-stale) and a full disk arrive together and the
+first causes the second.
+
+**Verify.** `DiskNearlyFull` clears, and `DiskWillFillSoon` with it.
+
+**Residual risk.** Docker image layers have no automatic bound. A deploy
+that runs often enough will fill a small disk with images nothing runs, and
+the only thing that catches it is these alerts.
+
+---
+
+## Memory pressure
+
+**Alert:** `MemoryPressure`.
+
+**Confirm.** `free -m` on the host, then `docker stats --no-stream`.
+
+`MemAvailable`, not `MemFree`: Linux uses free memory for page cache by
+design, so `MemFree` is near zero on every healthy machine.
+
+**Mitigate.** The next thing to happen is the OOM killer choosing a process,
+and it is not obliged to choose a good one — PostgreSQL is a large, long-
+lived process and an attractive target. Restarting the container that grew
+is better than letting the kernel decide.
+
+**Recover.** PostgreSQL's `shared_buffers` and Redis's dataset are supposed
+to be large. The API's RSS is measured separately
+(`arena64_http_requests_in_flight` and the process metrics) and should not
+be: A64-028.5A measured about 100 KB per idle WebSocket and 519 MB at two
+thousand of them.
+
+**Verify.** Available memory returns above 10%.
+
+**Residual risk.** No container has a memory limit — see **HOST-SIZING
+GATE** in `deployment.md`. Until the server exists there is no honest number
+to set, and a wrong limit turns a busy hour into an OOM kill.
+
+---
+
+## Host metrics missing
+
+**Alert:** `HostMetricsMissing`.
+
+**Confirm.** `docker compose ps node-exporter`, then from inside the
+network: `curl -s http://node-exporter:9100/metrics | head -1`.
+
+**Why it matters more than it looks.** Every rule in the host group reads
+this target, so its silence disables all of them — and a disabled alert is
+indistinguishable from a healthy one. This rule exists to make that
+difference visible.
+
+**Mitigate.** Restart it. It holds no state, publishes no port, and its
+absence affects nothing but the monitoring.
+
+**Recover.** If it will not start, check the read-only host mounts: it needs
+`/proc`, `/sys` and `/` and writes to none of them.
+
+**Verify.** `up{job="arena64-host"}` returns to 1 and the disk panels
+repopulate.
 
 ---
 

@@ -42,6 +42,9 @@ NGINX = _REPO / "infrastructure" / "production" / "nginx"
 MAIN_CONF = NGINX / "nginx.conf"
 APP_HOST = NGINX / "templates" / "10-arena64.conf.template"
 ADMIN_HOST = NGINX / "templates" / "20-admin.conf.template"
+WWW_HOST = NGINX / "templates" / "30-www.conf.template"
+DOCKERFILE = NGINX / "Dockerfile"
+ISSUE_SH = _REPO / "infrastructure" / "production" / "certbot" / "issue.sh"
 REDIRECT = NGINX / "conf.d" / "00-redirect.conf"
 HEADERS_COMMON = NGINX / "snippets" / "headers-common.conf"
 HEADERS_APP = NGINX / "snippets" / "headers-app.conf"
@@ -648,3 +651,145 @@ class TestTheEdgeAnswersForItself:
                 assert re.search(r'return 200 "ok\\n";', body), body
                 return
         pytest.fail("no /healthz")
+
+
+class TestNoStockServerBlockSurvives:
+    """A64-030.2, E-1 — the base image's own `default.conf` reached production.
+
+    `nginx:alpine` ships `/etc/nginx/conf.d/default.conf` — `listen 80;
+    server_name localhost;` over `/usr/share/nginx/html` — and the Dockerfile
+    copied this repository's `conf.d/` *beside* it without removing anything,
+    while `nginx.conf` includes `conf.d/*.conf` wholesale. Measured on the
+    built image:
+
+        GET / with Host: localhost   ->   200 "Welcome to nginx!"
+
+    where every other Host correctly received a 301 to HTTPS. One request
+    header opted out of the edge's HTTP→HTTPS policy.
+
+    **Why this file did not catch it.** Every other test here parses the
+    configuration this repository writes. The offending server block was in
+    none of those files — it arrived inside the base image, in a directory
+    the configuration includes by glob. That is the blind spot these tests
+    close: they now assert the *build* refuses anything in `conf.d` that this
+    repository did not put there.
+    """
+
+    def test_the_stock_default_is_removed(self) -> None:
+        assert "rm -f /etc/nginx/conf.d/default.conf" in DOCKERFILE.read_text(encoding="utf-8"), (
+            "the edge image no longer deletes the base image's default.conf, so a second "
+            "server block listens on 80 and serves the stock nginx page to any Host that "
+            "does not match a real one"
+        )
+
+    def test_the_build_refuses_any_unexpected_file_in_conf_d(self) -> None:
+        """The half that survives the *next* base image.
+
+        Deleting one known filename fixes the file that existed when it was
+        written. The defect was that nothing noticed the base image had put
+        anything there at all, so the assertion is over the directory rather
+        than over a name.
+        """
+        body = DOCKERFILE.read_text(encoding="utf-8")
+        assert "/etc/nginx/conf.d && ls -A" in body, (
+            "the Dockerfile no longer enumerates conf.d at build time. A future base "
+            "image shipping a new default would be included silently, exactly as "
+            "default.conf was."
+        )
+        shipped = sorted(path.name for path in (NGINX / "conf.d").iterdir())
+        assert shipped == ["00-redirect.conf"], (
+            f"conf.d now ships {shipped}. The Dockerfile's build-time assertion lists the "
+            "expected contents literally and must be updated in the same change."
+        )
+        assert '"00-redirect.conf "' in body, (
+            "the Dockerfile's expected-contents assertion has drifted from what conf.d "
+            "actually ships"
+        )
+
+    def test_the_only_port_80_server_is_the_repositorys_own(self) -> None:
+        """Nothing this repository writes may add a second port-80 block: the
+        one in `00-redirect.conf` is `default_server` and must stay the only
+        answer for an unrecognised Host."""
+        sources = [REDIRECT, APP_HOST, ADMIN_HOST, WWW_HOST]
+        listeners = [
+            line.strip()
+            for path in sources
+            for line in _directives(path).splitlines()
+            if line.strip().startswith("listen 80") or line.strip().startswith("listen [::]:80")
+        ]
+        assert len(listeners) == 2, f"expected the redirect host's two listeners, found {listeners}"
+        assert all("default_server" in line for line in listeners)
+
+
+class TestWwwRedirectsAndNeverServesTheApp:
+    """A64-030.2 — `www` resolved to this host and the edge answered to no
+    such name.
+
+    The visible failure was a certificate mismatch, and
+    `headers-common.conf` is what made it unrecoverable: HSTS with
+    `includeSubDomains; preload` pins every subdomain to HTTPS for two years,
+    so the error has no click-through. An `includeSubDomains` policy is a
+    promise that every subdomain terminates TLS, and a resolving `www`
+    without a certificate breaks it.
+
+    What `www` must **not** do is serve the application.
+    `specs/frontend.md` §11 makes one origin a security contract rather than
+    a preference: the refresh cookie is host-only and
+    `BROWSER_SESSION_TRUSTED_ORIGINS` names the apex alone, so an SPA here
+    would hold a cookie the apex does not recognise and have every
+    state-changing request refused — a session that reports itself signed in
+    and is not.
+    """
+
+    def test_the_www_host_exists(self) -> None:
+        assert WWW_HOST.is_file(), "no www server block; a resolving www has no certificate"
+        assert "server_name www.${ARENA64_DOMAIN}" in _directives(WWW_HOST)
+
+    def test_it_redirects_permanently_to_the_apex(self) -> None:
+        directives = _directives(WWW_HOST)
+        assert "return 301 https://${ARENA64_DOMAIN}$request_uri;" in directives, (
+            "www must 301 to the apex, preserving the request URI so a shared deep link "
+            "survives the hop"
+        )
+
+    def test_it_serves_no_application_surface(self) -> None:
+        """No root, no assets, no /api, no shell — the redirect is the whole
+        of this host's behaviour."""
+        directives = _directives(WWW_HOST)
+        for forbidden in ("root ", "try_files", "proxy_pass", "index ", "location "):
+            assert forbidden not in directives, (
+                f"the www host declares {forbidden.strip()!r}. It must redirect and nothing "
+                "else: an application served here breaks the one-origin contract in "
+                "specs/frontend.md §11."
+            )
+
+    def test_the_redirect_still_carries_transport_security(self) -> None:
+        assert "include /etc/nginx/snippets/headers-common.conf;" in _directives(WWW_HOST)
+
+    def test_it_is_not_marked_noindex(self) -> None:
+        """A crawler consolidates a 301 onto its target. `noindex` on the
+        redirect can suppress the target instead, which would deindex the one
+        page this site wants found."""
+        assert "X-Robots-Tag" not in _directives(WWW_HOST)
+
+    def test_it_does_not_claim_reuseport(self) -> None:
+        """`reuseport` belongs to one listener per address and port; the
+        product host already claims it."""
+        assert "reuseport" not in _directives(WWW_HOST)
+
+    def test_the_certificate_covers_every_name_the_edge_answers(self) -> None:
+        """The edge and the certificate are one contract. A `server_name` with
+        no SAN is the mismatch this task exists to close."""
+        issuance = ISSUE_SH.read_text(encoding="utf-8")
+        for name in (
+            '-d "${ARENA64_DOMAIN}"',
+            '-d "www.${ARENA64_DOMAIN}"',
+            '-d "admin.${ARENA64_DOMAIN}"',
+        ):
+            assert name in issuance, f"issue.sh does not request {name}"
+
+    def test_the_coupling_to_dns_is_written_down(self) -> None:
+        """One name that cannot be validated fails the whole ACME order, so
+        removing the www DNS record breaks renewal for the apex too. That is
+        not obvious and must not be discovered during an outage."""
+        assert "fails the whole order" in ISSUE_SH.read_text(encoding="utf-8")

@@ -175,6 +175,12 @@ docker compose --env-file production.env up -d nginx certbot
 
 `certbot-init` writes a self-signed stopgap, nginx starts on it, the
 challenge is served over port 80, and the real certificate replaces it.
+
+**The certificate carries three names** — the apex, `www.` and `admin.` —
+and ACME validates every one of them. All three must resolve to this host
+before issuance can succeed; a name that cannot be validated fails the whole
+order, taking the other two with it. `deployment.md` §8.10 records why `www`
+is on the certificate and what removing it would involve.
 A browser reaching the site in that window sees a warning — that is the
 correct signal for a deployment that is not finished.
 
@@ -215,6 +221,9 @@ from a dashboard.
 
 ```bash
 curl -sI https://arena64.gg/ | head -1                    # 200, HTTP/2
+curl -sI https://www.arena64.gg/ | head -1                # 301 to the apex
+curl -sI https://www.arena64.gg/ | grep -i ^location      # https://arena64.gg/
+curl -sI -H 'Host: nothing.invalid' http://arena64.gg/ | head -1   # 301, never the stock nginx page
 curl -sI https://arena64.gg/login | grep -i x-robots-tag  # noindex, nofollow
 curl -sI https://arena64.gg/gmaes/abc | head -1           # 404
 curl -sI https://arena64.gg/metrics | head -1             # 404 — not public

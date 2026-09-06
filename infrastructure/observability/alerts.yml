@@ -311,6 +311,63 @@ groups:
             failure. A destination that is full is the usual cause.
           runbook: docs/01-architecture/runbooks.md#backup-stale
 
+      - alert: CertificateExpiringSoon
+        expr: (arena64_certificate_expiry_timestamp_seconds - time()) < 14 * 86400
+        for: 1h
+        labels:
+          severity: page
+        annotations:
+          summary: "The TLS certificate expires in under fourteen days"
+          why: >-
+            **A64-028.6A §26, closing part of P3-4.** Let's Encrypt issues for
+            ninety days and `certbot renew` acts from thirty days out, so a
+            certificate inside fourteen means renewal has been failing for
+            more than two weeks — roughly thirty attempts. PROPOSED
+            OPERATIONAL DEFAULT: it is chosen to leave a fortnight of
+            working days, not derived from a measurement.
+            The signal is the **certificate on disk**, not the renewal job's
+            exit status, because a job that reports success and writes
+            nothing produces no failure log and an expiring certificate.
+          action: >-
+            Run the renewal by hand and read the error. DNS not pointing at
+            this host, or port 80 unreachable, are the two that break the
+            HTTP-01 challenge while everything else keeps working.
+          runbook: docs/01-architecture/runbooks.md#certificate-and-https
+
+      - alert: CertificateExpired
+        expr: (arena64_certificate_expiry_timestamp_seconds - time()) < 0
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: "The TLS certificate has expired"
+          why: >-
+            No `for:` clause. Every browser is already refusing the site;
+            waiting to confirm changes nothing except how long it lasts.
+          action: >-
+            Issue a certificate immediately — see the runbook. The edge
+            keeps serving on the expired certificate, so the fix is a
+            renewal and a reload rather than a restart.
+          runbook: docs/01-architecture/runbooks.md#certificate-and-https
+
+      - alert: CertificateMissing
+        expr: absent(arena64_certificate_expiry_timestamp_seconds)
+        for: 1h
+        labels:
+          severity: page
+        annotations:
+          summary: "No TLS certificate is readable by this deployment"
+          why: >-
+            A separate rule because the metric is **absent** rather than
+            old, and an arithmetic comparison against `absent` does not
+            fire. This is a deployment whose first issuance never completed,
+            or whose certificate volume is not mounted where the worker
+            expects — and it is the cheapest hour in which to find that out.
+          action: >-
+            Check that `certbot-init` completed and that the worker has
+            `OPS_CERTIFICATE_PATH` pointing into the mounted volume.
+          runbook: docs/01-architecture/runbooks.md#certificate-and-https
+
       - alert: BackupNeverSucceeded
         expr: absent(arena64_backup_last_success_timestamp_seconds)
         for: 1h

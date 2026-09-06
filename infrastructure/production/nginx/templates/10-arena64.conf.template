@@ -1,0 +1,235 @@
+# The product — A64-028.6A §15, §17, §18, §19, §24.
+#
+# Every behaviour A64-028.6 proved through Caddy, re-expressed in nginx's
+# own routing model rather than translated directive by directive.
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
+    # HTTP/3 — §9. The official image is built `--with-http_v3_module`, so
+    # this needs no custom build. TCP 443 keeps HTTP/1.1 and HTTP/2, and a
+    # client that cannot reach UDP 443 never learns HTTP/3 exists: `Alt-Svc`
+    # is an advertisement, not a redirect, so the fallback is the absence of
+    # an upgrade rather than a failure path that has to work.
+    listen 443 quic reuseport;
+    listen [::]:443 quic reuseport;
+
+    # Substituted by the official image's `20-envsubst-on-templates.sh`
+    # at container start. `$host`, `$uri` and friends are nginx variables
+    # and must survive that pass — see the Dockerfile's `NGINX_ENVSUBST_FILTER`.
+    server_name ${ARENA64_DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${ARENA64_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${ARENA64_DOMAIN}/privkey.pem;
+    ssl_trusted_certificate /etc/letsencrypt/live/${ARENA64_DOMAIN}/chain.pem;
+    include /etc/nginx/snippets/tls.conf;
+
+    root /srv/web;
+    index index.html;
+
+    # --- The operator surface is not on the internet — §24 -------------------
+    #
+    # `/metrics` and `POST /health/drain` are guarded by a bearer token as
+    # well (`app/api/security.py`); this is the other half. Either boundary
+    # alone has a way of being wrong — a mislaid token, a misconfigured
+    # proxy — and the combination is what makes both survivable.
+    #
+    # 404 rather than 403: a refusal confirms there is something there.
+    # `^~` so no regex location below can take these first.
+    location ^~ /metrics {
+        include /etc/nginx/snippets/headers-app.conf;
+        return 404;
+    }
+
+    location = /health/drain {
+        include /etc/nginx/snippets/headers-app.conf;
+        return 404;
+    }
+
+    # --- The realtime gateway — §12 -------------------------------------------
+    #
+    # `= /ws` exactly, which is the path `app/gateway/router.py` declares.
+    # An exact match so it cannot be shadowed and cannot accidentally cover
+    # a future `/wsomething`.
+    location = /ws {
+        include /etc/nginx/snippets/headers-app.conf;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        include /etc/nginx/snippets/websocket.conf;
+        set $arena64_api http://api:8000;
+        proxy_pass $arena64_api$request_uri;
+    }
+
+    # --- The API --------------------------------------------------------------
+    location /api/ {
+        include /etc/nginx/snippets/headers-app.conf;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        # An API response is per-request and per-player. A shared cache in
+        # front of it would serve one player's profile to the next.
+        add_header Cache-Control "no-store" always;
+        include /etc/nginx/snippets/proxy.conf;
+        set $arena64_api http://api:8000;
+        proxy_pass $arena64_api$request_uri;
+    }
+
+    # Liveness and readiness, unversioned, for anything in front of this.
+    # `= ` on both so `/health/drain` above keeps its own block.
+    location = /health {
+        include /etc/nginx/snippets/headers-app.conf;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        add_header Cache-Control "no-store" always;
+        include /etc/nginx/snippets/proxy.conf;
+        set $arena64_api http://api:8000;
+        proxy_pass $arena64_api$request_uri;
+    }
+
+    location = /health/ready {
+        include /etc/nginx/snippets/headers-app.conf;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        add_header Cache-Control "no-store" always;
+        include /etc/nginx/snippets/proxy.conf;
+        set $arena64_api http://api:8000;
+        proxy_pass $arena64_api$request_uri;
+    }
+
+    # --- Uploaded media -------------------------------------------------------
+    location /media/ {
+        include /etc/nginx/snippets/headers-app.conf;
+        add_header Cache-Control "public, max-age=604800" always;
+        include /etc/nginx/snippets/proxy.conf;
+        # A variable for the same reason the API upstream uses one: a literal
+        # name here is resolved at parse time, so a MinIO container that is
+        # down or has moved would stop nginx from starting at all.
+        #
+        # `/media/avatar.png` is stored as `avatar.png`, so the prefix is
+        # stripped — the equivalent of the Caddyfile's `handle_path`.
+        set $arena64_media http://minio:9000;
+        rewrite ^/media/(.*)$ /$1 break;
+        proxy_pass $arena64_media;
+    }
+
+    # --- Hashed assets — §15 --------------------------------------------------
+    #
+    # Immutable for a year because the filename changes when the content
+    # does, which is what makes a year safe and a revalidation wasteful.
+    # `=404` rather than a fallback: a missing asset is a missing asset, and
+    # answering it with the application shell would hand a broken deploy a
+    # 200 and an HTML body where a script was expected.
+    location ^~ /assets/ {
+        include /etc/nginx/snippets/headers-app.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+
+    # --- The shell, and the routes that get it — §17 --------------------------
+    #
+    # **Enumerated, not `try_files $uri /index.html`.** The catch-all form
+    # answers 200 for every URL on the internet, so `/gmaes/abc` is a page as
+    # far as a crawler is concerned — A64-028.1's P0-3, and the reason this
+    # section is the longest in the file.
+    #
+    # Fixed children are listed; only a segment carrying an identifier is
+    # matched by prefix. `/settings/` was a prefix in A64-028.6's first draft
+    # and `/settings/nope` came back 200, which is the same defect one level
+    # down.
+    #
+    # The residual, stated: `/games/`, `/players/` and `/tournaments/` stay
+    # prefixes because their next segment is a match id, a username and a
+    # tournament id. Those cannot be enumerated at the edge, so
+    # `/games/<nonsense>` is a 200 the application resolves to its own
+    # not-found view.
+
+    # Public, indexable. The **only** route with no `X-Robots-Tag`.
+    location = / {
+        include /etc/nginx/snippets/headers-app.conf;
+        add_header Cache-Control "no-cache" always;
+        try_files /index.html =404;
+    }
+
+    # The shell and the service worker must never be served stale — every
+    # deploy changes what they point at.
+    location = /index.html {
+        include /etc/nginx/snippets/headers-app.conf;
+        add_header Cache-Control "no-cache" always;
+    }
+
+    location = /sw.js {
+        include /etc/nginx/snippets/headers-app.conf;
+        add_header Cache-Control "no-cache" always;
+        try_files $uri =404;
+    }
+
+    location = /manifest.webmanifest {
+        include /etc/nginx/snippets/headers-app.conf;
+        add_header Cache-Control "no-cache" always;
+        try_files $uri =404;
+    }
+
+    # Private routes with fixed paths.
+    location ~ ^/(login|register|verify-email|forgot-password|reset-password|profile|challenges|search|play|notifications)$ {
+        include /etc/nginx/snippets/headers-app.conf;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        add_header Cache-Control "no-cache" always;
+        try_files /index.html =404;
+    }
+
+    location ~ ^/settings(/(profile|preferences|privacy|notifications|sessions))?$ {
+        include /etc/nginx/snippets/headers-app.conf;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        add_header Cache-Control "no-cache" always;
+        try_files /index.html =404;
+    }
+
+    location ~ ^/friends(/(requests|blocked))?$ {
+        include /etc/nginx/snippets/headers-app.conf;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        add_header Cache-Control "no-cache" always;
+        try_files /index.html =404;
+    }
+
+    # Identifier-bearing routes. `/games/history` is a fixed child and is
+    # covered by the same prefix.
+    location ~ ^/(games|players|tournaments)(/.*)?$ {
+        include /etc/nginx/snippets/headers-app.conf;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        add_header Cache-Control "no-cache" always;
+        try_files /index.html =404;
+    }
+
+    # --- Everything else ------------------------------------------------------
+    #
+    # A real file — `robots.txt`, `sitemap.xml`, `og-card.png`, an icon — or
+    # a genuine 404.
+    location / {
+        include /etc/nginx/snippets/headers-app.conf;
+        try_files $uri =404;
+    }
+
+    # --- The 404 itself — §17, §18, §19 ---------------------------------------
+    #
+    # Serves the branded page **with the 404 status**, which is the whole
+    # point: `error_page` keeps the code unless told to change it, and
+    # nothing here tells it to.
+    error_page 404 /404.html;
+
+    location = /404.html {
+        internal;
+        include /etc/nginx/snippets/headers-app.conf;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        add_header Cache-Control "no-store" always;
+    }
+
+    # A 5xx from the upstream must still carry the security headers — the
+    # inheritance footgun applies to error responses exactly as it does to
+    # ordinary ones.
+    error_page 500 502 503 504 /50x.html;
+
+    location = /50x.html {
+        internal;
+        include /etc/nginx/snippets/headers-app.conf;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        add_header Cache-Control "no-store" always;
+        return 503 "Arena64 is temporarily unavailable.\n";
+    }
+}

@@ -969,6 +969,35 @@ keeps serving it while an operator sorts the state out.
 states, the numbered names, and the mixed shape the production host was
 actually in.
 
+### 8.14 The web manifest's media type — A64-030.5C
+
+`/manifest.webmanifest` must be served as **`application/manifest+json`**,
+the type the W3C Web App Manifest specification registers.
+
+It was not. `nginx.conf` includes the stock `mime.types`, which has no entry
+for `webmanifest` — verified against the built edge image, where
+`grep -c webmanifest /etc/nginx/mime.types` answers `0` — so the file fell
+through to `default_type application/octet-stream`. The `nosniff` header the
+app snippet sets makes that worse rather than better: it tells a browser to
+believe the wrong type rather than guess a right one. And `gzip_types` in
+`nginx.conf` already listed `application/manifest+json`, so the edge was
+configured to compress a type it was not serving.
+
+Chromium parsed the manifest anyway, which is why this is a standards defect
+and **not** the cause of the installability warning A64-030.5B investigated —
+the Application panel showed every field. Firefox and Safari are under no
+obligation to be as forgiving, and neither is a future Chromium.
+
+The fix is a `types` block scoped to `location = /manifest.webmanifest`
+rather than a patched `mime.types`: that location serves exactly one file, so
+the override cannot reach anything else. The `include` of
+`snippets/headers-app.conf` stays — `add_header` is not inherited into a
+location that declares one of its own, so dropping it would have been a
+silent CSP hole on the one file this change touches.
+
+`tests/unit/test_edge_policy.py::TestTheWebManifestMediaType` pins the
+mapping, the surviving header include, and the agreement with `gzip_types`.
+
 ---
 
 ## 9. Gates — A64-028.7

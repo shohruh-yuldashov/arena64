@@ -495,6 +495,72 @@ class TestCachePolicy:
         pytest.fail(f"no `location {shell}` block")
 
 
+class TestTheWebManifestMediaType:
+    """`/manifest.webmanifest` must be `application/manifest+json` —
+    A64-030.5C.
+
+    `nginx.conf` includes the stock `mime.types`, which has no entry for
+    `webmanifest`, so the file fell through to
+    `default_type application/octet-stream`. Verified against the built
+    edge image: `grep -c webmanifest /etc/nginx/mime.types` answers `0`,
+    and a location without an override served
+    `Content-Type: application/octet-stream` while the same file behind the
+    `types` block below served `application/manifest+json`.
+
+    Chromium parsed the manifest anyway — which is precisely why this needs
+    a test rather than a bug report. Nothing observable was broken, so
+    nothing would have caught it coming back, and Firefox and Safari are
+    under no obligation to be as forgiving.
+
+    The `nosniff` header the app snippet sets makes it worse rather than
+    better: it tells a browser to believe the wrong type rather than guess
+    a right one.
+    """
+
+    #: The location, and the only one that serves this file.
+    MANIFEST = "= /manifest.webmanifest"
+
+    def _manifest_body(self) -> str:
+        for matcher, body in _locations(APP_HOST):
+            if matcher.strip() == self.MANIFEST:
+                return body
+        pytest.fail(f"no `location {self.MANIFEST}` block")
+
+    def test_the_location_declares_the_registered_media_type(self) -> None:
+        body = self._manifest_body()
+
+        assert re.search(r"types\s*\{\s*application/manifest\+json\s+webmanifest;\s*\}", body), (
+            "the manifest location does not map `webmanifest`, so nginx falls "
+            "back to `default_type application/octet-stream`"
+        )
+
+    def test_it_still_carries_the_security_headers(self) -> None:
+        """`types` must not have been added by replacing the `include`.
+
+        `add_header` is not inherited into a location that declares one of
+        its own — `TestHeaderInheritance` above — so the snippet has to
+        stay, and a MIME fix that dropped it would be a silent CSP hole on
+        the one file this change touches.
+        """
+        assert "headers-app.conf" in self._manifest_body()
+
+    def test_the_manifest_the_app_ships_is_the_one_this_serves(self) -> None:
+        """The path in `index.html`, the file in `public/`, and the
+        location here are one fact stated in three places."""
+        manifest = _REPO / "apps" / "web" / "public" / "manifest.webmanifest"
+
+        assert manifest.is_file()
+        assert 'href="/manifest.webmanifest"' in INDEX_HTML.read_text()
+
+    def test_compression_names_the_type_that_is_now_served(self) -> None:
+        """`gzip_types` already listed `application/manifest+json`, so the
+        edge was configured to compress a type it was not serving. Kept as
+        an assertion because the two have to agree in the other direction
+        too: changing the served type without the compression list would
+        stop compressing it."""
+        assert "application/manifest+json" in _directives(MAIN_CONF)
+
+
 class TestHttp3:
     """HTTP/3 is an enhancement, not a dependency — A64-028.6A §9, §31.
 

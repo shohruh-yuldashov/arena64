@@ -217,8 +217,27 @@ server {
         try_files $uri =404;
     }
 
+    # A64-030.5C. `nginx.conf` includes the stock `mime.types`, which has no
+    # entry for `webmanifest`, so this file fell through to
+    # `default_type application/octet-stream` — and with `X-Content-Type-Options:
+    # nosniff` beside it, that is the header a browser was told to believe.
+    #
+    # The correct type is `application/manifest+json` (W3C Web App Manifest,
+    # §"Media type registration"), and `gzip_types` in `nginx.conf` already
+    # names it — so the edge was compressing a type it was not serving.
+    #
+    # Chromium parsed the manifest anyway, which is why this is a standards
+    # defect rather than the cause of the installability warning A64-030.5B
+    # chased: the Application panel showed every field. Firefox and Safari
+    # are not obliged to be that forgiving, and neither is a future Chromium.
+    #
+    # A `types` block scoped to this location rather than an entry in a
+    # patched `mime.types`: the location serves exactly one file, so the
+    # override cannot reach anything else, and the rule sits where a reader
+    # is already looking at the manifest.
     location = /manifest.webmanifest {
         include /etc/nginx/snippets/headers-app.conf;
+        types { application/manifest+json webmanifest; }
         add_header Cache-Control "no-cache" always;
         try_files $uri =404;
     }

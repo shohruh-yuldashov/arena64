@@ -138,10 +138,32 @@ x-api-common: &api-common
       condition: service_completed_successfully
 
 
+# Log rotation — A64-028.7 §30, and it was missing.
+#
+# Docker's default `json-file` driver has **no size limit**. Every container
+# here writes structured JSON to stdout — nginx logs a line per request, the
+# API logs a line per metric flush — and without this the files grow until
+# the disk does not have room for the database.
+#
+# It is applied to every service rather than the noisy ones, because "the
+# noisy ones" is a judgement that ages: the next service to become chatty
+# would be the one without a bound.
+#
+# 10 MB × 5 is about a day of the edge's access log at a modest rate and
+# costs 50 MB per container. A **PROPOSED OPERATIONAL DEFAULT** — the right
+# number depends on the disk, which is a HOST-SIZING GATE.
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+
 services:
   # --- One-shot schema step -------------------------------------------------
   migrate:
-    <<: *api-image
+    <<: [*api-image, *logging]
     restart: "no"
     command: ["alembic", "upgrade", "head"]
     environment:
@@ -158,20 +180,20 @@ services:
   # every running container and DNS round-robins between them. Their
   # individual names are what a deploy addresses: draining is per instance.
   api-1:
-    <<: [*api-image, *api-common]
+    <<: [*api-image, *api-common, *logging]
     networks:
       default:
         aliases: [api]
 
   api-2:
-    <<: [*api-image, *api-common]
+    <<: [*api-image, *api-common, *logging]
     networks:
       default:
         aliases: [api]
 
   # --- Scheduled work, exactly one ------------------------------------------
   worker:
-    <<: *api-image
+    <<: [*api-image, *logging]
     restart: unless-stopped
     stop_grace_period: 60s
     deploy:
@@ -218,6 +240,7 @@ services:
   # nothing to run: the container exits immediately and the volume keeps
   # what it copied.
   web:
+    <<: *logging
     build:
       context: ../../apps/web
       args:
@@ -230,6 +253,7 @@ services:
     entrypoint: ["/bin/sh", "-c", "cp -r /dist/. /srv/web/"]
 
   admin:
+    <<: *logging
     build:
       context: ../../apps/admin
     image: arena64-admin:${ARENA64_TAG:-latest}
@@ -247,6 +271,7 @@ services:
   # the behaviour A64-028.6 established is re-proved through nginx rather
   # than assumed to have survived.
   nginx:
+    <<: *logging
     build:
       context: ./nginx
     image: arena64-nginx:${ARENA64_TAG:-latest}
@@ -287,6 +312,7 @@ services:
   # open — and a loop that retried it for ever would hide that behind a
   # container that looks like it is working.
   certbot-init:
+    <<: *logging
     image: certbot/certbot:v5.8.0
     restart: "no"
     environment:
@@ -299,6 +325,7 @@ services:
     entrypoint: ["/bin/sh", "/usr/local/bin/issue.sh"]
 
   certbot:
+    <<: *logging
     image: certbot/certbot:v5.8.0
     restart: unless-stopped
     volumes:
@@ -312,6 +339,7 @@ services:
 
   # --- Stateful dependencies, none of them published ------------------------
   postgres:
+    <<: *logging
     image: postgres:17
     restart: unless-stopped
     environment:
@@ -327,6 +355,7 @@ services:
       retries: 10
 
   redis:
+    <<: *logging
     image: redis:8
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
@@ -339,6 +368,7 @@ services:
       retries: 10
 
   minio:
+    <<: *logging
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
     command: ["server", "/data"]
@@ -354,6 +384,7 @@ services:
       retries: 10
 
   minio-provision:
+    <<: *logging
     image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     restart: "no"
     depends_on:
@@ -379,6 +410,7 @@ services:
   # things §9 asks for. No published port — Prometheus reaches it on the
   # compose network and nothing else can.
   node-exporter:
+    <<: *logging
     image: prom/node-exporter:v1.9.1
     restart: unless-stopped
     # Read-only host mounts. The exporter needs to see the host's `/proc`,
@@ -424,7 +456,7 @@ services:
   # storage; this makes the backups exist and makes their age observable,
   # which is the part that was missing.
   backup:
-    <<: *api-image
+    <<: [*api-image, *logging]
     restart: unless-stopped
     environment:
       <<: *api-env

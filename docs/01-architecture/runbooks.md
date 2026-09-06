@@ -794,7 +794,7 @@ du -sh /var/lib/docker/volumes/* 2>/dev/null | sort -h | tail -5
 | WAL | checkpoints, unless a replication slot is stuck |
 | Redis AOF | rewritten as it grows |
 | Docker images | **unbounded** — nothing prunes old layers |
-| Container logs | `json-file` with rotation, see [log rotation](#log-rotation) |
+| Container logs | `json-file`, 10 MB × 5 per container — A64-028.7 |
 
 **Mitigate.** `docker image prune -a --filter "until=168h"` is the safest
 first move: it touches no volume and no running container.
@@ -809,6 +809,13 @@ first causes the second.
 **Residual risk.** Docker image layers have no automatic bound. A deploy
 that runs often enough will fill a small disk with images nothing runs, and
 the only thing that catches it is these alerts.
+
+**Container logs are bounded and were not.** A64-028.7 found every service
+on Docker's default `json-file` driver, which has no size limit — nginx
+logs a line per request and the API a line per metric flush, so the files
+grow until the disk has no room for the database. Every service now caps at
+10 MB × 5. That figure is a PROPOSED OPERATIONAL DEFAULT: the right one
+depends on the disk, which is a HOST-SIZING GATE.
 
 ---
 

@@ -314,6 +314,50 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 | **Regression cover** | `tests/contract/test_gateway_bus_lifecycle.py`, 5 tests, against a real Redis. Three mutations each caught by 3 failures: never recreating on `NOGROUP`; never clearing the stale cache; recreating at `$` instead of `0` |
 | **Owner** | **A64-028.6** for the alert that would have caught it in production |
 
+### Found by A64-030.4B — the first hour of production observability
+
+> All three were **found by turning Prometheus on**, and none of them was
+> visible before that. Each had been live in production since the tier
+> started.
+
+### B-1 — The certificate-expiry metric could not read a certificate
+
+| | |
+| --- | --- |
+| **Area** | Observability / TLS |
+| **Status** | ~~FAIL~~ → **PASS** (A64-030.4B.1) |
+| **Evidence** | `CertificateMissing` went *pending* within minutes of Prometheus starting. `docker exec worker test -r $OPS_CERTIFICATE_PATH` → `Permission denied`; `arena64_certificate_expiry_timestamp_seconds` was absent from a 250-series scrape |
+| **Root cause** | The worker runs as uid 10001. Certbot's `archive/` is `0700 root:root` because it holds private keys, and *every* path to a certificate resolves through it — `live/<name>/*.pem` and `arena64/current/<domain>/*.pem` are both symlinks into that directory. A64-030.3 had already moved this variable off `live/<domain>`, which fixed the **name** and could not fix the **permission** |
+| **Impact** | Three `page` alerts blind — `CertificateMissing`, `CertificateExpiringSoon`, `CertificateExpired` — on the subsystem whose failure takes the whole site off the internet. `includeSubDomains; preload` makes an expired certificate unclickable, so the alert nobody would get is the one for an outage nobody can work around |
+| **Action taken** | `certbot/lineage.sh` publishes the **public** half — the `fullchain.pem` every client already receives in the handshake — to `arena64/observability/<domain>/`, world-readable, written atomically and refreshed wherever `arena64/current/<domain>` is set. No private key is copied and Certbot's permissions are untouched. A projection failure logs and leaves the last-known-good copy: a stale expiry date beats a truncated one, and neither may stop nginx serving TLS |
+| **Regression cover** | `tests/unit/test_acme_bootstrap.py::TestThePublicCertificateProjection` and `::TestTheProductionShapeUnderCertbotPermissions` — the second builds production's shape with `archive/` at `0700` and asks from uid 10001, which is the only configuration in which this defect is visible at all |
+
+### B-2 — `HostRebooted` was armed against a series nothing collected
+
+| | |
+| --- | --- |
+| **Area** | Observability |
+| **Status** | ~~FAIL~~ → **PASS** (A64-030.4B.1) |
+| **Evidence** | `node_boot_time_seconds` absent from a 149-series exporter scrape. Running the same image with `--collector.stat` added produces it |
+| **Root cause** | The exporter runs `--collector.disable-defaults` with an explicit allowlist, and `stat` — which publishes `node_boot_time_seconds` — was not on it. The rule evaluated against an empty vector, which is indistinguishable from a host that has not rebooted |
+| **Impact** | One `ticket` alert that could never fire. Smaller than B-1, and the same failure mode: a rule that looks armed |
+| **Action taken** | `--collector.stat` added to the allowlist. The allowlist stays an allowlist — an exporter publishing every default is a scrape nobody sized for on a four-core host |
+| **Regression cover** | `tests/unit/test_observability_config.py::TestTheHostExporterCollectsWhatTheAlertsRead`, which checks every `node_` series any rule names against the collector that publishes it, and scrapes the pinned image to confirm |
+
+### B-3 — Every friend challenge was projected into an event the schema refused
+
+> **The same defect as P1-11, one schema down.**
+
+| | |
+| --- | --- |
+| **Area** | Analytics |
+| **Status** | ~~FAIL~~ → **PASS** (A64-030.4B.1) |
+| **Evidence** | Five `ValidationError` tracebacks and one `outbox_entry_exhausted{reason=repeated_failure}` in the worker's first ten minutes, all from real users: `1 validation error for ChallengeSent / speed_class / Field required / input_value={'variant': 'russian_8x8', 'rated': False}` |
+| **Root cause** | `ChallengeSent` required `speed_class`; `matchmaking.friend_challenge_created` carries a `time_control_id` and `_challenge_created`'s own docstring said the schema made the field optional. It did not — exactly the sentence P1-11 found untrue of `QueueJoined`, in the change that fixed `QueueJoined` and left this one |
+| **Impact** | Every friend challenge in every environment retried five times and was abandoned. `challenge_sent` is §30's third activity signal, so DAU has undercounted anybody whose day was a challenge. Notifications were unaffected — the analytics consumer alone failed, and failed the whole entry |
+| **Action taken** | `speed_class` is optional, matching `QueueJoined` and `QueueLeft`. **Not derived:** the `TimeControlId` → `SpeedClass` mapping is a column of the `reference` catalogue reached through an async port, and it is a column so it can change without a deploy; a projection is a pure synchronous function over one payload, and a second mapping beside the authoritative one is a table that disagrees with the database the first time an operator edits a row. The field stays declared — matchmaking owes it additively (A64-027.1 §49) |
+| **Regression cover** | `TestAProjectionSatisfiesItsOwnSchema` gains the production payload across all four time controls and both `rated` values, **and** a guard requiring every entry in `PROJECTIONS` to be named as tested or explicitly deferred. P1-11's regression asserted the property for one projection; that is why this one survived it |
+
 ### Found by A64-028.5A
 
 ### P1-10 — Two relays deadlocked over the rows they had just delivered

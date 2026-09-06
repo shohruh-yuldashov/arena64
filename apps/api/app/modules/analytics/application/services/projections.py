@@ -383,8 +383,10 @@ def _challenge_created(ctx: ProjectionContext) -> Sequence[PendingEvent]:
     undercounted anybody whose day was a challenge.
 
     `speed_class` is absent: the event carries a `time_control_id`, and
-    mapping one to a speed class is `rating`'s knowledge rather than a
-    projection's. Optional in the schema, and recorded in §49.
+    mapping one to a speed class is the `reference` catalogue's knowledge —
+    a column read through an async port — rather than a synchronous
+    projection's. Optional in the schema since A64-030.4B.1, which is when
+    the claim this docstring had always made became true; recorded in §49.
     """
     return [
         PendingEvent(

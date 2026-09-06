@@ -725,10 +725,26 @@ assuming it — see §8.13.
 Under Arena64's half:
 
 ```
-arena64/stopgap/<domain>/     the self-signed pair, real files
-arena64/current/<domain>      a symlink -> stopgap/<domain>  or  ../../live/<domain>
-arena64/quarantine/<stamp>/   whatever recovery moved aside
+arena64/stopgap/<domain>/         the self-signed pair, real files
+arena64/current/<domain>          a symlink -> stopgap/<domain>  or  ../../live/<name>
+arena64/observability/<domain>/   the public certificate, world-readable
+arena64/quarantine/<stamp>/       whatever recovery moved aside
 ```
+
+**`observability/` exists because `archive/` is `0700`** — A64-030.4B.1. The
+worker publishes `arena64_certificate_expiry_timestamp_seconds` and runs as
+uid 10001; every path to a certificate is a symlink into Certbot's archive,
+which holds private keys and is readable only by root. So it read nothing,
+the gauge was absent, and `CertificateMissing`, `CertificateExpiringSoon`
+and `CertificateExpired` could not fire.
+
+`certbot/lineage.sh` copies the **public** half — the same `fullchain.pem`
+every client receives in the handshake — to `observability/<domain>/`, mode
+`0444`, wherever `current/<domain>` is set. Written to a temporary name and
+renamed, so a reader never sees half a file; a failure logs and leaves the
+previous copy, because a stale expiry date is a smaller problem than a
+metric nobody can parse. No private key is copied, and Certbot's own
+permissions are not changed.
 
 **nginx reads `arena64/current/<domain>` and nothing else.** Its
 configuration never changes; only what one symlink resolves to does. That is

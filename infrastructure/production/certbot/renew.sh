@@ -123,6 +123,12 @@ while :; do
 	LINEAGE="$(arena64_discover_lineage "${ARENA64_DOMAIN}")" && STATUS=0 || STATUS=$?
 	if [ "${STATUS}" -eq "${ARENA64_LINEAGE_FOUND}" ]; then
 		arena64_point_current_at "${ARENA64_DOMAIN}" "${LINEAGE}"
+		# The public copy the expiry metric reads — A64-030.4B.1. A renewal
+		# replaces `fullchainN.pem` with `fullchainN+1.pem`, so without this
+		# the metric would keep reporting the date of the certificate the
+		# renewal just replaced.
+		arena64_project_public_certificate "${ARENA64_DOMAIN}" ||
+			echo "certbot: the observability certificate was not refreshed" >&2
 	else
 		echo "certbot: post-renewal discovery reports $(arena64_lineage_status_name "${STATUS}"); leaving the stable path alone" >&2
 	fi

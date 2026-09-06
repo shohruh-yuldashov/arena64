@@ -1,7 +1,8 @@
 # The operator console, built once and served as files — A64-028.6 §13.
 #
 # The same shape as `apps/web/Dockerfile` and for the same reasons; see that
-# file for why the output is a `scratch` image rather than a server.
+# file for why the output carries files rather than serving them, and why
+# the final stage is `busybox` rather than `scratch`.
 #
 # Two differences, both deliberate:
 #
@@ -18,7 +19,24 @@
 # action it can invoke is checked server-side, and hiding a frontend route
 # has never been a control.
 
-FROM node:22-bookworm-slim AS build
+# The Node version is **not** chosen here. `.nvmrc` names it once, CI reads it
+# through `node-version-file`, and this line must agree with it.
+#
+# It did not, and that is the whole of A64-029's blocker. `.nvmrc` pins
+# 24.13.0; this said `node:22-bookworm-slim`. Node 22 ships npm 10.9.8, which
+# resolves `@tailwindcss/oxide-wasm32-wasi`'s **bundled** dependencies at
+# different patches than the npm 11 that wrote the lock — so `npm ci` refused
+# a lock file that is correct everywhere else:
+#
+#     npm error `npm ci` can only install packages when your package.json and
+#     package-lock.json ... are in sync.
+#     npm error Missing: @emnapi/core@1.11.3 from lock file
+#
+# `f7df1f1` diagnosed exactly this and fixed it for CI. The image build was
+# the one place the fix did not reach, so the release artifact was the one
+# thing that could not be built. `tests/unit/test_build_toolchain.py` now
+# fails if this line and `.nvmrc` disagree again.
+FROM node:24.13.0-bookworm-slim AS build
 
 WORKDIR /build
 
@@ -29,5 +47,5 @@ COPY . .
 
 RUN npm run build
 
-FROM scratch AS dist
+FROM busybox:1.37.0-musl AS dist
 COPY --from=build /build/dist /dist

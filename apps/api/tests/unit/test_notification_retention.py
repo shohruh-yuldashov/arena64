@@ -9,6 +9,7 @@ and what is counted.
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from types import TracebackType
 
 import pytest
 
@@ -36,7 +37,12 @@ class _NullUnitOfWork:
     async def __aenter__(self) -> "_NullUnitOfWork":
         return self
 
-    async def __aexit__(self, *_: object) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         return None
 
     async def commit(self) -> None:

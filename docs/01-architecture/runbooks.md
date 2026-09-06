@@ -169,6 +169,20 @@ challenge is served over port 80, and the real certificate replaces it.
 A browser reaching the site in that window sees a warning — that is the
 correct signal for a deployment that is not finished.
 
+`certbot-init` exits zero whether or not issuance succeeded, so nginx is
+never held back by it. The `certbot` loop finishes the job, retrying every
+five minutes while the stopgap marker is present. To see which state a host
+is in:
+
+```bash
+docker compose --env-file production.env exec nginx \
+  ls -a /etc/letsencrypt/live/"${ARENA64_DOMAIN}"/
+```
+
+`.self-signed` present means the site is still serving an untrusted
+certificate — read `docker compose logs certbot` for the reason, which is
+usually DNS not yet pointing here or port 80 not reachable from outside.
+
 ### 9. Application
 
 ```bash

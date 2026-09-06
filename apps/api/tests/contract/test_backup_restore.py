@@ -402,6 +402,10 @@ async def test_the_metadata_beside_a_backup_carries_no_credential(
         "bytes",
         "created_at",
         "database",
+        # A64-028.7 (P2-8). `verify` branches on it to decide whether a key
+        # is required, so a restore that could not read it would ask for a
+        # passphrase for a plaintext archive, or fail to ask for one it needs.
+        "encrypted",
         "environment",
         "format",
         "pg_dump",

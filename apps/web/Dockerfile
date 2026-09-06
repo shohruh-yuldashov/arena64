@@ -4,13 +4,32 @@
 # `migrate`, `caddy`, `postgres`, `redis`, `minio` — no client. There is
 # nothing to serve."
 #
-# ## Why the output is a scratch image and not a server
+# ## Why the output is not a server
 #
-# This image runs nothing. It exists to carry `dist/` into the deployment,
+# This image serves nothing. It exists to carry `dist/` into the deployment,
 # where the edge container serves it from a shared volume. A second web
-# server behind Caddy would be a second place for cache headers, a second
+# server behind the edge would be a second place for cache headers, a second
 # place for a security header to be forgotten, and a second process to
 # operate — and §14 already makes the edge responsible for all of it.
+#
+# ## Why `busybox` and not `scratch`
+#
+# It was `scratch`, and that made the image unusable — A64-029. Carrying
+# `dist/` into the volume is a **copy**, and `compose.yml` performs it with
+# `entrypoint: ["/bin/sh", "-c", "cp -r /dist/. /srv/web/"]`. A `scratch`
+# image has no `/bin/sh` and no `cp`, so the container could not be created
+# at all:
+#
+#     exec: "/bin/sh": stat /bin/sh: no such file or directory
+#
+# The service stayed in `created` on every deploy, the volume stayed empty,
+# and nginx — which mounts that volume — never started either. Nothing
+# caught it because nothing had ever run this compose file through a first
+# boot.
+#
+# `busybox:*-musl` is ~4 MB and supplies exactly the `sh` and `cp` the
+# design already assumed were there. It still runs nothing: `restart: "no"`,
+# it copies and exits.
 #
 # ## Why the origin is a build argument
 #
@@ -23,7 +42,24 @@
 # an origin it writes a `robots.txt` that blocks everything — and a default
 # here would turn that fail-safe into a silent wrong answer.
 
-FROM node:22-bookworm-slim AS build
+# The Node version is **not** chosen here. `.nvmrc` names it once, CI reads it
+# through `node-version-file`, and this line must agree with it.
+#
+# It did not, and that is the whole of A64-029's blocker. `.nvmrc` pins
+# 24.13.0; this said `node:22-bookworm-slim`. Node 22 ships npm 10.9.8, which
+# resolves `@tailwindcss/oxide-wasm32-wasi`'s **bundled** dependencies at
+# different patches than the npm 11 that wrote the lock — so `npm ci` refused
+# a lock file that is correct everywhere else:
+#
+#     npm error `npm ci` can only install packages when your package.json and
+#     package-lock.json ... are in sync.
+#     npm error Missing: @emnapi/core@1.11.3 from lock file
+#
+# `f7df1f1` diagnosed exactly this and fixed it for CI. The image build was
+# the one place the fix did not reach, so the release artifact was the one
+# thing that could not be built. `tests/unit/test_build_toolchain.py` now
+# fails if this line and `.nvmrc` disagree again.
+FROM node:24.13.0-bookworm-slim AS build
 
 WORKDIR /build
 
@@ -63,5 +99,5 @@ RUN case "${VITE_PUBLIC_ORIGIN}" in \
 # deployment-layer answer that does not touch the config.
 RUN find dist -name '*.map' -delete
 
-FROM scratch AS dist
+FROM busybox:1.37.0-musl AS dist
 COPY --from=build /build/dist /dist

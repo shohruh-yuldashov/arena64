@@ -316,6 +316,94 @@ arena64_current_is_usable() {
 	return 0
 }
 
+# Where the public half of the certificate is published for readers that are
+# not root — A64-030.4B.1 (B-1).
+#
+# Certbot's `archive/` is `0700 root:root` because it holds private keys, and
+# every path to a certificate resolves through it: `live/<name>/*.pem` and
+# `arena64/current/<domain>/*.pem` are both symlinks into that directory. So
+# the worker, which runs as uid 10001 and needs nothing but the expiry date,
+# could not read the certificate at all and
+# `arena64_certificate_expiry_timestamp_seconds` was never published —
+# leaving `CertificateMissing`, `CertificateExpiringSoon` and
+# `CertificateExpired` unable to fire.
+arena64_observability_dir() {
+	printf '%s/observability/%s' "${ARENA64_STATE}" "$1"
+}
+
+# Publish the public certificate the edge is currently serving.
+#
+# **Public material only.** It copies `fullchain.pem` — the leaf and its
+# chain, which every client already receives during the handshake — and
+# nothing else. `privkey.pem` is never read, never copied and never named
+# here, and the guard below refuses to publish a file that turns out to
+# contain a key rather than trusting that it never will.
+#
+# **Sourced through `arena64/current/<domain>`**, which is the path nginx
+# reads, so the metric and the edge cannot disagree about which certificate
+# is live. That includes the stopgap: a host serving a three-day self-signed
+# certificate should have an expiry metric that says so.
+#
+# **Atomic.** Written to a temporary name and renamed over the target, so a
+# reader sees either the previous certificate or the new one and never a
+# half-written file.
+#
+# **Fails soft, and loudly.** Every failure path leaves the previous
+# projection untouched: a stale last-known-good certificate is a metric that
+# is wrong about the date, while a truncated one is a metric that cannot be
+# read at all — and the alert that matters most is the one for a certificate
+# nobody can see. Returns non-zero so a caller may log; no caller may treat
+# it as fatal, because nginx serving TLS must never depend on whether an
+# observability copy was written.
+arena64_project_public_certificate() {
+	_proj_domain="$1"
+	_proj_source="$(arena64_current_link "${_proj_domain}")/fullchain.pem"
+	_proj_dir="$(arena64_observability_dir "${_proj_domain}")"
+	_proj_target="${_proj_dir}/fullchain.pem"
+	_proj_tmp="${_proj_target}.next"
+
+	if [ ! -f "${_proj_source}" ]; then
+		echo "certbot: ${_proj_source} is not readable; observability certificate left as it was" >&2
+		return 1
+	fi
+
+	mkdir -p "${_proj_dir}" || {
+		echo "certbot: cannot create ${_proj_dir}; observability certificate left as it was" >&2
+		return 1
+	}
+	# Explicit rather than umask-dependent: the whole point of this file is
+	# that a uid which is not root can read it.
+	chmod 0755 "${ARENA64_STATE}/observability" "${_proj_dir}" 2>/dev/null || true
+
+	rm -f "${_proj_tmp}"
+	if ! cp "${_proj_source}" "${_proj_tmp}"; then
+		rm -f "${_proj_tmp}"
+		echo "certbot: could not copy ${_proj_source}; observability certificate left as it was" >&2
+		return 1
+	fi
+
+	if ! grep -q -- '-----BEGIN CERTIFICATE-----' "${_proj_tmp}"; then
+		rm -f "${_proj_tmp}"
+		echo "certbot: ${_proj_source} does not look like a certificate; refusing to publish it" >&2
+		return 1
+	fi
+	# Belt and braces. `fullchain.pem` cannot contain a key, and this is what
+	# makes that a checked property rather than an assumption.
+	if grep -q -- 'PRIVATE KEY' "${_proj_tmp}"; then
+		rm -f "${_proj_tmp}"
+		echo "certbot: refusing to publish a file containing private key material" >&2
+		return 1
+	fi
+
+	chmod 0444 "${_proj_tmp}"
+	if ! mv -f "${_proj_tmp}" "${_proj_target}"; then
+		rm -f "${_proj_tmp}"
+		echo "certbot: could not replace ${_proj_target}; observability certificate left as it was" >&2
+		return 1
+	fi
+	return 0
+}
+
 # Where the stable path currently resolves to, for logging. Never a key.
 arena64_current_target() {
 	readlink "$(arena64_current_link "$1")" 2>/dev/null || echo "(unset)"

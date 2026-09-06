@@ -17,7 +17,10 @@ invented in a dashboard is not.
 
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -175,3 +178,319 @@ class TestTheRunbookLinksResolve:
                     missing.add(target)
 
         assert not missing, f"runbook links that do not resolve: {sorted(missing)}"
+
+
+PRODUCTION = _REPO / "infrastructure" / "production"
+COMPOSE = PRODUCTION / "compose.yml"
+
+
+def _compose_service(name: str) -> dict[str, Any]:
+    document = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    service: dict[str, Any] = document["services"][name]
+    return service
+
+
+def _docker_available() -> bool:
+    return (
+        shutil.which("docker") is not None
+        and subprocess.run(["docker", "info"], capture_output=True).returncode == 0
+    )
+
+
+needs_docker = pytest.mark.skipif(
+    not _docker_available(), reason="needs a Docker daemon to run the real exporter image"
+)
+
+
+class TestTheHostExporterCollectsWhatTheAlertsRead:
+    """`HostRebooted` was armed and could never fire — A64-030.4B.1 (B-2).
+
+    Its expression is `(time() - node_boot_time_seconds) < 600`, and that
+    series comes from node-exporter's `stat` collector.
+    `--collector.disable-defaults` had switched every default off, and the
+    allowlist that replaced them did not name `stat`. The rule evaluated
+    against an empty vector on every cycle, which is indistinguishable from a
+    host that has not rebooted — the failure mode this whole module exists
+    to make impossible, arriving through the exporter's flags rather than
+    through a misspelling.
+    """
+
+    @pytest.fixture(scope="class")
+    def flags(self) -> list[str]:
+        return [str(flag) for flag in _compose_service("node-exporter")["command"]]
+
+    def test_the_allowlist_is_still_explicit(self, flags: list[str]) -> None:
+        """The fix is one collector, not `--collector.disable-defaults`
+        deleted: an exporter that publishes everything is a scrape nobody
+        sized for, on a host with four cores."""
+        assert "--collector.disable-defaults" in flags
+
+    def test_the_collector_the_reboot_alert_needs_is_enabled(self, flags: list[str]) -> None:
+        assert "--collector.stat" in flags
+
+    def test_every_alerted_host_series_has_a_collector(self, flags: list[str]) -> None:
+        """The general property, so the next alert to name a `node_` series
+        cannot be armed against a collector nobody switched on."""
+        needed = {
+            "node_boot_time_seconds": "--collector.stat",
+            "node_cpu_seconds_total": "--collector.cpu",
+            "node_filesystem_avail_bytes": "--collector.filesystem",
+            "node_filesystem_files": "--collector.filesystem",
+            "node_filesystem_files_free": "--collector.filesystem",
+            "node_filesystem_size_bytes": "--collector.filesystem",
+            "node_memory_MemAvailable_bytes": "--collector.meminfo",
+            "node_memory_MemTotal_bytes": "--collector.meminfo",
+        }
+        alerted = set(re.findall(r"\bnode_[a-zA-Z0-9_]+", ALERTS.read_text(encoding="utf-8")))
+        for series in sorted(alerted):
+            collector = needed.get(series)
+            assert collector is not None, (
+                f"{series} is alerted on and this test does not know which collector "
+                "publishes it; add it to the table rather than deleting the assertion"
+            )
+            assert collector in flags, f"{series} is alerted on but {collector} is not enabled"
+
+    def test_the_exporter_still_publishes_no_host_port(self) -> None:
+        """A collector was added, not a listener."""
+        assert not _compose_service("node-exporter").get("ports")
+
+    @needs_docker
+    def test_the_real_exporter_publishes_the_reboot_series(self, flags: list[str]) -> None:
+        """Against the pinned image, with production's own flags.
+
+        The flag table above is a reading of the configuration; this is the
+        exporter agreeing with it. `$$` is compose's escape for a literal
+        `$`, which the daemon never sees.
+        """
+        import uuid
+
+        image = str(_compose_service("node-exporter")["image"])
+        name = f"arena64-nodeexporter-test-{uuid.uuid4().hex[:8]}"
+        command = [flag.replace("$$", "$") for flag in flags]
+        started = subprocess.run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--rm",
+                "--name",
+                name,
+                "-v",
+                "/proc:/host/proc:ro",
+                "-v",
+                "/sys:/host/sys:ro",
+                "-v",
+                "/:/rootfs:ro",
+                image,
+                *command,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert started.returncode == 0, started.stderr
+        try:
+            # Shares the exporter's network namespace, so nothing is
+            # published to the host to read it.
+            scraped = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network",
+                    f"container:{name}",
+                    "curlimages/curl:8.11.1",
+                    "-sS",
+                    "--retry",
+                    "5",
+                    "--retry-all-errors",
+                    "-m",
+                    "20",
+                    "http://127.0.0.1:9100/metrics",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+        finally:
+            subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=60)
+
+        assert scraped.returncode == 0, scraped.stderr
+        series = {
+            line.split()[0].split("{")[0]
+            for line in scraped.stdout.splitlines()
+            if line[:1].isalpha()
+        }
+        assert "node_boot_time_seconds" in series, (
+            "the exporter production runs does not publish the series HostRebooted reads"
+        )
+        # The allowlist is still an allowlist: a default that was off stays off.
+        assert "node_systemd_unit_state" not in series
+
+
+#: Scenarios for the rules this change touched, plus the one it must not have
+#: disturbed. Each drives the **shipped expression**, read out of
+#: `alerts.yml`, against a synthetic series — so a threshold edited to make a
+#: test pass changes the assertion here rather than hiding in prose. Values
+#: are absolute because promtool starts its clock at the epoch: at
+#: `eval_time: 2h`, `time()` is 7200.
+_RULE_SCENARIOS: list[tuple[str, str, str, str, bool]] = [
+    # alert, why, series, values, expected to fire
+    (
+        "CertificateMissing",
+        "a readable projection means the gauge exists",
+        "arena64_certificate_expiry_timestamp_seconds",
+        "5191200+0x180",
+        False,
+    ),
+    (
+        "CertificateMissing",
+        "no gauge at all is the state B-1 left production in",
+        "up",
+        "1+0x180",
+        True,
+    ),
+    (
+        "CertificateExpiringSoon",
+        "sixty days out is not soon",
+        "arena64_certificate_expiry_timestamp_seconds",
+        "5191200+0x180",
+        False,
+    ),
+    (
+        "CertificateExpiringSoon",
+        "inside the fourteen-day threshold",
+        "arena64_certificate_expiry_timestamp_seconds",
+        "1216700+0x180",
+        True,
+    ),
+    (
+        "CertificateExpired",
+        "still valid",
+        "arena64_certificate_expiry_timestamp_seconds",
+        "5191200+0x180",
+        False,
+    ),
+    (
+        "CertificateExpired",
+        "expired ten seconds ago",
+        "arena64_certificate_expiry_timestamp_seconds",
+        "7190+0x180",
+        True,
+    ),
+    (
+        "HostRebooted",
+        "booted two hours ago",
+        "node_boot_time_seconds",
+        "0+0x180",
+        False,
+    ),
+    (
+        "HostRebooted",
+        "booted five minutes ago — the series B-2 was missing",
+        "node_boot_time_seconds",
+        "6900+0x180",
+        True,
+    ),
+    (
+        "OutboxEventsAbandoned",
+        "nothing abandoned",
+        "arena64_outbox_exhausted_total",
+        "5+0x180",
+        False,
+    ),
+    (
+        "OutboxEventsAbandoned",
+        "one entry exhausted per minute — B-3's symptom",
+        "arena64_outbox_exhausted_total",
+        "0+1x180",
+        True,
+    ),
+]
+
+
+@needs_docker
+class TestTheRulesEvaluateAgainstSyntheticData:
+    """The alerts this change repaired, evaluated rather than read.
+
+    `test_every_series_is_one_the_platform_emits` proves a rule names a
+    series the platform *could* emit. Neither B-1 nor B-2 was a naming
+    error: `arena64_certificate_expiry_timestamp_seconds` was spelled
+    correctly and never published, and `node_boot_time_seconds` was spelled
+    correctly and never collected. The missing half of the contract is
+    whether a rule, given the data it names, produces the verdict it claims
+    — which is what promtool answers.
+
+    Expressions are read from `alerts.yml` rather than restated, so a
+    threshold that moves moves here too instead of quietly agreeing with
+    itself. Each is wrapped in `count(...)`, which turns "did this fire" into
+    one deterministic sample and keeps the assertion independent of the
+    arithmetic behind the verdict and of whatever labels the input carried.
+    """
+
+    @pytest.fixture(scope="class")
+    def verdicts(self) -> dict[str, bool]:
+        document = yaml.safe_load(ALERTS.read_text(encoding="utf-8"))
+        expressions = {
+            rule["alert"]: str(rule["expr"]).strip()
+            for group in document["groups"]
+            for rule in group["rules"]
+            if "alert" in rule
+        }
+        cases = [
+            {
+                "name": f"{alert}: {why}",
+                "interval": "1m",
+                "input_series": [{"series": series, "values": values}],
+                "promql_expr_test": [
+                    {
+                        "expr": f"count({expressions[alert]})",
+                        "eval_time": "2h",
+                        "exp_samples": ([{"labels": "{}", "value": 1}] if fires else []),
+                    }
+                ],
+            }
+            for alert, why, series, values, fires in _RULE_SCENARIOS
+        ]
+        result = _run_promtool(cases)
+        assert result.returncode == 0, (
+            "a shipped alert expression disagreed with its scenario:\n"
+            f"{result.stdout}\n{result.stderr}"
+        )
+        return {f"{alert}: {why}": fires for alert, why, _, _, fires in _RULE_SCENARIOS}
+
+    @pytest.mark.parametrize(
+        "scenario", [f"{a}: {w}" for a, w, _, _, _ in _RULE_SCENARIOS], ids=lambda s: s
+    )
+    def test_the_rule_reaches_the_verdict_the_scenario_expects(
+        self, verdicts: dict[str, bool], scenario: str
+    ) -> None:
+        """One case per row. The fixture is where promtool runs — a single
+        invocation for all of them — and this is where a failure names which
+        scenario disagreed."""
+        assert scenario in verdicts
+
+
+def _run_promtool(cases: list[dict[str, Any]]) -> subprocess.CompletedProcess[str]:
+    """`promtool test rules` inside the pinned Prometheus image.
+
+    The unit file is written in there rather than bind-mounted: the daemon
+    resolves a mount source on the host, and this test may itself be running
+    inside a container where the repository sits at another path.
+    """
+    document = {"evaluation_interval": "1m", "tests": cases}
+    script = (
+        "cat > /tmp/unit.yml <<'ARENA64_UNIT_EOF'\n"
+        + yaml.safe_dump(document, sort_keys=False)
+        + "\nARENA64_UNIT_EOF\n"
+        "promtool test rules /tmp/unit.yml\n"
+    )
+    image = str(
+        yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]["prometheus"]["image"]
+    )
+    return subprocess.run(
+        ["docker", "run", "--rm", "--network", "none", "--entrypoint", "sh", image, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )

@@ -17,6 +17,7 @@ the mutation checks in A64-027.2 §71 target.
 """
 
 from datetime import UTC, datetime
+from typing import Final
 from uuid import UUID, uuid4
 
 import pytest
@@ -28,6 +29,7 @@ from app.modules.analytics.application.services.collector import (
     EventNotAcceptable,
 )
 from app.modules.analytics.application.services.projections import (
+    PROJECTIONS,
     ProjectionError,
     finalise,
     project,
@@ -43,10 +45,12 @@ from app.modules.game.domain.variants import MatchOrigin as DomainOrigin
 from app.modules.game.domain.variants import ProductVariant
 from app.modules.game.domain.variants import ProductVariant as DomainVariant
 from app.modules.game.public.metrics import MatchOutcome as DomainOfferOutcome
+from app.modules.matchmaking.domain.challenge_events import FriendChallengeCreated
 from app.modules.matchmaking.domain.events import QueueTicketEnqueued
 from app.modules.matchmaking.domain.queue_pool import QueueType, Region
 from app.modules.matchmaking.domain.queue_pool import QueueType as DomainQueueType
 from app.modules.rating.domain.keys import SpeedClass as DomainSpeedClass
+from app.modules.reference.domain.time_control import TimeControlId
 from app.modules.tournament.domain.tournament import TournamentFormat as DomainFormat
 from app.modules.tournament.domain.tournament import TournamentStatus as DomainStatus
 from app.platform.analytics import CLIENT_EMITTABLE, EventName
@@ -531,6 +535,45 @@ class TestTheIdentityInvariant:
         assert all(spec_for(name).identity is Identity.ANONYMOUS for name in CLIENT_EMITTABLE)
 
 
+#: Source types this file drives end to end — event in, `finalise` out.
+_SCHEMA_SATISFACTION_TESTED: Final = frozenset(
+    {
+        "matchmaking.queue_ticket_enqueued",
+        "matchmaking.friend_challenge_created",
+    }
+)
+
+#: Source types not yet driven end to end. Declared rather than omitted: the
+#: two defects this property exists for were each invisible because nobody
+#: could see which projections had been checked and which had not. A name
+#: here is a debt with an owner, and a projection in neither set fails the
+#: guard below until somebody decides which it is.
+_SCHEMA_SATISFACTION_DEFERRED: Final = frozenset(
+    {
+        "friends.friend_request_accepted",
+        "friends.friend_request_sent",
+        "game.match_acceptance_expired",
+        "game.match_activated",
+        "game.match_completed",
+        "game.match_declined",
+        "matchmaking.friend_challenge_accepted",
+        "matchmaking.friend_challenge_cancelled",
+        "matchmaking.friend_challenge_declined",
+        "matchmaking.friend_challenge_expired",
+        "matchmaking.players_paired",
+        "matchmaking.queue_ticket_cancelled",
+        "matchmaking.queue_ticket_expired",
+        "rating.updated",
+        "tournament.completed",
+        "tournament.player_registered",
+        "users.email_verified",
+        "users.registered",
+    }
+)
+
+_SCHEMA_SATISFACTION_COVERED: Final = _SCHEMA_SATISFACTION_TESTED | _SCHEMA_SATISFACTION_DEFERRED
+
+
 class TestAProjectionSatisfiesItsOwnSchema:
     """The half of the contract that was never checked — A64-028.5A §25.
 
@@ -580,3 +623,91 @@ class TestAProjectionSatisfiesItsOwnSchema:
         # matchmaking, and an explicit `None` in the store would read as
         # "measured, and unknown".
         assert "speed_class" not in sealed.properties
+
+    #: The payload production actually produced, from the worker's own log:
+    #: `{'variant': 'russian_8x8', 'rated': False}` reaching a schema that
+    #: required `speed_class`.
+    @pytest.mark.parametrize("rated", [False, True])
+    @pytest.mark.parametrize(
+        "time_control_id",
+        [
+            TimeControlId.BULLET_1_0,
+            TimeControlId.BLITZ_3_2,
+            TimeControlId.RAPID_10_0,
+            TimeControlId.CLASSICAL_30_0,
+        ],
+    )
+    def test_a_friend_challenge_projects_into_a_valid_event(
+        self, time_control_id: TimeControlId, rated: bool
+    ) -> None:
+        """The production failure, reproduced — A64-030.4B.1 (B-3).
+
+        Before the fix this raised `ValidationError: speed_class Field
+        required`, which is what abandoned every friend challenge the
+        platform has ever seen. Every offered time control is exercised
+        because the projection must not become sensitive to one.
+        """
+        entry = OutboxEntry.of(
+            FriendChallengeCreated(
+                challenge_id=uuid4(),
+                challenger_id=uuid4(),
+                recipient_id=uuid4(),
+                time_control_id=time_control_id,
+                variant=ProductVariant.RUSSIAN_8X8,
+                rated=rated,
+                expires_at=datetime(2026, 9, 6, tzinfo=UTC),
+                occurred_at=datetime(2026, 9, 6, tzinfo=UTC),
+            )
+        )
+
+        (pending,) = project(entry)
+
+        sealed = finalise(
+            pending,
+            subject_key=SubjectKey(uuid4()),
+            occurred_at=datetime(2026, 9, 6, tzinfo=UTC),
+            received_at=datetime(2026, 9, 6, tzinfo=UTC),
+            environment=Environment.TEST,
+            is_synthetic=False,
+            source_event_id=entry.id,
+        )
+
+        assert sealed.event_name is EventName.CHALLENGE_SENT
+        assert sealed.properties["variant"] == ProductVariant.RUSSIAN_8X8.value
+        assert sealed.properties["rated"] is rated
+        # Absent rather than null, for the reason the queue join gives above.
+        assert "speed_class" not in sealed.properties
+
+    def test_the_exact_production_payload_is_accepted(self) -> None:
+        """The literal properties the abandoned entries carried.
+
+        Asserted against the schema directly as well as through the
+        projection, so the contract holds even if the projection later
+        learns to send more.
+        """
+        schema = SCHEMAS[EventName.CHALLENGE_SENT]
+
+        validated = schema.model_validate({"variant": "russian_8x8", "rated": False})
+
+        assert validated.model_dump(exclude_none=True) == {
+            "variant": "russian_8x8",
+            "rated": False,
+        }
+
+    def test_every_projection_is_covered_by_a_schema_satisfaction_test(self) -> None:
+        """The guard that would have caught this one.
+
+        `QueueJoined` was fixed by P1-11 and `ChallengeSent` — the same
+        mismatch, written in the same change — survived another two epics,
+        because the regression that closed P1-11 asserted the property for
+        one projection rather than for projections. A source type that
+        reaches this table without a case below is a projection nothing has
+        ever validated end to end, which is precisely the state both defects
+        were found in.
+        """
+        untested = set(PROJECTIONS) - _SCHEMA_SATISFACTION_COVERED
+        assert not untested, (
+            "these projections have no test proving they can satisfy their own schema: "
+            f"{sorted(untested)}. Add one to TestAProjectionSatisfiesItsOwnSchema, or "
+            "record the omission here deliberately."
+        )

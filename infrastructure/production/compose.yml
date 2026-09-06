@@ -350,13 +350,24 @@ services:
       # The same shape as the backup destination above and for the same
       # reason: the container that owns the file cannot answer a scrape.
       #
-      # **The Arena64-owned stable path, not `live/<domain>`** — A64-030.3.
-      # Certbot names a lineage `<domain>-0001` when the base name is taken,
-      # and on the affected host it did, so this gauge read a path that did
-      # not exist while a valid certificate sat one directory away.
-      # `arena64/current/<domain>` is the symlink nginx serves from, so the
-      # metric and the edge cannot disagree about which certificate is live.
-      OPS_CERTIFICATE_PATH: /etc/letsencrypt/arena64/current/${ARENA64_DOMAIN}/fullchain.pem
+      # **The Arena64-owned public projection** — A64-030.3, A64-030.4B.1.
+      #
+      # A64-030.3 moved this off `live/<domain>`, which does not exist on a
+      # host whose lineage Certbot named `<domain>-0001`. That was necessary
+      # and not sufficient: every path to a certificate — `live/...` and
+      # `arena64/current/...` alike — is a symlink into Certbot's
+      # `archive/`, which is `0700 root:root` because it holds private keys.
+      # This process runs as uid 10001, so it read nothing at all and
+      # `arena64_certificate_expiry_timestamp_seconds` was never published,
+      # leaving `CertificateMissing`, `CertificateExpiringSoon` and
+      # `CertificateExpired` unable to fire.
+      #
+      # `certbot/lineage.sh` now publishes the **public** half — the same
+      # `fullchain.pem` every client receives in the handshake — into
+      # Arena64's own namespace, world-readable, refreshed wherever
+      # `arena64/current/<domain>` is set. No private key is copied, and
+      # Certbot's permissions are untouched.
+      OPS_CERTIFICATE_PATH: /etc/letsencrypt/arena64/observability/${ARENA64_DOMAIN}/fullchain.pem
       # Named for the same reason as the replicas'. This process holds no
       # WebSocket, so nothing routes to its identifier — what a stable name
       # buys here is a log line an operator can attribute.
@@ -824,6 +835,13 @@ services:
       - --collector.disable-defaults
       - --collector.cpu
       - --collector.loadavg
+      # `node_boot_time_seconds`, and nothing else this deployment reads —
+      # A64-030.4B.1. `HostRebooted` is `(time() - node_boot_time_seconds) <
+      # 600`, and that series comes from `stat`, which
+      # `--collector.disable-defaults` had switched off along with the rest.
+      # The alert was armed, evaluated against an empty vector and could
+      # never fire.
+      - --collector.stat
       - --collector.meminfo
       - --collector.filesystem
       - --collector.diskstats

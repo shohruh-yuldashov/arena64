@@ -53,6 +53,17 @@ set -eu
 
 STOPGAP="$(arena64_stopgap_dir "${ARENA64_DOMAIN}")"
 
+# Republish the public certificate for the expiry metric — A64-030.4B.1.
+#
+# Never fatal. The worker reading a stale expiry date is a smaller problem
+# than an issuance path that aborts because an observability copy could not
+# be written, and `arena64_project_public_certificate` has already said why
+# on stderr.
+publish_public_certificate() {
+	arena64_project_public_certificate "${ARENA64_DOMAIN}" ||
+		echo "certbot: the observability certificate was not refreshed" >&2
+}
+
 # `set -e` would kill the script on any status but zero, and three of the
 # four are ordinary answers this script exists to handle.
 LINEAGE="$(arena64_discover_lineage "${ARENA64_DOMAIN}")" && STATUS=0 || STATUS=$?
@@ -62,6 +73,7 @@ echo "certbot: lineage discovery reports $(arena64_lineage_status_name "${STATUS
 # --- Already done? --------------------------------------------------------
 if [ "${STATUS}" -eq "${ARENA64_LINEAGE_FOUND}" ]; then
 	arena64_point_current_at "${ARENA64_DOMAIN}" "${LINEAGE}"
+	publish_public_certificate
 	echo "certbot: ${LINEAGE} already holds a certificate for ${ARENA64_DOMAIN} — nothing to do"
 	exit 0
 fi
@@ -105,6 +117,7 @@ if [ "${STATUS}" -ne "${ARENA64_LINEAGE_NONE}" ]; then
 	if ! arena64_current_is_usable "${ARENA64_DOMAIN}"; then
 		write_stopgap
 		arena64_point_current_at "${ARENA64_DOMAIN}" "${STOPGAP}"
+		publish_public_certificate
 		echo "certbot: the edge starts on the self-signed stopgap until an operator resolves this" >&2
 	else
 		echo "certbot: leaving the stable path at $(arena64_current_target "${ARENA64_DOMAIN}")" >&2
@@ -118,6 +131,7 @@ write_stopgap
 # Doing this on every run is what makes a restart mid-bootstrap converge
 # rather than leaving nginx with a dangling link.
 arena64_point_current_at "${ARENA64_DOMAIN}" "${STOPGAP}"
+publish_public_certificate
 
 echo "certbot: requesting a certificate for ${ARENA64_DOMAIN}, www.${ARENA64_DOMAIN} and admin.${ARENA64_DOMAIN}"
 
@@ -160,6 +174,7 @@ if certbot certonly \
 	LINEAGE="$(arena64_discover_lineage "${ARENA64_DOMAIN}")" && STATUS=0 || STATUS=$?
 	if [ "${STATUS}" -eq "${ARENA64_LINEAGE_FOUND}" ]; then
 		arena64_point_current_at "${ARENA64_DOMAIN}" "${LINEAGE}"
+		publish_public_certificate
 		echo "certbot: issuance complete; ${ARENA64_DOMAIN} now serves the certificate at ${LINEAGE}"
 		echo "certbot: nginx picks it up on its next reload check"
 		exit 0

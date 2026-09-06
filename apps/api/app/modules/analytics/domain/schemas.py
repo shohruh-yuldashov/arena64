@@ -242,9 +242,37 @@ class TournamentCompleted(PropertySchema):
 
 
 class ChallengeSent(PropertySchema):
+    """A friend challenge was sent — F-B's third activity signal.
+
+    `speed_class` is **optional, and was not** — A64-030.4B.1, and the same
+    defect P1-11 fixed for `QueueJoined` one schema up. The pair were written
+    together, `QueueJoined` was corrected, and this one was missed for
+    exactly the reason that made the first invisible: read beside its
+    neighbours it looked consistent.
+
+    `matchmaking.friend_challenge_created` carries a `time_control_id`, not a
+    speed class, and `_challenge_created`'s own docstring said this schema
+    made the field optional. It did not. Every friend challenge therefore
+    produced an outbox entry that failed validation, retried five times and
+    was abandoned — `challenge_sent` was empty in every environment that has
+    ever run, and §30's third activity signal with it.
+
+    **Not derived here.** The `TimeControlId` → `SpeedClass` mapping is a
+    column of the `reference` catalogue, reachable only through the async
+    `TimeControlCatalogue` read port, and it is a column precisely so it can
+    change without a deploy. A projection is a pure synchronous function
+    over one payload; hard-coding a second mapping beside the authoritative
+    one would be a table that silently disagrees with the database the first
+    time an operator edits a row.
+
+    The field stays declared rather than deleted because matchmaking still
+    owes it additively (A64-027.1 §49); when a challenge event carries its
+    time control this becomes populated rather than reintroduced.
+    """
+
     variant: p.Variant
-    speed_class: p.SpeedClass
     rated: bool
+    speed_class: p.SpeedClass | None = None
 
 
 class ChallengeResolved(PropertySchema):

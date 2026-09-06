@@ -1233,10 +1233,364 @@ class TestTheOperationalContract:
         assert "--no-deps" in body
         assert "depends_on" in body, "the header states the rule without stating the hazard"
 
-    def test_the_expiry_metric_reads_the_same_path_nginx_serves(self) -> None:
+    def test_the_expiry_metric_reads_a_path_its_own_uid_can_open(self) -> None:
         """A gauge pointed at `live/<domain>` reads nothing on a host whose
         lineage is numbered — silently, which is the worst way for a
-        certificate-expiry alert to fail."""
+        certificate-expiry alert to fail. Pointing it at
+        `arena64/current/<domain>` fixed the name and not the permission:
+        that path is a symlink into Certbot's `archive/`, which is `0700
+        root:root`, and the worker is uid 10001. Only the Arena64-owned
+        public projection is readable by the process that publishes the
+        metric — A64-030.4B.1."""
         services = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
         path = services["worker"]["environment"]["OPS_CERTIFICATE_PATH"]
-        assert path.startswith("/etc/letsencrypt/arena64/current/"), path
+        assert path.startswith("/etc/letsencrypt/arena64/observability/"), path
+        assert "privkey" not in path
+
+
+def project_public_certificate(
+    letsencrypt: Path, tmp_path: Path, *, domain: str = DOMAIN
+) -> subprocess.CompletedProcess[str]:
+    """Run the shipped `arena64_project_public_certificate` against a fake root."""
+    lineage = _lineage_for(letsencrypt, tmp_path)
+    probe = tmp_path / "project.sh"
+    probe.write_text(f'. {lineage}\narena64_project_public_certificate "$ARENA64_DOMAIN"\n')
+    return subprocess.run(
+        ["sh", str(probe)],
+        env=_sh_env(letsencrypt, ARENA64_DOMAIN=domain),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+def projected_certificate(letsencrypt: Path, *, domain: str = DOMAIN) -> Path:
+    return letsencrypt / "arena64" / "observability" / domain / "fullchain.pem"
+
+
+class TestThePublicCertificateProjection:
+    """The expiry metric could not read a certificate — A64-030.4B.1 (B-1).
+
+    Certbot's `archive/` is `0700 root:root` because it holds private keys,
+    and every path to a certificate resolves through it: `live/<name>/*.pem`
+    and `arena64/current/<domain>/*.pem` are both symlinks into that
+    directory. The worker runs as uid 10001, so
+    `arena64_certificate_expiry_timestamp_seconds` was never published and
+    `CertificateMissing`, `CertificateExpiringSoon` and `CertificateExpired`
+    could not fire — three page-severity alerts, blind, on the one subsystem
+    whose failure takes the whole site off the internet.
+
+    The fix publishes the **public** half into Arena64's own namespace.
+    These assert that it is published, that it is public, and that it is
+    never replaced by something worse than what was already there.
+    """
+
+    def test_a_base_lineage_is_projected(self, letsencrypt: Path, tmp_path: Path) -> None:
+        _run_issue(letsencrypt, tmp_path, certbot_exits=0, creates_lineage=True)
+
+        projected = projected_certificate(letsencrypt)
+
+        assert projected.is_file()
+        assert "-----BEGIN CERTIFICATE-----" in projected.read_text()
+
+    def test_a_numbered_lineage_is_projected(self, letsencrypt: Path, tmp_path: Path) -> None:
+        """The shape production is actually in."""
+        _run_issue(
+            letsencrypt,
+            tmp_path,
+            certbot_exits=0,
+            creates_lineage=True,
+            lineage_name=f"{DOMAIN}-0001",
+        )
+
+        assert projected_certificate(letsencrypt).is_file()
+
+    def test_it_is_byte_for_byte_what_nginx_serves(self, letsencrypt: Path, tmp_path: Path) -> None:
+        """Sourced through `arena64/current/<domain>`, so the gauge and the
+        edge cannot disagree about which certificate is live."""
+        _run_issue(
+            letsencrypt,
+            tmp_path,
+            certbot_exits=0,
+            creates_lineage=True,
+            lineage_name=f"{DOMAIN}-0001",
+        )
+
+        served = letsencrypt / "arena64" / "current" / DOMAIN / "fullchain.pem"
+
+        assert projected_certificate(letsencrypt).read_bytes() == served.read_bytes()
+
+    def test_the_stopgap_is_projected_too(self, letsencrypt: Path, tmp_path: Path) -> None:
+        """A host serving a three-day self-signed certificate should have an
+        expiry metric that says so, rather than no metric at all."""
+        _run_issue(letsencrypt, tmp_path, certbot_exits=1)
+
+        assert projected_certificate(letsencrypt).is_file()
+
+    def test_it_carries_no_private_key(self, letsencrypt: Path, tmp_path: Path) -> None:
+        """The whole security argument: the reader gets the certificate every
+        client already receives in the handshake, and nothing else."""
+        _run_issue(letsencrypt, tmp_path, certbot_exits=0, creates_lineage=True)
+
+        observability = letsencrypt / "arena64" / "observability"
+        published = sorted(p for p in observability.rglob("*") if p.is_file())
+
+        assert [p.name for p in published] == ["fullchain.pem"]
+        for path in published:
+            assert "PRIVATE KEY" not in path.read_text()
+
+    def test_it_is_world_readable(self, letsencrypt: Path, tmp_path: Path) -> None:
+        """0444, and the directories traversable: a mode that only root can
+        read is the defect this exists to fix, written a second time."""
+        _run_issue(letsencrypt, tmp_path, certbot_exits=0, creates_lineage=True)
+
+        projected = projected_certificate(letsencrypt)
+        assert projected.stat().st_mode & 0o444 == 0o444
+        assert projected.stat().st_mode & 0o200 == 0, "the projection is writable"
+        for directory in (projected.parent, projected.parent.parent):
+            assert directory.stat().st_mode & 0o005 == 0o005, f"{directory} is not traversable"
+
+    def test_a_renewal_refreshes_it(self, letsencrypt: Path, tmp_path: Path) -> None:
+        """A renewal replaces `fullchainN.pem` with `fullchainN+1.pem`;
+        without this the gauge would report the date of the certificate the
+        renewal just replaced."""
+        _run_issue(letsencrypt, tmp_path, certbot_exits=0, creates_lineage=True)
+        first = projected_certificate(letsencrypt).read_bytes()
+
+        # Certbot renewing in place: same lineage, new key material.
+        write_lineage(letsencrypt, DOMAIN)
+        result = project_public_certificate(letsencrypt, tmp_path)
+
+        assert result.returncode == 0, result.stderr
+        assert projected_certificate(letsencrypt).read_bytes() != first
+
+    def test_a_broken_source_leaves_the_last_known_good(
+        self, letsencrypt: Path, tmp_path: Path
+    ) -> None:
+        """A stale certificate is a metric that is wrong about the date; a
+        truncated one is a metric nobody can read, and the alert that matters
+        most is the one for a certificate nobody can see."""
+        _run_issue(letsencrypt, tmp_path, certbot_exits=0, creates_lineage=True)
+        good = projected_certificate(letsencrypt).read_bytes()
+
+        (letsencrypt / "arena64" / "current" / DOMAIN).unlink()
+        result = project_public_certificate(letsencrypt, tmp_path)
+
+        assert result.returncode != 0
+        assert "left as it was" in result.stderr
+        assert projected_certificate(letsencrypt).read_bytes() == good
+
+    def test_it_refuses_to_publish_a_private_key(self, letsencrypt: Path, tmp_path: Path) -> None:
+        """Belt and braces, for the shape that would otherwise slip past.
+
+        A file holding *only* a key is caught by the certificate check
+        above. The one this guard exists for is a combined PEM — a
+        certificate with a key appended, which is what somebody pointing
+        `current` at a bundle from another tool would produce — because that
+        satisfies every check about being a certificate and would publish a
+        private key world-readable.
+        """
+        _run_issue(letsencrypt, tmp_path, certbot_exits=0, creates_lineage=True)
+        good = projected_certificate(letsencrypt).read_bytes()
+
+        served = letsencrypt / "arena64" / "current" / DOMAIN / "fullchain.pem"
+        target = Path(os.path.realpath(served))
+        target.write_text(
+            target.read_text() + "-----BEGIN PRIVATE KEY-----\nnope\n-----END PRIVATE KEY-----\n"
+        )
+
+        result = project_public_certificate(letsencrypt, tmp_path)
+
+        assert result.returncode != 0
+        assert "private key material" in result.stderr
+        assert projected_certificate(letsencrypt).read_bytes() == good
+
+    def test_it_leaves_no_partial_file_behind(self, letsencrypt: Path, tmp_path: Path) -> None:
+        """Temporary name, then rename: a reader sees the previous
+        certificate or the new one, never half of either."""
+        _run_issue(letsencrypt, tmp_path, certbot_exits=0, creates_lineage=True)
+
+        observability = letsencrypt / "arena64" / "observability"
+        strays = [p.name for p in observability.rglob("*") if p.name.endswith(".next")]
+
+        assert not strays, f"a temporary projection survived: {strays}"
+
+    def test_a_missing_projection_does_not_buy_a_certificate(
+        self, letsencrypt: Path, tmp_path: Path
+    ) -> None:
+        """Observability is never a reason to spend a rate-limit slot."""
+        _run_issue(letsencrypt, tmp_path, certbot_exits=0, creates_lineage=True)
+        projected_certificate(letsencrypt).unlink()
+
+        again = _run_issue(letsencrypt, tmp_path, certbot_exits=1)
+
+        assert "stub certbot invoked" not in again.stderr
+        assert "nothing to do" in again.stdout
+
+    def test_the_expiry_metric_reads_it(self, letsencrypt: Path, tmp_path: Path) -> None:
+        """The end of the chain: the module that publishes
+        `arena64_certificate_expiry_timestamp_seconds` reads the projection."""
+        from app.operator import certificate_status
+
+        _run_issue(
+            letsencrypt,
+            tmp_path,
+            certbot_exits=0,
+            creates_lineage=True,
+            lineage_name=f"{DOMAIN}-0001",
+        )
+
+        remaining = certificate_status.days_remaining(projected_certificate(letsencrypt))
+
+        assert remaining is not None, "the expiry metric would be absent, and CertificateMissing"
+        assert remaining > 0
+
+
+#: Builds the exact shape production is in, with Certbot's own permissions,
+#: and asks the two questions that matter from the uid the worker runs as.
+_PRODUCTION_SHAPE = r"""
+set -eu
+D=arena64.gg
+LE=/etc/letsencrypt
+mkdir -p "$LE/live" "$LE/archive" "$LE/renewal"
+
+# The lineage Certbot actually created on the production host.
+mkdir -p "$LE/archive/$D-0001" "$LE/live/$D-0001"
+openssl req -x509 -newkey rsa:2048 -nodes -days 90 -subj "/CN=$D" \
+  -addext "subjectAltName=DNS:$D,DNS:www.$D,DNS:admin.$D" \
+  -keyout "$LE/archive/$D-0001/privkey1.pem" \
+  -out "$LE/archive/$D-0001/fullchain1.pem" 2>/dev/null
+cp "$LE/archive/$D-0001/fullchain1.pem" "$LE/archive/$D-0001/chain1.pem"
+cp "$LE/archive/$D-0001/fullchain1.pem" "$LE/archive/$D-0001/cert1.pem"
+for kind in fullchain privkey chain cert; do
+  ln -sf "../../archive/$D-0001/${kind}1.pem" "$LE/live/$D-0001/${kind}.pem"
+done
+printf 'archive_dir = %s\n' "$LE/archive/$D-0001" > "$LE/renewal/$D-0001.conf"
+
+# Certbot's permissions, which are the whole reason this test exists.
+chmod 0700 "$LE/archive"
+chmod 0600 "$LE/archive/$D-0001/privkey1.pem"
+chmod 0644 "$LE/archive/$D-0001/fullchain1.pem"
+
+. /usr/local/bin/lineage.sh
+LINEAGE="$(arena64_discover_lineage "$D")" && STATUS=0 || STATUS=$?
+echo "DISCOVERY=$(arena64_lineage_status_name "$STATUS")"
+echo "LINEAGE=$LINEAGE"
+arena64_point_current_at "$D" "$LINEAGE"
+if arena64_project_public_certificate "$D"; then echo "PROJECT=ok"; else echo "PROJECT=failed"; fi
+
+# The uid the worker runs as, asking for exactly what it needs and one
+# thing it must never get.
+adduser -D -u 10001 -H arena64 >/dev/null 2>&1 || true
+P="$LE/arena64/observability/$D/fullchain.pem"
+ask() {
+  if su arena64 -s /bin/sh -c "$2" >/dev/null 2>&1
+  then echo "$1=yes"
+  else echo "$1=no"
+  fi
+}
+ask WORKER_READS_PROJECTION "cat $P"
+ask WORKER_READS_PRIVKEY "cat $LE/live/$D-0001/privkey.pem"
+ask WORKER_READS_ARCHIVE_KEY "cat $LE/archive/$D-0001/privkey1.pem"
+ask WORKER_TRAVERSES_ARCHIVE "ls $LE/archive"
+ask WORKER_READS_SERVED_CERT "cat $LE/arena64/current/$D/fullchain.pem"
+
+echo "LIVE_LINEAGES=$(ls "$LE/live" | tr '\n' ' ')"
+if cmp -s "$P" "$LE/arena64/current/$D/fullchain.pem"; then
+  echo "PROJECTION_IS_WHAT_NGINX_SERVES=yes"
+else
+  echo "PROJECTION_IS_WHAT_NGINX_SERVES=no"
+fi
+if grep -q 'PRIVATE KEY' "$P"
+then echo "PROJECTION_HAS_KEY=yes"
+else echo "PROJECTION_HAS_KEY=no"
+fi
+"""
+
+
+@needs_docker
+class TestTheProductionShapeUnderCertbotPermissions:
+    """The whole of B-1, against Certbot's real permissions — A64-030.4B.1.
+
+    Every other test in this file runs as one uid on a directory tree it
+    owns, which is precisely the condition under which this defect is
+    invisible: the projection and the private key are equally readable, so
+    nothing distinguishes them. Here `archive/` is `0700` as Certbot makes
+    it, the reader is uid 10001 as the worker is, and the questions are the
+    two that were wrong in production — can it read the certificate, and can
+    it read anything it should not.
+
+    `--network none`: nothing here may reach an ACME server.
+    """
+
+    @pytest.fixture(scope="class")
+    def facts(self) -> dict[str, str]:
+        # `lineage.sh` is carried in the command rather than bind-mounted:
+        # the Docker daemon resolves a mount source on the *host*, and this
+        # test may itself be running inside a container where the repository
+        # sits at a different path. The shipped file is still the one under
+        # test — it is read from disk here and written unchanged in there.
+        script = (
+            "cat > /usr/local/bin/lineage.sh <<'ARENA64_LINEAGE_EOF'\n"
+            + LINEAGE_SH.read_text(encoding="utf-8")
+            + "\nARENA64_LINEAGE_EOF\n"
+            + _PRODUCTION_SHAPE
+        )
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--entrypoint",
+                "sh",
+                _certbot_image(),
+                "-c",
+                script,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        assert result.returncode == 0, result.stderr
+        return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+
+    def test_discovery_finds_the_numbered_lineage(self, facts: dict[str, str]) -> None:
+        assert facts["DISCOVERY"] == "FOUND"
+        assert facts["LINEAGE"] == "/etc/letsencrypt/live/arena64.gg-0001"
+
+    def test_the_projection_is_written(self, facts: dict[str, str]) -> None:
+        assert facts["PROJECT"] == "ok"
+
+    def test_the_worker_uid_can_read_the_projection(self, facts: dict[str, str]) -> None:
+        """The defect, inverted: this was `no`, and three page-severity
+        certificate alerts were blind because of it."""
+        assert facts["WORKER_READS_PROJECTION"] == "yes"
+
+    @pytest.mark.parametrize(
+        "fact",
+        ["WORKER_READS_PRIVKEY", "WORKER_READS_ARCHIVE_KEY", "WORKER_TRAVERSES_ARCHIVE"],
+    )
+    def test_the_worker_uid_still_cannot_reach_private_material(
+        self, facts: dict[str, str], fact: str
+    ) -> None:
+        """Certbot's ownership model is untouched: the fix publishes a public
+        copy, it does not open the private one."""
+        assert facts[fact] == "no"
+
+    def test_the_worker_uid_still_cannot_read_the_path_nginx_serves(
+        self, facts: dict[str, str]
+    ) -> None:
+        """Which is why the projection has to exist at all."""
+        assert facts["WORKER_READS_SERVED_CERT"] == "no"
+
+    def test_the_projection_is_the_certificate_nginx_serves(self, facts: dict[str, str]) -> None:
+        assert facts["PROJECTION_IS_WHAT_NGINX_SERVES"] == "yes"
+
+    def test_the_projection_carries_no_private_key(self, facts: dict[str, str]) -> None:
+        assert facts["PROJECTION_HAS_KEY"] == "no"
+
+    def test_no_second_lineage_was_created(self, facts: dict[str, str]) -> None:
+        """Observability must never be a reason to ask for a certificate."""
+        assert facts["LIVE_LINEAGES"].split() == ["arena64.gg-0001"]

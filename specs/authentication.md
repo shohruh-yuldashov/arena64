@@ -105,6 +105,8 @@ unauthenticated.
 | `refresh` | the cookie | no — rotation is the point |
 | `logout` | the cookie, best-effort | **yes** — a missing or unknown cookie is still `204`, and the cookie is cleared either way |
 | `logout-all` | the **access token** | yes. Acts on the account rather than one device, so the credential that names an account is the right one — a player whose laptop was taken can sign out everywhere from their phone |
+| `GET sessions` | the **access token**; the cookie only labels which row is current | yes — a read |
+| `DELETE sessions/{id}` | the **access token**, plus the trusted-origin check | **yes** — a device already signed out is still `204` |
 
 ### No migration
 
@@ -112,10 +114,11 @@ A cookie is not a schema. Nothing in `alembic/` changed.
 
 ### Deferred
 
-- A device/session list UI. `SessionService.list_user_sessions` exists and
-  no endpoint exposes it; it belongs with Profile.
 - Access-token revocation before expiry. Still the documented cost of a
   stateless token (`JWTSettings`), unchanged by this phase.
+
+*(The device/session list was deferred here and is implemented — see
+"Active Sessions" below.)*
 
 ---
 
@@ -453,3 +456,142 @@ silently, which is the worst of the three states: absent is a decision,
 malformed is caught, and half is somebody who intended to enable push, got
 it wrong, and was told nothing while the settings screen truthfully showed
 the channel off.
+
+---
+
+## Active Sessions — A64-030.5C
+
+> **Status:** Implemented
+> **Last updated:** 2026-09-07 — A64-030.5C, the device list, its trust boundary and its labels
+> **Owner:** Backend
+
+SE-2's "a browser, a phone — that can be listed and individually revoked",
+finally reachable. Two endpoints, one screen, and no new schema.
+
+### The surface
+
+| Endpoint | Answers |
+| --- | --- |
+| `GET /api/v1/auth/browser/sessions` | one entry per live device, newest sign-in first |
+| `DELETE /api/v1/auth/browser/sessions/{id}` | `204`, whether or not this call was the one that revoked it |
+
+Both authenticate with the **access token**. The `DELETE` also carries the
+trusted-origin check every state-changing browser route carries.
+
+### Why the browser prefix and not `/auth/sessions`
+
+Because the list has to say *which row is this browser*, and nothing on the
+JSON surface can. An access token names an **account** — `sub` and `jti`,
+and deliberately no `sid` — so two devices of one player present
+indistinguishable credentials. The refresh token names a device, and in a
+browser that is the cookie, whose path is `/api/v1/auth/browser`.
+
+The three ways to serve the list under `/auth` were: widen the cookie path,
+which sends a thirty-day credential to every endpoint under `/auth` in order
+to label a row; add a claim, which is a token-format change that every
+access token already in circulation lacks; or move one route decorator. The
+third gives up nothing — a native client, which holds its own refresh token,
+can be served the same list from the same service methods on the day one
+exists.
+
+### A row is a token family, not a session row
+
+`rotate_refresh_token` revokes the presented row and **inserts a
+successor** carrying the same `token_family`. A browser open in a tab
+therefore produces a new `user_sessions` row roughly every fifteen minutes.
+
+So a list of rows would renumber itself while somebody was looking at it: a
+"Sign out" button whose target stops existing, and a "current device" marker
+that moves on every refresh. The family is minted once at sign-in, inherited
+by every successor, and is already what `revoke_family` revokes as a unit for
+reuse detection.
+
+It is also why `signed_in_at` is the family's earliest `created_at`, taken in
+one grouped statement, rather than the live row's — which is the time of the
+last refresh.
+
+### What a row may reveal
+
+| Field | Why |
+| --- | --- |
+| `id` | the family. What a revoke names, and stable across rotation |
+| `is_current` | from the refresh cookie. `false` on every row when no cookie is presented, which is honest |
+| `browser`, `platform` | families only, `null` when unrecognised |
+| `signed_in_at`, `last_active_at` | when the device arrived, and when it last exchanged its credential |
+
+**No address.** SE-2 asks for "originating region" and the column stores an
+address, but an address is not a region: it is precise personal data about
+the person reading the screen and nobody who benefits from seeing it. The
+column is still populated, for an operator investigating an incident;
+publishing it into a page, a screenshot or a support ticket is not
+recoverable, and adding it later is additive.
+
+No refresh token, no hash and no session-row id leave the boundary, and none
+of them has a field in the read model to leave through.
+
+### The real client address — the trust boundary
+
+`ip_address` recorded the nginx container's address on every session the
+production tier had created, because both auth routers read
+`request.client.host` — the socket peer, which behind a reverse proxy is
+always the proxy.
+
+The fix reuses the strategy that already exists rather than adding one:
+`app/api/rate_limiting.py::client_ip`, driven by
+`RATE_LIMIT_TRUSTED_PROXY_COUNT`, called from
+`auth/presentation/device.py`. The rule it implements:
+
+- with a count of `0`, the socket peer is used and `X-Forwarded-For` is
+  **ignored** — a header any client can set is not an address;
+- with a count of N, the address is read N entries from the **right**, which
+  is what the outermost trusted proxy observed. Anything further left was
+  supplied by the caller and is never read;
+- `nginx/snippets/proxy.conf` **replaces** `X-Forwarded-For` rather than
+  appending to it, so the header reaching the application has one entry and
+  nginx wrote it.
+
+A peer that cannot be resolved stores `null`, not the string `"unknown"`
+that `client_ip` returns for a rate-limit bucket: the column is nullable so
+that "not known" is representable, and a player must not be shown a
+fabricated address.
+
+### Device labels are presentation, never a decision
+
+`parse_user_agent` returns a browser family and an operating-system family
+and is read by nothing that authorises, rate-limits or branches on identity.
+A `User-Agent` is attacker-controlled, so a rule that consulted it would be
+a rule with an opt-out.
+
+It is not a dependency: `ua-parser` and its siblings carry a regex corpus
+with a monthly update cadence, and what is needed here is two words. The
+table is ordered — every Chromium fork ships `Chrome/` in its own user agent
+— and returns `null` rather than guessing, because a confidently wrong
+"Firefox on Windows" defeats recognition more thoroughly than an honest gap.
+
+Parsed on **read**, from the stored `user_agent`, so improving the table
+improves every existing row and a session created before this phase still
+gets a label.
+
+### Revocation
+
+`SessionService.revoke_device` checks ownership and then revokes the whole
+family. The check is the security property: `revoke_family` takes no user id
+— correct for reuse detection, which already holds the session — so without
+it a `DELETE` naming somebody else's family would revoke it.
+
+A family that is not the caller's is `404`, deliberately **not** the `401`
+the refresh path returns for `SessionNotFound`: a `401` would make a
+browser's unauthorised interceptor sign the caller out of their own account
+over one wrong identifier.
+
+Revoking the device making the request is permitted and behaves exactly as
+being revoked from elsewhere does — the cookie stops working at the next
+refresh. The UI does not offer it, because `POST /auth/browser/logout`
+revokes *and* clears the cookie, which is what "sign out of this device"
+means.
+
+### No migration
+
+`user_sessions` already carried `token_family`, `created_at`,
+`last_used_at`, `user_agent` and `ip_address`. Nothing in `alembic/`
+changed.

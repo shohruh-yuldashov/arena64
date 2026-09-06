@@ -78,22 +78,25 @@ stores what it receives. Adding `Set-Cookie` here would make the endpoint
 browser-specific and would need CSRF machinery this task does not
 include — see the recommendations.
 
-No `GET /auth/sessions`. Listing devices is SE-2's, and the service
-method exists (`SessionService.list_user_sessions`), but the task's
-endpoint list does not include it and a listing needs a response schema
-whose shape belongs with its own task.
+No `GET /auth/sessions` **here**, and A64-030.5C did not add one. The
+device list lives on the browser surface — `GET /auth/browser/sessions` —
+because the only credential that can say *which device* is asking is the
+refresh cookie, and that cookie's path is `/api/v1/auth/browser`. A
+listing under this prefix would be a list on which no row could be marked
+"this one". `browser_router.py` states the alternatives that were
+rejected.
 """
 
 import logging
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Response, status
 
 from app.api.openapi import Responses, error_response
 from app.api.responses import build_response
 from app.core.constants import API_PREFIX, API_V1_PREFIX
 from app.core.responses import ApiResponse
 from app.modules.auth.application.commands import AuthenticateUser, RegisterUser
-from app.modules.auth.domain.sessions import RevocationReason, SessionDevice
+from app.modules.auth.domain.sessions import RevocationReason
 from app.modules.auth.presentation.dependencies import (
     AccessTokenServiceDep,
     AuthenticationServiceDep,
@@ -105,6 +108,7 @@ from app.modules.auth.presentation.dependencies import (
     UserProfileReaderDep,
     WebSocketTicketServiceDep,
 )
+from app.modules.auth.presentation.device import SessionDeviceDep
 from app.modules.auth.presentation.rate_limits import (
     FORGOT_PASSWORD_RATE_LIMIT,
     LOGIN_RATE_LIMIT,
@@ -186,32 +190,6 @@ _TOO_MANY_REQUESTS: Responses = error_response(
 )
 
 
-def _device_of(request: Request) -> SessionDevice:
-    """Describes the caller's device for the session list — SE-2.
-
-    Read from the request here rather than in `SessionService`, because a
-    service that knew what a `User-Agent` header was could only be called
-    over HTTP — and AD-09's gateway and a future mobile client are both
-    callers that are not.
-
-    `device_name` is the raw user agent truncated, not a parsed "Chrome on
-    macOS". Parsing user agents needs a dependency with a monthly update
-    cadence, and a wrong label is worse than a plain one: SE-2's purpose
-    is for a player to *recognise* their devices, and a confidently wrong
-    "Firefox on Windows" defeats that more thoroughly than a raw string.
-    Parsing belongs with the task that adds the device list UI.
-
-    `request.client` is `None` behind some ASGI setups and in `TestClient`
-    without a transport, so the address is optional rather than assumed.
-    """
-    user_agent = request.headers.get("user-agent")
-    return SessionDevice(
-        device_name=user_agent[:120] if user_agent else None,
-        user_agent=user_agent[:512] if user_agent else None,
-        ip_address=request.client.host if request.client else None,
-    )
-
-
 @auth_router.post(
     "/register",
     dependencies=[Depends(REGISTER_RATE_LIMIT)],
@@ -280,7 +258,7 @@ async def register(
 )
 async def login(
     payload: LoginRequest,
-    request: Request,
+    device: SessionDeviceDep,
     authentication: AuthenticationServiceDep,
     access_tokens: AccessTokenServiceDep,
     sessions: SessionServiceDep,
@@ -312,7 +290,7 @@ async def login(
     account = await authentication.authenticate(
         AuthenticateUser(email=payload.email, password=payload.password)
     )
-    issued_session = await sessions.create_session(account.id, device=_device_of(request))
+    issued_session = await sessions.create_session(account.id, device=device)
     access = access_tokens.create_access_token(account)
 
     # A64-013.6. **After the session exists**, so a sign-in that failed to

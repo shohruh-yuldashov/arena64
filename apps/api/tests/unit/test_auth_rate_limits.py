@@ -184,6 +184,15 @@ class TestTheWalkerItself:
             /auth/ws-ticket    one ticket per socket, and a client reconnects
                                on a flaky network — a rule tuned for sign-in
                                attempts would refuse ordinary reconnection
+            /auth/browser/sessions
+                               a read of the caller's own devices, bounded by
+                               how many devices they own — A64-030.5C. Both
+                               it and the `DELETE` beside it require an
+                               access token, so abusing either needs an
+                               account; and the `DELETE` is the one control
+                               a player reaches for when a device they do
+                               not recognise is on the list, which is
+                               precisely the moment it must not be refusable
         """
         deliberately_unlimited = {
             "/api/v1/auth/me",
@@ -194,6 +203,8 @@ class TestTheWalkerItself:
             "/api/v1/auth/email/verify",
             "/api/v1/auth/email/verify-code",
             "/api/v1/auth/ws-ticket",
+            "/api/v1/auth/browser/sessions",
+            "/api/v1/auth/browser/sessions/{session_id}",
         }
         auth_paths = {path for path, _ in api_routes(app) if path.startswith("/api/v1/auth/")}
 

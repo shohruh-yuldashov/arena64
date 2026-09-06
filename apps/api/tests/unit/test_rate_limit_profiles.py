@@ -166,6 +166,13 @@ class TestItCannotSilentlyWeakenProduction:
         # A64-028.6: a deployed tier must say how the operator surface is
         # guarded before it will start at all.
         monkeypatch.setenv("OPS_TOKEN", "ops-token")
+        # A64-028.7: a deployed tier refuses to start without an encrypted,
+        # off-host backup target.
+        monkeypatch.setenv("OPS_BACKUP_ENCRYPTION_KEY", "Zm9vYmFyYmF6cXV1eGZvb2JhcmJhenF1dXhhYmM9")
+        monkeypatch.setenv("OPS_BACKUP_OFFSITE_ENDPOINT", "https://s3.example.test")
+        monkeypatch.setenv("OPS_BACKUP_OFFSITE_BUCKET", "arena64-backups")
+        monkeypatch.setenv("OPS_BACKUP_OFFSITE_ACCESS_KEY_ID", "AKIAEXAMPLE")
+        monkeypatch.setenv("OPS_BACKUP_OFFSITE_SECRET_ACCESS_KEY", "offsite-secret")
         get_settings.cache_clear()
 
         try:

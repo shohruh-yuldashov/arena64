@@ -20,6 +20,7 @@ runner may not). A missing binary is not a broken backup, and a suite that
 went red on somebody's laptop for it would teach them to ignore it.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -490,12 +491,16 @@ async def test_the_archive_on_disk_is_not_readable_as_a_dump(
     await _seed(source)
     dump = backup_tool.create(destination, keep=3, key=KEY)
 
-    listing = subprocess.run(  # noqa: S603
-        ["pg_restore", "--list", str(dump)], capture_output=True, text=True, check=False
+    listing = await asyncio.to_thread(
+        subprocess.run,  # noqa: S603
+        ["pg_restore", "--list", str(dump)],
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
     assert listing.returncode != 0
-    assert b"PGDMP" not in dump.read_bytes()[:64]
+    assert b"PGDMP" not in (await asyncio.to_thread(dump.read_bytes))[:64]
 
 
 async def test_a_plaintext_dump_never_touches_the_disk(
@@ -512,9 +517,10 @@ async def test_a_plaintext_dump_never_touches_the_disk(
     await _seed(source)
     backup_tool.create(destination, keep=3, key=KEY)
 
+    entries = await asyncio.to_thread(lambda: sorted(destination.iterdir()))
     stray = [
         entry.name
-        for entry in destination.iterdir()
+        for entry in entries
         if entry.suffix not in {".dump", ".json"} or entry.name.endswith(".partial")
     ]
 
@@ -541,9 +547,9 @@ async def test_a_corrupted_archive_refuses(
     cheaper check and the one that runs before anything is decrypted."""
     await _seed(source)
     dump = backup_tool.create(destination, keep=3, key=KEY)
-    raw = bytearray(dump.read_bytes())
+    raw = bytearray(await asyncio.to_thread(dump.read_bytes))
     raw[-1] ^= 0x01
-    dump.write_bytes(bytes(raw))
+    await asyncio.to_thread(dump.write_bytes, bytes(raw))
 
     with pytest.raises(backup_tool.BackupError, match="Checksum mismatch"):
         backup_tool.verify(dump, key=KEY)

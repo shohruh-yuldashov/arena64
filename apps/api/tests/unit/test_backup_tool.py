@@ -18,6 +18,7 @@ import pytest
 from app.common.logging import _extras
 from app.config.settings import get_settings
 from app.operator import backup as tool
+from app.operator import backup_status
 
 UNREACHABLE = "postgresql+asyncpg://arena64:hunter2@127.0.0.1:1/arena64"
 
@@ -57,7 +58,23 @@ class TestABackupThatFailsSaysSo:
             tool.create(destination)
 
         assert list(destination.glob("*.dump")) == []
-        assert list(destination.glob("*.json")) == []
+        # The metadata sidecar specifically — `metadata_path` writes
+        # `<name>.dump.json`, and `verify` refuses a dump without one. A
+        # sidecar with no dump beside it is the shape that would let a
+        # partial backup pass for a finished one.
+        #
+        # Not every `*.json`: A64-028.6 §20 added `arena64-backup-status.json`
+        # to the same directory, and it is written *because* this attempt
+        # failed. Excluding it is not a loosening — the assertion below is
+        # stronger than the glob it replaces, because "no status file" and
+        # "a status file that says the backup failed" are the same to a
+        # blanket glob and opposite to an operator.
+        assert list(destination.glob("*.dump.json")) == []
+
+        status = backup_status.read(destination)
+        assert status.last_outcome == "failed"
+        assert status.failed_at is not None
+        assert status.succeeded_at is None
 
     def test_pg_dump_exiting_zero_with_no_file_is_still_a_failure(
         self, monkeypatch: pytest.MonkeyPatch, destination: Path

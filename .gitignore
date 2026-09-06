@@ -1,0 +1,70 @@
+# What this repository must never carry — A64-030.2 (B-2).
+#
+# There was no `.gitignore` here at all, at any depth, and two files said
+# otherwise: `infrastructure/production/production.env.example` claimed
+# "`production.env` is gitignored", and `apps/api/.env.example` claimed
+# "a file called `.env` is gitignored". Both were false, and `git
+# check-ignore` matched nothing. The moment an operator filled in a real
+# `production.env` on the production host, every secret on the platform was
+# one `git add -A` from being published.
+#
+# The patterns below are this project's, not a template's: each line names
+# an artefact this repository's own toolchain produces or a file its own
+# documentation tells an operator to create.
+
+# --- Secrets ------------------------------------------------------------
+#
+# Three shapes exist, so all three are refused: `.env`, `.env.<tier>` (which
+# is what `app/config/environment.py` reads — `.env.local`), and
+# `<tier>.env` (which is what `docker compose --env-file` takes —
+# `production.env`, `staging.env`).
+#
+# The negation is last and is what keeps the four committed templates
+# trackable. It is a suffix match rather than a list of paths so a new
+# `*.env.example` beside a new tier does not need a line here.
+.env
+.env.*
+*.env
+!*.env.example
+
+# Anything that is a key is a secret, whatever it is called. The
+# certificate material this deployment uses lives in a Docker volume and in
+# `/etc/letsencrypt` on the host, never here — these lines exist so that an
+# operator who copies one into the checkout to look at it cannot commit it.
+*.pem
+*.key
+*.p12
+*.pfx
+
+# --- Python — apps/api --------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.egg-info/
+
+# `StorageSettings.local_root` defaults to `var/storage`, resolved from the
+# working directory — so running the API locally writes uploaded objects
+# into `apps/api/var/`. A deployed tier uses S3 and never creates this.
+apps/api/var/
+
+# --- Node — apps/web, apps/admin ----------------------------------------
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Playwright's defaults. `apps/web/playwright.config.ts` overrides neither.
+test-results/
+playwright-report/
+
+# --- Operating system ---------------------------------------------------
+#
+# `.DS_Store` and `apps/.DS_Store` were tracked before this file existed.
+.DS_Store

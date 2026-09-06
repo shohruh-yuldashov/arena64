@@ -154,11 +154,27 @@ class SectionSettings(BaseSettings):
     **its own** — its field names, and any `validation_alias` a field
     declares. Everything else is another section's business.
 
-    `extra="forbid"` stays, and stays meaningful where it matters: the
-    process-environment source is untouched, so a typo'd `POSTGRES_DSNN` in
-    a deployed tier is still a refusal to start (DI-06). What is relaxed is
-    only the local file, where the same typo is a line a developer can read
-    beside the correct one in `.env.example`.
+    `extra="forbid"` stays, and constrains what a *caller* may pass to a
+    constructor, which is where these models are composed and where a wrong
+    keyword should be a type error.
+
+    ## What it does not do, corrected by A64-030.2
+
+    This said that the process-environment source was untouched, so a typo'd
+    `POSTGRES_DSNN` in a deployed tier was "still a refusal to start". **It
+    is not.** `EnvSettingsSource` looks up `<prefix><field>` for each field
+    the model declares; it never scans the environment for unrecognised
+    keys, so an extra never reaches the model and `extra="forbid"` has
+    nothing to refuse. A misspelled variable in a deployed tier is silently
+    ignored and the setting stays at its default.
+
+    That gap is why the explicit guards below exist and matter more than
+    they look: `_forbid_local_defaults_outside_local` refuses a *value* that
+    is still the development default, which catches the same mistake from
+    the other end — a variable that was never read looks exactly like one
+    that was never set. `tests/unit/test_settings.py` asserts the real
+    behaviour so that a future pydantic-settings that does report extras
+    fails the test rather than quietly making this paragraph wrong again.
     """
 
     @classmethod
@@ -3500,7 +3516,7 @@ class GatewaySettings(SectionSettings):
         return self
 
 
-class AnalyticsSettings(BaseModel):
+class AnalyticsSettings(SectionSettings):
     """The analytics pipeline's operational knobs — A64-027.2.
 
     The **horizon is not here.** `RETENTION_DAYS` is a constant in
@@ -3509,7 +3525,28 @@ class AnalyticsSettings(BaseModel):
     quietly keep more than the policy allows. What is configurable is the
     shape of the work: whether the job runs at all, how often, and how much
     it may delete per run.
+
+    ## Why this reads the environment, when it did not — A64-030.2 (F-3)
+
+    It was a plain `BaseModel`, on the reasoning that none of these values
+    is a secret and no deployment has to set one for the feature to work.
+    That reasoning was sound and the conclusion was wrong, because a
+    deployment *had* set one: `infrastructure/production/compose.yml` writes
+    `ANALYTICS_RETENTION_ENABLED: "false"` on both API replicas, as one of
+    the eleven flags that make the api/worker split real.
+
+    A `BaseModel` has no environment source, so that variable was read by
+    nothing and `retention_enabled` stayed `True` on every process. The
+    retention sweep therefore ran on **all three** — which is precisely the
+    "N replicas of one image run N copies of every sweep" trap A64-028.1
+    filed as P1-3 and the compose file's own header claims to have closed.
+    Its consequence today is mild, because the horizon is 400 days and
+    nothing has reached it, and the shape is the defect: a flag written down
+    in one file and honoured by nothing is worse than no flag, because it
+    reads as a decision that has been made.
     """
+
+    model_config = SettingsConfigDict(env_prefix="ANALYTICS_", frozen=True, extra="forbid")
 
     retention_enabled: bool = True
 
@@ -3528,9 +3565,10 @@ class AnalyticsSettings(BaseModel):
 class BroadcastSettings(BaseModel):
     """Administrative broadcast delivery — A64-027A §19.
 
-    `BaseModel` rather than `BaseSettings`, matching `AnalyticsSettings`
-    beside it: one operational number, no secret, and nothing a deployment
-    has to set for the feature to work.
+    `BaseModel` rather than `BaseSettings`: one operational number, no
+    secret, and — unlike `AnalyticsSettings` above, which had to become a
+    `SectionSettings` when a deployment turned out to be setting it — no
+    deployment file names it. The day one does, this becomes a section too.
 
     In-app delivery has no third party to be unavailable, so the broadcast
     worker is registered unconditionally — unlike email and push, which are
@@ -3574,6 +3612,20 @@ class Settings(BaseModel):
     #: Defaulted, unlike every group above it: each field has a default and
     #: none is a secret, so requiring every construction site to pass one
     #: would be churn for a group that is entirely operational tuning.
+    #:
+    #: The factory reads the process environment — that is what
+    #: `SectionSettings` is, and A64-030.2 (F-3) is the record of what
+    #: happened while this class was not one. `get_settings` passes this one
+    #: an `_env_file` as well, so the dotenv layer reaches it too.
+    #:
+    #: `observability` and `notification_retention` below are defaulted on
+    #: the same terms and are **not** constructed there, so neither reads a
+    #: dotenv file. That costs nothing in a deployed tier — `env_file_for`
+    #: returns `None` outside `local` and every value arrives as a real
+    #: environment variable — and neither is documented in `.env.example`,
+    #: so nothing promises otherwise. Carried as a follow-up rather than
+    #: changed here, because widening the fix past the section that had the
+    #: defect is how a focused change stops being reviewable.
     analytics: AnalyticsSettings = Field(default_factory=AnalyticsSettings)
     #: Defaulted for the same reason as `analytics`: one operational number,
     #: no secret, no construction site that should have to know about it.
@@ -3897,4 +3949,11 @@ def get_settings() -> Settings:
         game=GameSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         tournament=TournamentSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
         browser_session=BrowserSessionSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        # Constructed here rather than left to its `default_factory` so that
+        # the dotenv layer reaches it, like every section above — A64-030.2.
+        # `.env.example` documents `ANALYTICS_RETENTION_ENABLED` as a
+        # per-process switch beside `OUTBOX_WORKER_ENABLED`, and a documented
+        # variable a local `.env.local` cannot set is the same class of
+        # untruth this task was opened to fix.
+        analytics=AnalyticsSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

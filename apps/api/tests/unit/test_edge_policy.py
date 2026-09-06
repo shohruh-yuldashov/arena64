@@ -32,10 +32,12 @@ from base64 import b64encode
 from pathlib import Path
 
 import pytest
+import yaml
 
 from app.platform.metrics.prometheus import NAMESPACE  # noqa: F401 — see _series_in
 
 _REPO = Path(__file__).resolve().parents[4]
+COMPOSE = _REPO / "infrastructure" / "production" / "compose.yml"
 NGINX = _REPO / "infrastructure" / "production" / "nginx"
 MAIN_CONF = NGINX / "nginx.conf"
 APP_HOST = NGINX / "templates" / "10-arena64.conf.template"
@@ -126,6 +128,23 @@ def _router_paths() -> set[str]:
     """
     declared = re.findall(r'path:\s*"([^"]+)"', ROUTES.read_text(encoding="utf-8"))
     return {path[: path.index("$")].rstrip("/") if "$" in path else path for path in declared}
+
+
+def _healthcheck(dockerfile: Path) -> str | None:
+    """A `HEALTHCHECK` directive, continuation lines included.
+
+    Joined by hand rather than by regex: a `\\`-continued directive is a line
+    that *ends* with the escape, so any pattern greedy enough to reach it has
+    already consumed the newline it needs to match.
+    """
+    directive: list[str] = []
+    for line in dockerfile.read_text(encoding="utf-8").splitlines():
+        if not directive and not line.startswith("HEALTHCHECK"):
+            continue
+        directive.append(line.rstrip().removesuffix("\\"))
+        if not line.rstrip().endswith("\\"):
+            break
+    return " ".join(part.strip() for part in directive) if directive else None
 
 
 def _matches(pattern: str, path: str) -> bool:
@@ -506,3 +525,126 @@ class TestHttp3:
         configuration; a second one is a startup failure, not a warning."""
         declared = sum(_directives(host).count("quic reuseport") for host in (APP_HOST, ADMIN_HOST))
         assert declared == 2, f"expected the product host's two listeners, found {declared}"
+
+
+class TestUploadedMediaReachesItsBucket:
+    """A64-030.2, B-3 — a route that resolved to nothing.
+
+    MinIO addresses objects **path-style** unless `MINIO_DOMAIN` is set,
+    which this deployment does not set, so an object stored under `<key>` in
+    bucket `arena64-media` lives at `/arena64-media/<key>`. The edge rewrote
+    `/media/<key>` to `/<key>`, which asked MinIO for an object in a bucket
+    named after the key's *first path segment* — a 404 on every avatar on the
+    platform, and one nothing tested.
+
+    `S3StorageProvider` is the other half of the contract and is consistent
+    with itself: `_path` builds `/{bucket}/{key}` for its own signed
+    requests, and `get_public_url` composes `<public base>/<key>` with no
+    bucket, because the bucket is the edge's business. This is where the two
+    meet.
+    """
+
+    def _media_body(self) -> str:
+        for matcher, body in _locations(APP_HOST):
+            if matcher.strip() == "/media/":
+                return body
+        pytest.fail("the product host serves no /media/ location")
+
+    def _bucket(self) -> str:
+        """The bucket the application is told to write to."""
+        compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+        bucket = compose["services"]["api-1"]["environment"]["STORAGE_S3_BUCKET"]
+        return str(bucket)
+
+    def test_the_rewrite_puts_the_object_in_a_bucket(self) -> None:
+        rewrite = re.search(
+            r"rewrite\s+\^/media/\(\.\*\)\$\s+(?P<target>\S+)\s+break;", self._media_body()
+        )
+        assert rewrite is not None, "the /media/ location no longer rewrites the request path"
+        assert rewrite.group("target") != "/$1", (
+            "the rewrite strips `/media/` and stops there, so MinIO reads the key's first "
+            "segment as a bucket name and every media URL 404s"
+        )
+
+    def test_the_bucket_it_names_is_the_one_the_application_writes_to(self) -> None:
+        """The name is in two files — this template and `compose.yml`'s
+        `STORAGE_S3_BUCKET` — and this is what keeps them in step. A third
+        envsubst variable would have put it in three."""
+        bucket = self._bucket()
+        assert f"/{bucket}/$1" in self._media_body(), (
+            f"the edge rewrites media into a bucket other than {bucket!r}, which is where "
+            "STORAGE_S3_BUCKET tells the application to put the objects"
+        )
+
+    def test_the_public_url_names_the_edge_and_never_minio(self) -> None:
+        """`STORAGE_PUBLIC_BASE_URL` is what `get_public_url` hands a client.
+        MinIO's hostname, port and bucket layout are internal topology and
+        none of them may appear in it."""
+        compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+        public = str(compose["services"]["api-1"]["environment"]["STORAGE_PUBLIC_BASE_URL"])
+
+        assert public == "https://${ARENA64_DOMAIN}/media", public
+        for internal in ("minio", ":9000", self._bucket()):
+            assert internal not in public, f"the public media URL leaks {internal!r}"
+
+    def test_the_upstream_is_resolved_at_request_time(self) -> None:
+        """A literal upstream name is resolved when nginx parses its
+        configuration, so a MinIO that is down at boot would stop the edge
+        from starting at all — the same reason the API upstream uses a
+        variable."""
+        assert "set $arena64_media" in self._media_body()
+
+
+class TestTheEdgeAnswersForItself:
+    """A64-030.2, NB-2 — a healthcheck that was red while the edge was green.
+
+    The container healthcheck asked `/health`, which is **proxied to the
+    API**. So nginx reported `unhealthy` for the whole window between the
+    edge starting and the first API replica starting — which is the order
+    `runbooks.md` first boot deliberately uses, and a window every deploy
+    re-enters. A signal that is wrong in normal operation is one an operator
+    learns to ignore.
+
+    The application's readiness is untouched and is a different question:
+    `/health` and `/health/ready` still answer for PostgreSQL and Redis, and
+    are still what the drain step and an external uptime check read.
+    """
+
+    @pytest.mark.parametrize("host", [APP_HOST, ADMIN_HOST], ids=["product", "admin"])
+    def test_both_hosts_answer_it(self, host: Path) -> None:
+        """Declared on both, because which one the probe lands on depends on
+        `conf.d` ordering: it reaches `https://localhost/`, which matches no
+        `server_name` and falls to whichever 443 block loaded first."""
+        assert any(matcher.strip() == "= /healthz" for matcher, _ in _locations(host)), (
+            f"{host.name} declares no `location = /healthz`, so the container healthcheck "
+            "would 404 if this host is the one the probe reaches"
+        )
+
+    @pytest.mark.parametrize("host", [APP_HOST, ADMIN_HOST], ids=["product", "admin"])
+    def test_it_reaches_no_upstream(self, host: Path) -> None:
+        """The whole point: this must answer when nothing else is running."""
+        for matcher, body in _locations(host):
+            if matcher.strip() == "= /healthz":
+                assert "proxy_pass" not in body, (
+                    "/healthz proxies somewhere, so it reports that upstream's health "
+                    "under the edge's name — which is the defect it was added to fix"
+                )
+                assert "return 200" in body
+                return
+        pytest.fail(f"{host.name} declares no /healthz")
+
+    def test_the_container_healthcheck_asks_the_edge_and_not_the_api(self) -> None:
+        directive = _healthcheck(NGINX / "Dockerfile")
+        assert directive is not None, "the edge image declares no healthcheck"
+        assert "/healthz" in directive, (
+            "the edge's healthcheck asks a path it proxies, so it is red whenever the API "
+            "is not up — including the whole of a first boot, by design"
+        )
+
+    def test_it_discloses_nothing(self) -> None:
+        """A probe reachable from the internet. Four bytes and no state."""
+        for matcher, body in _locations(APP_HOST):
+            if matcher.strip() == "= /healthz":
+                assert re.search(r'return 200 "ok\\n";', body), body
+                return
+        pytest.fail("no /healthz")

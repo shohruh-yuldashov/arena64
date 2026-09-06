@@ -112,6 +112,15 @@ warning and a cheap one. Five instances on one host would be five processes
 pretending to be five machines, which teaches nothing the single instance
 does not.
 
+**Production shares this deviation, and A64-030.2 recorded it here rather
+than leaving it implied.** The production host is the same one host, so
+`infrastructure/production/compose.yml` also runs one Redis with five
+logical databases, and one instance has one instance-wide
+`maxmemory-policy`. What production adds is a **bound** — `maxmemory` was
+unset, which is unbounded, on a machine with 7.75 GiB — and a deliberate
+choice of policy: `noeviction`, so pressure fails a write loudly rather than
+evicting a rate-limit counter silently. §9.4 carries the reasoning.
+
 ### Storage — MinIO rather than a managed bucket
 
 `LocalStorageProvider` refuses to construct in a deployed tier, correctly:
@@ -223,9 +232,18 @@ asked.
 | Cache and bus | `redis` | 6379 | no | rebuildable | `redis-cli ping` | — | 1 | signal |
 | Object storage | `minio` | 9000 | no | **durable** | `mc ready` | — | 1 | signal |
 | Backup | `backup` | — | no | **durable volume** | — | — | 1 | signal |
+| Host metrics | `node-exporter` | 9100 | no | — | — | — | 1 | signal |
+| Metrics and alerts | `prometheus` | 9090 | no | **durable volume** | `/-/healthy` | — | 1 | signal |
 
-Only `caddy` publishes ports. Everything else is reachable on the compose
-network and nowhere else.
+Only the edge publishes ports. Everything else is reachable on the compose
+network and nowhere else. The edge is `nginx` rather than `caddy` — §8
+replaced it, and this table is A64-028.6's record of the shape rather than
+the current service list, which is the compose file.
+
+`prometheus` was added by A64-030.2. `infrastructure/observability/` had
+held a finished Prometheus configuration and twenty-nine alert rules since
+A64-028.7, and no compose file ran it: every rule was unarmed, including the
+two that fire on a backup that has never succeeded.
 
 ### 7.2 The api/worker split, and why the flags are written out
 
@@ -604,25 +622,118 @@ measured on this machine is a production number.
 | **External monitoring** | nothing in this repository, deliberately | an off-host uptime check on `https://arena64.gg/` and on certificate expiry | see [monitoring the monitoring](./runbooks.md#monitoring-the-monitoring) |
 | **Resend production credential** | fail-fast on a missing or placeholder key; delivery metrics and two alerts | a real key, and a sending domain with SPF, DKIM and DMARC | a verification email arrives during the first-boot smoke test |
 
-### 9.2 Host-sizing gates
+### 9.2 Host-sizing gates — CLOSED by A64-030.2
 
-None of these is a defect. Each is a number that cannot be chosen honestly
-before the machine exists, and inventing one would be the fake tuning
-A64-028.5A's performance document refuses.
+None of these was a defect. Each was a number that could not be chosen
+honestly before the machine existed, and inventing one would have been the
+fake tuning A64-028.5A's performance document refuses.
 
-| Setting | Depends on | Today |
+**The machine now exists** — netcup RS 1000 G12, Ubuntu 24.04.4, **4 vCPU,
+7.75 GiB RAM, 4 GiB swap, 251 GiB ext4**, with fio measuring 4 KiB random
+reads at ~61.9k IOPS (p99 1.16 ms) and writes at ~26.6k IOPS (p99 1.50 ms).
+So every row below is now answered in `infrastructure/production/compose.yml`
+rather than deferred, and §9.3 records the envelope.
+
+| Setting | Depends on | Now |
 | --- | --- | --- |
-| API replica count | cores, and measured request load | 2, which is what the edge and the deploy procedure are written against |
-| Container memory and CPU limits | total RAM, and how it is shared | **unset** — a wrong limit turns a busy hour into an OOM kill, and `MemoryPressure` alerts on the host instead |
-| PostgreSQL `shared_buffers`, `work_mem` | RAM | server defaults. The **connection budget is computed and safe**: 2 API × 15 + worker 15 = 45 steady, 60 during a deploy, against `max_connections` 100 with 3 reserved |
-| Redis `maxmemory` and eviction | RAM, and the live-state working set | unset. Redis holds a cache of a replay (`data-reliability.md` §3); an eviction costs a rebuild, not data |
-| Prometheus retention | disk | set at deploy. `DiskWillFillSoon` is what catches getting it wrong |
-| nginx `worker_processes` | cores | `auto`, which reads the cgroup limit rather than the host's core count |
+| API replica count | cores, and measured request load | **2**, unchanged — what the edge and the deploy procedure are written against |
+| Container memory and CPU limits | total RAM, and how it is shared | **set** — §9.3. Ceilings total 5.25 GiB against 7.75 GiB, so a per-container limit acts before the kernel's OOM killer, which is not obliged to choose a good victim |
+| PostgreSQL `shared_buffers`, `work_mem` | RAM | **set** — 256MB and 4MB, sized against the *container* limit rather than host RAM. §9.3 |
+| PostgreSQL connection budget | replica count | **30 steady, 32 during a deploy**, against `max_connections` 100 with 3 reserved. Pools are 5 + 5 per process rather than the code default of 10 + 5: one single-threaded uvicorn process with a 5 s statement timeout cannot usefully hold fifteen backends, and each idle backend costs 5–10 MB |
+| Redis `maxmemory` and eviction | RAM, and the live-state working set | **256mb, `noeviction`** — it was unset, which is unbounded. See §9.4 on why the policy is the loud one |
+| Prometheus retention | disk | **15 days, and 4 GB** — bounded twice, because the size bound is what stops `DiskWillFillSoon` becoming an alert about the alerting |
+| nginx `worker_processes` | cores | `auto`, which reads the cgroup limit rather than the host's core count — so the CPU limit below is what it sees |
 
-**After the server is provisioned**, work through §9.2 in order, then re-run
-A64-028.5A's load matrix on it — every number in
-`docs/05-operations/performance.md` was measured on a laptop that was also
-the client, and none of it transfers.
+**Still outstanding:** re-run A64-028.5A's load matrix on this host. Every
+number in `docs/05-operations/performance.md` was measured on a laptop that
+was also the client, and none of it transfers. The envelope below is a
+conservative starting point derived from those measurements, not a
+measurement of this machine.
+
+### 9.3 The resource envelope — A64-030.2
+
+| Service | `cpu_shares` | CPU limit | Memory reservation | Memory limit |
+| --- | ---: | ---: | ---: | ---: |
+| `nginx` | 256 | 1.0 | 64M | 128M |
+| `api-1` | 768 | 1.5 | 512M | 832M |
+| `api-2` | 768 | 1.5 | 512M | 832M |
+| `worker` | 512 | 1.0 | 384M | 640M |
+| `postgres` | 768 | 2.0 | 768M | 1280M |
+| `redis` | 256 | 0.5 | 256M | 768M |
+| `minio` | 154 | 0.5 | 192M | 384M |
+| `prometheus` | 256 | 1.0 | 384M | 768M |
+| `node-exporter` | 51 | 0.25 | 32M | 64M |
+| `certbot` | 51 | — | 32M | 64M |
+| `backup` | 256 | 1.0 | 64M | 384M |
+| **Total** | **4 096** | — | **3 200M** | **6 144M** |
+
+`migrate` carries a 512M ceiling and no reservation; the other one-shot
+services carry neither. Reservations total 3.1 GiB, which is what the tier
+is expected to occupy; ceilings total 6.0 GiB, and the gap is what absorbs a
+spike without the kernel getting involved.
+
+**Why `cpu_shares` and not `deploy.resources.reservations.cpus`.** Verified
+on this host against Compose v5.5.1 by creating a container and reading
+`HostConfig` back: `limits.memory`, `limits.cpus` and
+`reservations.memory` are applied; **`reservations.cpus` is silently
+ignored** — it is a Swarm scheduling hint with no meaning in the local
+runtime. `cpu_shares` is the real cgroup control with that meaning: relative
+weight under saturation, never a cap. The mapping is
+`cpu_shares = round(reserved cores × 1024)`.
+
+Every resident service carries one, including the small ones, and that is
+not tidiness: an unset `cpu_shares` is the Docker default of **1024**, so a
+service left out would outweigh PostgreSQL at 768 under exactly the
+contention this exists to arbitrate.
+
+**Swap is not application capacity.** `memswap_limit` is deliberately not
+pinned to `mem_limit` — that converts a transient spike into an OOM kill of
+PostgreSQL, which is worse than a second of paging. Keeping the host off
+swap in normal operation is `vm.swappiness`, a host setting this repository
+does not own; **10 is the recommendation** and it has not been applied.
+
+### 9.4 PostgreSQL and Redis, as configured
+
+PostgreSQL runs with a `command:` override rather than a mounted
+`postgresql.conf`, for the reason the nginx image gives about baking its
+configuration: a mounted file is a thing on the host that nothing versions
+and nothing reviews.
+
+```
+shared_buffers=256MB          effective_cache_size=2GB
+work_mem=4MB                  maintenance_work_mem=96MB
+autovacuum_max_workers=2      max_connections=100
+wal_buffers=16MB              max_wal_size=1GB / min_wal_size=128MB
+checkpoint_completion_target=0.9
+random_page_cost=1.1          effective_io_concurrency=200
+log_min_duration_statement=500ms   log_checkpoints=on   timezone=UTC
+```
+
+`shared_buffers` is a quarter of the **container**, not of host RAM: a
+quarter of 7.75 GiB inside a 1280M container is a process that is killed
+before it fills its cache. The rest of the caching is the OS page cache,
+which §9.3 leaves 1.5 GiB for and which `effective_cache_size` tells the
+planner about without allocating a byte. `random_page_cost` and
+`effective_io_concurrency` are the only two numbers derived from a
+measurement on this host; the stock 4.0 describes a spinning disk.
+
+**Durability is untouched.** `fsync`, `synchronous_commit` and
+`full_page_writes` keep their defaults and are deliberately not listed, so
+no later edit can turn one off by looking like the others.
+`shared_preload_libraries=pg_stat_statements` is **not** enabled: the
+library alone does not create the extension, and creating it needs an init
+mechanism this deployment does not otherwise have. Carried as a follow-up.
+
+Redis runs one instance with `appendonly yes`, `appendfsync everysec`,
+`maxmemory 256mb`, `maxmemory-policy noeviction` and a `requirepass`.
+`data-reliability.md` §3 asks for `allkeys-lru` on `cache` and `noeviction`
+on `limits` and `live`; one instance has one instance-wide policy, so the
+tie is broken towards the **loud** failure. With `noeviction`, memory
+pressure fails writes and the rate limiter fails open *and increments
+`rate_limit_unavailable_total{failed_open}`*, which is an alert. With
+`volatile-lru` — nearly every key here carries a TTL — Redis would instead
+silently evict `rl:` counters during exactly the spike the limiter exists
+for, which `data-reliability.md` names as the unacceptable outcome.
 
 
 ---

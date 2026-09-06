@@ -126,6 +126,25 @@ evicted live position costs a replay per move.
 evict. Staging runs one instance with five logical databases, so it cannot
 express this — recorded in `deployment.md` as AD-03's deviation.
 
+**How production answers it (A64-030.2).** Production runs one instance too,
+so it cannot express a per-role policy either, and the honest resolution is
+to choose the failure that is *loud* rather than the one that is *silent*:
+
+| Policy | Under memory pressure |
+| --- | --- |
+| **`noeviction` — chosen** | Writes fail. The rate limiter fails open **and increments `rate_limit_unavailable_total{failed_open}`**, which pages. Live-state writes fail and the next move replays from the durable log |
+| `volatile-lru` | Redis evicts TTL'd keys — which is nearly everything here — including `rl:` counters, during exactly the spike the limiter exists for. Nothing fires |
+| `allkeys-lru` | The above, plus `clock:v1:deadlines`, which carries no TTL by design |
+
+The second row is the outcome the paragraph above calls unacceptable, so it
+is not chosen merely because it keeps more of the platform serving.
+
+`maxmemory` itself is the larger change: it was **unset**, which is
+unbounded, on a host with 7.75 GiB of RAM. It is now `256mb` — far above any
+realistic beta working set — inside a container capped at 768M, the extra
+headroom being for the copy-on-write an AOF rewrite forks. The envelope is
+`deployment.md` §9.3.
+
 ### Logical databases
 
 Five roles on five logical databases (`live` 0, `bus` 1, `broker` 2,

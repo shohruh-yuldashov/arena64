@@ -37,6 +37,17 @@ server {
         return 404;
     }
 
+    # The edge's own liveness, as on the product host — A64-030.2 (NB-2).
+    # Declared on both hosts rather than only the one the healthcheck lands
+    # on, because which host that is depends on `conf.d` ordering: the probe
+    # reaches `https://localhost/`, which matches no `server_name` and
+    # therefore falls to whichever 443 block loaded first.
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
     location /api/ {
         include /etc/nginx/snippets/headers-admin.conf;
         add_header Cache-Control "no-store" always;

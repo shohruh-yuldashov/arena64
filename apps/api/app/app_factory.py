@@ -278,6 +278,8 @@ from app.platform.outbox import (
     prune_request,
     retention_policy,
 )
+from app.platform.outbox.entry import BacklogSnapshot, process_backlog
+from app.platform.outbox.metrics import BACKLOG, OLDEST_PENDING_AGE
 from app.platform.push import build_push_provider, build_vapid_keys
 from app.platform.tasks import (
     InlineTaskDispatcher,
@@ -868,6 +870,7 @@ def build_outbox_worker(
 
     return OutboxWorker(
         session_factory=db.session_factory,
+        metrics=_metrics(),
         # A64-015.6 §5. Per-consumer budgets, so a slow sibling fails its own
         # slice rather than delaying everybody else's tick. The numbers are
         # ordered by what each consumer *does*, not by importance:
@@ -1873,6 +1876,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         redis_pools.limits,
         settings=settings.rate_limit,
         clock=SystemClock(),
+        metrics=_metrics(),
     )
 
     if not settings.rate_limit.enabled:
@@ -2058,7 +2062,7 @@ def create_app() -> FastAPI:
 
     settings = get_settings()
     _configure_storage(app, settings)
-    _register_gauges(prometheus_metrics(), in_flight)
+    _register_gauges(prometheus_metrics(), in_flight, process_backlog())
 
     # Unversioned, for load-balancer and orchestrator probes: a liveness
     # check must not sit behind API versioning that could itself fail to
@@ -2087,7 +2091,9 @@ def create_app() -> FastAPI:
     return app
 
 
-def _register_gauges(exporter: PrometheusMetrics, in_flight: InFlight) -> None:
+def _register_gauges(
+    exporter: PrometheusMetrics, in_flight: InFlight, outbox_backlog: BacklogSnapshot
+) -> None:
     """Values the exporter reads at scrape time — A64-028.6 §3.
 
     A depth is a thing that *is*, not a thing that happened, and
@@ -2109,4 +2115,27 @@ def _register_gauges(exporter: PrometheusMetrics, in_flight: InFlight) -> None:
         REQUESTS_IN_FLIGHT,
         "HTTP requests being served at this instant.",
         read_in_flight,
+    )
+
+    async def read_backlog() -> dict[tuple[tuple[str, str], ...], float]:
+        backlog = outbox_backlog.value
+        if backlog is None:
+            # A process that has not ticked yet publishes nothing rather
+            # than zero — "no backlog" is the reading an operator would
+            # most regret trusting.
+            return {}
+        return {
+            (("state", "retryable"),): float(backlog.retryable),
+            (("state", "exhausted"),): float(backlog.exhausted),
+        }
+
+    async def read_oldest() -> dict[tuple[tuple[str, str], ...], float]:
+        backlog = outbox_backlog.value
+        return {} if backlog is None else {(): backlog.oldest_pending_age_seconds}
+
+    exporter.register_gauge(BACKLOG, "Unpublished outbox entries, by state.", read_backlog)
+    exporter.register_gauge(
+        OLDEST_PENDING_AGE,
+        "Age of the oldest retryable outbox entry, in seconds.",
+        read_oldest,
     )

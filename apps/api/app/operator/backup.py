@@ -64,6 +64,7 @@ from urllib.parse import unquote, urlsplit
 
 from app.config.environment import current_environment
 from app.config.settings import get_settings
+from app.operator import backup_status
 
 logger = logging.getLogger(__name__)
 
@@ -235,12 +236,20 @@ def create(destination: Path, *, keep: int = DEFAULT_KEEP) -> Path:
     except Exception:
         partial.unlink(missing_ok=True)
         logger.exception("backup_failed", extra={"database": database})
+        # Recorded before the raise, so a destination whose backups have
+        # been failing says so — A64-028.6 §20. The last success is kept
+        # alongside: "the last attempt failed" and "the last good copy is
+        # from Tuesday" are different facts and an operator needs both.
+        backup_status.record_failure(destination, at=datetime.now(UTC))
         raise
 
     logger.info(
         "backup_completed",
         extra={"backup": final.name, "bytes": final.stat().st_size, "revision": revision},
     )
+    # A note beside the dumps, so "when did a backup last succeed" is
+    # answerable without a shell on the backup host — A64-028.6 §20.
+    backup_status.record_success(destination, archive=final.name, at=datetime.now(UTC))
     prune(destination, keep=keep)
     return final
 

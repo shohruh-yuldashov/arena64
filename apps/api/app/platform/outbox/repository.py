@@ -48,7 +48,7 @@ from sqlalchemy import CursorResult, delete, func, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.platform.outbox.entry import OutboxEntry
+from app.platform.outbox.entry import OutboxBacklog, OutboxEntry
 from app.platform.outbox.models import OutboxModel, ProcessedEventModel
 
 logger = logging.getLogger(__name__)
@@ -194,6 +194,48 @@ class SqlAlchemyOutboxRepository:
             ),
         )
         return int(result.rowcount)
+
+    async def backlog(self, *, now: datetime, max_attempts: int) -> OutboxBacklog:
+        """The three numbers an operator watches — A64-028.6 §3.
+
+        One statement rather than three, because they are read together on
+        every scrape and a backlog query that costs three round trips is one
+        an operator turns off.
+
+        `oldest_pending_age_seconds` is the number that matters most and is
+        the one nothing published before: a backlog of ten thousand that is
+        draining is healthy, and a backlog of three whose oldest entry is
+        from yesterday is an incident. A count alone cannot tell them apart.
+
+        Exhausted rows are counted separately and **excluded** from the
+        retryable backlog: they are not waiting for anything, and including
+        them would make a permanent loss look like a growing queue that
+        might still drain.
+        """
+        row = (
+            await self._session.execute(
+                select(
+                    func.count()
+                    .filter(OutboxModel.attempt_count < max_attempts)
+                    .label("retryable"),
+                    func.count()
+                    .filter(OutboxModel.attempt_count >= max_attempts)
+                    .label("exhausted"),
+                    func.min(OutboxModel.occurred_at)
+                    .filter(OutboxModel.attempt_count < max_attempts)
+                    .label("oldest"),
+                ).where(OutboxModel.published_at.is_(None))
+            )
+        ).one()
+
+        oldest: datetime | None = row.oldest
+        return OutboxBacklog(
+            retryable=int(row.retryable),
+            exhausted=int(row.exhausted),
+            oldest_pending_age_seconds=(
+                max(0.0, (now - oldest).total_seconds()) if oldest is not None else 0.0
+            ),
+        )
 
     async def lock_in_order(self, entry_ids: Sequence[UUID]) -> None:
         """Takes every row lock this tick needs, in ascending id order.

@@ -25,10 +25,10 @@ counted and whether the API answered was not — and `configure_logging` pins
 | HTTP metrics | 0 | 4 |
 | Outbox metrics | 0 | 9 |
 | Rate-limiter metrics | 0 | 3 |
-| Gauges | 0 — the port had none | 5 |
+| Gauges | 0 — the port had none | 6 |
 | Exporter | none | `/metrics`, token-guarded |
 | Dashboards | none | 4, version controlled |
-| Alert rules | none | 15, each with a runbook |
+| Alert rules | none | 18, each with a runbook |
 | Log redaction | none | at the handler |
 
 ---
@@ -69,6 +69,7 @@ the exporter and called **during the scrape**.
 | `arena64_outbox_backlog{state}` | the relay's last tick |
 | `arena64_outbox_oldest_pending_age_seconds` | the relay's last tick |
 | `arena64_backup_last_success_timestamp_seconds` | a JSON file in the backup destination |
+| `arena64_certificate_expiry_timestamp_seconds` | the TLS certificate on disk |
 
 The outbox gauges are refreshed by the relay's own tick from the session it
 already has open, not by the scrape. A gauge source that opened a database
@@ -189,7 +190,7 @@ is worth a commit.
 
 ## 8. Alerts
 
-`infrastructure/observability/alerts.yml`, 15 rules, validated by
+`infrastructure/observability/alerts.yml`, 18 rules, validated by
 `promtool check rules`. Each names a failure mode this platform has had or
 that A64-028.1 identified, says what an operator does, and links a runbook
 section.
@@ -203,6 +204,28 @@ resolve. Both failures are invisible in Grafana, in Prometheus and in
 review: a panel on a missing metric draws a flat line, and an alert on a
 misspelled one never fires — which is exactly what a working alert looks
 like until the day it was needed.
+
+---
+
+## 8a. The edge's own logs — A64-028.6A
+
+Nginx is not instrumented for Prometheus. That is a documented defer rather
+than an omission: an exporter is another container, another scrape target
+and another thing to keep in step, and everything an alert would fire on is
+already measured **behind** it — request rate, status classes and latency by
+`app/api/http_metrics.py`, upstream failure as a 5xx, and instance
+availability as Prometheus's own `up`.
+
+What the edge adds that the application cannot see is in its access log,
+which is JSON and carries `upstream`, `upstream_status`, `upstream_time` and
+the negotiated `protocol`. That is what answers "which replica served this"
+and "did nginx retry", and it is the first thing the upstream runbook asks
+for.
+
+**Open:** a request that never reaches an upstream — a TLS handshake
+failure, a client the edge rejected — is in the log and in no metric. If
+that becomes a question worth alerting on, `nginx-prometheus-exporter` is
+the minimal answer, and it must not publish on a public port.
 
 ---
 
@@ -236,7 +259,7 @@ Stated rather than implied.
 | Gap | Why, and who owns it |
 | --- | --- |
 | Host CPU, memory, disk | No node exporter. The application reports its own RSS and nothing about the machine it is on — so [disk pressure](./runbooks.md#disk-pressure) has a runbook and no alert. **Open.** |
-| Certificate expiry | Caddy renews automatically and logs failures; nothing probes the result. `ARENA64_ACME_EMAIL` gets the provider's warning. **Open.** |
+| ~~Certificate expiry~~ | **Closed — A64-028.6A.** `arena64_certificate_expiry_timestamp_seconds` is read from the certificate on disk by the worker, which mounts `/etc/letsencrypt` read-only. Three rules: expiring inside fourteen days, expired, and absent. The signal is deliberately not the renewal job's exit status — a job that reports success and writes nothing produces no failure log and an expiring certificate. |
 | Email provider health | The metric exists; the rule does not. A threshold separating "the provider is down" from "several addresses bounced" needs a baseline this deployment has not produced. Guessing one would be the false-positive source §7 exists to avoid. **Open.** |
 | Distributed tracing | No spans. `correlation_id` links a causal chain across services in the logs, which is the cheap 80%. **Not planned.** |
 | Analytics read path | The pipeline's ingest is measured; the dashboards' query latency is not. **Open.** |

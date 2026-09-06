@@ -380,6 +380,194 @@ Nothing here spans machines. Before one exists:
   wrong hop either rate-limits the proxy as one client or accepts a spoofed
   address from a real one.
 
+
+---
+
+## 8. The edge is nginx — A64-028.6A
+
+> §7 describes the production topology A64-028.6 built on Caddy. This
+> section replaces its edge. Everything else in §7 stands.
+
+### 8.1 Why
+
+**An architecture decision, not a fault found in Caddy.** Arena64 targets
+nginx as its production edge; the Caddy configuration was a correct
+implementation of the same policy and is retained only in
+`infrastructure/staging/`, which is explicitly not a production definition.
+
+Migrating a proxy is a chance to lose behaviour silently, so nothing was
+assumed to have survived translation: every invariant below was re-proved
+through nginx over real HTTP, and two defects were found that way.
+
+### 8.2 The migration matrix
+
+| Behaviour | Caddy | Nginx | Migration risk | Cover |
+| --- | --- | --- | --- | --- |
+| HTTP→HTTPS | automatic | explicit `return 301`, ACME path excluded | a redirect loop, or an unrenewable certificate | `TestTheHttpListener` |
+| TLS issuance | built in | `certbot` service | **the largest** — nginx renews nothing by itself | §8.5 |
+| TLS policy | opinionated defaults | `TLSv1.2 TLSv1.3`, OpenSSL's own cipher defaults | a hand-written cipher list that ages badly | `TestTlsPolicy` |
+| Security headers | `header` inherits | `add_header` **does not** | a location that sets one header loses them all | `TestHeaderInheritance` |
+| `Server` header | removable | `server_tokens off` only | the name remains; the version does not | stated |
+| SPA routes | enumerated matchers | enumerated `location` blocks | a route added to the router and not the edge | `TestEveryRouteIsServed` |
+| True 404 | `error` + `handle_errors` | `try_files … =404` + `error_page` | a catch-all making every URL a page | `TestEveryRouteIsServed` |
+| `X-Robots-Tag` | `header @private` | per-location `add_header` | a private route indexed, or the landing page hidden | `TestPrivateRoutesAreNotIndexable` |
+| API upstream | `reverse_proxy api:8000` | `resolver` + variable `proxy_pass` | **stale or fatal name resolution** | §8.3 |
+| WebSocket | transparent | explicit `Upgrade`/`Connection` | a handshake that returns 200 and a dead socket | `TestTheRealtimePath` |
+| Forwarded headers | `header_up {remote_host}` | `proxy_set_header … $remote_addr` | an appending proxy trusting a forged prefix | `TestForwardedHeaderTrust` |
+| Compression | `encode zstd gzip` | `gzip` only | zstd and Brotli need modules the official image lacks | stated |
+| Metrics isolation | `error 404` | `return 404` | the exporter reachable from the internet | `TestTheOperatorSurfaceIsNotPublic` |
+| HTTP/2 | automatic | `http2 on` | the pre-1.25 `listen … http2` syntax | proved by negotiation |
+| HTTP/3 | automatic | `listen 443 quic` + `Alt-Svc` + UDP mapping | advertising a protocol nothing is listening for | `TestHttp3` |
+
+### 8.3 Upstream resolution — the decision that was reversed by evidence
+
+The obvious form was written first:
+
+```nginx
+upstream arena64_api { server api-1:8000; server api-2:8000; }
+```
+
+and rejected, because nginx resolves those names at **configuration parse
+time** and treats a failure as fatal:
+
+```
+nginx: [emerg] host not found in upstream "api-1:8000"
+```
+
+That is not a startup-ordering inconvenience. It means an edge that **will
+not start while a backend is down** — one crashed API container takes the
+whole site offline, including static pages that need no backend — and a
+`reload` that fails for the same reason, silently leaving a renewed
+certificate unapplied.
+
+What replaced it is a `resolver` and a variable `proxy_pass`, resolved per
+request. Both replicas carry the network alias `api`, so Docker's DNS
+returns every running container and round-robins.
+
+**The trade, measured.** Twenty requests per state, one replica of two:
+
+| State | Answered |
+| --- | ---: |
+| Both replicas up | 20/20 |
+| Container stopped, probed immediately | 19/20 |
+| After the resolver TTL (5 s) | 20/20 |
+| Application killed, container still in DNS | 8/8 |
+
+The last row is `proxy_next_upstream` reaching the second address DNS
+returned. What is lost with `max_fails` is one request in twenty during the
+few seconds between a container stopping and the resolver noticing — and a
+deploy drains and waits before stopping, so that window is off the deploy
+path. The case neither approach covers is a container that **accepts a
+connection and then hangs**.
+
+### 8.4 The image
+
+`nginx:1.29-alpine`, configuration **baked in**. A mounted config is a file
+on the host that nothing versions and nothing validates; baking it makes the
+tag that is deployed *be* the routing policy, and `nginx -t` runs at build
+time against a throwaway certificate — a syntax error fails the build rather
+than a container start.
+
+The build also asserts the binary has `--with-http_v3_module`,
+`--with-http_v2_module` and `--with-http_ssl_module`. An image without the
+first would start happily and serve no HTTP/3 at all.
+
+**Root.** The master process stays root and drops to `nginx` for workers,
+which is the stock image's model and what lets it bind 80 and 443. Running
+the master unprivileged means a capability grant or a high port and a
+host-level redirect — trading a well-understood privilege separation for a
+less-well-understood one. What root here can reach: no database credential,
+no application secret, and a certificate volume mounted read-only.
+
+### 8.5 Certificates
+
+`certbot`, webroot challenge, two containers:
+
+- **`certbot-init`** runs once and exits. It writes a self-signed stopgap
+  first, because nginx will not start without the files its
+  `ssl_certificate` names and the challenge is served *by nginx* — a
+  deadlock the stopgap breaks. A browser in that window sees a certificate
+  warning, which is the correct signal for a deployment that is not
+  finished.
+- **`certbot`** renews twice a day with jitter. A failed renewal leaves the
+  existing certificate untouched and does not stop the loop.
+
+**Nginx reloads itself on a six-hour timer.** The obvious
+`--deploy-hook "nginx -s reload"` cannot work across containers, and giving
+the renewal job the Docker socket would let a certificate task start any
+container on the host. A renewal is live within six hours of being written
+and the certificate is valid for thirty days at that point.
+
+**The renewal is not trusted to report itself.** A job that exits zero and
+writes nothing produces no failure log and an expiring certificate, so the
+signal is the certificate on disk: the worker mounts
+`/etc/letsencrypt` read-only and publishes
+`arena64_certificate_expiry_timestamp_seconds`. Three alert rules read it —
+expiring, expired, and absent.
+
+### 8.6 HTTP/2 and HTTP/3
+
+Both enabled. HTTP/2 on TCP 443 is the baseline; HTTP/3 is QUIC on **UDP**
+443, which needs its own port mapping — without it `Alt-Svc` advertises a
+port nothing is listening on and every client silently stays on HTTP/2.
+
+Proven: `curl` negotiates HTTP/2 on TCP; an `aioquic` client negotiates ALPN
+`h3` on QUIC v1 and receives HTTP 200 with the same 11 188-byte page.
+
+**The fallback is the absence of a step, not a path that has to work.**
+`Alt-Svc` is an advertisement: a client that cannot reach UDP 443 never
+upgrades. Demonstrated by running the same image with the UDP port
+unpublished — the HTTP/3 client gets a connection error, and HTTP/2 over TCP
+serves the page unchanged.
+
+### 8.7 Logging
+
+The default `combined` format logs `$request`, the raw request line
+**including the query string** — where a password reset carries `?token=` and
+an email verification carries `?code=`. Those are precisely what
+`app/common/redaction.py` keeps out of the application's own logs, and
+logging them at the edge would put them back.
+
+The format logs `$uri`, the normalised path with the query string removed.
+No header is logged, so `Authorization` and `Cookie` cannot appear.
+
+### 8.8 Firewall contract
+
+The host must allow inbound:
+
+| Port | Protocol | Why |
+| --- | --- | --- |
+| 22 | TCP | operator access, per the deployment's own SSH policy |
+| 80 | TCP | HTTP→HTTPS redirect **and the ACME challenge** — closing it breaks renewal while leaving the site working |
+| 443 | TCP | HTTP/1.1 and HTTP/2 |
+| 443 | **UDP** | HTTP/3. Optional: closing it degrades to HTTP/2 with no other effect |
+
+Everything else must be unreachable from outside the host: PostgreSQL 5432,
+Redis 6379, the API's 8000, Prometheus, Grafana, and the operator surface
+(`/metrics`, `/health/drain`) — which the edge refuses in addition to the
+bearer token the application requires.
+
+The compose file publishes ports for `nginx` **only**; every other service is
+reachable on the compose network. That is the enforcement, and the firewall
+is the second boundary.
+
+### 8.9 What the edge costs
+
+Forty requests over a reused connection, on a developer's laptop:
+
+| Path | p50 | p95 |
+| --- | ---: | ---: |
+| Direct to the API, plain HTTP | 1.12 ms | 1.40 ms |
+| Through nginx, HTTPS + HTTP/2 | 4.15 ms | 6.74 ms |
+| Through nginx, HTTPS + HTTP/1.1 | 3.94 ms | 5.30 ms |
+
+About three milliseconds, of which an unmeasured part is a `socat`
+forwarder the test harness inserts between nginx and each uvicorn and
+production does not have. **A regression check, not a capacity
+measurement** — see `docs/05-operations/performance.md` §1 for why nothing
+measured on this machine is a production number.
+
+
 ---
 
 ## Related Documents

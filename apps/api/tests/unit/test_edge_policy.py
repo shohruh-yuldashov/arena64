@@ -103,7 +103,17 @@ def _locations(path: Path) -> list[tuple[str, str]]:
 
 
 def _serves_the_shell(body: str) -> bool:
-    return "try_files /index.html" in body
+    """Whether a location answers with the application shell.
+
+    Matches `/index.html` **anywhere** in a `try_files`, not only as the
+    sole argument. A mutation that changed the catch-all's
+    `try_files $uri =404` to `try_files $uri /index.html` — which is exactly
+    the soft-404 §17 exists to forbid — went undetected by the narrower
+    form, because the shell is the *fallback* there rather than the target.
+    """
+    return any(
+        "/index.html" in line for line in body.splitlines() if line.strip().startswith("try_files")
+    )
 
 
 def _router_paths() -> set[str]:
@@ -461,3 +471,38 @@ class TestCachePolicy:
                 assert "no-cache" in body
                 return
         pytest.fail(f"no `location {shell}` block")
+
+
+class TestHttp3:
+    """HTTP/3 is an enhancement, not a dependency — A64-028.6A §9, §31.
+
+    Removing it must change nothing else, and that is deliberately **not**
+    asserted as a failure: a configuration serving only HTTP/2 is a working
+    configuration. What is asserted is the dangerous half — advertising a
+    protocol that is not listening.
+
+    `Alt-Svc` tells a browser to retry over QUIC on UDP 443. If nothing is
+    listening there, every client spends a connection attempt on it before
+    falling back, on every visit, and nothing in any log says why.
+    """
+
+    @pytest.mark.parametrize(
+        ("host", "snippet"),
+        [(APP_HOST, HEADERS_APP), (ADMIN_HOST, HEADERS_ADMIN)],
+        ids=["product", "admin"],
+    )
+    def test_alt_svc_is_only_advertised_where_quic_is_listening(
+        self, host: Path, snippet: Path
+    ) -> None:
+        advertises = "h3=" in _directives(snippet)
+        listens = "listen 443 quic" in _directives(host)
+
+        assert advertises == listens, (
+            f"{host.name} advertises h3={advertises} but listens for QUIC={listens}"
+        )
+
+    def test_reuseport_is_declared_exactly_once(self) -> None:
+        """It may appear once per address and port across the whole
+        configuration; a second one is a startup failure, not a warning."""
+        declared = sum(_directives(host).count("quic reuseport") for host in (APP_HOST, ADMIN_HOST))
+        assert declared == 2, f"expected the product host's two listeners, found {declared}"

@@ -160,6 +160,10 @@ from app.modules.notifications.application.services.game_notification_dispatcher
 from app.modules.notifications.application.services.game_notification_dispatcher import (
     SUBSCRIBED_EVENT_TYPES as GAME_NOTIFICATION_EVENTS,
 )
+from app.modules.notifications.application.services.notification_retention_service import (
+    NotificationRetentionService,
+    notification_retention_policy,
+)
 from app.modules.notifications.application.services.presence_sweeper import PresenceSweeper
 from app.modules.notifications.application.services.tournament_notification_dispatcher import (
     CONSUMER_NAME as TOURNAMENT_NOTIFICATION_CONSUMER,
@@ -173,12 +177,17 @@ from app.modules.notifications.infrastructure import (
     PresenceSweeperWorker,
     SessionScopedNotificationHandler,
 )
+from app.modules.notifications.infrastructure.repositories.retention_repository import (
+    SqlAlchemyNotificationRetentionStore,
+)
 from app.modules.notifications.infrastructure.tasks import (
     NotificationBroadcastTask,
     NotificationEmailDeliveryTask,
     NotificationPushDeliveryTask,
+    NotificationRetentionTask,
     broadcast_delivery_request,
     email_delivery_request,
+    notification_retention_request,
     push_delivery_request,
 )
 from app.modules.notifications.presentation.dependencies import (
@@ -1269,6 +1278,23 @@ def build_task_schedulers(
         # in cache.
         logger.warning("queue_retention_disabled", extra={"reason": "configuration"})
 
+    if settings.notification_retention.retention_enabled:
+        handlers.append(
+            NotificationRetentionTask(
+                session_factory=db.session_factory,
+                service_factory=lambda session: _notification_retention_for(
+                    session, settings, clock
+                ),
+            )
+        )
+    else:
+        # `WARNING`, like every other retention switch and for the same
+        # reason: with it off, `notification`, both delivery tables and the
+        # revoked half of `push_subscription` grow without bound, and the
+        # symptom arrives weeks later as an index that no longer fits in
+        # cache. A64-028.7, closing P2-7.
+        logger.warning("notification_retention_disabled", extra={"reason": "configuration"})
+
     # A64-022.6 §2. The friend challenge expiry sweep — the job that finally
     # writes down a transition the read predicates have been assuming since
     # A64-022.1. Its own switch, like every sweep here, so one tier runs it
@@ -1620,6 +1646,14 @@ def build_task_schedulers(
                 dispatcher=dispatcher,
                 request=queue_retention_request(),
                 interval_seconds=settings.matchmaking.retention_interval_seconds,
+            )
+        )
+    if settings.notification_retention.retention_enabled:
+        schedulers.append(
+            PeriodicTaskScheduler(
+                dispatcher=dispatcher,
+                request=notification_retention_request(),
+                interval_seconds=settings.notification_retention.retention_interval_seconds,
             )
         )
     if settings.matchmaking.challenge_expiry_enabled:
@@ -2167,6 +2201,28 @@ def _register_gauges(
         read_backup_age,
     )
 
+    async def read_offsite_age() -> dict[tuple[tuple[str, str], ...], float]:
+        """When the last **off-host** copy succeeded — A64-028.7 (P2-8).
+
+        A separate series from the local backup's, because a deployment
+        whose archives are written and never uploaded has a fresh local
+        timestamp and a stale one here — and only this one says the host
+        loss the backup exists for is still fatal.
+        """
+        destination = settings.observability.backup_destination
+        if destination is None:
+            return {}
+        status = backup_status.read(destination)
+        if status.offsite_at is None:
+            return {}
+        return {(): status.offsite_at.timestamp()}
+
+    exporter.register_gauge(
+        "backup.last_offsite_timestamp_seconds",
+        "Unix time of the last successful off-host backup copy.",
+        read_offsite_age,
+    )
+
     async def read_certificate_expiry() -> dict[tuple[tuple[str, str], ...], float]:
         path = settings.observability.certificate_path
         if path is None:
@@ -2190,4 +2246,29 @@ def _register_gauges(
         OLDEST_PENDING_AGE,
         "Age of the oldest retryable outbox entry, in seconds.",
         read_oldest,
+    )
+
+
+def _notification_retention_for(
+    session: AsyncSession, settings: Settings, clock: SystemClock
+) -> NotificationRetentionService:
+    """One retention service over one session — A64-028.7, closing P2-7.
+
+    The same shape as `_queue_retention_for`: the policy comes from
+    settings, the store is the only adapter that deletes, and the unit of
+    work wraps the session the store holds so a batch commits or does not.
+    """
+    retention = settings.notification_retention
+    return NotificationRetentionService(
+        store=SqlAlchemyNotificationRetentionStore(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+        policy=notification_retention_policy(
+            notification_days=retention.retention_days,
+            delivery_days=retention.delivery_retention_days,
+            revoked_subscription_days=retention.revoked_subscription_retention_days,
+            batch_size=retention.retention_batch_size,
+            max_batches=retention.retention_max_batches,
+        ),
+        metrics=_metrics(),
     )

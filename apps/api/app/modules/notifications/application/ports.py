@@ -657,3 +657,44 @@ class NotificationDeliveryPolicy(Protocol):
     ) -> frozenset[DeliveryRequest]:
         """The subset that may be delivered. An empty input is a legal no-op."""
         ...
+
+
+class NotificationRetentionStore(Protocol):
+    """The four bounded deletes retention needs — A64-028.7, closing P2-7.
+
+    A port of its own rather than four methods added to the repositories
+    above, because retention is not something any of them do: they read and
+    write one aggregate for a request, and this deletes rows nobody is
+    looking at on a schedule. `CLAUDE.md` §2.1's single responsibility, and
+    the same split `OutboxRepository`/`OutboxPruner` already makes.
+
+    Every method takes a `limit` and returns how many rows it removed. The
+    caller stops when a batch comes back short, which is how a first run
+    against years of history stays bounded.
+    """
+
+    async def delete_notifications(self, *, before: datetime, limit: int) -> int:
+        """Notifications created before the horizon.
+
+        Deleted **after** their delivery rows — there is no foreign key
+        between them, so a notification removed first leaves orphans nothing
+        else would ever clean up.
+        """
+        ...
+
+    async def delete_email_deliveries(self, *, before: datetime, limit: int) -> int:
+        """Email delivery audit rows past their own, shorter horizon."""
+        ...
+
+    async def delete_push_deliveries(self, *, before: datetime, limit: int) -> int:
+        """Push delivery audit rows past their own, shorter horizon."""
+        ...
+
+    async def delete_revoked_subscriptions(self, *, before: datetime, limit: int) -> int:
+        """Push subscriptions revoked before the horizon.
+
+        Only revoked ones. A live subscription is current state and has no
+        horizon: a player who has not opened the site for a year still
+        expects their notifications when they do.
+        """
+        ...

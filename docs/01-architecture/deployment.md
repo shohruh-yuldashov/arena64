@@ -568,6 +568,47 @@ measurement** — see `docs/05-operations/performance.md` §1 for why nothing
 measured on this machine is a production number.
 
 
+
+---
+
+## 9. Gates — A64-028.7
+
+> The epic's closing audit separates two things that are easy to conflate:
+> **code readiness**, which this repository can establish, and **live
+> deployment readiness**, which needs infrastructure that does not exist
+> yet. A gate below is never a missing implementation. Each one is a thing
+> the code is ready for and cannot prove alone.
+
+### 9.1 Live deployment gates
+
+| Gate | What is ready | What is missing | Proven when |
+| --- | --- | --- | --- |
+| **Public certificate** | ACME issuance, renewal, expiry metric and three alerts; a failed renewal leaves the existing certificate byte-identical | `arena64.gg` pointing at a host with port 80 open | `certbot-init` completes and `arena64_certificate_expiry_timestamp_seconds` reads a Let's Encrypt certificate |
+| **Off-host backup** | Encryption, SigV4 upload, a separate off-host timestamp and two alerts; proven against a MinIO **on this laptop** | a bucket at a real provider, and credentials for it | the object appears in the remote bucket and the off-host gauge exists |
+| **External monitoring** | nothing in this repository, deliberately | an off-host uptime check on `https://arena64.gg/` and on certificate expiry | see [monitoring the monitoring](./runbooks.md#monitoring-the-monitoring) |
+| **Resend production credential** | fail-fast on a missing or placeholder key; delivery metrics and two alerts | a real key, and a sending domain with SPF, DKIM and DMARC | a verification email arrives during the first-boot smoke test |
+
+### 9.2 Host-sizing gates
+
+None of these is a defect. Each is a number that cannot be chosen honestly
+before the machine exists, and inventing one would be the fake tuning
+A64-028.5A's performance document refuses.
+
+| Setting | Depends on | Today |
+| --- | --- | --- |
+| API replica count | cores, and measured request load | 2, which is what the edge and the deploy procedure are written against |
+| Container memory and CPU limits | total RAM, and how it is shared | **unset** — a wrong limit turns a busy hour into an OOM kill, and `MemoryPressure` alerts on the host instead |
+| PostgreSQL `shared_buffers`, `work_mem` | RAM | server defaults. The **connection budget is computed and safe**: 2 API × 15 + worker 15 = 45 steady, 60 during a deploy, against `max_connections` 100 with 3 reserved |
+| Redis `maxmemory` and eviction | RAM, and the live-state working set | unset. Redis holds a cache of a replay (`data-reliability.md` §3); an eviction costs a rebuild, not data |
+| Prometheus retention | disk | set at deploy. `DiskWillFillSoon` is what catches getting it wrong |
+| nginx `worker_processes` | cores | `auto`, which reads the cgroup limit rather than the host's core count |
+
+**After the server is provisioned**, work through §9.2 in order, then re-run
+A64-028.5A's load matrix on it — every number in
+`docs/05-operations/performance.md` was measured on a laptop that was also
+the client, and none of it transfers.
+
+
 ---
 
 ## Related Documents

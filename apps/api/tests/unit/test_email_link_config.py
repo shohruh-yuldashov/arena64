@@ -75,7 +75,7 @@ def build(
         notification_email=NotificationEmailSettings(),
         push=PushSettings(),
         storage=StorageSettings(),
-        rate_limit=RateLimitSettings(),
+        rate_limit=RateLimitSettings(trusted_proxy_count=1) if deployed else RateLimitSettings(),
         statistics=StatisticsSettings(),
         presence=PresenceSettings(),
         friends=FriendsSettings(),
@@ -89,7 +89,14 @@ def build(
         ),
         # A64-028.6: a deployed tier refuses to start without saying how the
         # operator surface is guarded.
-        observability=ObservabilitySettings(token=SecretStr("ops-token"))
+        observability=ObservabilitySettings(
+            token=SecretStr("ops-token"),
+            backup_encryption_key=SecretStr("Zm9vYmFyYmF6cXV1eGZvb2JhcmJhenF1dXhhYmM9"),
+            backup_offsite_endpoint="https://s3.example.test",
+            backup_offsite_bucket="arena64-backups",
+            backup_offsite_access_key_id=SecretStr("AKIAEXAMPLE"),
+            backup_offsite_secret_access_key=SecretStr("offsite-secret"),
+        )
         if deployed
         else ObservabilitySettings(),
     )

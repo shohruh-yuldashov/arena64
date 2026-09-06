@@ -56,7 +56,9 @@ import re
 import shutil
 import subprocess  # noqa: S404 — pg_dump is the tool; the point is to call it
 import sys
-from collections.abc import Sequence
+import tempfile
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
@@ -64,7 +66,8 @@ from urllib.parse import unquote, urlsplit
 
 from app.config.environment import current_environment
 from app.config.settings import get_settings
-from app.operator import backup_status
+from app.operator import backup_crypto, backup_offsite, backup_status
+from app.operator.backup_offsite import OffsiteTarget
 
 logger = logging.getLogger(__name__)
 
@@ -180,13 +183,35 @@ def metadata_path(dump: Path) -> Path:
     return dump.with_suffix(dump.suffix + ".json")
 
 
-def create(destination: Path, *, keep: int = DEFAULT_KEEP) -> Path:
+def create(
+    destination: Path,
+    *,
+    keep: int = DEFAULT_KEEP,
+    key: bytes | None = None,
+    offsite: OffsiteTarget | None = None,
+) -> Path:
     """Writes one backup and returns its path.
 
     Raises `BackupError` for every failure. There is deliberately no partial
     success: either a complete, checksummed dump with metadata beside it
     exists at the end, or this raises and the destination holds a `.partial`
     file whose name says so.
+
+    ## `key`, and the plaintext that never touches the disk — A64-028.7 (P2-8)
+
+    With a key, `pg_dump` writes to **stdout** and the bytes are encrypted as
+    they stream past. The obvious implementation — dump to a file, encrypt
+    the file, delete the plaintext — leaves every email address and password
+    hash on disk for the length of the encryption, and leaves them there for
+    good if the process dies in between. A `finally` that unlinks is not an
+    answer: it does not run when the machine loses power, which is one of
+    the events a backup exists for.
+
+    Without a key the behaviour is exactly what it was, because `local`
+    development has nothing to protect and an operator restoring by hand
+    should not need one. A deployed tier is refused at configuration time
+    (`Settings._guard_production_backup`), so an unencrypted production
+    backup cannot be produced by forgetting a flag.
     """
     dump_tool = _require("pg_dump")
     arguments, environment, database = _libpq(_dsn())
@@ -202,14 +227,34 @@ def create(destination: Path, *, keep: int = DEFAULT_KEEP) -> Path:
         extra={"database": database, "destination": str(destination), "target": final.name},
     )
     try:
-        _run(
-            [dump_tool, *arguments, "--format=custom", "--no-password", "--file", str(partial)],
-            environment,
-            what="pg_dump",
-        )
+        if key is None:
+            _run(
+                [
+                    dump_tool,
+                    *arguments,
+                    "--format=custom",
+                    "--no-password",
+                    "--file",
+                    str(partial),
+                ],
+                environment,
+                what="pg_dump",
+            )
+        else:
+            _dump_encrypted(
+                [dump_tool, *arguments, "--format=custom", "--no-password"],
+                environment,
+                target=partial,
+                key=key,
+            )
         if not partial.exists() or partial.stat().st_size == 0:
             raise BackupError("pg_dump exited zero but wrote nothing.")
 
+        # The checksum is of the artefact **as stored** — the ciphertext
+        # when encrypted. It answers "did this file arrive intact", which is
+        # a question about the bytes on disk and in the off-host copy; the
+        # GCM tag is what answers "is the plaintext authentic", and the two
+        # are different guarantees.
         checksum = _sha256(partial)
         revision = _alembic_head(arguments, environment)
         # The rename is the commit point. Until it happens the file is named
@@ -223,6 +268,10 @@ def create(destination: Path, *, keep: int = DEFAULT_KEEP) -> Path:
                     "environment": environment_name,
                     "database": database,
                     "format": _FORMAT,
+                    # So `verify` and `restore` know to ask for a key rather
+                    # than handing ciphertext to `pg_restore` and reporting
+                    # a corrupt archive.
+                    "encrypted": key is not None,
                     "alembic_revision": revision,
                     "sha256": checksum,
                     "bytes": final.stat().st_size,
@@ -250,8 +299,93 @@ def create(destination: Path, *, keep: int = DEFAULT_KEEP) -> Path:
     # A note beside the dumps, so "when did a backup last succeed" is
     # answerable without a shell on the backup host — A64-028.6 §20.
     backup_status.record_success(destination, archive=final.name, at=datetime.now(UTC))
+    # Off-host **after** the local archive is complete and stamped, so a
+    # failed upload leaves a verified local copy rather than nothing —
+    # A64-028.7, the second half of P2-8.
+    if offsite is not None:
+        try:
+            key_name = backup_offsite.upload(final, target=offsite, sha256=checksum)
+        except backup_offsite.OffsiteUploadError:
+            # Recorded and re-raised. An upload that fails silently leaves an
+            # operator believing they have an off-host copy, which is worse
+            # than knowing they do not — and the local archive is still
+            # there, so this is a partial success reported as a failure
+            # rather than a loss.
+            logger.exception("backup_offsite_failed", extra={"backup": final.name})
+            backup_status.record_offsite_failure(destination, at=datetime.now(UTC))
+            raise
+        backup_status.record_offsite_success(
+            destination, archive=final.name, key=key_name, at=datetime.now(UTC)
+        )
+
     prune(destination, keep=keep)
     return final
+
+
+def _dump_encrypted(
+    command: list[str], environment: dict[str, str], *, target: Path, key: bytes
+) -> None:
+    """`pg_dump` to stdout, encrypted into `target` as it streams.
+
+    The plaintext exists only in a pipe buffer and one 4 MiB chunk of this
+    process's memory. It is never a file, so there is no window in which a
+    crash leaves one and no cleanup path that has to be right.
+
+    `pg_dump`'s stderr is captured rather than inherited, for the reason
+    `_run` gives: it says useful things about a failure and none of them
+    should reach a log unfiltered.
+    """
+    with subprocess.Popen(  # noqa: S603 — the command is built above, not user input
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+    ) as process:
+        if process.stdout is None:  # pragma: no cover — Popen with PIPE always sets it
+            raise BackupError("pg_dump produced no stdout to read.")
+        with target.open("wb") as sealed:
+            backup_crypto.encrypt_stream(process.stdout, sealed, key=key)
+        _, stderr = process.communicate()
+
+    if process.returncode != 0:
+        raise BackupError(
+            f"pg_dump exited {process.returncode}: {stderr.decode(errors='replace').strip()}"
+        )
+
+
+@contextmanager
+def _decrypted(dump: Path, *, key: bytes | None) -> Iterator[Path]:
+    """The archive as something `pg_restore` can open.
+
+    An unencrypted archive is yielded as itself — no copy, no temporary
+    file, nothing to clean up.
+
+    An encrypted one is decrypted into a temporary file, because
+    `pg_restore` needs to seek and a pipe cannot. This is the **only** place
+    a plaintext dump legitimately exists on disk, and it is bounded three
+    ways: the file is created `0600` by `mkstemp`, it lives beside the
+    archive rather than in a shared `/tmp` that other users can list, and it
+    is removed in a `finally` — so a failed restore does not leave the
+    database's contents lying next to its backup.
+
+    What that cannot survive is the machine losing power mid-restore. The
+    window is a restore rather than a backup, which is the rarer and
+    supervised of the two, and it is stated in
+    `docs/05-operations/backup-restore.md` rather than left to be
+    discovered.
+    """
+    if key is None:
+        yield dump
+        return
+
+    handle, name = tempfile.mkstemp(prefix=".restore-", suffix=".dump", dir=str(dump.parent))
+    plaintext = Path(name)
+    try:
+        with os.fdopen(handle, "wb") as target, dump.open("rb") as source:
+            backup_crypto.decrypt_stream(source, target, key=key)
+        yield plaintext
+    finally:
+        plaintext.unlink(missing_ok=True)
 
 
 def _tool_version(tool: str) -> str:
@@ -281,7 +415,7 @@ def prune(destination: Path, *, keep: int) -> list[Path]:
     return removed
 
 
-def verify(dump: Path) -> dict[str, Any]:
+def verify(dump: Path, *, key: bytes | None = None) -> dict[str, Any]:
     """Checks a backup without a database, and returns its metadata.
 
     Three things, and each catches a different way a backup is not one:
@@ -292,6 +426,12 @@ def verify(dump: Path) -> dict[str, Any]:
                  so a truncated or wrong-format file fails here rather than
                  halfway through a restore at 3am
       non-empty  a listing with no entries is a dump of nothing
+
+    An encrypted archive is decrypted into a temporary file first, which is
+    the one place a plaintext dump legitimately touches the disk: the
+    listing is `pg_restore`'s and it needs a file. It is written under
+    `0600` in a directory this process owns and removed on every path,
+    including the failing one — see `_decrypted`.
     """
     if not dump.exists():
         raise BackupError(f"No such backup: {dump}")
@@ -307,9 +447,19 @@ def verify(dump: Path) -> dict[str, Any]:
             f"Checksum mismatch for {dump.name}: the file is not the one that was written."
         )
 
-    completed = subprocess.run(  # noqa: S603
-        [_require("pg_restore"), "--list", str(dump)], capture_output=True, text=True, check=False
-    )
+    if metadata.get("encrypted") and key is None:
+        raise BackupError(
+            f"{dump.name} is encrypted. Supply the key it was written with "
+            "(BACKUP_ENCRYPTION_KEY) — it is not stored with the archive."
+        )
+
+    with _decrypted(dump, key=key if metadata.get("encrypted") else None) as readable:
+        completed = subprocess.run(  # noqa: S603
+            [_require("pg_restore"), "--list", str(readable)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     if completed.returncode != 0:
         raise BackupError(
             f"pg_restore could not read {dump.name}: {completed.stderr.strip() or '(no output)'}"
@@ -322,7 +472,7 @@ def verify(dump: Path) -> dict[str, Any]:
     return {**metadata, "objects": len(entries)}
 
 
-def restore(dump: Path, *, target: str, confirmed: bool) -> None:
+def restore(dump: Path, *, target: str, confirmed: bool, key: bytes | None = None) -> None:
     """Restores into `target`, which must be an existing empty database.
 
     **The target is always explicit.** There is no "restore into the
@@ -335,21 +485,22 @@ def restore(dump: Path, *, target: str, confirmed: bool) -> None:
             "Refusing to restore without --i-understand-this-overwrites. "
             "This writes into the target database."
         )
-    verify(dump)
+    metadata = verify(dump, key=key)
     arguments, environment, database = _libpq(target)
     logger.info("restore_started", extra={"backup": dump.name, "database": database})
-    _run(
-        [
-            _require("pg_restore"),
-            *arguments,
-            "--no-password",
-            "--exit-on-error",
-            "--single-transaction",
-            str(dump),
-        ],
-        environment,
-        what="pg_restore",
-    )
+    with _decrypted(dump, key=key if metadata.get("encrypted") else None) as readable:
+        _run(
+            [
+                _require("pg_restore"),
+                *arguments,
+                "--no-password",
+                "--exit-on-error",
+                "--single-transaction",
+                str(readable),
+            ],
+            environment,
+            what="pg_restore",
+        )
     logger.info("restore_completed", extra={"backup": dump.name, "database": database})
 
 
@@ -359,6 +510,10 @@ def _parser() -> argparse.ArgumentParser:
         description="Back up and restore the Arena64 database.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
+
+    commands.add_parser(
+        "keygen", help="Print a fresh base64 encryption key. Store it away from the backups."
+    )
 
     creating = commands.add_parser("create", help="Write a new backup.")
     creating.add_argument("--into", type=Path, required=True, help="Destination directory.")
@@ -379,20 +534,66 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _key() -> bytes | None:
+    """The encryption key, from configuration.
+
+    Read here rather than passed on the command line, and that is the whole
+    of it: an argument is visible in `ps` to every user on the host and ends
+    up in shell history. `SecretStr` also keeps it out of a traceback.
+    """
+    encoded = get_settings().observability.backup_encryption_key
+    return None if encoded is None else backup_crypto.parse_key(encoded.get_secret_value())
+
+
+def _offsite() -> OffsiteTarget | None:
+    """The off-host target, from configuration.
+
+    `None` when nothing is configured, which is `local`'s state and is
+    refused in a deployed tier by `Settings._guard_production_backup` —
+    an off-host copy is not an enhancement, it is what makes the word
+    backup true.
+    """
+    observability = get_settings().observability
+    endpoint = observability.backup_offsite_endpoint
+    bucket = observability.backup_offsite_bucket
+    access = observability.backup_offsite_access_key_id
+    secret = observability.backup_offsite_secret_access_key
+    if endpoint is None or bucket is None or access is None or secret is None:
+        return None
+    return OffsiteTarget(
+        endpoint=endpoint,
+        bucket=bucket,
+        region=observability.backup_offsite_region,
+        access_key_id=access.get_secret_value(),
+        secret_access_key=secret.get_secret_value(),
+        prefix=observability.backup_offsite_prefix,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
+        if arguments.command == "keygen":
+            # Printed, never stored. The operator puts it in their secret
+            # manager; this command has no idea where that is.
+            print(backup_crypto.generate_key())  # noqa: T201
+            return 0
         if arguments.command == "create":
-            path = create(arguments.into, keep=arguments.keep)
+            path = create(arguments.into, keep=arguments.keep, key=_key(), offsite=_offsite())
             print(f"wrote {path}")  # noqa: T201 — an operator command's output
         elif arguments.command == "verify":
-            metadata = verify(arguments.dump)
+            metadata = verify(arguments.dump, key=_key())
             print(  # noqa: T201
                 f"{arguments.dump.name}: {metadata['objects']} objects, "
                 f"{metadata['bytes']} bytes, revision {metadata['alembic_revision']}"
             )
         else:
-            restore(arguments.dump, target=arguments.target, confirmed=arguments.confirmed)
+            restore(
+                arguments.dump,
+                target=arguments.target,
+                confirmed=arguments.confirmed,
+                key=_key(),
+            )
             print(f"restored {arguments.dump.name}")  # noqa: T201
     except BackupError as error:
         print(f"error: {error}", file=sys.stderr)  # noqa: T201

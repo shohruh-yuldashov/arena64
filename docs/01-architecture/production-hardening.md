@@ -75,9 +75,15 @@ log pipeline, a backup mechanism, a production compose/manifest.
 > risk that touched it** — P0-2, P0-3, P1-4, P1-5, P1-6, P2-2, P2-6, P3-1 —
 > over real HTTP rather than carrying the previous task's evidence forward.
 > It also closed the certificate half of **P3-4**.
-> Remaining: **0 P0, 0 P1, 2 P2, 1 P3** — P2-7 (notification retention),
-> P2-8 (backups are plaintext and on the same host), and P3-4, now reduced
-> to host metrics and an email-provider baseline.
+> **A64-028.7** is the epic's final audit. It closed **P2-7**, **P2-8**
+> (code) and **P3-4**, revalidated every previously closed risk against the
+> current code rather than against the reports that closed them, and found
+> **two more**: a deployed tier that could rate-limit its entire fleet as one
+> client (**P1-12**), and three production images on `:latest` (**P2-10**).
+> Both closed in the same task.
+> Remaining: **0 P0, 0 P1, 0 P2, 0 P3** in code. What is left is four
+> **LIVE DEPLOYMENT GATES**, each requiring infrastructure or credentials
+> that do not exist yet — listed in `deployment.md` §9.
 > See `specs/authentication.md` "Rotation under concurrency" for the design.
 
 
@@ -376,9 +382,37 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 
 | ID | Area | Status | Finding | Owner |
 | --- | --- | --- | --- | --- |
-| P2-7 | Retention | RISK | `notifications.notification` has **no retention policy** and grows with activity — the only unbounded durable table that is not meant to be. (`admin.audit_entry` is also unbounded and that is deliberate.) Nothing breaks; the table grows for ever | **A64-028.4** |
-| P2-8 | Backup | RISK | **A dump is plaintext** and holds every email address and password hash on the platform. Encryption at rest is a property of where it is stored, which this repository does not own. Off-host storage must encrypt | **A64-028.6** |
+| P2-7 | Retention | ~~RISK~~ → **PASS** | **Resolved — A64-028.7.** The finding named one table; the audit found **four**. `notification` keeps 90 days (how far back a player can scroll — a product decision, so a setting), both delivery tables keep 30 (they answer "why did this person not get their email", asked within days, and carry the provider's message id), and `push_subscription` keeps 30 days **after revocation** — a live one has no horizon, because a player away for a year still expects their notifications. `notification_preference` and `notification_broadcast` are deliberately untouched: one is current state, the other an operator record. **There are no foreign keys between these tables**, so the policy refuses to construct unless the delivery horizon is at or inside the notification horizon and the service deletes deliveries first — an orphan delivery row is one nothing else would ever remove. Bounded batches, `SKIP LOCKED`, indexed predicates. Five mutations caught, including a composite-key delete that would have removed every device's row for a notification | `test_notification_retention.py`, `test_notification_retention_repository.py` | A64-028.7 — **done** |
+| P2-8 | Backup | ~~RISK~~ → **PASS (code)** · off-host **LIVE DEPLOYMENT GATE** | **Resolved — A64-028.7, and the two halves close differently.** *Plaintext:* AES-256-GCM, streamed in 4 MiB chunks, and the plaintext **never touches the disk** — `pg_dump` writes to stdout and the bytes are sealed as they stream past, because a dump-then-encrypt would leave every account on disk for the length of the encryption and leave them there for good if the process died between. Authenticated, so a wrong key and a corrupted archive both fail rather than restoring rubbish. *Off-host:* an S3-compatible uploader over the existing `httpx`, no new dependency, signed SigV4 with the checksum `create` already computes. The production tier refuses to start without a key, without a target, or with a half-configured one. **What is proven and what is not:** the pipeline, the encryption, the refusals and a full restore drill are proven; the upload is proven against a **MinIO on this laptop**, which is not off-host storage. A real provider bucket is a live deployment gate | `test_backup_crypto.py`, `test_backup_offsite.py`, `test_backup_restore.py`, drill | A64-028.7 — **code done** |
 | ~~P3-4~~ **P1-8** | Redis | ~~RISK~~ → **PASS** | **Reclassified and resolved — A64-028.4.** Filed as a P3 about unbounded growth; the growth was the small half. The set has no durable backing, so a Redis loss took every active game's deadline with it — and `ClockAdjudicationService` has said since A64-018 that a lost deadline means "the match stops flagging … for a game nobody is moving in it stays open". A player who walks away never lost on time. `ClockDeadlineReconciliationTask` re-derives every active match's deadline from `clock_turn_started_at` and the side-to-move's remaining milliseconds — durable columns the move committed — so the queue is a cache of a derivation and a loss is a rebuild. Idempotent, so it is safe on every instance | A64-028.4 — **done** |
+
+### Found by A64-028.7
+
+### P1-12 — A deployed tier could rate-limit its whole fleet as one client
+
+> **RESOLVED in the same task.** Found by auditing what nothing checked.
+
+| | |
+| --- | --- |
+| **Area** | Abuse / configuration |
+| **Status** | ~~FAIL~~ → **PASS** |
+| **Evidence** | `RATE_LIMIT_TRUSTED_PROXY_COUNT` defaults to **0** and had no production guard. Every production topology in this repository puts nginx in front of the API, and the compose file sets it to 1 — but nothing refused a deployment that did not |
+| **Failure mode** | With zero, `client_ip` falls back to the socket peer, which is the proxy. Every request on the platform then shares one rate-limit bucket: the first twenty logins exhaust the per-IP budget and **every other player is refused**. It looks exactly like the limiter working |
+| **Impact** | A silent, total lockout of new sign-ins, from a variable nobody set |
+| **Action taken** | A production-like tier refuses to start with a count below one, and the message explains both wrong directions. Only "too low" is checkable from configuration — the real hop count is a fact about the deployment, stated in `deployment.md` §8.8 beside the nginx config that produces it |
+| **Regression cover** | `tests/unit/test_settings.py::TestProductionProxyTrust`; removing the guard fails it |
+
+### P2-10 — Three production images were on `:latest`
+
+> **RESOLVED in the same task.**
+
+| | |
+| --- | --- |
+| **Area** | Supply chain |
+| **Status** | ~~FAIL~~ → **PASS** |
+| **Evidence** | `certbot/certbot`, `minio/minio` and `minio/mc` were `:latest` while every other image in the file used a minor or release tag |
+| **Failure mode** | `latest` is not a version: a rebuild silently changes what runs, a rollback cannot name what to return to, and a compromised upstream tag is pulled on the next restart — on the certificate client and the object store, which is where it would matter most |
+| **Action taken** | Pinned to `v5.8.0` and the two current MinIO release tags. The API image stays `${ARENA64_TAG}`, which is the one tag that *should* move — it is the release being deployed |
 
 ### P3 findings
 
@@ -387,7 +421,7 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 | P3-1 | ~~`apps/web/.env.example` does not document `VITE_PUBLIC_ORIGIN`~~ → **RESOLVED — A64-028.6.** Documented with what it writes into the output, why it is build-time, and why it must stay unset locally. The production value is set once from `ARENA64_DOMAIN`, and the image refuses to build with a development origin | A64-028.6 — **done** |
 | P3-2 | ~~Runtime version ambiguity~~ → **RESOLVED — A64-028.3.** `apps/api/.python-version` pins **3.13**, which `uv` reads for the developer's virtualenv and CI's, and which the image already ran. The suite, ruff, mypy, pyright and import-linter all pass under it. 3.13 rather than 3.14 because the image runs it and every checker already targets it — upgrading a runtime because a newer one exists is not a reason | A64-028.3 — **done** |
 | P3-3 | ~~`compose.yml` gives `RESEND_API_KEY` an empty default, implying it is optional~~ → **RESOLVED — A64-028.6.** The production compose requires it, and `EmailSettings` refuses a value that is not a Resend credential: `None` has defined behaviour and fails at boot, while a placeholder builds the real provider, reports the channel available and fails every message one at a time. Original finding: the empty default implied optional. It is not — `ConsoleEmailProvider` refuses to construct in a deployed tier, so the stack fails to boot | **A64-028.6** |
-| P3-4 | **Raised by A64-028.6, reduced by A64-028.6A.** ~~Certificate expiry~~ is **closed**: `arena64_certificate_expiry_timestamp_seconds` is read from the certificate on disk and carries three rules. Two remain, each for a stated reason. **Host CPU, memory and disk:** no node exporter — the application reports its own RSS and nothing about the machine, so `disk pressure` has a runbook and no alert. **Email provider health:** the metric exists and the rule does not, because a threshold separating "the provider is down" from "several addresses bounced" needs a baseline this deployment has not produced — and guessing one is the false-positive source the alerting design exists to avoid. See `docs/01-architecture/observability.md` §10 | **A64-028.7** |
+| P3-4 | ~~Host metrics, certificate expiry, email baseline~~ → **RESOLVED — A64-028.7** (certificate expiry closed in A64-028.6A). *Host:* `node_exporter` pinned, no published port, read-only mounts, defaults disabled and seven collectors enabled — seven rules including `DiskWillFillSoon`, which reads the slope rather than the level because a disk at 60% falling steadily is a ticket today and an outage on Sunday, and `HostMetricsMissing`, because every other rule in the group reads that exporter and a disabled alert is indistinguishable from a healthy one. *Email:* the threshold is **not** a percentage and says so — a figure separating "the provider is down" from "several addresses bounced" needs a baseline that does not exist, so the rule fires on any sustained failure, gated on the platform actually sending. Marked TRAFFIC-INSUFFICIENT in the rule itself. `EmailDeliveryStalled` covers what a rate cannot see: a delivery task that stopped produces no failures at all | A64-028.7 — **done** |
 
 ---
 

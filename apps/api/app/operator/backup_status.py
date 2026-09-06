@@ -38,7 +38,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,8 @@ class BackupStatus:
     failed_at: datetime | None
     last_outcome: str
     archive: str | None
+    offsite_at: datetime | None = None
+    offsite_outcome: str = "unknown"
 
     def age_seconds(self, now: datetime) -> float:
         if self.succeeded_at is None:
@@ -109,6 +111,45 @@ def record_failure(destination: Path, *, at: datetime) -> None:
     )
 
 
+def record_offsite_success(destination: Path, *, archive: str, key: str, at: datetime) -> None:
+    """Stamps a successful off-host copy — A64-028.7 (P2-8).
+
+    A **separate** timestamp from the local backup's, and that separation is
+    the point: a deployment whose archives are written locally and never
+    uploaded has a fresh `succeeded_at` and a stale `offsite_at`, and only
+    the second says the host loss it is meant to survive is still fatal.
+    """
+    existing = _existing(destination)
+    _write(
+        destination,
+        {
+            **existing,
+            "offsite_at": at.astimezone(UTC).isoformat(),
+            "offsite_archive": archive,
+            "offsite_key": key,
+            "offsite_outcome": "succeeded",
+        },
+    )
+
+
+def record_offsite_failure(destination: Path, *, at: datetime) -> None:
+    """Stamps a failed upload, **keeping** the last success.
+
+    Both facts again: "the last upload failed" and "the last off-host copy
+    is from Tuesday" are different, and an operator needs the second to know
+    how much is at risk.
+    """
+    existing = _existing(destination)
+    _write(
+        destination,
+        {
+            **existing,
+            "offsite_failed_at": at.astimezone(UTC).isoformat(),
+            "offsite_outcome": "failed",
+        },
+    )
+
+
 def read(destination: Path) -> BackupStatus:
     """The last recorded outcome, or an empty status.
 
@@ -123,6 +164,8 @@ def read(destination: Path) -> BackupStatus:
         failed_at=_instant(raw.get("failed_at")),
         last_outcome=str(raw.get("last_outcome", "unknown")),
         archive=raw.get("archive") if isinstance(raw.get("archive"), str) else None,
+        offsite_at=_instant(raw.get("offsite_at")),
+        offsite_outcome=str(raw.get("offsite_outcome", "unknown")),
     )
 
 
@@ -135,7 +178,7 @@ def _existing(destination: Path) -> dict[str, str]:
     return loaded if isinstance(loaded, dict) else {}
 
 
-def _write(destination: Path, payload: dict[str, str | None]) -> None:
+def _write(destination: Path, payload: dict[str, Any]) -> None:
     path = destination / STATUS_FILENAME
     try:
         destination.mkdir(parents=True, exist_ok=True)

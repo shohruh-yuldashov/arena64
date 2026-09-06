@@ -88,6 +88,173 @@ established connection pool.
 
 ---
 
+## First boot
+
+**The one procedure that is not a deploy.** Everything below happens once,
+on a machine that has never run Arena64, and every step is here because
+skipping it produces a failure that looks like something else.
+
+### 1. Server prerequisites
+
+Docker Engine with Compose v2. Nothing else — every dependency runs in a
+container.
+
+### 2. DNS
+
+`arena64.gg` and `admin.arena64.gg`, both A records to this host, **before**
+anything starts. The ACME HTTP-01 challenge resolves the name from the
+outside; a certificate cannot be issued for a name that does not point here.
+
+### 3. Firewall
+
+Inbound 22, 80/tcp, 443/tcp and 443/udp; nothing else. **Port 80 is not
+optional** — it carries the ACME challenge, and a firewall allowing only 443
+leaves the site working and makes every renewal impossible. The full
+contract is `deployment.md` §8.8.
+
+### 4. Secrets
+
+```bash
+cd infrastructure/production
+cp production.env.example production.env
+chmod 600 production.env
+
+openssl rand -hex 32          # JWT_SECRET_KEY
+openssl rand -hex 32          # EMAIL_VERIFICATION_OTP_SECRET
+openssl rand -base64 32       # OPS_TOKEN
+openssl rand -base64 32       # OPS_BACKUP_ENCRYPTION_KEY  ← store this elsewhere
+```
+
+**The backup key goes in a secret manager, not only in this file.** Losing
+it loses every backup taken with it, and keeping the only copy on the host
+the backups protect defeats the point of having them off it.
+
+### 5. Off-host backup target
+
+Create the bucket at whatever S3-compatible provider is being used, an
+access key scoped to it, and a lifecycle rule for retention — the platform
+does not implement retention on the remote, because every provider already
+has it. Fill the four `OPS_BACKUP_OFFSITE_*` variables; the tier refuses to
+start with some of them.
+
+### 6. Bring up the data tier
+
+```bash
+docker compose --env-file production.env up -d postgres redis minio
+docker compose --env-file production.env run --rm minio-provision
+```
+
+Wait for `postgres` and `redis` to report healthy before continuing —
+`depends_on` enforces it for the services below, and doing it by hand here
+makes a failure visible now rather than as a confusing startup order.
+
+### 7. Schema
+
+```bash
+docker compose --env-file production.env run --rm migrate
+```
+
+Must exit zero. Nothing that serves traffic migrates anything.
+
+### 8. Clients and edge
+
+```bash
+docker compose --env-file production.env up -d web admin
+docker compose --env-file production.env up -d certbot-init
+docker compose --env-file production.env up -d nginx certbot
+```
+
+`certbot-init` writes a self-signed stopgap, nginx starts on it, the
+challenge is served over port 80, and the real certificate replaces it.
+A browser reaching the site in that window sees a warning — that is the
+correct signal for a deployment that is not finished.
+
+### 9. Application
+
+```bash
+docker compose --env-file production.env up -d api-1 api-2 worker
+```
+
+### 10. Monitoring and backup
+
+```bash
+docker compose --env-file production.env up -d node-exporter backup
+```
+
+### 11. Smoke tests
+
+```bash
+curl -sI https://arena64.gg/ | head -1                    # 200, HTTP/2
+curl -sI https://arena64.gg/login | grep -i x-robots-tag  # noindex, nofollow
+curl -sI https://arena64.gg/gmaes/abc | head -1           # 404
+curl -sI https://arena64.gg/metrics | head -1             # 404 — not public
+curl -s  https://arena64.gg/health/ready                  # postgres and redis true
+curl -sI https://admin.arena64.gg/ | grep -i x-robots-tag # noindex, nofollow
+```
+
+Then register an account, verify the email arrives, sign in, and play one
+move against a second browser. The last of those is the only test that
+exercises the WebSocket, the gateway and the durable move log together.
+
+### 12. First backup, by hand
+
+```bash
+docker compose --env-file production.env run --rm backup \
+  python -m app.operator.backup create --into /var/backups/arena64
+```
+
+Then confirm it reached the remote — the object should be in the bucket, and
+`arena64_backup_last_offsite_timestamp_seconds` should exist. **A backup
+nobody has watched arrive is a backup nobody has.**
+
+### 13. External monitoring — DEPLOYMENT GATE
+
+Configure an off-host uptime check against `https://arena64.gg/`. This is
+not optional and is not in this repository: Prometheus runs on the same host
+as everything it watches, so it cannot report that the host is gone. See
+[monitoring the monitoring](#monitoring-the-monitoring).
+
+---
+
+## Monitoring the monitoring
+
+**No alert.** By construction — this is the gap alerts cannot cover.
+
+Prometheus, Grafana, the node exporter and the application all run on one
+host. If that host stops, every one of them stops with it, and the last
+thing an operator sees is silence that looks exactly like a quiet night.
+
+**What is covered from inside.** A container that dies while the host lives:
+`up{}` goes to zero and `ApiUnavailable`, `HostMetricsMissing` and
+`SchedulerNotRunning` fire. Prometheus's own restart loses no history if its
+volume survives.
+
+**What is not, and cannot be.**
+
+| Failure | Detected from inside? |
+| --- | --- |
+| One container dies | **yes** |
+| Prometheus dies | no — nothing scrapes the scraper |
+| The host loses power | no |
+| The host loses network | no |
+| The disk fills so Prometheus cannot write | partly — the disk alert fires first, if it can be delivered |
+
+**The requirement, stated as a gate.** Production needs at least one
+external availability check that does not run on this host:
+
+- `https://arena64.gg/` returns 200;
+- the certificate is more than fourteen days from expiry — a second,
+  independent opinion on the thing `CertificateExpiringSoon` watches, and
+  the one that still works when the host is gone;
+- a notification path that is not email through this platform.
+
+Any external uptime provider does this. **None is configured in this
+repository, and pretending otherwise would be the most dangerous sentence in
+this file.** It is a LIVE DEPLOYMENT GATE in the final risk register.
+
+
+---
+
 ## Deploy
 
 **Not an incident.** Written first because every other section assumes it.
@@ -606,21 +773,100 @@ numbers.
 
 ## Disk pressure
 
-**Alert:** none — see the residual risk.
+**Alert:** `DiskNearlyFull`, `DiskWillFillSoon`, `InodesNearlyExhausted` —
+A64-028.7, closing half of P3-4.
 
-**Confirm.** `df -h` on the host, and the sizes of the `postgres_data`,
-`backup_data` and `caddy_data` volumes.
+**Confirm.** The host dashboard, or on the machine:
 
-**Mitigate.** Backups are the usual growth: `DEFAULT_KEEP` retains seven
-generations and prunes on every successful run, so an unpruned destination
-means backups have been failing.
+```bash
+df -h ; df -i
+docker system df
+du -sh /var/lib/docker/volumes/* 2>/dev/null | sort -h | tail -5
+```
 
-**Recover.** Retention for the durable tables is documented in
-`data-reliability.md` §4 and runs on the worker.
+**What fills it, in the order it usually happens.**
 
-**Residual risk.** **No disk metric is collected.** The exporter reports the
-application's own memory and nothing about the host. A node exporter is the
-obvious answer and is open work.
+| Consumer | Bound |
+| --- | --- |
+| Backups | `DEFAULT_KEEP` = 7 generations, pruned on every **successful** run |
+| Prometheus | its own retention, set at deploy |
+| PostgreSQL | table retention (outbox, analytics, matchmaking, notifications) |
+| WAL | checkpoints, unless a replication slot is stuck |
+| Redis AOF | rewritten as it grows |
+| Docker images | **unbounded** — nothing prunes old layers |
+| Container logs | `json-file`, 10 MB × 5 per container — A64-028.7 |
+
+**Mitigate.** `docker image prune -a --filter "until=168h"` is the safest
+first move: it touches no volume and no running container.
+
+**Recover.** An unpruned backup destination means backups have been
+*failing* — pruning only runs after a successful one, so
+[a stale backup](#backup-stale) and a full disk arrive together and the
+first causes the second.
+
+**Verify.** `DiskNearlyFull` clears, and `DiskWillFillSoon` with it.
+
+**Residual risk.** Docker image layers have no automatic bound. A deploy
+that runs often enough will fill a small disk with images nothing runs, and
+the only thing that catches it is these alerts.
+
+**Container logs are bounded and were not.** A64-028.7 found every service
+on Docker's default `json-file` driver, which has no size limit — nginx
+logs a line per request and the API a line per metric flush, so the files
+grow until the disk has no room for the database. Every service now caps at
+10 MB × 5. That figure is a PROPOSED OPERATIONAL DEFAULT: the right one
+depends on the disk, which is a HOST-SIZING GATE.
+
+---
+
+## Memory pressure
+
+**Alert:** `MemoryPressure`.
+
+**Confirm.** `free -m` on the host, then `docker stats --no-stream`.
+
+`MemAvailable`, not `MemFree`: Linux uses free memory for page cache by
+design, so `MemFree` is near zero on every healthy machine.
+
+**Mitigate.** The next thing to happen is the OOM killer choosing a process,
+and it is not obliged to choose a good one — PostgreSQL is a large, long-
+lived process and an attractive target. Restarting the container that grew
+is better than letting the kernel decide.
+
+**Recover.** PostgreSQL's `shared_buffers` and Redis's dataset are supposed
+to be large. The API's RSS is measured separately
+(`arena64_http_requests_in_flight` and the process metrics) and should not
+be: A64-028.5A measured about 100 KB per idle WebSocket and 519 MB at two
+thousand of them.
+
+**Verify.** Available memory returns above 10%.
+
+**Residual risk.** No container has a memory limit — see **HOST-SIZING
+GATE** in `deployment.md`. Until the server exists there is no honest number
+to set, and a wrong limit turns a busy hour into an OOM kill.
+
+---
+
+## Host metrics missing
+
+**Alert:** `HostMetricsMissing`.
+
+**Confirm.** `docker compose ps node-exporter`, then from inside the
+network: `curl -s http://node-exporter:9100/metrics | head -1`.
+
+**Why it matters more than it looks.** Every rule in the host group reads
+this target, so its silence disables all of them — and a disabled alert is
+indistinguishable from a healthy one. This rule exists to make that
+difference visible.
+
+**Mitigate.** Restart it. It holds no state, publishes no port, and its
+absence affects nothing but the monitoring.
+
+**Recover.** If it will not start, check the read-only host mounts: it needs
+`/proc`, `/sys` and `/` and writes to none of them.
+
+**Verify.** `up{job="arena64-host"}` returns to 1 and the disk panels
+repopulate.
 
 ---
 

@@ -2024,6 +2024,67 @@ class FriendsSettings(SectionSettings):
     """
 
 
+class NotificationRetentionSettings(SectionSettings):
+    """`notification_retention` — how long notification history is kept.
+
+    A64-028.7, closing **P2-7**. A64-028.1 recorded
+    `notifications.notification` as "the only unbounded durable table that
+    grows with activity and has no retention policy"; the audit found three
+    more with the same shape.
+
+    ## Why these are settings and not constants
+
+    `retention_days` is a **product** decision wearing an engineering hat —
+    it is how far back a player can scroll their notifications. A platform
+    that decides six months is right should raise a number, not write a
+    migration, and the code has no business fixing it.
+
+    ## The ordering invariant
+
+    A delivery row references a notification by id and **there is no foreign
+    key**, so a notification deleted before its delivery rows leaves orphans
+    nothing else removes. `NotificationRetentionPolicy` refuses to construct
+    unless `delivery_retention_days <= retention_days`, and the service
+    deletes deliveries first. That is an invariant, not a preference, which
+    is why it is checked in code rather than described here.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="NOTIFICATION_", frozen=True, extra="forbid", populate_by_name=True
+    )
+
+    retention_enabled: bool = True
+    """The switch. `False` stops the sweep and leaves the tables growing —
+    for an incident where the deletes themselves are the problem, which is
+    the only reason to turn a bound off."""
+
+    retention_days: int = Field(default=90, ge=1, le=3650)
+    """How far back a player can scroll. Ninety days."""
+
+    delivery_retention_days: int = Field(default=30, ge=1, le=3650)
+    """Email and push delivery audit rows.
+
+    Shorter than the notification itself and required to be: a delivery row
+    answers "why did this person not get their email", which is asked within
+    days. It also carries the provider's message id, so it holds the most
+    third-party detail and has the least reason to be kept."""
+
+    revoked_subscription_retention_days: int = Field(default=30, ge=1, le=3650)
+    """Push subscriptions **after they are revoked**.
+
+    A live subscription has no horizon — a player who has not visited for a
+    year still expects their notifications when they return. A revoked one
+    is a browser endpoint already told to stop, and keeping it holds a
+    device identifier for nothing."""
+
+    retention_interval_seconds: float = Field(default=3600.0, ge=60.0, le=86400.0)
+    retention_batch_size: int = Field(default=1000, ge=1, le=10000)
+    retention_max_batches: int = Field(default=20, ge=1, le=1000)
+    """`batch_size × max_batches` is the most one run removes per relation.
+    The ceiling is what stops a first run against years of history from
+    being unbounded after all; the sweep catches up over several runs."""
+
+
 class ObservabilitySettings(SectionSettings):
     """`observability` — the operator surface: `/metrics` and the drain switch.
 
@@ -2091,6 +2152,47 @@ class ObservabilitySettings(SectionSettings):
     `None` means this process cannot see a backup destination, and the
     metric is then **absent** rather than zero — which is what
     `BackupNeverSucceeded` fires on."""
+
+    backup_encryption_key: SecretStr | None = None
+    """The key `python -m app.operator.backup` seals an archive with —
+    `OPS_BACKUP_ENCRYPTION_KEY`. Base64, 32 bytes.
+
+    A64-028.7, closing half of **P2-8**: "a dump is plaintext and holds every
+    email address and password hash on the platform".
+
+    `None` means backups are written unencrypted, which is right for `local`
+    and refused everywhere else by `_guard_production_backup` — an
+    unencrypted production backup must not be producible by forgetting a
+    flag.
+
+    **It is not stored with the archive**, and cannot be: an archive
+    carrying its own key is a compressed file with extra steps. Losing it
+    means losing every backup taken with it, which is the trade encryption
+    always is and is why the rotation procedure is in
+    `docs/05-operations/backup-restore.md` rather than implied.
+
+    Generate one with `openssl rand -base64 32`, or
+    `python -m app.operator.backup keygen`."""
+
+    backup_offsite_endpoint: str | None = None
+    """The S3-compatible endpoint an archive is copied to —
+    `OPS_BACKUP_OFFSITE_ENDPOINT`. A64-028.7, the second half of **P2-8**.
+
+    `None` means backups stay on this host, which is the state A64-028.1
+    filed: "a volume on the same host as the database, so a host loss takes
+    both". It is refused in a production-like tier by
+    `_guard_production_backup` — an off-host copy is not an enhancement,
+    it is what makes the word backup true.
+
+    The API is S3's REST interface rather than a vendor SDK, so a
+    deployment chooses AWS, R2, B2, Hetzner or a self-hosted MinIO by
+    setting this and nothing else."""
+
+    backup_offsite_bucket: str | None = None
+    backup_offsite_region: str = "us-east-1"
+    backup_offsite_prefix: str = ""
+    backup_offsite_access_key_id: SecretStr | None = None
+    backup_offsite_secret_access_key: SecretStr | None = None
 
     certificate_path: Path | None = None
     """The TLS certificate this process can see, if any —
@@ -3479,6 +3581,11 @@ class Settings(BaseModel):
     #: Defaulted like `analytics`: one switch, one optional secret, and no
     #: construction site that should have to know about either.
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
+    #: Defaulted like `analytics`: operational tuning, no secret, and no
+    #: construction site that should have to know about it.
+    notification_retention: NotificationRetentionSettings = Field(
+        default_factory=NotificationRetentionSettings
+    )
 
     @model_validator(mode="after")
     def _resolve_email_links(self) -> "Settings":
@@ -3632,6 +3739,91 @@ class Settings(BaseModel):
                 f"use the browser refresh cookie in {self.environment} — an empty list "
                 "in a deployed tier disables the server-side half of the CSRF defence "
                 "(browser_csrf.py), leaving only the browser's SameSite guarantee"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _guard_production_proxy_trust(self) -> "Settings":
+        """A deployed tier is behind a proxy, and must say how many —
+        A64-028.7's audit.
+
+        Every production topology this repository defines puts nginx in
+        front of the API (`deployment.md` §8), so a count of zero there is
+        not a configuration choice, it is a variable somebody forgot.
+
+        Both wrong values are severe and neither is visible:
+
+          **too low (0)** — `client_ip` falls back to the socket peer, which
+          is the proxy. Every request on the platform then shares one rate
+          limit bucket, so the first twenty logins lock out everybody else.
+          It looks like the limiter working.
+
+          **too high** — the address is read from further left in
+          `X-Forwarded-For`, which is the part a client supplied. That is a
+          limiter with a documented bypass.
+
+        Only the first is checkable from configuration alone: the number of
+        real proxies is a fact about the deployment, not about this file. So
+        this refuses zero and leaves the rest to `deployment.md` §8.8, which
+        states the hop count beside the Caddyfile that produces it.
+        """
+        if not self.environment.is_production_like:
+            return self
+        if self.rate_limit.trusted_proxy_count < 1:
+            raise ValueError(
+                f"RATE_LIMIT_TRUSTED_PROXY_COUNT is 0 in {self.environment}, but every "
+                "production topology puts a reverse proxy in front of the API. With zero, "
+                "the rate limiter keys on the proxy's own address and the whole fleet "
+                "shares one bucket — the first few logins lock out everybody else. Set it "
+                "to the number of proxies that append to X-Forwarded-For (1 for the "
+                "nginx edge)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _guard_production_backup(self) -> "Settings":
+        """A deployed tier does not write plaintext backups — A64-028.7 (P2-8).
+
+        The check is here rather than in `ObservabilitySettings` because it
+        needs the tier, and it is a refusal rather than a warning because a
+        plaintext backup is not a degraded backup: it is a copy of every
+        email address and password hash on the platform, written to the one
+        artefact deliberately moved off the machine that protects it.
+
+        `local` is exempt. There is nothing to protect and an operator
+        restoring a development database by hand should not need a key.
+        """
+        if not self.environment.is_production_like:
+            return self
+        if self.observability.backup_encryption_key is None:
+            raise ValueError(
+                f"OPS_BACKUP_ENCRYPTION_KEY is unset in {self.environment}. A backup written "
+                "without it is a plaintext copy of every account on the platform. Generate a "
+                "key with `openssl rand -base64 32` and store it somewhere the backups are not."
+            )
+
+        offsite = (
+            self.observability.backup_offsite_endpoint,
+            self.observability.backup_offsite_bucket,
+            self.observability.backup_offsite_access_key_id,
+            self.observability.backup_offsite_secret_access_key,
+        )
+        if not any(offsite):
+            raise ValueError(
+                f"No off-host backup target is configured in {self.environment}. A backup on a "
+                "volume beside the database is not a backup: the host loss that makes a restore "
+                "necessary takes both. Set OPS_BACKUP_OFFSITE_ENDPOINT, _BUCKET, "
+                "_ACCESS_KEY_ID and _SECRET_ACCESS_KEY."
+            )
+        if not all(offsite):
+            # A half-configured target is the shape that fails at 3am: the
+            # backup runs, the upload does not, and the status file says
+            # "succeeded" about the local copy. Same reasoning as
+            # `PushSettings`' half-pair refusal (A64-028.2).
+            raise ValueError(
+                "The off-host backup target is half configured. All of "
+                "OPS_BACKUP_OFFSITE_ENDPOINT, _BUCKET, _ACCESS_KEY_ID and "
+                "_SECRET_ACCESS_KEY are required together."
             )
         return self
 

@@ -368,6 +368,47 @@ groups:
             `OPS_CERTIFICATE_PATH` pointing into the mounted volume.
           runbook: docs/01-architecture/runbooks.md#certificate-and-https
 
+      - alert: BackupNotCopiedOffHost
+        expr: time() - arena64_backup_last_offsite_timestamp_seconds > 172800
+        for: 30m
+        labels:
+          severity: page
+        annotations:
+          summary: "No backup has been copied off this host for two days"
+          why: >-
+            **A64-028.7, the second half of P2-8.** A backup on a volume
+            beside the database is not a backup: the host loss that makes a
+            restore necessary takes both. A local archive can be perfectly
+            fresh while this is stale — the upload is a separate step with a
+            separate failure mode, which is why it has a separate series.
+            PROPOSED OPERATIONAL DEFAULT, matched to a daily schedule.
+          action: >-
+            Read `offsite_outcome` in the destination's status file, then run
+            a backup by hand. Expired object-store credentials and a bucket
+            lifecycle rule that deleted the prefix are the two that leave the
+            local copy working.
+          runbook: docs/01-architecture/runbooks.md#backup-stale
+
+      - alert: BackupNeverCopiedOffHost
+        expr: absent(arena64_backup_last_offsite_timestamp_seconds)
+        for: 1h
+        labels:
+          severity: page
+        annotations:
+          summary: "No backup has ever reached off-host storage"
+          why: >-
+            The metric is **absent** rather than old, which an arithmetic
+            comparison cannot fire on. This is a deployment whose off-host
+            target has never worked — and the first hour is the cheapest
+            time to discover that the backups only exist on the machine they
+            are protecting.
+          action: >-
+            Check that the off-host settings are all four present and that
+            the bucket exists. The production tier refuses to start with a
+            half-configured target, so this means the upload itself is
+            failing.
+          runbook: docs/01-architecture/runbooks.md#backup-stale
+
       - alert: BackupNeverSucceeded
         expr: absent(arena64_backup_last_success_timestamp_seconds)
         for: 1h
@@ -384,3 +425,208 @@ groups:
             Check that the backup container is running and that its
             destination volume is mounted and writable.
           runbook: docs/01-architecture/runbooks.md#backup-stale
+
+  - name: arena64-email
+    rules:
+      - alert: EmailDeliveryFailing
+        expr: |
+          sum(rate(arena64_notifications_email_deliveries{outcome!="delivered"}[15m])) > 0
+          and
+          sum(rate(arena64_notifications_email_deliveries[15m])) > 0.01
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Email deliveries have been failing for fifteen minutes"
+          why: >-
+            **A64-028.7, closing the last of P3-4 — and the threshold is
+            deliberately not a percentage.**
+
+            A64-028.6 left this rule unwritten because a figure separating
+            "the provider is down" from "several addresses bounced" needs a
+            production traffic baseline that does not exist, and guessing one
+            is the false-positive source the alerting design exists to
+            avoid. That is still true, so this fires on *any* sustained
+            failure rather than on a rate nobody can justify — which is the
+            honest rule for a platform with no traffic history.
+
+            The second clause is what stops it being noise: with almost no
+            email being sent, one bounce is 100% and means nothing. It
+            requires the platform to actually be sending — about one message
+            every hundred seconds — before a failure counts, so a
+            zero-traffic deployment is silent rather than permanently red.
+
+            **TRAFFIC-INSUFFICIENT.** Replace this with a rate once a
+            baseline exists; until then a ticket on any sustained failure is
+            more informative than a percentage nobody measured.
+          action: >-
+            Read the `outcome` label. `provider_error` is Resend; `bounced`
+            and `rejected` are the recipients' domains and are ordinary at a
+            low rate. If the credential were wrong the platform would not
+            have started.
+          runbook: docs/01-architecture/runbooks.md#email-provider-failure
+
+      - alert: EmailDeliveryStalled
+        expr: |
+          sum(rate(arena64_notifications_email_deliveries[30m])) == 0
+          and
+          sum(rate(arena64_outbox_published_total[30m])) > 0
+        for: 30m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "No email has been attempted for half an hour while events are flowing"
+          why: >-
+            The failure a rate-based rule cannot see: a delivery task that
+            has stopped running produces **no** failures, so every
+            failure-rate alert stays green while nobody receives a
+            verification mail. The second clause is what distinguishes it
+            from a quiet night — the outbox is publishing, so the platform
+            is doing things that ought to produce mail.
+          action: >-
+            Check the worker is running and that `email_delivery` is among
+            its scheduled tasks. This is the same class of failure A64-028.4
+            found, where every scheduled job was dead behind a healthy
+            process.
+          runbook: docs/01-architecture/runbooks.md#email-provider-failure
+
+  - name: arena64-host
+    rules:
+      - alert: DiskNearlyFull
+        expr: |
+          (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}
+            / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}
+          ) < 0.10
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: "A filesystem is more than 90% full"
+          why: >-
+            **A64-028.7, closing half of P3-4.** A full disk takes
+            PostgreSQL, the WAL, the backups and the logs at once, and the
+            first symptom is a database that will not write. Ten percent is a
+            PROPOSED OPERATIONAL DEFAULT chosen to leave room for one
+            backup generation plus the WAL a long transaction can produce —
+            not derived from a measurement, because the disk does not exist
+            yet.
+          action: >-
+            The usual growth is backups. `DEFAULT_KEEP` retains seven
+            generations and prunes on every successful run, so an unpruned
+            destination means backups have been failing.
+          runbook: docs/01-architecture/runbooks.md#disk-pressure
+
+      - alert: DiskWillFillSoon
+        expr: |
+          predict_linear(
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}[6h], 24 * 3600
+          ) < 0
+        for: 1h
+        labels:
+          severity: ticket
+        annotations:
+          summary: "A filesystem is on course to fill within a day"
+          why: >-
+            The rate, not the level. A disk at 60% falling steadily is a
+            ticket today and an outage on Sunday; `DiskNearlyFull` would
+            first fire when there is no time left to act. A ticket rather
+            than a page for exactly that reason.
+          action: >-
+            Find what is growing. Prometheus's own retention, Docker image
+            layers and an unpruned backup destination are the three that do.
+          runbook: docs/01-architecture/runbooks.md#disk-pressure
+
+      - alert: InodesNearlyExhausted
+        expr: |
+          (
+            node_filesystem_files_free{fstype!~"tmpfs|overlay"}
+            / node_filesystem_files{fstype!~"tmpfs|overlay"}
+          ) < 0.10
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: "A filesystem is running out of inodes"
+          why: >-
+            A separate failure from running out of bytes, and one that looks
+            like a bug rather than a capacity problem: writes fail with "no
+            space left on device" while `df` shows the disk half empty.
+          action: >-
+            Count files rather than bytes. A log directory nothing rotates
+            is the usual cause.
+          runbook: docs/01-architecture/runbooks.md#disk-pressure
+
+      - alert: MemoryPressure
+        expr: |
+          (
+            node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes
+          ) < 0.10
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: "Less than 10% of memory is available"
+          why: >-
+            `MemAvailable` rather than `MemFree`: Linux uses free memory for
+            page cache by design, so `MemFree` is near zero on every healthy
+            machine and alerting on it would page nightly. PROPOSED
+            OPERATIONAL DEFAULT — the next thing to happen is the OOM killer
+            choosing a process, and it is not obliged to choose a good one.
+          action: >-
+            Check which container grew. PostgreSQL's `shared_buffers` and
+            Redis's dataset are the two that are supposed to be large; the
+            API's RSS is measured separately and should not be.
+          runbook: docs/01-architecture/runbooks.md#memory-pressure
+
+      - alert: SustainedCpuSaturation
+        expr: |
+          (1 - avg without (cpu) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.90
+        for: 30m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The host has been above 90% CPU for half an hour"
+          why: >-
+            A ticket, not a page. A64-028.5A established that the platform is
+            CPU-bound per process, so saturation is the expected shape of a
+            busy hour rather than a fault — thirty minutes is what separates
+            "busy" from "the lever needs pulling".
+          action: >-
+            Compare with the event-loop lag. Lag up as well means more API
+            worker processes; lag flat means something outside the
+            application is using the machine.
+          runbook: docs/01-architecture/runbooks.md#high-latency
+
+      - alert: HostMetricsMissing
+        expr: up{job="arena64-host"} == 0
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The node exporter has not answered for ten minutes"
+          why: >-
+            Every alert in this group reads it, so its silence disables all
+            of them — and a disabled alert is indistinguishable from a
+            healthy one. This is the rule that makes the difference visible.
+          action: >-
+            Restart the exporter. It holds no state and its absence affects
+            nothing but the monitoring.
+          runbook: docs/01-architecture/runbooks.md#host-metrics-missing
+
+      - alert: HostRebooted
+        expr: (time() - node_boot_time_seconds) < 600
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The host has rebooted within the last ten minutes"
+          why: >-
+            Informational and deliberately noisy-once: a reboot nobody
+            planned is the beginning of an incident, and a reboot somebody
+            planned is a line in the log that explains the alerts either
+            side of it.
+          action: >-
+            Confirm every container came back — `restart: unless-stopped`
+            does not cover a service that fails its own startup.
+          runbook: docs/01-architecture/runbooks.md#api-unavailable

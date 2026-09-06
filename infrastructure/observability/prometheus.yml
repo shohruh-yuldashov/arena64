@@ -50,3 +50,9 @@ scrape_configs:
       - names: ["worker"]
         type: A
         port: 8000
+
+  # The host itself — A64-028.7. No published port: this target is reachable
+  # only on the compose network, which is the same boundary `/metrics` has.
+  - job_name: arena64-host
+    static_configs:
+      - targets: ["node-exporter:9100"]

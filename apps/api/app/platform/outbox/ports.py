@@ -84,6 +84,17 @@ class OutboxRepository(Protocol):
         """
         ...
 
+    async def lock_in_order(self, entry_ids: Sequence[UUID]) -> None:
+        """Takes the row locks for one tick's writes, in a total order every
+        relay agrees on, before any of them are written.
+
+        Part of the port rather than an implementation detail: it is the
+        reason two relays recording overlapping ticks wait for each other
+        instead of deadlocking, so an adapter that ignores it is not a
+        working adapter. See the implementation for the observed failure.
+        """
+        ...
+
     async def mark_published(self, entry_ids: Sequence[UUID], *, at: datetime) -> int:
         """Marks entries delivered. Batched: one statement per relay tick.
 

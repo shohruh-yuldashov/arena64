@@ -20,6 +20,8 @@ produces it.
 Skipped, not failed, when PostgreSQL is unreachable (see `conftest.py`).
 """
 
+import asyncio
+import contextlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
@@ -388,3 +390,109 @@ async def _cleanup(engine: AsyncEngine, entry_ids: list[UUID]) -> None:
     async with AsyncSession(engine) as session:
         await session.execute(delete(OutboxModel).where(OutboxModel.id.in_(entry_ids)))
         await session.commit()
+
+
+class TestLockOrderingUnderConcurrency:
+    """The deadlock two relays actually hit — A64-028.5A §26.
+
+    A matchmaking burst across two instances produced
+    `DeadlockDetectedError` three times on each of them. PostgreSQL breaks a
+    cycle by killing one side, and the side it killed was recording work it
+    had already delivered: every kill counted as another failed attempt, and
+    809 presence events reached the five-attempt ceiling and were abandoned.
+
+    The cycle came from a tick writing its rows in two shapes — successes as
+    one batched update, failures one at a time — so two relays with
+    overlapping claims took the same locks in opposite orders. Overlapping
+    claims are ordinary rather than exotic: a lease lapses while a slow
+    handler is still running and the row becomes claimable again.
+
+    Runs off `contract_engine` for the reason `TestConcurrentWorkers` gives:
+    two transactions have to be able to see each other.
+
+    What this proves and what it does not: removing `lock_in_order`
+    reproduces `DeadlockDetectedError` here, so the single ordered lock
+    statement is load-bearing. Removing only its `ORDER BY` does not fail
+    this test, because two sessions asking for the *same* two rows are
+    served in the same order anyway. The ordering earns its place when
+    claims overlap only partly, which two rows cannot express.
+    """
+
+    async def test_two_transactions_writing_in_opposite_orders_do_not_deadlock(
+        self, contract_engine: AsyncEngine
+    ) -> None:
+        """Reproduces the cycle exactly, and requires it to resolve.
+
+        The interleaving is forced rather than hoped for. Two coroutines on
+        one event loop hand control over only at their own await points, and
+        left to themselves the first transaction runs to its commit before
+        the second begins — which is why an earlier version of this test
+        passed against the unfixed code and proved nothing. The barriers
+        below hold each session at the exact point the deadlock needs:
+        both have taken one row, and each then reaches for the other's.
+
+        Without `lock_in_order` that is a cycle and PostgreSQL kills one
+        side with `DeadlockDetectedError`. With it, both sessions ask for
+        both rows in ascending id order before writing either, so the
+        second waits for the first instead of dying.
+        """
+        ids: list[UUID] = []
+        try:
+            async with AsyncSession(contract_engine, expire_on_commit=False) as seeding:
+                repository = SqlAlchemyOutboxRepository(seeding)
+                for offset in range(2):
+                    entry = await _enqueue(repository, at=NOW + timedelta(seconds=offset))
+                    ids.append(entry.id)
+                await seeding.commit()
+
+            ordered = sorted(ids)
+            first_holds_a_row = asyncio.Event()
+            second_holds_a_row = asyncio.Event()
+
+            async def first() -> None:
+                async with AsyncSession(contract_engine, expire_on_commit=False) as session:
+                    repository = SqlAlchemyOutboxRepository(session)
+                    await repository.lock_in_order(ids)
+                    await repository.mark_published([ordered[0]], at=NOW)
+                    first_holds_a_row.set()
+
+                    # Waits for the other side to take the row it is about
+                    # to reach for — the cycle needs both halves to exist.
+                    # The timeout is not a fallback but the *fixed*
+                    # behaviour: the second session is queued behind this
+                    # one's locks and correctly makes no progress at all.
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(second_holds_a_row.wait(), timeout=2)
+
+                    await repository.mark_failed(
+                        ordered[1], error="Refused", retry_at=NOW + timedelta(minutes=1)
+                    )
+                    await session.commit()
+
+            async def second() -> None:
+                # Starts only once the first session holds a row, so the
+                # interleaving is forced rather than hoped for. Two
+                # coroutines on one event loop otherwise run one
+                # transaction to its commit before starting the other,
+                # which is why a version of this test without these events
+                # passed against the unfixed code and proved nothing.
+                await first_holds_a_row.wait()
+                async with AsyncSession(contract_engine, expire_on_commit=False) as session:
+                    repository = SqlAlchemyOutboxRepository(session)
+                    await repository.lock_in_order(ids)
+                    await repository.mark_published([ordered[1]], at=NOW)
+                    second_holds_a_row.set()
+                    await repository.mark_failed(
+                        ordered[0], error="Refused", retry_at=NOW + timedelta(minutes=1)
+                    )
+                    await session.commit()
+
+            # Opposite orders on purpose: this is the shape that deadlocked.
+            # A `DeadlockDetectedError` from either side fails the test by
+            # propagating; the timeout catches the other failure mode, a
+            # cycle that hangs instead of being detected.
+            await asyncio.wait_for(asyncio.gather(first(), second()), timeout=30)
+        finally:
+            async with AsyncSession(contract_engine) as cleanup:
+                await cleanup.execute(delete(OutboxModel).where(OutboxModel.id.in_(ids)))
+                await cleanup.commit()

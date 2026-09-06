@@ -69,6 +69,11 @@ class Result:
     duration_s: float
     samples: list[Sample] = field(default_factory=list)
     notes: dict[str, Any] = field(default_factory=dict)
+    started_at: float = 0.0
+    ended_at: float = 0.0
+    """`perf_counter` bounds of this level, so the observer's peak can be
+    attributed to the level that caused it rather than to the ladder — see
+    `Sampler.peak_between`."""
 
     @property
     def total(self) -> int:
@@ -97,6 +102,15 @@ class Result:
         healthy one.
         """
         return self.successes / self.duration_s if self.duration_s > 0 else 0.0
+
+    @property
+    def refusals_by_status(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for sample in self.samples:
+            if sample.expected_refusal and sample.status is not None:
+                key = str(sample.status)
+                counts[key] = counts.get(key, 0) + 1
+        return counts
 
     @property
     def failure_rate(self) -> float:
@@ -128,6 +142,13 @@ class Result:
             "p99_ms": round(self.percentile(0.99), 1),
             "max_ms": round(max((s.elapsed_s for s in self.samples if s.ok), default=0) * 1000, 1),
             "expected_refusals": self.refusals,
+            # Broken down, because the two mean opposite things — A64-028.5A
+            # §14. A wall of `429` says the limiter held and the service was
+            # never asked for the work, so the throughput beside it is a
+            # reading of the limit and not of capacity; a run of `409` says
+            # sessions genuinely raced. Reporting one total conflates a
+            # protected service with a struggling one.
+            "refusals_by_status": self.refusals_by_status,
             "failures": self.failures,
             "failure_rate": round(self.failure_rate, 5),
             **self.notes,
@@ -173,10 +194,13 @@ async def run_for(
             samples.append(await timed(lambda: operation(index)))
 
     await asyncio.gather(*(worker(index) for index in range(concurrency)))
+    ended = time.perf_counter()
     return Result(
         scenario=scenario,
         concurrency=concurrency,
-        duration_s=time.perf_counter() - started,
+        duration_s=ended - started,
+        started_at=started,
+        ended_at=ended,
         samples=samples,
     )
 

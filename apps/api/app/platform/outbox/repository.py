@@ -195,6 +195,42 @@ class SqlAlchemyOutboxRepository:
         )
         return int(result.rowcount)
 
+    async def lock_in_order(self, entry_ids: Sequence[UUID]) -> None:
+        """Takes every row lock this tick needs, in ascending id order.
+
+        **Deadlock avoidance, and it is not theoretical** — A64-028.5A §26
+        observed `DeadlockDetectedError` on two instances during a
+        matchmaking burst, three times per node, which burned the five
+        attempts of 809 presence events and abandoned them permanently.
+
+        The cycle: a tick writes its successes as one batched `UPDATE ...
+        WHERE id IN (...)` and then its failures one row at a time, so the
+        rows of a single transaction are locked partly as a set and partly
+        in claim order. Two relays whose claims overlap — which a lease
+        that lapses while a slow handler is still running makes ordinary —
+        then take the same two locks in opposite orders and PostgreSQL
+        breaks the tie by killing one.
+
+        Sorting the *writes* is not enough, because a success and a failure
+        are written by different statements and the order between the two
+        groups is what differs. Taking every lock first, in one statement,
+        in one total order every relay agrees on, removes the cycle by
+        construction: two ticks can still contend, but one now simply waits.
+
+        No `SKIP LOCKED` here, deliberately. Skipping is right when
+        *choosing* work — it is what lets relays cooperate — and wrong when
+        recording work already done: a skipped row would leave a delivered
+        event unpublished and it would be delivered again.
+        """
+        if not entry_ids:
+            return
+        await self._session.execute(
+            select(OutboxModel.id)
+            .where(OutboxModel.id.in_(sorted(entry_ids)))
+            .order_by(OutboxModel.id)
+            .with_for_update()
+        )
+
     async def mark_failed(self, entry_id: UUID, *, error: str, retry_at: datetime) -> None:
         """Records why one entry failed and when it may be tried again.
 

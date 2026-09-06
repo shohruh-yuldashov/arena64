@@ -60,7 +60,9 @@ def environment(node_urls: Sequence[str]) -> dict[str, Any]:
     }
 
 
-async def run(names: Sequence[str], node_urls: list[str], *, scale: float) -> list[Result]:
+async def run(
+    names: Sequence[str], node_urls: list[str], *, scale: float, soak_minutes: float
+) -> list[Result]:
     settings = get_settings()
     engine = create_async_engine(settings.postgres.dsn.get_secret_value())
     redis = Redis.from_url(settings.redis.live_url.get_secret_value())
@@ -108,7 +110,7 @@ async def run(names: Sequence[str], node_urls: list[str], *, scale: float) -> li
                     )
                 )
             elif name == "P06":
-                for users in (round(v * scale) for v in (50, 100)):
+                for users in (round(v * scale) for v in (100, 250, 500, 1000)):
                     if users >= 2:
                         results.append(
                             await scenarios.matchmaking_burst(
@@ -116,7 +118,7 @@ async def run(names: Sequence[str], node_urls: list[str], *, scale: float) -> li
                             )
                         )
             elif name == "P08":
-                for games in (round(v * scale) for v in (5, 25, 50)):
+                for games in (round(v * scale) for v in (10, 25, 50, 100, 250, 500)):
                     if games >= 1:
                         results.append(
                             await scenarios.live_games(
@@ -124,10 +126,29 @@ async def run(names: Sequence[str], node_urls: list[str], *, scale: float) -> li
                             )
                         )
             elif name == "P09":
-                for count in (round(v * scale) for v in (100, 300)):
+                for count in (round(v * scale) for v in (100, 250, 500, 1000, 2000)):
                     if count >= 1:
                         results.append(
                             await scenarios.idle_sockets(primary, count=count, hold_s=5.0)
+                        )
+            elif name == "P18":
+                results.append(
+                    await scenarios.mixed_workload(
+                        engine,
+                        node_urls=node_urls,
+                        readers=max(1, round(20 * scale)),
+                        games=max(1, round(25 * scale)),
+                        idle=max(1, round(100 * scale)),
+                        # Minutes, not the shared `--duration`: a soak is
+                        # the one scenario whose length is the point.
+                        duration_s=soak_minutes * 60,
+                    )
+                )
+            elif name == "P17":
+                for count in (round(v * scale) for v in (100, 250, 500)):
+                    if count >= 1:
+                        results.append(
+                            await scenarios.reconnect_storm(primary, count=count, waves=3)
                         )
             elif name == "P10":
                 results.append(
@@ -159,6 +180,13 @@ async def run(names: Sequence[str], node_urls: list[str], *, scale: float) -> li
                         scenario=f"scaling: {instances} instance(s)",
                         concurrency=per_node * instances,
                         duration_s=max(r.duration_s for r in flat),
+                        # The window the parts actually spanned, so this row
+                        # gets its own peaks rather than the whole ladder's
+                        # — without it the one-instance and two-instance
+                        # rows reported identical CPU, which is the one
+                        # comparison this scenario exists to make.
+                        started_at=min(r.started_at for r in flat),
+                        ended_at=max(r.ended_at for r in flat),
                         samples=[s for r in flat for s in r.samples],
                     )
                     combined.notes = {
@@ -176,12 +204,17 @@ async def run(names: Sequence[str], node_urls: list[str], *, scale: float) -> li
                 print(f"unknown scenario {name}", file=sys.stderr)  # noqa: T201
 
             await sampler.__aexit__()
-            # Attached to the **last** result of the group, which is its
-            # highest concurrency and where saturation shows. Copying one
-            # peak onto every level would read as if the low levels had also
-            # pinned the CPU.
-            if len(results) > first_new:
-                results[-1].notes.update(sampler.peak())
+            # Each level gets the peak from **its own window** —
+            # A64-028.5A §21. A64-028.5 attached one peak to the last level
+            # only, which was honest but made two of this task's questions
+            # unanswerable: per-connection memory needs RSS at each rung of
+            # the ladder, and a leak is a trend across rungs rather than a
+            # number at the top.
+            for level in results[first_new:]:
+                level.notes.update(sampler.peak_between(level.started_at, level.ended_at))
+                # Direction as well as height, for the long runs where a
+                # leak is the question and a peak cannot answer it.
+                level.notes.update(sampler.trend_between(level.started_at, level.ended_at))
 
         after = await outbox_health(engine)
         lag = await event_loop_lag()
@@ -214,12 +247,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="comma-separated API base URLs already running",
     )
     parser.add_argument("--scale", type=float, default=1.0, help="scale levels and durations")
+    parser.add_argument(
+        "--soak-minutes",
+        type=float,
+        default=30.0,
+        help="how long P18 runs; a soak's length is the measurement, so it is not scaled",
+    )
     parser.add_argument("--out", default="", help="write JSON results here")
     arguments = parser.parse_args(argv)
 
     node_urls = [url.strip() for url in arguments.nodes.split(",") if url.strip()]
     started = time.time()
-    results = asyncio.run(run(arguments.scenarios, node_urls, scale=arguments.scale))
+    results = asyncio.run(
+        run(
+            arguments.scenarios,
+            node_urls,
+            scale=arguments.scale,
+            soak_minutes=arguments.soak_minutes,
+        )
+    )
 
     payload = as_json(results, environment=environment(node_urls))
     if arguments.out:

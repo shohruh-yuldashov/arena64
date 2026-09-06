@@ -38,6 +38,11 @@ class InMemoryOutbox:
         #: Every `claim` call's `claimed_by`, in order. Asserted by the tests
         #: that care whether the relay claimed at all.
         self.claims: list[str] = []
+        #: Every `lock_in_order` call's ids, **as the relay asked for
+        #: them**. Recorded unsorted on purpose: the relay's side of the
+        #: contract is asking for every entry it is about to write, and
+        #: a fake that tidied the list could not tell whether it had.
+        self.locked_in_order: list[list[UUID]] = []
 
     async def enqueue(self, entry: OutboxEntry) -> OutboxEntry:
         self.entries[entry.id] = entry
@@ -71,6 +76,17 @@ class InMemoryOutbox:
             self.entries[entry.id] = taken
             claimed.append(taken)
         return claimed
+
+    async def lock_in_order(self, entry_ids: Sequence[UUID]) -> None:
+        """Records what the relay asked to lock.
+
+        Nothing in memory can deadlock, so the orderedness of the real
+        statement is proven against a real database in
+        `tests/contract/test_outbox_repository.py`. What is checkable here
+        is the half that lives in the relay: that it asks for every entry
+        of the tick, once, before writing any of them.
+        """
+        self.locked_in_order.append(list(entry_ids))
 
     async def mark_published(self, entry_ids: Sequence[UUID], *, at: datetime) -> int:
         published = 0

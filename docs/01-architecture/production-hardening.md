@@ -63,7 +63,12 @@ log pipeline, a backup mechanism, a production compose/manifest.
 > raising it to P1, and resolved the application half of **P1-6**.
 > **A64-028.5** partially resolved **P2-5** (capacity), found a **new P1** in
 > the realtime bus, and left most of its scenario matrix unrun.
-> Remaining: **2 P0, 4 P1, 5 P2, 2 P3**.
+> **A64-028.5A** closed **P1-9** — and found that its "remaining cause" was
+> the benchmark rather than the platform — completed the scenario matrix,
+> and found **two new P1s** by running it: an outbox deadlock between
+> instances and a projection no schema would accept. Both closed in the
+> same task.
+> Remaining: **2 P0, 3 P1, 6 P2, 2 P3** — the extra P2 is P2-9, raised by the soak and left open.
 > See `specs/authentication.md` "Rotation under concurrency" for the design.
 
 
@@ -293,7 +298,7 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 | P2-2 | Logging | RISK | No redaction filter at the logging boundary. `_JsonFormatter` emits whatever `extra={…}` a call site passed. `CLAUDE.md` §8.3 requires redaction *at the boundary* "so redaction cannot be forgotten"; today it is call-site discipline. That discipline is currently good (`session_service` logs identifiers only, never the token, user agent or IP) | `app/common/logging.py` | **A64-028.6** |
 | P2-3 | Migrations | ~~RISK~~ → **PASS** | **Resolved — A64-028.3, and the finding was understated.** Not three migrations but **thirty-nine**: `op.create_index` cannot be concurrent inside Alembic's transaction, so every index in the schema is built in a lock. All thirty-nine run at `t=0` — Arena64 has not launched and a production database is built from empty — so none is unsafe. Eleven index a table an *earlier* migration created, which is the shape that would matter after launch; they are declared in `tests/unit/test_migration_policy.py`, which fails when a new one appears undeclared. Live-migration rules are in `docs/05-operations/data-reliability.md` §5 | `tests/unit/test_migration_policy.py` | A64-028.3 — **done** |
 | P2-4 | Notifications | ~~RISK~~ → **PASS** | **Resolved — A64-028.2.** The audit sharpened the finding: absent is a supported decision and a malformed pair already raised, but a **half** pair was silently treated as "push not configured" — an operator who set one key got a tier that refused every subscription and said nothing. `PushSettings` now refuses a half pair at startup, naming the missing variable and never the value | `settings.py`, `tests/unit/test_push_config.py` | A64-028.2 — **done** |
-| P2-5 | Capacity | ~~UNKNOWN~~ → **PARTIAL** | **A64-028.5.** A reproducible harness exists and a baseline is measured: the bottleneck is **one Python process on one core** (104 % CPU at saturation while the DB pool never waited and Redis served 26 ops/s), reads peak at 400–580 ops/s on one instance, and two instances scale at **0.81** once the load generator itself stops being the limit. Outbox sustains ~90–97 events/s. Correctness invariants held throughout. **Most of the matrix is unrun** — live games, idle sockets, mixed workload, reconnect storm and the soak are implemented and not executed — so capacity for the game paths is still unknown. See `docs/05-operations/performance.md` | `tests/load/`, `performance.md` | A64-028.5 → remaining scenarios **A64-029** |
+| P2-5 | Capacity | ~~UNKNOWN~~ → **PASS (this environment only)** | **A64-028.5, completed by A64-028.5A.** The matrix is now run: refresh, matchmaking 100→1 000, live games 10→500, idle sockets 100→2 000, reconnect storm, cross-instance realtime, the analytics pipeline, a mixed workload and a 35-minute soak. **Zero unexpected failures at any level of any scenario.** The constraint is one Python process on one core (99–100 % at every saturated level) while the pool never waited once (`db_waiting_peak` 0, peak 32 of 100) and Redis peaked at 16 450 ops/s — so the first lever is worker processes per host, not a bigger database. Two things are labelled rather than claimed: refresh and login are **RATE-LIMIT BOUNDED**, and every per-IP figure was taken under the `development` profile, which is **20×** production's. The live-game plateau was tested against the generator rather than assumed: two generator processes bought 4.8 %, so the numbers are server-bound. **Nothing here is a production capacity claim** — client and server shared eleven cores. See `docs/05-operations/performance.md` | `tests/load/`, `performance.md` | A64-028.5A — **done**; production hardware **A64-029** |
 | P2-6 | Docs | RISK | The Dockerfile's `HEALTHCHECK` comment says the endpoint "reports the database and Redis". It calls `/api/v1/health`, which is liveness and reports neither. The behaviour is right; the comment describes `/health/ready` | `apps/api/Dockerfile` | **A64-028.6** |
 
 ### Found by A64-028.5
@@ -303,12 +308,63 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 | | |
 | --- | --- |
 | **Area** | Realtime |
-| **Status** | **PARTIAL** — one cause fixed, at least one remains |
+| **Status** | ~~PARTIAL~~ → **RESOLVED** (A64-028.5A) |
 | **Evidence** | `gwbus:v1:<node>` carries a TTL refreshed only on publish. A node with no cross-node traffic for that long loses the key **and its consumer group**, while `_ensure_group` has already cached the group as created — so every `XREADGROUP` fails `NOGROUP` for ever, until restart. One instance's log held **4812** `gateway_stream_consume_failed` warnings before a benchmark noticed |
-| **Failure mode** | Silent. The publisher succeeds, the frame is trimmed, and the opponent's moves simply stop arriving — the exact symptom A64-028.1 feared and A64-028.4 disproved, by a different route |
+| **Failure mode** | Silent. The publisher succeeds, the frame is trimmed, and the opponent's moves simply stop arriving |
 | **Impact** | Cross-instance realtime degrades to nothing on an idle node. Durable state is unaffected: PostgreSQL is authoritative and `game.resume` resyncs |
-| **Action taken** | `consume` now forgets the cached group on `NOGROUP` and recreates it. **Not claimed verified**: after the fix, a reproduction still left 20 of 30 frames undelivered without the new path triggering, so at least one further cause exists |
-| **Owner** | **A64-028.6** for the alert that would have caught it; **A64-029** for the remaining cause |
+| **Action taken** | `consume` forgets the cached group on `NOGROUP` and recreates it **at `0`, not `$`** — a group recreated at `$` skips everything already in the stream, which would have been a second silent loss surviving the first fix |
+| **The "remaining cause" was the benchmark, not the platform** | A64-028.5 reported 20 of 30 frames undelivered after the fix and concluded another cause existed. It did not. The harness replayed a fixed six-ply opening past the point where it stayed legal; from ply three the engine answered `game.move.rejected`, no broadcast was ever published, and the absent frame was counted as transport loss. Traced per ply: `xlen 0→1 watcher=GOT` for plies 1–2, `ack=game.move.rejected` with `xlen` unchanged for plies 3–6. The harness now generates moves with the same `MoveGenerator`/`MoveApplier` the server judges them with, and records a rejection as `HarnessIllegalMove` — never as a missing frame |
+| **Verified** | Two real uvicorn processes, distinct node ids, one Redis: **220 cross-instance frames, 112 A→B and 108 B→A, 0 missing and 0 duplicated**, p50 103 ms / p95 182 ms / p99 183 ms. Repeated after deleting both mailboxes to force the recreation path: **220 frames, 0 missing, 0 duplicated**. The fix was also observed firing in ordinary operation (`gateway_stream_group_recreated node=node-1`) |
+| **Regression cover** | `tests/contract/test_gateway_bus_lifecycle.py`, 5 tests, against a real Redis. Three mutations each caught by 3 failures: never recreating on `NOGROUP`; never clearing the stale cache; recreating at `$` instead of `0` |
+| **Owner** | **A64-028.6** for the alert that would have caught it in production |
+
+### Found by A64-028.5A
+
+### P1-10 — Two relays deadlocked over the rows they had just delivered
+
+> **RESOLVED in the same task.** Found by measurement, not review: it needs
+> two instances and enough load for claims to overlap.
+
+| | |
+| --- | --- |
+| **Area** | Background work |
+| **Status** | ~~FAIL~~ → **PASS** |
+| **Evidence** | Two instances under a 1 000-user matchmaking burst logged `DeadlockDetectedError` three times each. `platform.outbox` held **809** `users.presence_online`/`presence_offline` events at exactly five attempts, abandoned |
+| **Failure mode** | A tick records itself in two shapes — successes as one batched `UPDATE ... WHERE id IN (...)`, failures one row at a time in claim order — so one transaction takes its locks partly as a set and partly in its own order. Two relays with overlapping claims take the same locks in opposite orders; PostgreSQL breaks the cycle by killing one. The killed side was recording deliveries it had **already made**, so each kill counted as another failed attempt against rows that had succeeded, and five of those retired the event permanently. Overlapping claims are ordinary: a lease lapses while a slow handler is still running |
+| **Impact** | Silent, permanent loss of delivered events, worsening with instance count — the opposite of what horizontal scaling is for |
+| **Action taken** | `lock_in_order` takes every lock the tick needs first, in one statement, in ascending id order, so the second relay waits instead of dying. Sorting the two write groups separately would not have sufficed: it is the order *between* a success and a failure that differed |
+| **Verified** | The same ladder on the fixed build: **1 850 matchmaking joins and 500 concurrent live games, `outbox_exhausted` unchanged at 2 880** (all pre-existing), and the 1 807 new retryable rows drained to 0 within 30 s |
+| **Regression cover** | `tests/contract/test_outbox_repository.py` against real PostgreSQL, with the interleaving forced by explicit events — an earlier version let both coroutines run to commit in turn, passed against the unfixed code and proved nothing. Removing `lock_in_order` now raises `DeadlockDetectedError` exactly as production did |
+
+### P2-9 — Fifty events spent their whole retry budget without recording a reason
+
+> **OPEN.** Small in volume, invisible in operation, and the cause is not
+> known. Recorded rather than guessed at.
+
+| | |
+| --- | --- |
+| **Area** | Background work |
+| **Status** | **OPEN** |
+| **Evidence** | During A64-028.5A's 35-minute soak, `outbox_exhausted` rose by exactly 50 — 42 `game.move_applied`, 8 `users.presence_offline`. All were created at 21:21:30 UTC and all claimed at 21:21:34 by a single worker, about two minutes into the run, and it did not recur across the remaining 33 minutes |
+| **Failure mode** | Every one of the 50 carries `attempt_count = 5` with **`last_error` NULL and `next_attempt_at` NULL**, so `mark_failed` never ran for any of them. Across both instances the relay logged 4 866 ticks during the soak and **not one reported a failure**. Something spent the attempt budget five times without recording why, and an operator reading the logs would have seen a healthy relay |
+| **Impact** | Permanent loss of 50 delivered-or-not events out of ~783 000 operations, and — the part that matters — no signal that it happened. A larger occurrence would be equally silent |
+| **Not attributed to the P1-10 fix** | Plausible on its face, since `lock_in_order` waits where the old code deadlocked, and a wait longer than the 5 s `statement_timeout` would abort a tick with attempts already committed. Checked and **not supported**: the logs contain no `canceling statement`, no `QueryCanceled` and no `outbox_tick_failed`, and the same fixed build ran the full matchmaking and live-game ladders with `outbox_exhausted` unchanged |
+| **Owner** | **A64-028.6** — the relay needs to make a lost tick visible before the cause can be chased; today a tick that dies between claim and record leaves no trace anywhere |
+
+### P1-11 — Every queue join was projected into an event the schema refused
+
+> **RESOLVED in the same task.**
+
+| | |
+| --- | --- |
+| **Area** | Analytics |
+| **Status** | ~~FAIL~~ → **PASS** |
+| **Evidence** | `QueueJoined` required `speed_class`; `_queue_ticket_enqueued` has never supplied one, because a ticket carries a variant and a queue type and not a time control. Its own docstring said the schema made the field optional. It did not. **1 850 poisoned rows** surfaced in one load run, `last_error=ValidationError`, all at five attempts |
+| **Failure mode** | Every queue join in every environment produced an outbox entry that failed validation five times and was abandoned. `finalise` validates a projection's output — correctly — but nothing checked that a projection *could* satisfy its schema at all, so the only place the mismatch appeared was at the moment the event was thrown away |
+| **Impact** | The third stage of funnel F-B has been empty since it was written, in every environment. M7b's denominator is affected. The rejected rows accumulate permanently |
+| **Action taken** | `speed_class` is now optional, matching `QueueLeft` beside it — which already had the correct shape, and whose consistency is what let the mismatch survive review. The field stays declared rather than deleted: matchmaking owes it additively (A64-027.1 §49) |
+| **Verified** | Same ladder, fixed build: 1 850 joins, zero new exhausted rows, backlog drained within 30 s |
+| **Regression cover** | `tests/unit/test_analytics_contracts.py` asserts a queue ticket projects into an event that `finalise` accepts. Restoring the required field fails it |
 
 ### Found by A64-028.4
 

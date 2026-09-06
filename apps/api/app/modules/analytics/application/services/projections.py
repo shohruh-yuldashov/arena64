@@ -181,7 +181,9 @@ def _queue_ticket_enqueued(ctx: ProjectionContext) -> Sequence[PendingEvent]:
 
     `speed_class` is absent — the ticket carries a variant and a queue type
     and not a time control. The schema makes it optional and §49 records it
-    as the additive field `matchmaking` owes.
+    as the additive field `matchmaking` owes. It says so because A64-028.5A
+    made it true: the sentence was written before the schema agreed with
+    it, and until then every event this builds was rejected.
     """
     return [
         PendingEvent(

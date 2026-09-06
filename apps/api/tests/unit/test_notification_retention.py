@@ -84,9 +84,9 @@ def _service(
     max_batches: int = 20,
 ) -> NotificationRetentionService:
     return NotificationRetentionService(
-        store=store,  # type: ignore[arg-type]
-        unit_of_work=_NullUnitOfWork(),  # type: ignore[arg-type]
-        clock=_Clock(),  # type: ignore[arg-type]
+        store=store,
+        unit_of_work=_NullUnitOfWork(),
+        clock=_Clock(),
         policy=notification_retention_policy(
             notification_days=90,
             delivery_days=30,

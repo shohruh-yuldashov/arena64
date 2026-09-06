@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest_asyncio
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.modules.notifications.infrastructure.models import (
     NotificationEmailDeliveryModel,
@@ -228,7 +228,7 @@ class TestPushSubscriptions:
 
 class TestConcurrency:
     async def test_two_runs_over_the_same_rows_do_not_double_count(
-        self, contract_engine, contract_session: AsyncSession
+        self, contract_engine: AsyncEngine, contract_session: AsyncSession
     ) -> None:
         """`SKIP LOCKED` means a second run claims what the first left.
 

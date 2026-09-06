@@ -63,7 +63,7 @@ nothing here reads a row before deciding to remove it.
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork

@@ -1,0 +1,119 @@
+<!doctype html>
+<!--
+  The page a URL that does not exist gets — A64-028.6 §16.
+
+  ## Why this file exists at all
+
+  A single-page application is served by rewriting every path to
+  `index.html`, and the standard way to do that returns **HTTP 200** for
+  every URL, including the ones that are nothing. A64-028.1 filed that as
+  part of P0-3: a crawler asked for `/gmaes/abc`, got 200 and a page, and
+  indexed a URL the product does not have.
+
+  The production edge therefore rewrites only the paths the router actually
+  serves, and everything else lands here with a real 404 status. This page
+  is what stops that being a blank browser error.
+
+  Standalone for the same reason `offline.html` is: no bundle, no chunk, no
+  font. A 404 is frequently the *first* thing a crawler or a mistyped link
+  sees, and making it depend on the application shell would mean a page that
+  only works once the application it is apologising for has loaded.
+
+  Uzbek carries the message, with Russian and English lines after it, which
+  is the convention `offline.html` set.
+-->
+<html lang="uz">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#0a0a0a" />
+    <!-- Belt and braces with the edge's `X-Robots-Tag`: a 404 must never be
+         indexed, and the header is the one that binds. -->
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Arena64 — sahifa topilmadi</title>
+    <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #0a0a0a;
+        --muted: #737373;
+        --border: #e5e5e5;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0a0a0a;
+          --fg: #fafafa;
+          --muted: #a3a3a3;
+          --border: #262626;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        background: var(--bg);
+        color: var(--fg);
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          Helvetica,
+          Arial,
+          sans-serif;
+        line-height: 1.6;
+      }
+      main {
+        width: 100%;
+        max-width: 32rem;
+      }
+      .code {
+        font-size: 0.8125rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin: 0 0 0.5rem;
+      }
+      h1 {
+        font-size: 1.375rem;
+        margin: 0 0 0.75rem;
+      }
+      p {
+        margin: 0 0 0.5rem;
+        color: var(--muted);
+      }
+      a {
+        display: inline-block;
+        margin-top: 1.25rem;
+        padding: 0.625rem 1.125rem;
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        color: var(--fg);
+        text-decoration: none;
+        font-weight: 600;
+      }
+      a:hover {
+        border-color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="code">404</p>
+      <h1>Bunday sahifa yo'q</h1>
+      <p>Manzil noto'g'ri yozilgan yoki sahifa ko'chirilgan bo'lishi mumkin.</p>
+      <p lang="ru">Такой страницы нет. Возможно, адрес набран неверно.</p>
+      <p lang="en">This page does not exist. The address may be mistyped.</p>
+      <a href="/">Bosh sahifa</a>
+    </main>
+  </body>
+</html>

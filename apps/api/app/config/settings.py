@@ -837,6 +837,38 @@ class EmailSettings(SectionSettings):
     """
 
     @model_validator(mode="after")
+    def _refuse_a_credential_that_is_not_one(self) -> "EmailSettings":
+        """A blank or placeholder key is worse than no key — A64-028.6 §17.
+
+        `None` is a supported state with defined behaviour: the console
+        provider is built and refuses to construct in a deployed tier, so
+        the process fails at boot. A **present but meaningless** key skips
+        that: `ResendEmailProvider` is built, the channel reports itself
+        available, and every verification mail fails at the provider one at
+        a time for as long as nobody looks.
+
+        That is P3-3's real shape. `compose.yml` gave `RESEND_API_KEY` an
+        empty default, which reads as "optional" and produces exactly this
+        state. The production compose now requires it; this makes the empty
+        string impossible everywhere else too.
+
+        Checked by prefix rather than by length or charset: Resend issues
+        keys as `re_…`, and a value that is not one is a copied placeholder
+        or a variable that expanded to nothing.
+        """
+        if self.resend_api_key is None:
+            return self
+        key = self.resend_api_key.get_secret_value().strip()
+        if not key.startswith("re_") or len(key) < 20:
+            raise ValueError(
+                "RESEND_API_KEY is set but does not look like a Resend credential "
+                "(they begin `re_`). Unset it to run without an email transport, "
+                "or set the real key — a placeholder makes the channel report "
+                "itself available while every message fails at the provider."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _url_templates_must_carry_the_token(self) -> "EmailSettings":
         """Both templates, checked together.
 

@@ -93,12 +93,12 @@ RUN rm -f /etc/nginx/conf.d/default.conf \
 # it cannot prove is that the real certificate exists, which is the runtime
 # check the entrypoint makes.
 RUN apk add --no-cache --virtual .build-deps openssl gettext \
-	&& mkdir -p /etc/letsencrypt/live/build.invalid /var/www/certbot \
+	&& mkdir -p /etc/letsencrypt/arena64/current/build.invalid /var/www/certbot \
 	&& openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=build.invalid' \
-		-keyout /etc/letsencrypt/live/build.invalid/privkey.pem \
-		-out /etc/letsencrypt/live/build.invalid/fullchain.pem 2>/dev/null \
-	&& cp /etc/letsencrypt/live/build.invalid/fullchain.pem \
-		/etc/letsencrypt/live/build.invalid/chain.pem \
+		-keyout /etc/letsencrypt/arena64/current/build.invalid/privkey.pem \
+		-out /etc/letsencrypt/arena64/current/build.invalid/fullchain.pem 2>/dev/null \
+	&& cp /etc/letsencrypt/arena64/current/build.invalid/fullchain.pem \
+		/etc/letsencrypt/arena64/current/build.invalid/chain.pem \
 	&& for template in /etc/nginx/templates/*.template; do \
 		ARENA64_DOMAIN=build.invalid envsubst '$ARENA64_DOMAIN' \
 			< "$template" > "/etc/nginx/conf.d/$(basename "$template" .template)"; \
@@ -111,7 +111,7 @@ RUN apk add --no-cache --virtual .build-deps openssl gettext \
 	&& for template in /etc/nginx/templates/*.template; do \
 		rm -f "/etc/nginx/conf.d/$(basename "$template" .template)"; \
 	done \
-	&& rm -rf /etc/letsencrypt/live/build.invalid \
+	&& rm -rf /etc/letsencrypt/arena64 \
 	&& apk del .build-deps
 
 # Only `$ARENA64_DOMAIN` is substituted. Without this filter `envsubst`

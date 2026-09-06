@@ -59,9 +59,9 @@ server {
     server_name www.${ARENA64_DOMAIN};
 
     # The apex certificate, which now carries this name as a SAN.
-    ssl_certificate     /etc/letsencrypt/live/${ARENA64_DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${ARENA64_DOMAIN}/privkey.pem;
-    ssl_trusted_certificate /etc/letsencrypt/live/${ARENA64_DOMAIN}/chain.pem;
+    ssl_certificate     /etc/letsencrypt/arena64/current/${ARENA64_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/arena64/current/${ARENA64_DOMAIN}/privkey.pem;
+    ssl_trusted_certificate /etc/letsencrypt/arena64/current/${ARENA64_DOMAIN}/chain.pem;
     include /etc/nginx/snippets/tls.conf;
 
     # At server level: this block has no `location`, so there is nothing for

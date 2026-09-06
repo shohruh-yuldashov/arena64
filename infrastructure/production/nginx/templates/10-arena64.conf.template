@@ -21,9 +21,22 @@ server {
     # and must survive that pass — see the Dockerfile's `NGINX_ENVSUBST_FILTER`.
     server_name ${ARENA64_DOMAIN};
 
-    ssl_certificate     /etc/letsencrypt/live/${ARENA64_DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${ARENA64_DOMAIN}/privkey.pem;
-    ssl_trusted_certificate /etc/letsencrypt/live/${ARENA64_DOMAIN}/chain.pem;
+    # --- The certificate path is Arena64's, not Certbot's — A64-030.2 ---
+    #
+    # `arena64/current/<domain>` is a symlink this deployment owns. It points
+    # at the self-signed stopgap before the first successful issuance and at
+    # `/etc/letsencrypt/live/<domain>` afterwards, so nginx's configuration
+    # never changes — only what one symlink resolves to does.
+    #
+    # It does **not** point into `live/` directly, and nothing here creates
+    # anything under `live/`. Certbot refuses to create a lineage when that
+    # directory already exists, and the old bootstrap wrote its stopgap
+    # there: the first real production issuance obtained a certificate from
+    # Let's Encrypt and then discarded it with `CertStorageError: live
+    # directory exists`. `certbot/lineage.sh` carries the boundary.
+    ssl_certificate     /etc/letsencrypt/arena64/current/${ARENA64_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/arena64/current/${ARENA64_DOMAIN}/privkey.pem;
+    ssl_trusted_certificate /etc/letsencrypt/arena64/current/${ARENA64_DOMAIN}/chain.pem;
     include /etc/nginx/snippets/tls.conf;
 
     root /srv/web;

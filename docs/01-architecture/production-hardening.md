@@ -618,6 +618,28 @@ Every non-PASS finding has an owner. No orphans.
 | **A64-028.5** Performance & load testing | P2-5, and §8 in full |
 | **A64-028.6** Observability, deployment & operational safety | P0-2, P0-3, P1-4, P1-5, P1-6 (procedure), P1-7, P2-2, P2-6, P3-1, P3-3 |
 | **A64-028.7** Final hardening audit & closure | Re-verify every row above |
+| **A64-029** Release candidate & full regression | RC-1…RC-5 below — four of them invisible to every gate that existed |
+
+### 12.1 What A64-029 found, and why nothing above caught it
+
+A64-028.7 closed this register at zero open defects **in code**, and that was
+accurate. What it could not see is that the register's gates were themselves
+partly unread: CI was red on `main` at the closure commit, and the production
+compose had never been run through a first boot by anything.
+
+| Id | Defect | Why no gate saw it |
+| --- | --- | --- |
+| RC-1 | **`docker build apps/web` failed** — `.nvmrc` pins Node 24.13.0, the Dockerfiles said `node:22`, and the two npm versions disagree on `@tailwindcss/oxide-wasm32-wasi`'s bundled dependencies. No web image could be produced | CI builds no image. `f7df1f1` fixed this exact failure for CI and the image builds kept a second, divergent number |
+| RC-2 | **`pyright` failed on `main`** since `4313cfb` — a unit-of-work double whose `__aexit__` cannot take the protocol's named parameters | The gate ran and was red; nothing read the result |
+| RC-3 | **The entire backup and restore suite failed in CI** — the runner ships a PostgreSQL 16 client, every environment here runs `postgres:17`, and `pg_dump` aborts across a major | Same: red, unread. The suite that proves a backup restores had never been green |
+| RC-4 | **First boot could never reach a serving edge.** `certbot-init` exits non-zero when issuance fails; nginx waits on it succeeding; the HTTP-01 challenge is served *by nginx*. Eleven of fifteen services stayed in `created` | Nothing had ever run `docker compose up` on a clean host. The deadlock is in an exit code, and only Docker reads exit codes |
+| RC-5 | **`web` and `admin` could not be created at all** — `FROM scratch` images whose compose entrypoint is `/bin/sh -c "cp …"` | Same. The images built fine; they simply could not run |
+
+RC-2 and RC-3 are the register's own lesson repeated: a gate whose result
+nobody reads is not a gate. RC-4 and RC-5 are a new one — **the deployment
+definition had no test of any kind**, and both defects are of a shape no
+static check would find. `tests/unit/test_deployment_bootstrap.py` and
+`tests/unit/test_build_toolchain.py` close that, for these two shapes.
 
 ---
 

@@ -489,8 +489,24 @@ no application secret, and a certificate volume mounted read-only.
   deadlock the stopgap breaks. A browser in that window sees a certificate
   warning, which is the correct signal for a deployment that is not
   finished.
-- **`certbot`** renews twice a day with jitter. A failed renewal leaves the
-  existing certificate untouched and does not stop the loop.
+
+  **It exits zero even when issuance fails**, and that is load-bearing.
+  Nginx waits on it with `condition: service_completed_successfully`, so a
+  non-zero exit meant nginx never started, so nothing answered the
+  challenge, so issuance could never succeed — the deadlock the stopgap
+  exists to break, restored by an exit code. On a clean host that left
+  eleven of fifteen services in `created` with nothing on 80 or 443
+  (A64-029).
+- **`certbot`** renews twice a day with jitter, and **completes a first
+  issuance that `certbot-init` could not**. While
+  `live/<domain>/.self-signed` is on disk it retries issuance every five
+  minutes instead of renewing; `certbot renew` alone cannot help, being a
+  no-op when there is no certbot lineage to renew. A failed renewal leaves
+  the existing certificate untouched and does not stop the loop.
+
+  Nothing is hidden by the retry: the marker persists until a real
+  certificate replaces it, every attempt logs, and the stopgap expires in
+  three days — well inside the expiry alert.
 
 **Nginx reloads itself on a six-hour timer.** The obvious
 `--deploy-hook "nginx -s reload"` cannot work across containers, and giving
@@ -583,7 +599,7 @@ measured on this machine is a production number.
 
 | Gate | What is ready | What is missing | Proven when |
 | --- | --- | --- | --- |
-| **Public certificate** | ACME issuance, renewal, expiry metric and three alerts; a failed renewal leaves the existing certificate byte-identical | `arena64.gg` pointing at a host with port 80 open | `certbot-init` completes and `arena64_certificate_expiry_timestamp_seconds` reads a Let's Encrypt certificate |
+| **Public certificate** | ACME issuance, renewal, expiry metric and three alerts; a failed renewal leaves the existing certificate byte-identical | `arena64.gg` pointing at a host with port 80 open | `live/<domain>/.self-signed` is gone and `arena64_certificate_expiry_timestamp_seconds` reads a Let's Encrypt certificate. **Not** `certbot-init` exiting zero — it exits zero on failure too, deliberately, so that nginx is released (§8.5) |
 | **Off-host backup** | Encryption, SigV4 upload, a separate off-host timestamp and two alerts; proven against a MinIO **on this laptop** | a bucket at a real provider, and credentials for it | the object appears in the remote bucket and the off-host gauge exists |
 | **External monitoring** | nothing in this repository, deliberately | an off-host uptime check on `https://arena64.gg/` and on certificate expiry | see [monitoring the monitoring](./runbooks.md#monitoring-the-monitoring) |
 | **Resend production credential** | fail-fast on a missing or placeholder key; delivery metrics and two alerts | a real key, and a sending domain with SPF, DKIM and DMARC | a verification email arrives during the first-boot smoke test |

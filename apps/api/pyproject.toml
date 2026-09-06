@@ -69,6 +69,7 @@ dependencies = [
     # the avatar routes raise at *import* time and the whole app fails to
     # start. A dependency the process cannot boot without is a direct one.
     "python-multipart>=0.0.20,<0.1",
+    "prometheus-client>=0.21,<1.0",
 ]
 
 [project.optional-dependencies]
@@ -164,3 +165,9 @@ testpaths = ["tests"]
 [tool.coverage.run]
 source = ["app"]
 omit = ["*/tests/*"]
+
+[dependency-groups]
+dev = [
+    "pyyaml>=6.0,<7.0",
+    "types-pyyaml>=6.0.12.20260815",
+]

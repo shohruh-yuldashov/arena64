@@ -33,6 +33,7 @@ matters.
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import lru_cache
 from typing import Any
 from uuid import UUID
 
@@ -114,3 +115,59 @@ class OutboxEntry:
     @property
     def is_published(self) -> bool:
         return self.published_at is not None
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxBacklog:
+    """What is waiting, what is lost, and how old the oldest wait is.
+
+    A64-028.6 §3. Three numbers rather than one, because they fail
+    differently: a large `retryable` that is falling is a busy platform, a
+    small one whose `oldest_pending_age_seconds` keeps climbing is a stuck
+    consumer, and any rise in `exhausted` is permanent loss that no amount
+    of waiting fixes.
+    """
+
+    retryable: int
+    exhausted: int
+    oldest_pending_age_seconds: float
+
+
+class BacklogSnapshot:
+    """The last backlog reading, held for the exporter to publish.
+
+    A64-028.6 §3. Mutable and process-local by design: the relay writes it
+    once per tick from the session it already has open, and the exporter
+    reads it during a scrape. The alternative — a gauge source that opens
+    its own session — makes the monitoring into the load, and a reading at
+    most one poll interval old is finer than any scrape interval worth
+    configuring.
+
+    Starts empty rather than zeroed, so a process that has not ticked yet
+    publishes nothing instead of publishing "no backlog", which is the
+    reading an operator would most regret trusting.
+    """
+
+    def __init__(self) -> None:
+        self._value: OutboxBacklog | None = None
+
+    @property
+    def value(self) -> OutboxBacklog | None:
+        return self._value
+
+    def set(self, backlog: OutboxBacklog) -> None:
+        self._value = backlog
+
+
+@lru_cache(maxsize=1)
+def process_backlog() -> BacklogSnapshot:
+    """The one snapshot a process has.
+
+    Cached rather than a module global, for the reason `process_metrics()`
+    gives: the sharing is visible at the call site, and a test can
+    `process_backlog.cache_clear()` to get a process with no reading. Two
+    callers need the same object and neither can pass it to the other — the
+    relay worker is built inside the lifespan and the gauge is registered
+    while the app is being assembled, which is strictly earlier.
+    """
+    return BacklogSnapshot()

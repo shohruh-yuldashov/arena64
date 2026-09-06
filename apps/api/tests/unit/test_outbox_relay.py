@@ -25,7 +25,15 @@ import pytest
 
 from app.platform.events import DomainEvent
 from app.platform.outbox import OutboxEntry, OutboxEventPublisher
+from app.platform.outbox.metrics import (
+    EXHAUSTED,
+    INCOMPLETE_TICKS,
+    UNRECORDED_ATTEMPTS,
+    ClaimObservation,
+    ExhaustionReason,
+)
 from app.platform.outbox.relay import DeliveryFailure, OutboxRelay
+from tests.fakes.metrics import RecordingMetrics
 from tests.fakes.outbox import (
     InMemoryOutbox,
     InMemoryProcessedEvents,
@@ -116,6 +124,7 @@ def _relay(
     batch_size: int = 50,
     max_attempts: int = 5,
     unit_of_work: object | None = None,
+    metrics: RecordingMetrics | None = None,
 ) -> OutboxRelay:
     return OutboxRelay(
         outbox=cast(Any, outbox),
@@ -128,6 +137,7 @@ def _relay(
         max_attempts=max_attempts,
         retry_base_seconds=5,
         retry_max_seconds=300,
+        metrics=cast(Any, metrics) if metrics is not None else None,
     )
 
 
@@ -600,3 +610,76 @@ class TestLockOrdering:
 
         (asked,) = outbox.locked_in_order
         assert sorted(asked) == sorted(entry.id for entry in entries)
+
+
+class TestWhatTheRelayPublishesAboutItself:
+    """The counters an operator is paged by — A64-028.6 §3.
+
+    Named separately from the behaviour they describe because the two fail
+    independently: a relay that abandons an event correctly and does not
+    count it is a relay whose failure nobody hears about, and the tick log
+    line says `failed=0` in exactly that case. Every one of A64-028.4's,
+    A64-028.5A's and this task's outbox findings was discovered by reading a
+    log file after the fact.
+    """
+
+    async def test_an_abandoned_entry_is_counted_with_its_reason(
+        self, outbox: InMemoryOutbox, processed: InMemoryProcessedEvents, clock: MovableClock
+    ) -> None:
+        """`OutboxEventsAbandoned` fires on this counter, with no `for:`
+        clause: a single abandoned event is already unrecoverable."""
+        metrics = RecordingMetrics()
+        entry = await _enqueue(outbox)
+        relay = _relay(
+            outbox,
+            processed,
+            clock,
+            _Handler(fail_ids={entry.id}),
+            max_attempts=2,
+            metrics=metrics,
+        )
+
+        await relay.run_once()
+        clock.advance(600)
+        await relay.run_once()
+
+        assert metrics.counts(EXHAUSTED) == {ExhaustionReason.REPEATED_FAILURE.value: 1.0}
+
+    async def test_a_delivered_entry_is_never_counted_as_abandoned(
+        self, outbox: InMemoryOutbox, processed: InMemoryProcessedEvents, clock: MovableClock
+    ) -> None:
+        metrics = RecordingMetrics()
+        await _enqueue(outbox)
+
+        await _relay(outbox, processed, clock, _Handler(), metrics=metrics).run_once()
+
+        assert metrics.counts(EXHAUSTED) == {}
+
+    async def test_a_tick_that_publishes_what_it_claimed_is_not_incomplete(
+        self, outbox: InMemoryOutbox, processed: InMemoryProcessedEvents, clock: MovableClock
+    ) -> None:
+        metrics = RecordingMetrics()
+        await _enqueue(outbox)
+        await _enqueue(outbox)
+
+        await _relay(outbox, processed, clock, _Handler(), metrics=metrics).run_once()
+
+        assert metrics.counts(INCOMPLETE_TICKS) == {}
+
+    async def test_a_first_attempt_is_distinguished_from_a_spent_one(
+        self, outbox: InMemoryOutbox, processed: InMemoryProcessedEvents, clock: MovableClock
+    ) -> None:
+        """The classification P2-9 needed, and the only moment it is
+        knowable: the next claim overwrites the evidence."""
+        metrics = RecordingMetrics()
+        entry = await _enqueue(outbox)
+        relay = _relay(outbox, processed, clock, _Handler(fail_ids={entry.id}), metrics=metrics)
+
+        await relay.run_once()
+        clock.advance(600)
+        await relay.run_once()
+
+        assert metrics.counts(UNRECORDED_ATTEMPTS) == {
+            ClaimObservation.FIRST_ATTEMPT.value: 1.0,
+            ClaimObservation.RECORDED_FAILURE.value: 1.0,
+        }

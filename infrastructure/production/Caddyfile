@@ -1,0 +1,294 @@
+# The production edge — A64-028.6 §14, §15, §16.
+#
+# Closes A64-028.1's P0-3, which recorded that `infrastructure/staging/Caddyfile`
+# "sets `encode` and two `reverse_proxy` rules and nothing else: no
+# Content-Security-Policy, Strict-Transport-Security, X-Frame-Options,
+# Referrer-Policy, Permissions-Policy, no X-Robots-Tag, no SPA fallback, no
+# true 404."
+#
+# Three things this file is responsible for that nothing else can be:
+#
+#   1. transport and framing protections, because the API deliberately has
+#      no CORS middleware and the client is same-origin (P0-2's decision);
+#   2. `X-Robots-Tag` on every private path, because `robots.txt` is a
+#      crawling hint and Disallow is not noindex — a page linked from
+#      elsewhere is indexed regardless of what robots.txt says;
+#   3. a real HTTP 404, because the standard SPA rewrite answers 200 for
+#      every URL that does not exist.
+#
+# Ports are not published for anything but this container. The API, the
+# database, Redis and MinIO are reachable only on the compose network.
+
+{
+	# No admin API on the production edge. It is a local-only socket by
+	# default, and turning it off removes the question entirely.
+	admin off
+
+	# One canonical error page shape for the whole file — see the SPA
+	# section on why a 404 must keep its status.
+	email {$ARENA64_ACME_EMAIL}
+}
+
+# --- Snippets ---------------------------------------------------------------
+
+(security_headers) {
+	header {
+		# Two years, subdomains included, and preload-eligible. HSTS is the
+		# one header whose absence is exploitable on the *first* request of
+		# a session, which is the one a downgrade attack wants.
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+
+		# The browser must not second-guess a Content-Type. Sniffing is how
+		# an uploaded avatar becomes a script.
+		X-Content-Type-Options "nosniff"
+
+		# Same-origin referrers keep the request id useful in the API's own
+		# logs; cross-origin gets the origin only, never the path — a game
+		# URL carries a match id and a settings URL says where the player was.
+		Referrer-Policy "strict-origin-when-cross-origin"
+
+		# The platform asks for none of these. Stated rather than omitted:
+		# an empty allowlist is a decision a reader can check, and a missing
+		# header is a question.
+		Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+
+		# Servers do not need to announce themselves.
+		-Server
+		-X-Powered-By
+	}
+}
+
+(no_index) {
+	# `robots.txt` asks a crawler not to *fetch* a path. This tells it not
+	# to *index* one, which is the part that matters for a URL discovered
+	# from a link, a sitemap somebody else wrote, or a browser toolbar.
+	# A64-028.1 P0-3, and the policy in `docs/04-frontend/seo.md`.
+	header X-Robots-Tag "noindex, nofollow"
+}
+
+(api_upstream) {
+	reverse_proxy api:8000 {
+		# The application derives the client address from this chain, and
+		# `RATE_LIMIT_TRUSTED_PROXY_COUNT` must agree with how many proxies
+		# are in front of it — one, here. A limiter that trusts the wrong
+		# hop either rate-limits the proxy as a single client or accepts a
+		# spoofed address from a real one.
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+
+		# WebSockets need no directive: Caddy upgrades them transparently.
+		# The timeout below must therefore be long enough for a game, not
+		# for a request.
+		transport http {
+			read_timeout 24h
+			write_timeout 24h
+		}
+	}
+}
+
+# --- The product ------------------------------------------------------------
+
+{$ARENA64_DOMAIN} {
+	import security_headers
+
+	# A Content-Security-Policy that matches what the application actually
+	# loads, rather than one copied from an article.
+	#
+	#   script-src   'self' plus two SHA-256 hashes. `index.html` carries a
+	#                blocking inline script that sets the theme class before
+	#                first paint — an external file there would be a
+	#                render-blocking round trip and a flash of the wrong
+	#                theme. Hashes rather than 'unsafe-inline', so *those
+	#                two* scripts are allowed and no other inline script is.
+	#                `apps/web/src/app/csp.test.ts` recomputes them from the
+	#                built HTML and fails when they drift.
+	#   style-src    'unsafe-inline' is required and is the one concession.
+	#                React sets element styles and Tailwind emits inline
+	#                custom properties; there is no hash that survives a
+	#                re-render. Style injection cannot execute code, which
+	#                is why this is a different order of risk from the
+	#                script directive.
+	#   connect-src  same origin covers the API and the WebSocket, which is
+	#                the whole reason the client and the API share one origin.
+	#   img-src      `data:` for the inline icons, `blob:` for canvas-rendered
+	#                board exports, same origin for avatars via /media.
+	#   frame-ancestors 'none' replaces X-Frame-Options, which it supersedes.
+	header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-Asl+ROqZKKcKoexLQN7fhxZOiFSDP/yEj8/42vfLnog=' 'sha256-EjOprghzgzKvVjdj1gTxBLJEK1lRGo5dJkXRAdCXavk='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
+
+	encode zstd gzip
+
+	# --- The operator surface is not on the internet ------------------------
+	#
+	# `/metrics` and `/health/drain` are guarded by a bearer token as well
+	# (`app/api/security.py`), and this is the other half: either boundary
+	# alone has a way of being wrong — a mislaid token, a misconfigured
+	# proxy — and the combination is what makes both survivable.
+	#
+	# 404 rather than 403: a refusal confirms there is something there.
+	@operator path /metrics /metrics/* /health/drain
+	handle @operator {
+		error 404
+	}
+
+	# --- The API and the realtime gateway -----------------------------------
+	@api path /api/* /ws /ws/*
+	handle @api {
+		import no_index
+		# An API response is per-request and per-player. A shared cache in
+		# front of it would serve one player's profile to the next.
+		header Cache-Control "no-store"
+		import api_upstream
+	}
+
+	# Liveness and readiness, unversioned, for anything in front of this.
+	@probes path /health /health/ready
+	handle @probes {
+		import no_index
+		header Cache-Control "no-store"
+		import api_upstream
+	}
+
+	# --- Uploaded media -----------------------------------------------------
+	handle_path /media/* {
+		header Cache-Control "public, max-age=604800"
+		reverse_proxy minio:9000
+	}
+
+	# --- The client ---------------------------------------------------------
+	root * /srv/web
+
+	# Private routes get `noindex` whether they are rewritten to the shell
+	# or served as a file. Declared before the handlers so the header is set
+	# on the way out regardless of which one answers.
+	#
+	# The list is `apps/web/public/robots.txt`'s Disallow set, plus every
+	# authenticated route the router declares — the two must agree, and
+	# `tests/edge/test_edge_policy.py` is what makes them.
+	# Kept as prefixes deliberately, unlike `@spa` above: a header that is
+	# set on too much is harmless, and a header that is missing from one
+	# forgotten child is a private page in a search result.
+	@private {
+		path /login /register /verify-email /forgot-password /reset-password
+		path /profile /profile/* /settings /settings/* /friends /friends/*
+		path /challenges /search /play /notifications
+		path /players/* /games/* /tournaments /tournaments/*
+	}
+	# `header`, **not** `handle`. `handle` is mutually exclusive routing: a
+	# block that matched and only set a header would terminate the chain and
+	# answer an empty 200, which is what the first version of this file did
+	# — every private route, `/login` included, returned nothing. The static
+	# policy test could not see it, because it is a fact about Caddy's
+	# routing rather than about the list of paths; the live check in the
+	# deployment verification is what caught it.
+	header @private X-Robots-Tag "noindex, nofollow"
+
+	# Hashed assets are immutable: the filename changes when the content
+	# does, which is what makes a year safe and a revalidation wasteful.
+	@immutable path /assets/*
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+	# The shell and the service worker are the two files that must never be
+	# served stale — every deploy changes what they point at.
+	@revalidate path / /index.html /sw.js /manifest.webmanifest
+	header @revalidate Cache-Control "no-cache"
+
+	# 1. A real file wins. Assets, icons, robots.txt, sitemap.xml, og-card.
+	@static file
+	handle @static {
+		file_server
+	}
+
+	# 2. A path the router actually serves becomes the shell, with 200.
+	#
+	# Enumerated rather than `try_files {path} /index.html`, and that is the
+	# whole of §16: the catch-all form answers 200 for every URL on the
+	# internet, so `/gmaes/abc` is a page as far as a crawler is concerned.
+	# The cost of enumerating is that a new route must be added here, which
+	# `tests/edge/test_edge_policy.py` enforces against the router.
+	# Fixed children are enumerated; only a segment that carries an
+	# identifier is matched by prefix. `/settings/*` was a prefix in the
+	# first draft and `/settings/nope` came back 200 — a soft-404 inside
+	# the subtree, which is the same defect §16 is about, one level down.
+	#
+	# `/games/*`, `/players/*` and `/tournaments/*` stay prefixes because
+	# their next segment is a match id, a username and a tournament id.
+	# Those cannot be enumerated at the edge, so `/games/<nonsense>` is a
+	# 200 that the application resolves to its own not-found view. That is
+	# a stated residual, recorded in `docs/01-architecture/deployment.md`.
+	@spa {
+		path / /login /register /verify-email /forgot-password /reset-password
+		path /profile /challenges /search /play /notifications
+		path /settings /settings/profile /settings/preferences /settings/privacy
+		path /settings/notifications /settings/sessions
+		path /friends /friends/requests /friends/blocked
+		path /games/history /games/* /players/* /tournaments /tournaments/*
+	}
+	handle @spa {
+		rewrite * /index.html
+		file_server
+	}
+
+	# 3. Everything else does not exist, and says so.
+	handle {
+		error 404
+	}
+
+	handle_errors {
+		import no_index
+		header Cache-Control "no-store"
+		# Caddy keeps the error's status on the response; the rewrite only
+		# chooses the body. A page served with 200 would be the soft-404
+		# this whole section exists to remove.
+		rewrite * /404.html
+		file_server
+	}
+}
+
+# --- The admin console ------------------------------------------------------
+#
+# Its own hostname, deliberately. The boundary that matters is the backend's
+# authorization — a frontend route is not a security control and hiding one
+# is not a defence — but a separate origin means an admin bundle cannot be
+# reached by a path on the product's origin, and a cookie scoped to one is
+# not sent to the other.
+
+admin.{$ARENA64_DOMAIN} {
+	import security_headers
+	import no_index
+
+	header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
+
+	encode zstd gzip
+
+	@operator path /metrics /metrics/* /health/drain
+	handle @operator {
+		error 404
+	}
+
+	@api path /api/*
+	handle @api {
+		header Cache-Control "no-store"
+		import api_upstream
+	}
+
+	root * /srv/admin
+
+	@immutable path /assets/*
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+	@revalidate path / /index.html
+	header @revalidate Cache-Control "no-cache"
+
+	@static file
+	handle @static {
+		file_server
+	}
+
+	# The console is one bundle behind a client-side router, and every one
+	# of its routes is private — so unlike the product there is no public
+	# subset to enumerate. A path that is not a file becomes the shell.
+	handle {
+		rewrite * /index.html
+		file_server
+	}
+}

@@ -17,9 +17,12 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import service_lifecycle
 from app.api.exception_handlers import register_exception_handlers
+from app.api.http_metrics import REQUESTS_IN_FLIGHT, HttpMetricsMiddleware, InFlight
+from app.api.observability import build_metrics_router
 from app.api.router import api_router
-from app.api.v1.health import health_router
+from app.api.v1.health import build_drain_route, health_router
 from app.common.logging import configure_logging
 from app.common.middleware import CorrelationIdMiddleware, RequestIdMiddleware
 from app.config.environment import current_environment, describe_env_file
@@ -255,13 +258,17 @@ from app.modules.users.infrastructure.presence import (
     NoPresenceProvider,
     RedisPresenceProvider,
 )
+from app.operator import backup_status
 from app.platform.email import build_email_provider
 from app.platform.metrics import (
     AggregatingMetrics,
     MetricsFlushTask,
     flush_request,
     process_metrics,
+    prometheus_metrics,
 )
+from app.platform.metrics.loop import EventLoopLagProbe
+from app.platform.metrics.prometheus import PrometheusMetrics
 from app.platform.outbox import (
     ConsumerPolicies,
     ConsumerPolicy,
@@ -273,6 +280,8 @@ from app.platform.outbox import (
     prune_request,
     retention_policy,
 )
+from app.platform.outbox.entry import BacklogSnapshot, process_backlog
+from app.platform.outbox.metrics import BACKLOG, OLDEST_PENDING_AGE
 from app.platform.push import build_push_provider, build_vapid_keys
 from app.platform.tasks import (
     InlineTaskDispatcher,
@@ -863,6 +872,7 @@ def build_outbox_worker(
 
     return OutboxWorker(
         session_factory=db.session_factory,
+        metrics=_metrics(),
         # A64-015.6 §5. Per-consumer budgets, so a slow sibling fails its own
         # slice rather than delaying everybody else's tick. The numbers are
         # ordered by what each consumer *does*, not by importance:
@@ -1868,6 +1878,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         redis_pools.limits,
         settings=settings.rate_limit,
         clock=SystemClock(),
+        metrics=_metrics(),
     )
 
     if not settings.rate_limit.enabled:
@@ -1927,11 +1938,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await scheduler.start()
     app.state.task_schedulers = task_schedulers
 
+    # The loop's own health, measured inside the process that has to stay
+    # responsive — A64-028.6 §4. A64-028.5A could report only the load
+    # generator's lag and said so; that number says nothing about whether
+    # the server's loop is blocked, which is the failure that makes an
+    # asyncio service stop answering while every dependency it has is fine.
+    loop_probe = EventLoopLagProbe(
+        metrics=_metrics(),
+        interval_seconds=settings.app.event_loop_probe_interval_seconds,
+    )
+    await loop_probe.start()
+
     logger.info("startup_complete")
     try:
         yield
     finally:
         logger.info("shutdown_begin")
+        # First on the way down: it is the only background task whose
+        # output is about the shutdown itself, and a lag sample taken while
+        # the recorder's sink is closing is noise.
+        await loop_probe.stop()
         for scheduler in task_schedulers:
             await scheduler.stop()
         if presence_sweeper is not None:
@@ -2028,14 +2054,33 @@ def create_app() -> FastAPI:
     # having already run.
     app.add_middleware(CorrelationIdMiddleware)
     app.add_middleware(RequestIdMiddleware)
+    # Added last, so it is the **outermost** of the three: a request that
+    # ends as an unhandled exception must be counted as one, and a
+    # middleware inside `register_exception_handlers` would only ever see
+    # the response the handler produced. A64-028.6 §3.
+    in_flight = InFlight()
+    app.add_middleware(HttpMetricsMiddleware, metrics=_metrics(), in_flight=in_flight)
     register_exception_handlers(app)
 
-    _configure_storage(app, get_settings())
+    settings = get_settings()
+    _configure_storage(app, settings)
+    _register_gauges(prometheus_metrics(), in_flight, process_backlog(), settings)
 
     # Unversioned, for load-balancer and orchestrator probes: a liveness
     # check must not sit behind API versioning that could itself fail to
     # resolve (app/api/v1/health.py's docstring).
     app.include_router(health_router)
+
+    # The operator surface — A64-028.6 §5, §9. Unversioned for the same
+    # reason as the probes, and each route present only when configuration
+    # asks for it: a route that exists and refuses is still a signal that
+    # there is something behind it.
+    observability = settings.observability
+    if observability.metrics_enabled:
+        app.include_router(build_metrics_router(prometheus_metrics(), settings))
+    if observability.drain_enabled:
+        app.include_router(build_drain_route(settings))
+
     app.include_router(api_router, prefix=API_PREFIX)
 
     # A64-016.1. Unversioned in the path, like the health probe and for a
@@ -2046,3 +2091,85 @@ def create_app() -> FastAPI:
     app.include_router(gateway_router)
 
     return app
+
+
+def _register_gauges(
+    exporter: PrometheusMetrics,
+    in_flight: InFlight,
+    outbox_backlog: BacklogSnapshot,
+    settings: Settings,
+) -> None:
+    """Values the exporter reads at scrape time — A64-028.6 §3.
+
+    A depth is a thing that *is*, not a thing that happened, and
+    `platform/metrics/prometheus.py` explains why that gets its own
+    mechanism rather than a counter somebody tries to keep in step by
+    arithmetic. Registered here because the composition root is the only
+    place that knows both the exporter and the objects holding the values.
+
+    The outbox gauges are deliberately **not** here: they read the database,
+    and a scrape must not open a session per series. They are published by
+    the relay's own tick instead, which already has one open — see
+    `OutboxBacklogTask`.
+    """
+
+    async def read_in_flight() -> dict[tuple[tuple[str, str], ...], float]:
+        return {(): float(in_flight.count)}
+
+    exporter.register_gauge(
+        REQUESTS_IN_FLIGHT,
+        "HTTP requests being served at this instant.",
+        read_in_flight,
+    )
+
+    async def read_backlog() -> dict[tuple[tuple[str, str], ...], float]:
+        backlog = outbox_backlog.value
+        if backlog is None:
+            # A process that has not ticked yet publishes nothing rather
+            # than zero — "no backlog" is the reading an operator would
+            # most regret trusting.
+            return {}
+        return {
+            (("state", "retryable"),): float(backlog.retryable),
+            (("state", "exhausted"),): float(backlog.exhausted),
+        }
+
+    async def read_oldest() -> dict[tuple[tuple[str, str], ...], float]:
+        backlog = outbox_backlog.value
+        return {} if backlog is None else {(): backlog.oldest_pending_age_seconds}
+
+    async def read_draining() -> dict[tuple[tuple[str, str], ...], float]:
+        # Published so the readiness alert can exclude a deploy: an
+        # instance answering 503 because it was told to go away is the
+        # deploy working, and paging somebody for it would train the
+        # audience to ignore the channel.
+        return {(): 1.0 if service_lifecycle().draining else 0.0}
+
+    exporter.register_gauge(
+        "service.draining", "1 while this instance is draining, 0 otherwise.", read_draining
+    )
+
+    async def read_backup_age() -> dict[tuple[tuple[str, str], ...], float]:
+        destination = settings.observability.backup_destination
+        if destination is None:
+            # Absent rather than zero — see the setting's docstring. A
+            # deployment where nothing can see the backups must fire
+            # `BackupNeverSucceeded`, not report a fresh one.
+            return {}
+        status = backup_status.read(destination)
+        if status.succeeded_at is None:
+            return {}
+        return {(): status.succeeded_at.timestamp()}
+
+    exporter.register_gauge(
+        "backup.last_success_timestamp_seconds",
+        "Unix time of the last successful backup this process can see.",
+        read_backup_age,
+    )
+
+    exporter.register_gauge(BACKLOG, "Unpublished outbox entries, by state.", read_backlog)
+    exporter.register_gauge(
+        OLDEST_PENDING_AGE,
+        "Age of the oldest retryable outbox entry, in seconds.",
+        read_oldest,
+    )

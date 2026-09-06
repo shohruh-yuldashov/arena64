@@ -102,10 +102,22 @@ COPY --from=build --chown=arena64:arena64 /srv /srv
 USER arena64
 EXPOSE 8000
 
-# The readiness endpoint the platform already publishes. It reports the
-# database and Redis, so a container that answers this is one whose
-# dependencies resolved — which is the only useful definition of healthy
-# for a service that is a composition of both.
+# **Liveness, not readiness** — A64-028.6 §12, closing P2-6.
+#
+# The comment this replaces said the endpoint "reports the database and
+# Redis". It does not: `/api/v1/health` is the dependency-free liveness
+# probe, and the docstring in `app/api/v1/health.py` has always said so.
+#
+# The comment was wrong and the code was right, which is the direction that
+# matters. Docker's HEALTHCHECK feeds a **restart** decision, and a probe
+# that fails when PostgreSQL is unreachable would restart every container in
+# the fleet during a database incident — turning one outage into two while
+# removing the processes that would have recovered on their own.
+#
+# Readiness — which does check both, and now answers 503 rather than a
+# cheerful 200 — is for the load balancer, which takes an instance out of
+# rotation instead of killing it. Different question, different consumer,
+# different endpoint: `/health/ready`.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
     CMD curl --fail --silent http://localhost:8000/api/v1/health || exit 1
 

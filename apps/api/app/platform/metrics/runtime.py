@@ -39,10 +39,48 @@ which is not possible with a global and matters here, because this one
 carries counters between tests otherwise.
 """
 
+from dataclasses import dataclass
 from functools import lru_cache
 
 from app.platform.metrics.aggregation import AggregatingMetrics
-from app.platform.metrics.ports import LoggingMetrics
+from app.platform.metrics.ports import Labels, LoggingMetrics, MetricsRecorder
+from app.platform.metrics.prometheus import PrometheusMetrics
+
+
+@dataclass(frozen=True, slots=True)
+class FanOutMetrics:
+    """Every measurement to each sink, in order — A64-028.6 §5.
+
+    The log line and the exporter want the same measurements for different
+    readers: a log is what an incident is reconstructed from afterwards, a
+    series is what an alert fires on at the time. Neither replaces the other,
+    and duplicating the call sites to feed both would be the "one concept,
+    two spellings" defect this module was written to end.
+
+    A sink that raises must not stop the sinks after it — the port's
+    never-raises contract is per implementation, and this composes them.
+    """
+
+    sinks: tuple[MetricsRecorder, ...]
+
+    def increment(self, name: str, *, labels: Labels | None = None, by: int = 1) -> None:
+        for sink in self.sinks:
+            sink.increment(name, labels=labels, by=by)
+
+    def observe(self, name: str, value: float, *, labels: Labels | None = None) -> None:
+        for sink in self.sinks:
+            sink.observe(name, value, labels=labels)
+
+
+@lru_cache(maxsize=1)
+def prometheus_metrics() -> PrometheusMetrics:
+    """The process's exporter.
+
+    Separate from `process_metrics()` because two callers need it for
+    something other than recording: the `/metrics` route renders it, and the
+    composition root registers gauge sources against it.
+    """
+    return PrometheusMetrics()
 
 
 @lru_cache(maxsize=1)
@@ -53,8 +91,22 @@ def process_metrics() -> AggregatingMetrics:
     this platform, because `MetricsFlushTask` needs `flush()` and a port must
     not grow a method that exists for one implementation's lifecycle. Every
     other caller should annotate the port and stay ignorant of this.
+
+    ## What aggregation costs the exporter, and why it is accepted
+
+    Counters reach both sinks through `AggregatingMetrics`, so a counter's
+    total is exact but arrives in steps of the flush interval; observations
+    already pass straight through, so latency histograms are live. Set
+    `APP_METRICS_FLUSH_INTERVAL_SECONDS` at or below the scrape interval —
+    the production compose sets both to 15 — or `rate()` will read the
+    steps rather than the traffic.
+
+    Aggregating in front of the exporter as well as the log is deliberate:
+    the alternative is a second recorder feeding Prometheus directly, and a
+    second recorder is precisely the defect the rest of this docstring is
+    about.
     """
-    return AggregatingMetrics(sink=LoggingMetrics())
+    return AggregatingMetrics(sink=FanOutMetrics((LoggingMetrics(), prometheus_metrics())))
 
 
-__all__ = ["process_metrics"]
+__all__ = ["FanOutMetrics", "process_metrics", "prometheus_metrics"]

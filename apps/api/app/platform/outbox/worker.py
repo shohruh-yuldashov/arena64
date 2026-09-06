@@ -50,6 +50,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.config.settings import OutboxSettings
 from app.core.clock import Clock
 from app.database.unit_of_work import SessionUnitOfWork
+from app.platform.metrics.ports import MetricsRecorder, NullMetrics
+from app.platform.outbox.entry import BacklogSnapshot, process_backlog
 from app.platform.outbox.isolation import ConsumerPolicies
 from app.platform.outbox.ports import EventHandler
 from app.platform.outbox.relay import OutboxRelay, require_event_handlers
@@ -89,6 +91,7 @@ class OutboxWorker:
         clock: Clock,
         worker_id: str | None = None,
         policies: ConsumerPolicies | None = None,
+        metrics: MetricsRecorder | None = None,
     ) -> None:
         # A64-028.4 §19. Composition time, so a consumer that cannot behave
         # as one fails the process at startup rather than on the first tick
@@ -105,6 +108,8 @@ class OutboxWorker:
         # and a caller naming no policy still gets a bounded consumer.
         self._policies = policies or ConsumerPolicies.of()
         self._worker_id = worker_id or worker_identity()
+        self._metrics: MetricsRecorder = metrics or NullMetrics()
+        self._backlog = process_backlog()
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
@@ -164,9 +169,27 @@ class OutboxWorker:
                 max_attempts=self._settings.max_attempts,
                 retry_base_seconds=self._settings.retry_base_seconds,
                 retry_max_seconds=self._settings.retry_max_seconds,
+                claim_lease_seconds=self._settings.claim_lease_seconds,
                 policies=self._policies,
+                metrics=self._metrics,
             )
             await relay.run_once()
+            # Read on the relay's own session, once per tick, rather than
+            # per scrape — A64-028.6 §3. A gauge source that opened a
+            # database session every time Prometheus asked would make the
+            # monitoring the load, and the freshness a tick gives (one
+            # poll interval, a second by default) is finer than any scrape
+            # interval worth configuring.
+            self._backlog.set(
+                await SqlAlchemyOutboxRepository(session).backlog(
+                    now=self._clock.now(), max_attempts=self._settings.max_attempts
+                )
+            )
+
+    @property
+    def backlog(self) -> "BacklogSnapshot":
+        """The last reading, for the exporter to publish as gauges."""
+        return self._backlog
 
     async def _run(self) -> None:
         """The loop. **Never exits on an error**, only on cancellation.

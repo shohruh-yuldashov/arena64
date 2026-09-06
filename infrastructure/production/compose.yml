@@ -1,0 +1,306 @@
+# The production topology — A64-028.6 §2, §12, §13.
+#
+#   docker compose --env-file production.env up -d
+#
+# ## What this closes
+#
+# A64-028.1's P0-2: staging defines `api`, `migrate`, `caddy`, `postgres`,
+# `redis`, `minio` and **no client**, so the Caddyfile proxies every path to
+# the API and `/` returns the API's 404. There is now a `web` and an `admin`
+# whose build output the edge serves.
+#
+# ## The shape, and the two roles that are not the same process
+#
+#   migrate   one-shot, runs to completion before anything serves. A schema
+#             change is a deployment step, never something a replica does to
+#             a database other replicas are already using.
+#   api       stateless, replicated, **schedulers off**.
+#   worker    exactly one, schedulers and the outbox relay on.
+#   caddy     the only container with published ports.
+#
+# The api/worker split is the whole reason it is safe to scale `api`.
+# A64-028.1's audit found the trap: every scheduled job is gated by a
+# per-process boolean that **defaults to true**, so N replicas of one image
+# run N copies of every sweep. The handlers are individually safe under
+# concurrency — they claim with `FOR UPDATE SKIP LOCKED` and count the races
+# they lose — but "safe" is not "intended", and N pairing scanners a second
+# is load nobody asked for. Here the flags are set explicitly on both
+# services, so the shape is visible in this file rather than inferred from
+# defaults.
+#
+# `docs/01-architecture/deployment.md` carries the same table in prose,
+# including what must change before a second host exists.
+
+name: arena64
+
+x-api-image: &api-image
+  image: ghcr.io/shohruh-yuldashov/arena64-api:${ARENA64_TAG:-latest}
+
+x-api-env: &api-env
+  ENVIRONMENT: production
+  APP_LOG_FORMAT: json
+  # At or below the scrape interval, or `rate()` reads the flush steps
+  # rather than the traffic — `platform/metrics/runtime.py` says why
+  # counters arrive in steps at all.
+  APP_METRICS_FLUSH_INTERVAL_SECONDS: "15"
+  POSTGRES_DSN: postgresql+asyncpg://arena64:${POSTGRES_PASSWORD}@postgres:5432/arena64
+  REDIS_LIVE_URL: redis://redis:6379/0
+  REDIS_BUS_URL: redis://redis:6379/1
+  REDIS_BROKER_URL: redis://redis:6379/2
+  REDIS_CACHE_URL: redis://redis:6379/3
+  REDIS_LIMITS_URL: redis://redis:6379/4
+  # One proxy in front of the application. This number and the Caddyfile's
+  # `header_up X-Forwarded-For` must agree: a limiter that trusts the wrong
+  # hop either rate-limits the proxy as one client or accepts a spoofed
+  # address from a real one.
+  RATE_LIMIT_TRUSTED_PROXY_COUNT: "1"
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+  EMAIL_VERIFICATION_OTP_SECRET: ${EMAIL_VERIFICATION_OTP_SECRET}
+  PUBLIC_APP_URL: https://${ARENA64_DOMAIN}
+  BROWSER_SESSION_TRUSTED_ORIGINS: '["https://${ARENA64_DOMAIN}"]'
+  RESEND_API_KEY: ${RESEND_API_KEY}
+  EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS}
+  EMAIL_FROM_NAME: Arena64
+  STORAGE_PROVIDER: s3
+  STORAGE_S3_ENDPOINT_URL: http://minio:9000
+  STORAGE_S3_BUCKET: arena64-media
+  STORAGE_S3_REGION: auto
+  STORAGE_S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+  STORAGE_S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+  STORAGE_PUBLIC_BASE_URL: https://${ARENA64_DOMAIN}/media
+  # The operator surface. The tier refuses to start without one of these
+  # two being set — see `Settings._guard_production_observability`.
+  OPS_TOKEN: ${OPS_TOKEN}
+
+services:
+  # --- One-shot schema step -------------------------------------------------
+  migrate:
+    <<: *api-image
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *api-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # --- Request serving, replicated, schedulers off --------------------------
+  api:
+    <<: *api-image
+    restart: unless-stopped
+    # `stop_grace_period` is the window between SIGTERM and SIGKILL. The
+    # deploy is expected to have called `POST /health/drain` before this
+    # point, so the window only has to cover requests already in flight —
+    # A64-028.5A measured p99 at 616 ms and a maximum of 1.45 s under a
+    # 35-minute mixed load. Thirty seconds is that with room, and is a
+    # PROPOSED OPERATIONAL DEFAULT rather than a measured requirement.
+    stop_grace_period: 30s
+    deploy:
+      replicas: 2
+    expose: ["8000"]
+    environment:
+      <<: *api-env
+      OUTBOX_WORKER_ENABLED: "false"
+      MATCHMAKING_PAIRING_ENABLED: "false"
+      MATCHMAKING_EXPIRY_ENABLED: "false"
+      MATCHMAKING_RECONCILIATION_ENABLED: "false"
+      MATCHMAKING_RETENTION_ENABLED: "false"
+      MATCHMAKING_CHALLENGE_EXPIRY_ENABLED: "false"
+      OUTBOX_RETENTION_ENABLED: "false"
+      ANALYTICS_RETENTION_ENABLED: "false"
+      PRESENCE_SWEEPER_ENABLED: "false"
+      GAME_CLOCK_ENABLED: "false"
+      # **On, on every replica, deliberately.** The gateway forwarder drains
+      # this node's own cross-instance mailbox; a node that does not run it
+      # receives no frames from anywhere else. A64-028.4 established that
+      # this is one of the two tasks a leader election would break.
+      GATEWAY_FORWARDING_ENABLED: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # --- Scheduled work, exactly one ------------------------------------------
+  worker:
+    <<: *api-image
+    restart: unless-stopped
+    stop_grace_period: 60s
+    deploy:
+      replicas: 1
+    environment:
+      <<: *api-env
+      OUTBOX_WORKER_ENABLED: "true"
+      MATCHMAKING_PAIRING_ENABLED: "true"
+      MATCHMAKING_EXPIRY_ENABLED: "true"
+      MATCHMAKING_RECONCILIATION_ENABLED: "true"
+      MATCHMAKING_RETENTION_ENABLED: "true"
+      MATCHMAKING_CHALLENGE_EXPIRY_ENABLED: "true"
+      OUTBOX_RETENTION_ENABLED: "true"
+      ANALYTICS_RETENTION_ENABLED: "true"
+      PRESENCE_SWEEPER_ENABLED: "true"
+      GAME_CLOCK_ENABLED: "true"
+      # Off here: this process holds no WebSocket, so its mailbox is empty
+      # and draining it every interval is a query for nothing.
+      GATEWAY_FORWARDING_ENABLED: "false"
+      # Read-only, and only so the worker can publish
+      # `arena64_backup_last_success_timestamp_seconds`. The backup runs in
+      # its own container; what that container cannot do is answer a scrape.
+      OPS_BACKUP_DESTINATION: /var/backups/arena64
+    volumes:
+      - backup_data:/var/backups/arena64:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # --- Clients, built to files ----------------------------------------------
+  #
+  # Both build to a `scratch` image whose only content is `dist/`, and the
+  # edge serves it from the volume below. `restart: "no"` because there is
+  # nothing to run: the container exits immediately and the volume keeps
+  # what it copied.
+  web:
+    build:
+      context: ../../apps/web
+      args:
+        VITE_PUBLIC_ORIGIN: https://${ARENA64_DOMAIN}
+    image: arena64-web:${ARENA64_TAG:-latest}
+    restart: "no"
+    command: ["true"]
+    volumes:
+      - web_dist:/srv/web
+    entrypoint: ["/bin/sh", "-c", "cp -r /dist/. /srv/web/"]
+
+  admin:
+    build:
+      context: ../../apps/admin
+    image: arena64-admin:${ARENA64_TAG:-latest}
+    restart: "no"
+    command: ["true"]
+    volumes:
+      - admin_dist:/srv/admin
+    entrypoint: ["/bin/sh", "-c", "cp -r /dist/. /srv/admin/"]
+
+  # --- The only container with published ports ------------------------------
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      ARENA64_DOMAIN: ${ARENA64_DOMAIN}
+      ARENA64_ACME_EMAIL: ${ARENA64_ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - web_dist:/srv/web:ro
+      - admin_dist:/srv/admin:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+  # --- Stateful dependencies, none of them published ------------------------
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: arena64
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: arena64
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arena64 -d arena64"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-provision:
+    image: minio/mc:latest
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" &&
+        mc mb --ignore-existing local/arena64-media &&
+        mc anonymous set download local/arena64-media
+
+  # --- Backup, on a schedule outside the application ------------------------
+  #
+  # A64-028.3 built the command and said the interval was A64-028.6's. It is
+  # a container with a sleep loop rather than a periodic task inside the API
+  # for the reason `backup-restore.md` §8 gives: a backup that only runs
+  # while the application is healthy is a backup that stops exactly when it
+  # is most needed.
+  #
+  # **The destination is a volume on this host, and that is not enough.**
+  # `production-hardening.md` P2-8 owns encryption at rest and off-host
+  # storage; this makes the backups exist and makes their age observable,
+  # which is the part that was missing.
+  backup:
+    <<: *api-image
+    restart: unless-stopped
+    environment:
+      <<: *api-env
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    volumes:
+      - backup_data:/var/backups/arena64
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        while true; do
+          python -m app.operator.backup create --destination /var/backups/arena64 || true
+          sleep "${BACKUP_INTERVAL_SECONDS:-86400}"
+        done
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  caddy_data:
+  caddy_config:
+  web_dist:
+  admin_dist:
+  backup_data:

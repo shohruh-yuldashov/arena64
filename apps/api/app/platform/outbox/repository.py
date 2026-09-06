@@ -40,7 +40,7 @@ the other workers.
 
 import logging
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
@@ -48,7 +48,7 @@ from sqlalchemy import CursorResult, delete, func, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.platform.outbox.entry import OutboxEntry
+from app.platform.outbox.entry import OutboxBacklog, OutboxEntry
 from app.platform.outbox.models import OutboxModel, ProcessedEventModel
 
 logger = logging.getLogger(__name__)
@@ -119,7 +119,13 @@ class SqlAlchemyOutboxRepository:
         return entry
 
     async def claim(
-        self, *, limit: int, claimed_by: str, now: datetime, max_attempts: int
+        self,
+        *,
+        limit: int,
+        claimed_by: str,
+        now: datetime,
+        max_attempts: int,
+        lease: timedelta,
     ) -> Sequence[OutboxEntry]:
         """Takes up to `limit` due entries for this worker. See the module
         docstring on `SKIP LOCKED`.
@@ -164,6 +170,21 @@ class SqlAlchemyOutboxRepository:
                 claimed_at=now,
                 claimed_by=claimed_by,
                 attempt_count=OutboxModel.attempt_count + 1,
+                # The lease, and the fix for P2-9. Without it a claimed row
+                # satisfied the due predicate again the instant this
+                # transaction committed, so a second relay polling a second
+                # later claimed the same rows: both delivered, one
+                # published, and the other spent an attempt recording
+                # nothing because there was nothing left to publish. Five of
+                # those retire an event that never failed.
+                #
+                # `SKIP LOCKED` cannot help — it separates two relays for
+                # the length of one statement, and the claim commits
+                # immediately afterwards.
+                #
+                # `mark_published` and `mark_failed` both overwrite this, so
+                # the lease governs only a tick that reached neither.
+                next_attempt_at=now + lease,
             )
         )
 
@@ -194,6 +215,48 @@ class SqlAlchemyOutboxRepository:
             ),
         )
         return int(result.rowcount)
+
+    async def backlog(self, *, now: datetime, max_attempts: int) -> OutboxBacklog:
+        """The three numbers an operator watches — A64-028.6 §3.
+
+        One statement rather than three, because they are read together on
+        every scrape and a backlog query that costs three round trips is one
+        an operator turns off.
+
+        `oldest_pending_age_seconds` is the number that matters most and is
+        the one nothing published before: a backlog of ten thousand that is
+        draining is healthy, and a backlog of three whose oldest entry is
+        from yesterday is an incident. A count alone cannot tell them apart.
+
+        Exhausted rows are counted separately and **excluded** from the
+        retryable backlog: they are not waiting for anything, and including
+        them would make a permanent loss look like a growing queue that
+        might still drain.
+        """
+        row = (
+            await self._session.execute(
+                select(
+                    func.count()
+                    .filter(OutboxModel.attempt_count < max_attempts)
+                    .label("retryable"),
+                    func.count()
+                    .filter(OutboxModel.attempt_count >= max_attempts)
+                    .label("exhausted"),
+                    func.min(OutboxModel.occurred_at)
+                    .filter(OutboxModel.attempt_count < max_attempts)
+                    .label("oldest"),
+                ).where(OutboxModel.published_at.is_(None))
+            )
+        ).one()
+
+        oldest: datetime | None = row.oldest
+        return OutboxBacklog(
+            retryable=int(row.retryable),
+            exhausted=int(row.exhausted),
+            oldest_pending_age_seconds=(
+                max(0.0, (now - oldest).total_seconds()) if oldest is not None else 0.0
+            ),
+        )
 
     async def lock_in_order(self, entry_ids: Sequence[UUID]) -> None:
         """Takes every row lock this tick needs, in ascending id order.

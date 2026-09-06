@@ -66,6 +66,7 @@ waiting on a login, and only the timeout catches the second.
 import asyncio
 import logging
 import secrets
+import time
 from collections.abc import Sequence
 from datetime import timedelta
 
@@ -74,12 +75,20 @@ from redis.asyncio import Redis
 from app.config.settings import RateLimitSettings
 from app.core.clock import Clock
 from app.core.exceptions import TransientInfrastructureError
+from app.core.rate_limit_metrics import (
+    DECISIONS,
+    LATENCY,
+    UNAVAILABLE,
+    Availability,
+    Decision,
+)
 from app.core.rate_limiting import (
     RateLimitDecision,
     RateLimitRule,
     RateLimitScope,
     RateLimitSubject,
 )
+from app.platform.metrics.ports import MetricsRecorder, NullMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -177,10 +186,14 @@ class RedisRateLimiter:
         *,
         settings: RateLimitSettings,
         clock: Clock,
+        metrics: MetricsRecorder | None = None,
     ) -> None:
         self._redis = redis
         self._settings = settings
         self._clock = clock
+        # Defaulted so every existing construction site keeps working;
+        # `NullMetrics` is a real object, never `None` at a call site.
+        self._metrics: MetricsRecorder = metrics or NullMetrics()
         # `register_script` computes the SHA once and uses EVALSHA, falling
         # back to EVAL automatically if the script is not cached — which is
         # what makes this survive a Redis restart or a `SCRIPT FLUSH`
@@ -203,6 +216,7 @@ class RedisRateLimiter:
         for subject in subjects:
             args.extend((subject.rule.limit, subject.rule.window_ms))
 
+        started = time.perf_counter()
         try:
             raw = await asyncio.wait_for(
                 self._script(keys=keys, args=args),
@@ -210,9 +224,18 @@ class RedisRateLimiter:
             )
         except Exception as error:  # noqa: BLE001 — every failure is one outcome here
             return self._on_failure(subjects, error)
+        finally:
+            self._metrics.observe(LATENCY, time.perf_counter() - started)
 
         allowed, binding, count, limit, reset_ms = (int(value) for value in raw)
         rule = subjects[binding - 1].rule if binding > 0 else subjects[0].rule
+        self._metrics.increment(
+            DECISIONS,
+            labels={
+                "rule": rule.name,
+                "outcome": (Decision.ALLOWED if allowed else Decision.REFUSED).value,
+            },
+        )
 
         return RateLimitDecision(
             allowed=bool(allowed),
@@ -245,6 +268,20 @@ class RedisRateLimiter:
                 "error": type(error).__name__,
             },
             exc_info=error,
+        )
+
+        # Counted before the branch, so the series exists whichever way this
+        # deployment is configured — see `Availability` on why the two are
+        # not one number.
+        self._metrics.increment(
+            UNAVAILABLE,
+            labels={
+                "outcome": (
+                    Availability.FAILED_OPEN
+                    if self._settings.fail_open
+                    else Availability.FAILED_CLOSED
+                ).value
+            },
         )
 
         if self._settings.fail_open:

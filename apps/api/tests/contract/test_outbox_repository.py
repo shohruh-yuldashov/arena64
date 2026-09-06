@@ -39,6 +39,13 @@ from app.platform.outbox import (
     SqlAlchemyProcessedEventStore,
 )
 
+LEASE = timedelta(seconds=60)
+"""The claim lease every test uses unless it is testing the lease itself.
+
+Long enough that no test in this file trips over it by accident, which is
+the point: these tests are about the *due* predicate and the retry ledger,
+and `TestTheClaimLease` is where the lease is the subject."""
+
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 CONSUMER = "test_consumer"
 
@@ -122,7 +129,9 @@ class TestClaim:
         entry = await _enqueue(outbox)
         await contract_session.flush()
 
-        claimed = await outbox.claim(limit=10, claimed_by="w1", now=NOW, max_attempts=5)
+        claimed = await outbox.claim(
+            limit=10, claimed_by="w1", now=NOW, max_attempts=5, lease=LEASE
+        )
 
         assert [item.id for item in claimed] == [entry.id]
         assert claimed[0].claimed_by == "w1"
@@ -137,7 +146,9 @@ class TestClaim:
         earlier = await _enqueue(outbox, at=NOW)
         await contract_session.flush()
 
-        claimed = await outbox.claim(limit=10, claimed_by="w1", now=NOW, max_attempts=5)
+        claimed = await outbox.claim(
+            limit=10, claimed_by="w1", now=NOW, max_attempts=5, lease=LEASE
+        )
 
         assert [item.id for item in claimed] == [earlier.id, later.id]
 
@@ -148,7 +159,9 @@ class TestClaim:
         await contract_session.flush()
         await outbox.mark_published([entry.id], at=NOW)
 
-        assert not await outbox.claim(limit=10, claimed_by="w1", now=NOW, max_attempts=5)
+        assert not await outbox.claim(
+            limit=10, claimed_by="w1", now=NOW, max_attempts=5, lease=LEASE
+        )
 
     async def test_an_entry_backing_off_is_not_claimed(
         self, outbox: SqlAlchemyOutboxRepository, contract_session: AsyncSession
@@ -157,7 +170,9 @@ class TestClaim:
         await contract_session.flush()
         await outbox.mark_failed(entry.id, error="boom", retry_at=NOW + timedelta(seconds=30))
 
-        assert not await outbox.claim(limit=10, claimed_by="w1", now=NOW, max_attempts=5)
+        assert not await outbox.claim(
+            limit=10, claimed_by="w1", now=NOW, max_attempts=5, lease=LEASE
+        )
 
     async def test_the_entry_returns_once_its_backoff_has_elapsed(
         self, outbox: SqlAlchemyOutboxRepository, contract_session: AsyncSession
@@ -167,7 +182,7 @@ class TestClaim:
         await outbox.mark_failed(entry.id, error="boom", retry_at=NOW + timedelta(seconds=30))
 
         claimed = await outbox.claim(
-            limit=10, claimed_by="w1", now=NOW + timedelta(seconds=31), max_attempts=5
+            limit=10, claimed_by="w1", now=NOW + timedelta(seconds=31), max_attempts=5, lease=LEASE
         )
 
         assert [item.id for item in claimed] == [entry.id]
@@ -181,10 +196,12 @@ class TestClaim:
         await _enqueue(outbox)
         await contract_session.flush()
 
-        await outbox.claim(limit=10, claimed_by="w1", now=NOW, max_attempts=2)
-        await outbox.claim(limit=10, claimed_by="w1", now=NOW, max_attempts=2)
+        await outbox.claim(limit=10, claimed_by="w1", now=NOW, max_attempts=2, lease=LEASE)
+        await outbox.claim(limit=10, claimed_by="w1", now=NOW, max_attempts=2, lease=LEASE)
 
-        assert not await outbox.claim(limit=10, claimed_by="w1", now=NOW, max_attempts=2)
+        assert not await outbox.claim(
+            limit=10, claimed_by="w1", now=NOW, max_attempts=2, lease=LEASE
+        )
 
     async def test_the_claim_is_bounded_by_the_limit(
         self, outbox: SqlAlchemyOutboxRepository, contract_session: AsyncSession
@@ -193,7 +210,7 @@ class TestClaim:
             await _enqueue(outbox, at=NOW + timedelta(seconds=offset))
         await contract_session.flush()
 
-        claimed = await outbox.claim(limit=2, claimed_by="w1", now=NOW, max_attempts=5)
+        claimed = await outbox.claim(limit=2, claimed_by="w1", now=NOW, max_attempts=5, lease=LEASE)
 
         assert len(claimed) == 2
 
@@ -231,12 +248,12 @@ class TestConcurrentWorkers:
                 AsyncSession(contract_engine, expire_on_commit=False) as second_session,
             ):
                 first = await SqlAlchemyOutboxRepository(first_session).claim(
-                    limit=2, claimed_by="w1", now=NOW, max_attempts=5
+                    limit=2, claimed_by="w1", now=NOW, max_attempts=5, lease=LEASE
                 )
                 # The first session has **not** committed, so its two rows
                 # are still locked when the second worker polls.
                 second = await SqlAlchemyOutboxRepository(second_session).claim(
-                    limit=2, claimed_by="w2", now=NOW, max_attempts=5
+                    limit=2, claimed_by="w2", now=NOW, max_attempts=5, lease=LEASE
                 )
                 await first_session.rollback()
                 await second_session.rollback()
@@ -258,7 +275,7 @@ class TestPublication:
     ) -> None:
         entry = await _enqueue(outbox)
         await contract_session.flush()
-        await outbox.claim(limit=10, claimed_by="w1", now=NOW, max_attempts=5)
+        await outbox.claim(limit=10, claimed_by="w1", now=NOW, max_attempts=5, lease=LEASE)
 
         published = await outbox.mark_published([entry.id], at=NOW)
 
@@ -492,6 +509,115 @@ class TestLockOrderingUnderConcurrency:
             # propagating; the timeout catches the other failure mode, a
             # cycle that hangs instead of being detected.
             await asyncio.wait_for(asyncio.gather(first(), second()), timeout=30)
+        finally:
+            async with AsyncSession(contract_engine) as cleanup:
+                await cleanup.execute(delete(OutboxModel).where(OutboxModel.id.in_(ids)))
+                await cleanup.commit()
+
+
+class TestTheClaimLease:
+    """Two relays a poll apart must not claim the same rows — A64-028.6 §19.
+
+    This is P2-9's root cause, found by instrumenting the relay and then
+    reading what the instrument said. `SKIP LOCKED` makes two *simultaneous*
+    claims disjoint and nothing made two *sequential* ones disjoint: the
+    claim commits immediately so its rows are visible to everybody, and the
+    due predicate is `next_attempt_at IS NULL OR <= now`, which a
+    just-claimed row still satisfied.
+
+    A second relay polling a second later therefore claimed the same batch.
+    Both delivered it, one published, and the other's `mark_published`
+    matched nothing — the row was already published — so it recorded no
+    outcome and the attempt was spent for nothing. Five of those retire an
+    event that never failed, which is exactly the signature A64-028.5A
+    reported: `attempt_count = 5`, `last_error` null, `next_attempt_at`
+    null, and not one tick reporting a failure.
+
+    Measured on the unfixed build across a 500-game ladder: 3 incomplete
+    ticks, 150 attempts spent with nothing recorded, and 152 rows that
+    reached `published` only on their second or later attempt.
+    """
+
+    async def test_a_second_relay_does_not_reclaim_a_leased_batch(
+        self, contract_engine: AsyncEngine
+    ) -> None:
+        ids: list[UUID] = []
+        try:
+            async with AsyncSession(contract_engine, expire_on_commit=False) as seeding:
+                repository = SqlAlchemyOutboxRepository(seeding)
+                for offset in range(3):
+                    entry = await _enqueue(repository, at=NOW + timedelta(seconds=offset))
+                    ids.append(entry.id)
+                await seeding.commit()
+
+            async with AsyncSession(contract_engine, expire_on_commit=False) as first:
+                claimed = await SqlAlchemyOutboxRepository(first).claim(
+                    limit=10,
+                    claimed_by="w1",
+                    now=NOW,
+                    max_attempts=5,
+                    lease=timedelta(seconds=60),
+                )
+                # Committed, which is the whole point: the rows are visible
+                # to every other relay from this instant.
+                await first.commit()
+
+            assert {entry.id for entry in claimed} == set(ids)
+
+            async with AsyncSession(contract_engine, expire_on_commit=False) as second:
+                # One second later, which is the outbox's poll interval.
+                again = await SqlAlchemyOutboxRepository(second).claim(
+                    limit=10,
+                    claimed_by="w2",
+                    now=NOW + timedelta(seconds=1),
+                    max_attempts=5,
+                    lease=timedelta(seconds=60),
+                )
+
+            assert again == (), (
+                "a second relay reclaimed a batch another had already taken — "
+                "both would deliver it and one would spend an attempt recording nothing"
+            )
+        finally:
+            async with AsyncSession(contract_engine) as cleanup:
+                await cleanup.execute(delete(OutboxModel).where(OutboxModel.id.in_(ids)))
+                await cleanup.commit()
+
+    async def test_the_batch_returns_when_the_lease_expires(
+        self, contract_engine: AsyncEngine
+    ) -> None:
+        """The lease must not be a grave.
+
+        A relay that dies between claiming and recording leaves rows held by
+        a process that no longer exists. The attempt is already spent — by
+        design, so a crash loop cannot retry for ever — and the row has to
+        become claimable again, or one crash would strand a batch until
+        somebody noticed.
+        """
+        ids: list[UUID] = []
+        try:
+            async with AsyncSession(contract_engine, expire_on_commit=False) as seeding:
+                entry = await _enqueue(SqlAlchemyOutboxRepository(seeding), at=NOW)
+                ids.append(entry.id)
+                await seeding.commit()
+
+            async with AsyncSession(contract_engine, expire_on_commit=False) as first:
+                await SqlAlchemyOutboxRepository(first).claim(
+                    limit=10, claimed_by="w1", now=NOW, max_attempts=5, lease=timedelta(seconds=60)
+                )
+                await first.commit()
+
+            async with AsyncSession(contract_engine, expire_on_commit=False) as second:
+                recovered = await SqlAlchemyOutboxRepository(second).claim(
+                    limit=10,
+                    claimed_by="w2",
+                    now=NOW + timedelta(seconds=61),
+                    max_attempts=5,
+                    lease=timedelta(seconds=60),
+                )
+
+            assert [entry.id for entry in recovered] == ids
+            assert recovered[0].attempt_count == 2
         finally:
             async with AsyncSession(contract_engine) as cleanup:
                 await cleanup.execute(delete(OutboxModel).where(OutboxModel.id.in_(ids)))

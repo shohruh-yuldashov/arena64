@@ -16,7 +16,7 @@ not reimplement the limiter's Lua.
 
 import asyncio
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import TracebackType
 from typing import Self
 from uuid import UUID
@@ -49,7 +49,13 @@ class InMemoryOutbox:
         return entry
 
     async def claim(
-        self, *, limit: int, claimed_by: str, now: datetime, max_attempts: int
+        self,
+        *,
+        limit: int,
+        claimed_by: str,
+        now: datetime,
+        max_attempts: int,
+        lease: timedelta,
     ) -> Sequence[OutboxEntry]:
         self.claims.append(claimed_by)
         due = sorted(
@@ -72,6 +78,10 @@ class InMemoryOutbox:
                 attempt_count=entry.attempt_count + 1,
                 claimed_at=now,
                 claimed_by=claimed_by,
+                # The lease, like the real adapter — a claimed entry is not
+                # due again until it expires, which is what stops a second
+                # relay claiming it a poll later (P2-9).
+                next_attempt_at=now + lease,
             )
             self.entries[entry.id] = taken
             claimed.append(taken)

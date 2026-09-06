@@ -163,6 +163,9 @@ class TestItCannotSilentlyWeakenProduction:
         monkeypatch.setenv("EMAIL_VERIFICATION_OTP_SECRET", "y" * 64)
         monkeypatch.setenv("PUBLIC_APP_URL", "https://arena64.gg")
         monkeypatch.setenv("BROWSER_SESSION_TRUSTED_ORIGINS", '["https://arena64.gg"]')
+        # A64-028.6: a deployed tier must say how the operator surface is
+        # guarded before it will start at all.
+        monkeypatch.setenv("OPS_TOKEN", "ops-token")
         get_settings.cache_clear()
 
         try:

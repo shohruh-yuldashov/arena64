@@ -429,6 +429,7 @@ class TestExactlyOnce:
             claimed_by="contract-redelivery",
             now=SystemClock().now(),
             max_attempts=OutboxSettings().max_attempts,
+            lease=timedelta(seconds=OutboxSettings().claim_lease_seconds),
         )
         dispatcher = _dispatcher(contract_session)
         await dispatcher.handle(entries)

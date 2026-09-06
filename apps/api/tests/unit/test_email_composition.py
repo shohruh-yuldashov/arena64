@@ -29,7 +29,7 @@ from app.platform.email import (
     can_deliver_email,
 )
 
-CONFIGURED = EmailSettings(resend_api_key=SecretStr("re_test_key"))
+CONFIGURED = EmailSettings(resend_api_key=SecretStr("re_test_0000000000000000"))
 UNCONFIGURED = EmailSettings()
 
 

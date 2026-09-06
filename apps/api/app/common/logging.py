@@ -31,6 +31,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.common.context import current_causation_id, current_correlation_id, current_request_id
+from app.common.redaction import RedactingFilter
 from app.config.environment import Environment
 
 #: Everything `logging` puts on a record itself, plus what `_ContextFilter`
@@ -178,6 +179,11 @@ def configure_logging(
 
     handler = logging.StreamHandler(stream=sys.stdout)
     handler.addFilter(_ContextFilter())
+    # After the context filter, so the three correlation identifiers it adds
+    # are on the record before redaction inspects the field names — and
+    # before either formatter runs, so a redacted field is redacted in the
+    # human format as well. A64-028.6 §18, closing P2-2.
+    handler.addFilter(RedactingFilter())
     handler.setFormatter(_HumanFormatter() if use_human else _JsonFormatter())
     root.addHandler(handler)
 

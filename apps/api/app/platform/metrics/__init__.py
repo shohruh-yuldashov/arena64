@@ -77,7 +77,7 @@ from app.platform.metrics.ports import (
     MetricsRecorder,
     NullMetrics,
 )
-from app.platform.metrics.runtime import process_metrics
+from app.platform.metrics.runtime import process_metrics, prometheus_metrics
 
 __all__ = [
     "METRICS_FLUSH_TASK",
@@ -89,4 +89,5 @@ __all__ = [
     "NullMetrics",
     "flush_request",
     "process_metrics",
+    "prometheus_metrics",
 ]

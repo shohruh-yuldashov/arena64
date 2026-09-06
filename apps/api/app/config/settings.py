@@ -12,6 +12,7 @@ fail mysteriously on the ten-thousandth request.
 """
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -240,6 +241,10 @@ class AppSettings(SectionSettings):
     )
 
     name: str = "arena64-api"
+    #: Seconds between event-loop lag samples — A64-028.6 §4. Floored well
+    #: above the millisecond scale on purpose: a probe that wakes faster
+    #: than the thing it measures becomes the thing it measures.
+    event_loop_probe_interval_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     # None means "let the environment decide" (dependency-injection.md §2.3:
     # human-readable in `local`, JSON everywhere else) — set explicitly only
@@ -831,6 +836,38 @@ class EmailSettings(SectionSettings):
     works" that could disagree with whether a credential exists is exactly
     the settings-screen lie A64-021.5 §26 forbids.
     """
+
+    @model_validator(mode="after")
+    def _refuse_a_credential_that_is_not_one(self) -> "EmailSettings":
+        """A blank or placeholder key is worse than no key — A64-028.6 §17.
+
+        `None` is a supported state with defined behaviour: the console
+        provider is built and refuses to construct in a deployed tier, so
+        the process fails at boot. A **present but meaningless** key skips
+        that: `ResendEmailProvider` is built, the channel reports itself
+        available, and every verification mail fails at the provider one at
+        a time for as long as nobody looks.
+
+        That is P3-3's real shape. `compose.yml` gave `RESEND_API_KEY` an
+        empty default, which reads as "optional" and produces exactly this
+        state. The production compose now requires it; this makes the empty
+        string impossible everywhere else too.
+
+        Checked by prefix rather than by length or charset: Resend issues
+        keys as `re_…`, and a value that is not one is a copied placeholder
+        or a variable that expanded to nothing.
+        """
+        if self.resend_api_key is None:
+            return self
+        key = self.resend_api_key.get_secret_value().strip()
+        if not key.startswith("re_") or len(key) < 20:
+            raise ValueError(
+                "RESEND_API_KEY is set but does not look like a Resend credential "
+                "(they begin `re_`). Unset it to run without an email transport, "
+                "or set the real key — a placeholder makes the channel report "
+                "itself available while every message fails at the provider."
+            )
+        return self
 
     @model_validator(mode="after")
     def _url_templates_must_carry_the_token(self) -> "EmailSettings":
@@ -1987,6 +2024,88 @@ class FriendsSettings(SectionSettings):
     """
 
 
+class ObservabilitySettings(SectionSettings):
+    """`observability` — the operator surface: `/metrics` and the drain switch.
+
+    A64-028.6.
+
+    ## Why the exporter has a switch and a token
+
+    `/metrics` publishes the shape of the platform: request rates, queue
+    depths, failure counts. None of it is personal data — the cardinality
+    rules in `platform/metrics/__init__.py` see to that — but it is an
+    operational map, and a map of where a system is weakest is not something
+    to serve to the internet.
+
+    Two boundaries, because either one alone has a way of being wrong. The
+    edge refuses `/metrics` from outside, which is the one that holds when
+    the token is mislaid; the token refuses a caller that reached the port
+    another way, which is the one that holds when the edge is misconfigured
+    or bypassed on an internal network.
+
+    ## Why an unauthenticated exporter must be said out loud
+
+    A deployment that scrapes over a private network with no token is a
+    legitimate choice. A deployment that *meant* to set a token and did not
+    is a leak. The two are indistinguishable from the configuration alone,
+    so the second is refused: outside `local`, an enabled exporter needs
+    either a token or `METRICS_ALLOW_UNAUTHENTICATED=true` — which is not a
+    workaround but the operator saying which of the two this is.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="OPS_", frozen=True, extra="forbid", populate_by_name=True
+    )
+
+    metrics_enabled: bool = True
+    """Serves `/metrics`. `False` removes the route entirely rather than
+    answering 404 — a route that exists and refuses is still a signal that
+    there is something there."""
+
+    drain_enabled: bool = True
+    """Serves `POST /health/drain`, which is how a deploy takes an instance
+    out of rotation *before* it is signalled — see `api/v1/health.py`."""
+
+    token: SecretStr | None = None
+    """Presented as `Authorization: Bearer …` on both operator routes.
+    Compared in constant time.
+
+    One token for the surface rather than one per route: they have the same
+    audience and the same blast radius, and two secrets an operator has to
+    keep in step is how one of them ends up unset."""
+
+    allow_unauthenticated: bool = False
+    """The deliberate choice described above. Never a default."""
+
+    backup_destination: Path | None = None
+    """Where `python -m app.operator.backup` writes, if this process can see
+    it — `OPS_BACKUP_DESTINATION`.
+
+    Read-only and only to publish `arena64_backup_last_success_timestamp_seconds`.
+    The backup itself runs in its own container on its own schedule
+    (`infrastructure/production/compose.yml`), because a backup that only
+    runs while the application is healthy stops exactly when it is most
+    needed. What that container cannot do is answer a scrape, so the worker
+    mounts the same volume read-only and reports the age.
+
+    `None` means this process cannot see a backup destination, and the
+    metric is then **absent** rather than zero — which is what
+    `BackupNeverSucceeded` fires on."""
+
+    @model_validator(mode="after")
+    def _refuse_an_accidental_open_exporter(self) -> "ObservabilitySettings":
+        # The tier is not known to this section, so that half of the guard
+        # lives in `Settings`. What is checkable here is the contradiction:
+        # a token *and* the acknowledgement means one of them is not what
+        # the operator thinks it is.
+        if self.token is not None and self.allow_unauthenticated:
+            raise ValueError(
+                "OPS_TOKEN and OPS_ALLOW_UNAUTHENTICATED are both set. "
+                "One of them is wrong: a token that is not required protects nothing."
+            )
+        return self
+
+
 class OutboxSettings(SectionSettings):
     """`outbox` — the transactional event log and its relay (A64-013.7).
 
@@ -2043,6 +2162,42 @@ class OutboxSettings(SectionSettings):
     """
 
     max_attempts: int = Field(default=5, ge=1, le=20)
+
+    claim_lease_seconds: float = Field(default=60.0, ge=1.0, le=600.0)
+    """How long a claimed entry is invisible to other relays — the fix for
+    A64-028.5A's P2-9.
+
+    ## The defect this closes
+
+    `claim` set `claimed_at` and `claimed_by` and incremented
+    `attempt_count`, and **did not touch `next_attempt_at`**. The due
+    predicate is `next_attempt_at IS NULL OR <= now`, so a row that had just
+    been claimed still matched it: `SKIP LOCKED` keeps two relays out of
+    each other's way for the length of one *statement*, and the claim
+    commits immediately afterwards. A second relay polling a second later
+    claimed the same rows.
+
+    Both then delivered, one published, and the other's `mark_published`
+    matched nothing — the row was already published — so it recorded no
+    outcome at all and the attempt was spent for nothing. Five of those on
+    one row retires an event that never failed, which is exactly the
+    signature P2-9 described: `attempt_count = 5`, `last_error` null,
+    `next_attempt_at` null, and not one tick reporting a failure.
+
+    ## Why sixty seconds
+
+    It has to exceed the slowest tick, or a row still being delivered
+    becomes claimable and the race is back.
+    `DEFAULT_CONSUMER_TIMEOUT_SECONDS` is 30 and consumers run
+    concurrently, so a tick is bounded by 30 seconds plus the relay's own
+    two short statements. Sixty is that with room.
+
+    The cost of it being too long is a delayed retry **after a crash**, and
+    only after a crash: a delivered entry is published and a failed one has
+    its backoff written, and both overwrite the lease. The cost of it being
+    too short is the defect above. That asymmetry is why the default is
+    generous.
+    """
     """How many times an entry may be claimed before it stops being claimed.
 
     With the default backoff this is roughly eighty seconds of retrying,
@@ -3304,6 +3459,9 @@ class Settings(BaseModel):
     #: Defaulted for the same reason as `analytics`: one operational number,
     #: no secret, no construction site that should have to know about it.
     broadcast: BroadcastSettings = Field(default_factory=BroadcastSettings)
+    #: Defaulted like `analytics`: one switch, one optional secret, and no
+    #: construction site that should have to know about either.
+    observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
 
     @model_validator(mode="after")
     def _resolve_email_links(self) -> "Settings":
@@ -3457,6 +3615,31 @@ class Settings(BaseModel):
                 f"use the browser refresh cookie in {self.environment} — an empty list "
                 "in a deployed tier disables the server-side half of the CSRF defence "
                 "(browser_csrf.py), leaving only the browser's SameSite guarantee"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _guard_production_observability(self) -> "Settings":
+        """The operator surface is never accidentally open — A64-028.6 §5.
+
+        The half of `ObservabilitySettings`' rule that needs the tier. In
+        `local` an open `/metrics` is a convenience; anywhere else it is
+        either a decision or a mistake, and the operator says which. The
+        drain switch is held to the same bar for a stronger reason: an
+        unauthenticated caller who can flip it can take every instance out
+        of rotation one request at a time.
+        """
+        if not self.environment.is_production_like:
+            return self
+        observability = self.observability
+        if not (observability.metrics_enabled or observability.drain_enabled):
+            return self
+        if observability.token is None and not observability.allow_unauthenticated:
+            raise ValueError(
+                f"OPS_TOKEN is unset in {self.environment} and the operator surface "
+                "(/metrics, /health/drain) is enabled. Set a token, or set "
+                "OPS_ALLOW_UNAUTHENTICATED=true to state that the surface is reachable "
+                "only from a trusted network. Refusing to serve it unguarded."
             )
         return self
 

@@ -72,6 +72,651 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The signed-in administrator
+         * @description Who this session administers as, and what it may do.
+         *
+         *     The admin client calls this **before rendering anything privileged**:
+         *     it is the server-authoritative answer that decides whether the shell
+         *     appears at all. A client that guessed from local state would be
+         *     guessing, which is what §6 forbids.
+         */
+        get: operations["read_admin_session_api_v1_admin_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search and list accounts
+         * @description One page of accounts, newest first.
+         *
+         *     `admin` is unused in the body and named anyway: it is the guard, and a
+         *     route that took it only as a router-level dependency would be one whose
+         *     protection is invisible in its own signature.
+         */
+        get: operations["list_users_api_v1_admin_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One account in full
+         * @description One account, composed from published ports only.
+         */
+        get: operations["read_user_api_v1_admin_users__user_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/matches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List and filter matches
+         * @description One page of matches, newest first.
+         *
+         *     Every filter is a typed enum or a boolean, so there is no query
+         *     language and no free-text predicate reaching the database.
+         */
+        get: operations["list_matches_api_v1_admin_matches_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/matches/{match_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One match in full
+         * @description One match, composed from two published ports.
+         */
+        get: operations["read_match_api_v1_admin_matches__match_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/tournaments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List and filter tournaments
+         * @description One page of tournaments, newest first.
+         *
+         *     Every filter is a typed enum or a boolean. There is no name search:
+         *     `tournament.name` carries no index, so a substring match would be a
+         *     sequential scan — deferred rather than added expensively (§7).
+         */
+        get: operations["list_tournaments_api_v1_admin_tournaments_get"];
+        put?: never;
+        /**
+         * Create a tournament
+         * @description Creates a tournament in `draft`, attributed to the signed-in admin.
+         *
+         *     The id, the created-at instant and the state are the server's. So is
+         *     `created_by`: the column is nullable and `None` means "the platform
+         *     created it", which is a distinction a client-supplied value would
+         *     destroy.
+         */
+        post: operations["create_tournament_api_v1_admin_tournaments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/tournaments/{tournament_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One tournament in full
+         * @description One tournament, with its entrants, rounds, bracket and standings.
+         */
+        get: operations["read_tournament_api_v1_admin_tournaments__tournament_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/tournaments/{tournament_id}/registration/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open registration
+         * @description `draft` → `registration_open`.
+         *
+         *     The precondition is checked by the aggregate under a row lock, not
+         *     here: a check in this handler would be a second copy of the transition
+         *     table and the copy that races.
+         */
+        post: operations["open_registration_api_v1_admin_tournaments__tournament_id__registration_open_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/tournaments/{tournament_id}/registration/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Close registration
+         * @description `registration_open` → `registration_closed`.
+         *
+         *     Converges with `TournamentDeadlineTask`, which closes overdue
+         *     tournaments on its own: whichever arrives first wins, and the aggregate
+         *     refuses the second.
+         */
+        post: operations["close_registration_api_v1_admin_tournaments__tournament_id__registration_close_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/tournaments/{tournament_id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start the tournament
+         * @description `registration_closed` → `in_progress`, seeding and launching.
+         *
+         *     **Idempotent**, by the underlying service: a second call finds the
+         *     tournament already in progress and launches only what is missing. Two
+         *     administrators pressing it at once resolve through the aggregate's
+         *     `FOR UPDATE` lock.
+         *
+         *     No body, and there is nothing one could carry — the field is frozen at
+         *     close, the seeding is the seeding service's, and the bracket is
+         *     arithmetic over it.
+         */
+        post: operations["start_tournament_api_v1_admin_tournaments__tournament_id__start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the administrative audit trail
+         * @description One page of the trail, newest first.
+         *
+         *     `admin` is unused in the body and named anyway: it is the guard, and a
+         *     route whose protection lived only in a router-level dependency would be
+         *     one whose protection is invisible in its own signature.
+         */
+        get: operations["list_audit_entries_api_v1_admin_audit_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List account restrictions
+         * @description One page of restrictions, newest first.
+         *
+         *     Three statements whatever the page size: the page, one batch of cases,
+         *     one batch of accounts. Nothing here loops a read — a page of fifty
+         *     restrictions names at most a hundred accounts and asks for them once.
+         *
+         *     `admin` is unused in the body and named anyway: it is the guard, and a
+         *     route whose protection lived only in a router-level dependency would be
+         *     one whose protection is invisible in its own signature.
+         */
+        get: operations["list_restrictions_api_v1_admin_moderation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users/{user_id}/restrict": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Withhold access from an account
+         * @description Restricts `user_id`, recording the decision that authorised it.
+         *
+         *     The account is read **first**, so restricting an id that matches
+         *     nothing is a `404` rather than a moderation case about nobody. The
+         *     holder set is read next and handed to the service, which is where the
+         *     last-administrator refusal lives.
+         *
+         *     Every refusal the service raises maps to a status through the
+         *     platform's exception taxonomy, and each writes a `FAILED` audit entry
+         *     before raising — see `ModerationService`.
+         */
+        post: operations["restrict_account_api_v1_admin_users__user_id__restrict_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users/{user_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore access to a restricted account
+         * @description Lifts the live restriction on `user_id`, naming who lifted it.
+         *
+         *     **No body.** There is nothing to decide: a restore ends the one live
+         *     restriction, and a reason for ending it would be a second taxonomy
+         *     nobody reads. The lift is attributed and audited, which is what §13.3
+         *     asks for.
+         *
+         *     Sessions are not reinstated — see `ModerationService.restore`.
+         */
+        post: operations["restore_account_api_v1_admin_users__user_id__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List notifications and their push standing
+         * @description One page, newest first.
+         *
+         *     `admin` is unused in the body and named anyway: it is the guard, and a
+         *     route whose protection lived only in a router-level dependency would be
+         *     one whose protection is invisible in its own signature.
+         */
+        get: operations["list_notifications_api_v1_admin_notifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/notifications/{notification_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One notification, with every device's delivery
+         * @description One notification and its deliveries — two statements plus one name.
+         */
+        get: operations["read_notification_api_v1_admin_notifications__notification_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/notifications/{notification_id}/deliveries/{subscription_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-arm one exhausted push delivery
+         * @description Queues one more attempt at an already-recorded delivery.
+         *
+         *     **No request body.** There is nothing to decide: the recipient, the
+         *     type, the payload and the destination are all already stored, and this
+         *     endpoint changes none of them. A body would be a place for one of them
+         *     to arrive.
+         *
+         *     Eligibility is decided by the guarded `UPDATE` rather than by a read
+         *     taken a moment earlier — so a worker settling the row, a second
+         *     administrator, or a state that was never eligible all resolve to the
+         *     same `409` with nothing changed. Each refusal writes a `FAILED` audit
+         *     entry, per `specs/admin.md` §6.12's policy.
+         */
+        post: operations["retry_delivery_api_v1_admin_notifications__notification_id__deliveries__subscription_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The operator overview
+         * @description Six facts and the ten most recent privileged actions.
+         *
+         *     Seven reads plus one batch, and the count does not move with the size of
+         *     any table — see `DashboardService`.
+         *
+         *     `admin` is unused in the body and named anyway: it is the guard, and a
+         *     route whose protection lived only in a router-level dependency would be
+         *     one whose protection is invisible in its own signature.
+         */
+        get: operations["read_dashboard_api_v1_admin_dashboard_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/analytics/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Product health at a glance
+         * @description Five sections, one call.
+         *
+         *     Composed here for `admin/dashboard`'s reason: five round trips is five
+         *     chances for a page to be half right, and each would carry its own
+         *     period metadata for the same window.
+         */
+        get: operations["read_overview_api_v1_admin_analytics_overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/analytics/acquisition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The acquisition funnel */
+        get: operations["read_acquisition_api_v1_admin_analytics_acquisition_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/analytics/retention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Registration cohort retention */
+        get: operations["read_retention_api_v1_admin_analytics_retention_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/analytics/matchmaking": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Queue and offer health */
+        get: operations["read_matchmaking_api_v1_admin_analytics_matchmaking_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/analytics/games": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Game health */
+        get: operations["read_games_api_v1_admin_analytics_games_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/broadcasts/audience/{audience}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Audience Size
+         * @description How many accounts this audience reaches right now.
+         *
+         *     Guarded like every other route here. It is a count and not a list, but
+         *     an unguarded count of verified accounts is still a fact about the
+         *     platform that a stranger has no business reading.
+         */
+        get: operations["audience_size_api_v1_admin_broadcasts_audience__audience__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/broadcasts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Broadcasts
+         * @description The history, newest first — §20.
+         */
+        get: operations["list_broadcasts_api_v1_admin_broadcasts_get"];
+        put?: never;
+        /**
+         * Create Broadcast
+         * @description Queues one announcement. Idempotent on the request's key.
+         *
+         *     ## The audit entry is written for the attempt, not for the delivery
+         *
+         *     §23. What is recorded is that an administrator addressed an audience,
+         *     which is true the moment the row exists; whether every recipient
+         *     received it is the broadcast's own status and is on the row itself.
+         *
+         *     The entry carries the audience *category* and the broadcast id, and no
+         *     recipient. A named audience of a hundred players would otherwise put a
+         *     hundred identities into a table operators grep — §23 forbids exactly
+         *     that, and the broadcast row remains the place to look.
+         */
+        post: operations["create_broadcast_api_v1_admin_broadcasts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/broadcasts/{broadcast_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Broadcast */
+        get: operations["read_broadcast_api_v1_admin_broadcasts__broadcast_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record behavioural events
+         * @description Stores a batch of client events, or refuses the whole batch.
+         *
+         *     The refusal message is deliberately the same for a name outside the
+         *     taxonomy and a name the server owns. A client that could tell them apart
+         *     could enumerate which events are server-authoritative, and an endpoint
+         *     that answers that is an oracle for the taxonomy.
+         */
+        post: operations["collect_events_api_v1_analytics_events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/search": {
         parameters: {
             query?: never;
@@ -923,6 +1568,86 @@ export interface paths {
          */
         post: operations["browser_logout_all_api_v1_auth_browser_logout_all_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/browser/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The devices this account is signed in on
+         * @description Lists this account's live devices — SE-2.
+         *
+         *     One entry per **device**, not per session row: rotation replaces the
+         *     row four times an hour and the family is what survives it. The
+         *     identifier in each entry is what `DELETE` below takes.
+         *
+         *     Scoped by the access token and by nothing the caller sends. There is no
+         *     user id in the path or the query, so this cannot return somebody
+         *     else's list even if a client tried.
+         *
+         *     No refresh token, no hash and no address leaves here — see
+         *     `schemas/sessions.py` on which of those is absent by construction and
+         *     which is a product decision.
+         */
+        get: operations["browser_sessions_api_v1_auth_browser_sessions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/browser/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Sign one device out
+         * @description Revokes one device's whole rotation chain.
+         *
+         *     `204` whether or not this call was the one that revoked it: a device
+         *     already signed out is the state the caller asked for, and a retry
+         *     after a dropped response must not be an error.
+         *
+         *     `404` when the identifier is not one of this account's devices —
+         *     `SessionService.revoke_device` makes that check, and it is the only
+         *     thing standing between this route and a cross-user revoke. It is
+         *     deliberately not `401`: this browser's own credentials are fine, and a
+         *     `401` would make the client's unauthorised interceptor sign the whole
+         *     account out over one mistyped identifier.
+         *
+         *     ## Revoking the device you are using
+         *
+         *     Permitted, and the same thing happens as when another device revokes
+         *     you: the refresh cookie stops working, so the browser is signed out at
+         *     its next refresh rather than immediately — the access token it already
+         *     holds stays valid for its fifteen minutes.
+         *
+         *     That delay is why the UI does not offer it. `POST /auth/browser/logout`
+         *     is what "sign out of this device" means: it revokes *and* clears the
+         *     cookie, so the browser is anonymous straight away. Two routes, no
+         *     conflicting semantics — this one acts on a device in a list, that one
+         *     acts on the browser making the request.
+         *
+         *     Carries the trusted-origin check every other state-changing browser
+         *     route carries. A `DELETE` triggered from another site would otherwise
+         *     be able to sign a signed-in player out of their own devices.
+         */
+        delete: operations["browser_revoke_session_api_v1_auth_browser_sessions__session_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2524,10 +3249,22 @@ export interface paths {
          *     silence, and `status` is what narrows the view to what a player can
          *     still enter.
          *
-         *     Public in the same sense as everything else here (§7): visible to every
-         *     authenticated player, with no viewer narrower than another. Private
-         *     tournaments do not exist in v0.x, so there is no visibility predicate to
-         *     get wrong.
+         *     **Open to a visitor with no account** since A64-026.4 §43. A tournament
+         *     is a public competition and its bracket is a record of something that
+         *     happened; requiring an account to look at one made the landing page
+         *     describe a feature it could not show.
+         *
+         *     The one narrowing is `DRAFT`, which the enum itself calls "not yet
+         *     advertised" — a state whose operator has not decided it exists. It is
+         *     excluded for an anonymous viewer and included for an authenticated one,
+         *     so the lobby a player has seen since A64-020.0B is unchanged. Private
+         *     tournaments still do not exist in v0.x; this is a lifecycle predicate,
+         *     not a visibility flag.
+         *
+         *     The response is identical either way: `TournamentSummary` is already the
+         *     public read model — `created_by` is operational and was never published
+         *     — so there is no field an anonymous caller sees less of, and none it
+         *     sees more of.
          *
          *     The five filters are a **closed set** and each is an enum or a boolean
          *     the tournament already stores, so an unknown value is a `422` from
@@ -2554,10 +3291,17 @@ export interface paths {
         };
         /**
          * One tournament
-         * @description A tournament's public detail — §9.
+         * @description A tournament's public detail — §9, opened to anonymous in §43.
          *
          *     Everything a lobby or a detail page renders: the configuration, how full
          *     it is, which round is being played, and the three lifecycle instants.
+         *
+         *     A `DRAFT` tournament answers **404 to an anonymous caller**, not 403.
+         *     The two are distinguishable and one of them is an oracle: a 403 confirms
+         *     the id names something, which is the only fact an enumerating caller
+         *     wants from an endpoint whose identifiers are UUIDs. Not-found is the
+         *     same answer they would get for an id that names nothing, which is what
+         *     makes guessing worthless.
          */
         get: operations["tournament_detail_api_v1_tournaments__tournament_id__get"];
         put?: never;
@@ -3070,6 +3814,690 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * AccountModerationState
+         * @description One account's moderation standing, for the user detail page.
+         *
+         *     `restriction` is the **effective** one or `None`. A lifted or expired
+         *     restriction is history and belongs to `/moderation`, not to the badge
+         *     that tells an operator whether this person can sign in right now.
+         */
+        AccountModerationState: {
+            /** Is Restricted */
+            is_restricted: boolean;
+            restriction?: components["schemas"]["SanctionView"] | null;
+        };
+        /**
+         * AccountsCard
+         * @description Registrations, in two bounded windows. **No total.**
+         */
+        AccountsCard: {
+            /** Registered Last Day */
+            registered_last_day: number;
+            /** Registered Last Week */
+            registered_last_week: number;
+        };
+        /**
+         * AcquisitionResponse
+         * @description F-A, with its coverage gap **on the response**.
+         *
+         *     `registrations_in_range` is every registration in the window;
+         *     `stages[-1].subjects` is the ones the identity stitch could attribute
+         *     to a browser. The difference is the gap, and returning both is the only
+         *     honest way to publish the third stage at all — A64-027.3 §64.
+         */
+        AcquisitionResponse: {
+            /** Stages */
+            stages: components["schemas"]["FunnelStageResponse"][];
+            /** Overall Conversion */
+            overall_conversion?: number | null;
+            /** Registrations In Range */
+            registrations_in_range?: number | null;
+            meta: components["schemas"]["PeriodMeta"];
+        };
+        /** ActivationResponse */
+        ActivationResponse: {
+            /** Stages */
+            stages: components["schemas"]["FunnelStageResponse"][];
+            /** Overall Conversion */
+            overall_conversion?: number | null;
+            time_to_activation: components["schemas"]["DurationResponse"];
+            time_to_verify: components["schemas"]["DurationResponse"];
+            meta: components["schemas"]["PeriodMeta"];
+        };
+        /** ActivePlayersResponse */
+        ActivePlayersResponse: {
+            /**
+             * As Of
+             * Format: date
+             */
+            as_of: string;
+            /** Daily */
+            daily: number;
+            /** Weekly */
+            weekly: number;
+            /** Monthly */
+            monthly: number;
+            /** Stickiness */
+            stickiness?: number | null;
+        };
+        /**
+         * ActivityEntry
+         * @description One recent privileged action.
+         *
+         *     The audit log's own facts, narrowed further: the action, who did it,
+         *     what it was about, and when. **No `before`/`after` metadata** — the
+         *     dashboard is a place to notice that something happened, and `/audit` is
+         *     where a reviewer reads what changed.
+         */
+        ActivityEntry: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Action */
+            action: string;
+            /** Outcome */
+            outcome: string;
+            /** Actor Type */
+            actor_type: string;
+            /** Actor Id */
+            actor_id?: string | null;
+            /** Actor Username */
+            actor_username?: string | null;
+            /** Subject Type */
+            subject_type: string;
+            /** Subject Ref */
+            subject_ref: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * AdminEntrantView
+         * @description One registration. Identity and registration state, nothing more.
+         */
+        AdminEntrantView: {
+            /**
+             * Player Id
+             * Format: uuid
+             */
+            player_id: string;
+            /** Username */
+            username?: string | null;
+            /** Display Name */
+            display_name?: string | null;
+            /** Status */
+            status: string;
+            /** Seed Number */
+            seed_number?: number | null;
+            /**
+             * Registered At
+             * Format: date-time
+             */
+            registered_at: string;
+            /** Withdrawn At */
+            withdrawn_at?: string | null;
+        };
+        /**
+         * AdminMatchDetail
+         * @description One match in full — §9.
+         *
+         *     Adds only what a list row omits: the handshake instant, the engine
+         *     version the game was played under, and the time control.
+         *
+         *     **No move list.** The replay read is a separate, more expensive port
+         *     (`MatchReplayReader` applies every ply through the engine), and §10 asks
+         *     for it only where the architecture supports it naturally. It is not
+         *     folded in here so that opening a match detail does not replay a game.
+         */
+        AdminMatchDetail: {
+            /**
+             * Match Id
+             * Format: uuid
+             */
+            match_id: string;
+            /** Status */
+            status: string;
+            /** Variant */
+            variant: string;
+            /** Rated */
+            rated: boolean;
+            /** Origin */
+            origin: string;
+            light: components["schemas"]["AdminMatchParticipant"];
+            dark: components["schemas"]["AdminMatchParticipant"];
+            /** Outcome */
+            outcome?: string | null;
+            /** Winner */
+            winner?: string | null;
+            /** Termination Reason */
+            termination_reason?: string | null;
+            /** Speed Class */
+            speed_class?: string | null;
+            /** Ply Number */
+            ply_number: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Ended At */
+            ended_at?: string | null;
+            /**
+             * Settled At
+             * @description When the acceptance handshake ended — not a start time.
+             */
+            settled_at?: string | null;
+            time_control?: components["schemas"]["AdminMatchTimeControl"] | null;
+        };
+        /**
+         * AdminMatchPageResponse
+         * @description One page, and the cursor that continues it. No total count.
+         */
+        AdminMatchPageResponse: {
+            /** Items */
+            items: components["schemas"]["AdminMatchSummary"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /**
+         * AdminMatchParticipant
+         * @description One seat.
+         *
+         *     **The minimum operator-safe identity**: who it was and what to call
+         *     them. §11 is explicit that a match page does not need an email, and the
+         *     console links to `/users/$userId` for anything more — which is a page
+         *     with its own guard and its own decision about what to show.
+         *
+         *     `username` is `None` when the account no longer resolves. That is a real
+         *     state — an erased participant — rather than a gap, and the console
+         *     renders the id it already has.
+         */
+        AdminMatchParticipant: {
+            /**
+             * Player Id
+             * Format: uuid
+             */
+            player_id: string;
+            /** Username */
+            username?: string | null;
+            /** Display Name */
+            display_name?: string | null;
+            /** Side */
+            side: string;
+        };
+        /**
+         * AdminMatchSummary
+         * @description One match in the list.
+         */
+        AdminMatchSummary: {
+            /**
+             * Match Id
+             * Format: uuid
+             */
+            match_id: string;
+            /** Status */
+            status: string;
+            /** Variant */
+            variant: string;
+            /** Rated */
+            rated: boolean;
+            /** Origin */
+            origin: string;
+            light: components["schemas"]["AdminMatchParticipant"];
+            dark: components["schemas"]["AdminMatchParticipant"];
+            /** Outcome */
+            outcome?: string | null;
+            /** Winner */
+            winner?: string | null;
+            /** Termination Reason */
+            termination_reason?: string | null;
+            /** Speed Class */
+            speed_class?: string | null;
+            /** Ply Number */
+            ply_number: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Ended At */
+            ended_at?: string | null;
+        };
+        /** AdminMatchTimeControl */
+        AdminMatchTimeControl: {
+            /** Initial Ms */
+            initial_ms: number;
+            /** Increment Ms */
+            increment_ms: number;
+        };
+        /**
+         * AdminNotificationDetailResponse
+         * @description One notification with every device's delivery.
+         */
+        AdminNotificationDetailResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Recipient Id
+             * Format: uuid
+             */
+            recipient_id: string;
+            /** Recipient Username */
+            recipient_username?: string | null;
+            /** Type */
+            type: string;
+            /** Category */
+            category: string;
+            /**
+             * Target Type
+             * @description A closed set of internal destinations — no URL is ever stored.
+             */
+            target_type: string;
+            /** Target Ref */
+            target_ref?: string | null;
+            /**
+             * Source Event Id
+             * Format: uuid
+             * @description The outbox entry that caused this. Withheld from players; shown here because 'the event never fired' and 'the notification was never written' are different failures and this is what tells them apart.
+             */
+            source_event_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Read At */
+            read_at?: string | null;
+            /** Push Capable */
+            push_capable: boolean;
+            /** Deliveries */
+            deliveries: components["schemas"]["AdminPushDeliveryView"][];
+        };
+        /**
+         * AdminNotificationPageResponse
+         * @description One page, and the cursor that continues it. **No total count.**
+         */
+        AdminNotificationPageResponse: {
+            /** Items */
+            items: components["schemas"]["AdminNotificationSummary"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /**
+         * AdminNotificationSummary
+         * @description One notification in the list.
+         *
+         *     **No payload.** The stored payload is somebody's data — an actor's name,
+         *     a tournament, a game result — and none of it answers an operational
+         *     question. The type and the target say what the notification is.
+         */
+        AdminNotificationSummary: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Recipient Id
+             * Format: uuid
+             */
+            recipient_id: string;
+            /**
+             * Recipient Username
+             * @description Resolved per page in one batch. `None` for an account that no longer exists — the notification outlives it.
+             */
+            recipient_username?: string | null;
+            /** Type */
+            type: string;
+            /** Category */
+            category: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Read At */
+            read_at?: string | null;
+            /**
+             * Push Capable
+             * @description Whether this platform pushes this type at all. `false` means no push was ever owed, which is not a failure.
+             */
+            push_capable: boolean;
+            /**
+             * Push Summary
+             * @description The page's one-word push standing, derived from the deliveries: `none`, `pending`, `sent`, `skipped` or `failed`.
+             */
+            push_summary: string;
+            /** Delivery Count */
+            delivery_count: number;
+        };
+        /**
+         * AdminPairingView
+         * @description One bracket node, with the coordinates the tree is derived from.
+         *
+         *     `round_number` and `slot` are the node's identity. Its parent is
+         *     `(round_number + 1, slot // 2)` — the same arithmetic
+         *     `tournament.domain.bracket_plan` uses, published rather than restated,
+         *     so a console cannot draw a tree that disagrees with the domain's.
+         *
+         *     `match_ids` is plural because a pairing may be replayed.
+         */
+        AdminPairingView: {
+            /** Round Number */
+            round_number: number;
+            /** Slot */
+            slot: number;
+            /** Light Player Id */
+            light_player_id?: string | null;
+            /** Dark Player Id */
+            dark_player_id?: string | null;
+            /** Light Seed */
+            light_seed?: number | null;
+            /** Dark Seed */
+            dark_seed?: number | null;
+            /** Winner Id */
+            winner_id?: string | null;
+            /** Advancement Reason */
+            advancement_reason?: string | null;
+            /** Match Ids */
+            match_ids?: string[];
+        };
+        /**
+         * AdminPushDeliveryView
+         * @description One device's attempt at one notification.
+         */
+        AdminPushDeliveryView: {
+            /**
+             * Subscription Id
+             * Format: uuid
+             * @description The device, as this platform's own opaque key. Never an endpoint.
+             */
+            subscription_id: string;
+            /**
+             * Status
+             * @description `pending`, `sent`, `skipped` or `failed`.
+             */
+            status: string;
+            /**
+             * Outcome
+             * @description The bounded reason this delivery ended where it did. `null` while a row has never been attempted. Never a push service's own text.
+             */
+            outcome?: string | null;
+            /** Attempt Count */
+            attempt_count: number;
+            /** Next Attempt At */
+            next_attempt_at?: string | null;
+            /** Last Attempt At */
+            last_attempt_at?: string | null;
+            /**
+             * Accepted At
+             * @description When a push service **accepted** the request. Not an end-device acknowledgement — this platform receives none.
+             */
+            accepted_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Can Retry
+             * @description Whether an administrator may re-arm this delivery. True for exactly one state: a failed delivery whose outcome is `attempts_exhausted`.
+             */
+            can_retry: boolean;
+            /** Device First Seen At */
+            device_first_seen_at?: string | null;
+            /** Device Last Seen At */
+            device_last_seen_at?: string | null;
+            /**
+             * Device Revoked At
+             * @description When the subscription stopped being usable — a push service answered 404/410, or the person signed out on that browser.
+             */
+            device_revoked_at?: string | null;
+        };
+        /**
+         * AdminRole
+         * @description What authority a grant confers.
+         *
+         *     Closed, and lowercase on the wire like every other enum this platform
+         *     persists (`agreed_draw`, `not_a_participant`, `good_game`).
+         * @enum {string}
+         */
+        AdminRole: "admin";
+        /** AdminRoundView */
+        AdminRoundView: {
+            /** Round Number */
+            round_number: number;
+            /** Status */
+            status: string;
+            /** Pairing Count */
+            pairing_count: number;
+            /** Published At */
+            published_at?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+        };
+        /**
+         * AdminSessionResponse
+         * @description `GET /admin/me` — the minimum `apps/admin` needs to render a shell.
+         *
+         *     **Four fields, and the omissions are the design.** No email, no
+         *     password state, no session or refresh material, no last-sign-in, no
+         *     counts. The admin client needs to know who it is signed in as and what
+         *     it may do; everything else would be PII travelling to a privileged
+         *     surface for no reason (§5).
+         *
+         *     `roles` rather than a boolean, so a second role added later needs no
+         *     new field and no client change — the shell already branches on
+         *     membership.
+         */
+        AdminSessionResponse: {
+            /**
+             * Id
+             * @description The administrator's opaque account id (DM-06).
+             */
+            id: string;
+            /**
+             * Username
+             * @description What an operator recognises them by.
+             */
+            username: string;
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Roles
+             * @description Every role held right now. Read from storage per request, so a revoked role disappears on the next call.
+             */
+            roles: components["schemas"]["AdminRole"][];
+        };
+        /**
+         * AdminStandingView
+         * @description One final placement, **as `tournament` computed it** — never
+         *     recomputed here (§13).
+         */
+        AdminStandingView: {
+            /**
+             * Player Id
+             * Format: uuid
+             */
+            player_id: string;
+            /** Username */
+            username?: string | null;
+            /** Display Name */
+            display_name?: string | null;
+            /** Final Rank */
+            final_rank: number;
+            /** Seed Number */
+            seed_number: number;
+            /** Elimination Round */
+            elimination_round?: number | null;
+            /** Eliminated By Player Id */
+            eliminated_by_player_id?: string | null;
+            /** Wins */
+            wins: number;
+            /** Losses */
+            losses: number;
+            /** Draws */
+            draws: number;
+            /** Final Status */
+            final_status: string;
+        };
+        /**
+         * AdminTournamentDetailResponse
+         * @description One tournament and everything bounded by its capacity — §5.
+         *
+         *     One response rather than four endpoints: entrants, rounds and pairings
+         *     are all O(capacity), so fetching them together costs a fixed number of
+         *     statements and saves the console three round trips.
+         */
+        AdminTournamentDetailResponse: {
+            tournament: components["schemas"]["AdminTournamentSummary"];
+            /** Entrants */
+            entrants: components["schemas"]["AdminEntrantView"][];
+            /** Rounds */
+            rounds: components["schemas"]["AdminRoundView"][];
+            /** Pairings */
+            pairings: components["schemas"]["AdminPairingView"][];
+            /** Standings */
+            standings: components["schemas"]["AdminStandingView"][];
+        };
+        /** AdminTournamentPageResponse */
+        AdminTournamentPageResponse: {
+            /** Items */
+            items: components["schemas"]["AdminTournamentSummary"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /** AdminTournamentSummary */
+        AdminTournamentSummary: {
+            /**
+             * Tournament Id
+             * Format: uuid
+             */
+            tournament_id: string;
+            /** Name */
+            name: string;
+            /** Format */
+            format: string;
+            /** Variant */
+            variant: string;
+            /** Speed Class */
+            speed_class: string;
+            /** Status */
+            status: string;
+            /** Rated */
+            rated: boolean;
+            /** Capacity */
+            capacity: number;
+            /** Entrant Count */
+            entrant_count: number;
+            /** Registration Deadline */
+            registration_deadline?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * AdminUserDetail
+         * @description One account in full — §6.
+         *
+         *     Composed from published ports only: `users` for identity and account
+         *     state, `admin` for the role. Nothing here reads another module's
+         *     storage.
+         *
+         *     **No rating summary**, deliberately — see the router on why "if cheap"
+         *     is not satisfied by a reader batched on `(player, key)` pairs.
+         */
+        AdminUserDetail: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Username */
+            username: string;
+            /** Display Name */
+            display_name?: string | null;
+            /** Email */
+            email: string;
+            /** Is Active */
+            is_active: boolean;
+            /** Is Verified */
+            is_verified: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Is Admin */
+            is_admin: boolean;
+            /**
+             * Admin Role Granted At
+             * @description When the live admin grant was made. Absent when the account holds none.
+             */
+            admin_role_granted_at?: string | null;
+            /** @description The account's **effective** moderation standing — A64-024.6. History lives at `/admin/moderation`; this answers whether the person can sign in right now. */
+            moderation: components["schemas"]["AccountModerationState"];
+        };
+        /**
+         * AdminUserPageResponse
+         * @description One page, and the cursor that continues it.
+         *
+         *     **No total count** — an operator needs "are there more", and a count on
+         *     this table is a sequential scan on every page of every search.
+         */
+        AdminUserPageResponse: {
+            /** Items */
+            items: components["schemas"]["AdminUserSummary"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /**
+         * AdminUserSummary
+         * @description One account in the list.
+         */
+        AdminUserSummary: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Username */
+            username: string;
+            /** Display Name */
+            display_name?: string | null;
+            /** Email */
+            email: string;
+            /** Is Active */
+            is_active: boolean;
+            /** Is Verified */
+            is_verified: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Is Admin
+             * @description Whether this account currently holds the admin role. Resolved per page in one batch read, never per row.
+             */
+            is_admin: boolean;
+        };
+        /**
          * AnimationSpeed
          * @description How fast a piece slides to its square.
          *
@@ -3104,6 +4532,11 @@ export interface components {
         /** ApiResponse[ChallengeResponse] */
         ApiResponse_ChallengeResponse_: {
             data: components["schemas"]["ChallengeResponse"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        /** ApiResponse[CollectResponse] */
+        ApiResponse_CollectResponse_: {
+            data: components["schemas"]["CollectResponse"];
             meta: components["schemas"]["ResponseMeta"];
         };
         /** ApiResponse[CursorPage[BlockedPlayerResponse]] */
@@ -3296,6 +4729,12 @@ export interface components {
             data: components["schemas"]["WebSocketTicketRead"];
             meta: components["schemas"]["ResponseMeta"];
         };
+        /** ApiResponse[list[SessionRead]] */
+        ApiResponse_list_SessionRead__: {
+            /** Data */
+            data: components["schemas"]["SessionRead"][];
+            meta: components["schemas"]["ResponseMeta"];
+        };
         /** ApiResponse[list[TimeControlResponse]] */
         ApiResponse_list_TimeControlResponse__: {
             /** Data */
@@ -3335,6 +4774,146 @@ export interface components {
             /** Winner Id */
             winner_id?: string | null;
         };
+        /**
+         * AttentionCard
+         * @description Things waiting for a person.
+         *
+         *     Both members are states the product itself defines as actionable — not
+         *     thresholds invented here. A restriction in force is somebody currently
+         *     unable to sign in; `retry_exhausted` is the one push state A64-024.7
+         *     built an operator action for.
+         */
+        AttentionCard: {
+            /** Restrictions In Force */
+            restrictions_in_force: number;
+            /** Push Deliveries Retry Exhausted */
+            push_deliveries_retry_exhausted: number;
+        };
+        /**
+         * AudienceSizeResponse
+         * @description How many accounts an audience currently reaches.
+         *
+         *     Computed server-side. §14: the console must not estimate the number an
+         *     administrator reads immediately before sending to everybody.
+         */
+        AudienceSizeResponse: {
+            /** Audience */
+            audience: string;
+            /** Size */
+            size: number;
+        };
+        /**
+         * AuditAction
+         * @description What happened. Closed, and small on purpose.
+         *
+         *     Values are dotted and namespaced like every other machine-readable
+         *     vocabulary on this platform, so a future `moderation.*` family sorts
+         *     together and a filter can match a prefix.
+         * @enum {string}
+         */
+        AuditAction: "admin.role.grant" | "admin.role.revoke" | "admin.sanction.apply" | "admin.sanction.lift" | "tournament.create" | "tournament.registration_open" | "tournament.registration_close" | "tournament.start" | "tournament.transition_refused" | "notification.broadcast.send" | "notification.delivery.retry";
+        /**
+         * AuditActor
+         * @description Who acted.
+         *
+         *     `account_id` and `username` are both absent for an operator action, and
+         *     that absence is the fact: the deployment's first grant is made from a
+         *     shell with no administrator behind it. The console renders it as
+         *     "operator" rather than inventing a name for nobody.
+         *
+         *     `username` is `None` for an account that no longer exists, which is a
+         *     real state after erasure — the trail keeps the id it recorded, and
+         *     outlives the account it names.
+         */
+        AuditActor: {
+            /**
+             * Type
+             * @description `administrator` or `operator`.
+             */
+            type: string;
+            /** Account Id */
+            account_id?: string | null;
+            /** Username */
+            username?: string | null;
+        };
+        /**
+         * AuditEntryResponse
+         * @description One entry.
+         */
+        AuditEntryResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Action
+             * @description The semantic identifier, e.g. `admin.role.grant`.
+             */
+            action: string;
+            /** Outcome */
+            outcome: string;
+            actor: components["schemas"]["AuditActor"];
+            subject: components["schemas"]["AuditSubject"];
+            /** Before */
+            before: {
+                [key: string]: unknown;
+            };
+            /** After */
+            after: {
+                [key: string]: unknown;
+            };
+            /** Correlation Id */
+            correlation_id?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * AuditPageResponse
+         * @description One page, and the cursor that continues it.
+         *
+         *     **No total count**, for the reason no other admin page has one — and
+         *     more so here: the trail only ever grows, so a count gets slower every
+         *     day the platform runs and answers a question nobody asked.
+         */
+        AuditPageResponse: {
+            /** Items */
+            items: components["schemas"]["AuditEntryResponse"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /**
+         * AuditSubject
+         * @description What was acted upon.
+         *
+         *     `type` and `ref` together, rather than a typed id, because the subject
+         *     of a future action need not be an account. The console maps known types
+         *     to links and renders an unknown one as plain text — see `specs/admin.md`.
+         */
+        AuditSubject: {
+            /** Type */
+            type: string;
+            /** Ref */
+            ref: string;
+            /**
+             * Username
+             * @description Resolved only when `type` is `account`, batched per page. `None` for any other subject type and for an account that no longer exists.
+             */
+            username?: string | null;
+        };
+        /**
+         * AuditSubjectType
+         * @description What the action was performed on.
+         *
+         *     Closed so the console can map a subject to a route it actually has —
+         *     §16 forbids following a URL from the record itself. An unknown member
+         *     cannot exist, so a link can never point somewhere unintended.
+         * @enum {string}
+         */
+        AuditSubjectType: "account" | "notification" | "tournament";
         /**
          * AvatarDimensions
          * @description Both renditions' dimensions, as stored.
@@ -3579,6 +5158,87 @@ export interface components {
             participants?: components["schemas"]["TournamentParticipantResponse"][];
         };
         /**
+         * BroadcastAudience
+         * @description Who a broadcast is for.
+         *
+         *     Two members, and the set is short on purpose. §14 forbids inventing
+         *     segmentation: a "lapsed players" or "high rated" audience would need a
+         *     definition somebody could defend, and this platform has not agreed one.
+         *     When it does, it arrives here as a member with a query behind it.
+         * @enum {string}
+         */
+        BroadcastAudience: "all_players" | "specific_players";
+        /**
+         * BroadcastCreateRequest
+         * @description What the composer submits.
+         */
+        BroadcastCreateRequest: {
+            /** Title */
+            title: string;
+            /** Body */
+            body: string;
+            /** Locale */
+            locale: string;
+            audience: components["schemas"]["BroadcastAudience"];
+            /**
+             * Recipients
+             * @default []
+             */
+            recipients: string[];
+            /** Idempotency Key */
+            idempotency_key: string;
+        };
+        /** BroadcastPageResponse */
+        BroadcastPageResponse: {
+            /** Items */
+            items: components["schemas"]["BroadcastResponse"][];
+        };
+        /**
+         * BroadcastResponse
+         * @description One broadcast, as the console reads it.
+         *
+         *     **No recipient identities.** A `SPECIFIC_PLAYERS` broadcast reports how
+         *     many it named, not whom: §20 forbids exposing recipient PII in the
+         *     history, and a console that listed them would be a way of asking "who
+         *     did somebody message" from a screen everybody with the role can open.
+         */
+        BroadcastResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Title */
+            title: string;
+            /** Body */
+            body: string;
+            /** Locale */
+            locale: string;
+            /** Audience */
+            audience: string;
+            /** Channel */
+            channel: string;
+            /** Status */
+            status: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Started At */
+            started_at: string | null;
+            /** Completed At */
+            completed_at: string | null;
+            /** Audience Size */
+            audience_size: number | null;
+            /** Delivered */
+            delivered: number;
+            /** Named Recipients */
+            named_recipients: number;
+            /** Failure Reason */
+            failure_reason: string | null;
+        };
+        /**
          * BrowserSession
          * @description The signed-in state, as a page holds it.
          *
@@ -3703,6 +5363,47 @@ export interface components {
          */
         ChallengeStatus: "pending" | "accepted" | "declined" | "cancelled" | "expired";
         /**
+         * ClientEventRequest
+         * @description One behavioural event as a browser offers it.
+         */
+        ClientEventRequest: {
+            /** Event Name */
+            event_name: string;
+            /**
+             * Idempotency Key
+             * Format: uuid
+             */
+            idempotency_key: string;
+            /**
+             * Anonymous Id
+             * Format: uuid
+             */
+            anonymous_id: string;
+            /** Session Id */
+            session_id?: string | null;
+            /** Properties */
+            properties?: {
+                [key: string]: unknown;
+            };
+        };
+        /** CollectRequest */
+        CollectRequest: {
+            /** Events */
+            events: components["schemas"]["ClientEventRequest"][];
+        };
+        /**
+         * CollectResponse
+         * @description What the caller is told — §42.
+         *
+         *     `accepted` counts what was stored, so a client can see that a retry
+         *     deduplicated rather than failed. It reveals nothing about the store: no
+         *     row ids, no totals, no whether anybody else sent the same thing.
+         */
+        CollectResponse: {
+            /** Accepted */
+            accepted: number;
+        };
+        /**
          * CreateChallengeRequest
          * @description One player inviting one friend.
          */
@@ -3731,6 +5432,31 @@ export interface components {
              * @default false
              */
             rated: boolean;
+        };
+        /**
+         * CreateTournamentRequest
+         * @description Everything a tournament needs, and nothing the server decides.
+         */
+        CreateTournamentRequest: {
+            /** Name */
+            name: string;
+            variant: components["schemas"]["ProductVariant"];
+            speed_class: components["schemas"]["SpeedClass"];
+            /**
+             * Capacity
+             * @description Bounds are the aggregate's own — a value outside them is refused by `Tournament.__post_init__` whatever this says.
+             */
+            capacity: number;
+            /**
+             * Rated
+             * @default true
+             */
+            rated: boolean;
+            /**
+             * Registration Deadline
+             * @description When registration closes on its own. `null` means it closes only when somebody closes it.
+             */
+            registration_deadline?: string | null;
         };
         /**
          * CursorPageInfo
@@ -3782,6 +5508,24 @@ export interface components {
             page: components["schemas"]["CursorPageInfo"];
         };
         /**
+         * DashboardResponse
+         * @description The operator's overview.
+         */
+        DashboardResponse: {
+            accounts: components["schemas"]["AccountsCard"];
+            matches: components["schemas"]["MatchesCard"];
+            tournaments: components["schemas"]["TournamentsCard"];
+            attention: components["schemas"]["AttentionCard"];
+            /** Recent Activity */
+            recent_activity: components["schemas"]["ActivityEntry"][];
+            /**
+             * Generated At
+             * Format: date-time
+             * @description When the server composed this. Nothing here streams, so the console shows the age of the numbers rather than implying they are live.
+             */
+            generated_at: string;
+        };
+        /**
          * DeliveryChannel
          * @description Where a notification can reach a player.
          *
@@ -3796,6 +5540,55 @@ export interface components {
          * @enum {string}
          */
         DeliveryChannel: "in_app" | "email" | "push";
+        /** DurationResponse */
+        DurationResponse: {
+            /** Sample */
+            sample: number;
+            /** Median Seconds */
+            median_seconds?: number | null;
+            /** P95 Seconds */
+            p95_seconds?: number | null;
+        };
+        /** EngagementResponse */
+        EngagementResponse: {
+            /**
+             * Week Start
+             * Format: date
+             */
+            week_start: string;
+            /**
+             * Week End
+             * Format: date
+             */
+            week_end: string;
+            /** Active Players */
+            active_players: number;
+            /** Match Starts */
+            match_starts: number;
+            /** Matches Per Active Player */
+            matches_per_active_player?: number | null;
+            /** Median Matches Per Active Player */
+            median_matches_per_active_player?: number | null;
+            /** Tournament Entrants */
+            tournament_entrants: number;
+            /** Tournament Participation */
+            tournament_participation?: number | null;
+            /** Friendships Created */
+            friendships_created: number;
+            /** Challenges Sent */
+            challenges_sent: number;
+            /** Challenges Accepted */
+            challenges_accepted: number;
+            /** Challenges Declined */
+            challenges_declined: number;
+            /** Challenges Expired */
+            challenges_expired: number;
+            /** Challenges Cancelled */
+            challenges_cancelled: number;
+            /** Challenge Acceptance */
+            challenge_acceptance?: number | null;
+            meta: components["schemas"]["PeriodMeta"];
+        };
         /**
          * ErrorCode
          * @description Every code an `Arena64Error` can carry. Additive only — see
@@ -3815,7 +5608,7 @@ export interface components {
          *     per module and stops being a useful thing to exhaustively switch over.
          * @enum {string}
          */
-        ErrorCode: "internal_error" | "validation_error" | "domain_error" | "authentication_failed" | "not_found" | "conflict" | "permission_denied" | "precondition_failed" | "rule_violation" | "rate_limited" | "unsupported_engine_version" | "invalid_cursor" | "tournament_not_found" | "registration_not_open" | "registration_deadline_passed" | "tournament_full" | "already_registered" | "registration_not_found" | "invalid_tournament_state" | "infrastructure_error" | "transient_infrastructure_error" | "permanent_infrastructure_error" | "username_already_exists" | "email_already_exists" | "duplicate_friend_request" | "opposite_friend_request_pending" | "invalid_username" | "invalid_email" | "weak_password" | "invalid_credentials" | "inactive_account" | "account_locked" | "authentication_required" | "invalid_token" | "expired_token" | "invalid_session" | "session_expired" | "invalid_verification_token" | "invalid_reset_token" | "avatar_too_large" | "queue_cooldown_active" | "unsupported_time_control" | "notification_preference_locked" | "notification_channel_unavailable" | "duplicate_preference_change" | "email_verification_code_invalid" | "email_verification_code_expired" | "email_verification_attempts_exceeded" | "email_verification_resend_too_soon" | "email_already_verified" | "email_verification_required" | "challenge_self_not_allowed" | "challenge_not_friends" | "challenge_already_pending" | "challenge_not_pending" | "challenge_expired" | "challenge_invalid_time_control";
+        ErrorCode: "internal_error" | "validation_error" | "domain_error" | "authentication_failed" | "not_found" | "conflict" | "permission_denied" | "precondition_failed" | "rule_violation" | "rate_limited" | "unsupported_engine_version" | "invalid_cursor" | "session_rotation_conflict" | "tournament_not_found" | "registration_not_open" | "registration_deadline_passed" | "tournament_full" | "already_registered" | "registration_not_found" | "invalid_tournament_state" | "infrastructure_error" | "transient_infrastructure_error" | "permanent_infrastructure_error" | "username_already_exists" | "email_already_exists" | "duplicate_friend_request" | "opposite_friend_request_pending" | "invalid_username" | "invalid_email" | "weak_password" | "invalid_credentials" | "inactive_account" | "account_locked" | "authentication_required" | "invalid_token" | "expired_token" | "invalid_session" | "session_expired" | "invalid_verification_token" | "invalid_reset_token" | "avatar_too_large" | "queue_cooldown_active" | "unsupported_time_control" | "notification_preference_locked" | "notification_channel_unavailable" | "duplicate_preference_change" | "email_verification_code_invalid" | "email_verification_code_expired" | "email_verification_attempts_exceeded" | "email_verification_resend_too_soon" | "email_already_verified" | "email_verification_required" | "challenge_self_not_allowed" | "challenge_not_friends" | "challenge_already_pending" | "challenge_not_pending" | "challenge_expired" | "challenge_invalid_time_control";
         /**
          * ErrorResponse
          * @description The only shape an Arena64 error takes on the wire: a safe message and
@@ -4115,6 +5908,21 @@ export interface components {
              */
             friends_since: string;
         };
+        /** FunnelStageResponse */
+        FunnelStageResponse: {
+            /** Stage */
+            stage: string;
+            /** Subjects */
+            subjects: number;
+            /** Conversion From Previous */
+            conversion_from_previous?: number | null;
+            /** Conversion From Start */
+            conversion_from_start?: number | null;
+            /** Drop Off */
+            drop_off: number;
+            /** Drop Off Rate */
+            drop_off_rate?: number | null;
+        };
         /**
          * GameplayPreferencesResponse
          * @description The gameplay group, complete.
@@ -4187,6 +5995,48 @@ export interface components {
              * @example fast
              */
             animation_speed?: components["schemas"]["AnimationSpeed"] | null;
+        };
+        /**
+         * GamesResponse
+         * @description M10 – M14, at match grain.
+         *
+         *     **No speed-class completion rate.** `match_started` carries no speed
+         *     class, so a segmented denominator does not exist — A64-027.5 §89. The
+         *     field is absent rather than nullable, because a nullable one invites a
+         *     console to render a dash where a number will never come.
+         */
+        GamesResponse: {
+            /** Grain */
+            grain: string;
+            /** Started */
+            started: number;
+            /** Completed */
+            completed: number;
+            /** Aborted */
+            aborted: number;
+            /** Completion Rate */
+            completion_rate?: number | null;
+            /** Resignation Rate */
+            resignation_rate?: number | null;
+            /** Draw Rate */
+            draw_rate?: number | null;
+            /** Abandonment Rate */
+            abandonment_rate?: number | null;
+            /** Rated Share */
+            rated_share?: number | null;
+            /** Resignations */
+            resignations: number;
+            /** Draws */
+            draws: number;
+            /** Abandonments */
+            abandonments: number;
+            /** Flags */
+            flags: number;
+            /** Rated Completions */
+            rated_completions: number;
+            /** Termination Breakdown */
+            termination_breakdown: components["schemas"]["TerminationCount"][];
+            meta: components["schemas"]["PeriodMeta"];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -4507,6 +6357,28 @@ export interface components {
             next_cursor?: string | null;
         };
         /**
+         * MatchOrigin
+         * @description Where a match came from — `domain-model.md` R-25, A64-019.0.
+         *
+         *     **`game` knows the member and nothing behind it.** `TOURNAMENT` does not
+         *     make this module aware of brackets, rounds or seeding: it is a label on
+         *     a row, paired with an opaque `origin_ref` that carries no foreign key
+         *     (DB-03) and no meaning here.
+         *
+         *     That is the whole of R-25, and it is what lets `services.md` §11.3's
+         *     claim — *tournaments require no new mechanism* — actually hold. Without
+         *     it a tournament can create a match through `game.public` and has no way
+         *     to recognise it again when `match_completed` comes back.
+         *
+         *     Populated from day one rather than added per feature. `domain-model.md`
+         *     R-19 makes the argument for `TerminationReason` and it applies here
+         *     unchanged: adding `tournament` later, after months of matches were
+         *     recorded as `queue`, makes every historical query about origin wrong and
+         *     unfixable.
+         * @enum {string}
+         */
+        MatchOrigin: "queue" | "challenge" | "rematch" | "tournament";
+        /**
          * MatchRatingChangeResponse
          * @description What a rated match did to **the requesting player's** rating — A64-023 §1.
          *
@@ -4592,6 +6464,116 @@ export interface components {
             /** Winner */
             winner: string | null;
         };
+        /**
+         * MatchesCard
+         * @description Games in flight right now.
+         */
+        MatchesCard: {
+            /** Active */
+            active: number;
+            /**
+             * Awaiting Acceptance
+             * @description Pairings offered and not yet taken up by both players.
+             */
+            awaiting_acceptance: number;
+        };
+        /**
+         * MatchmakingResponse
+         * @description M6 – M9 and M7b. `grain` is on the wire so a console cannot label a
+         *     queue-attempt rate as a share of players.
+         */
+        MatchmakingResponse: {
+            /** Grain */
+            grain: string;
+            /** Queue Joins */
+            queue_joins: number;
+            /** Paired Attempts */
+            paired_attempts: number;
+            /** Abandoned Attempts */
+            abandoned_attempts: number;
+            /** Cancelled Attempts */
+            cancelled_attempts: number;
+            /** Expired Attempts */
+            expired_attempts: number;
+            /** Abandonment Rate */
+            abandonment_rate?: number | null;
+            /** Match Found Rate */
+            match_found_rate?: number | null;
+            wait: components["schemas"]["WaitResponse"];
+            /** Offers Accepted */
+            offers_accepted: number;
+            /** Offers Declined */
+            offers_declined: number;
+            /** Offers Expired */
+            offers_expired: number;
+            /** Offers Resolved */
+            offers_resolved: number;
+            /** Offer Acceptance */
+            offer_acceptance?: number | null;
+            meta: components["schemas"]["PeriodMeta"];
+        };
+        /**
+         * ModerationCaseView
+         * @description The decision behind a restriction.
+         */
+        ModerationCaseView: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Category */
+            category: string;
+            /** Decision */
+            decision: string;
+            /** Reasoning */
+            reasoning: string;
+            /**
+             * Opened By
+             * Format: uuid
+             */
+            opened_by: string;
+            /**
+             * Opened By Username
+             * @description Resolved per page in one batch. `None` for an account that no longer exists — the case outlives it.
+             */
+            opened_by_username?: string | null;
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+        };
+        /**
+         * ModerationCategory
+         * @description Why the decision was taken — a **closed** vocabulary.
+         *
+         *     Machine-readable identifiers; the console localises them (uz/ru/en).
+         *     Free text is not the authoritative reason: a taxonomy nobody can filter
+         *     or count is a taxonomy that cannot answer "how often does this happen",
+         *     which is the first question asked of any moderation surface.
+         *
+         *     Chosen from surfaces Arena64 **actually has**, not from a generic
+         *     trust-and-safety list:
+         *
+         *     - `CHEATING` — `fairplay` collects integrity signals (§13.1), and IS-1
+         *       is explicit that a signal never sanctions automatically. A human
+         *       deciding on that evidence is exactly this category.
+         *     - `ABUSE` — the quick-message surface (ADR-004) and the block graph.
+         *       **`harassment` and `spam` are not separate members**: there is no
+         *       free-text channel to distinguish them on, quick messages are already
+         *       rate-limited (A64-023.3), and three categories that no evidence can
+         *       tell apart would be three categories filled in at random.
+         *     - `ACCOUNT_COMPROMISE` — a real operational case: `auth` already has
+         *       lockout and password reset, and withholding access to a stolen
+         *       account is a protective act rather than a punitive one.
+         *     - `POLICY_VIOLATION` — the bounded catch-all for a rule that exists but
+         *       has no dedicated evidence surface.
+         *     - `OTHER` — the honest escape hatch. `reasoning` is required on every
+         *       case, so this one is not a hole in the record.
+         * @enum {string}
+         */
+        ModerationCategory: "cheating" | "abuse" | "account_compromise" | "policy_violation" | "other";
         /**
          * MyProfileResponse
          * @description The account holder's own profile, as returned by both endpoints.
@@ -4746,7 +6728,7 @@ export interface components {
          *     `domain.preference.LOCKED`.
          * @enum {string}
          */
-        NotificationCategory: "social" | "game" | "tournament" | "system";
+        NotificationCategory: "social" | "game" | "tournament" | "system" | "announcement";
         /**
          * NotificationChallengeResponse
          * @description The friend challenge a notification is about — A64-022.4 §4.
@@ -4974,6 +6956,23 @@ export interface components {
             display_name: string | null;
         };
         /**
+         * OverviewResponse
+         * @description The one call the overview page makes.
+         *
+         *     Composed server-side for `admin/dashboard`'s reason: five sections
+         *     rendered from five round trips is five chances for a page to be half
+         *     right, and each would carry its own period metadata for the same
+         *     window.
+         */
+        OverviewResponse: {
+            active_players: components["schemas"]["ActivePlayersResponse"];
+            activation: components["schemas"]["ActivationResponse"];
+            matchmaking: components["schemas"]["MatchmakingResponse"];
+            games: components["schemas"]["GamesResponse"];
+            engagement: components["schemas"]["EngagementResponse"];
+            meta: components["schemas"]["PeriodMeta"];
+        };
+        /**
          * PendingMatchResponse
          * @description One match, as one of its two participants sees it.
          *
@@ -5031,6 +7030,49 @@ export interface components {
              * @description When the pairing produced this match.
              */
             created_at: string;
+        };
+        /**
+         * PeriodMeta
+         * @description What a number covers, and how far it can be trusted.
+         *
+         *     Carried on every section because a figure without it gets compared
+         *     against another that meant something else — the failure the whole
+         *     maturity/coverage machinery exists to prevent.
+         */
+        PeriodMeta: {
+            /** Environment */
+            environment: string;
+            /** Include Synthetic */
+            include_synthetic: boolean;
+            /**
+             * Period Start
+             * Format: date
+             */
+            period_start: string;
+            /**
+             * Period End
+             * Format: date
+             */
+            period_end: string;
+            /**
+             * Requested Start
+             * Format: date
+             */
+            requested_start: string;
+            /**
+             * Requested End
+             * Format: date
+             */
+            requested_end: string;
+            /** Maturity */
+            maturity: string;
+            /** Coverage */
+            coverage: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
         };
         /**
          * PieceSet
@@ -5785,6 +7827,8 @@ export interface components {
             redis: {
                 [key: string]: boolean;
             };
+            /** Draining */
+            draining: boolean;
         };
         /**
          * RefreshRequest
@@ -6157,6 +8201,57 @@ export interface components {
             /** Correlation Id */
             correlation_id?: string | null;
         };
+        /**
+         * RestrictAccountRequest
+         * @description Withhold access from an account.
+         */
+        RestrictAccountRequest: {
+            /** @description Why, from a closed vocabulary. The console localises it; the server stores the identifier. */
+            category: components["schemas"]["ModerationCategory"];
+            /**
+             * Reasoning
+             * @description The decision's reasoning, recorded on the moderation case. Plain text, bounded, and never shown to the restricted account.
+             */
+            reasoning: string;
+            /**
+             * Duration Hours
+             * @description How long the restriction lasts. Omit for an indefinite one.
+             */
+            duration_hours?: number | null;
+        };
+        /** RetentionResponse */
+        RetentionResponse: {
+            /** Rows */
+            rows: components["schemas"]["RetentionRowResponse"][];
+            meta: components["schemas"]["PeriodMeta"];
+        };
+        /**
+         * RetentionRowResponse
+         * @description One cohort. `d1`/`d7`/`d30` are `None` where the day has not
+         *     arrived — never nought, which would be a decline that did not
+         *     happen.
+         */
+        RetentionRowResponse: {
+            /**
+             * Cohort Day
+             * Format: date
+             */
+            cohort_day: string;
+            /** Cohort */
+            cohort: number;
+            /** D1 */
+            d1?: number | null;
+            /** D7 */
+            d7?: number | null;
+            /** D30 */
+            d30?: number | null;
+            /** D1 Rate */
+            d1_rate?: number | null;
+            /** D7 Rate */
+            d7_rate?: number | null;
+            /** D30 Rate */
+            d30_rate?: number | null;
+        };
         /** RoundResponse */
         RoundResponse: {
             /** Round Number */
@@ -6165,6 +8260,78 @@ export interface components {
             status: string;
             /** Nodes */
             nodes: components["schemas"]["BracketNodeResponse"][];
+        };
+        /**
+         * SanctionKind
+         * @description What a sanction withholds.
+         *
+         *     **One member, and that is the honest count.** §13.3 names four kinds —
+         *     muted, matchmaking-restricted, suspended, banned — and only one of them
+         *     has an enforcement seam on this platform today.
+         *
+         *     `MUTED` (quick messages withheld) and `MATCHMAKING_RESTRICTED` would
+         *     each need a guard on a surface that currently has none, and a kind an
+         *     administrator can apply while nothing enforces it is worse than an
+         *     absent one: the console would report a restriction the player does not
+         *     experience. `BANNED` is deferred for a different reason — §6's
+         *     lifecycle ties it to erasure ("Suspended → Erased: permanent ban plus
+         *     erasure request"), which is DM-13's obligation and not this task's.
+         *
+         *     An indefinite suspension is already expressible: `expires_at` is null.
+         * @enum {string}
+         */
+        SanctionKind: "suspended";
+        /**
+         * SanctionPageResponse
+         * @description One page, and the cursor that continues it.
+         *
+         *     **No total count**, for the reason no other admin page has one: an
+         *     operator needs "are there more".
+         */
+        SanctionPageResponse: {
+            /** Items */
+            items: components["schemas"]["SanctionView"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /**
+         * SanctionView
+         * @description One restriction, with the decision that authorised it.
+         */
+        SanctionView: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Player Id
+             * Format: uuid
+             */
+            player_id: string;
+            /** Username */
+            username?: string | null;
+            kind: components["schemas"]["SanctionKind"];
+            /**
+             * Is Effective
+             * @description Whether it is in force **now**. Computed at read time from `expires_at` and `lifted_at` — no job removes anything.
+             */
+            is_effective: boolean;
+            /**
+             * Starts At
+             * Format: date-time
+             */
+            starts_at: string;
+            /**
+             * Expires At
+             * @description `None` for an indefinite restriction.
+             */
+            expires_at?: string | null;
+            /** Lifted At */
+            lifted_at?: string | null;
+            /** Lifted By */
+            lifted_by?: string | null;
+            case: components["schemas"]["ModerationCaseView"];
         };
         /**
          * SendFriendRequestRequest
@@ -6189,6 +8356,40 @@ export interface components {
              * @example 019fb9ea-0a0c-7cec-9c5f-402727c31a96
              */
             player_id: string;
+        };
+        /**
+         * SessionRead
+         * @description One device a player is signed in on.
+         */
+        SessionRead: {
+            /**
+             * Id
+             * Format: uuid
+             * @example 019fb9ea-0a0c-7cec-9c5f-402727c31a96
+             */
+            id: string;
+            /** Is Current */
+            is_current: boolean;
+            /**
+             * Browser
+             * @example Chrome
+             */
+            browser?: string | null;
+            /**
+             * Platform
+             * @example macOS
+             */
+            platform?: string | null;
+            /**
+             * Signed In At
+             * Format: date-time
+             */
+            signed_in_at: string;
+            /**
+             * Last Active At
+             * Format: date-time
+             */
+            last_active_at: string;
         };
         /**
          * SpeedClass
@@ -6339,6 +8540,13 @@ export interface components {
              */
             best_win_streak: number;
         };
+        /** TerminationCount */
+        TerminationCount: {
+            /** Reason */
+            reason: string;
+            /** Matches */
+            matches: number;
+        };
         /**
          * TimeControlId
          * @description Which time controls the platform offers, by stable code.
@@ -6436,6 +8644,28 @@ export interface components {
              * @description Seconds until the **access** token expires, not the refresh token.
              */
             expires_in: number;
+        };
+        /**
+         * TournamentActionResponse
+         * @description What a command changed.
+         *
+         *     Two facts and no aggregate: the console re-reads the tournament to
+         *     render it, so returning a copy here would be a second shape to keep in
+         *     step with the detail response.
+         */
+        TournamentActionResponse: {
+            /**
+             * Tournament Id
+             * Format: uuid
+             */
+            tournament_id: string;
+            status: components["schemas"]["TournamentStatus"];
+            /**
+             * Matches Launched
+             * @description Non-zero only for `start`. A tournament that reached `in_progress` and launched nothing is a bracket that did not materialise.
+             * @default 0
+             */
+            matches_launched: number;
         };
         /**
          * TournamentFormat
@@ -6552,6 +8782,16 @@ export interface components {
          * @enum {string}
          */
         TournamentStatus: "draft" | "registration_open" | "registration_closed" | "in_progress" | "completed" | "cancelled";
+        /**
+         * TournamentsCard
+         * @description The two tournament states an operator can act on.
+         */
+        TournamentsCard: {
+            /** Registration Open */
+            registration_open: number;
+            /** In Progress */
+            in_progress: number;
+        };
         /**
          * UnreadCountResponse
          * @description The badge, and nothing else — §10.
@@ -6674,6 +8914,9 @@ export interface components {
          *     (`domain.otp.generate_otp`), and an integer field would parse it as
          *     `42`, compare six characters against two, and reject a code that was
          *     correct. The pattern is the validation.
+         * @example {
+         *       "code": "482193"
+         *     }
          */
         VerifyCodeRequest: {
             /**
@@ -6724,6 +8967,18 @@ export interface components {
          * @enum {string}
          */
         VisibilityLevel: "everyone" | "friends" | "nobody";
+        /**
+         * WaitResponse
+         * @description Seconds, and the sample counts **pairings** rather than seats.
+         */
+        WaitResponse: {
+            /** Sample */
+            sample: number;
+            /** P50 Seconds */
+            p50_seconds?: number | null;
+            /** P95 Seconds */
+            p95_seconds?: number | null;
+        };
         /**
          * WebSocketTicketRead
          * @description A freshly minted, single-use ticket.
@@ -6889,6 +9144,1054 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiResponse_ReadinessResponse_"];
+                };
+            };
+        };
+    };
+    read_admin_session_api_v1_admin_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSessionResponse"];
+                };
+            };
+            /** @description No credential, or one that does not verify. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authenticated, and not an administrator. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_users_api_v1_admin_users_get: {
+        parameters: {
+            query?: {
+                /** @description Matches a username or an email address by **prefix**. Substring matching is not offered — it cannot use either index. */
+                q?: string | null;
+                is_active?: boolean | null;
+                is_verified?: boolean | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_user_api_v1_admin_users__user_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserDetail"];
+                };
+            };
+            /** @description No such account. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_matches_api_v1_admin_matches_get: {
+        parameters: {
+            query?: {
+                status?: components["schemas"]["MatchRecordStatus"] | null;
+                rated?: boolean | null;
+                variant?: components["schemas"]["ProductVariant"] | null;
+                origin?: components["schemas"]["MatchOrigin"] | null;
+                /** @description Matches either seat. Search by *name* is two steps: find the account on the Users console, then filter here by its id. */
+                participant_id?: string | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminMatchPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_match_api_v1_admin_matches__match_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                match_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminMatchDetail"];
+                };
+            };
+            /** @description No such match. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_tournaments_api_v1_admin_tournaments_get: {
+        parameters: {
+            query?: {
+                status?: components["schemas"]["TournamentStatus"] | null;
+                format?: components["schemas"]["TournamentFormat"] | null;
+                variant?: components["schemas"]["ProductVariant"] | null;
+                rated?: boolean | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTournamentPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_tournament_api_v1_admin_tournaments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTournamentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_tournament_api_v1_admin_tournaments__tournament_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTournamentDetailResponse"];
+                };
+            };
+            /** @description No such tournament. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    open_registration_api_v1_admin_tournaments__tournament_id__registration_open_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentActionResponse"];
+                };
+            };
+            /** @description The tournament is not in a state to open. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    close_registration_api_v1_admin_tournaments__tournament_id__registration_close_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentActionResponse"];
+                };
+            };
+            /** @description The tournament is not in a state to close. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_tournament_api_v1_admin_tournaments__tournament_id__start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentActionResponse"];
+                };
+            };
+            /** @description The tournament is not in a state to start. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_audit_entries_api_v1_admin_audit_get: {
+        parameters: {
+            query?: {
+                /** @description Narrow to one kind of action. Index-backed. */
+                action?: components["schemas"]["AuditAction"] | null;
+                /** @description Everything one administrator did. Index-backed. */
+                actor_id?: string | null;
+                /** @description Narrow to one kind of subject. Required alongside `subject_ref`. */
+                subject_type?: components["schemas"]["AuditSubjectType"] | null;
+                /** @description Everything that happened to one subject. Only accepted together with `subject_type` — the index leads with it. */
+                subject_ref?: string | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditPageResponse"];
+                };
+            };
+            /** @description `subject_ref` was given without `subject_type`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_restrictions_api_v1_admin_moderation_get: {
+        parameters: {
+            query?: {
+                /** @description Only restrictions in force right now. `false` includes expired and lifted ones, which are history rather than deletions. */
+                effective_only?: boolean;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SanctionPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restrict_account_api_v1_admin_users__user_id__restrict_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestrictAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SanctionView"];
+                };
+            };
+            /** @description No such account. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Already restricted, or the last administrator. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An administrator cannot restrict themselves. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    restore_account_api_v1_admin_users__user_id__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SanctionView"];
+                };
+            };
+            /** @description No such account. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description That account is not restricted. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_notifications_api_v1_admin_notifications_get: {
+        parameters: {
+            query?: {
+                /** @description Everything one account was sent. Index-backed. */
+                recipient_id?: string | null;
+                /** @description Only notifications with at least one failed push. Index-backed, and the question this console exists to answer. */
+                failed_push_only?: boolean;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminNotificationPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_notification_api_v1_admin_notifications__notification_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                notification_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminNotificationDetailResponse"];
+                };
+            };
+            /** @description No such notification. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_delivery_api_v1_admin_notifications__notification_id__deliveries__subscription_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                notification_id: string;
+                subscription_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPushDeliveryView"];
+                };
+            };
+            /** @description No such notification. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description That delivery cannot be retried. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_dashboard_api_v1_admin_dashboard_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardResponse"];
+                };
+            };
+        };
+    };
+    read_overview_api_v1_admin_analytics_overview_get: {
+        parameters: {
+            query?: {
+                /** @description First UTC day, inclusive. */
+                start?: string | null;
+                /** @description Last UTC day, inclusive. */
+                end?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OverviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_acquisition_api_v1_admin_analytics_acquisition_get: {
+        parameters: {
+            query?: {
+                /** @description First UTC day, inclusive. */
+                start?: string | null;
+                /** @description Last UTC day, inclusive. */
+                end?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcquisitionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_retention_api_v1_admin_analytics_retention_get: {
+        parameters: {
+            query?: {
+                /** @description First UTC day, inclusive. */
+                start?: string | null;
+                /** @description Last UTC day, inclusive. */
+                end?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetentionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_matchmaking_api_v1_admin_analytics_matchmaking_get: {
+        parameters: {
+            query?: {
+                /** @description First UTC day, inclusive. */
+                start?: string | null;
+                /** @description Last UTC day, inclusive. */
+                end?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchmakingResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_games_api_v1_admin_analytics_games_get: {
+        parameters: {
+            query?: {
+                /** @description First UTC day, inclusive. */
+                start?: string | null;
+                /** @description Last UTC day, inclusive. */
+                end?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GamesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    audience_size_api_v1_admin_broadcasts_audience__audience__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                audience: components["schemas"]["BroadcastAudience"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudienceSizeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_broadcasts_api_v1_admin_broadcasts_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                before?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BroadcastPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_broadcast_api_v1_admin_broadcasts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BroadcastCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BroadcastResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_broadcast_api_v1_admin_broadcasts__broadcast_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                broadcast_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BroadcastResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    collect_events_api_v1_analytics_events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CollectRequest"];
+            };
+        };
+        responses: {
+            /** @description How many events were stored. A retry deduplicates rather than adding. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_CollectResponse_"];
+                };
+            };
+            /** @description An event this endpoint does not accept, or invalid properties */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -7782,6 +11085,91 @@ export interface operations {
             };
             /** @description The account may not sign in, or the request came from an unrecognised origin. */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    browser_sessions_api_v1_auth_browser_sessions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One entry per device, newest sign-in first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_list_SessionRead__"];
+                };
+            };
+            /** @description The session cookie was missing, expired or already rotated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    browser_revoke_session_api_v1_auth_browser_sessions__session_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The session cookie was missing, expired or already rotated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The account may not sign in, or the request came from an unrecognised origin. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such device on this account. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A field failed validation. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -102,9 +102,7 @@ class TestAQuietNodeKeepsItsMailbox:
             '{"ply":4}',
         ]
 
-    async def test_recovery_repeats_for_a_second_lapse(
-        self, contract_redis: Redis
-    ) -> None:
+    async def test_recovery_repeats_for_a_second_lapse(self, contract_redis: Redis) -> None:
         """A node can be quiet more than once. A fix that healed the cache
         only the first time would pass the test above and fail in a week."""
         bus = bus_for(contract_redis)
@@ -117,9 +115,7 @@ class TestAQuietNodeKeepsItsMailbox:
 
             assert [entry.frame for entry in delivered] == [f'{{"ply":{ply}}}']
 
-    async def test_an_ordinary_consume_costs_no_recreation(
-        self, contract_redis: Redis
-    ) -> None:
+    async def test_an_ordinary_consume_costs_no_recreation(self, contract_redis: Redis) -> None:
         """The cache still has to work. A fix that recreated the group on
         every tick would be correct and would add a round trip to the
         hottest loop on the platform."""

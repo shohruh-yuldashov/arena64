@@ -603,6 +603,96 @@ measured on this machine is a production number.
 
 
 
+### 8.10 The names the edge answers — A64-030.2
+
+Three, and the certificate carries all three:
+
+| Name | Serves | Why |
+| --- | --- | --- |
+| `${ARENA64_DOMAIN}` | the product | The canonical origin. `PUBLIC_APP_URL`, the cookie's trusted origin, the media base and the client's canonical link all derive from it |
+| `admin.${ARENA64_DOMAIN}` | the admin console | §7.6 — a separate origin so a cookie scoped to one is not sent to the other |
+| `www.${ARENA64_DOMAIN}` | **a 301 to the apex, and nothing else** | below |
+
+**Why `www` exists here at all.** It has a public A record pointing at the
+production host, and before A64-030.2 the edge answered to no such name.
+That was not a 404: the port-80 default server redirects to `https://$host`,
+so a visitor reached `https://www.…` and met a **certificate name
+mismatch**. `headers-common.conf` is what made that unrecoverable rather
+than merely ugly — it sends `Strict-Transport-Security … includeSubDomains;
+preload`, so once a browser has seen the apex once, `www` is pinned to HTTPS
+for two years and the certificate error has **no click-through**.
+
+An `includeSubDomains` policy is a promise that every subdomain terminates
+TLS properly. A resolving `www` without a certificate breaks that promise,
+which is why this was a defect in the edge rather than a missing feature.
+
+**Why it redirects and never serves the application.**
+`specs/frontend.md` §11 makes one origin a security contract rather than a
+preference: the refresh token is a host-only `SameSite=Lax` cookie and
+`BROWSER_SESSION_TRUSTED_ORIGINS` names the apex alone. An SPA served on
+`www` would look like it worked, hold a cookie the apex does not recognise,
+and have every state-changing request refused by `browser_csrf.py` — a
+session that reports itself as signed in and is not. So `www` declares no
+`root`, no `try_files`, no `proxy_pass` and no `location`; a test asserts
+each of those absences.
+
+The redirect is a 301 carrying `$request_uri`, so a shared deep link keeps
+its path and query. It sends no `X-Robots-Tag`: a crawler consolidates a 301
+onto its target, and `noindex` on the redirect can suppress the target
+instead.
+
+**The alternative, and why it was not chosen.** `www` could instead be
+removed from DNS, which is equally consistent with the one-origin contract
+and is one fewer name to renew. It was rejected because the DNS record is
+not this repository's to remove, and because the failure mode while the
+record exists is the worst kind — a hard TLS interstitial on the most
+commonly typed variant of the domain, during a public beta. Supporting the
+name is safe whether or not the record survives; removing the record is safe
+only once it is actually gone.
+
+**The coupling this creates.** ACME validates every name in an order, and one
+name that cannot be validated fails the whole order. If `www` stops
+resolving to this host, the apex and `admin.` stop renewing with it.
+Removing `www` is therefore one change with three edits: the DNS record,
+`certbot/issue.sh`, and `nginx/templates/30-www.conf.template`.
+
+### 8.11 Two things the base image and the runtime got to decide — A64-030.2
+
+Both were found by the application-tier preflight, on the built image rather
+than in the configuration this repository writes — which is exactly why
+neither was caught by a test that reads these files.
+
+**E-1 — the stock server block survived.** `nginx:alpine` ships
+`/etc/nginx/conf.d/default.conf` (`listen 80; server_name localhost;` over
+`/usr/share/nginx/html`), `COPY conf.d/` added this repository's files beside
+it without removing anything, and `nginx.conf` includes `conf.d/*.conf`
+wholesale. Measured on the built image: `GET /` with `Host: localhost`
+returned **200 "Welcome to nginx!"** while every other Host correctly got a
+301. One request header opted out of the HTTP→HTTPS policy.
+
+The image now deletes it **and asserts the directory contains exactly what
+this repository put there**, so a future base image shipping a new default
+fails the build rather than appearing in a response header on a production
+host.
+
+**E-2 — the edge could not reach its configured capacity.** `nginx.conf`
+asks for 4096 connections per worker; containers on this host inherit a soft
+`nofile` of 1024, and nginx said so at every start:
+
+```
+[warn] 4096 worker_connections exceed open file resource limit: 1024
+```
+
+A proxied request holds two descriptors — client and upstream — so the real
+ceiling was about five hundred concurrent requests per worker on the only
+process facing the internet, and reaching it fails quietly: accepts stall
+and clients hang. The `nginx` service now declares
+`ulimits.nofile` **65535 soft and hard**, inside this host's 524288 hard
+ceiling. Raised rather than capped, because 4096 is the number the edge was
+sized for and 1024 was a runtime default that happened to be smaller. Only
+the edge declares it; nothing else here multiplies descriptors per
+connection the way a proxy does.
+
 ---
 
 ## 9. Gates — A64-028.7

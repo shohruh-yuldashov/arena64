@@ -41,6 +41,46 @@ COPY snippets/ /etc/nginx/snippets/
 COPY conf.d/ /etc/nginx/conf.d/
 COPY templates/ /etc/nginx/templates/
 
+# --- The base image's own server block, which used to survive — A64-030.2 (E-1)
+#
+# `nginx:alpine` ships `/etc/nginx/conf.d/default.conf`: `listen 80;
+# server_name localhost;` serving `/usr/share/nginx/html`. `COPY conf.d/`
+# adds this repository's files beside it and removes nothing, and
+# `nginx.conf` includes `conf.d/*.conf` — so the stock block was loaded in
+# production alongside `00-redirect.conf`.
+#
+# Measured on the built image before this line existed:
+#
+#     GET / with Host: localhost  ->  200 "Welcome to nginx!"
+#
+# while every other Host correctly got a 301 to HTTPS. One request header
+# was enough to opt out of the edge's HTTP→HTTPS policy and be served a page
+# this deployment never intended to publish. Nothing was exposed beyond the
+# stock page, and HTTPS was unaffected — `default.conf` listens only on 80 —
+# but a policy with a bypass is not the policy.
+#
+# ## Why an assertion and not just `rm`
+#
+# `rm` fixes today's file. The defect was never that *this* file existed; it
+# was that nothing noticed the base image had put something in a directory
+# this configuration includes wholesale. A future `nginx:alpine` adding a
+# second default would reintroduce it silently, and the deletion of one
+# known name would still look correct.
+#
+# So the directory is asserted to contain **exactly** what this repository
+# put there. A base image that ships anything new fails the build, which is
+# where a surprise like this should surface — not in a response header on a
+# production host. `tests/unit/test_edge_policy.py` guards that this
+# assertion is still here.
+RUN rm -f /etc/nginx/conf.d/default.conf \
+	&& expected="$(cd /etc/nginx/conf.d && ls -A | sort | tr '\n' ' ')" \
+	&& if [ "$expected" != "00-redirect.conf " ]; then \
+		echo "conf.d holds files this repository did not put there: ${expected}" >&2; \
+		echo "The base image ships its own server blocks and nginx.conf includes" >&2; \
+		echo "conf.d/*.conf wholesale. Review them, then update this assertion." >&2; \
+		exit 1; \
+	fi
+
 # --- The build-time gate — §4 -------------------------------------------------
 #
 # `nginx -t` needs the finished configuration, and the finished
@@ -64,7 +104,13 @@ RUN apk add --no-cache --virtual .build-deps openssl gettext \
 			< "$template" > "/etc/nginx/conf.d/$(basename "$template" .template)"; \
 	done \
 	&& nginx -t \
-	&& rm -f /etc/nginx/conf.d/10-arena64.conf /etc/nginx/conf.d/20-admin.conf \
+	# Rendered copies exist only for the test above. They are removed by the
+	# same rule that put them there, so a template added later cannot leave a
+	# stale build-time render behind — the assertion above would fail the
+	# next build if one did.
+	&& for template in /etc/nginx/templates/*.template; do \
+		rm -f "/etc/nginx/conf.d/$(basename "$template" .template)"; \
+	done \
 	&& rm -rf /etc/letsencrypt/live/build.invalid \
 	&& apk del .build-deps
 

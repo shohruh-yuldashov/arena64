@@ -43,11 +43,21 @@ if [ ! -f "${LIVE}/fullchain.pem" ]; then
 	chmod 640 "${LIVE}/privkey.pem"
 fi
 
-echo "certbot: requesting a certificate for ${ARENA64_DOMAIN} and admin.${ARENA64_DOMAIN}"
+echo "certbot: requesting a certificate for ${ARENA64_DOMAIN}, www.${ARENA64_DOMAIN} and admin.${ARENA64_DOMAIN}"
 
 # `--keep-until-expiring` so a re-run inside the validity window is free.
-# Both names on one certificate: the admin console is a subdomain of the
-# product and a single certificate is one thing to renew rather than two.
+# All three names on one certificate: the admin console and `www` are
+# subdomains of the product and a single certificate is one thing to renew
+# rather than three.
+#
+# **`www` was added by A64-030.2 and it couples issuance to that DNS record.**
+# ACME validates every name in an order, and one name that cannot be
+# validated fails the whole order — so if `www.${ARENA64_DOMAIN}` ever stops
+# resolving to this host, the apex and `admin.` stop renewing with it. That
+# is the same coupling `admin.` has always carried, now with one more name
+# in it. Removing `www` is therefore three edits in one change: the DNS
+# record, this line, and `nginx/templates/30-www.conf.template`.
+# `deployment.md` §8.10 states the alternative and why it was not chosen.
 #
 # **The failure is survived rather than fatal, and that is A64-029's
 # deployment blocker.** The challenge above is served by nginx, and nginx
@@ -65,7 +75,7 @@ if certbot certonly \
 	--email "${ARENA64_ACME_EMAIL}" \
 	--keep-until-expiring \
 	--cert-name "${ARENA64_DOMAIN}" \
-	-d "${ARENA64_DOMAIN}" -d "admin.${ARENA64_DOMAIN}"; then
+	-d "${ARENA64_DOMAIN}" -d "www.${ARENA64_DOMAIN}" -d "admin.${ARENA64_DOMAIN}"; then
 	rm -f "${LIVE}/.self-signed"
 	echo "certbot: issuance complete"
 	exit 0

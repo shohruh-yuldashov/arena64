@@ -454,6 +454,32 @@ services:
       - "443:443/udp"
     environment:
       ARENA64_DOMAIN: ${ARENA64_DOMAIN}
+    # --- The descriptor budget `worker_connections` needs — A64-030.2 (E-2)
+    #
+    # `nginx.conf` asks for 4096 connections per worker. Containers on this
+    # host inherit a **soft `nofile` of 1024** (hard 524288; the daemon sets
+    # no `default-ulimits`), and nginx said so at every start:
+    #
+    #     [warn] 4096 worker_connections exceed open file resource limit: 1024
+    #
+    # A connection is not one descriptor. A proxied request holds two — the
+    # client socket and the upstream socket — so 1024 was a ceiling of about
+    # five hundred concurrent requests per worker, on the only process on
+    # this host that faces the internet. Nothing fails loudly when it is
+    # reached: accepts stall and clients see a hang.
+    #
+    # Raised here rather than by lowering `worker_connections`, because 4096
+    # is the number the edge was sized for and the descriptor limit is a
+    # runtime default that happened to be smaller — the configuration was
+    # right and the sandbox was wrong.
+    #
+    # Soft equals hard so nothing has to raise it at runtime, and 65535 is
+    # comfortably inside this host's 524288 hard ceiling. It is a bound, not
+    # a reservation: descriptors cost nothing until they are opened.
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     cpu_shares: 256
     deploy:
       resources:

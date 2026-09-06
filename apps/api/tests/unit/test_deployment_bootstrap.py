@@ -732,3 +732,78 @@ class TestTheClientVolumesDoNotAccumulate:
         """nginx serves these files directly, so their modes are not
         incidental."""
         assert "cp -a " in _shell_body(service)
+
+
+class TestTheEdgeHasTheDescriptorsItWasSizedFor:
+    """A64-030.2, E-2 — a ceiling nginx announced and nobody read.
+
+    `nginx.conf` asks for 4096 connections per worker. Containers on the
+    production host inherit a soft `nofile` of 1024, and nginx warned at
+    every start:
+
+        [warn] 4096 worker_connections exceed open file resource limit: 1024
+
+    A proxied request holds two descriptors — client and upstream — so the
+    real ceiling was roughly five hundred concurrent requests per worker on
+    the only process facing the internet, and reaching it does not fail
+    loudly: accepts stall and clients hang.
+
+    Raised rather than capped: 4096 is the number the edge was sized for and
+    1024 is a runtime default that happened to be smaller.
+    """
+
+    def _nofile(self) -> dict[str, int]:
+        limits = _service("nginx").get("ulimits", {})
+        assert "nofile" in limits, (
+            "the nginx service declares no nofile ulimit, so it inherits the daemon "
+            "default of 1024 and cannot reach its configured worker_connections"
+        )
+        nofile = limits["nofile"]
+        assert isinstance(nofile, dict), (
+            f"nofile must state soft and hard explicitly, got {nofile!r} — a bare integer "
+            "sets both and hides which one was meant"
+        )
+        return nofile
+
+    def test_soft_and_hard_are_both_stated(self) -> None:
+        nofile = self._nofile()
+        assert "soft" in nofile and "hard" in nofile
+
+    def test_the_soft_limit_covers_worker_connections(self) -> None:
+        """nginx's own check: it compares `worker_connections` against the
+        soft limit and warns when the limit is smaller."""
+        configured = re.search(
+            r"worker_connections\s+(\d+)", (PRODUCTION / "nginx" / "nginx.conf").read_text()
+        )
+        assert configured is not None, "nginx.conf declares no worker_connections"
+        wanted = int(configured.group(1))
+        soft = int(self._nofile()["soft"])
+        assert soft >= wanted, (
+            f"nofile soft {soft} is below worker_connections {wanted}; nginx will warn at "
+            "every start and silently cap below its configured capacity"
+        )
+
+    def test_hard_is_at_least_soft(self) -> None:
+        nofile = self._nofile()
+        assert int(nofile["hard"]) >= int(nofile["soft"]), (
+            "a soft limit above the hard limit is refused by the kernel and the container "
+            "will not start"
+        )
+
+    def test_the_limit_stays_inside_the_hosts_hard_ceiling(self) -> None:
+        """524288 is what this host's daemon allows a container to raise to.
+        A value above it is a container that cannot start, which is a worse
+        outcome than the warning this replaces."""
+        assert int(self._nofile()["hard"]) <= 524288
+
+    def test_only_the_edge_needs_this(self) -> None:
+        """Stated so the next reader does not copy it everywhere. The API
+        holds WebSockets but is bounded by its own pool sizes and by the
+        edge in front of it; nothing else here multiplies descriptors per
+        connection the way a proxy does."""
+        elsewhere = [
+            name
+            for name, service in _compose()["services"].items()
+            if name != "nginx" and "nofile" in (service.get("ulimits") or {})
+        ]
+        assert not elsewhere, f"{elsewhere} also raise nofile; document why or remove it"

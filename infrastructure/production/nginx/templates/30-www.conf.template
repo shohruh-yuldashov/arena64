@@ -1,0 +1,74 @@
+# `www` exists to send people to the apex — A64-030.2.
+#
+# ## Why this block exists at all
+#
+# `www.${ARENA64_DOMAIN}` has a public A record pointing at this host, and
+# before this file the edge answered to no such name. What a visitor got was
+# not a 404: the port-80 default server redirects to `https://$host`, so
+# `http://www.…` became `https://www.…`, and the certificate covers the apex
+# and `admin.` only — a **certificate name mismatch**, which is the worst
+# error page a first-time visitor can be shown.
+#
+# `headers-common.conf` makes that unrecoverable rather than merely ugly.
+# It sends `Strict-Transport-Security … includeSubDomains; preload`, so once
+# a browser has seen the apex once — or once the domain is on the preload
+# list, which that header asks for — `www` is pinned to HTTPS for two years
+# and the certificate error becomes **non-bypassable**. There is no
+# click-through. An `includeSubDomains` policy is a promise that every
+# subdomain terminates TLS properly, and a resolving `www` without a
+# certificate breaks that promise.
+#
+# ## Why a redirect and never the application
+#
+# `specs/frontend.md` §11 is titled "Deployment contract — one origin", and
+# it is a security contract rather than a preference: the refresh token is a
+# host-only `SameSite=Lax` cookie, and `BROWSER_SESSION_TRUSTED_ORIGINS`
+# lists `https://${ARENA64_DOMAIN}` and nothing else. An SPA served here
+# would look like it worked, hold a cookie the apex does not recognise, and
+# have every state-changing request refused by `browser_csrf.py` — a broken
+# session that reports itself as signed in. So this host serves no root, no
+# assets and no `/api`. It answers one thing, to one place.
+#
+# `$request_uri` rather than `$uri`, so a shared deep link survives the hop
+# with its query string intact. 301 rather than 302 because this is
+# permanent and the apex is the canonical origin the sitemap, the canonical
+# link and `og:url` all name.
+#
+# **No `X-Robots-Tag` here, deliberately.** A crawler that follows a 301
+# consolidates the signal onto the target; `noindex` on the redirect can
+# suppress the target instead, which would deindex the one page this site
+# wants found.
+#
+# ## The coupling this creates, stated where it will be read
+#
+# `certbot/issue.sh` now requests this name on the same certificate. If the
+# `www` DNS record is ever removed, **issuance for every name fails** — one
+# unvalidatable name fails the whole ACME order. Removing the record and
+# removing it from `issue.sh` and deleting this file are one change, not
+# three. `docs/01-architecture/deployment.md` §8.10 records that.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
+    # No `reuseport` — it belongs to exactly one listener per address and
+    # port, and `10-arena64.conf.template` already claims it.
+    listen 443 quic;
+    listen [::]:443 quic;
+
+    server_name www.${ARENA64_DOMAIN};
+
+    # The apex certificate, which now carries this name as a SAN.
+    ssl_certificate     /etc/letsencrypt/live/${ARENA64_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${ARENA64_DOMAIN}/privkey.pem;
+    ssl_trusted_certificate /etc/letsencrypt/live/${ARENA64_DOMAIN}/chain.pem;
+    include /etc/nginx/snippets/tls.conf;
+
+    # At server level: this block has no `location`, so there is nothing for
+    # a per-location `add_header` to discard. The redirect still carries
+    # HSTS, which is the header that matters on the hop.
+    include /etc/nginx/snippets/headers-common.conf;
+    add_header Alt-Svc 'h3=":443"; ma=86400' always;
+
+    return 301 https://${ARENA64_DOMAIN}$request_uri;
+}

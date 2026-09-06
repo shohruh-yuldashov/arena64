@@ -99,6 +99,25 @@ ENV PATH="/srv/.venv/bin:$PATH" \
 WORKDIR /srv
 COPY --from=build --chown=arena64:arena64 /srv /srv
 
+# The backup destination, owned by the account that writes to it —
+# A64-030.4C.1.
+#
+# `compose.yml` mounts the `backup_data` named volume here, and Docker gives
+# a volume the ownership of the image path it is mounted over. The path did
+# not exist, so the volume's root was created `root:root` — and the backup
+# service runs as this user, so every run failed on
+# `PermissionError: /var/backups/arena64/<name>.dump.partial` and the
+# platform had no backup at all. Creating it here is what makes the volume
+# writable, including on the host whose volume is already created: Docker
+# takes the ownership from the image whenever the volume is empty, not only
+# when it is first created.
+#
+# Not `chmod 777`, and not running the container as root: this process holds
+# a `pg_dump` of the whole database, and it needs one directory rather than
+# the machine.
+RUN mkdir -p /var/backups/arena64 \
+    && chown arena64:arena64 /var/backups/arena64
+
 USER arena64
 EXPOSE 8000
 

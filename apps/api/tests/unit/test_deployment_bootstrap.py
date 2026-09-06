@@ -752,3 +752,133 @@ class TestTheEdgeHasTheDescriptorsItWasSizedFor:
             if name != "nginx" and "nofile" in (service.get("ulimits") or {})
         ]
         assert not elsewhere, f"{elsewhere} also raise nofile; document why or remove it"
+
+
+API_DIR = _REPO / "apps" / "api"
+API_DOCKERFILE = API_DIR / "Dockerfile"
+
+
+def _docker_available() -> bool:
+    import shutil
+    import subprocess
+
+    return (
+        shutil.which("docker") is not None
+        and subprocess.run(["docker", "info"], capture_output=True).returncode == 0
+    )
+
+
+needs_docker = pytest.mark.skipif(
+    not _docker_available(), reason="needs a Docker daemon to build and run the runtime image"
+)
+
+
+class TestTheBackupDestinationIsWritableByTheAccountThatWritesIt:
+    """The backup service could not create a file — A64-030.4C.1.
+
+    `compose.yml` mounts the `backup_data` named volume at
+    `/var/backups/arena64` and the container runs as uid 10001. Docker takes
+    a volume's ownership from the image path it is mounted over, and that
+    path did not exist in the image — so the volume's root was created
+    `root:root` and every run died on
+
+        PermissionError: /var/backups/arena64/<name>.dump.partial
+
+    The platform therefore had no backup at all, on any host, ever.
+
+    **Why this test runs Docker.** The tests beside it read `compose.yml` and
+    the loop's shell, and all of them passed while this was broken: the
+    arguments were right, the failure was reported, the loop survived. What
+    nothing checked was whether the process could write where it was told to,
+    which is not a property of any text in this repository — it is a property
+    of the image and the volume together. So this one builds the real runtime
+    image and mounts a real named volume.
+    """
+
+    def test_the_dockerfile_does_not_buy_write_access_with_privilege(self) -> None:
+        """Cheap, and it runs without Docker: the fix is one directory, not
+        `chmod 777` and not a container running as root."""
+        body = API_DOCKERFILE.read_text(encoding="utf-8")
+        # Instructions only. A comment explaining why the fix is *not*
+        # `chmod 777` would otherwise fail the assertion that it is not.
+        instructions = [
+            line.strip()
+            for line in body.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        assert any("/var/backups/arena64" in line for line in instructions), (
+            "the API image no longer creates the backup mount point, so the volume "
+            "reverts to root:root and the backup service cannot write to it"
+        )
+        assert not [line for line in instructions if "777" in line], (
+            "write access to the backup volume is bought with permissions rather than "
+            "ownership; the dump it holds is the whole database"
+        )
+        users = [line for line in instructions if line.startswith("USER ")]
+        assert users and users[-1] == "USER arena64", (
+            f"the image's final USER is {users[-1] if users else 'unset'}, so the backup "
+            "process would run with more privilege than one directory"
+        )
+
+    @needs_docker
+    def test_the_runtime_user_can_create_a_file_on_a_fresh_volume(self) -> None:
+        """The whole defect, end to end.
+
+        A fresh named volume, the real image, its own default user, and no
+        `chown` or `chmod` anywhere after the container starts — because a
+        fix that needed one would not survive the next volume.
+        """
+        import subprocess
+        import uuid
+
+        tag = f"arena64-api-backupvol-{uuid.uuid4().hex[:8]}"
+        volume = f"arena64-backupvol-test-{uuid.uuid4().hex[:8]}"
+        built = subprocess.run(
+            ["docker", "build", "-q", "-t", tag, str(API_DIR)],
+            capture_output=True,
+            text=True,
+            timeout=1800,
+        )
+        assert built.returncode == 0, built.stderr[-2000:]
+        try:
+            probe = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    "-v",
+                    f"{volume}:/var/backups/arena64",
+                    "--entrypoint",
+                    "sh",
+                    tag,
+                    "-c",
+                    'echo "uid=$(id -u)"; '
+                    'echo "owner=$(stat -c %u /var/backups/arena64)"; '
+                    'if [ -w /var/backups/arena64 ]; then echo "writable=yes"; '
+                    'else echo "writable=no"; fi; '
+                    "if touch /var/backups/arena64/probe.partial 2>/dev/null; "
+                    'then echo "created=yes"; else echo "created=no"; fi',
+                ],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            assert probe.returncode == 0, probe.stderr
+            facts = dict(line.split("=", 1) for line in probe.stdout.splitlines() if "=" in line)
+        finally:
+            subprocess.run(["docker", "volume", "rm", "-f", volume], capture_output=True)
+            subprocess.run(["docker", "rmi", "-f", tag], capture_output=True)
+
+        assert facts["uid"] == "10001", f"the image no longer runs as uid 10001: {facts}"
+        assert facts["uid"] != "0", "the backup process must not be root"
+        assert facts["owner"] == "10001", (
+            "Docker gave the fresh volume to root, which is the defect: the image path "
+            f"is not owned by the runtime user. {facts}"
+        )
+        assert facts["writable"] == "yes", facts
+        assert facts["created"] == "yes", (
+            "the runtime user still cannot create the `.partial` file `backup create` "
+            f"writes first, so every backup fails. {facts}"
+        )

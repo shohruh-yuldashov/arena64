@@ -41,8 +41,20 @@ ENV VITE_PUBLIC_ORIGIN=${VITE_PUBLIC_ORIGIN}
 # `npm run build` is `tsc --noEmit && vite build && node scripts/generate-seo.mjs`.
 # The type check is part of the build on purpose: an image that compiles but
 # does not type-check is one whose next change is unreviewable.
-RUN test -n "${VITE_PUBLIC_ORIGIN}" \
-	|| (echo "VITE_PUBLIC_ORIGIN is required: without it the SEO step writes a robots.txt that blocks everything." >&2 && exit 1) \
+# Two checks the generator cannot make for itself. `generate-seo.mjs`
+# accepts an `http://localhost` origin deliberately — that is what a
+# developer previewing a build wants — and a production image is exactly
+# where that affordance becomes a defect: canonical, `og:url` and the
+# sitemap would all name a machine nobody else has, and search would index
+# it or refuse it.
+RUN case "${VITE_PUBLIC_ORIGIN}" in \
+	"") echo "VITE_PUBLIC_ORIGIN is required: without it the SEO step writes a robots.txt that blocks everything." >&2; exit 1 ;; \
+	https://*) ;; \
+	*) echo "VITE_PUBLIC_ORIGIN must be https:// for a production image, got '${VITE_PUBLIC_ORIGIN}'." >&2; exit 1 ;; \
+	esac \
+	&& case "${VITE_PUBLIC_ORIGIN}" in \
+	*localhost*|*127.0.0.1*|*.local|*.local/*) echo "VITE_PUBLIC_ORIGIN names a development host: '${VITE_PUBLIC_ORIGIN}'. A production build would put it in the canonical link, og:url and the sitemap." >&2; exit 1 ;; \
+	esac \
 	&& npm run build
 
 # Source maps are built (`vite.config.ts` sets `sourcemap: true`, and that

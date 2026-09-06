@@ -2024,6 +2024,67 @@ class FriendsSettings(SectionSettings):
     """
 
 
+class NotificationRetentionSettings(SectionSettings):
+    """`notification_retention` — how long notification history is kept.
+
+    A64-028.7, closing **P2-7**. A64-028.1 recorded
+    `notifications.notification` as "the only unbounded durable table that
+    grows with activity and has no retention policy"; the audit found three
+    more with the same shape.
+
+    ## Why these are settings and not constants
+
+    `retention_days` is a **product** decision wearing an engineering hat —
+    it is how far back a player can scroll their notifications. A platform
+    that decides six months is right should raise a number, not write a
+    migration, and the code has no business fixing it.
+
+    ## The ordering invariant
+
+    A delivery row references a notification by id and **there is no foreign
+    key**, so a notification deleted before its delivery rows leaves orphans
+    nothing else removes. `NotificationRetentionPolicy` refuses to construct
+    unless `delivery_retention_days <= retention_days`, and the service
+    deletes deliveries first. That is an invariant, not a preference, which
+    is why it is checked in code rather than described here.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="NOTIFICATION_", frozen=True, extra="forbid", populate_by_name=True
+    )
+
+    retention_enabled: bool = True
+    """The switch. `False` stops the sweep and leaves the tables growing —
+    for an incident where the deletes themselves are the problem, which is
+    the only reason to turn a bound off."""
+
+    retention_days: int = Field(default=90, ge=1, le=3650)
+    """How far back a player can scroll. Ninety days."""
+
+    delivery_retention_days: int = Field(default=30, ge=1, le=3650)
+    """Email and push delivery audit rows.
+
+    Shorter than the notification itself and required to be: a delivery row
+    answers "why did this person not get their email", which is asked within
+    days. It also carries the provider's message id, so it holds the most
+    third-party detail and has the least reason to be kept."""
+
+    revoked_subscription_retention_days: int = Field(default=30, ge=1, le=3650)
+    """Push subscriptions **after they are revoked**.
+
+    A live subscription has no horizon — a player who has not visited for a
+    year still expects their notifications when they return. A revoked one
+    is a browser endpoint already told to stop, and keeping it holds a
+    device identifier for nothing."""
+
+    retention_interval_seconds: float = Field(default=3600.0, ge=60.0, le=86400.0)
+    retention_batch_size: int = Field(default=1000, ge=1, le=10000)
+    retention_max_batches: int = Field(default=20, ge=1, le=1000)
+    """`batch_size × max_batches` is the most one run removes per relation.
+    The ceiling is what stops a first run against years of history from
+    being unbounded after all; the sweep catches up over several runs."""
+
+
 class ObservabilitySettings(SectionSettings):
     """`observability` — the operator surface: `/metrics` and the drain switch.
 
@@ -3479,6 +3540,11 @@ class Settings(BaseModel):
     #: Defaulted like `analytics`: one switch, one optional secret, and no
     #: construction site that should have to know about either.
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
+    #: Defaulted like `analytics`: operational tuning, no secret, and no
+    #: construction site that should have to know about it.
+    notification_retention: NotificationRetentionSettings = Field(
+        default_factory=NotificationRetentionSettings
+    )
 
     @model_validator(mode="after")
     def _resolve_email_links(self) -> "Settings":

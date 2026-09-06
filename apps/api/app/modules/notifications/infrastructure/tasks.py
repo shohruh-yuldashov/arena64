@@ -27,6 +27,9 @@ from app.modules.notifications.application.services.broadcast_expander import (
 from app.modules.notifications.application.services.email_delivery_service import (
     EmailDeliveryService,
 )
+from app.modules.notifications.application.services.notification_retention_service import (
+    NotificationRetentionService,
+)
 from app.modules.notifications.application.services.push_delivery_service import (
     PushDeliveryService,
 )
@@ -185,3 +188,64 @@ __all__ = [
     "email_delivery_request",
     "push_delivery_request",
 ]
+
+
+#: The name a notification retention sweep is dispatched under — A64-028.7.
+NOTIFICATION_RETENTION_TASK = "notifications.retention.prune"
+
+
+class NotificationRetentionServiceFactory(Protocol):
+    def __call__(self, session: AsyncSession) -> NotificationRetentionService: ...
+
+
+def notification_retention_request() -> TaskRequest:
+    """The request that asks for one retention run.
+
+    Routed to `maintenance` for the reason every prune on this platform is:
+    AD-20 separates work by what a delay costs, and a sweep that runs an
+    hour late deletes the same rows an hour later. Sharing a queue with
+    delivery would let a long prune delay a notification somebody is waiting
+    for.
+
+    An empty payload. The horizons are configuration and the instant is the
+    service's clock — a request carrying a cutoff would let a stale schedule
+    prune against yesterday's horizon, which on the one job that deletes
+    anything means deleting more than the policy allows.
+    """
+    return TaskRequest(name=NOTIFICATION_RETENTION_TASK, queue=MAINTENANCE_QUEUE)
+
+
+class NotificationRetentionTask:
+    """`platform.tasks.TaskHandler` — one retention run, over one session.
+
+    ## Duplicate delivery is safe
+
+    AD-17's contract is at-least-once, so this will occasionally run twice
+    for one scheduled tick. Every delete selects `FOR UPDATE SKIP LOCKED`
+    and removes by key, so a second run claims what the first left and finds
+    nothing — and deleting a row that is already gone is an empty batch
+    rather than an error.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        service_factory: NotificationRetentionServiceFactory,
+    ) -> None:
+        self._session_factory = session_factory
+        self._service_factory = service_factory
+
+    @property
+    def name(self) -> str:
+        return NOTIFICATION_RETENTION_TASK
+
+    async def run(self, payload: Mapping[str, Any]) -> None:
+        """Ignores the payload — see `notification_retention_request`.
+
+        Does not catch. `PeriodicTaskScheduler` logs a failing tick and
+        keeps its schedule, so a `try` here would swallow the one signal an
+        operator has that the sweep has stopped working.
+        """
+        async with self._session_factory() as session:
+            await self._service_factory(session).run()

@@ -3743,6 +3743,44 @@ class Settings(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _guard_production_proxy_trust(self) -> "Settings":
+        """A deployed tier is behind a proxy, and must say how many —
+        A64-028.7's audit.
+
+        Every production topology this repository defines puts nginx in
+        front of the API (`deployment.md` §8), so a count of zero there is
+        not a configuration choice, it is a variable somebody forgot.
+
+        Both wrong values are severe and neither is visible:
+
+          **too low (0)** — `client_ip` falls back to the socket peer, which
+          is the proxy. Every request on the platform then shares one rate
+          limit bucket, so the first twenty logins lock out everybody else.
+          It looks like the limiter working.
+
+          **too high** — the address is read from further left in
+          `X-Forwarded-For`, which is the part a client supplied. That is a
+          limiter with a documented bypass.
+
+        Only the first is checkable from configuration alone: the number of
+        real proxies is a fact about the deployment, not about this file. So
+        this refuses zero and leaves the rest to `deployment.md` §8.8, which
+        states the hop count beside the Caddyfile that produces it.
+        """
+        if not self.environment.is_production_like:
+            return self
+        if self.rate_limit.trusted_proxy_count < 1:
+            raise ValueError(
+                f"RATE_LIMIT_TRUSTED_PROXY_COUNT is 0 in {self.environment}, but every "
+                "production topology puts a reverse proxy in front of the API. With zero, "
+                "the rate limiter keys on the proxy's own address and the whole fleet "
+                "shares one bucket — the first few logins lock out everybody else. Set it "
+                "to the number of proxies that append to X-Forwarded-For (1 for the "
+                "nginx edge)."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _guard_production_backup(self) -> "Settings":
         """A deployed tier does not write plaintext backups — A64-028.7 (P2-8).
 

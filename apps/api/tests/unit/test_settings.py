@@ -115,7 +115,7 @@ class TestSettings:
             notification_email=NotificationEmailSettings(),
             push=PushSettings(),
             storage=StorageSettings(),
-            rate_limit=RateLimitSettings(),
+            rate_limit=RateLimitSettings(trusted_proxy_count=1),
             statistics=StatisticsSettings(),
             presence=PresenceSettings(),
             friends=FriendsSettings(),
@@ -151,7 +151,7 @@ class TestSettings:
                 notification_email=NotificationEmailSettings(),
                 push=PushSettings(),
                 storage=StorageSettings(),
-                rate_limit=RateLimitSettings(),
+                rate_limit=RateLimitSettings(trusted_proxy_count=1),
                 statistics=StatisticsSettings(),
                 presence=PresenceSettings(),
                 friends=FriendsSettings(),
@@ -179,7 +179,7 @@ class TestSettings:
                 notification_email=NotificationEmailSettings(),
                 push=PushSettings(),
                 storage=StorageSettings(),
-                rate_limit=RateLimitSettings(),
+                rate_limit=RateLimitSettings(trusted_proxy_count=1),
                 statistics=StatisticsSettings(),
                 presence=PresenceSettings(),
                 friends=FriendsSettings(),
@@ -212,7 +212,7 @@ class TestSettings:
             notification_email=NotificationEmailSettings(),
             push=PushSettings(),
             storage=StorageSettings(),
-            rate_limit=RateLimitSettings(),
+            rate_limit=RateLimitSettings(trusted_proxy_count=1),
             statistics=StatisticsSettings(),
             presence=PresenceSettings(),
             friends=FriendsSettings(),
@@ -249,7 +249,7 @@ class TestSettings:
             notification_email=NotificationEmailSettings(),
             push=PushSettings(),
             storage=StorageSettings(),
-            rate_limit=RateLimitSettings(),
+            rate_limit=RateLimitSettings(trusted_proxy_count=1),
             statistics=StatisticsSettings(),
             presence=PresenceSettings(),
             friends=FriendsSettings(),
@@ -365,7 +365,7 @@ class TestJWTProductionGuard:
             notification_email=NotificationEmailSettings(),
             push=PushSettings(),
             storage=StorageSettings(),
-            rate_limit=RateLimitSettings(),
+            rate_limit=RateLimitSettings(trusted_proxy_count=1),
             statistics=StatisticsSettings(),
             presence=PresenceSettings(),
             friends=FriendsSettings(),
@@ -415,7 +415,7 @@ class TestJWTProductionGuard:
             notification_email=NotificationEmailSettings(),
             push=PushSettings(),
             storage=StorageSettings(),
-            rate_limit=RateLimitSettings(),
+            rate_limit=RateLimitSettings(trusted_proxy_count=1),
             statistics=StatisticsSettings(),
             presence=PresenceSettings(),
             friends=FriendsSettings(),
@@ -710,3 +710,72 @@ class TestTheAnswerLatencyMetricsAreNamed:
             "no_action",
             "reconciliation_failed",
         }
+
+
+class TestProductionProxyTrust:
+    """A64-028.7's audit finding: nothing refused a deployed tier that
+    forgot `RATE_LIMIT_TRUSTED_PROXY_COUNT`.
+
+    Both wrong values are severe and neither is visible. Zero makes the
+    limiter key on the proxy's own address, so the whole fleet shares one
+    bucket and the first few logins lock out everybody else — which looks
+    exactly like the limiter working. Too high reads the address from the
+    part of `X-Forwarded-For` a client supplied, which is a bypass.
+
+    Only zero is checkable from configuration alone; the real hop count is
+    a fact about the deployment.
+    """
+
+    def _production(self, *, proxies: int) -> Settings:
+        return Settings(
+            environment=Environment.PRODUCTION,
+            app=AppSettings(public_url=EXPLICIT_PUBLIC_URL),
+            postgres=PostgresSettings(
+                dsn=SecretStr("postgresql+asyncpg://real:pw@prod-host:5432/arena64")
+            ),
+            redis=RedisSettings(
+                live_url=SecretStr("redis://prod:6379/0"),
+                bus_url=SecretStr("redis://prod:6379/1"),
+                broker_url=SecretStr("redis://prod:6379/2"),
+                cache_url=SecretStr("redis://prod:6379/3"),
+                limits_url=SecretStr("redis://prod:6379/4"),
+            ),
+            auth=AuthSettings(),
+            jwt=JWTSettings(secret_key=SecretStr("k" * 64)),
+            session=SessionSettings(),
+            email=EmailSettings(otp_secret=SecretStr(EXPLICIT_OTP_SECRET)),
+            notification_email=NotificationEmailSettings(),
+            push=PushSettings(),
+            storage=StorageSettings(),
+            rate_limit=RateLimitSettings(trusted_proxy_count=proxies),
+            statistics=StatisticsSettings(),
+            presence=PresenceSettings(),
+            friends=FriendsSettings(),
+            outbox=OutboxSettings(),
+            matchmaking=MatchmakingSettings(),
+            gateway=GatewaySettings(),
+            game=GameSettings(),
+            tournament=TournamentSettings(),
+            browser_session=BrowserSessionSettings(trusted_origins=("https://arena64.example",)),
+            observability=ObservabilitySettings(
+                token=SecretStr("ops-token"),
+                backup_encryption_key=SecretStr("Zm9vYmFyYmF6cXV1eGZvb2JhcmJhenF1dXhhYmM9"),
+                backup_offsite_endpoint="https://s3.example.test",
+                backup_offsite_bucket="arena64-backups",
+                backup_offsite_access_key_id=SecretStr("AKIAEXAMPLE"),
+                backup_offsite_secret_access_key=SecretStr("offsite-secret"),
+            ),
+        )
+
+    def test_a_deployed_tier_refuses_zero_proxies(self) -> None:
+        with pytest.raises(PydanticValidationError, match="TRUSTED_PROXY_COUNT"):
+            self._production(proxies=0)
+
+    def test_one_proxy_is_accepted(self) -> None:
+        """The nginx edge, which is what every production topology here has."""
+        assert self._production(proxies=1).rate_limit.trusted_proxy_count == 1
+
+    def test_local_is_unaffected(self) -> None:
+        """No proxy, and the socket peer is the client — which is exactly
+        what a count of zero means and is correct there."""
+        assert RateLimitSettings().trusted_proxy_count == 0

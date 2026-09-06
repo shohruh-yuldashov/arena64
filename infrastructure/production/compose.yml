@@ -38,6 +38,17 @@
 # `docs/01-architecture/deployment.md` carries the same table in prose,
 # including what must change before a second host exists.
 
+# Every image is pinned to a tag that does not move — A64-028.7's audit
+# found `certbot/certbot`, `minio/minio` and `minio/mc` on `:latest`.
+#
+# `latest` is not a version: a rebuild silently changes what runs, a
+# rollback cannot name what to go back to, and a compromised upstream tag is
+# pulled on the next restart. The rest of the file already used minor or
+# release tags; these three did not.
+#
+# The API image is the exception and deliberately so: `ARENA64_TAG` is the
+# release being deployed, which is the one thing that *should* move.
+
 name: arena64
 
 x-api-image: &api-image
@@ -78,6 +89,14 @@ x-api-env: &api-env
   # The operator surface. The tier refuses to start without one of these
   # two being set — see `Settings._guard_production_observability`.
   OPS_TOKEN: ${OPS_TOKEN}
+  # Backups — A64-028.7 (P2-8). The tier refuses to start without both.
+  OPS_BACKUP_ENCRYPTION_KEY: ${OPS_BACKUP_ENCRYPTION_KEY}
+  OPS_BACKUP_OFFSITE_ENDPOINT: ${OPS_BACKUP_OFFSITE_ENDPOINT}
+  OPS_BACKUP_OFFSITE_BUCKET: ${OPS_BACKUP_OFFSITE_BUCKET}
+  OPS_BACKUP_OFFSITE_REGION: ${OPS_BACKUP_OFFSITE_REGION:-us-east-1}
+  OPS_BACKUP_OFFSITE_PREFIX: ${OPS_BACKUP_OFFSITE_PREFIX:-production}
+  OPS_BACKUP_OFFSITE_ACCESS_KEY_ID: ${OPS_BACKUP_OFFSITE_ACCESS_KEY_ID}
+  OPS_BACKUP_OFFSITE_SECRET_ACCESS_KEY: ${OPS_BACKUP_OFFSITE_SECRET_ACCESS_KEY}
 
 # Everything the two API replicas share. Split from the image anchor so the
 # replicas differ in nothing but their name and alias — a difference between
@@ -268,7 +287,7 @@ services:
   # open — and a loop that retried it for ever would hide that behind a
   # container that looks like it is working.
   certbot-init:
-    image: certbot/certbot:latest
+    image: certbot/certbot:v5.8.0
     restart: "no"
     environment:
       ARENA64_DOMAIN: ${ARENA64_DOMAIN}
@@ -280,7 +299,7 @@ services:
     entrypoint: ["/bin/sh", "/usr/local/bin/issue.sh"]
 
   certbot:
-    image: certbot/certbot:latest
+    image: certbot/certbot:v5.8.0
     restart: unless-stopped
     volumes:
       - letsencrypt:/etc/letsencrypt
@@ -320,7 +339,7 @@ services:
       retries: 10
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
     command: ["server", "/data"]
     environment:
@@ -335,7 +354,7 @@ services:
       retries: 10
 
   minio-provision:
-    image: minio/mc:latest
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     restart: "no"
     depends_on:
       minio:

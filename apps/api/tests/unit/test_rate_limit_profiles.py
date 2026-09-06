@@ -166,6 +166,7 @@ class TestItCannotSilentlyWeakenProduction:
         # A64-028.6: a deployed tier must say how the operator surface is
         # guarded before it will start at all.
         monkeypatch.setenv("OPS_TOKEN", "ops-token")
+        monkeypatch.setenv("RATE_LIMIT_TRUSTED_PROXY_COUNT", "1")
         # A64-028.7: a deployed tier refuses to start without an encrypted,
         # off-host backup target.
         monkeypatch.setenv("OPS_BACKUP_ENCRYPTION_KEY", "Zm9vYmFyYmF6cXV1eGZvb2JhcmJhenF1dXhhYmM9")

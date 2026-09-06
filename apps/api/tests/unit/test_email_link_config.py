@@ -75,7 +75,7 @@ def build(
         notification_email=NotificationEmailSettings(),
         push=PushSettings(),
         storage=StorageSettings(),
-        rate_limit=RateLimitSettings(),
+        rate_limit=RateLimitSettings(trusted_proxy_count=1) if deployed else RateLimitSettings(),
         statistics=StatisticsSettings(),
         presence=PresenceSettings(),
         friends=FriendsSettings(),

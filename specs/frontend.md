@@ -675,13 +675,29 @@ of the boundary.
 `final_rank` is `null` while a tournament is running — "in progress", not "unplaced". Ranks
 are non-dense and are never renumbered.
 
-### 13.8 Session management — bounded on purpose
+### 13.8 Session management
 
-`SessionService.list_user_sessions` exists in the backend and **no endpoint exposes it**. So
-`/settings/sessions` offers "Sign out everywhere" and says plainly that a device list is not
-available — rather than rendering an empty table that looks broken, or inventing a one-row
-list that is always "this device". Publishing that endpoint is a backend change with its own
-visibility questions; deferred as OQ-8.
+`/settings/sessions` lists the account's devices and offers "Sign out everywhere" below
+them. `features/sessions` owns the list; the page owns the account-wide control, because
+only the page can navigate afterwards.
+
+A row is a **device**, not a session row. The backend rotates a browser's refresh token
+roughly every fifteen minutes, replacing the row each time, so a list of rows would
+renumber itself while somebody was looking at it; the identifier the API returns survives
+rotation. `GET /auth/browser/sessions` is on the browser prefix rather than under `/auth`
+because the refresh cookie is the only credential that can say *which* device is asking,
+and that cookie's path is `/api/v1/auth/browser`.
+
+The current device is marked and carries no control. Revoking it would invalidate its
+cookie without clearing it, so the page would keep working on the access token it already
+holds and then drop to the login screen for no visible reason — "Sign out everywhere" is
+the control that ends this session deliberately.
+
+Browser and platform arrive as separate fields and are composed into "Chrome on macOS"
+here, because the word between them differs per locale. Either may be `null`: the server
+answers `null` rather than guessing, and the screen renders "Unknown browser" rather than
+inventing a label, because a confidently wrong one defeats the only purpose the screen has.
+No IP address is shown.
 
 `signOutEverywhere` clears the private query cache in the auth layer; this page does not
 repeat it, because two places that clear the cache is one that can be forgotten.
@@ -2625,7 +2641,7 @@ application, in any form.
 | OQ-5 | **Automated a11y checks.** `@axe-core/playwright` is not wired; today's accessibility guarantees are hand-asserted | An a11y gate |
 | OQ-6 | **Access-token expiry is not anticipated.** The client waits for a `401` and refreshes reactively rather than scheduling against `expires_in`, so the first request after ~15 minutes idle always costs a round trip | A latency budget on the first interaction |
 | ~~OQ-7~~ | **Closed by A64-020.3.** `signOutEverywhere` is reachable from `/settings/sessions`, behind an explicit confirmation | — |
-| OQ-8 | **No session list.** `SessionService.list_user_sessions` has no HTTP endpoint, so there is no device list to show — only "sign out everywhere". Publishing it needs a decision about what a session row may reveal (IP, user agent) | A device-management UI |
+| ~~OQ-8~~ | **Closed by A64-030.5C.** `GET`/`DELETE /auth/browser/sessions` publish the list, and `/settings/sessions` renders it. What a row may reveal was decided: browser and platform families, sign-in and last-active times, and **no address** | — |
 | ~~OQ-9~~ | **Closed by A64-020.4.** The public profile renders a relationship-aware action set through `ProfileHeader`'s seam | — |
 | ~~OQ-10~~ | **Closed by A64-020.5B, in part.** The frontend has a socket: `shared/realtime` owns it, `app/providers` mounts it above the route tree, and a live game runs entirely on frames (§16). What remains is narrower and no longer a frontend gap — **the lobby still polls**, because `LoggingPendingMatchSink` (§15.3) means no match offer is ever published to the gateway. Reopened as OQ-13 | — |
 | ~~OQ-13~~ | **Closed by A64-020.5D.** `GatewayPendingMatchSink` publishes a pairing to the paired players' sockets through the existing fleet fan-out, and the lobby reconciles against the durable read. Friend presence is still polled — reopened as OQ-14, which is the narrower half | — |

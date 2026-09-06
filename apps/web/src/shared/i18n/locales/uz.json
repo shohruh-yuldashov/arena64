@@ -320,7 +320,19 @@
       "confirmBody": "Har bir qurilmada qaytadan kirishingiz kerak bo'ladi.",
       "confirm": "Chiqish",
       "cancel": "Bekor qilish",
-      "listDeferred": "Qurilmalar ro'yxati hali mavjud emas — server uni chiqarmaydi."
+      "loading": "Qurilmalar yuklanmoqda…",
+      "loadFailed": "Qurilmalaringizni yuklab bo'lmadi.",
+      "emptyTitle": "Faol qurilma yo'q",
+      "emptyHint": "Siz kirgan qurilmalar shu yerda ko'rinadi.",
+      "currentDevice": "Joriy qurilma",
+      "lastActive": "Oxirgi faollik: {when}",
+      "signedIn": "Kirilgan: {when}",
+      "deviceOn": "{platform} tizimidagi {browser}",
+      "unknownBrowser": "Noma'lum brauzer",
+      "unknownDevice": "Noma'lum qurilma",
+      "revoke": "Chiqish",
+      "revokeTitle": "Bu qurilmadan chiqilsinmi?",
+      "revokeBody": "«{device}» qurilmasida qaytadan kirish talab qilinadi."
     },
     "public": {
       "notFoundTitle": "O'yinchi topilmadi",

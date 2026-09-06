@@ -258,7 +258,7 @@ from app.modules.users.infrastructure.presence import (
     NoPresenceProvider,
     RedisPresenceProvider,
 )
-from app.operator import backup_status
+from app.operator import backup_status, certificate_status
 from app.platform.email import build_email_provider
 from app.platform.metrics import (
     AggregatingMetrics,
@@ -2165,6 +2165,24 @@ def _register_gauges(
         "backup.last_success_timestamp_seconds",
         "Unix time of the last successful backup this process can see.",
         read_backup_age,
+    )
+
+    async def read_certificate_expiry() -> dict[tuple[tuple[str, str], ...], float]:
+        path = settings.observability.certificate_path
+        if path is None:
+            return {}
+        status = certificate_status.read(path)
+        if status is None:
+            # Absent rather than zero — a certificate that cannot be read is
+            # a different incident from one that has expired, and zero would
+            # report the second when the first is true.
+            return {}
+        return {(): status.not_after.timestamp()}
+
+    exporter.register_gauge(
+        "certificate.expiry_timestamp_seconds",
+        "Unix time the TLS certificate this process can see stops being valid.",
+        read_certificate_expiry,
     )
 
     exporter.register_gauge(BACKLOG, "Unpublished outbox entries, by state.", read_backlog)

@@ -4,19 +4,26 @@
 #
 # ## What this closes
 #
-# A64-028.1's P0-2: staging defines `api`, `migrate`, `caddy`, `postgres`,
-# `redis`, `minio` and **no client**, so the Caddyfile proxies every path to
-# the API and `/` returns the API's 404. There is now a `web` and an `admin`
+# A64-028.1's P0-2: staging defines `api`, `migrate`, an edge, `postgres`,
+# `redis`, `minio` and **no client**, so the edge proxied every path to the
+# API and `/` returned the API's 404. There is now a `web` and an `admin`
 # whose build output the edge serves.
+#
+# A64-028.6A replaced the Caddy edge with nginx. See
+# `docs/01-architecture/deployment.md` §8 for the migration and what changed
+# mechanically; `infrastructure/staging/` still runs Caddy and is explicitly
+# not a production definition.
 #
 # ## The shape, and the two roles that are not the same process
 #
 #   migrate   one-shot, runs to completion before anything serves. A schema
 #             change is a deployment step, never something a replica does to
 #             a database other replicas are already using.
-#   api       stateless, replicated, **schedulers off**.
+#   api-1/2   stateless, named replicas sharing the alias `api`,
+#             **schedulers off**.
 #   worker    exactly one, schedulers and the outbox relay on.
-#   caddy     the only container with published ports.
+#   nginx     the only container with published ports.
+#   certbot   the certificate lifecycle nginx does not manage itself.
 #
 # The api/worker split is the whole reason it is safe to scale `api`.
 # A64-028.1's audit found the trap: every scheduled job is gated by a
@@ -72,6 +79,46 @@ x-api-env: &api-env
   # two being set — see `Settings._guard_production_observability`.
   OPS_TOKEN: ${OPS_TOKEN}
 
+# Everything the two API replicas share. Split from the image anchor so the
+# replicas differ in nothing but their name and alias — a difference between
+# them is a difference nobody would find until traffic landed on the wrong
+# one.
+x-api-common: &api-common
+  restart: unless-stopped
+  # `stop_grace_period` is the window between SIGTERM and SIGKILL. The deploy
+  # is expected to have called `POST /health/drain` before this point, so the
+  # window only has to cover requests already in flight — A64-028.5A measured
+  # p99 at 616 ms and a maximum of 1.45 s under a 35-minute mixed load.
+  # Thirty seconds is that with room, and is a PROPOSED OPERATIONAL DEFAULT
+  # rather than a measured requirement.
+  stop_grace_period: 30s
+  expose: ["8000"]
+  environment:
+    <<: *api-env
+    OUTBOX_WORKER_ENABLED: "false"
+    MATCHMAKING_PAIRING_ENABLED: "false"
+    MATCHMAKING_EXPIRY_ENABLED: "false"
+    MATCHMAKING_RECONCILIATION_ENABLED: "false"
+    MATCHMAKING_RETENTION_ENABLED: "false"
+    MATCHMAKING_CHALLENGE_EXPIRY_ENABLED: "false"
+    OUTBOX_RETENTION_ENABLED: "false"
+    ANALYTICS_RETENTION_ENABLED: "false"
+    PRESENCE_SWEEPER_ENABLED: "false"
+    GAME_CLOCK_ENABLED: "false"
+    # **On, on every replica, deliberately.** The gateway forwarder drains
+    # this node's own cross-instance mailbox; a node that does not run it
+    # receives no frames from anywhere else. A64-028.4 established that this
+    # is one of the two tasks a leader election would break.
+    GATEWAY_FORWARDING_ENABLED: "true"
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+
+
 services:
   # --- One-shot schema step -------------------------------------------------
   migrate:
@@ -84,44 +131,24 @@ services:
       postgres:
         condition: service_healthy
 
-  # --- Request serving, replicated, schedulers off --------------------------
-  api:
-    <<: *api-image
-    restart: unless-stopped
-    # `stop_grace_period` is the window between SIGTERM and SIGKILL. The
-    # deploy is expected to have called `POST /health/drain` before this
-    # point, so the window only has to cover requests already in flight —
-    # A64-028.5A measured p99 at 616 ms and a maximum of 1.45 s under a
-    # 35-minute mixed load. Thirty seconds is that with room, and is a
-    # PROPOSED OPERATIONAL DEFAULT rather than a measured requirement.
-    stop_grace_period: 30s
-    deploy:
-      replicas: 2
-    expose: ["8000"]
-    environment:
-      <<: *api-env
-      OUTBOX_WORKER_ENABLED: "false"
-      MATCHMAKING_PAIRING_ENABLED: "false"
-      MATCHMAKING_EXPIRY_ENABLED: "false"
-      MATCHMAKING_RECONCILIATION_ENABLED: "false"
-      MATCHMAKING_RETENTION_ENABLED: "false"
-      MATCHMAKING_CHALLENGE_EXPIRY_ENABLED: "false"
-      OUTBOX_RETENTION_ENABLED: "false"
-      ANALYTICS_RETENTION_ENABLED: "false"
-      PRESENCE_SWEEPER_ENABLED: "false"
-      GAME_CLOCK_ENABLED: "false"
-      # **On, on every replica, deliberately.** The gateway forwarder drains
-      # this node's own cross-instance mailbox; a node that does not run it
-      # receives no frames from anywhere else. A64-028.4 established that
-      # this is one of the two tasks a leader election would break.
-      GATEWAY_FORWARDING_ENABLED: "true"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+  # --- Request serving, two named replicas, schedulers off ------------------
+  #
+  # Named rather than `deploy.replicas`, and the reason is the edge — A64-028.6A
+  # §10. Nginx resolves upstream names through Docker's DNS at request time,
+  # and both replicas carry the network alias `api`, so that name returns
+  # every running container and DNS round-robins between them. Their
+  # individual names are what a deploy addresses: draining is per instance.
+  api-1:
+    <<: [*api-image, *api-common]
+    networks:
+      default:
+        aliases: [api]
+
+  api-2:
+    <<: [*api-image, *api-common]
+    networks:
+      default:
+        aliases: [api]
 
   # --- Scheduled work, exactly one ------------------------------------------
   worker:
@@ -149,8 +176,14 @@ services:
       # `arena64_backup_last_success_timestamp_seconds`. The backup runs in
       # its own container; what that container cannot do is answer a scrape.
       OPS_BACKUP_DESTINATION: /var/backups/arena64
+      # Read-only, and only to publish
+      # `arena64_certificate_expiry_timestamp_seconds` — A64-028.6A §26.
+      # The same shape as the backup destination above and for the same
+      # reason: the container that owns the file cannot answer a scrape.
+      OPS_CERTIFICATE_PATH: /etc/letsencrypt/live/${ARENA64_DOMAIN}/fullchain.pem
     volumes:
       - backup_data:/var/backups/arena64:ro
+      - letsencrypt:/etc/letsencrypt:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -188,23 +221,75 @@ services:
     entrypoint: ["/bin/sh", "-c", "cp -r /dist/. /srv/admin/"]
 
   # --- The only container with published ports ------------------------------
-  caddy:
-    image: caddy:2-alpine
+  #
+  # A64-028.6A replaced Caddy with nginx. The rationale is in
+  # `docs/01-architecture/deployment.md` §8; the short form is that it is an
+  # architecture decision, not a technical dissatisfaction with Caddy, and
+  # the behaviour A64-028.6 established is re-proved through nginx rather
+  # than assumed to have survived.
+  nginx:
+    build:
+      context: ./nginx
+    image: arena64-nginx:${ARENA64_TAG:-latest}
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
+      # HTTP/3 is QUIC over UDP on the same port number and a **different
+      # protocol**, so it needs its own mapping. Without this line the
+      # `Alt-Svc` advertisement points at a port nothing is listening on and
+      # every client silently stays on HTTP/2 — which works, and hides that
+      # HTTP/3 was never reachable.
+      - "443:443/udp"
+    environment:
+      ARENA64_DOMAIN: ${ARENA64_DOMAIN}
+    volumes:
+      - web_dist:/srv/web:ro
+      - admin_dist:/srv/admin:ro
+      - letsencrypt:/etc/letsencrypt:ro
+      - certbot_webroot:/var/www/certbot:ro
+    # Reloads every six hours to pick up a renewed certificate — see
+    # `certbot/renew.sh` on why the renewal container does not signal this
+    # one directly. `exec` so nginx is PID 1 and `SIGTERM` reaches it.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        while :; do sleep 6h; nginx -s reload; done &
+        exec /docker-entrypoint.sh nginx -g 'daemon off;'
+    depends_on:
+      certbot-init:
+        condition: service_completed_successfully
+
+  # --- Certificates ----------------------------------------------------------
+  #
+  # First issuance, once, then exit. Separate from renewal because issuance
+  # fails for reasons renewal cannot — DNS not yet pointed here, port 80 not
+  # open — and a loop that retried it for ever would hide that behind a
+  # container that looks like it is working.
+  certbot-init:
+    image: certbot/certbot:latest
+    restart: "no"
     environment:
       ARENA64_DOMAIN: ${ARENA64_DOMAIN}
       ARENA64_ACME_EMAIL: ${ARENA64_ACME_EMAIL}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - web_dist:/srv/web:ro
-      - admin_dist:/srv/admin:ro
-      - caddy_data:/data
-      - caddy_config:/config
+      - letsencrypt:/etc/letsencrypt
+      - certbot_webroot:/var/www/certbot
+      - ./certbot/issue.sh:/usr/local/bin/issue.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/issue.sh"]
+
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot_webroot:/var/www/certbot
+      - ./certbot/renew.sh:/usr/local/bin/renew.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/renew.sh"]
     depends_on:
-      - api
+      certbot-init:
+        condition: service_completed_successfully
 
   # --- Stateful dependencies, none of them published ------------------------
   postgres:
@@ -299,8 +384,8 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
-  caddy_data:
-  caddy_config:
+  letsencrypt:
+  certbot_webroot:
   web_dist:
   admin_dist:
   backup_data:

@@ -33,8 +33,11 @@ scrape_configs:
     authorization:
       type: Bearer
       credentials_file: /etc/prometheus/ops-token
+    # The alias both replicas share. Docker's embedded DNS returns every
+    # running container behind it, so a replica added or removed needs no
+    # change here — A64-028.6A §10, the same resolution the edge uses.
     dns_sd_configs:
-      - names: ["tasks.api"]
+      - names: ["api"]
         type: A
         port: 8000
 
@@ -44,6 +47,6 @@ scrape_configs:
       type: Bearer
       credentials_file: /etc/prometheus/ops-token
     dns_sd_configs:
-      - names: ["tasks.worker"]
+      - names: ["worker"]
         type: A
         port: 8000

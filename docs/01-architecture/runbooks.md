@@ -516,22 +516,91 @@ Every one of them exists because the failure it prevents is silent.
 
 ## Certificate and HTTPS
 
-**Alert:** none yet — see the residual risk.
+**Alert:** `CertificateExpiringSoon`, `CertificateExpired`,
+`CertificateMissing` — A64-028.6A, closing the certificate half of P3-4.
 
-**Confirm.** `docker compose logs caddy | grep -i certificate`. Caddy
-obtains and renews automatically; a failure is almost always DNS or rate
-limiting at the ACME provider.
+**Confirm.**
 
-**Mitigate.** Existing certificates remain valid until expiry, so a renewal
-failure is days of warning rather than an outage.
+```bash
+docker compose -f infrastructure/production/compose.yml logs --tail 50 certbot
+docker compose -f infrastructure/production/compose.yml exec worker \
+  python -c "from pathlib import Path; from app.operator import certificate_status as c; \
+             print(c.days_remaining(Path('/etc/letsencrypt/live/arena64.gg/fullchain.pem')))"
+```
 
-**Recover.** Check that `ARENA64_DOMAIN` resolves to this host and that port
-80 is reachable — the HTTP-01 challenge needs it, and a firewall that allows
-only 443 breaks renewal while leaving the site working.
+The metric is read from **the certificate on disk**, not from the renewal
+job's exit status — a job that reports success and writes nothing produces
+no failure log and an expiring certificate.
 
-**Residual risk.** **Nothing alerts on certificate expiry.** Caddy's own
-logs are the only signal, and `ARENA64_ACME_EMAIL` is what gets the
-provider's warning. Wiring a probe is open work.
+**Mitigate.** Nothing is broken until the certificate expires. Let's Encrypt
+issues for ninety days and `certbot renew` acts from thirty days out, so the
+`ExpiringSoon` threshold of fourteen days means roughly thirty attempts have
+already failed — there is time, and it is not unlimited.
+
+**Recover.** Run one by hand and read the error:
+
+```bash
+docker compose -f infrastructure/production/compose.yml run --rm certbot \
+  certbot renew --webroot --webroot-path /var/www/certbot --dry-run
+```
+
+The two usual causes both break the HTTP-01 challenge while leaving the site
+working, which is why neither is noticed without this alert:
+
+- `ARENA64_DOMAIN` no longer resolves to this host;
+- **port 80 is closed.** A firewall that allows only 443 looks correct and
+  makes renewal impossible. See `deployment.md` §8.8.
+
+After a successful renewal, nginx picks it up within six hours on its own
+reload timer, or immediately with
+`docker compose exec nginx nginx -s reload`.
+
+**Verify.** `arena64_certificate_expiry_timestamp_seconds` jumps forward by
+about ninety days.
+
+**Residual risk.** The private key lives in a Docker volume on this host and
+is mounted read-only into nginx. It is in no image, no repository and no
+application container.
+
+---
+
+## Nginx upstream
+
+**Alert:** `ApiUnavailable` if every replica is gone; nothing if one is.
+
+**Confirm.** The edge resolves `api` through Docker's DNS every five seconds
+and round-robins across whatever it returns. Which instance answered is in
+the access log:
+
+```bash
+docker compose -f infrastructure/production/compose.yml logs nginx \
+  | grep '"uri":"/api/' | tail -20
+```
+
+`upstream` holds the address; two addresses separated by a comma means
+nginx retried after the first failed.
+
+**What is covered, measured.** A stopped container costs about one request
+in twenty for up to one resolver TTL and then heals with no action. An
+application that has died while its container is still running is covered
+by the retry — 8 of 8 requests were answered by the survivor.
+
+**What is not.** A container that **accepts a connection and then hangs**.
+No retry helps, because the connection succeeded. Its own `HEALTHCHECK`
+marks it unhealthy and plain Compose does not act on that; an orchestrator
+with health-aware service discovery would drop it.
+
+**Mitigate.** `docker compose restart api-1`. It is a blunt instrument and
+it is the right one: the instance is not serving and nothing else is
+affected.
+
+**Recover.** If it recurs, the event-loop lag metric will say whether the
+process is blocked — see [event loop lag](#event-loop-lag).
+
+**Why there is no `upstream` block.** Nginx resolves those names at parse
+time and refuses to start if one fails, so a single crashed backend would
+take the edge down entirely. `deployment.md` §8.3 has the reasoning and the
+numbers.
 
 ---
 

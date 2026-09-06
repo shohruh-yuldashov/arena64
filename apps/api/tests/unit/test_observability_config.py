@@ -91,6 +91,34 @@ class TestAlertRules:
                 assert {"summary", "why", "action", "runbook"} <= set(annotations), rule["alert"]
                 assert annotations["runbook"].startswith("docs/"), rule["alert"]
 
+    @pytest.mark.parametrize(
+        "series",
+        [
+            "arena64_certificate_expiry_timestamp_seconds",
+            "arena64_backup_last_success_timestamp_seconds",
+            "arena64_outbox_exhausted_total",
+            "arena64_rate_limit_unavailable_total",
+        ],
+    )
+    def test_the_signals_that_exist_to_be_alerted_on_are_alerted_on(self, series: str) -> None:
+        """A metric published for an alert, with no alert, is a metric
+        nobody reads.
+
+        Every series here was added **because** something needed to page on
+        it — a certificate that stops renewing works perfectly for
+        eighty-nine days, a backup that stops is discovered on the day it is
+        needed, an abandoned event is already lost, and a fail-open limiter
+        is an abuse window nobody is told about. Removing the rule leaves
+        the metric, the dashboard and this file's other checks all passing.
+        """
+        rules = "\n".join(
+            rule["expr"]
+            for group in yaml.safe_load(ALERTS.read_text())["groups"]
+            for rule in group["rules"]
+        )
+
+        assert series in rules, f"nothing alerts on {series}"
+
     def test_severity_is_one_of_two_words(self) -> None:
         """`page` wakes somebody; `ticket` does not. A third level is a level
         nobody agrees on."""

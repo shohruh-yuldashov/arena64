@@ -337,6 +337,43 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "type": "timeseries",
+      "title": "TLS certificate lifetime remaining",
+      "description": "Read from the certificate on disk, not from the renewal job's exit status \u2014 a job that reports success and writes nothing produces no failure log and an expiring certificate. Absent means no certificate is readable, which is a separate alert.",
+      "id": 8,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "arena64_certificate_expiry_timestamp_seconds - time()",
+          "legendFormat": "time to expiry",
+          "refId": "A"
+        }
+      ]
     }
   ]
 }

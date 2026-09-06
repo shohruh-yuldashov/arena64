@@ -2092,6 +2092,23 @@ class ObservabilitySettings(SectionSettings):
     metric is then **absent** rather than zero — which is what
     `BackupNeverSucceeded` fires on."""
 
+    certificate_path: Path | None = None
+    """The TLS certificate this process can see, if any —
+    `OPS_CERTIFICATE_PATH`.
+
+    Read-only and only to publish
+    `arena64_certificate_expiry_timestamp_seconds` — A64-028.6A §26. The
+    same shape as `backup_destination` and for the same reason: nginx holds
+    the certificate and is not the application; `certbot` renews it and
+    serves nothing.
+
+    **The public certificate only.** `fullchain.pem` carries no private key,
+    and the private key is mounted into no application container.
+
+    `None`, or a path that cannot be read, leaves the metric **absent**
+    rather than zero. Zero would read as "expired just now"; absent is what
+    `CertificateMissing` fires on."""
+
     @model_validator(mode="after")
     def _refuse_an_accidental_open_exporter(self) -> "ObservabilitySettings":
         # The tier is not known to this section, so that half of the guard

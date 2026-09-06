@@ -1,0 +1,86 @@
+# The admin console — A64-028.6A §16.
+#
+# Its own hostname, deliberately. **The boundary that matters is the API's
+# authorization, not this hostname** — a bundle is public the moment it is
+# served, and hiding a frontend route has never been a control. What a
+# separate origin buys is that a cookie scoped to one is not sent to the
+# other, and that an admin bundle cannot be reached by a path on the
+# product's origin.
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
+    # No `reuseport` here: it may appear once per address:port across the
+    # whole configuration, and the product host has it.
+    listen 443 quic;
+    listen [::]:443 quic;
+
+    server_name admin.${ARENA64_DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${ARENA64_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${ARENA64_DOMAIN}/privkey.pem;
+    ssl_trusted_certificate /etc/letsencrypt/live/${ARENA64_DOMAIN}/chain.pem;
+    include /etc/nginx/snippets/tls.conf;
+
+    root /srv/admin;
+    index index.html;
+
+    location ^~ /metrics {
+        include /etc/nginx/snippets/headers-admin.conf;
+        return 404;
+    }
+
+    location = /health/drain {
+        include /etc/nginx/snippets/headers-admin.conf;
+        return 404;
+    }
+
+    location /api/ {
+        include /etc/nginx/snippets/headers-admin.conf;
+        add_header Cache-Control "no-store" always;
+        include /etc/nginx/snippets/proxy.conf;
+        set $arena64_api http://api:8000;
+        proxy_pass $arena64_api$request_uri;
+    }
+
+    location ^~ /assets/ {
+        include /etc/nginx/snippets/headers-admin.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+
+    location = / {
+        include /etc/nginx/snippets/headers-admin.conf;
+        add_header Cache-Control "no-cache" always;
+        try_files /index.html =404;
+    }
+
+    location = /index.html {
+        include /etc/nginx/snippets/headers-admin.conf;
+        add_header Cache-Control "no-cache" always;
+    }
+
+    # The console is one bundle behind a client-side router and every one of
+    # its routes is private, so unlike the product there is no public subset
+    # to enumerate and no crawler to mislead — an unknown admin path becomes
+    # the shell, which then shows its own not-found view.
+    #
+    # A real file still wins, so a missing asset is a 404 rather than an
+    # HTML body where a script was expected.
+    location / {
+        include /etc/nginx/snippets/headers-admin.conf;
+        add_header Cache-Control "no-cache" always;
+        try_files $uri /index.html;
+    }
+
+    error_page 500 502 503 504 /50x.html;
+
+    location = /50x.html {
+        internal;
+        include /etc/nginx/snippets/headers-admin.conf;
+        add_header Cache-Control "no-store" always;
+        return 503 "Arena64 admin is temporarily unavailable.\n";
+    }
+}

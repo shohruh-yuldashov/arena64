@@ -2201,6 +2201,28 @@ def _register_gauges(
         read_backup_age,
     )
 
+    async def read_offsite_age() -> dict[tuple[tuple[str, str], ...], float]:
+        """When the last **off-host** copy succeeded — A64-028.7 (P2-8).
+
+        A separate series from the local backup's, because a deployment
+        whose archives are written and never uploaded has a fresh local
+        timestamp and a stale one here — and only this one says the host
+        loss the backup exists for is still fatal.
+        """
+        destination = settings.observability.backup_destination
+        if destination is None:
+            return {}
+        status = backup_status.read(destination)
+        if status.offsite_at is None:
+            return {}
+        return {(): status.offsite_at.timestamp()}
+
+    exporter.register_gauge(
+        "backup.last_offsite_timestamp_seconds",
+        "Unix time of the last successful off-host backup copy.",
+        read_offsite_age,
+    )
+
     async def read_certificate_expiry() -> dict[tuple[tuple[str, str], ...], float]:
         path = settings.observability.certificate_path
         if path is None:

@@ -368,6 +368,47 @@ groups:
             `OPS_CERTIFICATE_PATH` pointing into the mounted volume.
           runbook: docs/01-architecture/runbooks.md#certificate-and-https
 
+      - alert: BackupNotCopiedOffHost
+        expr: time() - arena64_backup_last_offsite_timestamp_seconds > 172800
+        for: 30m
+        labels:
+          severity: page
+        annotations:
+          summary: "No backup has been copied off this host for two days"
+          why: >-
+            **A64-028.7, the second half of P2-8.** A backup on a volume
+            beside the database is not a backup: the host loss that makes a
+            restore necessary takes both. A local archive can be perfectly
+            fresh while this is stale — the upload is a separate step with a
+            separate failure mode, which is why it has a separate series.
+            PROPOSED OPERATIONAL DEFAULT, matched to a daily schedule.
+          action: >-
+            Read `offsite_outcome` in the destination's status file, then run
+            a backup by hand. Expired object-store credentials and a bucket
+            lifecycle rule that deleted the prefix are the two that leave the
+            local copy working.
+          runbook: docs/01-architecture/runbooks.md#backup-stale
+
+      - alert: BackupNeverCopiedOffHost
+        expr: absent(arena64_backup_last_offsite_timestamp_seconds)
+        for: 1h
+        labels:
+          severity: page
+        annotations:
+          summary: "No backup has ever reached off-host storage"
+          why: >-
+            The metric is **absent** rather than old, which an arithmetic
+            comparison cannot fire on. This is a deployment whose off-host
+            target has never worked — and the first hour is the cheapest
+            time to discover that the backups only exist on the machine they
+            are protecting.
+          action: >-
+            Check that the off-host settings are all four present and that
+            the bucket exists. The production tier refuses to start with a
+            half-configured target, so this means the upload itself is
+            failing.
+          runbook: docs/01-architecture/runbooks.md#backup-stale
+
       - alert: BackupNeverSucceeded
         expr: absent(arena64_backup_last_success_timestamp_seconds)
         for: 1h

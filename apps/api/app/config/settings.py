@@ -2153,6 +2153,47 @@ class ObservabilitySettings(SectionSettings):
     metric is then **absent** rather than zero — which is what
     `BackupNeverSucceeded` fires on."""
 
+    backup_encryption_key: SecretStr | None = None
+    """The key `python -m app.operator.backup` seals an archive with —
+    `OPS_BACKUP_ENCRYPTION_KEY`. Base64, 32 bytes.
+
+    A64-028.7, closing half of **P2-8**: "a dump is plaintext and holds every
+    email address and password hash on the platform".
+
+    `None` means backups are written unencrypted, which is right for `local`
+    and refused everywhere else by `_guard_production_backup` — an
+    unencrypted production backup must not be producible by forgetting a
+    flag.
+
+    **It is not stored with the archive**, and cannot be: an archive
+    carrying its own key is a compressed file with extra steps. Losing it
+    means losing every backup taken with it, which is the trade encryption
+    always is and is why the rotation procedure is in
+    `docs/05-operations/backup-restore.md` rather than implied.
+
+    Generate one with `openssl rand -base64 32`, or
+    `python -m app.operator.backup keygen`."""
+
+    backup_offsite_endpoint: str | None = None
+    """The S3-compatible endpoint an archive is copied to —
+    `OPS_BACKUP_OFFSITE_ENDPOINT`. A64-028.7, the second half of **P2-8**.
+
+    `None` means backups stay on this host, which is the state A64-028.1
+    filed: "a volume on the same host as the database, so a host loss takes
+    both". It is refused in a production-like tier by
+    `_guard_production_backup` — an off-host copy is not an enhancement,
+    it is what makes the word backup true.
+
+    The API is S3's REST interface rather than a vendor SDK, so a
+    deployment chooses AWS, R2, B2, Hetzner or a self-hosted MinIO by
+    setting this and nothing else."""
+
+    backup_offsite_bucket: str | None = None
+    backup_offsite_region: str = "us-east-1"
+    backup_offsite_prefix: str = ""
+    backup_offsite_access_key_id: SecretStr | None = None
+    backup_offsite_secret_access_key: SecretStr | None = None
+
     certificate_path: Path | None = None
     """The TLS certificate this process can see, if any —
     `OPS_CERTIFICATE_PATH`.
@@ -3698,6 +3739,53 @@ class Settings(BaseModel):
                 f"use the browser refresh cookie in {self.environment} — an empty list "
                 "in a deployed tier disables the server-side half of the CSRF defence "
                 "(browser_csrf.py), leaving only the browser's SameSite guarantee"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _guard_production_backup(self) -> "Settings":
+        """A deployed tier does not write plaintext backups — A64-028.7 (P2-8).
+
+        The check is here rather than in `ObservabilitySettings` because it
+        needs the tier, and it is a refusal rather than a warning because a
+        plaintext backup is not a degraded backup: it is a copy of every
+        email address and password hash on the platform, written to the one
+        artefact deliberately moved off the machine that protects it.
+
+        `local` is exempt. There is nothing to protect and an operator
+        restoring a development database by hand should not need a key.
+        """
+        if not self.environment.is_production_like:
+            return self
+        if self.observability.backup_encryption_key is None:
+            raise ValueError(
+                f"OPS_BACKUP_ENCRYPTION_KEY is unset in {self.environment}. A backup written "
+                "without it is a plaintext copy of every account on the platform. Generate a "
+                "key with `openssl rand -base64 32` and store it somewhere the backups are not."
+            )
+
+        offsite = (
+            self.observability.backup_offsite_endpoint,
+            self.observability.backup_offsite_bucket,
+            self.observability.backup_offsite_access_key_id,
+            self.observability.backup_offsite_secret_access_key,
+        )
+        if not any(offsite):
+            raise ValueError(
+                f"No off-host backup target is configured in {self.environment}. A backup on a "
+                "volume beside the database is not a backup: the host loss that makes a restore "
+                "necessary takes both. Set OPS_BACKUP_OFFSITE_ENDPOINT, _BUCKET, "
+                "_ACCESS_KEY_ID and _SECRET_ACCESS_KEY."
+            )
+        if not all(offsite):
+            # A half-configured target is the shape that fails at 3am: the
+            # backup runs, the upload does not, and the status file says
+            # "succeeded" about the local copy. Same reasoning as
+            # `PushSettings`' half-pair refusal (A64-028.2).
+            raise ValueError(
+                "The off-host backup target is half configured. All of "
+                "OPS_BACKUP_OFFSITE_ENDPOINT, _BUCKET, _ACCESS_KEY_ID and "
+                "_SECRET_ACCESS_KEY are required together."
             )
         return self
 

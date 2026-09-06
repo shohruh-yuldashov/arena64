@@ -41,6 +41,7 @@ from app.modules.game.infrastructure.repositories.move_log_repository import (
     SqlAlchemyMoveLogRepository,
 )
 from app.operator import backup as backup_tool
+from app.operator import backup_crypto
 from tests.contract.conftest import _TEST_DSN
 
 pytestmark = [
@@ -448,3 +449,113 @@ async def test_a_successful_backup_logs_no_credential(
     messages = [record.message for record in caplog.records]
     assert "backup_started" in messages
     assert "backup_completed" in messages
+
+
+# --- Encrypted backups — A64-028.7, closing half of P2-8 ---------------------
+
+
+KEY = backup_crypto.parse_key(backup_crypto.generate_key())
+
+
+async def test_an_encrypted_backup_restores_into_a_clean_database(
+    source: AsyncEngine, target: str, destination: Path, pointed_at_source: None
+) -> None:
+    """The drill again, through encryption. The same assertions, because
+    encryption must change nothing an operator can observe except that the
+    file on disk is unreadable without the key."""
+    expected = await _seed(source)
+    source_revision = await _revision(source)
+
+    dump = backup_tool.create(destination, keep=3, key=KEY)
+    metadata = backup_tool.verify(dump, key=KEY)
+
+    assert metadata["encrypted"] is True
+    assert metadata["alembic_revision"] == source_revision
+
+    backup_tool.restore(dump, target=_libpq(target), confirmed=True, key=KEY)
+
+    restored = create_async_engine(_dsn_for(target))
+    try:
+        assert await _counts(restored) == expected
+        assert await _revision(restored) == source_revision
+    finally:
+        await restored.dispose()
+
+
+async def test_the_archive_on_disk_is_not_readable_as_a_dump(
+    source: AsyncEngine, destination: Path, pointed_at_source: None
+) -> None:
+    """The property P2-8 is about. `pg_restore` reading the file would mean
+    the encryption is decoration."""
+    await _seed(source)
+    dump = backup_tool.create(destination, keep=3, key=KEY)
+
+    listing = subprocess.run(  # noqa: S603
+        ["pg_restore", "--list", str(dump)], capture_output=True, text=True, check=False
+    )
+
+    assert listing.returncode != 0
+    assert b"PGDMP" not in dump.read_bytes()[:64]
+
+
+async def test_a_plaintext_dump_never_touches_the_disk(
+    source: AsyncEngine, destination: Path, pointed_at_source: None
+) -> None:
+    """`pg_dump` writes to a pipe, not a file.
+
+    The obvious implementation — dump, encrypt, delete — leaves every email
+    address and password hash on disk for the length of the encryption, and
+    leaves them there for good if the process dies in between. Asserted by
+    what is in the destination afterwards: the archive, its metadata, the
+    status file, and nothing else.
+    """
+    await _seed(source)
+    backup_tool.create(destination, keep=3, key=KEY)
+
+    stray = [
+        entry.name
+        for entry in destination.iterdir()
+        if entry.suffix not in {".dump", ".json"} or entry.name.endswith(".partial")
+    ]
+
+    assert stray == [], f"the destination holds files a backup should not leave: {stray}"
+
+
+async def test_the_wrong_key_refuses_rather_than_restoring_rubbish(
+    source: AsyncEngine, target: str, destination: Path, pointed_at_source: None
+) -> None:
+    """Authenticated encryption's whole point: a backup that restores into
+    garbage is worse than one that refuses."""
+    await _seed(source)
+    dump = backup_tool.create(destination, keep=3, key=KEY)
+    other = backup_crypto.parse_key(backup_crypto.generate_key())
+
+    with pytest.raises(backup_crypto.BackupDecryptionError):
+        backup_tool.restore(dump, target=_libpq(target), confirmed=True, key=other)
+
+
+async def test_a_corrupted_archive_refuses(
+    source: AsyncEngine, target: str, destination: Path, pointed_at_source: None
+) -> None:
+    """A single flipped bit. The checksum catches it first, which is the
+    cheaper check and the one that runs before anything is decrypted."""
+    await _seed(source)
+    dump = backup_tool.create(destination, keep=3, key=KEY)
+    raw = bytearray(dump.read_bytes())
+    raw[-1] ^= 0x01
+    dump.write_bytes(bytes(raw))
+
+    with pytest.raises(backup_tool.BackupError, match="Checksum mismatch"):
+        backup_tool.verify(dump, key=KEY)
+
+
+async def test_an_encrypted_archive_without_a_key_says_so(
+    source: AsyncEngine, destination: Path, pointed_at_source: None
+) -> None:
+    """Rather than handing ciphertext to `pg_restore` and reporting a
+    corrupt archive, which is the same message a real corruption gives."""
+    await _seed(source)
+    dump = backup_tool.create(destination, keep=3, key=KEY)
+
+    with pytest.raises(backup_tool.BackupError, match="is encrypted"):
+        backup_tool.verify(dump)

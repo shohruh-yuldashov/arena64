@@ -69,6 +69,7 @@ dependencies = [
     # the avatar routes raise at *import* time and the whole app fails to
     # start. A dependency the process cannot boot without is a direct one.
     "python-multipart>=0.0.20,<0.1",
+    "prometheus-client>=0.21,<1.0",
 ]
 
 [project.optional-dependencies]

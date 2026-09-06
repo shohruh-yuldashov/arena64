@@ -240,6 +240,10 @@ class AppSettings(SectionSettings):
     )
 
     name: str = "arena64-api"
+    #: Seconds between event-loop lag samples — A64-028.6 §4. Floored well
+    #: above the millisecond scale on purpose: a probe that wakes faster
+    #: than the thing it measures becomes the thing it measures.
+    event_loop_probe_interval_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     # None means "let the environment decide" (dependency-injection.md §2.3:
     # human-readable in `local`, JSON everywhere else) — set explicitly only
@@ -1987,6 +1991,73 @@ class FriendsSettings(SectionSettings):
     """
 
 
+class ObservabilitySettings(SectionSettings):
+    """`observability` — the operator surface: `/metrics` and the drain switch.
+
+    A64-028.6.
+
+    ## Why the exporter has a switch and a token
+
+    `/metrics` publishes the shape of the platform: request rates, queue
+    depths, failure counts. None of it is personal data — the cardinality
+    rules in `platform/metrics/__init__.py` see to that — but it is an
+    operational map, and a map of where a system is weakest is not something
+    to serve to the internet.
+
+    Two boundaries, because either one alone has a way of being wrong. The
+    edge refuses `/metrics` from outside, which is the one that holds when
+    the token is mislaid; the token refuses a caller that reached the port
+    another way, which is the one that holds when the edge is misconfigured
+    or bypassed on an internal network.
+
+    ## Why an unauthenticated exporter must be said out loud
+
+    A deployment that scrapes over a private network with no token is a
+    legitimate choice. A deployment that *meant* to set a token and did not
+    is a leak. The two are indistinguishable from the configuration alone,
+    so the second is refused: outside `local`, an enabled exporter needs
+    either a token or `METRICS_ALLOW_UNAUTHENTICATED=true` — which is not a
+    workaround but the operator saying which of the two this is.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="OPS_", frozen=True, extra="forbid", populate_by_name=True
+    )
+
+    metrics_enabled: bool = True
+    """Serves `/metrics`. `False` removes the route entirely rather than
+    answering 404 — a route that exists and refuses is still a signal that
+    there is something there."""
+
+    drain_enabled: bool = True
+    """Serves `POST /health/drain`, which is how a deploy takes an instance
+    out of rotation *before* it is signalled — see `api/v1/health.py`."""
+
+    token: SecretStr | None = None
+    """Presented as `Authorization: Bearer …` on both operator routes.
+    Compared in constant time.
+
+    One token for the surface rather than one per route: they have the same
+    audience and the same blast radius, and two secrets an operator has to
+    keep in step is how one of them ends up unset."""
+
+    allow_unauthenticated: bool = False
+    """The deliberate choice described above. Never a default."""
+
+    @model_validator(mode="after")
+    def _refuse_an_accidental_open_exporter(self) -> "ObservabilitySettings":
+        # The tier is not known to this section, so that half of the guard
+        # lives in `Settings`. What is checkable here is the contradiction:
+        # a token *and* the acknowledgement means one of them is not what
+        # the operator thinks it is.
+        if self.token is not None and self.allow_unauthenticated:
+            raise ValueError(
+                "OPS_TOKEN and OPS_ALLOW_UNAUTHENTICATED are both set. "
+                "One of them is wrong: a token that is not required protects nothing."
+            )
+        return self
+
+
 class OutboxSettings(SectionSettings):
     """`outbox` — the transactional event log and its relay (A64-013.7).
 
@@ -3304,6 +3375,9 @@ class Settings(BaseModel):
     #: Defaulted for the same reason as `analytics`: one operational number,
     #: no secret, no construction site that should have to know about it.
     broadcast: BroadcastSettings = Field(default_factory=BroadcastSettings)
+    #: Defaulted like `analytics`: one switch, one optional secret, and no
+    #: construction site that should have to know about either.
+    observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
 
     @model_validator(mode="after")
     def _resolve_email_links(self) -> "Settings":
@@ -3457,6 +3531,31 @@ class Settings(BaseModel):
                 f"use the browser refresh cookie in {self.environment} — an empty list "
                 "in a deployed tier disables the server-side half of the CSRF defence "
                 "(browser_csrf.py), leaving only the browser's SameSite guarantee"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _guard_production_observability(self) -> "Settings":
+        """The operator surface is never accidentally open — A64-028.6 §5.
+
+        The half of `ObservabilitySettings`' rule that needs the tier. In
+        `local` an open `/metrics` is a convenience; anywhere else it is
+        either a decision or a mistake, and the operator says which. The
+        drain switch is held to the same bar for a stronger reason: an
+        unauthenticated caller who can flip it can take every instance out
+        of rotation one request at a time.
+        """
+        if not self.environment.is_production_like:
+            return self
+        observability = self.observability
+        if not (observability.metrics_enabled or observability.drain_enabled):
+            return self
+        if observability.token is None and not observability.allow_unauthenticated:
+            raise ValueError(
+                f"OPS_TOKEN is unset in {self.environment} and the operator surface "
+                "(/metrics, /health/drain) is enabled. Set a token, or set "
+                "OPS_ALLOW_UNAUTHENTICATED=true to state that the surface is reachable "
+                "only from a trusted network. Refusing to serve it unguarded."
             )
         return self
 

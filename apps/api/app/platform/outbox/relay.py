@@ -49,6 +49,7 @@ injecting a random source, for a herd that cannot form.
 
 import asyncio
 import logging
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -56,8 +57,21 @@ from uuid import UUID
 
 from app.core.clock import Clock
 from app.core.unit_of_work import UnitOfWork
+from app.platform.metrics.ports import MetricsRecorder, NullMetrics
 from app.platform.outbox.entry import OutboxEntry
 from app.platform.outbox.isolation import ConsumerPolicies
+from app.platform.outbox.metrics import (
+    CLAIMED,
+    EXHAUSTED,
+    FAILED,
+    INCOMPLETE_TICKS,
+    PUBLISHED,
+    TICK_DURATION,
+    UNRECORDED_ATTEMPTS,
+    ClaimObservation,
+    ExhaustionReason,
+    FailureReason,
+)
 from app.platform.outbox.ports import EventHandler, OutboxRepository, ProcessedEventStore
 
 logger = logging.getLogger(__name__)
@@ -153,10 +167,15 @@ class OutboxRelay:
         retry_base_seconds: int,
         retry_max_seconds: int,
         policies: ConsumerPolicies | None = None,
+        metrics: MetricsRecorder | None = None,
     ) -> None:
         require_event_handlers(handlers)
 
         self._outbox = outbox
+        # Defaulted rather than required so every existing construction site
+        # keeps working; `NullMetrics` is a real object, never `None` at a
+        # call site (platform/metrics/__init__.py).
+        self._metrics: MetricsRecorder = metrics or NullMetrics()
         self._processed = processed
         self._handlers = handlers
         self._unit_of_work = unit_of_work
@@ -199,11 +218,44 @@ class OutboxRelay:
         is ever delivered again". Every failure below is recorded on the row
         and reported in the return value instead.
         """
+        started = time.perf_counter()
         entries = await self._claim()
         if not entries:
             return RelayTick(claimed=0, published=0, failed=0, skipped=0)
 
-        return await self._record(entries, await self._dispatch(entries))
+        self._observe_claim(entries)
+        tick = await self._record(entries, await self._dispatch(entries))
+        self._metrics.observe(TICK_DURATION, time.perf_counter() - started)
+        return tick
+
+    def _observe_claim(self, entries: Sequence[OutboxEntry]) -> None:
+        """Classifies what each claimed row was carrying — §19.
+
+        **The only moment the evidence exists.** A row whose attempt was
+        spent without an outcome carries `claimed_at` set, `attempt_count`
+        raised and `last_error` still null; the claim that observes it has
+        already overwritten the first two, and the next one overwrites the
+        third. A64-028.5A could reconstruct P2-9 at all only because the
+        rows happened to still be in the table when somebody looked.
+
+        A count here turns "50 events vanished during a soak" into a series
+        with a timestamp.
+        """
+        self._metrics.increment(CLAIMED, by=len(entries))
+        for entry in entries:
+            self._metrics.increment(
+                UNRECORDED_ATTEMPTS, labels={"observation": self._observation_of(entry)}
+            )
+
+    @staticmethod
+    def _observation_of(entry: OutboxEntry) -> str:
+        if entry.attempt_count <= 1:
+            # 1, not 0: `claim` increments before the entry reaches here, so
+            # a first attempt arrives already counted.
+            return ClaimObservation.FIRST_ATTEMPT.value
+        if entry.last_error is None:
+            return ClaimObservation.UNRECORDED_ATTEMPT.value
+        return ClaimObservation.RECORDED_FAILURE.value
 
     async def _dispatch(self, entries: Sequence[OutboxEntry]) -> dict[UUID, str]:
         """Hands the batch to every interested consumer, **concurrently** —
@@ -322,6 +374,78 @@ class OutboxRelay:
             await self._unit_of_work.commit()
         return entries
 
+    def _observe_outcome(
+        self,
+        entries: Sequence[OutboxEntry],
+        failures: dict[UUID, str],
+        published: int,
+        at: datetime,
+    ) -> None:
+        """What the tick actually did, as opposed to what it attempted.
+
+        ## The incomplete tick — the P2-9 signal
+
+        A64-028.5A's soak logs hold **163** ticks that claimed entries,
+        reported zero failures and published **zero**, and one of them —
+        `claimed=50 published=0` at 21:21:34 — is the exact tick whose 50
+        rows were abandoned. `outbox_tick_completed` logged every one of
+        them at `INFO`, looking healthy, because a tick that publishes
+        nothing and fails nothing is indistinguishable in that line from a
+        tick that had nothing to do.
+
+        It is distinguishable here. `published < len(succeeded)` with no
+        failure recorded means attempts were spent and no outcome was
+        written — and five of those retire an event permanently. The
+        counter is the alert; the `WARNING` beside it is what an operator
+        greps for afterwards.
+
+        ## Exhaustion, with its reason
+
+        An entry on its last attempt is counted as it crosses, rather than
+        by a query that has to guess when it happened. `UNRECORDED`
+        separates "delivery kept failing" from "the relay kept losing the
+        outcome", which is the distinction P2-9 exists because nothing made.
+        """
+        self._metrics.increment(PUBLISHED, by=published)
+
+        succeeded = len(entries) - len(failures)
+        if published < succeeded:
+            self._metrics.increment(INCOMPLETE_TICKS)
+            logger.warning(
+                "outbox_tick_incomplete",
+                extra={
+                    "worker_id": self._worker_id,
+                    "claimed": len(entries),
+                    "expected_published": succeeded,
+                    "published": published,
+                    "failed": len(failures),
+                },
+            )
+
+        for entry in entries:
+            reason = failures.get(entry.id)
+            if reason is not None:
+                self._metrics.increment(FAILED, labels={"reason": _classify(reason).value})
+            if entry.attempt_count < self._max_attempts:
+                continue
+            # The row has spent its last attempt. Whether it did so with an
+            # outcome recorded is the whole of P2-9.
+            exhaustion = (
+                ExhaustionReason.REPEATED_FAILURE
+                if reason is not None or entry.last_error is not None
+                else ExhaustionReason.UNRECORDED
+            )
+            self._metrics.increment(EXHAUSTED, labels={"reason": exhaustion.value})
+            logger.error(
+                "outbox_entry_exhausted",
+                extra={
+                    "event_type": entry.event_type,
+                    "attempt_count": entry.attempt_count,
+                    "reason": exhaustion.value,
+                    "worker_id": self._worker_id,
+                },
+            )
+
     async def _deliver(
         self, handler: EventHandler, entries: Sequence[OutboxEntry]
     ) -> Sequence[DeliveryFailure]:
@@ -436,6 +560,8 @@ class OutboxRelay:
                 )
             await self._unit_of_work.commit()
 
+        self._observe_outcome(entries, failures, published, at)
+
         logger.info(
             "outbox_tick_completed",
             extra={
@@ -497,3 +623,21 @@ class OutboxRelay:
             },
         )
         return now + timedelta(seconds=delay)
+
+
+def _classify(reason: str) -> FailureReason:
+    """A recorded failure's exception name, mapped onto the closed set.
+
+    The mapping is by exception *type name* because that is what
+    `_deliver` records, and it is deliberately small: three named cases and
+    `UNKNOWN`. A reason that falls through is not a defect — it is a
+    consumer failing in a way nobody has classified yet, and the log line
+    beside the metric carries the name.
+    """
+    if reason in {"TimeoutError", "CancelledError"}:
+        return FailureReason.TIMEOUT
+    if reason in {"ValidationError", "ProjectionError", "ValueError", "KeyError"}:
+        return FailureReason.INVALID_PAYLOAD
+    if reason == "":
+        return FailureReason.UNKNOWN
+    return FailureReason.HANDLER_ERROR

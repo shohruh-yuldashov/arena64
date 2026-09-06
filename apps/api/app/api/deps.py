@@ -11,12 +11,14 @@ and nothing in `core/` or `database/` knows this module exists.
 """
 
 from collections.abc import AsyncIterator
+from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
 
+from app.api.lifecycle import ServiceLifecycle
 from app.config.settings import (
     FriendsSettings,
     PresenceSettings,
@@ -205,3 +207,20 @@ def get_friends_settings(settings: SettingsDep) -> FriendsSettings:
 
 
 FriendsSettingsDep = Annotated[FriendsSettings, Depends(get_friends_settings)]
+
+
+@lru_cache(maxsize=1)
+def service_lifecycle() -> ServiceLifecycle:
+    """This process's drain flag — A64-028.6 §9.
+
+    Cached rather than a module global, for the reason `process_metrics()`
+    gives: the sharing is visible at the call site, and a test can
+    `service_lifecycle.cache_clear()` to get a process that is not draining.
+    Genuinely per-process state — one flag describing this instance — which
+    is the one shape `CLAUDE.md` §3.9's "stateless services" does not
+    forbid, because it is not request-scoped and is not replicated.
+    """
+    return ServiceLifecycle()
+
+
+ServiceLifecycleDep = Annotated[ServiceLifecycle, Depends(service_lifecycle)]

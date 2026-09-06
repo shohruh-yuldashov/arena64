@@ -18,8 +18,10 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.exception_handlers import register_exception_handlers
+from app.api.http_metrics import REQUESTS_IN_FLIGHT, HttpMetricsMiddleware, InFlight
+from app.api.observability import build_metrics_router
 from app.api.router import api_router
-from app.api.v1.health import health_router
+from app.api.v1.health import build_drain_route, health_router
 from app.common.logging import configure_logging
 from app.common.middleware import CorrelationIdMiddleware, RequestIdMiddleware
 from app.config.environment import current_environment, describe_env_file
@@ -261,7 +263,10 @@ from app.platform.metrics import (
     MetricsFlushTask,
     flush_request,
     process_metrics,
+    prometheus_metrics,
 )
+from app.platform.metrics.loop import EventLoopLagProbe
+from app.platform.metrics.prometheus import PrometheusMetrics
 from app.platform.outbox import (
     ConsumerPolicies,
     ConsumerPolicy,
@@ -1927,11 +1932,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await scheduler.start()
     app.state.task_schedulers = task_schedulers
 
+    # The loop's own health, measured inside the process that has to stay
+    # responsive — A64-028.6 §4. A64-028.5A could report only the load
+    # generator's lag and said so; that number says nothing about whether
+    # the server's loop is blocked, which is the failure that makes an
+    # asyncio service stop answering while every dependency it has is fine.
+    loop_probe = EventLoopLagProbe(
+        metrics=_metrics(),
+        interval_seconds=settings.app.event_loop_probe_interval_seconds,
+    )
+    await loop_probe.start()
+
     logger.info("startup_complete")
     try:
         yield
     finally:
         logger.info("shutdown_begin")
+        # First on the way down: it is the only background task whose
+        # output is about the shutdown itself, and a lag sample taken while
+        # the recorder's sink is closing is noise.
+        await loop_probe.stop()
         for scheduler in task_schedulers:
             await scheduler.stop()
         if presence_sweeper is not None:
@@ -2028,14 +2048,33 @@ def create_app() -> FastAPI:
     # having already run.
     app.add_middleware(CorrelationIdMiddleware)
     app.add_middleware(RequestIdMiddleware)
+    # Added last, so it is the **outermost** of the three: a request that
+    # ends as an unhandled exception must be counted as one, and a
+    # middleware inside `register_exception_handlers` would only ever see
+    # the response the handler produced. A64-028.6 §3.
+    in_flight = InFlight()
+    app.add_middleware(HttpMetricsMiddleware, metrics=_metrics(), in_flight=in_flight)
     register_exception_handlers(app)
 
-    _configure_storage(app, get_settings())
+    settings = get_settings()
+    _configure_storage(app, settings)
+    _register_gauges(prometheus_metrics(), in_flight)
 
     # Unversioned, for load-balancer and orchestrator probes: a liveness
     # check must not sit behind API versioning that could itself fail to
     # resolve (app/api/v1/health.py's docstring).
     app.include_router(health_router)
+
+    # The operator surface — A64-028.6 §5, §9. Unversioned for the same
+    # reason as the probes, and each route present only when configuration
+    # asks for it: a route that exists and refuses is still a signal that
+    # there is something behind it.
+    observability = settings.observability
+    if observability.metrics_enabled:
+        app.include_router(build_metrics_router(prometheus_metrics(), settings))
+    if observability.drain_enabled:
+        app.include_router(build_drain_route(settings))
+
     app.include_router(api_router, prefix=API_PREFIX)
 
     # A64-016.1. Unversioned in the path, like the health probe and for a
@@ -2046,3 +2085,28 @@ def create_app() -> FastAPI:
     app.include_router(gateway_router)
 
     return app
+
+
+def _register_gauges(exporter: PrometheusMetrics, in_flight: InFlight) -> None:
+    """Values the exporter reads at scrape time — A64-028.6 §3.
+
+    A depth is a thing that *is*, not a thing that happened, and
+    `platform/metrics/prometheus.py` explains why that gets its own
+    mechanism rather than a counter somebody tries to keep in step by
+    arithmetic. Registered here because the composition root is the only
+    place that knows both the exporter and the objects holding the values.
+
+    The outbox gauges are deliberately **not** here: they read the database,
+    and a scrape must not open a session per series. They are published by
+    the relay's own tick instead, which already has one open — see
+    `OutboxBacklogTask`.
+    """
+
+    async def read_in_flight() -> dict[tuple[tuple[str, str], ...], float]:
+        return {(): float(in_flight.count)}
+
+    exporter.register_gauge(
+        REQUESTS_IN_FLIGHT,
+        "HTTP requests being served at this instant.",
+        read_in_flight,
+    )

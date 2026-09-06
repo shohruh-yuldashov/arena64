@@ -1,7 +1,17 @@
-"""The app must start and answer health checks, and readiness must degrade
-gracefully rather than raise when a dependency is unreachable (CLAUDE.md §9
-rule 8: distinguish expected from exceptional — a down dependency is an
-expected outcome for a readiness probe, not a defect).
+"""The app must start and answer health checks, and readiness must answer
+**in its status line** when a dependency is unreachable.
+
+A64-028.6 §9 changed that last part and this file records why. Until then
+readiness returned HTTP 200 with `status: "degraded"` even with PostgreSQL
+and Redis both unreachable, and these tests asserted it — a load balancer
+reads the status line and nothing in a fleet parses the body, so a
+database-less instance stayed in rotation and kept failing requests. That
+was A64-028.1's P1-5.
+
+Degrading gracefully rather than raising is still the rule (CLAUDE.md §9
+rule 8: a down dependency is an expected outcome for a probe, not a
+defect). What changed is that the expected outcome is now **503** and the
+diagnostic body is unchanged beside it.
 
 Every success body is asserted against the standard `{data, meta}` envelope
 (app.core.responses.ApiResponse) — health is the first real consumer that
@@ -34,7 +44,7 @@ def test_readiness_has_the_documented_shape(client: TestClient) -> None:
     # deterministic, no dependence on the surrounding environment). The
     # unreachable-dependency path is exercised deterministically below.
     response = client.get("/api/v1/health/ready")
-    assert response.status_code == 200
+    assert response.status_code in {200, 503}
     data = response.json()["data"]
     assert data["status"] in {"ok", "degraded"}
     assert isinstance(data["postgres"], bool)
@@ -60,7 +70,9 @@ def test_readiness_reports_degraded_when_dependencies_are_unreachable(
     with TestClient(create_app()) as unreachable_client:
         response = unreachable_client.get("/api/v1/health/ready")
 
-    assert response.status_code == 200
+    # The status line, which is the whole of P1-5: 200 here meant a
+    # balancer kept routing to an instance with no database.
+    assert response.status_code == 503
     data = response.json()["data"]
     assert data["status"] == "degraded"
     assert data["postgres"] is False
@@ -92,3 +104,47 @@ def test_unknown_route_returns_404(client: TestClient) -> None:
     # See test_exceptions.py for the taxonomy's own mapping.
     response = client.get("/this-route-does-not-exist")
     assert response.status_code == 404
+
+
+def test_readiness_fails_while_the_instance_is_draining(client: TestClient) -> None:
+    """A64-028.6 §9 and §11 — the deploy's side of readiness.
+
+    Every dependency is healthy; the instance has simply been told it is
+    going away. Readiness must say so, because saying so *before* the
+    process is signalled is the only thing that lets a balancer stop
+    routing to it in time — which is what P1-6 needed and did not have.
+    """
+    from app.api.deps import service_lifecycle
+
+    lifecycle = service_lifecycle()
+    try:
+        lifecycle.begin_drain()
+        response = client.get("/api/v1/health/ready")
+    finally:
+        service_lifecycle.cache_clear()
+
+    assert response.status_code == 503
+    data = response.json()["data"]
+    assert data["draining"] is True
+    # Draining is not a dependency failure, and the body must not blur them:
+    # an operator reading this needs to know the deploy did it.
+    assert data["postgres"] is True
+
+
+def test_liveness_stays_ok_while_draining(client: TestClient) -> None:
+    """Liveness must not follow readiness down.
+
+    An orchestrator that reads liveness restarts what fails it. A draining
+    instance is working perfectly and is about to be replaced on purpose;
+    restarting it mid-drain would be the orchestrator undoing the deploy.
+    """
+    from app.api.deps import service_lifecycle
+
+    try:
+        service_lifecycle().begin_drain()
+        response = client.get("/health")
+    finally:
+        service_lifecycle.cache_clear()
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"status": "ok"}

@@ -19,6 +19,7 @@ from app.config.settings import (
     JWTSettings,
     MatchmakingSettings,
     NotificationEmailSettings,
+    ObservabilitySettings,
     OutboxSettings,
     PostgresSettings,
     PresenceSettings,
@@ -221,6 +222,10 @@ class TestSettings:
             game=GameSettings(),
             tournament=TournamentSettings(),
             browser_session=BrowserSessionSettings(trusted_origins=("https://arena64.example",)),
+            # A64-028.6: a deployed tier must say how the operator
+            # surface is guarded. Explicit here because this helper's
+            # whole purpose is a *fully explicit* production config.
+            observability=ObservabilitySettings(token=SecretStr("ops-token")),
         )
         assert settings.environment is Environment.PRODUCTION
 
@@ -363,6 +368,9 @@ class TestJWTProductionGuard:
             game=GameSettings(),
             tournament=TournamentSettings(),
             browser_session=BrowserSessionSettings(trusted_origins=("https://arena64.example",)),
+            # A64-028.6: a deployed tier must say how the operator surface
+            # is guarded, and this helper exists to be fully explicit.
+            observability=ObservabilitySettings(token=SecretStr("ops-token")),
             jwt=JWTSettings(**jwt_overrides),  # type: ignore[arg-type]
         )
 

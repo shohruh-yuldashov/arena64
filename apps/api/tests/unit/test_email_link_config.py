@@ -28,6 +28,7 @@ from app.config.settings import (
     JWTSettings,
     MatchmakingSettings,
     NotificationEmailSettings,
+    ObservabilitySettings,
     OutboxSettings,
     PostgresSettings,
     PresenceSettings,
@@ -86,6 +87,11 @@ def build(
         browser_session=BrowserSessionSettings(
             trusted_origins=(DEPLOYED_ORIGIN,) if deployed else ()
         ),
+        # A64-028.6: a deployed tier refuses to start without saying how the
+        # operator surface is guarded.
+        observability=ObservabilitySettings(token=SecretStr("ops-token"))
+        if deployed
+        else ObservabilitySettings(),
     )
 
 

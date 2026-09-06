@@ -84,7 +84,11 @@ export default defineConfig({
   server: {
     proxy: API_PROXY,
     /**
-     * `app.localhost` beside the tunnel host — A64-024.2H §8.
+     * `app.localhost` — A64-024.2H §8.
+     *
+     * A tunnel host (ngrok, Cloudflare) goes here while one is in use and
+     * comes back out with it. The names are ephemeral, so a committed one
+     * is a name that will never be requested again.
      *
      * **Ports do not separate cookies.** `localhost:5173` and
      * `localhost:5174` are one host to the cookie jar, so developing the
@@ -96,11 +100,7 @@ export default defineConfig({
      * `admin.arena64.gg`), and `*.localhost` reproduces that locally with
      * no `/etc/hosts` entry.
      */
-    allowedHosts: [
-      "app.localhost",
-      "localhost",
-      "beatles-share-iowa-attached.trycloudflare.com",
-    ],
+    allowedHosts: ["app.localhost", "localhost"],
   },
   preview: { proxy: API_PROXY },
   resolve: {

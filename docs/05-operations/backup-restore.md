@@ -93,7 +93,23 @@ What it guarantees:
 
 ### Metadata
 
-A `<name>.dump.json` sits beside every backup:
+A `<name>.dump.json` sits beside every backup, **and beside the off-host copy
+too** — A64-030.4C.3. `verify` reads the checksum and the revision out of it
+and `restore` calls `verify`, so a bucket holding only the ciphertext is a
+file nobody can check and nothing that says which schema is in it. That is
+what A64-030.4C's drill found, in the only way it can be found: by restoring
+from off-host and watching the tooling refuse.
+
+An off-host recovery therefore needs three things and nothing from the
+machine that is gone:
+
+```
+<prefix>/<name>.dump        the encrypted archive
+<prefix>/<name>.dump.json   this file
+the encryption key          stored where neither of those is
+```
+
+Download the pair into one directory and the commands below work unchanged.
 
 ```json
 {
@@ -256,7 +272,7 @@ confirmation, and the password appearing in a log or in `argv`.
 | Database password | `PGPASSWORD` to the subprocess. Never `argv`, never a log line, never metadata |
 | Backup credentials | Environment, like every other secret. Nothing in this repository |
 | Encryption at rest | **Implemented — A64-028.7, closing P2-8.** `app/operator/backup_crypto.py` seals the archive as `pg_dump` streams it, so a plaintext dump never touches a disk. The key is `OPS_BACKUP_ENCRYPTION_KEY` and a production-like tier refuses to start without it (`Settings._guard_production_backup`). It is **not** stored with the archive and must live in a secret manager off this host: losing it loses every backup taken with it |
-| Off-host copy | **Implemented — A64-028.7.** `app/operator/backup_offsite.py` uploads over the S3 REST API with SigV4, to any S3-compatible provider named by `OPS_BACKUP_OFFSITE_ENDPOINT`. All four `OPS_BACKUP_OFFSITE_*` values are required together; a half-configured target is refused rather than half-used |
+| Off-host copy | **Implemented — A64-028.7, completed A64-030.4C.3.** `app/operator/backup_offsite.py` uploads over the S3 REST API with SigV4, to any S3-compatible provider named by `OPS_BACKUP_OFFSITE_ENDPOINT`. All four `OPS_BACKUP_OFFSITE_*` values are required together; a half-configured target is refused rather than half-used. **The archive and its manifest are one unit**: both are uploaded, the manifest second so an interrupted copy leaves a dump the restore path refuses rather than a manifest promising a dump that is not there, and a manifest that does not arrive is recorded as an off-host *failure* — the local archive is still there, so it is a partial success reported as one |
 | Test data | The drill's corpus is generated. **No production data is in this repository** |
 | Backup artefacts | Never world-readable. `0600`, on a path only the operator account can read |
 

@@ -114,7 +114,7 @@ class RedactingFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        for key, value in list(record.__dict__.items()):
+        for key in list(record.__dict__):
             if key.startswith("_") or not is_sensitive(key):
                 continue
             record.__dict__[key] = REDACTED

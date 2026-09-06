@@ -169,6 +169,7 @@ class OutboxWorker:
                 max_attempts=self._settings.max_attempts,
                 retry_base_seconds=self._settings.retry_base_seconds,
                 retry_max_seconds=self._settings.retry_max_seconds,
+                claim_lease_seconds=self._settings.claim_lease_seconds,
                 policies=self._policies,
                 metrics=self._metrics,
             )

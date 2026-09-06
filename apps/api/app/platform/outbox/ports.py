@@ -20,7 +20,7 @@ constructor argument.
 """
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 from uuid import UUID
 
@@ -65,7 +65,13 @@ class OutboxRepository(Protocol):
         ...
 
     async def claim(
-        self, *, limit: int, claimed_by: str, now: datetime, max_attempts: int
+        self,
+        *,
+        limit: int,
+        claimed_by: str,
+        now: datetime,
+        max_attempts: int,
+        lease: timedelta,
     ) -> Sequence[OutboxEntry]:
         """Takes up to `limit` due entries, oldest first, for this worker.
 
@@ -74,6 +80,13 @@ class OutboxRepository(Protocol):
         sets. An implementation that read and then updated in two statements
         would hand the same event to both, and at-least-once would become
         at-least-twice on every poll rather than only on a crash.
+
+        `lease` is the second half of that contract and the half A64-028.5A's
+        P2-9 was missing: disjoint *within* a call is not enough, because
+        the claim commits and the next poll is a second later. An entry must
+        stay invisible to other relays for the length of the lease, and an
+        adapter that ignores it is not a working adapter — see the
+        implementation for what it cost.
 
         `max_attempts` is a *parameter* rather than a property of the store,
         so the retry ceiling stays configuration owned by the worker

@@ -40,7 +40,7 @@ the other workers.
 
 import logging
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
@@ -119,7 +119,13 @@ class SqlAlchemyOutboxRepository:
         return entry
 
     async def claim(
-        self, *, limit: int, claimed_by: str, now: datetime, max_attempts: int
+        self,
+        *,
+        limit: int,
+        claimed_by: str,
+        now: datetime,
+        max_attempts: int,
+        lease: timedelta,
     ) -> Sequence[OutboxEntry]:
         """Takes up to `limit` due entries for this worker. See the module
         docstring on `SKIP LOCKED`.
@@ -164,6 +170,21 @@ class SqlAlchemyOutboxRepository:
                 claimed_at=now,
                 claimed_by=claimed_by,
                 attempt_count=OutboxModel.attempt_count + 1,
+                # The lease, and the fix for P2-9. Without it a claimed row
+                # satisfied the due predicate again the instant this
+                # transaction committed, so a second relay polling a second
+                # later claimed the same rows: both delivered, one
+                # published, and the other spent an attempt recording
+                # nothing because there was nothing left to publish. Five of
+                # those retire an event that never failed.
+                #
+                # `SKIP LOCKED` cannot help — it separates two relays for
+                # the length of one statement, and the claim commits
+                # immediately afterwards.
+                #
+                # `mark_published` and `mark_failed` both overwrite this, so
+                # the lease governs only a tick that reached neither.
+                next_attempt_at=now + lease,
             )
         )
 

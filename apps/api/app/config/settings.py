@@ -2162,6 +2162,42 @@ class OutboxSettings(SectionSettings):
     """
 
     max_attempts: int = Field(default=5, ge=1, le=20)
+
+    claim_lease_seconds: float = Field(default=60.0, ge=1.0, le=600.0)
+    """How long a claimed entry is invisible to other relays — the fix for
+    A64-028.5A's P2-9.
+
+    ## The defect this closes
+
+    `claim` set `claimed_at` and `claimed_by` and incremented
+    `attempt_count`, and **did not touch `next_attempt_at`**. The due
+    predicate is `next_attempt_at IS NULL OR <= now`, so a row that had just
+    been claimed still matched it: `SKIP LOCKED` keeps two relays out of
+    each other's way for the length of one *statement*, and the claim
+    commits immediately afterwards. A second relay polling a second later
+    claimed the same rows.
+
+    Both then delivered, one published, and the other's `mark_published`
+    matched nothing — the row was already published — so it recorded no
+    outcome at all and the attempt was spent for nothing. Five of those on
+    one row retires an event that never failed, which is exactly the
+    signature P2-9 described: `attempt_count = 5`, `last_error` null,
+    `next_attempt_at` null, and not one tick reporting a failure.
+
+    ## Why sixty seconds
+
+    It has to exceed the slowest tick, or a row still being delivered
+    becomes claimable and the race is back.
+    `DEFAULT_CONSUMER_TIMEOUT_SECONDS` is 30 and consumers run
+    concurrently, so a tick is bounded by 30 seconds plus the relay's own
+    two short statements. Sixty is that with room.
+
+    The cost of it being too long is a delayed retry **after a crash**, and
+    only after a crash: a delivered entry is published and a failed one has
+    its backoff written, and both overwrite the lease. The cost of it being
+    too short is the defect above. That asymmetry is why the default is
+    generous.
+    """
     """How many times an entry may be claimed before it stops being claimed.
 
     With the default backoff this is roughly eighty seconds of retrying,

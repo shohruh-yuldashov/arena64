@@ -166,6 +166,7 @@ class OutboxRelay:
         max_attempts: int,
         retry_base_seconds: int,
         retry_max_seconds: int,
+        claim_lease_seconds: float = 60.0,
         policies: ConsumerPolicies | None = None,
         metrics: MetricsRecorder | None = None,
     ) -> None:
@@ -176,6 +177,7 @@ class OutboxRelay:
         # keeps working; `NullMetrics` is a real object, never `None` at a
         # call site (platform/metrics/__init__.py).
         self._metrics: MetricsRecorder = metrics or NullMetrics()
+        self._claim_lease_seconds = claim_lease_seconds
         self._processed = processed
         self._handlers = handlers
         self._unit_of_work = unit_of_work
@@ -370,6 +372,7 @@ class OutboxRelay:
                 claimed_by=self._worker_id,
                 now=self._clock.now(),
                 max_attempts=self._max_attempts,
+                lease=timedelta(seconds=self._claim_lease_seconds),
             )
             await self._unit_of_work.commit()
         return entries

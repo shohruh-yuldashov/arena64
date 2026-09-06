@@ -48,13 +48,34 @@ echo "certbot: requesting a certificate for ${ARENA64_DOMAIN} and admin.${ARENA6
 # `--keep-until-expiring` so a re-run inside the validity window is free.
 # Both names on one certificate: the admin console is a subdomain of the
 # product and a single certificate is one thing to renew rather than two.
-certbot certonly \
+#
+# **The failure is survived rather than fatal, and that is A64-029's
+# deployment blocker.** The challenge above is served by nginx, and nginx
+# waits on this container with `condition: service_completed_successfully`.
+# Exiting non-zero meant nginx never started, so nothing ever answered the
+# challenge, so this could never succeed — on every first boot, for ever.
+# Measured on a clean host: eleven of fifteen services stayed in `created`
+# and nothing listened on 80 or 443.
+#
+# That is exactly the deadlock the stopgap above was written to break, and
+# the exit code put it straight back.
+if certbot certonly \
 	--webroot --webroot-path /var/www/certbot \
 	--non-interactive --agree-tos \
 	--email "${ARENA64_ACME_EMAIL}" \
 	--keep-until-expiring \
 	--cert-name "${ARENA64_DOMAIN}" \
-	-d "${ARENA64_DOMAIN}" -d "admin.${ARENA64_DOMAIN}"
+	-d "${ARENA64_DOMAIN}" -d "admin.${ARENA64_DOMAIN}"; then
+	rm -f "${LIVE}/.self-signed"
+	echo "certbot: issuance complete"
+	exit 0
+fi
 
-rm -f "${LIVE}/.self-signed"
-echo "certbot: issuance complete"
+# Nothing is hidden by exiting zero. `.self-signed` stays on disk — it is
+# what `renew.sh` retries on and what an operator greps for — and the
+# certificate nginx then serves expires in three days, far inside any expiry
+# alert. A deployment that is not finished says so with a browser warning,
+# which §6 already chose as the correct signal.
+echo "certbot: issuance FAILED — nginx will start on the self-signed stopgap" >&2
+echo "certbot: the renewal loop retries; the site is untrusted until it succeeds" >&2
+exit 0

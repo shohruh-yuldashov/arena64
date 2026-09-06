@@ -328,10 +328,19 @@ services:
     <<: *logging
     image: certbot/certbot:v5.8.0
     restart: unless-stopped
+    # The same two the init container reads: this loop finishes the issuance
+    # that one starts, once nginx is up to answer the challenge — A64-029.
+    environment:
+      ARENA64_DOMAIN: ${ARENA64_DOMAIN}
+      ARENA64_ACME_EMAIL: ${ARENA64_ACME_EMAIL}
     volumes:
       - letsencrypt:/etc/letsencrypt
       - certbot_webroot:/var/www/certbot
       - ./certbot/renew.sh:/usr/local/bin/renew.sh:ro
+      # One issuance script, mounted into both containers that perform an
+      # issuance. A second copy of these flags is a second thing to keep in
+      # step with the certificate name — CLAUDE.md §3.4.
+      - ./certbot/issue.sh:/usr/local/bin/issue.sh:ro
     entrypoint: ["/bin/sh", "/usr/local/bin/renew.sh"]
     depends_on:
       certbot-init:

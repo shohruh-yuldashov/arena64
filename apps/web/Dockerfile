@@ -4,13 +4,32 @@
 # `migrate`, `caddy`, `postgres`, `redis`, `minio` — no client. There is
 # nothing to serve."
 #
-# ## Why the output is a scratch image and not a server
+# ## Why the output is not a server
 #
-# This image runs nothing. It exists to carry `dist/` into the deployment,
+# This image serves nothing. It exists to carry `dist/` into the deployment,
 # where the edge container serves it from a shared volume. A second web
-# server behind Caddy would be a second place for cache headers, a second
+# server behind the edge would be a second place for cache headers, a second
 # place for a security header to be forgotten, and a second process to
 # operate — and §14 already makes the edge responsible for all of it.
+#
+# ## Why `busybox` and not `scratch`
+#
+# It was `scratch`, and that made the image unusable — A64-029. Carrying
+# `dist/` into the volume is a **copy**, and `compose.yml` performs it with
+# `entrypoint: ["/bin/sh", "-c", "cp -r /dist/. /srv/web/"]`. A `scratch`
+# image has no `/bin/sh` and no `cp`, so the container could not be created
+# at all:
+#
+#     exec: "/bin/sh": stat /bin/sh: no such file or directory
+#
+# The service stayed in `created` on every deploy, the volume stayed empty,
+# and nginx — which mounts that volume — never started either. Nothing
+# caught it because nothing had ever run this compose file through a first
+# boot.
+#
+# `busybox:*-musl` is ~4 MB and supplies exactly the `sh` and `cp` the
+# design already assumed were there. It still runs nothing: `restart: "no"`,
+# it copies and exits.
 #
 # ## Why the origin is a build argument
 #
@@ -80,5 +99,5 @@ RUN case "${VITE_PUBLIC_ORIGIN}" in \
 # deployment-layer answer that does not touch the config.
 RUN find dist -name '*.map' -delete
 
-FROM scratch AS dist
+FROM busybox:1.37.0-musl AS dist
 COPY --from=build /build/dist /dist

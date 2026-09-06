@@ -1,7 +1,8 @@
 # The operator console, built once and served as files — A64-028.6 §13.
 #
 # The same shape as `apps/web/Dockerfile` and for the same reasons; see that
-# file for why the output is a `scratch` image rather than a server.
+# file for why the output carries files rather than serving them, and why
+# the final stage is `busybox` rather than `scratch`.
 #
 # Two differences, both deliberate:
 #
@@ -46,5 +47,5 @@ COPY . .
 
 RUN npm run build
 
-FROM scratch AS dist
+FROM busybox:1.37.0-musl AS dist
 COPY --from=build /build/dist /dist

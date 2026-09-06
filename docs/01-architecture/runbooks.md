@@ -34,6 +34,60 @@ curl -s -H "Authorization: Bearer $OPS_TOKEN" http://api:8000/metrics
 
 ---
 
+
+---
+
+## Failure matrix
+
+What A64-028.6 actually exercised, and what it did not. **SAFE** — the
+platform degrades correctly and an operator is told. **DEGRADED** — reduced
+function, no data loss, an operator is told. **UNSAFE** — loss or a silent
+security change. **UNKNOWN** — not exercised.
+
+| # | Condition | Client sees | Readiness | Liveness | Signal | Loss? | Class |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| A | Healthy | normal | 200 | 200 | — | no | **SAFE** |
+| B | PostgreSQL unreachable | requests fail | **503** | 200 | readiness body `postgres: false`; `PostgresUnreachable` | no | **DEGRADED** |
+| C | PostgreSQL restarted | one failed request per pooled connection at most | 503 → 200 | 200 | as above; `pool_pre_ping` discards dead connections | no | **DEGRADED** |
+| D | Redis unreachable | requests served; **rate limits bypassed** | **503** | 200 | `rate_limit_unavailable_total{failed_open}`, ERROR log, `RateLimiterUnavailable` **pages** | no data; **abuse window open** | **DEGRADED** |
+| E | Redis restarted | reconnects; live state rebuilds from the durable log | 503 → 200 | 200 | as above | no | **DEGRADED** |
+| F | One instance draining | nothing — the balancer routes elsewhere | **503** | **200** | `service_draining` 1; readiness excluded from the alert | no | **SAFE** |
+| G | One instance killed mid-game | socket closes `1012`, reconnects in **265 ms** | n/a | n/a | `ApiUnavailable` after 2m | **no** — plies 2 → 3, 0 duplicates | **SAFE** |
+| H | Worker killed | matchmaking stops; backlog grows | 200 | 200 | `SchedulerNotRunning`, `OutboxBacklogStale` | no — the backlog drains on restart | **DEGRADED** |
+| I | Poison outbox event | that event never delivers | 200 | 200 | `outbox_failed_total{invalid_payload}`, then `OutboxEventsAbandoned` | **yes, that event** | **DEGRADED** |
+| J | Email provider unavailable | verification and reset mail delayed | 200 | 200 | `notifications_email_deliveries{outcome}` — **metric only, no alert** (P3-4) | no — retried through the outbox | **DEGRADED** |
+| K | Backup job failing | nothing | 200 | 200 | status file records the failure; `BackupStale` after two days | no — until a restore is needed | **DEGRADED** |
+| L | Invalid production config | nothing — the old version still serves | n/a | n/a | the process refuses to start and names the variable | no | **SAFE** |
+| M | Migration fails | nothing — `api` never starts | n/a | n/a | the deploy fails visibly | no | **SAFE** |
+| N | Metrics backend unavailable | nothing | 200 | 200 | Prometheus's own `up` goes to 0 | no | **SAFE** |
+| O | Event-loop lag | slow responses | 200 | 200 | the lag histogram; `EventLoopBlocked` **pages** at p99 > 250 ms | no | **DEGRADED** |
+| P | Unknown SPA route | branded **404** | — | — | — | no | **SAFE** |
+| Q | Private route crawled | `X-Robots-Tag: noindex` | — | — | — | no | **SAFE** |
+| R | Missing static asset | **404** | — | — | — | no | **SAFE** |
+
+### How each was exercised
+
+**Really run:** A, B, D, F, G, L, P, Q, R. B and D by pointing an instance at
+an unreachable dependency; F and G by draining and terminating an instance
+during a live game; P, Q and R against a real Caddy over HTTP; L by
+constructing a production `Settings` and reading the refusal.
+
+**Reasoned from mechanism, not run:** C, E, H, I, J, K, M, N, O. Each rests
+on behaviour tested elsewhere — `pool_pre_ping` in A64-028.3, the outbox
+retry ledger in this task's contract tests, the config guards in the unit
+suite — but the end-to-end condition was not staged. Recorded as reasoned
+rather than measured, because the distinction is the point.
+
+**Not exercised at all:** a Redis outage on the *shared* instance. The
+machine running these checks has a Redis the developer uses for other work,
+and stopping it was not something to do to somebody else's system. The
+unreachable-instance form (D) proves the application's behaviour; what it
+does not prove is what a real mid-flight disconnection does to an
+established connection pool.
+
+
+---
+
 ## Deploy
 
 **Not an incident.** Written first because every other section assumes it.

@@ -200,6 +200,188 @@ asked.
 | P-5 | Managed data services | One host means one failure domain for the database, Redis and the object store at once |
 | P-6 | Observability | `docs/00-overview/roadmap.md` U-6; there is no error tracking, no alerting and no dashboard |
 
+
+---
+
+## 7. Production — A64-028.6
+
+> §1–§6 above describe the **staging** definition and the gaps it left.
+> This section is the production one, and it closes P0-2, P0-3, P1-5, P1-6,
+> P2-6 and P3-1. Everything here is in `infrastructure/production/`.
+
+### 7.1 Topology
+
+| Component | Container | Port | Public | State | Liveness | Readiness | Scaling | Shutdown |
+| --- | --- | ---: | --- | --- | --- | --- | --- | --- |
+| Edge | `caddy` | 80, 443 | **yes — the only one** | certificates | — | — | 1 | signal |
+| API | `api` | 8000 | no | stateless | `/health` | `/health/ready` | **N** | drain, then signal |
+| Scheduled work | `worker` | 8000 | no | stateless | `/health` | `/health/ready` | **exactly 1** | signal, 60s grace |
+| Schema | `migrate` | — | no | — | — | — | one-shot | exits |
+| Web bundle | `web` | — | no | — | — | — | one-shot | exits |
+| Admin bundle | `admin` | — | no | — | — | — | one-shot | exits |
+| Database | `postgres` | 5432 | no | **durable** | `pg_isready` | — | 1 | signal |
+| Cache and bus | `redis` | 6379 | no | rebuildable | `redis-cli ping` | — | 1 | signal |
+| Object storage | `minio` | 9000 | no | **durable** | `mc ready` | — | 1 | signal |
+| Backup | `backup` | — | no | **durable volume** | — | — | 1 | signal |
+
+Only `caddy` publishes ports. Everything else is reachable on the compose
+network and nowhere else.
+
+### 7.2 The api/worker split, and why the flags are written out
+
+A64-028.1's audit found the trap: every scheduled job is gated by a
+per-process boolean that **defaults to `true`**, so N replicas of one image
+run N copies of every sweep. The handlers are individually safe under
+concurrency — they claim with `FOR UPDATE SKIP LOCKED` and count the races
+they lose — but safe is not intended, and N pairing scanners a second is
+load nobody asked for.
+
+So both services set every flag explicitly. The shape is visible in the
+compose file rather than inferred from defaults, and a future default change
+cannot silently alter it.
+
+**One task stays on everywhere: the gateway forwarder.** It drains *this
+node's* cross-instance mailbox, so a node that does not run it receives no
+frames from any other node. A64-028.4 established that this is one of the
+two tasks a leader election would break.
+
+**Exactly one worker is a deliberate single point of failure** for scheduled
+work. Scheduled work is recoverable — the outbox retains its rows and a
+restarted worker drains the backlog — and two workers would double every
+sweep for no benefit the claim semantics do not already provide.
+
+### 7.3 Startup order
+
+```
+config validation      Settings refuses a deployed tier with a local default,
+                       a development signing key, an unguarded operator
+                       surface or a placeholder Resend key. Refusing to start
+                       is a rolled-back deploy; starting is an outage.
+        ↓
+dependencies           postgres and redis healthchecks
+        ↓
+migrations             `migrate` runs alembic to completion and exits.
+                       A replica never migrates a database other replicas
+                       are already using.
+        ↓
+application            api and worker start; readiness is 503 until both
+                       PostgreSQL and Redis answer
+        ↓
+traffic                the edge routes to whatever readiness says yes to
+```
+
+### 7.4 A deploy, and what it costs a live game
+
+```
+POST /health/drain   →  readiness 503, liveness still 200
+                     →  the balancer stops routing new work
+SIGTERM              →  uvicorn closes sockets with 1012, lifespan tears down
+                     →  the client reconnects to a surviving instance
+                     →  game.resume replays from the durable move log
+```
+
+Draining is a **request, not a signal handler**, and A64-028.4 found out
+why the obvious version cannot work: uvicorn closes every socket before the
+lifespan hears about `SIGTERM`, so by the time application code could flip a
+flag the connections are gone and the balancer has not been told anything.
+`POST /health/drain` is the step before, which is a `preStop` hook wherever
+one exists.
+
+Liveness deliberately does **not** follow readiness down. An orchestrator
+restarts what fails liveness, and restarting a draining instance is the
+orchestrator undoing the deploy.
+
+**Measured end to end**, two instances, one live game (A64-028.6 §29):
+
+| | |
+| --- | --- |
+| Readiness before drain / after | 200 / **503** |
+| Liveness while draining | **200** |
+| Untouched instance | 200 throughout |
+| Socket close code | **1012** service restart |
+| Reconnect to the survivor | **265 ms** |
+| `game.resume` | answered with a snapshot |
+| Next legal move | **accepted** |
+| Durable plies before / after | 2 / 3 |
+| Duplicate plies | **0** |
+
+`stop_grace_period` is **30s** for `api` — a PROPOSED OPERATIONAL DEFAULT
+covering requests already in flight, against A64-028.5A's measured p99 of
+616 ms and 1.45 s maximum — and **60s** for `worker`, which must exceed the
+outbox claim lease.
+
+### 7.5 The edge
+
+`infrastructure/production/Caddyfile`, validated by `caddy validate`.
+
+| Concern | What it does |
+| --- | --- |
+| TLS | Caddy obtains and renews; HTTP redirects to HTTPS |
+| HSTS | 2 years, subdomains, preload-eligible |
+| CSP | `default-src 'self'`, two SHA-256 script hashes, no `unsafe-eval`, `frame-ancestors 'none'` |
+| Other headers | `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`; `Server` removed |
+| Indexing | `X-Robots-Tag: noindex` on every private path; **nothing on `/`** |
+| Unknown routes | a real **404** with a branded page |
+| Operator surface | `/metrics` and `/health/drain` answer 404 from outside |
+| Caching | hashed assets immutable for a year; `index.html` and `sw.js` `no-cache`; API `no-store` |
+| Admin | its own hostname, `noindex` wholesale |
+
+**Why the SPA routes are enumerated.** `try_files {path} /index.html`
+returns 200 for every URL on the internet, so `/gmaes/abc` is a page as far
+as a crawler is concerned. The router's paths are listed instead, and fixed
+children are listed rather than prefixed — `/settings/*` was a prefix in the
+first draft and `/settings/nope` came back 200, which is the same defect one
+level down.
+
+**The stated residual.** `/games/*`, `/players/*` and `/tournaments/*` stay
+prefixes because their next segment is a match id, a username and a
+tournament id. Those cannot be enumerated at the edge, so
+`/games/<nonsense>` is a 200 that the application resolves to its own
+not-found view. `apps/api/tests/unit/test_edge_policy.py` keeps the lists in
+step with the router.
+
+### 7.6 The clients
+
+Both build to a `scratch` image whose only content is `dist/`, copied into a
+volume the edge serves. Not a second web server behind Caddy: that would be
+a second place for cache headers, a second place to forget a security
+header, and a second process to operate.
+
+`VITE_PUBLIC_ORIGIN` is a **build argument with no default**, set from
+`ARENA64_DOMAIN` so the origin is named once for the whole deployment. It
+writes the canonical link, `og:url`, the absolute social image and the
+sitemap, none of which can be decided at runtime. The image refuses to build
+with it empty, non-`https`, or naming a development host — the SEO generator
+accepts `http://localhost` deliberately, which is right for a preview and
+wrong for an image.
+
+Source maps are generated and **deleted from the image**. A public source
+map hands an attacker the unminified application, and deleting them at the
+deployment layer is the answer that does not touch the user-owned
+`vite.config.ts`.
+
+The admin console is on `admin.<domain>`. **Its security boundary is the
+API's authorization, not its hostname** — a bundle is public the moment it
+is served, and hiding a frontend route has never been a control. What a
+separate origin buys is that a cookie scoped to one is not sent to the
+other.
+
+### 7.7 What a second host still needs
+
+Nothing here spans machines. Before one exists:
+
+- shared object storage rather than a MinIO container per host;
+- backups off this host — **P2-8 is open**, and this deployment writes them
+  to a volume beside the database, so a host loss takes both;
+- a real load balancer in front of several edges, and a decision about where
+  TLS terminates;
+- `RATE_LIMIT_TRUSTED_PROXY_COUNT` raised to match the new hop count. It is
+  **1** here, and it must agree with the Caddyfile: a limiter that trusts the
+  wrong hop either rate-limits the proxy as one client or accepts a spoofed
+  address from a real one.
+
+---
+
 ## Related Documents
 
 - [`architecture.md`](./architecture.md) — AD-02 and AD-03, which §2 deviates from

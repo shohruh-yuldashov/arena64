@@ -68,7 +68,12 @@ log pipeline, a backup mechanism, a production compose/manifest.
 > and found **two new P1s** by running it: an outbox deadlock between
 > instances and a projection no schema would accept. Both closed in the
 > same task.
-> Remaining: **2 P0, 3 P1, 6 P2, 2 P3** — the extra P2 is P2-9, raised by the soak and left open.
+> **A64-028.6** closed **P0-2, P0-3, P1-4, P1-5, P1-6, P1-7, P2-2, P2-6,
+> P3-1, P3-3** — and **P2-9**, whose root cause it found by instrumenting
+> the relay and reading what the instrument said.
+> Remaining: **0 P0, 0 P1, 2 P2, 1 P3** — P2-7 (notification retention),
+> P2-8 (backups are plaintext and on the same host), and P3-4 (the three
+> things A64-028.6 could not put an honest threshold on).
 > See `specs/authentication.md` "Rotation under concurrency" for the design.
 
 
@@ -102,28 +107,26 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 | | |
 | --- | --- |
 | **Area** | Deployment |
-| **Status** | **FAIL** |
-| **Evidence** | `compose.yml` defines `api`, `migrate`, `caddy`, `postgres`, `redis`, `minio` — no client. `.github/workflows/ci.yml` builds and publishes the API image only; the web and admin jobs lint, type-check and test but never build a bundle. `VITE_PUBLIC_ORIGIN` is set nowhere in the repository. `deployment.md` §6 P-4 records the gap. |
-| **Failure mode** | There is nothing to serve. The Caddyfile proxies every path to the API, so `/` returns the API's 404. |
-| **Impact** | No product. Additionally, `apps/web/scripts/generate-seo.mjs` writes a `robots.txt` that **blocks everything** when `VITE_PUBLIC_ORIGIN` is unset — a fail-safe that becomes a launch defect if a bundle is ever built without it. |
-| **Likelihood** | Certain. |
-| **Action** | Define the client build and host; set `VITE_PUBLIC_ORIGIN=https://arena64.gg`; keep the client and API on **one origin** — the refresh cookie is HttpOnly and same-site by design (`apps/web/.env.example`), which is also why the API carries no CORS middleware and must not gain one. |
-| **Owner** | **A64-028.6** |
-| **Blocker?** | **YES** |
+| **Status** | ~~FAIL~~ → **PASS** (A64-028.6) |
+| **Evidence** | No compose file defined a client, so the Caddyfile proxied every path to the API and `/` returned the API's 404. `VITE_PUBLIC_ORIGIN` was set nowhere in the repository |
+| **Action taken** | `apps/web/Dockerfile` and `apps/admin/Dockerfile` build to `scratch` images whose only content is `dist/`, copied into a volume the edge serves — not a second web server behind Caddy, which would be a second place for cache headers and a second place to forget a security header. `infrastructure/production/compose.yml` defines the whole topology; the origin is set once from `ARENA64_DOMAIN` |
+| **Verified** | A real build with `VITE_PUBLIC_ORIGIN=https://arena64.gg`: `<link rel="canonical" href="https://arena64.gg/">`, `og:url` and the absolute `og:image` the same, `sitemap.xml` listing `https://arena64.gg/`, and `Sitemap: https://arena64.gg/sitemap.xml` in `robots.txt`. The only `localhost` anywhere in the output is prose inside an HTML comment explaining that no host is named |
+| **The fail-safe is now a gate** | `generate-seo.mjs` writes a `robots.txt` that blocks everything when the origin is unset — correct, and invisible. The image refuses to build with the origin empty, non-`https`, or naming a development host, so a preview build cannot become a deployment |
+| **Owner** | A64-028.6 — **done** |
 
 ### P0-3 — No production edge configuration
 
 | | |
 | --- | --- |
 | **Area** | SEO / Edge / Security headers |
-| **Status** | **FAIL** |
-| **Evidence** | `infrastructure/staging/Caddyfile` sets `encode` and two `reverse_proxy` rules and nothing else: no `Content-Security-Policy`, `Strict-Transport-Security`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, no `X-Robots-Tag`, no SPA fallback, no true 404. The API adds none either — `create_app` registers only `CorrelationIdMiddleware` and `RequestIdMiddleware`. |
-| **Failure mode** | Missing transport and framing protections; private and auth paths indexable; an SPA host that rewrites everything to `index.html` returns HTTP 200 for URLs that do not exist. |
-| **Impact** | Security headers absent in production; `/admin`, `/auth/*` and other private paths eligible for indexing; soft-404s pollute the index and mislead crawlers. |
-| **Likelihood** | Certain — none of it exists. |
-| **Action** | Own the edge configuration in this repository. Required: HSTS, CSP, `Referrer-Policy`, `Permissions-Policy`, frame policy; `X-Robots-Tag: noindex` on every path `robots.txt` disallows and on all private/admin/auth paths; a genuine HTTP 404 for unknown routes; www/non-www canonical policy. |
-| **Owner** | **A64-028.6** |
-| **Blocker?** | **YES** |
+| **Status** | ~~FAIL~~ → **PASS** (A64-028.6) |
+| **Evidence** | `infrastructure/staging/Caddyfile` set `encode` and two `reverse_proxy` rules and nothing else |
+| **Action taken** | `infrastructure/production/Caddyfile`: HSTS, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, a CSP written against what this application loads — two SHA-256 hashes for the blocking theme script rather than `'unsafe-inline'`, `frame-ancestors 'none'`, no `unsafe-eval` — `X-Robots-Tag: noindex` on every private path, a genuine 404 for unknown routes, and `/metrics` and `/health/drain` refused from outside |
+| **Verified over real HTTP** | Headers present on `/`. `X-Robots-Tag: noindex, nofollow` on `/login`, `/register`, `/settings/*`, `/games/*`, `/players/*`, `/notifications`; **absent on `/`**. `/gmaes/abc`, `/settings/nope`, `/friends/nope`, `/assets/missing.js` → **404** with the branded page; `/`, `/login`, `/games/<id>`, `/tournaments/<id>`, `/settings/privacy`, `/friends/requests` → **200** with the shell. `/metrics` and `/health/drain` → 404 at the edge, 200 direct with the token |
+| **A defect only the live check could find** | The first version wrote `handle @private { import no_index }`. `handle` is mutually exclusive routing, so every private route — `/login` included — matched, set a header, terminated the chain and returned an **empty 200**. The application was completely broken and every static policy assertion still passed, because the list of paths was right and the routing semantics were not |
+| **Regression cover** | `apps/api/tests/unit/test_edge_policy.py`, 19 tests. Five mutations caught: a private path losing its header, the landing page gaining one, a live route dropping out of the SPA matcher, `/metrics` becoming reachable, and `script-src` gaining `'unsafe-inline'` |
+| **Residual** | `/games/*`, `/players/*` and `/tournaments/*` are prefix matchers because their next segment is an identifier, so `/games/<nonsense>` is a 200 the application resolves to its own not-found view. Stated in `deployment.md` §7.5 |
+| **Owner** | A64-028.6 — **done** |
 
 ### P0-4 — No backups and no tested restore
 
@@ -224,82 +227,64 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 | | |
 | --- | --- |
 | **Area** | Observability |
-| **Status** | **FAIL** |
-| **Evidence** | `app/platform/metrics/__init__.py`: "There is no metrics backend in this deployment: no Prometheus, no StatsD, no OpenTelemetry collector." No `/metrics` endpoint. No error tracker, no dashboard, no alert rule anywhere in the repository. Structured JSON logs are written to stdout and no pipeline collects them. `deployment.md` §6 P-6 records it. |
-| **Failure mode** | An incident is invisible until a user reports it, and unexplainable afterwards because nothing was retained. |
-| **Impact** | No mean-time-to-detect. Every other risk in this register becomes harder to diagnose. |
-| **Likelihood** | Certain. |
-| **Action** | The instrumentation is real and already emits at the right instants with bounded labels — what is missing is an exporter, storage, dashboards and alerts. See §10 and §11 for the minimum set. |
-| **Owner** | **A64-028.6** |
-| **Blocker?** | No — but launching blind is a deliberate decision that should be recorded as one |
+| **Status** | ~~FAIL~~ → **PASS** (A64-028.6) |
+| **Evidence** | No `/metrics`, no exporter, no dashboard, no alert rule anywhere in the repository. The audit sharpened it: of 41 metrics, **none was about an HTTP request**, and `uvicorn.access` is pinned to `WARNING`, so there was no request log either |
+| **Action taken** | `PrometheusMetrics` as the second implementation of the port the design always described; `/metrics` guarded by a bearer token and by the edge; HTTP request/latency/in-flight metrics; nine outbox metrics; three rate-limiter metrics; five gauges read at scrape time; four version-controlled dashboards; 15 alert rules |
+| **Verified** | `/metrics` returns 401 without the token and the exposition with it; `promtool check rules` accepts all fifteen; the exporter's own `arena64_metrics_dropped_total` stayed at zero through a 500-game ladder |
+| **Regression cover** | `test_observability_config.py` refuses a dashboard panel or an alert rule naming a series nothing emits, and a runbook link that does not resolve — it caught one on the first run |
+| **What is still unobserved** | Host CPU/memory/disk, certificate expiry, email-provider health, tracing. Each is listed with its reason in `observability.md` §10 |
+| **Owner** | A64-028.6 — **done** |
 
 ### P1-5 — Readiness cannot fail
 
 | | |
 | --- | --- |
 | **Area** | Health |
-| **Status** | **RISK** |
-| **Evidence** | `app/api/v1/health.py`: `/health/ready` returns HTTP **200** with `status: "degraded"` when PostgreSQL or Redis is unreachable. It never returns a non-2xx. |
-| **Failure mode** | A load balancer or orchestrator that reads the HTTP status — which is what they read — considers a process with no database perfectly ready and keeps sending it traffic. |
-| **Impact** | A degraded instance stays in rotation. (Liveness at `/health` is correctly dependency-free, and the Dockerfile's `HEALTHCHECK` correctly calls it — so there is no restart storm.) |
-| **Likelihood** | Certain when a dependency fails. |
-| **Action** | Return `503` from `/health/ready` when a required dependency is down, keeping the diagnostic body. Do **not** change `/health`. |
-| **Owner** | **A64-028.6** |
-| **Blocker?** | No |
+| **Status** | ~~RISK~~ → **PASS** (A64-028.6) |
+| **Evidence** | `/health/ready` returned HTTP **200** with `status: "degraded"` when PostgreSQL and Redis were both unreachable. A load balancer reads the status line; nothing in a fleet parses the body |
+| **Action taken** | 503 for an unreachable required dependency or a draining instance, with the diagnostic body unchanged. Liveness deliberately unchanged — an orchestrator restarts what fails liveness, and a database outage must not become a fleet-wide restart storm |
+| **Verified against real failures** | PostgreSQL unreachable: liveness **200**, readiness **503**, body `postgres: false`. Redis unreachable: liveness **200**, readiness **503**, all five roles `false`. Draining: liveness **200**, readiness **503**, `draining: true` with `postgres: true` — the body keeps the two apart |
+| **Regression cover** | `tests/unit/test_health.py`. Two mutations caught: readiness answering 200 unconditionally, and draining no longer failing readiness |
+| **Owner** | A64-028.6 — **done** |
 
 ### P1-6 — Every deploy drops every live game
 
-| | |
-| --- | --- |
-> **APPLICATION SIDE RESOLVED — A64-028.4; deployment side is A64-028.6's.**
-> `SIGTERM` closes live sockets with `1012 service restart` — uvicorn's own
-> shutdown, before the lifespan teardown, which is also the right order.
-> Verified end to end: the client sees the code, reconnects to the surviving
-> instance, `game.resume` returns a snapshot and the durable move log is
-> unchanged. **A game survives a process restart**, which is the requirement;
-> a socket surviving one is not. Readiness routing, stop timeouts and
-> rolling deploys remain open for A64-028.6.
->
-> An application-level drain was written for this and then **removed**: it
-> found zero sockets, because uvicorn closes them first. Keeping it would
-> have been a comment claiming credit for the server's behaviour.
+> **CLOSED — application side A64-028.4, deployment side A64-028.6.**
 
 | | |
 | --- | --- |
 | **Area** | Deployment / realtime |
-| **Status** | **application side PASS** · deployment side **OPEN** → A64-028.6 |
-| **Evidence** | `deployment.md` §1: "**Every live game is dropped** — one process holds the WebSocket connections and the schedulers alike". No socket drain exists in `lifespan`'s shutdown path, which stops schedulers, the sweeper and the outbox relay, then closes Redis and the database. |
-| **Failure mode** | A deploy severs every WebSocket mid-game. |
-| **Impact** | Players lose games in progress. With one instance there is no rolling window in which to avoid it. |
-| **Likelihood** | Certain, on every deploy. |
-| **Action** | AD-02's `gateway`/`api`/`worker` split (`deployment.md` §6 P-1), or a maintenance window and an in-app warning. Reconnect behaviour on the client should be measured before deciding which. |
-| **Owner** | **A64-028.4** (behaviour), **A64-028.6** (deploy procedure) |
-| **Blocker?** | No |
+| **Status** | ~~OPEN~~ → **PASS** |
+| **What A64-028.4 established** | `SIGTERM` closes live sockets with `1012 service restart` — uvicorn's own shutdown, before the lifespan teardown. A game survives a process restart; a socket does not, and a socket surviving one was never the requirement. An application-level drain was written and removed because it found zero sockets: uvicorn closes them first |
+| **What was left open** | Readiness routing, stop timeouts and a rolling procedure — the part that decides whether the balancer stops sending work *before* the process is signalled |
+| **Action taken** | `POST /health/drain` turns readiness 503 while liveness stays 200. A request rather than a signal handler, because uvicorn closes every socket before the lifespan hears about `SIGTERM` — by then the connections are gone and the balancer has been told nothing. This is a `preStop` hook wherever one exists. `stop_grace_period` 30s for `api`, 60s for `worker` |
+| **Verified end to end** | Two instances, one live game, one drained and terminated mid-game: readiness 200 → **503** on drain, liveness **200** throughout, the other instance untouched, socket closed with **1012**, client reconnected to the survivor in **265 ms**, `game.resume` answered with a snapshot, the next legal move **accepted**, durable plies 2 → 3, **0 duplicates** |
+| **Residual** | An unplanned exit — a crash, an OOM kill — skips the drain. That is correct: there is nothing to co-ordinate with a process that is already gone, and the durable move log plus `game.resume` is what makes it survivable |
+| **Owner** | A64-028.4 (behaviour), A64-028.6 (procedure) — **done** |
 
 ### P1-7 — A Redis outage silently removes rate limiting
 
 | | |
 | --- | --- |
 | **Area** | Abuse |
-| **Status** | **RISK** (deliberate, documented) |
-| **Evidence** | `RateLimitSettings.fail_open = True`, with a full written rationale: failing closed would convert a limiter outage into a total authentication outage. Argon2id, `users.locked_until` and 256-bit reset tokens remain. |
-| **Failure mode** | While Redis is unreachable every rate limit is bypassed and nothing signals it except a log line. |
-| **Impact** | An abuse window whose length is the outage's length. The trade is correct; the **absence of an alert on it** is not. |
-| **Likelihood** | As likely as a Redis outage. |
-| **Action** | Keep fail-open. Add a P0 alert on Redis availability and on the fail-open counter (§11). |
-| **Owner** | **A64-028.6** |
-| **Blocker?** | No |
+| **Status** | ~~RISK~~ → **MITIGATED** (A64-028.6) |
+| **Evidence** | `fail_open = True` with a written rationale that is correct. The finding was never the trade-off — it was that while Redis is unreachable every limit on the platform is bypassed and nothing signals it except one log line |
+| **Decision, restated** | **Fail-open is kept.** Failing closed converts a limiter outage into a total authentication outage: login, registration, password reset and OTP all stop. What remains in place meanwhile is Argon2id, `users.locked_until` and 256-bit reset tokens. The abuse window is exactly as long as the outage |
+| **Action taken** | `rate_limit.unavailable_total{outcome}` separates failing open from failing closed — opposite risks with opposite responses. `rate_limit.decisions_total{rule,outcome}` gives HTTP 429s their first counter; until now a refusal was visible only on the WebSocket paths. `RateLimiterUnavailable` pages, and the runbook says to watch registration volume while it is down |
+| **Verified against a real outage** | An instance pointed at an unreachable Redis: readiness **503**, login answered **401** rather than 503 (fail-open working), `rate_limit_unavailable` logged at ERROR, and `arena64_rate_limit_unavailable_total{outcome="failed_open"} 1.0` on the next scrape |
+| **Residual risk** | An abuser active during a Redis outage is unimpeded by rate limits. That is the accepted trade; what has changed is that an operator now knows the window is open while it is open |
+| **Owner** | A64-028.6 — **done** |
 
 ### P2 findings
 
 | ID | Area | Status | Finding | Evidence | Owner |
 | --- | --- | --- | --- | --- | --- |
 | P2-1 | PostgreSQL | ~~RISK~~ → **PASS** | **Resolved — A64-028.3.** Measured rather than inferred: killing a pooled backend and making three requests gives `1:InterfaceError 2:ok 3:ok` without `pool_pre_ping` and `1:ok 2:ok 3:ok` with it — up to one failed request per pooled connection after a database restart. `pool_pre_ping` is now on, and an explicit 10s `connect_timeout` replaces asyncpg's 60s default. `pool_recycle` was evaluated and **not** added: pre-ping covers the failure it would address and there is no idle-timeout middlebox between the app and the server | `tests/contract/test_pool_resilience.py` | A64-028.3 — **done** |
-| P2-2 | Logging | RISK | No redaction filter at the logging boundary. `_JsonFormatter` emits whatever `extra={…}` a call site passed. `CLAUDE.md` §8.3 requires redaction *at the boundary* "so redaction cannot be forgotten"; today it is call-site discipline. That discipline is currently good (`session_service` logs identifiers only, never the token, user agent or IP) | `app/common/logging.py` | **A64-028.6** |
+| P2-2 | Logging | ~~RISK~~ → **PASS** | **Resolved — A64-028.6.** `RedactingFilter` sits on the logging handler, so it applies whichever formatter the environment chose — a redaction that only ran for JSON would leave every developer's machine unprotected, and that is where a token is most likely to be printed by hand. Matches by field **name**, not by sniffing values: a value sniffer is a regex arms race that fails open on the first credential shaped differently. Keeps the identifiers an incident is reconstructed from, with `token_family` explicitly allowed. 27 tests; removing the filter fails 16 of them. Original finding: no redaction filter at the logging boundary. `_JsonFormatter` emits whatever `extra={…}` a call site passed. `CLAUDE.md` §8.3 requires redaction *at the boundary* "so redaction cannot be forgotten"; today it is call-site discipline. That discipline is currently good (`session_service` logs identifiers only, never the token, user agent or IP) | `app/common/logging.py` | **A64-028.6** |
 | P2-3 | Migrations | ~~RISK~~ → **PASS** | **Resolved — A64-028.3, and the finding was understated.** Not three migrations but **thirty-nine**: `op.create_index` cannot be concurrent inside Alembic's transaction, so every index in the schema is built in a lock. All thirty-nine run at `t=0` — Arena64 has not launched and a production database is built from empty — so none is unsafe. Eleven index a table an *earlier* migration created, which is the shape that would matter after launch; they are declared in `tests/unit/test_migration_policy.py`, which fails when a new one appears undeclared. Live-migration rules are in `docs/05-operations/data-reliability.md` §5 | `tests/unit/test_migration_policy.py` | A64-028.3 — **done** |
 | P2-4 | Notifications | ~~RISK~~ → **PASS** | **Resolved — A64-028.2.** The audit sharpened the finding: absent is a supported decision and a malformed pair already raised, but a **half** pair was silently treated as "push not configured" — an operator who set one key got a tier that refused every subscription and said nothing. `PushSettings` now refuses a half pair at startup, naming the missing variable and never the value | `settings.py`, `tests/unit/test_push_config.py` | A64-028.2 — **done** |
 | P2-5 | Capacity | ~~UNKNOWN~~ → **PASS (this environment only)** | **A64-028.5, completed by A64-028.5A.** The matrix is now run: refresh, matchmaking 100→1 000, live games 10→500, idle sockets 100→2 000, reconnect storm, cross-instance realtime, the analytics pipeline, a mixed workload and a 35-minute soak. **Zero unexpected failures at any level of any scenario.** The constraint is one Python process on one core (99–100 % at every saturated level) while the pool never waited once (`db_waiting_peak` 0, peak 32 of 100) and Redis peaked at 16 450 ops/s — so the first lever is worker processes per host, not a bigger database. Two things are labelled rather than claimed: refresh and login are **RATE-LIMIT BOUNDED**, and every per-IP figure was taken under the `development` profile, which is **20×** production's. The live-game plateau was tested against the generator rather than assumed: two generator processes bought 4.8 %, so the numbers are server-bound. **Nothing here is a production capacity claim** — client and server shared eleven cores. See `docs/05-operations/performance.md` | `tests/load/`, `performance.md` | A64-028.5A — **done**; production hardware **A64-029** |
-| P2-6 | Docs | RISK | The Dockerfile's `HEALTHCHECK` comment says the endpoint "reports the database and Redis". It calls `/api/v1/health`, which is liveness and reports neither. The behaviour is right; the comment describes `/health/ready` | `apps/api/Dockerfile` | **A64-028.6** |
+| P2-6 | Docs | ~~RISK~~ → **PASS** | **Resolved — A64-028.6.** The comment was wrong and the code was right, which is the direction that matters: HEALTHCHECK feeds a **restart** decision, and a probe failing on an unreachable database would restart every container in the fleet during a database incident. The comment now says liveness, says why, and points at readiness for the other question. Original finding: the comment said the endpoint "reports the database and Redis". It calls `/api/v1/health`, which is liveness and reports neither. The behaviour is right; the comment describes `/health/ready` | `apps/api/Dockerfile` | **A64-028.6** |
 
 ### Found by A64-028.5
 
@@ -338,18 +323,17 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 
 ### P2-9 — Fifty events spent their whole retry budget without recording a reason
 
-> **OPEN.** Small in volume, invisible in operation, and the cause is not
-> known. Recorded rather than guessed at.
-
 | | |
 | --- | --- |
 | **Area** | Background work |
-| **Status** | **OPEN** |
-| **Evidence** | During A64-028.5A's 35-minute soak, `outbox_exhausted` rose by exactly 50 — 42 `game.move_applied`, 8 `users.presence_offline`. All were created at 21:21:30 UTC and all claimed at 21:21:34 by a single worker, about two minutes into the run, and it did not recur across the remaining 33 minutes |
-| **Failure mode** | Every one of the 50 carries `attempt_count = 5` with **`last_error` NULL and `next_attempt_at` NULL**, so `mark_failed` never ran for any of them. Across both instances the relay logged 4 866 ticks during the soak and **not one reported a failure**. Something spent the attempt budget five times without recording why, and an operator reading the logs would have seen a healthy relay |
-| **Impact** | Permanent loss of 50 delivered-or-not events out of ~783 000 operations, and — the part that matters — no signal that it happened. A larger occurrence would be equally silent |
-| **Not attributed to the P1-10 fix** | Plausible on its face, since `lock_in_order` waits where the old code deadlocked, and a wait longer than the 5 s `statement_timeout` would abort a tick with attempts already committed. Checked and **not supported**: the logs contain no `canceling statement`, no `QueryCanceled` and no `outbox_tick_failed`, and the same fixed build ran the full matchmaking and live-game ladders with `outbox_exhausted` unchanged |
-| **Owner** | **A64-028.6** — the relay needs to make a lost tick visible before the cause can be chased; today a tick that dies between claim and record leaves no trace anywhere |
+| **Status** | ~~OPEN~~ → **PASS** (A64-028.6) |
+| **Original evidence** | During A64-028.5A's 35-minute soak, `outbox_exhausted` rose by exactly 50. All carried `attempt_count = 5` with **`last_error` and `next_attempt_at` NULL**, and across both instances the relay logged 4 866 ticks and **not one reported a failure** |
+| **How it was found** | Instrumentation written for it, then read. `outbox.incomplete_ticks_total` counts a tick that claimed entries, reported no failures and published fewer than it claimed; `outbox.unrecorded_attempts_total{observation}` classifies what each claimed row was already carrying. A64-028.5A's 500-game ladder on the unfixed build: **3 incomplete ticks, 150 attempts spent recording nothing, claimed 2 900 against published 2 750** — a difference of exactly 150 — and 152 rows that reached `published` only on their second or later attempt with no error ever recorded |
+| **Root cause** | `claim` set `claimed_at` and `claimed_by` and incremented `attempt_count`, and **did not touch `next_attempt_at`**. The due predicate is `next_attempt_at IS NULL OR <= now`, so a just-claimed row still satisfied it. `SKIP LOCKED` keeps two relays apart for the length of one *statement* and the claim commits immediately afterwards — deliberately, so the claim is visible to everybody. A second relay polling a second later claimed the same batch; both delivered, one published, and the other's `mark_published` matched nothing because the row was already published, so it recorded no outcome and spent an attempt for nothing. Five of those retires an event that never failed |
+| **Action taken** | The claim writes `next_attempt_at = now + lease` — the visibility timeout this design already had the field for. `mark_published` and `mark_failed` both overwrite it, so the lease governs only a tick that reached neither. Sixty seconds, because it must exceed the slowest tick and the default consumer budget is thirty; too long costs a delayed retry after a crash, too short is the defect, and that asymmetry chooses the default. `lease` is a **required** argument on the port: the contract is not "disjoint within a call", which is what `SKIP LOCKED` gives and what was never enough |
+| **Verified** | The same ladder on the fixed build: **`claimed == published` on both instances** — 2 837 and 2 775 — with **no incomplete ticks and no unrecorded attempts at all** |
+| **Regression cover** | Two contract tests against real PostgreSQL. Both mutations caught: removing the lease lets a second relay reclaim a batch another has taken; making it never expire strands a batch a crashed relay was holding |
+| **Owner** | A64-028.6 — **done** |
 
 ### P1-11 — Every queue join was projected into an event the schema refused
 
@@ -395,9 +379,10 @@ Severity: **P0** launch blocker · **P1** serious reliability/operational risk �
 
 | ID | Finding | Owner |
 | --- | --- | --- |
-| P3-1 | `apps/web/.env.example` does not document `VITE_PUBLIC_ORIGIN`, which the SEO build reads | **A64-028.6** |
+| P3-1 | ~~`apps/web/.env.example` does not document `VITE_PUBLIC_ORIGIN`~~ → **RESOLVED — A64-028.6.** Documented with what it writes into the output, why it is build-time, and why it must stay unset locally. The production value is set once from `ARENA64_DOMAIN`, and the image refuses to build with a development origin | A64-028.6 — **done** |
 | P3-2 | ~~Runtime version ambiguity~~ → **RESOLVED — A64-028.3.** `apps/api/.python-version` pins **3.13**, which `uv` reads for the developer's virtualenv and CI's, and which the image already ran. The suite, ruff, mypy, pyright and import-linter all pass under it. 3.13 rather than 3.14 because the image runs it and every checker already targets it — upgrading a runtime because a newer one exists is not a reason | A64-028.3 — **done** |
-| P3-3 | `compose.yml` gives `RESEND_API_KEY` an empty default, implying it is optional. It is not — `ConsoleEmailProvider` refuses to construct in a deployed tier, so the stack fails to boot | **A64-028.6** |
+| P3-3 | ~~`compose.yml` gives `RESEND_API_KEY` an empty default, implying it is optional~~ → **RESOLVED — A64-028.6.** The production compose requires it, and `EmailSettings` refuses a value that is not a Resend credential: `None` has defined behaviour and fails at boot, while a placeholder builds the real provider, reports the channel available and fails every message one at a time. Original finding: the empty default implied optional. It is not — `ConsoleEmailProvider` refuses to construct in a deployed tier, so the stack fails to boot | **A64-028.6** |
+| P3-4 | **Raised by A64-028.6.** Three things an operator would want alerted on and cannot be, each for a stated reason. **Host CPU, memory and disk:** no node exporter — the application reports its own RSS and nothing about the machine, so `disk pressure` has a runbook and no alert. **Certificate expiry:** Caddy renews automatically and logs failures; nothing probes the result, and `ARENA64_ACME_EMAIL` is the only warning path. **Email provider health:** the metric exists and the rule does not, because a threshold separating "the provider is down" from "several addresses bounced" needs a baseline this deployment has not produced — and guessing one is the false-positive source the alerting design exists to avoid. See `docs/01-architecture/observability.md` §10 | **A64-028.7** |
 
 ---
 
@@ -463,8 +448,8 @@ Recorded so that later tasks do not re-litigate them.
 | API instance dies | Total outage — one instance, no redundancy | **UNSAFE** |
 | Deploy while games are live | Every WebSocket severed (P1-6) | **DEGRADED** |
 | PostgreSQL restarts | Pool holds dead connections; SQLAlchemy invalidates on a detected disconnect. Cost unmeasured (P2-1) | **UNKNOWN** |
-| PostgreSQL unavailable | Requests fail; readiness reports `degraded` **with HTTP 200** (P1-5); liveness stays up, so no restart storm | **DEGRADED** |
-| Redis unavailable | Rate limiting fails open (P1-7); live match state in the `live` role is unavailable | **DEGRADED** |
+| PostgreSQL unavailable | Requests fail; readiness returns **503** and the balancer stops routing (A64-028.6); liveness stays 200, so no restart storm | **DEGRADED** |
+| Redis unavailable | Rate limiting fails open **and says so** — `rate_limit_unavailable_total{failed_open}` and a page (A64-028.6); readiness returns 503; live match state in the `live` role is unavailable and rebuilds from the durable log | **DEGRADED** |
 | Redis restarts | `live` recovers from AOF; `cache`, `limits`, `broker`, `bus` reconstruct | **SAFE** |
 | Email provider timeout | `httpx` timeout bounds it; delivery retried by the scheduled poller | **SAFE** |
 | Push provider timeout | Same | **SAFE** |

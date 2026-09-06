@@ -693,6 +693,119 @@ sized for and 1024 was a runtime default that happened to be smaller. Only
 the edge declares it; nothing else here multiplies descriptors per
 connection the way a proxy does.
 
+### 8.12 Who owns `/etc/letsencrypt` — A64-030.2
+
+The first real production issuance validated all three names, finalised the
+ACME order, **received a certificate from Let's Encrypt**, and then threw it
+away:
+
+```
+certbot.errors.CertStorageError: live directory exists for arena64.gg
+```
+
+`RenewableCert.new_lineage` refuses to create a lineage when `live/<name>`
+already exists and is non-empty. The bootstrap wrote its self-signed stopgap
+straight into that directory, so the file that existed to let nginx start
+was also what made issuance impossible — permanently, because the stopgap is
+only removed on a success that could never happen.
+
+**The boundary, now explicit:**
+
+| Path | Owner |
+| --- | --- |
+| `/etc/letsencrypt/live`, `archive`, `renewal` | **Certbot.** Arena64 creates nothing here, ever |
+| `/etc/letsencrypt/arena64` | **Arena64.** Certbot never reads or writes it |
+
+Under Arena64's half:
+
+```
+arena64/stopgap/<domain>/     the self-signed pair, real files
+arena64/current/<domain>      a symlink -> stopgap/<domain>  or  ../../live/<domain>
+arena64/quarantine/<stamp>/   whatever recovery moved aside
+```
+
+**nginx reads `arena64/current/<domain>` and nothing else.** Its
+configuration never changes; only what one symlink resolves to does. That is
+what lets the edge start before a certificate exists and switch to the real
+one without a rewrite — and nginx mounts `/etc/letsencrypt` read-only, so it
+could not have flipped anything itself.
+
+The flip is `mv -T`, not `mv -f`: the link points at a *directory*, and
+`mv -f` follows it, moving the replacement **inside** rather than over it —
+silently, exit zero. The first draft of this fix shipped that bug and
+`tests/unit/test_acme_bootstrap.py::TestTheSymlinkFlipReallyFlips` is why it
+will not ship twice.
+
+**State is decided by evidence, not by a marker Arena64 wrote.**
+`certbot/lineage.sh`'s `has_certbot_lineage` requires
+`live/<domain>/fullchain.pem` to be a *symlink resolving into*
+`archive/<domain>/` — Certbot's own layout, which nothing this repository
+creates can imitate. The old loop keyed on `.self-signed`, a file we wrote
+into the directory that was simultaneously breaking issuance.
+
+#### First boot, and the two state machines
+
+```
+no lineage   ->  write stopgap, point current at it, attempt issuance
+                 success -> point current at live/<domain>   (nginx reloads within 60s)
+                 failure -> stay on stopgap, exit 0 so nginx is released, retry in 5 min
+lineage      ->  certbot renew twice a day, re-assert the symlink, sleep 12h + jitter
+```
+
+`certbot-init` still exits 0 on failure — nginx waits on it with
+`service_completed_successfully`, and a non-zero exit is the A64-029
+deadlock. What changed is that a failure now leaves Certbot's namespace
+untouched, so the retry can actually succeed.
+
+nginx watches `arena64/current/<domain>` resolved through to the archive file
+and reloads when it changes, so a first issuance is live within a minute
+instead of up to six hours. A renewal changes `fullchainN.pem` ->
+`fullchainN+1.pem`, which the same watch catches.
+
+#### One-time recovery for a host that ran the old bootstrap
+
+A host that already failed this way holds two pieces of state in Certbot's
+namespace, and **both** must go:
+
+- `live/<domain>/` with regular `.pem` files — blocks `new_lineage` outright;
+- `renewal/<domain>.conf`, left behind empty by the failed attempt.
+  `util.unique_lineage_name` creates it with `safe_open` *before* the
+  live-directory guard runs and does not unlink it when the guard raises. On
+  the next attempt it finds the name taken and returns `<domain>-0001.conf`,
+  so Certbot creates a lineage called **`<domain>-0001`** — quietly, at a
+  path the edge does not read.
+
+Both behaviours are pinned by
+`tests/unit/test_acme_bootstrap.py::TestCertbotStorageContract`, which calls
+Certbot's own storage module inside the pinned image.
+
+```bash
+docker compose --env-file production.env run --rm   --entrypoint sh certbot /usr/local/bin/recover-legacy-stopgap.sh
+```
+
+It **quarantines rather than deletes**, moving both into
+`arena64/quarantine/<timestamp>/`, and refuses to run when it sees a real
+Certbot lineage, a `live/` directory without the legacy `.self-signed`
+fingerprint, or a non-empty `archive/<domain>`. Running it twice is safe.
+
+**Operators must never place files under `live/<cert-name>`.** That directory
+is Certbot's lineage namespace; anything there makes the next issuance either
+fail or silently rename itself.
+
+#### Before retrying real issuance on the affected host
+
+The failed attempt already spent one of Let's Encrypt's **five duplicate
+certificates per week** for this exact name set. Prove the fix against
+staging first — it has no such limit:
+
+```bash
+docker compose --env-file production.env run --rm --entrypoint certbot certbot   certonly --webroot --webroot-path /var/www/certbot --dry-run   --cert-name arena64.gg -d arena64.gg -d www.arena64.gg -d admin.arena64.gg
+```
+
+A real lineage is confirmed by `live/<domain>/fullchain.pem` being a symlink
+into `archive/<domain>/` — not by `certbot certonly` exiting zero, which it
+did on the day it discarded a real certificate.
+
 ---
 
 ## 9. Gates — A64-028.7

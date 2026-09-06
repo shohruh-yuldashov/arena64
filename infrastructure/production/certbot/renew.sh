@@ -1,40 +1,33 @@
 #!/bin/sh
-# Certificate lifecycle — A64-028.6A §6, §32.
+# Certificate lifecycle — A64-028.6A §6, §32; state machine split by A64-030.2.
 #
 # ## Why this exists at all
 #
-# Caddy obtained and renewed certificates itself; nginx does not. That is
-# the single largest thing this migration had to replace, and it is the one
+# Caddy obtained and renewed certificates itself; nginx does not. That is the
+# single largest thing the nginx migration had to replace, and it is the one
 # with a failure mode nobody notices until the site is unreachable: a
 # certificate that quietly stops renewing works perfectly for eighty-nine
 # days.
 #
-# ## The loop
+# ## Two modes, told apart by evidence
 #
-# `certbot renew` is a no-op until a certificate is within thirty days of
-# expiry, so running it twice a day costs two processes and a log line and
-# means a renewal happens on the first of sixty opportunities rather than
-# the last. The randomised sleep spreads load on Let's Encrypt's servers,
-# which their own guidance asks for.
+#   FIRST ISSUANCE   no Certbot lineage exists. Retry `issue.sh` on a short
+#                    interval; every failure leaves the stopgap in place and
+#                    the site untrusted, so the interval is minutes.
 #
-# ## Issuance is attempted first, then finished here
+#   NORMAL RENEWAL   a Certbot lineage exists. `certbot renew` is a no-op
+#                    until thirty days from expiry, so twice a day costs two
+#                    processes and a log line and means a renewal happens on
+#                    the first of sixty opportunities rather than the last.
 #
-# The first certificate is requested by `certbot-init` (see the compose
-# file), which runs once and exits. That attempt can fail for reasons
-# renewal cannot — DNS not yet pointed at this host, port 80 not open — and
-# on a first boot it fails for a reason of its own: the HTTP-01 challenge is
-# served by nginx, and nginx has not started yet, because it is waiting for
-# that very container to finish.
+# **The test that separates them is `has_certbot_lineage`** — a symlink under
+# `live/<domain>` resolving into `archive/<domain>`, which is certbot's own
+# layout and which nothing this repository writes can imitate.
 #
-# So `issue.sh` now writes its self-signed stopgap, reports the failure, and
-# exits zero. Nginx starts on the stopgap and can answer a challenge, and
-# this loop finishes what `certbot-init` began.
-#
-# Retrying does not hide the failure, which was the original objection to
-# putting issuance in a loop. `.self-signed` stays on disk until a real
-# certificate replaces it, the certificate being served expires in three
-# days, and every retry logs. What would hide it is a container that exited
-# non-zero on a host where nothing reads exit codes — A64-029.
+# It used to be the presence of `.self-signed`, a marker Arena64 wrote into
+# certbot's own directory. That is what A64-030.2 removed: the loop's notion
+# of "have we succeeded yet" was a file we controlled, sitting in a directory
+# whose contents were simultaneously making success impossible.
 #
 # ## Nginx is reloaded by nginx, not from here
 #
@@ -44,33 +37,30 @@
 # certificate-renewal job the ability to start any container on the host,
 # which is a far larger grant than the problem needs.
 #
-# So nginx reloads itself on a timer (see its compose command). A renewal
-# is therefore live within six hours of being written, and the certificate
-# is valid for thirty days at that point — the delay is irrelevant and the
-# privilege saved is not.
+# So nginx watches the stable symlink itself and reloads when what it
+# resolves to changes — see its command in `compose.yml`. A new certificate
+# is live within a minute of being written, and this container keeps no
+# privilege it does not need.
 
 set -eu
 
+. /usr/local/bin/lineage.sh
+
 : "${ARENA64_DOMAIN:?ARENA64_DOMAIN is required}"
 
-#: Written by `issue.sh` beside the stopgap, and removed the moment a real
-#: certificate replaces it. Its presence is the one durable fact that says
-#: "this host is serving a certificate nobody trusts".
-STOPGAP="/etc/letsencrypt/live/${ARENA64_DOMAIN}/.self-signed"
-
 #: Minutes, not hours, while the site is untrusted: every retry is a chance
-#: to stop serving a browser warning. Once a real certificate is in place
-#: the loop drops to the renewal cadence, where twelve hours means a renewal
-#: happens on the first of sixty opportunities rather than the last.
+#: to stop serving a browser warning.
 RETRY_SECONDS=300
 
 echo "certbot: certificate loop started"
 
 while :; do
-	if [ -f "${STOPGAP}" ]; then
+	if ! has_certbot_lineage "${ARENA64_DOMAIN}"; then
+		# --- FIRST ISSUANCE ------------------------------------------------
+		#
 		# Nginx is up by now — that is what `issue.sh` exiting zero bought —
 		# so there is finally something to answer the HTTP-01 challenge.
-		echo "certbot: still on the self-signed stopgap; retrying issuance"
+		echo "certbot: no certificate lineage yet; retrying issuance"
 		# Through `sh`, exactly as `certbot-init`'s entrypoint invokes it: the
 		# script is bind-mounted read-only and carries whatever mode the host
 		# gave it, so nothing here may depend on the execute bit.
@@ -79,16 +69,24 @@ while :; do
 		continue
 	fi
 
+	# --- NORMAL RENEWAL -----------------------------------------------------
+	#
 	# `|| echo`: a failed renewal must not stop the loop. The **existing**
 	# certificate stays valid and in place — certbot writes atomically and
-	# never removes a working certificate on failure — so a transient
-	# failure costs nothing and a persistent one is caught by the expiry
-	# metric long before the certificate lapses.
+	# never removes a working certificate on failure — so a transient failure
+	# costs nothing and a persistent one is caught by the expiry metric long
+	# before the certificate lapses.
 	certbot renew \
 		--webroot --webroot-path /var/www/certbot \
 		--non-interactive \
 		--quiet \
 		|| echo "certbot: renewal attempt failed; the existing certificate is unchanged"
+
+	# Re-assert the stable path after every renewal pass. A renewal replaces
+	# `live/<domain>`'s symlinks in place, so this is normally a no-op — but
+	# it is what makes the loop self-healing if the link is ever lost, and it
+	# costs one `readlink`.
+	arena64_point_current_at "${ARENA64_DOMAIN}" "$(certbot_live_dir "${ARENA64_DOMAIN}")"
 
 	# 12 hours, plus up to an hour of jitter.
 	sleep $((43200 + RANDOM % 3600))

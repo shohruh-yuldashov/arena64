@@ -35,8 +35,6 @@ by nothing. Each has a class below.
 """
 
 import re
-import shutil
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -112,72 +110,19 @@ class TestTheCarrierImagesCanRunTheirEntrypoint:
         )
 
 
-class TestIssuanceFailureDoesNotBlockTheEdge:
-    """`issue.sh` must leave a certificate behind and exit zero.
-
-    Driven for real rather than grepped: the property is the exit code of a
-    script whose control flow is three branches deep, and a regex over it
-    would pass on any rearrangement that reintroduced the abort.
-    """
-
-    @pytest.fixture
-    def stub_path(self, tmp_path: Path) -> Path:
-        """A `certbot` on PATH that always fails, as it does on a first boot."""
-        binaries = tmp_path / "bin"
-        binaries.mkdir()
-        failing = binaries / "certbot"
-        failing.write_text("#!/bin/sh\necho 'stub certbot: challenge unanswerable' >&2\nexit 1\n")
-        failing.chmod(0o755)
-        return binaries
-
-    def _run(self, stub_path: Path, letsencrypt: Path) -> subprocess.CompletedProcess[str]:
-        openssl = shutil.which("openssl")
-        assert openssl is not None, "openssl is needed to write the stopgap"
-        script = ISSUE_SH.read_text().replace("/etc/letsencrypt", str(letsencrypt))
-        runnable = letsencrypt.parent / "issue.sh"
-        runnable.write_text(script)
-        return subprocess.run(
-            ["sh", str(runnable)],
-            env={
-                "PATH": f"{stub_path}:{Path(openssl).parent}:/usr/bin:/bin",
-                "ARENA64_DOMAIN": "arena64.example",
-                "ARENA64_ACME_EMAIL": "ops@arena64.example",
-            },
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-
-    def test_it_exits_zero_so_nginx_is_released(self, stub_path: Path, tmp_path: Path) -> None:
-        result = self._run(stub_path, tmp_path / "letsencrypt")
-        assert result.returncode == 0, (
-            "issue.sh aborted on a failed issuance. nginx waits on this container with "
-            f"`service_completed_successfully`, so the edge never starts.\n{result.stderr}"
-        )
-
-    def test_it_leaves_a_certificate_nginx_can_start_on(
-        self, stub_path: Path, tmp_path: Path
-    ) -> None:
-        letsencrypt = tmp_path / "letsencrypt"
-        self._run(stub_path, letsencrypt)
-
-        live = letsencrypt / "live" / "arena64.example"
-        for name in ("fullchain.pem", "privkey.pem", "chain.pem"):
-            assert (live / name).is_file(), f"{name} is missing; nginx will not start"
-
-    def test_the_failure_is_visible_rather_than_swallowed(
-        self, stub_path: Path, tmp_path: Path
-    ) -> None:
-        """Exiting zero is only defensible because the state stays readable."""
-        letsencrypt = tmp_path / "letsencrypt"
-        result = self._run(stub_path, letsencrypt)
-
-        marker = letsencrypt / "live" / "arena64.example" / ".self-signed"
-        assert marker.is_file(), (
-            "the .self-signed marker is gone, so nothing records that this host is "
-            "serving a certificate nobody trusts — and renew.sh retries on it"
-        )
-        assert "FAILED" in result.stderr, f"the failure was not reported: {result.stderr!r}"
+# `TestIssuanceFailureDoesNotBlockTheEdge` used to live here — A64-029's
+# proof that `issue.sh` exits zero on a failed issuance so that nginx, which
+# waits on it with `service_completed_successfully`, is released.
+#
+# A64-030.2 moved it to `tests/unit/test_acme_bootstrap.py`, where the same
+# property is asserted alongside the rest of the bootstrap's contract:
+# `test_a_failed_issuance_exits_zero_so_nginx_is_released` keeps the exit
+# code, and `test_nginx_has_something_to_start_on` keeps the certificate the
+# edge needs. Both now drive the script with its `lineage.sh` dependency, and
+# against the layout the bootstrap actually writes.
+#
+# Kept as a pointer rather than duplicated: two copies of a rule is how the
+# copies drift.
 
 
 class TestTheLoopFinishesWhatInitStarted:

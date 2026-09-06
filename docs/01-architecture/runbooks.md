@@ -194,9 +194,25 @@ docker compose --env-file production.env exec nginx \
   ls -a /etc/letsencrypt/live/"${ARENA64_DOMAIN}"/
 ```
 
-`.self-signed` present means the site is still serving an untrusted
-certificate — read `docker compose logs certbot` for the reason, which is
-usually DNS not yet pointing here or port 80 not reachable from outside.
+**The gate is a Certbot lineage, not a marker.** `live/<domain>/fullchain.pem`
+must be a **symlink** resolving into `archive/<domain>/` — that is Certbot's
+own layout and nothing else produces it:
+
+```bash
+docker compose --env-file production.env exec nginx \
+  readlink -f /etc/letsencrypt/live/"${ARENA64_DOMAIN}"/fullchain.pem
+```
+
+A path under `archive/` means a real certificate. Anything else means the
+edge is still on the self-signed stopgap at
+`/etc/letsencrypt/arena64/stopgap/${ARENA64_DOMAIN}` — read
+`docker compose logs certbot` for the reason, usually DNS not yet pointing
+here or port 80 not reachable from outside.
+
+**Never put files under `live/<cert-name>` by hand.** That directory belongs
+to Certbot; anything there makes the next issuance fail, or silently rename
+the lineage to `<cert-name>-0001`. `deployment.md` §8.12 explains both, and
+carries the one-time recovery for a host that hit this before A64-030.2.
 
 ### 9. Application
 

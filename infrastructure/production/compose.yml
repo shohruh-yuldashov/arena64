@@ -493,14 +493,42 @@ services:
       - admin_dist:/srv/admin:ro
       - letsencrypt:/etc/letsencrypt:ro
       - certbot_webroot:/var/www/certbot:ro
-    # Reloads every six hours to pick up a renewed certificate — see
-    # `certbot/renew.sh` on why the renewal container does not signal this
-    # one directly. `exec` so nginx is PID 1 and `SIGTERM` reaches it.
+    # Reloads when the certificate actually changes — A64-030.2.
+    #
+    # `certbot/renew.sh` explains why the renewal container cannot signal
+    # this one: it is a different container and giving it the Docker socket
+    # would hand a certificate job the ability to start anything on the
+    # host. So nginx watches instead.
+    #
+    # It watches `arena64/current/<domain>`, the stable symlink this
+    # deployment owns, resolved all the way through — so it fires on both
+    # transitions that matter: stopgap -> first real lineage, and
+    # `archive/fullchainN.pem` -> `fullchainN+1.pem` on renewal. The old
+    # blind `sleep 6h` meant a first issuance could serve a browser warning
+    # for six more hours after it succeeded.
+    #
+    # The first pass only records the target; it does not reload, because
+    # nginx has just started on exactly that certificate. The six-hour
+    # backstop stays for anything a symlink comparison would miss.
+    # `exec` so nginx is PID 1 and `SIGTERM` reaches it.
     command:
       - /bin/sh
       - -c
       - |
-        while :; do sleep 6h; nginx -s reload; done &
+        CURRENT="/etc/letsencrypt/arena64/current/${ARENA64_DOMAIN}"
+        (
+          seen=""; elapsed=0
+          while :; do
+            sleep 60; elapsed=$$((elapsed + 60))
+            now="$$(readlink -f "$$CURRENT" 2>/dev/null || true)"
+            if [ -n "$$now" ] && [ "$$now" != "$$seen" ]; then
+              [ -n "$$seen" ] && nginx -s reload
+              seen="$$now"
+            elif [ "$$elapsed" -ge 21600 ]; then
+              nginx -s reload; elapsed=0
+            fi
+          done
+        ) &
         exec /docker-entrypoint.sh nginx -g 'daemon off;'
     depends_on:
       certbot-init:
@@ -523,6 +551,9 @@ services:
       - letsencrypt:/etc/letsencrypt
       - certbot_webroot:/var/www/certbot
       - ./certbot/issue.sh:/usr/local/bin/issue.sh:ro
+      # The ownership boundary and the lineage evidence test, shared by
+      # every script that touches /etc/letsencrypt — A64-030.2.
+      - ./certbot/lineage.sh:/usr/local/bin/lineage.sh:ro
     entrypoint: ["/bin/sh", "/usr/local/bin/issue.sh"]
 
   certbot:
@@ -542,6 +573,11 @@ services:
       # issuance. A second copy of these flags is a second thing to keep in
       # step with the certificate name — CLAUDE.md §3.4.
       - ./certbot/issue.sh:/usr/local/bin/issue.sh:ro
+      - ./certbot/lineage.sh:/usr/local/bin/lineage.sh:ro
+      # The one-time recovery for a host that ran the pre-A64-030.2
+      # bootstrap. Mounted, never invoked automatically: it moves state
+      # an operator should be looking at when it happens.
+      - ./certbot/recover-legacy-stopgap.sh:/usr/local/bin/recover-legacy-stopgap.sh:ro
     entrypoint: ["/bin/sh", "/usr/local/bin/renew.sh"]
     cpu_shares: 51
     deploy:

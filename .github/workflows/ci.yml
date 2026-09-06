@@ -239,6 +239,40 @@ jobs:
               mc anonymous set download ci/arena64-media
             "
 
+      # `pg_dump` and `pg_restore`, at the **same major** as the server.
+      #
+      # The runner image ships a PostgreSQL 16 client on `PATH`; the service
+      # container above, `docker/docker-compose.yml` and the production
+      # compose all run `postgres:17`. `pg_dump` refuses to dump a server
+      # newer than itself — it does not degrade, it aborts:
+      #
+      #     pg_dump: error: aborting because of server version mismatch
+      #     detail: server version: 17.11; pg_dump version: 16.15
+      #
+      # That took the whole backup and restore suite down — ten contract
+      # tests and one unit test — so the one gate that proves a backup can
+      # actually be restored was the gate that never ran. A64-029.
+      #
+      # The version is derived from the service image rather than repeated,
+      # so the two cannot drift apart the way they just did.
+      - name: Install the PostgreSQL client
+        run: |
+          set -euo pipefail
+          major="$(docker exec "$(docker ps --filter ancestor=postgres:17 --format '{{.ID}}' | head -1)" \
+            postgres --version | grep -oE '[0-9]+' | head -1)"
+          echo "server major: ${major}"
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq "postgresql-client-${major}"
+          # `pg_dump` must resolve to the new client, not the runner's 16.
+          echo "/usr/lib/postgresql/${major}/bin" >> "$GITHUB_PATH"
+          "/usr/lib/postgresql/${major}/bin/pg_dump" --version
+
       - name: Create the contract database
         run: |
           uv run python - <<'PY'

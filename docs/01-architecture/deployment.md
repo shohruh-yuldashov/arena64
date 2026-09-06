@@ -516,13 +516,14 @@ no application secret, and a certificate volume mounted read-only.
   eleven of fifteen services in `created` with nothing on 80 or 443
   (A64-029).
 - **`certbot`** renews twice a day with jitter, and **completes a first
-  issuance that `certbot-init` could not**. While
-  `live/<domain>/.self-signed` is on disk it retries issuance every five
-  minutes instead of renewing; `certbot renew` alone cannot help, being a
-  no-op when there is no certbot lineage to renew. A failed renewal leaves
-  the existing certificate untouched and does not stop the loop.
+  issuance that `certbot-init` could not**. While `arena64_discover_lineage`
+  reports `NONE` it retries issuance every five minutes instead of renewing;
+  `certbot renew` alone cannot help, being a no-op when there is no certbot
+  lineage to renew. A failed renewal leaves the existing certificate
+  untouched and does not stop the loop. When discovery reports `AMBIGUOUS`
+  or `MALFORMED` the loop holds hourly and asks for nothing at all — §8.13.
 
-  Nothing is hidden by the retry: the marker persists until a real
+  Nothing is hidden by the retry: the state persists until a real
   certificate replaces it, every attempt logs, and the stopgap expires in
   three days — well inside the expiry alert.
 
@@ -713,8 +714,13 @@ only removed on a success that could never happen.
 
 | Path | Owner |
 | --- | --- |
-| `/etc/letsencrypt/live`, `archive`, `renewal` | **Certbot.** Arena64 creates nothing here, ever |
+| `/etc/letsencrypt/live/<name>`, `archive/<name>`, `renewal/<name>.conf` | **Certbot.** Arena64 creates nothing here, ever, and does not choose `<name>` |
 | `/etc/letsencrypt/arena64` | **Arena64.** Certbot never reads or writes it |
+
+**`<name>` is Certbot's to pick.** `--cert-name` is a request; when the name
+is already taken `util.unique_lineage_name` returns `<domain>-0001`,
+`-0002`, and so on. Arena64 therefore *discovers* the lineage instead of
+assuming it — see §8.13.
 
 Under Arena64's half:
 
@@ -737,19 +743,20 @@ silently, exit zero. The first draft of this fix shipped that bug and
 will not ship twice.
 
 **State is decided by evidence, not by a marker Arena64 wrote.**
-`certbot/lineage.sh`'s `has_certbot_lineage` requires
-`live/<domain>/fullchain.pem` to be a *symlink resolving into*
-`archive/<domain>/` — Certbot's own layout, which nothing this repository
-creates can imitate. The old loop keyed on `.self-signed`, a file we wrote
-into the directory that was simultaneously breaking issuance.
+`certbot/lineage.sh` requires `live/<name>/*.pem` to be *symlinks resolving
+into* `archive/<name>/` — Certbot's own layout, which nothing this
+repository creates can imitate. The old loop keyed on `.self-signed`, a file
+we wrote into the directory that was simultaneously breaking issuance.
 
-#### First boot, and the two state machines
+#### First boot, and the three state machines
 
 ```
-no lineage   ->  write stopgap, point current at it, attempt issuance
-                 success -> point current at live/<domain>   (nginx reloads within 60s)
-                 failure -> stay on stopgap, exit 0 so nginx is released, retry in 5 min
-lineage      ->  certbot renew twice a day, re-assert the symlink, sleep 12h + jitter
+NONE       ->  write stopgap, point current at it, attempt issuance
+               success -> discover the lineage, point current at it   (nginx reloads within 60s)
+               failure -> stay on stopgap, exit 0 so nginx is released, retry in 5 min
+FOUND      ->  certbot renew twice a day, re-discover, re-assert the symlink, sleep 12h + jitter
+AMBIGUOUS
+MALFORMED  ->  log and hold hourly. No renewal, and above all no issuance
 ```
 
 `certbot-init` still exits 0 on failure — nginx waits on it with
@@ -780,13 +787,31 @@ Both behaviours are pinned by
 Certbot's own storage module inside the pinned image.
 
 ```bash
-docker compose --env-file production.env run --rm   --entrypoint sh certbot /usr/local/bin/recover-legacy-stopgap.sh
+docker compose --env-file production.env run --rm --no-deps \
+  --entrypoint sh certbot /usr/local/bin/recover-legacy-stopgap.sh
 ```
 
+**`--no-deps` is mandatory, and its absence is what caused the second
+incident.** The `certbot` service declares
+`depends_on: certbot-init (service_completed_successfully)`, so
+`docker compose run certbot …` starts `certbot-init` first — which runs
+`issue.sh`, which asks Let's Encrypt for a certificate. On the production
+host that happened *before* this script had removed the orphan renewal
+config, so `unique_lineage_name` returned `arena64.gg-0001.conf` and Certbot
+stored a real, trusted certificate at `live/arena64.gg-0001`. One
+duplicate-certificate slot spent, and a lineage no script was looking for.
+The same flag belongs on every one-shot `certbot` command below for the same
+reason.
+
 It **quarantines rather than deletes**, moving both into
-`arena64/quarantine/<timestamp>/`, and refuses to run when it sees a real
-Certbot lineage, a `live/` directory without the legacy `.self-signed`
-fingerprint, or a non-empty `archive/<domain>`. Running it twice is safe.
+`arena64/quarantine/<timestamp>/`. It refuses to run when it sees a real
+Certbot lineage under `<domain>`, a `live/` directory without the legacy
+`.self-signed` fingerprint, a non-empty `archive/<domain>`, a
+`renewal/<domain>.conf` that is not the zero-byte orphan, or more than one
+valid lineage matching these names. Numbered lineages such as
+`live/<domain>-0001` are never touched — it names exactly two paths and
+neither can be one — and it logs the ones it is keeping. Running it twice is
+safe.
 
 **Operators must never place files under `live/<cert-name>`.** That directory
 is Certbot's lineage namespace; anything there makes the next issuance either
@@ -799,12 +824,66 @@ certificates per week** for this exact name set. Prove the fix against
 staging first — it has no such limit:
 
 ```bash
-docker compose --env-file production.env run --rm --entrypoint certbot certbot   certonly --webroot --webroot-path /var/www/certbot --dry-run   --cert-name arena64.gg -d arena64.gg -d www.arena64.gg -d admin.arena64.gg
+docker compose --env-file production.env run --rm --no-deps \
+  --entrypoint certbot certbot certonly \
+  --webroot --webroot-path /var/www/certbot --dry-run \
+  --cert-name arena64.gg -d arena64.gg -d www.arena64.gg -d admin.arena64.gg
 ```
 
-A real lineage is confirmed by `live/<domain>/fullchain.pem` being a symlink
-into `archive/<domain>/` — not by `certbot certonly` exiting zero, which it
-did on the day it discarded a real certificate.
+A real lineage is confirmed by `arena64_discover_lineage` — not by
+`certbot certonly` exiting zero, which it did on the day it discarded a real
+certificate, and not by the name `--cert-name` asked for, which Certbot is
+free to decline.
+
+### 8.13 Finding the lineage instead of assuming it — A64-030.3
+
+The recovery in §8.12 was run without `--no-deps`. Compose started
+`certbot-init` first, `issue.sh` asked Let's Encrypt for a certificate while
+the orphan renewal config was still in place, and Certbot stored a real
+ninety-day certificate for all three names at **`live/arena64.gg-0001`**.
+
+Nothing was broken about that certificate. What was broken was every
+question this repository asked about it: `has_certbot_lineage
+"$ARENA64_DOMAIN"` tests `live/arena64.gg`, so the renewal loop would have
+classified a valid certificate as *no certificate*, called `issue.sh` every
+five minutes, and bought a duplicate on each pass until the weekly limit
+stopped it.
+
+So the lineage is now **discovered**. `arena64_discover_lineage <domain>`
+enumerates the names Certbot could have used — `<domain>` and
+`<domain>-<digits>`, from both `live/` and `renewal/` — and validates each
+against Certbot-managed evidence:
+
+| Check | Why it is the evidence |
+| --- | --- |
+| `fullchain`, `privkey`, `chain` under `live/<name>` are symlinks resolving into `archive/<name>/` | Certbot's own layout; nothing here can imitate it |
+| `renewal/<name>.conf` exists and is **non-empty** | the orphan a failed attempt leaves is zero bytes, because `safe_open` creates it before anything is written |
+| the leaf certificate's SAN covers the apex, `www` and `admin` | a lineage under our name that is somebody else's certificate would fail two of three hosts, and `includeSubDomains; preload` makes that unclickable |
+
+It returns one of four states, and only one of them may lead to an ACME
+request:
+
+| State | Meaning | What the lifecycle does |
+| --- | --- | --- |
+| `FOUND` | exactly one valid lineage | serve it; renew it |
+| `NONE` | no candidate names on disk | first issuance |
+| `AMBIGUOUS` | two or more valid lineages match | **hold.** An operator retires the ones that are not canonical |
+| `MALFORMED` | a candidate occupies the namespace without being usable | **hold.** Run the §8.12 recovery, or inspect by hand |
+
+**A malformed candidate outranks a valid one.** A host holding both a good
+lineage and wreckage under a sibling name is a host where nobody can say
+which certificate is canonical without looking, and the two ways to be wrong
+are to renew the wrong one or to buy a third. Holding costs a warning in the
+log; guessing has now cost two rate-limit slots.
+
+Holding never takes the edge down: `issue.sh` still exits zero so nginx is
+released, and it only writes a stopgap when `arena64/current/<domain>` would
+otherwise resolve to nothing — a host already serving a real certificate
+keeps serving it while an operator sorts the state out.
+
+`tests/unit/test_acme_bootstrap.py::TestLineageDiscovery` pins all four
+states, the numbered names, and the mixed shape the production host was
+actually in.
 
 ---
 
@@ -820,7 +899,7 @@ did on the day it discarded a real certificate.
 
 | Gate | What is ready | What is missing | Proven when |
 | --- | --- | --- | --- |
-| **Public certificate** | ACME issuance, renewal, expiry metric and three alerts; a failed renewal leaves the existing certificate byte-identical | `arena64.gg` pointing at a host with port 80 open | `live/<domain>/.self-signed` is gone and `arena64_certificate_expiry_timestamp_seconds` reads a Let's Encrypt certificate. **Not** `certbot-init` exiting zero — it exits zero on failure too, deliberately, so that nginx is released (§8.5) |
+| **Public certificate** | ACME issuance, renewal, expiry metric and three alerts; a failed renewal leaves the existing certificate byte-identical | `arena64.gg` pointing at a host with port 80 open | `arena64_discover_lineage` reports `FOUND` and `arena64_certificate_expiry_timestamp_seconds` reads a Let's Encrypt certificate. **Not** `certbot-init` exiting zero — it exits zero on failure too, deliberately, so that nginx is released (§8.5) |
 | **Off-host backup** | Encryption, SigV4 upload, a separate off-host timestamp and two alerts; proven against a MinIO **on this laptop** | a bucket at a real provider, and credentials for it | the object appears in the remote bucket and the off-host gauge exists |
 | **External monitoring** | nothing in this repository, deliberately | an off-host uptime check on `https://arena64.gg/` and on certificate expiry | see [monitoring the monitoring](./runbooks.md#monitoring-the-monitoring) |
 | **Resend production credential** | fail-fast on a missing or placeholder key; delivery metrics and two alerts | a real key, and a sending domain with SPF, DKIM and DMARC | a verification email arrives during the first-boot smoke test |

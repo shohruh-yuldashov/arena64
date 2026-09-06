@@ -349,7 +349,14 @@ services:
       # `arena64_certificate_expiry_timestamp_seconds` — A64-028.6A §26.
       # The same shape as the backup destination above and for the same
       # reason: the container that owns the file cannot answer a scrape.
-      OPS_CERTIFICATE_PATH: /etc/letsencrypt/live/${ARENA64_DOMAIN}/fullchain.pem
+      #
+      # **The Arena64-owned stable path, not `live/<domain>`** — A64-030.3.
+      # Certbot names a lineage `<domain>-0001` when the base name is taken,
+      # and on the affected host it did, so this gauge read a path that did
+      # not exist while a valid certificate sat one directory away.
+      # `arena64/current/<domain>` is the symlink nginx serves from, so the
+      # metric and the edge cannot disagree about which certificate is live.
+      OPS_CERTIFICATE_PATH: /etc/letsencrypt/arena64/current/${ARENA64_DOMAIN}/fullchain.pem
       # Named for the same reason as the replicas'. This process holds no
       # WebSocket, so nothing routes to its identifier — what a stable name
       # buys here is a log line an operator can attribute.

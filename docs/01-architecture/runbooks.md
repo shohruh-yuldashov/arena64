@@ -191,23 +191,31 @@ is in:
 
 ```bash
 docker compose --env-file production.env exec nginx \
-  ls -a /etc/letsencrypt/live/"${ARENA64_DOMAIN}"/
+  readlink -f /etc/letsencrypt/arena64/current/"${ARENA64_DOMAIN}"/fullchain.pem
 ```
 
-**The gate is a Certbot lineage, not a marker.** `live/<domain>/fullchain.pem`
-must be a **symlink** resolving into `archive/<domain>/` — that is Certbot's
-own layout and nothing else produces it:
+**The gate is a Certbot lineage, not a marker, and not a name.** A resolved
+path under `/etc/letsencrypt/archive/` means a real certificate. A path under
+`/etc/letsencrypt/arena64/stopgap/` means the edge is still self-signed —
+read `docker compose logs certbot` for the reason, usually DNS not yet
+pointing here or port 80 not reachable from outside.
+
+The archive directory is named after the **lineage**, which is not
+necessarily the domain: Certbot appends `-0001` when the base name is taken,
+so `archive/arena64.gg-0001/` is an ordinary healthy answer. To see which
+lineage the lifecycle selected and why:
 
 ```bash
-docker compose --env-file production.env exec nginx \
-  readlink -f /etc/letsencrypt/live/"${ARENA64_DOMAIN}"/fullchain.pem
+docker compose --env-file production.env run --rm --no-deps \
+  --entrypoint sh certbot -c \
+  '. /usr/local/bin/lineage.sh; arena64_discover_lineage "$ARENA64_DOMAIN"; \
+   echo "status=$(arena64_lineage_status_name $?)"'
 ```
 
-A path under `archive/` means a real certificate. Anything else means the
-edge is still on the self-signed stopgap at
-`/etc/letsencrypt/arena64/stopgap/${ARENA64_DOMAIN}` — read
-`docker compose logs certbot` for the reason, usually DNS not yet pointing
-here or port 80 not reachable from outside.
+`FOUND` prints the lineage directory. `NONE`, `AMBIGUOUS` and `MALFORMED`
+print the reason on stderr; the last two mean the lifecycle is **held** and
+will not renew or issue until an operator resolves it — `deployment.md`
+§8.13 has the table.
 
 **Never put files under `live/<cert-name>` by hand.** That directory belongs
 to Certbot; anything there makes the next issuance fail, or silently rename
@@ -754,7 +762,7 @@ Every one of them exists because the failure it prevents is silent.
 docker compose -f infrastructure/production/compose.yml logs --tail 50 certbot
 docker compose -f infrastructure/production/compose.yml exec worker \
   python -c "from pathlib import Path; from app.operator import certificate_status as c; \
-             print(c.days_remaining(Path('/etc/letsencrypt/live/arena64.gg/fullchain.pem')))"
+             print(c.days_remaining(Path('/etc/letsencrypt/arena64/current/arena64.gg/fullchain.pem')))"
 ```
 
 The metric is read from **the certificate on disk**, not from the renewal
@@ -769,9 +777,15 @@ already failed — there is time, and it is not unlimited.
 **Recover.** Run one by hand and read the error:
 
 ```bash
-docker compose -f infrastructure/production/compose.yml run --rm certbot \
+docker compose -f infrastructure/production/compose.yml run --rm --no-deps certbot \
   certbot renew --webroot --webroot-path /var/www/certbot --dry-run
 ```
+
+**`--no-deps` on every one-shot `certbot` command.** The service declares
+`depends_on: certbot-init`, and without the flag Compose runs `issue.sh`
+first — a real Let's Encrypt request, before the command you actually typed.
+That is how the production host spent a duplicate-certificate slot during a
+recovery that was supposed to touch nothing; `deployment.md` §8.12 tells it.
 
 The two usual causes both break the HTTP-01 challenge while leaving the site
 working, which is why neither is noticed without this alert:

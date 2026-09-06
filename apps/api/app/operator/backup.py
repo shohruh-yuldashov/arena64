@@ -25,6 +25,19 @@ residual risk it leaves, is recorded in
 `docs/05-operations/backup-restore.md` — it needs WAL archiving to somewhere
 this repository does not own, and A64-028.6 owns the deployment that would.
 
+## What an off-host recovery needs
+
+Three things, and nothing from the machine that is gone:
+
+    <prefix>/<name>.dump        the encrypted archive
+    <prefix>/<name>.dump.json   its manifest — checksum, revision, format
+    the encryption key          stored somewhere neither of those is
+
+`create` uploads both objects; `verify` and `restore` then work against a
+directory holding the pair, exactly as they do on the host that wrote it.
+A64-030.4C's drill found the manifest was staying behind, which made the
+off-host copy a file nobody could check and the documented restore refuse.
+
 ## Why not a shell script
 
 `pg_dump` is one subprocess; everything else here is the part that goes
@@ -303,14 +316,35 @@ def create(
     # failed upload leaves a verified local copy rather than nothing —
     # A64-028.7, the second half of P2-8.
     if offsite is not None:
+        manifest = metadata_path(final)
         try:
             key_name = backup_offsite.upload(final, target=offsite, sha256=checksum)
+            # **The manifest goes off-host too, and second** — A64-030.4C.3.
+            #
+            # `verify` reads the checksum and the revision out of the file
+            # beside the dump, and `restore` calls `verify`, so an off-host
+            # copy of the ciphertext alone is not restorable: after the host
+            # is lost there is nothing to check the download against and
+            # nothing that says which schema is in it. A64-030.4C's drill
+            # found this the only way it can be found — by restoring from
+            # off-host and discovering the tooling refuses.
+            #
+            # **Second, not first.** The manifest is what makes the pair
+            # usable, so uploading it last means an interrupted copy leaves a
+            # dump with no manifest — which the restore path already refuses
+            # — rather than a manifest promising a dump that is not there.
+            # Failing closed is the direction that does not lose data.
+            backup_offsite.upload(manifest, target=offsite, sha256=_sha256(manifest))
         except backup_offsite.OffsiteUploadError:
             # Recorded and re-raised. An upload that fails silently leaves an
             # operator believing they have an off-host copy, which is worse
             # than knowing they do not — and the local archive is still
             # there, so this is a partial success reported as a failure
             # rather than a loss.
+            #
+            # The pair is one recoverable unit: a dump that arrived without
+            # its manifest is not an off-host backup, and is recorded as a
+            # failure for the same reason no upload at all would be.
             logger.exception("backup_offsite_failed", extra={"backup": final.name})
             backup_status.record_offsite_failure(destination, at=datetime.now(UTC))
             raise

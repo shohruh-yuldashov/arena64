@@ -1,0 +1,49 @@
+# What scrapes Arena64 — A64-028.6 §5.
+#
+# The scrape interval and `APP_METRICS_FLUSH_INTERVAL_SECONDS` must agree.
+# Counters reach the exporter through `AggregatingMetrics`, so their totals
+# are exact but arrive in steps of the flush interval; a scrape faster than
+# the flush reads the steps rather than the traffic. Both are 15s in the
+# production compose. See `app/platform/metrics/runtime.py`.
+#
+# The bearer token is the operator token (`OPS_TOKEN`). It is referenced from
+# a file rather than written here so this file can be committed.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: production
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  # Every API replica and the worker. They are separate targets because
+  # their metrics mean different things: `outbox.*` is only ever non-zero on
+  # the worker, and `http.*` is only ever non-zero on the api replicas.
+  #
+  # `instance` is the only label Prometheus adds, and it is exactly the one
+  # a per-process gauge like `arena64_http_requests_in_flight` needs — the
+  # application deliberately does not label anything by node, because a
+  # fleet-sized label inside the process is how a metrics backend falls over
+  # (see `app/gateway/metrics.py`).
+  - job_name: arena64-api
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/ops-token
+    dns_sd_configs:
+      - names: ["tasks.api"]
+        type: A
+        port: 8000
+
+  - job_name: arena64-worker
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/ops-token
+    dns_sd_configs:
+      - names: ["tasks.worker"]
+        type: A
+        port: 8000

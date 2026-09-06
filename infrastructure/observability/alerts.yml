@@ -1,0 +1,329 @@
+# Alert rules — A64-028.6 §7.
+#
+# ## The bar every rule here had to clear
+#
+# An alert exists to make somebody do something. A rule that fires on a
+# condition with no action is a rule that trains its audience to ignore the
+# channel, which is worse than having no alerting at all — the first real
+# page then arrives in a stream nobody reads.
+#
+# So every rule below names a failure mode this platform has actually had or
+# that A64-028.1 identified, states what an operator does about it, and
+# links the runbook section that says how.
+#
+# ## Thresholds
+#
+# Marked **MEASURED** where A64-028.5A produced the number on a developer's
+# laptop, and **PROPOSED OPERATIONAL DEFAULT** where it is a chosen figure
+# with no evidence behind it. None of them is a product SLO: no SLO exists
+# and this task does not invent one. Production hardware will move the
+# measured ones and should.
+#
+# ## False positives
+#
+# Every rule carries a `for:` long enough that a single scrape, a single
+# restart or a single slow request cannot page anybody. A deploy rolls two
+# replicas; nothing here fires because one of them was briefly absent.
+
+groups:
+  - name: arena64-availability
+    rules:
+      - alert: ApiUnavailable
+        expr: up{job="arena64-api"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "An API replica has not answered a scrape for two minutes"
+          why: >-
+            The process is gone, wedged, or unreachable. Two minutes rather
+            than one because a rolling deploy replaces replicas and a
+            replacement can take longer than a single scrape interval.
+          action: >-
+            Check whether the other replicas are serving. If all are down the
+            product is down; if one is, the balancer has already stopped
+            routing to it and this is a restart rather than an incident.
+          runbook: docs/01-architecture/runbooks.md#api-unavailable
+
+      - alert: ReadinessFailing
+        expr: |
+          min by (instance) (
+            arena64_http_requests_total{route="/health/ready", status_class="5xx"}
+          ) > 0
+          unless on (instance) arena64_service_draining == 1
+        for: 3m
+        labels:
+          severity: page
+        annotations:
+          summary: "An instance has been reporting itself not ready for three minutes"
+          why: >-
+            Readiness answers 503 for an unreachable PostgreSQL, an
+            unreachable Redis, or a drain. The `unless` clause removes the
+            drain case, which is a deploy doing exactly what it should —
+            without it every deploy would page somebody.
+          action: >-
+            Read the readiness body on the instance: it names which
+            dependency. If it names none, the instance is draining and was
+            never signalled — finish or roll back the deploy.
+          runbook: docs/01-architecture/runbooks.md#readiness-failing
+
+      - alert: ElevatedServerErrors
+        expr: |
+          sum(rate(arena64_http_requests_total{status_class="5xx"}[5m]))
+          /
+          clamp_min(sum(rate(arena64_http_requests_total[5m])), 0.001)
+          > 0.02
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "More than 2% of requests have failed for five minutes"
+          why: >-
+            A ratio rather than a count, so a quiet hour does not hide a
+            broken endpoint and a busy one does not page over a handful of
+            failures. PROPOSED OPERATIONAL DEFAULT — A64-028.5A saw **zero**
+            unexpected failures at every level of every scenario, so any
+            sustained non-zero rate is new behaviour rather than a tuning
+            question.
+          action: >-
+            Group by route in the dashboard. One route is a defect in that
+            handler; every route is a dependency.
+          runbook: docs/01-architecture/runbooks.md#elevated-5xx
+
+      - alert: SevereLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(arena64_http_request_duration_seconds_bucket[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "p95 request latency above one second for ten minutes"
+          why: >-
+            MEASURED context: A64-028.5A's 35-minute mixed workload held p95
+            at 207 ms and p99 at 616 ms with a maximum of 1.45 s, on a laptop
+            that was also generating the load. One second sustained is well
+            outside that and is a ticket rather than a page, because a slow
+            platform is still a working one.
+          action: >-
+            Compare with event-loop lag. Lag up as well means the process is
+            CPU-bound; lag flat means it is waiting on something.
+          runbook: docs/01-architecture/runbooks.md#high-latency
+
+      - alert: EventLoopBlocked
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le, instance) (rate(arena64_process_event_loop_lag_seconds_bucket[5m]))
+          ) > 0.25
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "The event loop is late by more than 250 ms at p99"
+          why: >-
+            The failure that makes an asyncio service stop answering while
+            every dependency it has is healthy — and the one A64-028.5A
+            could not measure, because the harness could only see its own
+            loop. PROPOSED OPERATIONAL DEFAULT: a healthy loop is under a
+            millisecond, so 250 ms is not a boundary between good and bad
+            but a boundary between bad and unusable.
+          action: >-
+            Something synchronous is running on the loop. Look at what
+            deployed last; a blocking call in a request path is the usual
+            cause.
+          runbook: docs/01-architecture/runbooks.md#event-loop-lag
+
+  - name: arena64-dependencies
+    rules:
+      - alert: RateLimiterUnavailable
+        expr: increase(arena64_rate_limit_unavailable_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "The rate limiter cannot reach Redis"
+          why: >-
+            **This is P1-7 and it is why this rule exists.** `fail_open` is
+            true and correct — failing closed would turn a limiter outage
+            into a total authentication outage — so while this fires, every
+            rate limit on the platform is bypassed and login, registration
+            and password reset are unprotected. The trade-off was never the
+            problem; the absence of this alert was.
+          action: >-
+            Restore Redis. Until it is back, watch registration and login
+            volume for abuse; the window is exactly as long as the outage.
+          runbook: docs/01-architecture/runbooks.md#redis-outage
+
+      - alert: PostgresUnreachable
+        expr: |
+          increase(arena64_http_requests_total{route="/health/ready", status_class="5xx"}[5m]) > 10
+        for: 3m
+        labels:
+          severity: page
+        annotations:
+          summary: "Readiness is failing across instances"
+          why: >-
+            Inferred from readiness rather than measured directly, because
+            the application has no separate PostgreSQL probe metric and a
+            readiness failure across *every* instance is what a database
+            outage looks like from outside.
+          action: >-
+            Check the database before the application. Liveness is
+            deliberately independent, so the processes are still up and will
+            recover without a restart.
+          runbook: docs/01-architecture/runbooks.md#postgresql-outage
+
+  - name: arena64-delivery
+    rules:
+      - alert: OutboxBacklogStale
+        expr: max(arena64_outbox_oldest_pending_age_seconds) > 900
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "The oldest unpublished event is more than fifteen minutes old"
+          why: >-
+            The number a count cannot give. A backlog of ten thousand that is
+            draining is healthy; a backlog of three whose oldest entry is
+            from yesterday is a stuck consumer. MEASURED context: A64-028.5A
+            drained 1 807 events to zero in 30 seconds under load, so fifteen
+            minutes is three orders of magnitude outside normal.
+          action: >-
+            Check whether the worker is running at all — A64-028.4 found a
+            relay that had been dead for weeks. Then look at
+            `arena64_outbox_failed_total` by reason.
+          runbook: docs/01-architecture/runbooks.md#outbox-backlog
+
+      - alert: OutboxEventsAbandoned
+        expr: increase(arena64_outbox_exhausted_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: "Events have spent their last attempt and been abandoned"
+          why: >-
+            Permanent loss. No `for:` clause, deliberately — a single
+            abandoned event is already unrecoverable and waiting to see
+            whether more follow changes nothing about the first. A64-028.5A's
+            P1-11 abandoned 1 850 queue joins this way and it was found by a
+            load test rather than by an alert.
+          action: >-
+            Read `reason`. `repeated_failure` is a consumer that cannot
+            handle its events; `unrecorded` is the relay losing outcomes,
+            which is P2-9 and needs the incomplete-tick counter below.
+          runbook: docs/01-architecture/runbooks.md#outbox-exhausted
+
+      - alert: OutboxTicksIncomplete
+        expr: increase(arena64_outbox_incomplete_ticks_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "A relay tick claimed entries, reported no failures and published nothing"
+          why: >-
+            **The P2-9 signal.** A64-028.5A's soak logs contain 163 of these
+            and nothing counted them: the tick log line said `failed=0` and
+            looked healthy. Five on the same rows retires an event for good.
+          action: >-
+            Correlate with `arena64_outbox_exhausted_total{reason="unrecorded"}`.
+            Together they are the reproduction P2-9 has been missing.
+          runbook: docs/01-architecture/runbooks.md#outbox-exhausted
+
+      - alert: SchedulerNotRunning
+        expr: |
+          absent(arena64_matchmaking_pairing_scans_total)
+          or increase(arena64_matchmaking_pairing_scans_total[10m]) == 0
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "The pairing scan has not run for ten minutes"
+          why: >-
+            The scheduler's liveness, read from the job with the shortest
+            interval (one second) so its silence is unambiguous. A64-028.4
+            found every scheduled job dead behind a healthy-looking process;
+            nothing would have said so.
+          action: >-
+            The worker is down or its loop is wedged. Matchmaking has stopped
+            pairing, which players see immediately.
+          runbook: docs/01-architecture/runbooks.md#scheduler-failure
+
+  - name: arena64-realtime
+    rules:
+      - alert: CrossInstanceFramesFailing
+        expr: increase(arena64_gateway_remote_publish_failures_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Frames destined for another instance are being refused"
+          why: >-
+            The symptom P1-9 wore. A move published to a node's mailbox and
+            refused never reaches the opponent, and the failure is silent to
+            both players — the durable log is unaffected, so the game is
+            recoverable and the experience is not.
+          action: >-
+            Check Redis, then look for `gateway_stream_group_recreated` in the
+            logs — the mailbox TTL fix firing repeatedly means nodes are idle
+            long enough to lose their groups.
+          runbook: docs/01-architecture/runbooks.md#realtime-relay
+
+      - alert: ReconnectStorm
+        expr: |
+          rate(arena64_gateway_connections_accepted_total[5m])
+          > 5 * rate(arena64_gateway_connections_accepted_total[1h] offset 1h)
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Connections are being established five times faster than the recent baseline"
+          why: >-
+            Relative to the platform's own hour rather than to a fixed
+            number, because the absolute rate depends on how many people are
+            playing. MEASURED context: A64-028.5A held 2 550 reconnects
+            across three waves with zero failures, so a storm is survivable —
+            this fires so somebody knows one happened, not because it broke.
+          action: >-
+            Usually a deploy or a network event upstream. If neither, look
+            for an instance closing connections it should be keeping.
+          runbook: docs/01-architecture/runbooks.md#reconnect-storm
+
+  - name: arena64-durability
+    rules:
+      - alert: BackupStale
+        expr: time() - arena64_backup_last_success_timestamp_seconds > 172800
+        for: 30m
+        labels:
+          severity: page
+        annotations:
+          summary: "No successful backup for two days"
+          why: >-
+            The interval is daily, so two days means at least one run has
+            failed or the job is not running. PROPOSED OPERATIONAL DEFAULT —
+            the recovery-point objective in
+            `docs/05-operations/backup-restore.md` §3 is what this should be
+            derived from once that number is agreed.
+          action: >-
+            Run `python -m app.operator.backup create` by hand and read the
+            failure. A destination that is full is the usual cause.
+          runbook: docs/01-architecture/runbooks.md#backup-stale
+
+      - alert: BackupNeverSucceeded
+        expr: absent(arena64_backup_last_success_timestamp_seconds)
+        for: 1h
+        labels:
+          severity: page
+        annotations:
+          summary: "No backup has ever succeeded in this deployment"
+          why: >-
+            A separate rule because the metric is **absent** rather than old,
+            and `time() - absent` is not a comparison that fires. This is the
+            first hour of a deployment whose backup job has never worked, and
+            it is the cheapest possible moment to find that out.
+          action: >-
+            Check that the backup container is running and that its
+            destination volume is mounted and writable.
+          runbook: docs/01-architecture/runbooks.md#backup-stale

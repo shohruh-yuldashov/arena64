@@ -12,6 +12,7 @@ fail mysteriously on the ten-thousandth request.
 """
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -2075,6 +2076,21 @@ class ObservabilitySettings(SectionSettings):
 
     allow_unauthenticated: bool = False
     """The deliberate choice described above. Never a default."""
+
+    backup_destination: Path | None = None
+    """Where `python -m app.operator.backup` writes, if this process can see
+    it — `OPS_BACKUP_DESTINATION`.
+
+    Read-only and only to publish `arena64_backup_last_success_timestamp_seconds`.
+    The backup itself runs in its own container on its own schedule
+    (`infrastructure/production/compose.yml`), because a backup that only
+    runs while the application is healthy stops exactly when it is most
+    needed. What that container cannot do is answer a scrape, so the worker
+    mounts the same volume read-only and reports the age.
+
+    `None` means this process cannot see a backup destination, and the
+    metric is then **absent** rather than zero — which is what
+    `BackupNeverSucceeded` fires on."""
 
     @model_validator(mode="after")
     def _refuse_an_accidental_open_exporter(self) -> "ObservabilitySettings":

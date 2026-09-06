@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import service_lifecycle
 from app.api.exception_handlers import register_exception_handlers
 from app.api.http_metrics import REQUESTS_IN_FLIGHT, HttpMetricsMiddleware, InFlight
 from app.api.observability import build_metrics_router
@@ -257,6 +258,7 @@ from app.modules.users.infrastructure.presence import (
     NoPresenceProvider,
     RedisPresenceProvider,
 )
+from app.operator import backup_status
 from app.platform.email import build_email_provider
 from app.platform.metrics import (
     AggregatingMetrics,
@@ -2062,7 +2064,7 @@ def create_app() -> FastAPI:
 
     settings = get_settings()
     _configure_storage(app, settings)
-    _register_gauges(prometheus_metrics(), in_flight, process_backlog())
+    _register_gauges(prometheus_metrics(), in_flight, process_backlog(), settings)
 
     # Unversioned, for load-balancer and orchestrator probes: a liveness
     # check must not sit behind API versioning that could itself fail to
@@ -2092,7 +2094,10 @@ def create_app() -> FastAPI:
 
 
 def _register_gauges(
-    exporter: PrometheusMetrics, in_flight: InFlight, outbox_backlog: BacklogSnapshot
+    exporter: PrometheusMetrics,
+    in_flight: InFlight,
+    outbox_backlog: BacklogSnapshot,
+    settings: Settings,
 ) -> None:
     """Values the exporter reads at scrape time — A64-028.6 §3.
 
@@ -2132,6 +2137,35 @@ def _register_gauges(
     async def read_oldest() -> dict[tuple[tuple[str, str], ...], float]:
         backlog = outbox_backlog.value
         return {} if backlog is None else {(): backlog.oldest_pending_age_seconds}
+
+    async def read_draining() -> dict[tuple[tuple[str, str], ...], float]:
+        # Published so the readiness alert can exclude a deploy: an
+        # instance answering 503 because it was told to go away is the
+        # deploy working, and paging somebody for it would train the
+        # audience to ignore the channel.
+        return {(): 1.0 if service_lifecycle().draining else 0.0}
+
+    exporter.register_gauge(
+        "service.draining", "1 while this instance is draining, 0 otherwise.", read_draining
+    )
+
+    async def read_backup_age() -> dict[tuple[tuple[str, str], ...], float]:
+        destination = settings.observability.backup_destination
+        if destination is None:
+            # Absent rather than zero — see the setting's docstring. A
+            # deployment where nothing can see the backups must fire
+            # `BackupNeverSucceeded`, not report a fresh one.
+            return {}
+        status = backup_status.read(destination)
+        if status.succeeded_at is None:
+            return {}
+        return {(): status.succeeded_at.timestamp()}
+
+    exporter.register_gauge(
+        "backup.last_success_timestamp_seconds",
+        "Unix time of the last successful backup this process can see.",
+        read_backup_age,
+    )
 
     exporter.register_gauge(BACKLOG, "Unpublished outbox entries, by state.", read_backlog)
     exporter.register_gauge(

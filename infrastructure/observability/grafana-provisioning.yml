@@ -1,0 +1,44 @@
+# Grafana provisioning — A64-028.6 §6.
+#
+# Mount as two files in a Grafana container:
+#
+#   this file's `datasources` block  → /etc/grafana/provisioning/datasources/arena64.yml
+#   this file's `providers`  block   → /etc/grafana/provisioning/dashboards/arena64.yml
+#   ./dashboards                     → /var/lib/grafana/dashboards/arena64
+#
+# Kept as one committed file rather than two, because they are one decision:
+# these dashboards read this datasource. Splitting them is a step somebody
+# does half of.
+#
+# **No credential appears here.** The datasource is Prometheus over the
+# compose network with no auth of its own; the operator token that guards
+# `/metrics` is Prometheus's business (`prometheus.yml`), not Grafana's.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: arena64-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      # Must match `prometheus.yml`'s scrape interval, or Grafana's
+      # `$__rate_interval` computes a window shorter than the data and every
+      # `rate()` reads as zero between samples.
+      timeInterval: 15s
+
+providers:
+  - name: arena64
+    orgId: 1
+    folder: Arena64
+    type: file
+    # The dashboards are the repository's, not the UI's. An operator who
+    # edits one in Grafana is making a change that the next deploy discards,
+    # which is the correct outcome: a panel worth keeping is worth a commit.
+    disableDeletion: false
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards/arena64
+      foldersFromFilesStructure: false

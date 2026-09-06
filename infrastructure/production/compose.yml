@@ -145,6 +145,12 @@ services:
       # Off here: this process holds no WebSocket, so its mailbox is empty
       # and draining it every interval is a query for nothing.
       GATEWAY_FORWARDING_ENABLED: "false"
+      # Read-only, and only so the worker can publish
+      # `arena64_backup_last_success_timestamp_seconds`. The backup runs in
+      # its own container; what that container cannot do is answer a scrape.
+      OPS_BACKUP_DESTINATION: /var/backups/arena64
+    volumes:
+      - backup_data:/var/backups/arena64:ro
     depends_on:
       postgres:
         condition: service_healthy

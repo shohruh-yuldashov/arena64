@@ -85,7 +85,11 @@ export function MarketingHeader() {
   return (
     <header
       className={cn(
-        "bg-background/85 sticky top-0 z-40 backdrop-blur transition-colors duration-fast",
+        // `pt-safe-top` for the reason `AppShell`'s header carries it —
+        // A64-031.C. This one is `sticky top-0`, so it meets the unsafe area
+        // every time the page is scrolled rather than only at the top, and
+        // the blurred background extends into it rather than stopping short.
+        "bg-background/85 sticky top-0 z-40 pt-safe-top backdrop-blur transition-colors duration-fast",
         scrolled ? "border-border border-b" : "border-b border-transparent",
       )}
     >

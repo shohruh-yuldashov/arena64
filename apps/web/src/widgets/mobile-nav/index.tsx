@@ -88,6 +88,15 @@ export function MobileNav() {
           // still applies, so it can never exceed the viewport.
           "top-0 left-0 h-dvh w-72 max-w-[85vw] translate-x-0 translate-y-0 rounded-none",
           "grid-rows-[auto_1fr] gap-6 p-6",
+          // **Both edges** — A64-031.C. This is the one surface that spans
+          // the whole height: `top-0 h-dvh`, so its title and the primitive's
+          // `top-4` close button meet the status bar, and its last navigation
+          // item meets the home indicator. `max` rather than the token alone,
+          // because `p-6` is the design's padding and the inset is a floor
+          // under it, not a replacement — the same shape the bottom sheets in
+          // this app already use.
+          "pt-[max(1.5rem,env(safe-area-inset-top))]",
+          "pb-[max(1.5rem,env(safe-area-inset-bottom))]",
           // The panel is the only thing on screen; the page behind it must
           // not scroll under it.
           "overflow-y-auto",

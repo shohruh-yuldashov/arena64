@@ -58,3 +58,72 @@ test("the shell boots, splits its routes, and is reachable by keyboard", async (
   ).toBeVisible();
   expect(new URL(page.url()).pathname).toBe("/no-such-page");
 });
+
+/**
+ * The shell reserves the system's area — A64-031.C.
+ *
+ * **What this can and cannot prove.** Chromium reports no safe-area insets,
+ * so `env(safe-area-inset-top, 0px)` resolves to zero here and no assertion
+ * in this file can demonstrate the iPhone behaviour the fix is for. Real
+ * verification is a Home Screen install on a device, after deploy.
+ *
+ * What it *can* prove is the half that silently fails: that the utility
+ * exists in the shipped stylesheet at all. An unknown Tailwind class
+ * generates nothing and throws nothing — the page looks correct on every
+ * machine anybody tests on, and the padding is simply absent on the one
+ * device that needed it. That is why the token is registered in `@theme`
+ * rather than written as an arbitrary value, and this is the check that the
+ * registration survived the build.
+ *
+ * The rest asserts the desktop requirement: an inset of zero must leave the
+ * layout exactly as it was.
+ */
+test("the header reserves the top inset, and reserves nothing when there is none", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  const header = page.locator("header").first();
+  await expect(header).toBeVisible();
+
+  // The rule reached the browser, with `env()` intact rather than compiled
+  // away or dropped.
+  const declaration = await page.evaluate(() => {
+    // Recursive: Tailwind v4 emits its utilities inside `@layer`, so the
+    // rules are nested one grouping rule deep and a flat scan finds nothing.
+    const find = (rules: CSSRuleList): string | null => {
+      for (const rule of Array.from(rules)) {
+        if (rule instanceof CSSStyleRule && rule.selectorText === ".pt-safe-top") {
+          return rule.style.paddingTop || rule.cssText;
+        }
+        const nested = (rule as CSSGroupingRule).cssRules as CSSRuleList | undefined;
+        if (nested !== undefined) {
+          const found = find(nested);
+          if (found !== null) return found;
+        }
+      }
+      return null;
+    };
+
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        const found = find(sheet.cssRules);
+        if (found !== null) return found;
+      } catch {
+        continue; // cross-origin, not ours
+      }
+    }
+    return null;
+  });
+  expect(declaration).toContain("safe-area-inset-top");
+
+  // And the element that owns the top edge is the one carrying it.
+  await expect(header).toHaveClass(/pt-safe-top/);
+
+  // Desktop, where the inset is zero: the header still begins at the very top
+  // and its controls are where they were. A fix that reserved space nobody
+  // asked for would show up here as a strip above the bar.
+  expect(await header.evaluate((node) => getComputedStyle(node).paddingTop)).toBe("0px");
+  const box = await header.boundingBox();
+  expect(box?.y).toBe(0);
+});

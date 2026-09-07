@@ -83,7 +83,14 @@ export function AppShell({ children }: { children: ReactNode }) {
         {t("layout.skipToContent")}
       </a>
 
-      <header className="border-b">
+      {/* `pt-safe-top` — A64-031.C. Installed to a Home Screen, the viewport
+          begins at the physical top of the screen, so this 56px row sat
+          under the status bar and the Dynamic Island: the menu trigger and
+          the account menu below were behind it and could not be tapped. The
+          padding is on the header rather than on the row inside it, so the
+          shell's background still reaches the top edge and only the controls
+          move down. Zero everywhere that reports no inset. */}
+      <header className="border-b pt-safe-top">
         <div className="mx-auto flex h-14 max-w-5xl items-center gap-2 px-4">
           {/* Identity and product navigation, in reading order. The menu
               trigger comes first on a phone because it is the control a

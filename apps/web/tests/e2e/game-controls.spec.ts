@@ -210,9 +210,12 @@ test("two players negotiate a draw and one resigns", async ({ browser, request }
     await menu.getByRole("menuitem").last().scrollIntoViewIfNeeded();
     await expect(menu.getByRole("menuitem").last()).toBeInViewport();
 
-    // Pressed on an item rather than on the page: the handler is on the menu
-    // and a keypress that never reaches it proves nothing about the menu.
-    await menu.getByRole("menuitem").first().press("Escape");
+    // **At the page level, deliberately.** The handler lives on the menu, so
+    // this only closes if opening actually moved focus onto a menu item —
+    // which is the property an `invisible` first frame silently destroyed,
+    // and which jsdom cannot check because it does not enforce that a hidden
+    // element is unfocusable.
+    await responder.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
     await responder.setViewportSize({ width: 1280, height: 720 });
 

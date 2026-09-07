@@ -456,6 +456,36 @@ MATCH_OFFER_PUSHES: Final = "gateway.match_offer_pushes_total"
 NOTIFICATION_PUSHES: Final = "gateway.notification_pushes_total"
 
 
+#: One counter per completed match this pushed to its players — A64-031.A.
+#:
+#: The signal an operator needs is the ratio, not the total: a `nobody` rate
+#: near one is a platform whose games end after both players have left, and a
+#: `nobody` rate that *rises* is the flag path failing to reach people who are
+#: still sitting there — which is the defect this sink was added for and which
+#: nothing could see, because a completion nobody was told about looked
+#: identical to a completion nobody was there for.
+COMPLETION_PUSHES: Final = "gateway.completion_pushes_total"
+
+
+class CompletionPushOutcome(StrEnum):
+    """What happened to one pushed completion."""
+
+    DELIVERED = "delivered"
+    """Written to at least one socket, here or on a peer node."""
+
+    NOBODY = "nobody"
+    """No participant was connected. **Not a failure** — a game both players
+    left still ends, and `game.snapshot` carries the result to whichever of
+    them opens it next."""
+
+    FAILED = "failed"
+    """The fan-out raised. Counted rather than propagated: this runs beside
+    the rating and statistics consumers on one relay tick."""
+
+    UNREADABLE = "unreadable"
+    """The payload could not be decoded. Never retried — see the sink."""
+
+
 class MatchOfferOutcome(StrEnum):
     """What happened to one pushed match offer."""
 
@@ -504,9 +534,11 @@ class NotificationPushOutcome(StrEnum):
 
 
 __all__ = [
+    "COMPLETION_PUSHES",
     "CONNECTIONS_ACCEPTED",
     "MATCH_OFFER_PUSHES",
     "NOTIFICATION_PUSHES",
+    "CompletionPushOutcome",
     "MatchOfferOutcome",
     "NotificationPushOutcome",
     "CONNECTIONS_CLOSED",

@@ -36,11 +36,12 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, exists, select, update
+from sqlalchemy import CursorResult, exists, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError
+from app.modules.auth.application.read_models import SessionDeviceSummary
 from app.modules.auth.domain.sessions import (
     RevocationReason,
     SessionDevice,
@@ -230,6 +231,67 @@ class SqlAlchemySessionRepository:
 
         rows = (await self._session.scalars(statement)).all()
         return [self._to_domain(row) for row in rows]
+
+    async def list_user_devices(self, user_id: UUID) -> list[SessionDeviceSummary]:
+        # The subquery is the whole reason this is not a projection over
+        # `list_user_sessions`: it collapses each rotation chain to the
+        # moment it began. `read_models.py` carries the why.
+        #
+        # Scoped to `user_id` on **both** sides. Grouping the whole table
+        # and joining afterwards would give the same answer and would scan
+        # every session on the platform to produce one player's list.
+        first_seen = (
+            select(
+                UserSessionModel.token_family.label("token_family"),
+                func.min(UserSessionModel.created_at).label("signed_in_at"),
+            )
+            .where(UserSessionModel.user_id == user_id)
+            .group_by(UserSessionModel.token_family)
+            .subquery()
+        )
+
+        statement = (
+            select(
+                UserSessionModel.token_family,
+                first_seen.c.signed_in_at,
+                UserSessionModel.last_used_at,
+                UserSessionModel.user_agent,
+            )
+            .join(first_seen, first_seen.c.token_family == UserSessionModel.token_family)
+            .where(
+                UserSessionModel.user_id == user_id,
+                UserSessionModel.revoked_at.is_(None),
+            )
+            # Newest sign-in first, so a device somebody has just added is
+            # at the top — that is the row they are looking for when they
+            # open this screen after signing in somewhere new. The family
+            # breaks ties so the order is total and a list does not shuffle
+            # between two reads.
+            .order_by(first_seen.c.signed_in_at.desc(), UserSessionModel.token_family.desc())
+        )
+
+        rows = (await self._session.execute(statement)).all()
+        return [
+            SessionDeviceSummary(
+                token_family=row.token_family,
+                signed_in_at=row.signed_in_at,
+                last_used_at=row.last_used_at,
+                user_agent=row.user_agent,
+            )
+            for row in rows
+        ]
+
+    async def family_belongs_to(self, user_id: UUID, token_family: UUID) -> bool:
+        return bool(
+            await self._session.scalar(
+                select(
+                    exists().where(
+                        UserSessionModel.user_id == user_id,
+                        UserSessionModel.token_family == token_family,
+                    )
+                )
+            )
+        )
 
     # --- plumbing -----------------------------------------------------------
 

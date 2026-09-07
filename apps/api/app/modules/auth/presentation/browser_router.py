@@ -1,6 +1,6 @@
 """The browser's session surface — A64-020.2.
 
-Five endpoints, and **not one new rule**. Every one of them calls the same
+Seven endpoints, and **not one new rule**. Every one of them calls the same
 application services `/auth/login`, `/auth/refresh` and `/auth/logout`
 already call; what differs is where the refresh token travels.
 
@@ -9,6 +9,8 @@ already call; what differs is where the refresh token travels.
     POST /auth/browser/refresh      cookie in, rotated cookie + token out
     POST /auth/browser/logout       revoke this device, clear the cookie
     POST /auth/browser/logout-all   revoke every device
+    GET  /auth/browser/sessions     the devices this account is signed in on
+    DELETE /auth/browser/sessions/{id}  revoke one of them
 
 ## Why a second surface rather than a flag on the first
 
@@ -43,6 +45,7 @@ platform later applies to unverified accounts applies to this session too.
 """
 
 import logging
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response, status
 
@@ -52,7 +55,7 @@ from app.core.responses import ApiResponse
 from app.modules.auth.application.commands import AuthenticateUser, RegisterUser
 from app.modules.auth.application.services import IssuedAccessToken
 from app.modules.auth.domain.exceptions import SessionNotFound
-from app.modules.auth.domain.sessions import RevocationReason, SessionDevice
+from app.modules.auth.domain.sessions import RevocationReason
 from app.modules.auth.presentation.browser_cookie import RefreshCookieDep
 from app.modules.auth.presentation.browser_csrf import TrustedOriginDep
 from app.modules.auth.presentation.dependencies import (
@@ -64,12 +67,13 @@ from app.modules.auth.presentation.dependencies import (
     SessionServiceDep,
     UserProfileReaderDep,
 )
+from app.modules.auth.presentation.device import SessionDeviceDep
 from app.modules.auth.presentation.rate_limits import (
     LOGIN_RATE_LIMIT,
     REFRESH_RATE_LIMIT,
     REGISTER_RATE_LIMIT,
 )
-from app.modules.auth.presentation.schemas import LoginRequest, RegisterRequest
+from app.modules.auth.presentation.schemas import LoginRequest, RegisterRequest, SessionRead
 from app.modules.auth.presentation.schemas.browser import BrowserSession
 from app.modules.notifications.presentation.dependencies import (
     PresenceNotificationServiceDep,
@@ -88,21 +92,8 @@ _FORBIDDEN: Responses = error_response(
 )
 _CONFLICT: Responses = error_response(409, "The username or email address is taken.")
 _UNPROCESSABLE: Responses = error_response(422, "A field failed validation.")
+_NOT_FOUND: Responses = error_response(404, "No such device on this account.")
 _TOO_MANY_REQUESTS: Responses = error_response(429, "Too many attempts. Try again later.")
-
-
-def _device_of(request: Request) -> SessionDevice:
-    """What the session row records about this browser.
-
-    The same truncations `/auth/login` applies, and for the same reason:
-    the header is attacker-controlled and lands in a column.
-    """
-    user_agent = request.headers.get("user-agent")
-    return SessionDevice(
-        device_name=user_agent[:120] if user_agent else None,
-        user_agent=user_agent[:512] if user_agent else None,
-        ip_address=request.client.host if request.client else None,
-    )
 
 
 def _session_of(access: IssuedAccessToken, user: UserRead) -> BrowserSession:
@@ -118,7 +109,7 @@ def _session_of(access: IssuedAccessToken, user: UserRead) -> BrowserSession:
 )
 async def browser_register(
     payload: RegisterRequest,
-    request: Request,
+    device: SessionDeviceDep,
     response: Response,
     cookie: RefreshCookieDep,
     registration: RegistrationServiceDep,
@@ -156,7 +147,7 @@ async def browser_register(
     )
     await verification.send_verification_code(created)
 
-    issued = await sessions.create_session(created.id, device=_device_of(request))
+    issued = await sessions.create_session(created.id, device=device)
     access = access_tokens.create_access_token(created)
     await presence.record_online(created.id, session_id=issued.session.id)
 
@@ -176,7 +167,7 @@ async def browser_register(
 )
 async def browser_login(
     payload: LoginRequest,
-    request: Request,
+    device: SessionDeviceDep,
     response: Response,
     cookie: RefreshCookieDep,
     authentication: AuthenticationServiceDep,
@@ -195,7 +186,7 @@ async def browser_login(
     account = await authentication.authenticate(
         AuthenticateUser(email=payload.email, password=payload.password)
     )
-    issued = await sessions.create_session(account.id, device=_device_of(request))
+    issued = await sessions.create_session(account.id, device=device)
     access = access_tokens.create_access_token(account)
     await presence.record_online(account.id, session_id=issued.session.id)
 
@@ -324,6 +315,129 @@ async def browser_logout_all(
     empty = Response(status_code=status.HTTP_204_NO_CONTENT)
     cookie.clear(empty)
     return empty
+
+
+# --- The device list — A64-030.5C, SE-2 --------------------------------------
+#
+# ## Why these two live here and not under `/auth/sessions`
+#
+# The list has to be able to say *which row is this browser*, and nothing
+# on the JSON surface can. An access token names an **account**: it carries
+# `sub` and `jti` and deliberately no `sid`, so two devices of the same
+# player present indistinguishable credentials. The refresh token is the
+# only thing that names one device, and in a browser it is the cookie —
+# whose path is `BROWSER_SESSION_COOKIE_PATH`, `/api/v1/auth/browser`.
+#
+# A `GET /api/v1/auth/sessions` would therefore be served a request the
+# cookie was never sent with, and `is_current` would be `false` on every
+# row. The three ways to avoid that were:
+#
+#   widen the cookie path       sends a thirty-day credential to every
+#                               endpoint under `/auth`, to label a row
+#   add a `sid`/family claim    a token format change, and every access
+#                               token already in circulation lacks it
+#   put the list where the      one route decorator
+#     cookie already goes
+#
+# The third is the smallest and gives up nothing: this list is a browser
+# screen, and a native client — which holds its refresh token itself — can
+# be given the same list under `/auth` on the day one exists, from the same
+# service methods.
+#
+# ## What the cookie is and is not used for here
+#
+# **Not authentication.** Both routes authenticate with `CurrentUser`, the
+# access token, exactly as `logout-all` does. The cookie is read on the
+# `GET` for one purpose — deciding which row is marked — and a missing or
+# stale cookie costs the marker and nothing else.
+
+
+@browser_auth_router.get(
+    "/sessions",
+    summary="The devices this account is signed in on",
+    response_description="One entry per device, newest sign-in first.",
+    responses={**_UNAUTHORIZED},
+)
+async def browser_sessions(
+    user: CurrentUser,
+    request: Request,
+    cookie: RefreshCookieDep,
+    sessions: SessionServiceDep,
+) -> ApiResponse[list[SessionRead]]:
+    """Lists this account's live devices — SE-2.
+
+    One entry per **device**, not per session row: rotation replaces the
+    row four times an hour and the family is what survives it. The
+    identifier in each entry is what `DELETE` below takes.
+
+    Scoped by the access token and by nothing the caller sends. There is no
+    user id in the path or the query, so this cannot return somebody
+    else's list even if a client tried.
+
+    No refresh token, no hash and no address leaves here — see
+    `schemas/sessions.py` on which of those is absent by construction and
+    which is a product decision.
+    """
+    presented = cookie.read(request)
+    current_family = (
+        await sessions.device_for_refresh_token(presented) if presented is not None else None
+    )
+    devices = await sessions.list_user_devices(user.id)
+
+    return build_response(
+        [SessionRead.of(device, current_family=current_family) for device in devices]
+    )
+
+
+@browser_auth_router.delete(
+    "/sessions/{session_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Sign one device out",
+    # `_UNPROCESSABLE` because the identifier is a path parameter:
+    # FastAPI declares a `422` for it whether or not this says so, and
+    # its default schema is FastAPI's own `HTTPValidationError` rather
+    # than the platform envelope every other failure on this module
+    # uses. Naming it here replaces that with `ErrorResponse`.
+    responses={**_UNAUTHORIZED, **_FORBIDDEN, **_NOT_FOUND, **_UNPROCESSABLE},
+)
+async def browser_revoke_session(
+    session_id: UUID,
+    user: CurrentUser,
+    _origin: TrustedOriginDep,
+    sessions: SessionServiceDep,
+) -> Response:
+    """Revokes one device's whole rotation chain.
+
+    `204` whether or not this call was the one that revoked it: a device
+    already signed out is the state the caller asked for, and a retry
+    after a dropped response must not be an error.
+
+    `404` when the identifier is not one of this account's devices —
+    `SessionService.revoke_device` makes that check, and it is the only
+    thing standing between this route and a cross-user revoke. It is
+    deliberately not `401`: this browser's own credentials are fine, and a
+    `401` would make the client's unauthorised interceptor sign the whole
+    account out over one mistyped identifier.
+
+    ## Revoking the device you are using
+
+    Permitted, and the same thing happens as when another device revokes
+    you: the refresh cookie stops working, so the browser is signed out at
+    its next refresh rather than immediately — the access token it already
+    holds stays valid for its fifteen minutes.
+
+    That delay is why the UI does not offer it. `POST /auth/browser/logout`
+    is what "sign out of this device" means: it revokes *and* clears the
+    cookie, so the browser is anonymous straight away. Two routes, no
+    conflicting semantics — this one acts on a device in a list, that one
+    acts on the browser making the request.
+
+    Carries the trusted-origin check every other state-changing browser
+    route carries. A `DELETE` triggered from another site would otherwise
+    be able to sign a signed-in player out of their own devices.
+    """
+    await sessions.revoke_device(user.id, session_id, reason=RevocationReason.PLAYER)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 __all__ = ["browser_auth_router"]

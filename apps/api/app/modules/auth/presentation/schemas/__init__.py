@@ -7,6 +7,7 @@ from app.modules.auth.presentation.schemas.password_reset import (
     ResetPasswordRequest,
 )
 from app.modules.auth.presentation.schemas.register import RegisterRequest
+from app.modules.auth.presentation.schemas.sessions import SessionRead
 from app.modules.auth.presentation.schemas.tickets import WebSocketTicketRead
 from app.modules.auth.presentation.schemas.tokens import RefreshRequest, TokenPair
 from app.modules.auth.presentation.schemas.verification import (
@@ -24,6 +25,7 @@ __all__ = [
     "RegisterRequest",
     "ResendVerificationRequest",
     "ResetPasswordRequest",
+    "SessionRead",
     "TokenPair",
     "VerificationAccepted",
     "VerifyCodeRequest",

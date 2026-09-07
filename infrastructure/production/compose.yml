@@ -117,6 +117,31 @@ x-api-env: &api-env
   OPS_BACKUP_OFFSITE_PREFIX: ${OPS_BACKUP_OFFSITE_PREFIX:-production}
   OPS_BACKUP_OFFSITE_ACCESS_KEY_ID: ${OPS_BACKUP_OFFSITE_ACCESS_KEY_ID}
   OPS_BACKUP_OFFSITE_SECRET_ACCESS_KEY: ${OPS_BACKUP_OFFSITE_SECRET_ACCESS_KEY}
+  # Web Push — A64-030.5C. The implementation shipped in A64-021.6 and this
+  # file never passed it anything, so the production tier reported push
+  # unavailable, refused every subscription, and held zero of them.
+  #
+  # **Optional, and safe to leave unset.** `PushSettings` reads an empty
+  # value as absent, so a deployment without a key pair boots normally and
+  # reports the channel off — which is the state this host is in until an
+  # operator runs `python -m app.operator.push_keys generate`. Both halves
+  # or neither: a half pair is refused at start, deliberately.
+  #
+  # In `x-api-env` rather than an anchor of its own because the API and the
+  # worker both genuinely need all three — `can_deliver_push` gates
+  # subscription storage on the API and signing on the worker — and they
+  # share this block. `migrate` inherits it too and uses none of it, exactly
+  # as it inherits `RESEND_API_KEY`; a fourth anchor for one variable group
+  # would trade that harmlessness for the nested-merge subtlety this file
+  # warns about above.
+  #
+  # VAPID_PRIVATE_KEY reaches **only** these containers. It is never a build
+  # argument, never a `VITE_` variable, and is not passed to `web`, `admin`
+  # or `nginx` — the browser is given the public half at runtime by
+  # `GET /notifications/push/status`.
+  VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+  VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+  VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:no-reply@${ARENA64_DOMAIN}}
 
 # Everything the two API replicas share. Split from the image anchor so the
 # replicas differ in nothing but their name, their alias and their node id —

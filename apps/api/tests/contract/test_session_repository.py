@@ -482,6 +482,155 @@ class TestListUserSessions:
         assert await repository.list_user_sessions(uuid4()) == []
 
 
+class TestListUserDevices:
+    """One entry per rotation chain, not per row — A64-030.5C.
+
+    The behaviour the device list depends on and the one a naive
+    implementation gets wrong. Rotation revokes a row and inserts a
+    successor in the same family, so a repository that answered per row
+    would report one device as several, and a repository that took the
+    live row's `created_at` would report every device as having signed in
+    at its last refresh.
+    """
+
+    async def test_a_rotated_chain_is_one_device(
+        self, repository: SessionRepository, user_id: UUID
+    ) -> None:
+        family = uuid4()
+        first = await repository.create_session(
+            make_session(user_id=user_id, token="a", token_family=family, created_at=_BASE_TIME)
+        )
+        await repository.revoke_session(first.id, at=_BASE_TIME, reason=RevocationReason.ROTATED)
+        await repository.create_session(
+            make_session(
+                user_id=user_id,
+                token="b",
+                token_family=family,
+                created_at=_BASE_TIME + timedelta(minutes=15),
+            )
+        )
+
+        devices = await repository.list_user_devices(user_id)
+
+        assert [device.token_family for device in devices] == [family]
+
+    async def test_the_sign_in_time_is_the_familys_first_row(
+        self, repository: SessionRepository, user_id: UUID
+    ) -> None:
+        """Not the live row's own `created_at`, which is the last refresh."""
+        family = uuid4()
+        first = await repository.create_session(
+            make_session(user_id=user_id, token="a", token_family=family, created_at=_BASE_TIME)
+        )
+        await repository.revoke_session(first.id, at=_BASE_TIME, reason=RevocationReason.ROTATED)
+        await repository.create_session(
+            make_session(
+                user_id=user_id,
+                token="b",
+                token_family=family,
+                created_at=_BASE_TIME + timedelta(hours=6),
+            )
+        )
+
+        [device] = await repository.list_user_devices(user_id)
+
+        assert device.signed_in_at == _BASE_TIME
+
+    async def test_two_sign_ins_are_two_devices(
+        self, repository: SessionRepository, user_id: UUID
+    ) -> None:
+        laptop = await repository.create_session(make_session(user_id=user_id, token="a"))
+        phone = await repository.create_session(make_session(user_id=user_id, token="b"))
+
+        families = {device.token_family for device in await repository.list_user_devices(user_id)}
+
+        assert families == {laptop.token_family, phone.token_family}
+
+    async def test_a_fully_revoked_chain_disappears(
+        self, repository: SessionRepository, user_id: UUID
+    ) -> None:
+        signed_out = await repository.create_session(make_session(user_id=user_id, token="a"))
+        await repository.revoke_family(
+            signed_out.token_family, at=_BASE_TIME, reason=RevocationReason.PLAYER
+        )
+
+        assert await repository.list_user_devices(user_id) == []
+
+    async def test_it_is_scoped_to_one_user(
+        self, repository: SessionRepository, user_id: UUID
+    ) -> None:
+        await repository.create_session(make_session(user_id=user_id))
+
+        assert await repository.list_user_devices(uuid4()) == []
+
+    async def test_it_carries_the_stored_user_agent(
+        self, repository: SessionRepository, user_id: UUID
+    ) -> None:
+        await repository.create_session(
+            make_session(
+                user_id=user_id,
+                device=SessionDevice(user_agent="Mozilla/5.0 (Macintosh) Chrome/141.0"),
+            )
+        )
+
+        [device] = await repository.list_user_devices(user_id)
+
+        assert device.user_agent == "Mozilla/5.0 (Macintosh) Chrome/141.0"
+
+    async def test_it_is_newest_sign_in_first(
+        self, repository: SessionRepository, user_id: UUID
+    ) -> None:
+        older = await repository.create_session(
+            make_session(user_id=user_id, token="a", created_at=_BASE_TIME)
+        )
+        newer = await repository.create_session(
+            make_session(user_id=user_id, token="b", created_at=_BASE_TIME + timedelta(minutes=5))
+        )
+
+        devices = await repository.list_user_devices(user_id)
+
+        assert [device.token_family for device in devices] == [
+            newer.token_family,
+            older.token_family,
+        ]
+
+
+class TestFamilyBelongsTo:
+    """The ownership check that stands between the revoke endpoint and a
+    cross-user revoke — `revoke_family` itself makes none."""
+
+    async def test_it_recognises_the_owner(
+        self, repository: SessionRepository, user_id: UUID
+    ) -> None:
+        session = await repository.create_session(make_session(user_id=user_id))
+
+        assert await repository.family_belongs_to(user_id, session.token_family) is True
+
+    async def test_it_refuses_another_user(
+        self, repository: SessionRepository, user_id: UUID
+    ) -> None:
+        session = await repository.create_session(make_session(user_id=user_id))
+
+        assert await repository.family_belongs_to(uuid4(), session.token_family) is False
+
+    async def test_it_refuses_a_family_that_does_not_exist(
+        self, repository: SessionRepository, user_id: UUID
+    ) -> None:
+        assert await repository.family_belongs_to(user_id, uuid4()) is False
+
+    async def test_ownership_survives_revocation(
+        self, repository: SessionRepository, user_id: UUID
+    ) -> None:
+        """Otherwise an idempotent retry would look like somebody else's
+        family and answer `404` instead of succeeding."""
+        session = await repository.create_session(make_session(user_id=user_id))
+        await repository.revoke_family(
+            session.token_family, at=_BASE_TIME, reason=RevocationReason.PLAYER
+        )
+
+        assert await repository.family_belongs_to(user_id, session.token_family) is True
+
+
 class TestPostgresSpecificGuarantees:
     """Properties only the real adapter can demonstrate — the database
     constraints that BE-06 makes authoritative. The fake does not claim

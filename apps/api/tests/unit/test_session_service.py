@@ -19,6 +19,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.config.settings import SessionSettings
+from app.core.exceptions import NotFoundError
 from app.modules.auth.application.services import (
     RefreshTokenService,
     SessionService,
@@ -570,6 +571,168 @@ class TestListUserSessions:
 
     async def test_is_empty_for_a_user_with_no_sessions(self, service: SessionService) -> None:
         assert await service.list_user_sessions(uuid4()) == []
+
+
+class TestListUserDevices:
+    """SE-2's list, which counts **devices** and not rows — A64-030.5C."""
+
+    async def test_a_rotated_session_is_still_one_device(
+        self, service: SessionService, clock: MovableClock
+    ) -> None:
+        """The whole reason the list is not `list_user_sessions`.
+
+        Rotation revokes a row and inserts a successor, so a browser open
+        for an hour has produced four rows and is still one laptop.
+        """
+        issued = await service.create_session(USER_ID)
+        clock.instant = NOW + timedelta(minutes=15)
+        await service.rotate_refresh_token(issued.refresh_token)
+
+        devices = await service.list_user_devices(USER_ID)
+
+        assert [device.token_family for device in devices] == [issued.session.token_family]
+
+    async def test_the_sign_in_time_survives_rotation(
+        self, service: SessionService, clock: MovableClock
+    ) -> None:
+        """Not the successor's `created_at`, which is the last refresh."""
+        issued = await service.create_session(USER_ID)
+        clock.instant = NOW + timedelta(hours=6)
+        await service.rotate_refresh_token(issued.refresh_token)
+
+        [device] = await service.list_user_devices(USER_ID)
+
+        assert device.signed_in_at == NOW
+
+    async def test_two_sign_ins_are_two_devices(self, service: SessionService) -> None:
+        laptop = await service.create_session(USER_ID)
+        phone = await service.create_session(USER_ID)
+
+        devices = await service.list_user_devices(USER_ID)
+
+        assert {device.token_family for device in devices} == {
+            laptop.session.token_family,
+            phone.session.token_family,
+        }
+
+    async def test_it_is_scoped_to_one_user(self, service: SessionService) -> None:
+        await service.create_session(USER_ID)
+        await service.create_session(OTHER_USER_ID)
+
+        assert len(await service.list_user_devices(USER_ID)) == 1
+
+    async def test_it_carries_no_credential(self, service: SessionService) -> None:
+        """The property that makes this the method a route may serialise.
+
+        `list_user_sessions` returns entities holding `refresh_token_hash`;
+        this read model has no field that could carry one, and the
+        assertion is written against the *shape* so that adding one is a
+        failing test rather than a leak.
+        """
+        await service.create_session(USER_ID)
+
+        [device] = await service.list_user_devices(USER_ID)
+
+        assert not any(
+            "token" in field or "hash" in field
+            for field in device.__slots__
+            if field != "token_family"
+        )
+
+
+class TestDeviceForRefreshToken:
+    """Which row on the list is the browser asking — A64-030.5C §3."""
+
+    async def test_it_names_the_presenting_device(self, service: SessionService) -> None:
+        issued = await service.create_session(USER_ID)
+
+        found = await service.device_for_refresh_token(issued.refresh_token)
+
+        assert found == issued.session.token_family
+
+    async def test_it_is_stable_across_rotation(
+        self, service: SessionService, clock: MovableClock
+    ) -> None:
+        """The marker must not move to another row every fifteen minutes."""
+        issued = await service.create_session(USER_ID)
+        clock.instant = NOW + timedelta(minutes=15)
+        rotated = await service.rotate_refresh_token(issued.refresh_token)
+
+        assert await service.device_for_refresh_token(rotated.refresh_token) == (
+            await service.device_for_refresh_token(issued.refresh_token)
+        )
+
+    async def test_a_superseded_token_still_names_its_device(
+        self, service: SessionService, clock: MovableClock
+    ) -> None:
+        """Another tab refreshing first must not blank the marker."""
+        issued = await service.create_session(USER_ID)
+        clock.instant = NOW + timedelta(minutes=15)
+        await service.rotate_refresh_token(issued.refresh_token)
+
+        assert await service.device_for_refresh_token(issued.refresh_token) == (
+            issued.session.token_family
+        )
+
+    async def test_an_unknown_token_names_nothing(self, service: SessionService) -> None:
+        """A garbage cookie costs the marker, never a rejection — this is
+        not an authorisation check."""
+        assert await service.device_for_refresh_token("not-a-token") is None
+
+
+class TestRevokeDevice:
+    """SE-2's "individually revoked", and the ownership check that keeps
+    it from being a cross-user revoke — A64-030.5C §6."""
+
+    async def test_it_revokes_the_whole_chain(
+        self, service: SessionService, clock: MovableClock
+    ) -> None:
+        issued = await service.create_session(USER_ID)
+        clock.instant = NOW + timedelta(minutes=15)
+        rotated = await service.rotate_refresh_token(issued.refresh_token)
+
+        await service.revoke_device(USER_ID, issued.session.token_family)
+
+        with pytest.raises(RevokedSession):
+            await service.validate_refresh_token(rotated.refresh_token)
+
+    async def test_the_device_disappears_from_the_list(self, service: SessionService) -> None:
+        laptop = await service.create_session(USER_ID)
+        phone = await service.create_session(USER_ID)
+
+        await service.revoke_device(USER_ID, phone.session.token_family)
+
+        devices = await service.list_user_devices(USER_ID)
+        assert [device.token_family for device in devices] == [laptop.session.token_family]
+
+    async def test_it_leaves_other_devices_alone(self, service: SessionService) -> None:
+        laptop = await service.create_session(USER_ID)
+        phone = await service.create_session(USER_ID)
+
+        await service.revoke_device(USER_ID, phone.session.token_family)
+
+        assert await service.validate_refresh_token(laptop.refresh_token) is not None
+
+    async def test_another_users_device_cannot_be_revoked(self, service: SessionService) -> None:
+        """The security property. Without the ownership check,
+        `revoke_family` would have revoked it — it takes no user id."""
+        theirs = await service.create_session(OTHER_USER_ID)
+
+        with pytest.raises(NotFoundError):
+            await service.revoke_device(USER_ID, theirs.session.token_family)
+
+        assert await service.validate_refresh_token(theirs.refresh_token) is not None
+
+    async def test_an_unknown_device_is_not_found(self, service: SessionService) -> None:
+        with pytest.raises(NotFoundError):
+            await service.revoke_device(USER_ID, uuid4())
+
+    async def test_revoking_twice_is_a_successful_no_op(self, service: SessionService) -> None:
+        """A retry after a dropped response must not be an error."""
+        issued = await service.create_session(USER_ID)
+
+        assert await service.revoke_device(USER_ID, issued.session.token_family) == 1
+        assert await service.revoke_device(USER_ID, issued.session.token_family) == 0
 
 
 class TestRotateRefreshToken:

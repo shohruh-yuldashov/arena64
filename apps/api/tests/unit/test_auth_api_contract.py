@@ -227,6 +227,11 @@ class TestAppWiring:
             "/api/v1/auth/password/reset",
             "/api/v1/auth/email/verify",
             "/api/v1/auth/email/resend",
+            # The device list — A64-030.5C. On the browser prefix
+            # because the refresh cookie is the only credential that
+            # names a device, and its path is `/api/v1/auth/browser`.
+            "/api/v1/auth/browser/sessions",
+            "/api/v1/auth/browser/sessions/{session_id}",
             # The code flow that replaced the link at registration —
             # A64-021.5H. Added here in A64-024's closing sweep, having
             # shipped without it: the set was red from that phase on, which

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
@@ -982,6 +982,16 @@ class NotificationEmailSettings(SectionSettings):
     retry_max_seconds: int = Field(default=6 * 60 * 60, ge=60)
 
 
+#: The contact address a push service operator may use when something is
+#: wrong with what this platform is sending — RFC 8292 §2.1.
+#:
+#: A named constant because two places need the same literal: the field
+#: default, and the validator that treats an empty variable as unset. Two
+#: copies would be a deployment that boots with an empty subject the day
+#: somebody changed one of them.
+DEFAULT_VAPID_SUBJECT = "mailto:no-reply@arena64.gg"
+
+
 class PushSettings(SectionSettings):
     """`push` — Web Push identity and delivery, A64-021.6 §5, §18.
 
@@ -1050,9 +1060,7 @@ class PushSettings(SectionSettings):
     reporter through a repr (services.md §8.5).
     """
 
-    vapid_subject: str = Field(
-        default="mailto:no-reply@arena64.gg", validation_alias="VAPID_SUBJECT"
-    )
+    vapid_subject: str = Field(default=DEFAULT_VAPID_SUBJECT, validation_alias="VAPID_SUBJECT")
     """A way for a push service operator to reach whoever is sending —
     `VAPID_SUBJECT`, `mailto:` or `https:` per RFC 8292 §2.1.
 
@@ -1093,6 +1101,50 @@ class PushSettings(SectionSettings):
 
     retry_base_seconds: int = Field(default=60, ge=1)
     retry_max_seconds: int = Field(default=6 * 60 * 60, ge=60)
+
+    @field_validator("vapid_subject", mode="before")
+    @classmethod
+    def _an_empty_subject_is_the_default(cls, value: object) -> object:
+        """`VAPID_SUBJECT=` means "I did not set this" — A64-030.5C.
+
+        The same Compose behaviour `_empty_is_absent` handles, with a
+        different right answer: this field is not a secret and has a real
+        default, so an empty one falls back rather than becoming absent.
+
+        It matters because the empty string is not merely useless here —
+        `VapidKeyPair.from_base64` refuses a subject that is not a
+        `mailto:` or `https:` URI, so an empty one would stop a tier that
+        *has* a valid key pair from starting.
+        """
+        return DEFAULT_VAPID_SUBJECT if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("vapid_public_key", "vapid_private_key", mode="before")
+    @classmethod
+    def _empty_is_absent(cls, value: object) -> object:
+        """An empty variable means "not configured" — A64-030.5C.
+
+        Every other setting here can tell the difference between unset and
+        empty because nothing sets it to empty. These two cannot, because
+        of how they reach a container: `compose.yml` writes
+        `VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}`, and Compose resolves an
+        unset host variable to the **empty string** rather than omitting
+        the key. There is no interpolation form that omits it.
+
+        Without this, a deployment that has not yet generated a key pair
+        gets `""` for both halves — which passes the whole-or-absent check
+        below, because neither is `None`, and then fails
+        `VapidKeyPair.from_base64` with "must be a 32-byte scalar, got 0"
+        **at application start**. Measured, not theorised: that is exactly
+        what `build_vapid_keys` did against `PushSettings` with both
+        variables set to empty.
+
+        So the tier would refuse to boot because an optional channel was
+        not configured, which inverts this class's own rule that absent is
+        allowed. `""` is what every shell and Compose mean by "I did not
+        set this", and it is read that way here — at the boundary, once,
+        rather than by each of the four things that ask whether push works.
+        """
+        return None if isinstance(value, str) and not value.strip() else value
 
     @model_validator(mode="after")
     def _the_pair_is_whole_or_absent(self) -> "PushSettings":

@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
+from app.modules.auth.application.read_models import SessionDeviceSummary
 from app.modules.auth.domain.password_reset import PasswordResetToken
 from app.modules.auth.domain.sessions import RevocationReason, UserSession
 from app.modules.auth.domain.tickets import RedeemedTicket
@@ -271,6 +272,43 @@ class SessionRepository(Protocol):
         every device the player owns. Signing someone out of their phone
         because their laptop's token was replayed is a worse outcome than
         the attack in most cases.
+        """
+        ...
+
+    async def list_user_devices(self, user_id: UUID) -> list[SessionDeviceSummary]:
+        """One entry per live device, newest sign-in first — A64-030.5C.
+
+        Not `list_user_sessions` with a projection applied afterwards, and
+        the difference is the `signed_in_at` field. A device's sign-in time
+        is the earliest `created_at` in its rotation family, and the live
+        row does not carry it: rotation inserts a successor, so the live
+        row was created at the last refresh. Deriving it in the
+        application layer would mean loading every revoked ancestor —
+        roughly ninety-six rows per device per day at a fifteen-minute
+        refresh — to compute one timestamp.
+
+        So it is one grouped statement. See
+        `application/read_models.py` on why a device is a token family.
+
+        Unpaginated, for the reason `list_user_sessions` gives: the result
+        is bounded by how many devices a person owns.
+        """
+        ...
+
+    async def family_belongs_to(self, user_id: UUID, token_family: UUID) -> bool:
+        """Whether this user owns this rotation chain.
+
+        The ownership check `revoke_family` does not make. That method
+        takes a family and revokes it, because its caller — reuse
+        detection — already holds the session it came from. A player
+        submitting an identifier from a list has not proved anything, and
+        without this a `DELETE` naming somebody else's family would revoke
+        it (§6: "no cross-user revoke is possible").
+
+        Includes revoked rows, deliberately. Ownership is a fact about the
+        chain, not about its state, and answering "not yours" for a family
+        that is merely already revoked would make an idempotent retry look
+        like an attack.
         """
         ...
 

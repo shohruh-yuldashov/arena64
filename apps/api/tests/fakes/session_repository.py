@@ -22,7 +22,13 @@ incorrectly:
     the caller passed. A fake that stored the caller's instance would let
     a test mutate a "persisted" session without saving and still see the
     change on the next read — passing for a reason production would not;
-  - **newest-first ordering with the same `(created_at, id)` key**.
+  - **newest-first ordering with the same `(created_at, id)` key**;
+  - **`list_user_devices` collapses a rotation chain**, taking the
+    family's earliest `created_at` as its sign-in time, exactly as the
+    real adapter's `MIN(created_at) GROUP BY token_family` does. A fake
+    that read the live row's own `created_at` would report every device
+    as having signed in at its last refresh, and the service test would
+    agree with it.
 """
 
 import copy
@@ -31,6 +37,7 @@ from datetime import datetime
 from uuid import UUID
 
 from app.core.exceptions import ConflictError
+from app.modules.auth.application.read_models import SessionDeviceSummary
 from app.modules.auth.domain.sessions import RevocationReason, UserSession
 
 
@@ -146,3 +153,33 @@ class FakeSessionRepository:
         # still have a stable order.
         matches.sort(key=lambda session: (session.created_at, session.id), reverse=True)
         return [copy.deepcopy(session) for session in matches]
+
+    async def list_user_devices(self, user_id: UUID) -> list[SessionDeviceSummary]:
+        signed_in_at: dict[UUID, datetime] = {}
+        for session in self._sessions.values():
+            if session.user_id != user_id:
+                continue
+            # Revoked ancestors count: the family's first row is almost
+            # always one, because rotation revokes what it replaces.
+            earliest = signed_in_at.get(session.token_family)
+            if earliest is None or session.created_at < earliest:
+                signed_in_at[session.token_family] = session.created_at
+
+        devices = [
+            SessionDeviceSummary(
+                token_family=session.token_family,
+                signed_in_at=signed_in_at[session.token_family],
+                last_used_at=session.last_used_at,
+                user_agent=session.device.user_agent,
+            )
+            for session in self._sessions.values()
+            if session.user_id == user_id and not session.is_revoked
+        ]
+        devices.sort(key=lambda device: (device.signed_in_at, device.token_family), reverse=True)
+        return devices
+
+    async def family_belongs_to(self, user_id: UUID, token_family: UUID) -> bool:
+        return any(
+            session.user_id == user_id and session.token_family == token_family
+            for session in self._sessions.values()
+        )

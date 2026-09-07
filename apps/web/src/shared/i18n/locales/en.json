@@ -320,7 +320,19 @@
       "confirmBody": "You will have to sign in again on each device.",
       "confirm": "Sign out",
       "cancel": "Cancel",
-      "listDeferred": "A device list is not available yet — the server does not publish one."
+      "loading": "Loading devices…",
+      "loadFailed": "Your devices could not be loaded.",
+      "emptyTitle": "No active devices",
+      "emptyHint": "Devices you sign in on appear here.",
+      "currentDevice": "Current device",
+      "lastActive": "Last active: {when}",
+      "signedIn": "Signed in {when}",
+      "deviceOn": "{browser} on {platform}",
+      "unknownBrowser": "Unknown browser",
+      "unknownDevice": "Unknown device",
+      "revoke": "Sign out",
+      "revokeTitle": "Sign this device out?",
+      "revokeBody": "{device} will have to sign in again."
     },
     "public": {
       "notFoundTitle": "Player not found",

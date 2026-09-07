@@ -641,6 +641,81 @@ class TestThePrometheusThatArmsTheAlerts:
         assert re.search(r":v\d+\.\d+\.\d+$", image), f"{image} is not pinned — CLAUDE.md §2.6"
 
 
+class TestWebPushIsWiredToTheServicesThatNeedIt:
+    """A64-030.5C. The implementation shipped in A64-021.6 and this file
+    passed it nothing.
+
+    That is the whole defect: the code was complete, `PushSettings` read
+    three variables, and `compose.yml` set none of them — so the production
+    tier reported push unavailable, refused every subscription, and held
+    zero. Nothing failed, nothing logged an error, and the settings screen
+    truthfully said the channel was off, so nobody looked.
+
+    The failure is invisible by construction, which is why it is a test
+    over the deployment definition rather than over any code.
+    """
+
+    #: `VAPID_SUBJECT` is not a secret and carries a default, so a service
+    #: without it still works. The pair is what decides whether push
+    #: exists at all.
+    PAIR = ("VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY")
+
+    @pytest.mark.parametrize("service", ["api-1", "api-2", "worker"])
+    @pytest.mark.parametrize("variable", [*PAIR, "VAPID_SUBJECT"])
+    def test_the_service_receives_it(self, service: str, variable: str) -> None:
+        """All three services, because both halves of the channel need the
+        pair: `can_deliver_push` gates subscription storage on the API and
+        signing on the worker."""
+        environment = _compose()["services"][service]["environment"]
+
+        assert variable in environment, (
+            f"{service} does not receive {variable}, so push is off wherever it runs."
+        )
+
+    @pytest.mark.parametrize("variable", [*PAIR, "VAPID_SUBJECT"])
+    def test_it_is_optional_at_the_compose_level(self, variable: str) -> None:
+        """`${VAR:-}`, not `${VAR}`.
+
+        Not cosmetic: a host that has not generated a key pair would
+        otherwise see Compose warn on every command, and — more to the
+        point — the value must be allowed to be empty, because that is
+        what Compose passes for an unset variable. `PushSettings` reads an
+        empty value as absent (`tests/unit/test_push_config.py`), and this
+        is the other half of that contract.
+        """
+        raw = _compose()["services"]["worker"]["environment"][variable]
+
+        assert raw.startswith(f"${{{variable}:-"), (
+            f"{variable} is interpolated as {raw!r}; a bare ${{VAR}} makes an "
+            "unconfigured host noisy and the default unavailable."
+        )
+
+    @pytest.mark.parametrize("service", ["web", "admin", "nginx"])
+    def test_the_signing_key_reaches_no_client_facing_service(self, service: str) -> None:
+        """The security property, and the one worth a test that can never
+        pass by accident.
+
+        Anybody holding `VAPID_PRIVATE_KEY` can push to every subscription
+        this platform holds. It belongs to the API and the worker; the
+        browser is handed the **public** half at runtime by
+        `GET /notifications/push/status`, which is why there is no `VITE_`
+        variable for either.
+        """
+        definition = _compose()["services"][service]
+        rendered = yaml.safe_dump(definition)
+
+        assert "VAPID_PRIVATE_KEY" not in rendered
+
+    def test_no_build_argument_carries_the_signing_key(self) -> None:
+        """A build argument is baked into an image layer and survives into
+        anything that pulls it, so it is a worse home for a secret than an
+        environment variable is."""
+        for service in _compose()["services"].values():
+            build = service.get("build")
+            if isinstance(build, dict):
+                assert "VAPID_PRIVATE_KEY" not in yaml.safe_dump(build.get("args") or {})
+
+
 class TestTheClientVolumesDoNotAccumulate:
     """A64-030.2, N-8. The copy was additive into a persistent volume, so a
     file **deleted** in a later release survived in it for ever.

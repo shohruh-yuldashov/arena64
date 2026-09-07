@@ -394,9 +394,77 @@ Nothing here spans machines. Before one exists:
 - a real load balancer in front of several edges, and a decision about where
   TLS terminates;
 - `RATE_LIMIT_TRUSTED_PROXY_COUNT` raised to match the new hop count. It is
-  **1** here, and it must agree with the Caddyfile: a limiter that trusts the
-  wrong hop either rate-limits the proxy as one client or accepts a spoofed
-  address from a real one.
+  **1** here, and it must agree with the edge configuration: a limiter that
+  trusts the wrong hop either rate-limits the proxy as one client or accepts
+  a spoofed address from a real one. **A64-030.5C made it load-bearing for a
+  second thing** — the address a session row records, which the auth routers
+  used to take from the socket peer and which is therefore the proxy's own
+  address on every session this tier had created. `specs/authentication.md`,
+  "Active Sessions", states the rule.
+
+
+### 7.8 Web Push — A64-030.5C
+
+The implementation shipped in A64-021.6 and `compose.yml` passed it nothing,
+so the production tier reported push unavailable, refused every subscription
+and held zero. Nothing failed and nothing logged an error, which is why the
+wiring is now asserted in `tests/unit/test_deployment_bootstrap.py`.
+
+**Which service gets what.** All three variables reach `api-1`, `api-2` and
+`worker`, through the shared `x-api-env` anchor. Both halves of the channel
+need the pair: `can_deliver_push` gates subscription storage on the API and
+signing on the worker.
+
+`VAPID_PRIVATE_KEY` reaches **only** those containers. It is never a build
+argument, never a `VITE_` variable, and is not passed to `web`, `admin` or
+`nginx` — the browser is handed the public half at runtime by
+`GET /notifications/push/status`. That is the single authoritative path;
+there is deliberately no build-time frontend copy of the key, because a
+value baked into a bundle cannot be changed without a rebuild and would be a
+second source of truth about which pair a deployment holds.
+
+**Generating the pair.** Once, on the host, never in source control:
+
+```sh
+docker compose --env-file production.env run --rm --no-deps   --entrypoint python api-1 -m app.operator.push_keys generate
+```
+
+`--no-deps` is not optional on this stack — see §8.12. Paste the two values
+into `production.env` as `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY`, then
+recreate `api-1`, `api-2` and `worker`.
+
+`VAPID_SUBJECT` is optional and defaults to `mailto:no-reply@${ARENA64_DOMAIN}`.
+It is not a secret and is the one field a boot line logs, so an operator can
+tell which configuration was loaded.
+
+**Changing the pair invalidates every existing subscription**, immediately
+and permanently: a browser commits to the public key when it subscribes and
+its push service refuses anything not signed by the matching private half.
+This is operational state, not a credential on a rotation schedule.
+
+**Verifying it is on.**
+
+```sh
+docker compose --env-file production.env run --rm --no-deps   --entrypoint python api-1 -m app.operator.push_keys status
+```
+
+It reports whether a pair is configured, whether the two halves match, the
+subject, and the delivery queue's counts by status. It never prints the
+private key, and there is deliberately no command that does. Over HTTP, an
+authenticated `GET /api/v1/notifications/push/status` answers `available`
+and the public key.
+
+**The disabled state is a supported state.** Leave both variables unset and
+the tier boots normally, reports the channel unavailable, refuses to store
+subscriptions and offers no switch on the settings screen — all true, so
+there is nothing to fail at boot over. A **half** pair is refused at
+startup, because that is never intentional and accepting it would bind every
+subscription created afterwards to a key that cannot sign for it.
+
+An empty value counts as unset. Compose resolves an unset host variable to
+the empty string rather than omitting the key, so `PushSettings` reads a
+blank variable as absent — without which a host that had not generated a
+pair would fail to start on `VAPID private key must be a 32-byte scalar, got 0`.
 
 
 ---
@@ -900,6 +968,35 @@ keeps serving it while an operator sorts the state out.
 `tests/unit/test_acme_bootstrap.py::TestLineageDiscovery` pins all four
 states, the numbered names, and the mixed shape the production host was
 actually in.
+
+### 8.14 The web manifest's media type — A64-030.5C
+
+`/manifest.webmanifest` must be served as **`application/manifest+json`**,
+the type the W3C Web App Manifest specification registers.
+
+It was not. `nginx.conf` includes the stock `mime.types`, which has no entry
+for `webmanifest` — verified against the built edge image, where
+`grep -c webmanifest /etc/nginx/mime.types` answers `0` — so the file fell
+through to `default_type application/octet-stream`. The `nosniff` header the
+app snippet sets makes that worse rather than better: it tells a browser to
+believe the wrong type rather than guess a right one. And `gzip_types` in
+`nginx.conf` already listed `application/manifest+json`, so the edge was
+configured to compress a type it was not serving.
+
+Chromium parsed the manifest anyway, which is why this is a standards defect
+and **not** the cause of the installability warning A64-030.5B investigated —
+the Application panel showed every field. Firefox and Safari are under no
+obligation to be as forgiving, and neither is a future Chromium.
+
+The fix is a `types` block scoped to `location = /manifest.webmanifest`
+rather than a patched `mime.types`: that location serves exactly one file, so
+the override cannot reach anything else. The `include` of
+`snippets/headers-app.conf` stays — `add_header` is not inherited into a
+location that declares one of its own, so dropping it would have been a
+silent CSP hole on the one file this change touches.
+
+`tests/unit/test_edge_policy.py::TestTheWebManifestMediaType` pins the
+mapping, the surviving header include, and the agreement with `gzip_types`.
 
 ---
 

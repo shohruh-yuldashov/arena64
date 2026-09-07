@@ -63,9 +63,11 @@ from uuid import UUID
 
 from app.config.settings import SessionSettings
 from app.core.clock import Clock
+from app.core.exceptions import NotFoundError
 from app.core.unit_of_work import UnitOfWork
 from app.modules.admin.public import AccountRestrictionGate
 from app.modules.auth.application.ports import SessionRepository
+from app.modules.auth.application.read_models import SessionDeviceSummary
 from app.modules.auth.application.services.refresh_token_service import RefreshTokenService
 from app.modules.auth.domain.exceptions import (
     AccountRestricted,
@@ -558,6 +560,61 @@ class SessionService:
         )
         return revoked
 
+    async def revoke_device(
+        self,
+        user_id: UUID,
+        token_family: UUID,
+        *,
+        reason: RevocationReason = RevocationReason.PLAYER,
+    ) -> int:
+        """Signs one device out, by the identity the session list shows.
+
+        SE-2's "individually revoked", and the counterpart to
+        `list_user_devices`. It takes a **family** rather than a session
+        id because that is what survives rotation: an id read from a list
+        four minutes ago names a row that has already been rotated away,
+        so a revoke keyed on it would fail for exactly the device somebody
+        is looking at. `application/read_models.py` carries the reasoning.
+
+        ## The ownership check is the security property
+
+        `SessionRepository.revoke_family` takes a family and revokes it,
+        with no notion of who owns it — correct for its original caller,
+        reuse detection, which already holds the session. Here the family
+        arrived in a URL, so it is checked against `user_id` first.
+        Without that check this method is a cross-user revoke.
+
+        Raises `NotFoundError` — a `404` — when the family is not this
+        user's, which is deliberately **not** the `SessionNotFound` the
+        refresh path raises. That one is a `401`, and a `401` here would
+        make a browser that asked to sign out one device sign itself out
+        of the account instead, because the client's unauthorised
+        interceptor cannot tell the two apart.
+
+        Returns how many live rows this call revoked. `0` is a successful
+        no-op: the device was already signed out, and a retry after a
+        dropped response must not be an error (CLAUDE.md §3 rule 8).
+        """
+        if not await self._sessions.family_belongs_to(user_id, token_family):
+            raise NotFoundError("No such device.")
+
+        async with self._uow:
+            revoked = await self._sessions.revoke_family(
+                token_family, at=self._clock.now(), reason=reason
+            )
+            await self._uow.commit()
+
+        logger.info(
+            "session_device_revoked",
+            extra={
+                "user_id": str(user_id),
+                "token_family": str(token_family),
+                "sessions_revoked": revoked,
+                "reason": reason.value,
+            },
+        )
+        return revoked
+
     # --- listing ------------------------------------------------------------
 
     async def list_user_sessions(
@@ -571,3 +628,36 @@ class SessionService:
         `users.public.UserRead` has no `password_hash`.
         """
         return await self._sessions.list_user_sessions(user_id, include_revoked=include_revoked)
+
+    async def list_user_devices(self, user_id: UUID) -> list[SessionDeviceSummary]:
+        """SE-2's device list, in the shape a screen needs. Read-only.
+
+        The sibling of `list_user_sessions` and the one a route may
+        serialise: that method returns `UserSession` entities carrying
+        `refresh_token_hash`, and this returns a read model that has no
+        field for one. Both are honest about what they are for.
+        """
+        return await self._sessions.list_user_devices(user_id)
+
+    async def device_for_refresh_token(self, refresh_token: str) -> UUID | None:
+        """Which device presented this refresh token, or `None`.
+
+        The only reliable answer to "which row on this list is the browser
+        asking?". An access token names an account and carries no `sid`
+        claim, so it cannot distinguish two devices of the same player;
+        the refresh token is the credential that names one.
+
+        **Not an authorisation check, and never used as one.** The caller
+        authenticates with an access token and this only decides which
+        already-authorised row is marked as current — so a caller that
+        sends a garbage cookie gets an unmarked list, not a rejection.
+
+        A revoked session still answers with its family, deliberately.
+        Rotation revokes the presented row and inserts a successor, so a
+        cookie one rotation stale — another tab refreshed first — belongs
+        to the same device, and a marker that vanished for a few seconds
+        after every refresh would be worse than one derived from a row
+        that has been superseded.
+        """
+        session = await self._sessions.get_session(self._tokens.hash_refresh_token(refresh_token))
+        return session.token_family if session is not None else None

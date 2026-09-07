@@ -35,8 +35,8 @@ export type {
   Side,
   SnapshotPayload,
 } from "./protocol";
-export { isQuickMessage, QUICK_MESSAGES } from "./protocol";
+export { isQuickMessage, parseFrame, QUICK_MESSAGES } from "./protocol";
 export { RealtimeContextProvider } from "./provider";
 export { RealtimeError } from "./request-registry";
 export type { FrameListener } from "./socket-client";
-export { RealtimeClient } from "./socket-client";
+export { HEARTBEAT_INTERVAL_MS, RealtimeClient } from "./socket-client";

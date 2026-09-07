@@ -33,6 +33,7 @@ from app.database.rate_limiter import RedisRateLimiter
 from app.database.redis import RedisPools, create_redis_pools
 from app.database.session_manager import DatabaseSessionManager
 from app.database.unit_of_work import SessionUnitOfWork
+from app.gateway.completions import GatewayCompletionSink
 from app.gateway.dependencies import (
     build_broadcaster_for,
     get_gateway_bus_for,
@@ -44,6 +45,7 @@ from app.gateway.matchmaking_offers import GatewayPendingMatchSink
 from app.gateway.node import resolve_node_id
 from app.gateway.notifications import GatewayNotificationSink
 from app.gateway.router import gateway_router
+from app.gateway.spectator_store import RedisSpectatorStore
 from app.modules.analytics.application.services.projections import (
     PROJECTIONS as ANALYTICS_PROJECTIONS,
 )
@@ -758,6 +760,34 @@ def build_outbox_worker(
             dispatcher_factory=lambda session: _statistics_consumer_for(session, clock),
             consumer=STATISTICS_CONSUMER,
             event_types=frozenset({MATCH_COMPLETED}),
+        )
+    )
+    # A64-031.A. The fifth subscriber to `game.match_completed`, and the only
+    # one that writes to a socket rather than to a table.
+    #
+    # Two of the three ways a game ends already tell the players on the way
+    # out — a move that ends it rides `game.move.applied`, a resignation
+    # rides `game.completed` from the command handler — because both run in
+    # the gateway. **A flag does not.** `ClockAdjudicationService` is on the
+    # worker and holds no broadcaster, by design: it has to settle a game
+    # whose players have both closed their tabs. So a match that timed out
+    # completed correctly, moved the ratings, sent the notifications, and
+    # left two browsers on a board that never changed.
+    #
+    # No session: it reads the participants from the event's own seat
+    # summaries, which is what `SeatSummary` being primitive-only buys. It is
+    # therefore appended directly rather than wrapped — it satisfies
+    # `EventHandler` as it stands.
+    handlers.append(
+        GatewayCompletionSink(
+            broadcaster=build_broadcaster_for(
+                pools=redis_pools,
+                settings=settings.gateway,
+                clock=clock,
+                node_id=resolve_node_id(settings.gateway),
+            ),
+            spectators=RedisSpectatorStore(redis_pools.cache, clock=clock),
+            metrics=_metrics(),
         )
     )
     # A64-021.4. Two more notification consumers, and the reason they are

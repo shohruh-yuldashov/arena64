@@ -23,6 +23,7 @@ import {
   type InboundFrame,
   isReady,
   type MovePayload,
+  parseFrame,
   RealtimeError,
   type SnapshotPayload,
   useConnectionStatus,
@@ -170,134 +171,178 @@ export function useGameRoom(matchId: string): GameRoom {
 
   // --- inbound ------------------------------------------------------------
 
-  useFrames(
-    useCallback(
-      (frame: InboundFrame) => {
-        if (frame.channel !== "game") return;
-        const payload = frame.payload;
+  // This handler, reachable from inside itself — A64-031.A.
+  //
+  // `game.events` carries frames *within* a frame, and each one has to take
+  // the ordinary path below rather than a second copy of it. A ref is what
+  // lets the handler re-enter without `useCallback` depending on its own
+  // identity, which cannot be expressed directly.
+  const applyFrame = useRef<(frame: InboundFrame) => void>(() => {});
 
-        switch (frame.type) {
-          case "game.snapshot": {
-            if (viewerId === null) return;
-            // Validated before it is trusted: the transport hands over
-            // `Record<string, unknown>` and a payload that is not a snapshot
-            // must not become a board.
-            const snapshot = asSnapshot(payload);
-            if (snapshot === null || snapshot.match_id !== matchId) return;
-            joined.current = true;
-            dispatch({ type: "snapshot", payload: snapshot, viewerId });
-            return;
-          }
+  const handleFrame = useCallback(
+    (frame: InboundFrame) => {
+      if (frame.channel !== "game") return;
+      const payload = frame.payload;
 
-          case "game.move.applied":
-          case "game.move.accepted": {
-            const move = asMove(payload);
-            if (move === null || move.match_id !== matchId) return;
-            // Both are dispatched identically, and that is not a
-            // contradiction of §11's "model them separately": the
-            // *distinction* is that `accepted` resolves the submitter's
-            // promise, which the request registry already did before this
-            // ran. What each does to the board is the same, and writing it
-            // twice would be two chances to diverge.
-            dispatch({ type: "applied", payload: move });
-            // A move that ended the game changes the same durable records
-            // a resignation does — §25.
-            if (move.result != null) refreshDurableRecords();
-            return;
-          }
-
-          case "game.move.rejected": {
-            const code = payload.code;
-            dispatch({
-              type: "rejected",
-              code: typeof code === "string" ? code : "internal_error",
-            });
-            return;
-          }
-
-          case "game.resync_required":
-            dispatch({ type: "resyncing" });
-            return;
-
-          case "game.draw.offered": {
-            const offered = asDrawOffered(payload);
-            if (offered === null || offered.match_id !== matchId) return;
-            // `sideRef` rather than `state.side`: this callback is installed
-            // once and must see the current seat, and putting `side` in the
-            // dependency list would tear the subscription down and rebuild
-            // it the first time a snapshot named us.
-            dispatch({ type: "draw_offered", payload: offered, viewerSide: sideRef.current });
-            return;
-          }
-
-          case "game.draw.declined": {
-            const declined = asDrawDeclined(payload);
-            if (declined === null || declined.match_id !== matchId) return;
-            dispatch({ type: "draw_declined", payload: declined });
-            return;
-          }
-
-          case "game.completed": {
-            const completed = asCompleted(payload);
-            if (completed === null || completed.match_id !== matchId) return;
-            // §15: the authoritative payload wins over whatever this client
-            // asked for. A resignation that raced an accepted draw ends as
-            // the server settled it.
-            dispatch({ type: "completed", payload: completed });
-            refreshDurableRecords();
-            return;
-          }
-
-          case "game.draw.state": {
-            // A64-020.5D §11, §13. The authoritative per-seat agreement,
-            // which **replaces** A64-020.5C's snapshot-per-ply workaround:
-            // that re-read a whole snapshot once per ply for a restricted
-            // player, because permissions could not ride on
-            // `game.move.applied`. They now arrive addressed.
-            //
-            // Order-independent by construction (§12): this touches the
-            // agreement and nothing else, so it is harmless whether it
-            // arrives before or after the move that caused it.
-            const draw = asDrawState(payload);
-            if (draw === null || draw.match_id !== matchId) return;
-            dispatch({ type: "draw_state", payload: draw });
-            return;
-          }
-
-          case "game.command.rejected": {
-            // Not ours if no command is in flight — see `activeCommandRef`.
-            // `useQuickMessages` attributes the same frame the same way,
-            // and the two conditions are mutually exclusive by
-            // construction: a command and a quick message cannot both be
-            // outstanding on one connection without the player having sent
-            // both, in which case the server answered the newer one.
-            if (activeCommandRef.current === null) return;
-            const code = payload.code;
-            dispatch({
-              type: "command_rejected",
-              code: typeof code === "string" ? code : "internal_error",
-            });
-            return;
-          }
-
-          case "error": {
-            const code = payload.code;
-            dispatch(fatalOrUnavailable(typeof code === "string" ? code : "internal_error"));
-            return;
-          }
-
-          default:
-            // `game.events` is unwrapped by the gateway into individual
-            // frames before it reaches a subscriber, and `room.joined`,
-            // `room.left` and `game.resumed` are answered through the
-            // request registry. Nothing else needs handling, and an
-            // unrecognised type is ignored rather than thrown (§7).
-            return;
+      switch (frame.type) {
+        case "game.snapshot": {
+          if (viewerId === null) return;
+          // Validated before it is trusted: the transport hands over
+          // `Record<string, unknown>` and a payload that is not a snapshot
+          // must not become a board.
+          const snapshot = asSnapshot(payload);
+          if (snapshot === null || snapshot.match_id !== matchId) return;
+          joined.current = true;
+          dispatch({ type: "snapshot", payload: snapshot, viewerId });
+          return;
         }
-      },
-      [matchId, viewerId, refreshDurableRecords],
-    ),
+
+        case "game.move.applied":
+        case "game.move.accepted": {
+          const move = asMove(payload);
+          if (move === null || move.match_id !== matchId) return;
+          // Both are dispatched identically, and that is not a
+          // contradiction of §11's "model them separately": the
+          // *distinction* is that `accepted` resolves the submitter's
+          // promise, which the request registry already did before this
+          // ran. What each does to the board is the same, and writing it
+          // twice would be two chances to diverge.
+          dispatch({ type: "applied", payload: move });
+          // A move that ended the game changes the same durable records
+          // a resignation does — §25.
+          if (move.result != null) refreshDurableRecords();
+          return;
+        }
+
+        case "game.move.rejected": {
+          const code = payload.code;
+          dispatch({
+            type: "rejected",
+            code: typeof code === "string" ? code : "internal_error",
+          });
+          return;
+        }
+
+        case "game.resync_required":
+          dispatch({ type: "resyncing" });
+          return;
+
+        case "game.draw.offered": {
+          const offered = asDrawOffered(payload);
+          if (offered === null || offered.match_id !== matchId) return;
+          // `sideRef` rather than `state.side`: this callback is installed
+          // once and must see the current seat, and putting `side` in the
+          // dependency list would tear the subscription down and rebuild
+          // it the first time a snapshot named us.
+          dispatch({ type: "draw_offered", payload: offered, viewerSide: sideRef.current });
+          return;
+        }
+
+        case "game.draw.declined": {
+          const declined = asDrawDeclined(payload);
+          if (declined === null || declined.match_id !== matchId) return;
+          dispatch({ type: "draw_declined", payload: declined });
+          return;
+        }
+
+        case "game.completed": {
+          const completed = asCompleted(payload);
+          if (completed === null || completed.match_id !== matchId) return;
+          // §15: the authoritative payload wins over whatever this client
+          // asked for. A resignation that raced an accepted draw ends as
+          // the server settled it.
+          dispatch({ type: "completed", payload: completed });
+          refreshDurableRecords();
+          return;
+        }
+
+        case "game.draw.state": {
+          // A64-020.5D §11, §13. The authoritative per-seat agreement,
+          // which **replaces** A64-020.5C's snapshot-per-ply workaround:
+          // that re-read a whole snapshot once per ply for a restricted
+          // player, because permissions could not ride on
+          // `game.move.applied`. They now arrive addressed.
+          //
+          // Order-independent by construction (§12): this touches the
+          // agreement and nothing else, so it is harmless whether it
+          // arrives before or after the move that caused it.
+          const draw = asDrawState(payload);
+          if (draw === null || draw.match_id !== matchId) return;
+          dispatch({ type: "draw_state", payload: draw });
+          return;
+        }
+
+        case "game.command.rejected": {
+          // Not ours if no command is in flight — see `activeCommandRef`.
+          // `useQuickMessages` attributes the same frame the same way,
+          // and the two conditions are mutually exclusive by
+          // construction: a command and a quick message cannot both be
+          // outstanding on one connection without the player having sent
+          // both, in which case the server answered the newer one.
+          if (activeCommandRef.current === null) return;
+          const code = payload.code;
+          dispatch({
+            type: "command_rejected",
+            code: typeof code === "string" ? code : "internal_error",
+          });
+          return;
+        }
+
+        case "error": {
+          const code = payload.code;
+          dispatch(fatalOrUnavailable(typeof code === "string" ? code : "internal_error"));
+          return;
+        }
+
+        case "game.events": {
+          // **A wrapper, not an unwrapped stream** — A64-031.A.
+          //
+          // `match_events` in `app/gateway/protocol.py` answers an
+          // incremental resume with one frame carrying the missed frames
+          // as encoded strings in `payload.frames`. Nothing between there
+          // and here unwraps it: this is the only place that can.
+          //
+          // It said otherwise for as long as this file has existed, and
+          // the cost was the bug this task exists for. The frames were
+          // parsed by the transport, delivered to this handler, matched
+          // `default` and were dropped — while `request_id` resolved the
+          // `game.resume` promise, so the client believed it had caught
+          // up. A board then sat one ply behind with nothing to correct
+          // it: gap detection needs a *later* frame, and when the missed
+          // move was the one that passed the turn to this player, no
+          // later frame ever came. Only a reload fixed it.
+          const events = asEvents(payload);
+          if (events === null || events.match_id !== matchId) return;
+
+          // In order, through this same handler — §17's duplicate and gap
+          // rules are the reducer's and apply unchanged, which is the
+          // point of re-entering rather than reimplementing.
+          for (const raw of events.frames) {
+            const embedded = parseFrame(raw);
+            // A frame this client cannot parse is skipped, not fatal: the
+            // transport already refuses an unknown version or type, and
+            // one bad member must not discard the rest of a replay.
+            if (embedded === null || embedded.channel !== "game") continue;
+            // Never nested by the gateway, and refused here anyway so a
+            // future server cannot make this recurse without bound.
+            if (embedded.type === "game.events") continue;
+            applyFrame.current(embedded);
+          }
+          return;
+        }
+
+        default:
+          // `room.joined`, `room.left` and `game.resumed` are answered
+          // through the request registry. Nothing else needs handling, and
+          // an unrecognised type is ignored rather than thrown (§7).
+          return;
+      }
+    },
+    [matchId, viewerId, refreshDurableRecords],
   );
+
+  applyFrame.current = handleFrame;
+  useFrames(handleFrame);
 
   // --- joining and resuming -----------------------------------------------
 
@@ -500,6 +545,26 @@ function asCompleted(payload: Record<string, unknown>): GameCompletedPayload | n
   if (typeof result !== "object" || result === null) return null;
   if (typeof (result as Record<string, unknown>).outcome !== "string") return null;
   return payload as unknown as GameCompletedPayload;
+}
+
+/**
+ * The `game.events` wrapper — A64-031.A.
+ *
+ * `frames` is a list of **encoded frames**, not decoded objects: the gateway
+ * replays the exact bytes a live client would have received, so a resuming
+ * board cannot diverge from a live one through a second encoder. Members
+ * that are not strings are dropped here rather than at the parse step, so
+ * one malformed entry costs one ply of replay and not the whole answer.
+ */
+function asEvents(
+  payload: Record<string, unknown>,
+): { match_id: string; frames: string[] } | null {
+  if (typeof payload.match_id !== "string") return null;
+  if (!Array.isArray(payload.frames)) return null;
+  return {
+    match_id: payload.match_id,
+    frames: payload.frames.filter((frame): frame is string => typeof frame === "string"),
+  };
 }
 
 function asMove(payload: Record<string, unknown>): MovePayload | null {

@@ -44,10 +44,15 @@ because the database was unreachable is simply gone, and the match stops
 flagging until its next move writes a new one — which for a game nobody is
 moving in means it stays open.
 
-That is a real limitation and it is stated rather than hidden: the correct
-fix is a sweep that re-derives deadlines from active matches, which is a
-recovery job rather than part of adjudication. Recorded in
-`docs/01-architecture/websocket.md` §19.
+That was a real limitation and it is **closed** — A64-028.4 built the sweep
+this paragraph asked for. `ClockDeadlineReconciliationTask` re-derives every
+active match's deadline from the columns the move committed, so a deadline
+lost here is rebuilt on the next pass rather than leaving a game that no
+process will ever settle. It is a recovery job rather than part of
+adjudication, which is why it is a separate task and not a retry here.
+
+The sentence that used to stand here said the fix was still outstanding, and
+A64-031.A's audit believed it. A stale comment is worse than none.
 """
 
 import logging

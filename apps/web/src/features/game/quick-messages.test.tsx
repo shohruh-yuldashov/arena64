@@ -640,3 +640,96 @@ it("returns focus to the trigger when a finishing game closes an open picker", a
   expect(document.activeElement).toBe(mute);
   expect(trigger.hasAttribute("disabled")).toBe(true);
 });
+
+// --- the menu stays inside the viewport — A64-031.B --------------------------
+
+/**
+ * Places the trigger at a chosen height in a chosen viewport.
+ *
+ * jsdom computes no layout, so every rectangle it reports is zero. What can
+ * be tested here is the **decision** — which side the menu opens into and how
+ * much room it is given — and that decision is arithmetic over a rectangle
+ * and a viewport height. The rendering it produces is a browser's, and
+ * `tests/e2e/game-controls.spec.ts` measures that.
+ */
+function placeAnchorAt(top: number, viewportHeight: number): void {
+  window.innerHeight = viewportHeight;
+  Object.defineProperty(HTMLDivElement.prototype, "getBoundingClientRect", {
+    configurable: true,
+    value(this: HTMLDivElement) {
+      // The **positioned ancestor** is what the menu is anchored to, so it is
+      // what the component measures — see `placementFor`. Anything else keeps
+      // jsdom's zeroes.
+      const isAnchor = this.className.includes("relative");
+      return {
+        top: isAnchor ? top : 0,
+        bottom: isAnchor ? top + 44 : 0,
+        left: 0,
+        right: 0,
+        width: 0,
+        height: isAnchor ? 44 : 0,
+        x: 0,
+        y: isAnchor ? top : 0,
+        toJSON: () => ({}),
+      } as DOMRect;
+    },
+  });
+}
+
+function picker() {
+  return (
+    <QuickMessagePicker
+      disabled={false}
+      muted={false}
+      error={null}
+      onSelect={vi.fn()}
+      onToggleMute={vi.fn()}
+    />
+  );
+}
+
+it("opens into whichever side of the trigger has room, and is bounded to it", async () => {
+  const user = userEvent.setup();
+
+  // The desktop layout that broke: the panel is the right-hand column, so the
+  // trigger sits near the top of the document. Opening upward — which is all
+  // this could do — put the menu above the top of the page, where nothing can
+  // scroll to it and the first items are unreachable rather than hidden.
+  placeAnchorAt(120, 600);
+  const { unmount } = renderWithProviders(picker());
+  await user.click(screen.getByRole("button", { name: /send a message/i }));
+
+  const below = screen.getByRole("menu");
+  expect(below).toHaveAttribute("data-placement", "below");
+  // 600 - (120 + 44) - 8 = 428, and never more than the room measured.
+  expect(Number.parseInt(below.style.maxHeight, 10)).toBe(428);
+  unmount();
+
+  // A phone, where the panel is stacked under the board: the trigger is far
+  // down the page and upward was right all along. That behaviour is kept.
+  placeAnchorAt(700, 800);
+  renderWithProviders(picker());
+  await user.click(screen.getByRole("button", { name: /send a message/i }));
+
+  const above = screen.getByRole("menu");
+  expect(above).toHaveAttribute("data-placement", "above");
+  expect(Number.parseInt(above.style.maxHeight, 10)).toBe(692);
+});
+
+it("keeps every item reachable when neither side has room", async () => {
+  const user = userEvent.setup();
+
+  // A viewport short enough that the list cannot fit either way. The menu is
+  // bounded rather than overflowing, so the six items scroll inside it — the
+  // one outcome in which none of them becomes unreachable.
+  placeAnchorAt(150, 320);
+  renderWithProviders(picker());
+  await user.click(screen.getByRole("button", { name: /send a message/i }));
+
+  const menu = screen.getByRole("menu");
+  const height = Number.parseInt(menu.style.maxHeight, 10);
+  expect(height).toBeGreaterThan(0);
+  expect(height).toBeLessThanOrEqual(320);
+  // Bounded, and still holding the whole catalogue rather than a trimmed one.
+  expect(within(menu).getAllByRole("menuitem")).toHaveLength(QUICK_MESSAGES.length);
+});

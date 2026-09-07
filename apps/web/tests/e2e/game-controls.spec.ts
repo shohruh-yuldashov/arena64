@@ -33,6 +33,27 @@ test.setTimeout(180_000);
 
 const LOBBY = [E2E_ACCOUNTS.lobbyOne, E2E_ACCOUNTS.lobbyTwo, E2E_ACCOUNTS.lobbyThree] as const;
 
+/**
+ * Nothing inside a container may extend past it — A64-031.B.
+ *
+ * Measured in the browser rather than asserted from class names: the whole
+ * bug was that the classes read as correct and the layout was not.
+ */
+async function overflowOf(page: Page, selector: string) {
+  return page.evaluate((css) => {
+    const container = document.querySelector(css);
+    if (container === null) return null;
+    const box = container.getBoundingClientRect();
+    const escaping = [...container.querySelectorAll("button")].filter((child) => {
+      const rect = child.getBoundingClientRect();
+      // One pixel of tolerance for sub-pixel rounding, which every browser
+      // does and which is not an overflow anybody can see.
+      return rect.right > box.right + 1 || rect.left < box.left - 1;
+    }).length;
+    return { horizontal: container.scrollWidth - container.clientWidth, escaping };
+  }, selector);
+}
+
 test("two players negotiate a draw and one resigns", async ({ browser, request }) => {
   const reachable = await request
     .get("http://localhost:8000/health")
@@ -102,6 +123,98 @@ test("two players negotiate a draw and one resigns", async ({ browser, request }
     await expect(responder.getByRole("button", { name: /accept draw/i })).toBeVisible({
       timeout: 30_000,
     });
+
+    // --- the offer fits its card, at a short desktop viewport — A64-031.B --
+    //
+    // 1280x600 rather than the default 1280x720: B1 is a *vertical* space
+    // bug, and the picker below needs a viewport short enough to prove it.
+    // The offer card is unaffected by height and is measured here because
+    // this is the one moment in the suite when it exists.
+    await responder.setViewportSize({ width: 1280, height: 600 });
+    await expect(responder.getByRole("alert")).toBeVisible();
+
+    const offer = await overflowOf(responder, '[role="alert"]');
+    expect(offer).not.toBeNull();
+    // `Button` is `shrink-0` and `whitespace-nowrap`, so a row that cannot
+    // hold both at their natural width used to push them straight out of
+    // the card. In every locale this suite can run in.
+    expect(offer?.horizontal).toBeLessThanOrEqual(0);
+    expect(offer?.escaping).toBe(0);
+
+    // Each button is inside the card, which is the contract that holds in
+    // every language. The old layout could satisfy it in English by luck —
+    // "Accept draw" and "Decline draw" happen to fit 264px side by side —
+    // and could not satisfy it at all in Uzbek or Russian, because `Button`
+    // is `shrink-0` and `whitespace-nowrap` and `sm:flex-row` gave them no
+    // way to wrap. Nothing about the new layout depends on which of those
+    // this suite happens to run in.
+    const fits = await responder.evaluate(() => {
+      const card = document.querySelector('[role="alert"]');
+      if (card === null) return null;
+      const box = card.getBoundingClientRect();
+      return [...card.querySelectorAll("button")].every((button) => {
+        const rect = button.getBoundingClientRect();
+        return rect.width <= box.width + 1 && rect.right <= box.right + 1;
+      });
+    });
+    expect(fits).toBe(true);
+
+    // Every width the product supports, measured rather than reasoned about
+    // — A64-031.B §5. The panel is full-width on a phone and a fixed 320px
+    // from `lg` up, so the two arrangements that matter are both here, and
+    // the widths between them are where a breakpoint would show.
+    for (const width of [320, 375, 390, 768, 1024, 1280, 1440]) {
+      await responder.setViewportSize({ width, height: 600 });
+      const clean = await overflowOf(responder, '[role="alert"]');
+      expect(clean?.horizontal, `offer card at ${width}px`).toBeLessThanOrEqual(0);
+      expect(clean?.escaping, `offer card at ${width}px`).toBe(0);
+      // The page itself must not gain a horizontal scrollbar either.
+      const page = await responder.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(page, `document at ${width}px`).toBeLessThanOrEqual(0);
+    }
+    await responder.setViewportSize({ width: 1280, height: 600 });
+
+    // --- and the quick-message menu stays on screen — A64-031.B ------------
+    // By the ARIA property rather than the label: "Mute quick messages"
+    // matches a name-based regex too, and the trigger is the only control on
+    // the page that opens a menu — in any language.
+    await responder.locator('button[aria-haspopup="menu"]').click();
+    const menu = responder.getByRole("menu");
+    await expect(menu).toBeVisible();
+
+    const fit = await menu.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        viewport: window.innerHeight,
+        // A list too tall for the room it was given scrolls rather than
+        // escaping, which is what makes every item reachable.
+        scrolls: element.scrollHeight > element.clientHeight,
+        items: element.querySelectorAll('[role="menuitem"]').length,
+      };
+    });
+
+    // The bug: anchored upward from a trigger near the top of the document,
+    // the menu grew past the top of the page where nothing could scroll to
+    // it, and the first items were unreachable rather than merely hidden.
+    const where = `top=${fit.top} bottom=${fit.bottom} viewport=${fit.viewport}`;
+    expect(fit.top, where).toBeGreaterThanOrEqual(0);
+    expect(fit.bottom, where).toBeLessThanOrEqual(fit.viewport);
+    expect(fit.items).toBeGreaterThan(0);
+
+    // Every item is reachable: the last one can be brought into view, which
+    // is only true if the menu scrolls internally rather than overflowing.
+    await menu.getByRole("menuitem").last().scrollIntoViewIfNeeded();
+    await expect(menu.getByRole("menuitem").last()).toBeInViewport();
+
+    // Pressed on an item rather than on the page: the handler is on the menu
+    // and a keypress that never reaches it proves nothing about the menu.
+    await menu.getByRole("menuitem").first().press("Escape");
+    await expect(menu).toHaveCount(0);
+    await responder.setViewportSize({ width: 1280, height: 720 });
 
     // --- decline ---------------------------------------------------------
     await responder.getByRole("button", { name: /decline draw/i }).click();

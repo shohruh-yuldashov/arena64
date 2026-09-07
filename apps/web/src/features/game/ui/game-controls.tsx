@@ -177,16 +177,34 @@ function IncomingOffer({
     >
       <p className="text-sm font-medium">{t("game.controls.incoming.title")}</p>
       <p className="text-muted-foreground text-sm">{t("game.controls.incoming.body")}</p>
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <Button ref={accept} className="min-h-11 flex-1" disabled={busy} onClick={onAccept}>
+      {/* **Wrapping, not a viewport breakpoint** — A64-031.B.
+
+          This was `flex-col sm:flex-row`, which asks the *window* how much
+          room there is. The window is the wrong thing to ask: on desktop
+          these sit in `aside`'s fixed `lg:w-80`, so past 640px the two
+          buttons were placed side by side inside about 264px of usable
+          width whatever the screen actually was.
+
+          They could not recover from that. `Button` is `shrink-0` and
+          `whitespace-nowrap`, so `flex-1` could only ever grow them —
+          nothing could shrink them and nothing could break the label. With
+          "Durangni qabul qilish" and "Durangni rad etish", or "Принять
+          ничью" and "Отклонить ничью", the pair simply left the card.
+
+          `flex-wrap` asks the *container* instead, and the basis is left as
+          the label itself: the browser then wraps exactly when the two do
+          not both fit, at any width and in any language. A fixed basis was
+          tried and is wrong for the same reason `sm:flex-row` is — two
+          160px placeholders fit a 340px phone, so the pair would share a
+          row and then overflow it by however much the real words exceeded
+          their share. On a narrow panel this is the stacked layout it
+          already had; in English on a wide one the two still share a row,
+          because there they genuinely fit. */}
+      <div className="flex flex-wrap gap-2">
+        <Button ref={accept} className="min-h-11 grow" disabled={busy} onClick={onAccept}>
           {t("game.controls.accept")}
         </Button>
-        <Button
-          variant="outline"
-          className="min-h-11 flex-1"
-          disabled={busy}
-          onClick={onDecline}
-        >
+        <Button variant="outline" className="min-h-11 grow" disabled={busy} onClick={onDecline}>
           {t("game.controls.decline")}
         </Button>
       </div>

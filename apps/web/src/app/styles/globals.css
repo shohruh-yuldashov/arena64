@@ -272,6 +272,28 @@
 }
 
 @theme inline {
+  /* The area the system keeps for itself — A64-031.C.
+   *
+   * `index.html` sets `viewport-fit=cover` and
+   * `apple-mobile-web-app-status-bar-style: black-translucent`, which is what
+   * makes an installed Arena64 draw edge to edge. It is also what puts the
+   * top of the document underneath the status bar and the Dynamic Island: on
+   * a phone the header row is 56px and the inset is up to 59, so the menu
+   * trigger and the account menu sat behind the island and could not be
+   * tapped.
+   *
+   * Registered here rather than written as `env(...)` at each call site, for
+   * the reason the durations above are: a `pt-safe-top` that does not exist
+   * fails the build, where a mistyped arbitrary value silently generates
+   * nothing — and this one would fail only on a device nobody is testing on.
+   *
+   * The `0px` fallback is what makes every other surface unaffected. A
+   * desktop browser, an Android browser and a Safari tab all report no inset,
+   * so the utilities resolve to zero and the layout is the one that shipped.
+   */
+  --spacing-safe-top: env(safe-area-inset-top, 0px);
+  --spacing-safe-bottom: env(safe-area-inset-bottom, 0px);
+
   /* Every `transition-*` utility in the app inherits these, so a
      component does not have to remember to state a duration and
      cannot state one that ignores the scale. A per-site `duration-200`

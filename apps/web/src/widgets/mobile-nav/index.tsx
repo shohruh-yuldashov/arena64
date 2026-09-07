@@ -88,6 +88,26 @@ export function MobileNav() {
           // still applies, so it can never exceed the viewport.
           "top-0 left-0 h-dvh w-72 max-w-[85vw] translate-x-0 translate-y-0 rounded-none",
           "grid-rows-[auto_1fr] gap-6 p-6",
+          // **Both edges** — A64-031.C. This is the one surface that spans
+          // the whole height: `top-0 h-dvh`, so its title and the primitive's
+          // `top-4` close button meet the status bar, and its last navigation
+          // item meets the home indicator. `max` rather than the token alone,
+          // because `p-6` is the design's padding and the inset is a floor
+          // under it, not a replacement — the same shape the bottom sheets in
+          // this app already use.
+          "pt-[max(1.5rem,env(safe-area-inset-top))]",
+          "pb-[max(1.5rem,env(safe-area-inset-bottom))]",
+          // **And the close button, which padding cannot reach.** It is
+          // `absolute top-4` inside this panel, and an absolutely positioned
+          // child is placed from the containing block's padding *edge* — so
+          // the padding above moves the title and the navigation down and
+          // leaves the close exactly where it was, 16px into the area the
+          // status bar covers. Measured: a 59px inset moves the title 35px
+          // and the close 0. Scoped here rather than in the primitive
+          // because every other dialog in this app is centred, and a top
+          // inset on those would push their close button down the middle of
+          // a panel that never meets the edge.
+          "[&_[data-slot=dialog-close]]:top-[max(1rem,env(safe-area-inset-top))]",
           // The panel is the only thing on screen; the page behind it must
           // not scroll under it.
           "overflow-y-auto",

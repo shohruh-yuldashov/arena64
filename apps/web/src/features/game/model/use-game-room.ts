@@ -288,6 +288,28 @@ export function useGameRoom(matchId: string): GameRoom {
           return;
         }
 
+        case "game.resumed": {
+          // **The third resume answer, and the one nothing handled** —
+          // A64-031.A S-1.
+          //
+          // `ResumeHandler` sends this and only this when the client is
+          // already current: the snapshot and `game.events` paths both
+          // return earlier. It is the server saying "you missed nothing".
+          //
+          // Nothing acted on it. `enter()` awaits the request and discards
+          // the answer, and this switch let the frame fall to `default`, so
+          // a reconnect that missed no ply left `phase` at `joining` — set
+          // just before the resume, and moved out of by only `snapshot`,
+          // `applied` and `rejected`. `canInteract` is false there, so the
+          // player could not move; and if it was *their* turn, no opponent
+          // frame was ever coming to release it. A reload was the only way
+          // out, which is the recovery this whole subsystem exists to avoid.
+          const resumed = asResumed(payload);
+          if (resumed === null || resumed.match_id !== matchId) return;
+          dispatch({ type: "resumed", sequence: resumed.sequence });
+          return;
+        }
+
         case "error": {
           const code = payload.code;
           dispatch(fatalOrUnavailable(typeof code === "string" ? code : "internal_error"));
@@ -545,6 +567,22 @@ function asCompleted(payload: Record<string, unknown>): GameCompletedPayload | n
   if (typeof result !== "object" || result === null) return null;
   if (typeof (result as Record<string, unknown>).outcome !== "string") return null;
   return payload as unknown as GameCompletedPayload;
+}
+
+/**
+ * The `game.resumed` answer — A64-031.A S-1.
+ *
+ * `sequence` is the server's own ply, carried so a client can check the
+ * claim rather than take it. It is validated here because the reducer
+ * branches on it: "you are current" from a server that is ahead of us is
+ * the one reading of this frame that must not be believed.
+ */
+function asResumed(
+  payload: Record<string, unknown>,
+): { match_id: string; sequence: number } | null {
+  if (typeof payload.match_id !== "string") return null;
+  if (typeof payload.sequence !== "number") return null;
+  return { match_id: payload.match_id, sequence: payload.sequence };
 }
 
 /**

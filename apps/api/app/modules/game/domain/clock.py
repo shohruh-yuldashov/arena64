@@ -138,6 +138,30 @@ class ClockState:
         """What `side` has left, ignoring time running now."""
         return self.light_ms if side is PlayerSide.LIGHT else self.dark_ms
 
+    def remaining_at(self, side: PlayerSide, *, at: datetime) -> int:
+        """What `side` has left **as of `at`** — A64-031.A.
+
+        `remaining` answers as of `turn_started_at`: it is what the stored
+        columns hold, and what `charged` and `deadline` are computed from.
+        This answers the question a *reader* asks — how much is left right
+        now — and the two differ by exactly the time the active side has
+        spent thinking.
+
+        The distinction had no name, and a reader picked the wrong one. A
+        snapshot paired `remaining` with a `server_time` of *now*, which
+        told a client "you have this much, as of this instant" using a
+        figure that was true when the turn began. A player who thought for a
+        minute and reloaded saw the minute given back.
+
+        Only the active side moves: nobody else's clock is running, so
+        deducting from theirs would invent a charge. Floored at zero,
+        because a clock does not hold negative time — how far past the flag
+        it is is `deadline`'s question and `has_flagged` answers it exactly.
+        """
+        if side is not self.active_side:
+            return self.remaining(side)
+        return max(0, self.remaining(side) - self.elapsed_ms(at))
+
     def elapsed_ms(self, at: datetime) -> int:
         """How long the active side has been thinking, as of `at`.
 

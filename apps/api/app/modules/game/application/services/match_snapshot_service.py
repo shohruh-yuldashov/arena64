@@ -158,17 +158,30 @@ def _draw_offer_state(record: MatchRecord) -> DrawOfferState | None:
 
 
 def _clock_view(clock: ClockState | None, *, at: datetime) -> ClockView | None:
-    """The stored clock as a client renders it — §7.
+    """The stored clock as a client renders it — §7, A64-031.A.
 
     Absolute, never relative: a duration re-based on receipt drifts by the
     network latency it was meant to describe, and a reconnecting client is
     exactly the one whose latency is unknown.
+
+    **`remaining_at`, not `remaining`, and that is the fix.** The stored
+    columns hold what each side had when the turn *began*; `server_time`
+    here is when the snapshot was taken. Pairing the two said "you have this
+    much, as of now" using a figure that was true minutes ago, and a client
+    counting down from it — correctly, per its own contract — showed the
+    elapsed turn time given back. A player who thought for a minute and
+    reloaded saw the minute return.
+
+    The server's authority was never affected: `turn_started_at` moves only
+    when a move is charged, so `deadline` was right throughout and a reload
+    bought nobody a second of real time. What was wrong was the number on
+    the screen, which is the number a player spends their time against.
     """
     if clock is None:
         return None
     return ClockView(
-        light_ms=clock.light_ms,
-        dark_ms=clock.dark_ms,
+        light_ms=clock.remaining_at(PlayerSide.LIGHT, at=at),
+        dark_ms=clock.remaining_at(PlayerSide.DARK, at=at),
         active_side=clock.active_side,
         deadline=clock.deadline(),
         server_time=at,

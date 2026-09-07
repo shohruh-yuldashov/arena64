@@ -546,12 +546,21 @@ def _charged(record: MatchRecord, *, at: datetime) -> ClockState | None:
 
 
 def _clock_view(clock: ClockState | None, *, at: datetime) -> ClockView | None:
-    """The clock as a client renders it. `None` for an untimed match."""
+    """The clock as a client renders it. `None` for an untimed match.
+
+    `remaining_at` rather than `remaining` — A64-031.A. On this path the two
+    are equal: `at` is the mover's `received_at` and `charged` has just made
+    that the new `turn_started_at`, so no time has elapsed on the clock this
+    frame describes. Written this way regardless, because the invariant
+    `ClockView` states is that its durations are true *as of* `server_time`,
+    and holding that by coincidence is how the snapshot projection came to
+    break it while this one did not.
+    """
     if clock is None:
         return None
     return ClockView(
-        light_ms=clock.light_ms,
-        dark_ms=clock.dark_ms,
+        light_ms=clock.remaining_at(PlayerSide.LIGHT, at=at),
+        dark_ms=clock.remaining_at(PlayerSide.DARK, at=at),
         active_side=clock.active_side,
         deadline=clock.deadline(),
         server_time=at,

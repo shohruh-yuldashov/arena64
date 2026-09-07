@@ -488,6 +488,12 @@ describe("the clock follows the move — A64-024", () => {
         ply: 6,
         side_to_move: "light",
         fingerprint: "fp6",
+        // **Dark's own piece** — A64-031.A. This replayed `c3 -> d4`, which
+        // `afterLight` had already emptied, and the reducer only tolerated it
+        // because `applyToBoard` returned the board unchanged and let the
+        // sequence advance over it. That is the defect this fixture was
+        // silently relying on; the clock assertions below are unchanged.
+        applied: { path: ["f6", "e5"], captured: [], promoted_to: null },
         clock: {
           light_ms: 170_000,
           dark_ms: 168_000,

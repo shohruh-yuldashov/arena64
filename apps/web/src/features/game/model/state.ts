@@ -289,6 +289,23 @@ export function reduce(state: GameState, action: GameAction): GameState {
       if (move.ply > state.sequence + 1) return { ...state, phase: "resyncing" };
 
       const board = applyToBoard(state.board, move);
+
+      // **A sequence is a claim about a board** — A64-031.A.
+      //
+      // `applyToBoard` returns `null` when this client's position cannot
+      // accept the transition the server describes: no piece on the origin
+      // square, or a path it cannot read. That means the two positions have
+      // already diverged, whatever the plies say.
+      //
+      // Advancing `sequence` anyway — which is what happened before — would
+      // record ply N against a board still at N-1, and nothing could ever
+      // notice: gap detection compares plies, and a resume reporting N is
+      // answered `CURRENT` and sent nothing. The divergence became permanent
+      // until a reload.
+      //
+      // `resyncing` is the honest state and the recovery already exists.
+      if (board === null) return { ...state, phase: "resyncing", pending: null };
+
       const completed = move.result != null;
 
       return {
@@ -498,15 +515,20 @@ function clearedByMove(draw: DrawAgreementState, sideToMove: Side): DrawAgreemen
  * to highlight squares; letting it decide what a confirmed move did would
  * make a client-side disagreement corrupt the board instead of merely
  * mis-highlighting it.
+ *
+ * `null` when the transition cannot be applied — A64-031.A. It previously
+ * returned the board unchanged, which the caller could not tell apart from
+ * a move that legitimately changed nothing, so it advanced the sequence over
+ * a board that had not moved. The caller now resyncs instead; see `applied`.
  */
-function applyToBoard(board: Board, move: MovePayload): Board {
+function applyToBoard(board: Board, move: MovePayload): Board | null {
   const next = new Map(board);
   const from = move.applied.path[0];
   const to = move.applied.path[move.applied.path.length - 1];
-  if (from === undefined || to === undefined) return board;
+  if (from === undefined || to === undefined) return null;
 
   const piece = next.get(from);
-  if (piece === undefined) return board;
+  if (piece === undefined) return null;
 
   next.delete(from);
   for (const square of move.applied.captured) next.delete(square);

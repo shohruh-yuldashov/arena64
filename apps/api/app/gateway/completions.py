@@ -59,7 +59,7 @@ from uuid import UUID
 from app.gateway.delivery import RoomBroadcaster
 from app.gateway.metrics import COMPLETION_PUSHES, CompletionPushOutcome
 from app.gateway.protocol import game_completed
-from app.gateway.spectators import SpectatorStore
+from app.gateway.spectators import SpectatorStore, SpectatorSubscription
 from app.platform.metrics import MetricsRecorder
 from app.platform.outbox.entry import OutboxEntry
 from app.platform.outbox.ports import EventFailure
@@ -147,7 +147,7 @@ class GatewayCompletionSink:
             },
         )
 
-    async def _watching(self, match_id: UUID) -> Sequence[Any]:
+    async def _watching(self, match_id: UUID) -> Sequence[SpectatorSubscription]:
         """Who is spectating, or nobody if that cannot be read.
 
         The same posture `commands.py` takes: an audience that could not be

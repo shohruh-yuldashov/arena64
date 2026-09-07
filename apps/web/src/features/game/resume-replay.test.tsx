@@ -4,7 +4,7 @@ import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppProviders } from "@/app/providers";
-import { initialState, reduce } from "@/features/game/model/state";
+import { canInteract, initialState, reduce } from "@/features/game/model/state";
 import { useGameRoom } from "@/features/game/model/use-game-room";
 import { httpClient } from "@/shared/api/client";
 import { env } from "@/shared/config/env";
@@ -198,6 +198,7 @@ function Probe() {
     <div>
       <span data-testid="sequence">{room.state.sequence}</span>
       <span data-testid="phase">{room.state.phase}</span>
+      <span data-testid="can-interact">{String(canInteract(room.state))}</span>
       <span data-testid="occupied">
         {[...room.state.board.keys()].sort((a, b) => a.localeCompare(b)).join(",")}
       </span>
@@ -322,5 +323,239 @@ describe("a sequence is a claim about a board", () => {
       "c3",
       "f6",
     ]);
+  });
+});
+
+// --- the reconnect that missed nothing — A64-031.A S-1 -----------------------
+
+interface ReconnectingSocket extends StubSocket {
+  onclose: ((event: { code: number }) => void) | null;
+}
+
+/**
+ * A socket whose **second** `game.resume` is answered `CURRENT`.
+ *
+ * That is the case the server takes whenever a reconnect missed no ply, and
+ * it is the overwhelmingly common one: a socket closed by the heartbeat
+ * deadline is back in about half a second, and half a second usually
+ * contains no move. `ResumeHandler` returns `game.resumed` and nothing else
+ * — no snapshot, no `game.events` — which is precisely why the client had
+ * nothing to act on.
+ */
+function stubReconnectingWebSocket(options: { result?: SnapshotPayload["result"] } = {}) {
+  const sockets: ReconnectingSocket[] = [];
+  let resumes = 0;
+
+  vi.stubGlobal(
+    "WebSocket",
+    class {
+      static readonly OPEN = 1;
+      static readonly CONNECTING = 0;
+      readyState = 1;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onclose: ((event: { code: number }) => void) | null = null;
+      onerror: unknown = null;
+      readonly sent: string[] = [];
+
+      constructor() {
+        sockets.push(this);
+        queueMicrotask(() => {
+          this.onmessage?.({
+            data: JSON.stringify({
+              v: 1,
+              type: "connection.ready",
+              channel: "system",
+              payload: {},
+            }),
+          });
+        });
+      }
+      close() {
+        this.readyState = 3;
+      }
+      send(frame: string) {
+        this.sent.push(frame);
+        const parsed = JSON.parse(frame) as { type: string; request_id?: string };
+        if (parsed.type === "room.join") {
+          this.onmessage?.({
+            data: JSON.stringify({
+              v: 1,
+              type: "room.joined",
+              request_id: parsed.request_id ?? null,
+              channel: "game",
+              payload: {
+                match_id: MATCH,
+                participants: [VIEWER, OPPONENT],
+                both_connected: true,
+              },
+            }),
+          });
+        }
+        if (parsed.type === "game.resume") {
+          resumes += 1;
+          const first = resumes === 1;
+          this.onmessage?.({
+            data: JSON.stringify(
+              first
+                ? {
+                    v: 1,
+                    type: "game.snapshot",
+                    request_id: parsed.request_id ?? null,
+                    channel: "game",
+                    payload: { ...SNAPSHOT, result: options.result ?? null },
+                  }
+                : {
+                    // The whole of S-1: this frame, and nothing beside it.
+                    v: 1,
+                    type: "game.resumed",
+                    request_id: parsed.request_id ?? null,
+                    channel: "game",
+                    payload: { match_id: MATCH, sequence: 4, both_connected: true },
+                  },
+            ),
+          });
+        }
+      }
+    },
+  );
+
+  return sockets;
+}
+
+/** Drops the live socket so the client backs off and reconnects. */
+async function reconnect(sockets: ReconnectingSocket[]): Promise<ReconnectingSocket> {
+  const live = sockets[sockets.length - 1]!;
+  act(() => live.onclose?.({ code: 1006 }));
+  await waitFor(() => expect(sockets.length).toBeGreaterThan(1), { timeout: 4000 });
+  return sockets[sockets.length - 1]!;
+}
+
+describe("a reconnect that missed nothing", () => {
+  it("leaves the joining phase and lets the player move again", async () => {
+    const sockets = stubReconnectingWebSocket();
+    mount();
+
+    await waitFor(() => expect(screen.getByTestId("phase")).toHaveTextContent("active"));
+    // Light is to move and this viewer is Light: it is their turn.
+    expect(screen.getByTestId("can-interact")).toHaveTextContent("true");
+
+    await reconnect(sockets);
+
+    // Before the fix this stayed at `joining` for ever: `game.resumed` was
+    // ignored, no snapshot or events were coming, and — because it is this
+    // player's turn — no opponent move was coming either. The board rendered
+    // and refused every click until the page was reloaded.
+    await waitFor(() => expect(screen.getByTestId("phase")).toHaveTextContent("active"), {
+      timeout: 4000,
+    });
+    expect(screen.getByTestId("can-interact")).toHaveTextContent("true");
+    // Nothing was replaced: continuity was proven, not re-sent.
+    expect(screen.getByTestId("sequence")).toHaveTextContent("4");
+    expect(screen.getByTestId("occupied")).toHaveTextContent("c3,f6");
+  });
+
+  it("does not grant a move when it is the opponent's turn", async () => {
+    const sockets = stubReconnectingWebSocket();
+    mount();
+    await waitFor(() => expect(screen.getByTestId("phase")).toHaveTextContent("active"));
+
+    // Light plays c3 -> d4, so it becomes Dark's turn before the drop.
+    act(() => {
+      sockets[0]!.onmessage?.({ data: moveFrame(move(5, ["c3", "d4"], "dark")) });
+    });
+    await waitFor(() => expect(screen.getByTestId("can-interact")).toHaveTextContent("false"));
+
+    await reconnect(sockets);
+
+    await waitFor(() => expect(screen.getByTestId("phase")).toHaveTextContent("active"), {
+      timeout: 4000,
+    });
+    // Playable again, but not by this player — recovering the phase must not
+    // recover a turn that is not theirs.
+    expect(screen.getByTestId("can-interact")).toHaveTextContent("false");
+  });
+
+  it("does not put a finished game back in play", async () => {
+    const sockets = stubReconnectingWebSocket({
+      result: { outcome: "win", termination_reason: "flag", winner: "dark" },
+    });
+    mount();
+
+    await waitFor(() => expect(screen.getByTestId("phase")).toHaveTextContent("completed"));
+
+    await reconnect(sockets);
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(screen.getByTestId("phase")).toHaveTextContent("completed");
+    expect(screen.getByTestId("can-interact")).toHaveTextContent("false");
+  });
+
+  it("is unchanged by a second game.resumed", async () => {
+    const sockets = stubReconnectingWebSocket();
+    mount();
+    await waitFor(() => expect(screen.getByTestId("phase")).toHaveTextContent("active"));
+    const socket = await reconnect(sockets);
+    await waitFor(() => expect(screen.getByTestId("phase")).toHaveTextContent("active"), {
+      timeout: 4000,
+    });
+
+    // Redelivery is legal on this transport; applying it twice must not be.
+    act(() => {
+      socket.onmessage?.({
+        data: JSON.stringify({
+          v: 1,
+          type: "game.resumed",
+          request_id: null,
+          channel: "game",
+          payload: { match_id: MATCH, sequence: 4, both_connected: true },
+        }),
+      });
+    });
+
+    expect(screen.getByTestId("phase")).toHaveTextContent("active");
+    expect(screen.getByTestId("sequence")).toHaveTextContent("4");
+  });
+});
+
+describe("no resume outcome leaves the client stuck", () => {
+  /**
+   * The three answers `ResumeHandler` can give, asserted as one property:
+   * whichever it sends, the room becomes usable again. Two of the three were
+   * already true before A64-031.A; none of them was.
+   */
+  it("a server that is ahead is not believed, and resyncs instead", () => {
+    const at4 = reduce(initialState(MATCH), {
+      type: "snapshot",
+      payload: SNAPSHOT,
+      viewerId: VIEWER,
+    });
+    const joining = reduce(at4, { type: "resuming" });
+    expect(joining.phase).toBe("joining");
+
+    // `CURRENT` from a server holding a later ply cannot happen against a
+    // correct server. If it ever does, "you are current" is the one reading
+    // that must not be taken on trust.
+    const ahead = reduce(joining, { type: "resumed", sequence: 9 });
+
+    expect(ahead.phase).toBe("resyncing");
+    expect(ahead.sequence).toBe(4);
+  });
+
+  it("does not disturb a phase the resume is no longer the answer to", () => {
+    const at4 = reduce(initialState(MATCH), {
+      type: "snapshot",
+      payload: SNAPSHOT,
+      viewerId: VIEWER,
+    });
+
+    // A gap detected while the resume was in flight: this client is waiting
+    // for a snapshot it asked for, and a stale "you are current" must not
+    // cancel that.
+    const resyncing = reduce(at4, { type: "resyncing" });
+    expect(reduce(resyncing, { type: "resumed", sequence: 4 }).phase).toBe("resyncing");
+
+    // And a frame that already made it playable is left alone.
+    const active = reduce(at4, { type: "resumed", sequence: 4 });
+    expect(active.phase).toBe("active");
   });
 });

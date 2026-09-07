@@ -198,6 +198,7 @@ export type GameAction =
   | { type: "rejected"; code: string }
   | { type: "submitting"; move: PendingMove }
   | { type: "resuming" }
+  | { type: "resumed"; sequence: number }
   | { type: "resyncing" }
   | { type: "disconnected" }
   | { type: "unavailable"; code: string }
@@ -361,6 +362,35 @@ export function reduce(state: GameState, action: GameAction): GameState {
 
     case "resuming":
       return { ...state, phase: "joining" };
+
+    case "resumed": {
+      // **The reconnect that missed nothing** — A64-031.A S-1.
+      //
+      // The server proved continuity rather than replacing state, so there
+      // is nothing to apply: what this restores is the *phase*, which
+      // `resuming` set to `joining` and which nothing else was going to move
+      // when no snapshot, no events and no opponent move were coming.
+      //
+      // Only from `joining`. A frame that arrived while the resume was in
+      // flight has already put this somewhere truer — an `applied` makes it
+      // `active`, a `resyncing` means this client asked for a snapshot it is
+      // still waiting for — and neither should be overwritten by an answer
+      // to a question that is no longer the current one.
+      if (state.phase !== "joining") return state;
+
+      // "You are current" from a server that is ahead is the one reading of
+      // this frame that must not be believed. It cannot happen against a
+      // correct server — `CURRENT` is returned only when the client's
+      // reported sequence is at least the server's — so this is the same
+      // posture §18 takes everywhere else: where continuity cannot be
+      // proven, ask for the truth rather than assume it.
+      if (action.sequence > state.sequence) return { ...state, phase: "resyncing" };
+
+      // A match that ended while this client was away comes back finished.
+      // Reactivating it would put a board back in play that the server has
+      // already settled.
+      return { ...state, phase: state.result === null ? "active" : "completed" };
+    }
 
     case "resyncing":
       return { ...state, phase: "resyncing", pending: null };

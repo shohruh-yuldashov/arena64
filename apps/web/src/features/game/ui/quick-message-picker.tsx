@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import {
   QUICK_MESSAGE_ORDER,
@@ -44,12 +44,26 @@ import { Button } from "@/shared/ui";
  *     glyphs       `aria-hidden` — the localised text is the content, and
  *                  "person with folded hands" read aloud mid-game is noise
  *
- * ## Responsive — §16
+ * ## Responsive — §16, and the desktop bug it missed — A64-031.B
  *
- * Anchored to the trigger and opening **upward** (`bottom-full`), because
- * the control sits under the panel and a menu opening downward on a phone
- * would leave the viewport. Six short rows is roughly 260px — small enough
- * not to cover the board, which is why this is a menu rather than a sheet.
+ * This opened **upward and only upward** (`bottom-full`), reasoning that
+ * "the control sits under the panel and a menu opening downward on a phone
+ * would leave the viewport". That is true on a phone, where the panel is
+ * stacked below the board and the trigger is far down the page.
+ *
+ * On desktop the same panel is the right-hand column, so the trigger sits
+ * near the **top** of the document — and a menu with no height bound and no
+ * collision handling grew upward past the top of the page, where nothing can
+ * scroll to it. The upper items were not merely off-screen; they were
+ * unreachable. Six rows is roughly 260px, and the trigger is routinely
+ * closer to the top than that.
+ *
+ * So placement is now measured rather than assumed: the menu opens into
+ * whichever side of the trigger has more room, and is bounded to that room
+ * with `overflow-y-auto` so a list that cannot fit scrolls instead of
+ * escaping. Both halves are needed — flipping alone still overflows a short
+ * viewport, and bounding alone can leave a 40px menu when the other side had
+ * 400px going spare.
  */
 
 /** A refused send as a sentence — §9. */
@@ -62,6 +76,49 @@ function errorKey(code: GatewayErrorCode): TranslationKey {
   // Anything else is an ordinary transport problem, and §9 forbids showing
   // frightening generic websocket text for what is usually a slow down.
   return known[code] ?? "game.quickMessages.errors.unknown";
+}
+
+/**
+ * Where the menu opens, and how much room it has there — A64-031.B.
+ *
+ * `null` until the trigger has been measured, which is one frame: rendering
+ * the menu before its placement is known would put it in the wrong place and
+ * move it, and a menu that jumps is worse than one that appears a frame late.
+ */
+interface Placement {
+  side: "above" | "below";
+  maxHeight: number;
+}
+
+/** The gap the menu keeps from the trigger and from the viewport edge. */
+const MENU_GAP_PX = 8;
+
+/**
+ * Measured on the **positioned ancestor**, not on the trigger.
+ *
+ * `top-full` and `bottom-full` resolve against the offset parent, and that
+ * parent holds the trigger *and* the mute button under `flex-wrap`. In the
+ * 320px desktop panel the two wrap onto separate rows, so the box the menu is
+ * actually anchored to ends lower than the trigger does — and a bound
+ * computed from the trigger let the menu hang past the bottom of the
+ * viewport. Thirteen pixels, caught by the end-to-end measurement and by
+ * nothing else.
+ */
+function placementFor(anchor: HTMLElement): Placement {
+  const rect = anchor.getBoundingClientRect();
+  const above = rect.top - MENU_GAP_PX;
+  const below = window.innerHeight - rect.bottom - MENU_GAP_PX;
+  // Ties go **above**, which keeps the established behaviour on every layout
+  // that was already correct — a phone, where the trigger is near the bottom
+  // and `above` wins by a wide margin anyway.
+  const side = above >= below ? "above" : "below";
+  // **No floor.** A minimum height was the obvious kindness and is the one
+  // thing that can put the menu back outside the viewport: forcing 96px into
+  // 83px of room overflows by thirteen, which is exactly what the end-to-end
+  // measurement caught. The larger side is already chosen, so a small number
+  // here means the viewport is genuinely small — and a short menu that
+  // scrolls is usable, where one that hangs off the edge is not.
+  return { side, maxHeight: Math.max(0, Math.floor(side === "above" ? above : below)) };
 }
 
 export function QuickMessagePicker({
@@ -80,8 +137,10 @@ export function QuickMessagePicker({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [placement, setPlacement] = useState<Placement | null>(null);
   const menuId = useId();
 
+  const anchor = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const muteButton = useRef<HTMLButtonElement>(null);
@@ -120,6 +179,41 @@ export function QuickMessagePicker({
   // merely because it has the right roles.
   useEffect(() => {
     if (open) items.current[0]?.focus();
+  }, [open]);
+
+  // Measured on open, and again while the viewport or the page moves under
+  // it — A64-031.B. `useLayoutEffect` so the menu is placed before the
+  // browser paints it; with `useEffect` it would render in the default
+  // position for a frame and then jump.
+  //
+  // Scroll as well as resize: this is anchored to a trigger inside a page
+  // that scrolls, so the room above and below it changes without the window
+  // changing size at all. `capture` because the scroll may be an ancestor's
+  // rather than the document's.
+  useLayoutEffect(() => {
+    if (!open) {
+      setPlacement(null);
+      return;
+    }
+    const measure = () => {
+      if (anchor.current === null) return;
+      const next = placementFor(anchor.current);
+      // Compared before it is set: a scroll that moves nothing produces an
+      // identical decision, and a new object per  event would re-render the menu
+      // under the player's cursor for no reason.
+      setPlacement((current) =>
+        current !== null && current.side === next.side && current.maxHeight === next.maxHeight
+          ? current
+          : next,
+      );
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
   }, [open]);
 
   useEffect(() => {
@@ -181,7 +275,7 @@ export function QuickMessagePicker({
         {t("game.quickMessages.heading")}
       </h2>
 
-      <div className="relative flex flex-wrap items-center gap-2">
+      <div ref={anchor} className="relative flex flex-wrap items-center gap-2">
         <Button
           ref={trigger}
           type="button"
@@ -217,10 +311,22 @@ export function QuickMessagePicker({
             id={menuId}
             role="menu"
             aria-label={t("game.quickMessages.open")}
+            // The measured decision, as state a test can read — the layout
+            // it produces is a browser's to compute and jsdom has none.
+            data-placement={placement?.side}
             onKeyDown={onKeyDown}
+            // Bounded to the room actually measured, and scrolling inside
+            // it. `overscroll-contain` so reaching the end of a scrolled
+            // menu does not start scrolling the page behind it.
+            style={{ maxHeight: placement?.maxHeight }}
             className={cn(
-              "bg-popover absolute bottom-full left-0 z-40 mb-2 flex w-56 max-w-[calc(100vw-2rem)]",
-              "border-border flex-col gap-1 rounded-md border p-1 shadow-md",
+              "bg-popover absolute left-0 z-40 flex w-56 max-w-[calc(100vw-2rem)]",
+              "border-border flex-col gap-1 overflow-y-auto overscroll-contain",
+              "rounded-md border p-1 shadow-md",
+              // Hidden until measured — one frame, and it prevents the jump
+              // that placing after paint would cause.
+              placement === null && "invisible",
+              placement?.side === "below" ? "top-full mt-2" : "bottom-full mb-2",
             )}
           >
             {QUICK_MESSAGE_ORDER.map((message, index) => {

@@ -81,9 +81,9 @@ function errorKey(code: GatewayErrorCode): TranslationKey {
 /**
  * Where the menu opens, and how much room it has there — A64-031.B.
  *
- * `null` until the trigger has been measured, which is one frame: rendering
- * the menu before its placement is known would put it in the wrong place and
- * move it, and a menu that jumps is worse than one that appears a frame late.
+ * Set as the menu opens rather than after it renders, so there is no frame
+ * in which the menu exists without a placement. `null` only before the first
+ * open, where nothing is rendered to place.
  */
 interface Placement {
   side: "above" | "below";
@@ -285,7 +285,23 @@ export function QuickMessagePicker({
           aria-haspopup="menu"
           aria-expanded={open}
           aria-controls={open ? menuId : undefined}
-          onClick={() => setOpen((current) => !current)}
+          onClick={() => {
+            if (open) {
+              close(false);
+              return;
+            }
+            // **Measured before the menu exists**, not after it has rendered.
+            // Placing it afterwards meant one frame with no placement, and
+            // the only way to keep that frame from being visibly wrong was
+            // `invisible` — which then swallowed the focus this menu moves
+            // onto its first item, because a `visibility: hidden` element
+            // cannot take focus. jsdom does not implement that rule, so the
+            // keyboard test kept passing while the real browser stopped
+            // closing on Escape. Measuring here removes the frame and the
+            // hazard together.
+            if (anchor.current !== null) setPlacement(placementFor(anchor.current));
+            setOpen(true);
+          }}
         >
           {t("game.quickMessages.open")}
         </Button>
@@ -323,9 +339,6 @@ export function QuickMessagePicker({
               "bg-popover absolute left-0 z-40 flex w-56 max-w-[calc(100vw-2rem)]",
               "border-border flex-col gap-1 overflow-y-auto overscroll-contain",
               "rounded-md border p-1 shadow-md",
-              // Hidden until measured — one frame, and it prevents the jump
-              // that placing after paint would cause.
-              placement === null && "invisible",
               placement?.side === "below" ? "top-full mt-2" : "bottom-full mb-2",
             )}
           >

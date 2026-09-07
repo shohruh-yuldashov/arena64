@@ -51,6 +51,32 @@ import { RealtimeError, RequestRegistry } from "@/shared/realtime/request-regist
 export type FrameListener = (frame: InboundFrame) => void;
 export type StatusListener = (status: ConnectionStatus) => void;
 
+/**
+ * How often this client proves it is still there — A64-031.A.
+ *
+ * **The server does not ping; it enforces a deadline.** `connections.py`
+ * reads with `wait_for(receive(), GATEWAY_HEARTBEAT_TIMEOUT_SECONDS)` and
+ * closes anything that has said nothing for 45 seconds, because a server
+ * that pinged would need one timer per socket and a gateway node holds tens
+ * of thousands. The protocol says so at `MessageType.PING`: *"Client to
+ * server … why the client drives the heartbeat rather than the server."*
+ *
+ * This client never sent one. So a player who was merely **thinking** — the
+ * one waiting for their opponent, who by definition sends nothing — was
+ * disconnected every 45 seconds and silently reconnected, and every one of
+ * those reconnects was a chance to miss a move.
+ *
+ * Twenty seconds: two ticks inside the deadline, so a single dropped frame
+ * or a stalled tab does not cost the connection, and idle enough that a
+ * quiet game costs three frames a minute.
+ *
+ * A ping also refreshes two windows the connection depends on and which
+ * nothing else touches — `GATEWAY_CONNECTION_TTL_SECONDS` (90 s), which is
+ * what the fleet routes on, and `PRESENCE_TTL_SECONDS` (60 s), which is what
+ * makes a player show online. Both are longer than this interval on purpose.
+ */
+export const HEARTBEAT_INTERVAL_MS = 20_000;
+
 interface TicketResponse {
   ticket: string;
   expires_at: string;
@@ -76,6 +102,7 @@ export class RealtimeClient {
   private attempt = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private stableTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   /** Set by `stop()`. Nothing reconnects while it stands. */
   private stopped = true;
 
@@ -248,6 +275,10 @@ export class RealtimeClient {
     if (frame.type === "connection.ready") {
       this.setStatus("ready");
       this.lastReadyAt = Date.now();
+      // Started here rather than on `open`: the deadline only begins once
+      // the gateway has a registered connection to apply it to, and this is
+      // the frame that says it does.
+      this.startHeartbeat();
       // §6: forgiven only after the connection *holds*. A socket that
       // authenticates and dies a second later has not recovered.
       this.stableTimer = setTimeout(() => {
@@ -294,7 +325,37 @@ export class RealtimeClient {
     void this.connect();
   }
 
+  /**
+   * Begins the heartbeat, replacing any that was running.
+   *
+   * **Cleared first, unconditionally.** Every reconnect reaches
+   * `connection.ready` again, and a start that merely assigned would leave
+   * the previous interval running against a socket that no longer exists —
+   * one extra ping per reconnect, for ever. That accumulation is the bug an
+   * interval in a class with a lifecycle invites, so it is closed here
+   * rather than relied upon not to happen.
+   */
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      // `send` is a no-op unless the socket is `ready`, so a tick that
+      // races a disconnect writes nothing. Fire-and-forget rather than
+      // `request`: a heartbeat that awaited its `pong` would put one
+      // pending entry per tick through the request registry, and the
+      // registry exists to correlate *decisions*, not liveness.
+      this.send("ping", {}, "system");
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer !== null) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = null;
+  }
+
   private teardownSocket(): void {
+    // Before the early return: a teardown with no socket still has to stop
+    // a heartbeat, and this runs on every path a connection ends by.
+    this.stopHeartbeat();
     const socket = this.socket;
     this.socket = null;
     if (socket === null) return;
@@ -311,6 +372,7 @@ export class RealtimeClient {
     if (this.stableTimer !== null) clearTimeout(this.stableTimer);
     this.retryTimer = null;
     this.stableTimer = null;
+    this.stopHeartbeat();
   }
 
   private setStatus(status: ConnectionStatus): void {

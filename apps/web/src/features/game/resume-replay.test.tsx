@@ -169,8 +169,8 @@ function move(ply: number, path: [string, string], sideToMove: "light" | "dark")
     ply,
     side_to_move: sideToMove,
     fingerprint: `fp${ply}`,
-    applied: { path, captured: [] },
-  } as MovePayload;
+    applied: { path, captured: [], promoted_to: null },
+  } satisfies MovePayload;
 }
 
 /**

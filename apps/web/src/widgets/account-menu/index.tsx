@@ -238,7 +238,13 @@ function MenuPanel({ title, children }: { title: string; children: React.ReactNo
   return (
     <DialogContent
       className={cn(
-        "top-16 right-2 bottom-auto left-auto w-72 max-w-[calc(100vw-1rem)]",
+        // `top-16` was the header's 56px plus a little — A64-031.C. The
+        // header now reserves the status bar as well, so a fixed 64px would
+        // open this panel *behind* it, and partly under the island. What has
+        // to stay constant is the gap below the header, not the offset from
+        // the top of a viewport whose top moved.
+        "top-[calc(4rem+env(safe-area-inset-top))] right-2 bottom-auto left-auto",
+        "w-72 max-w-[calc(100vw-1rem)]",
         "translate-x-0 translate-y-0 gap-3 rounded-xl p-4",
       )}
     >

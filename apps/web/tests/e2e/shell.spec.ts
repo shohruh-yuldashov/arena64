@@ -117,6 +117,41 @@ test("the header reserves the top inset, and reserves nothing when there is none
   });
   expect(declaration).toContain("safe-area-inset-top");
 
+  // Two surfaces are positioned *from* the top rather than padded away from
+  // it, and padding cannot reach either — A64-031.C review.
+  //
+  //   the account panel      opens at a fixed offset meant to clear the
+  //                          header, and the header is now taller
+  //   the drawer's close     is `absolute`, so it is placed from the padding
+  //                          edge and the drawer's own padding moves the
+  //                          title 35px while moving it 0
+  //
+  // Both must therefore derive their `top` from the inset. Counted rather
+  // than matched by selector, because the generated class names are escaped
+  // Tailwind and asserting those would be brittle in a way this is not: if
+  // either reverts to a constant, the count drops.
+  const positionedFromTheInset = await page.evaluate(() => {
+    let found = 0;
+    const walk = (rules: CSSRuleList) => {
+      for (const rule of Array.from(rules)) {
+        if (rule instanceof CSSStyleRule && rule.style.top.includes("safe-area-inset-top")) {
+          found += 1;
+        }
+        const nested = (rule as CSSGroupingRule).cssRules as CSSRuleList | undefined;
+        if (nested !== undefined) walk(nested);
+      }
+    };
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        walk(sheet.cssRules);
+      } catch {
+        continue;
+      }
+    }
+    return found;
+  });
+  expect(positionedFromTheInset).toBeGreaterThanOrEqual(2);
+
   // And the element that owns the top edge is the one carrying it.
   await expect(header).toHaveClass(/pt-safe-top/);
 

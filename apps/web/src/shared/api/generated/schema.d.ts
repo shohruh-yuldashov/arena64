@@ -5169,6 +5169,27 @@ export interface components {
          */
         BroadcastAudience: "all_players" | "specific_players";
         /**
+         * BroadcastChannel
+         * @description How it is delivered.
+         *
+         *     Two members, and both **include** the in-app row. That is not a
+         *     convention: on this platform a push is a pointer to a durable
+         *     notification — `PushPayload` carries an id and a type, and the service
+         *     worker renders a sentence and then opens the record — so a push without
+         *     a stored notification would be a buzz that leads nowhere. "Push instead
+         *     of in-app" is therefore not a state this domain can represent, which is
+         *     §2.4's rule applied to a channel.
+         *
+         *     Email is still not offered, and the deferral is still deliberate rather
+         *     than an oversight: a broadcast over email is a different risk class —
+         *     provider cost, sender reputation, a bounce path, and an unsubscribe
+         *     obligation that in-app delivery discharges through the preference
+         *     switch. §15 says to show only the channels that exist; showing an email
+         *     toggle this build would honour badly is worse than showing none.
+         * @enum {string}
+         */
+        BroadcastChannel: "in_app" | "in_app_and_push";
+        /**
          * BroadcastCreateRequest
          * @description What the composer submits.
          */
@@ -5180,6 +5201,8 @@ export interface components {
             /** Locale */
             locale: string;
             audience: components["schemas"]["BroadcastAudience"];
+            /** @default in_app */
+            channel: components["schemas"]["BroadcastChannel"];
             /**
              * Recipients
              * @default []
@@ -6715,6 +6738,44 @@ export interface components {
             thumbnail_url: string | null;
         };
         /**
+         * NotificationAnnouncementResponse
+         * @description The administrative announcement a notification carries — A64-031.D.
+         *
+         *     The **one** payload on this platform whose text is stored rather than
+         *     translated, for the reason `AnnouncementSummary` gives: an operator
+         *     writes the sentence and no compiled table can hold it. Every other
+         *     notification sends facts and the client renders the sentence.
+         *
+         *     `title` and `body` are **plain text**. There is no `html`, no `markdown`
+         *     and no `url` here because there is none in the stored payload either —
+         *     a client renders them as text and must not parse them as anything else.
+         *
+         *     `locale` is the language the operator wrote in, which is not necessarily
+         *     the reader's: it is sent so a client can mark the text with `lang` and
+         *     let a screen reader pronounce it correctly, rather than announcing
+         *     Russian prose with Uzbek rules.
+         */
+        NotificationAnnouncementResponse: {
+            /**
+             * Title
+             * @description Plain text, as written by an operator. Never markup.
+             * @example Scheduled maintenance on Sunday
+             */
+            title: string;
+            /**
+             * Body
+             * @description Plain text, as written by an operator. Never markup.
+             * @example The platform will be unavailable from 02:00 to 04:00 UTC.
+             */
+            body: string;
+            /**
+             * Locale
+             * @description The language the announcement was written in, for `lang`.
+             * @example en
+             */
+            locale: string;
+        };
+        /**
          * NotificationCategory
          * @description The bounded families a future preference switch will address.
          *
@@ -6829,13 +6890,18 @@ export interface components {
          * NotificationResponse
          * @description One durable notification.
          *
-         *     ## Three optional subject keys, exactly one of which is present
+         *     ## One optional subject key per payload, exactly one of which is present
          *
          *     A64-021.1 shipped with `actor` required and predicted this: *"the first
          *     type without an actor makes this optional and adds its own key beside
-         *     it."* A64-021.4 is that phase, and `actor`, `tournament` and `game` are
-         *     now three nullable keys — a social notification carries the first, a
-         *     tournament notification the second, a completed game the third.
+         *     it."* A64-021.4 is that phase, and the shape has grown one key per
+         *     payload since: `actor` for a social notification, `tournament` for a
+         *     tournament one, `game` for a completed game, `challenge` for a friend
+         *     challenge, and `announcement` for an administrative one.
+         *
+         *     The count is deliberately not stated here. It was written as "three"
+         *     and was wrong twice — once when `challenge` arrived and once when
+         *     `announcement` did — which is exactly the drift §2.5 warns about.
          *
          *     A discriminated union on the wire was the alternative and was not taken.
          *     It would name the payload shape twice — once as `type`, once as the
@@ -6869,6 +6935,8 @@ export interface components {
             game?: components["schemas"]["NotificationGameResponse"] | null;
             /** @description The friend challenge a challenge notification is about. */
             challenge?: components["schemas"]["NotificationChallengeResponse"] | null;
+            /** @description The announcement a platform notification carries. */
+            announcement?: components["schemas"]["NotificationAnnouncementResponse"] | null;
             target: components["schemas"]["NotificationTargetResponse"];
             /**
              * Created At

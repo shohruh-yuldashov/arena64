@@ -18,9 +18,14 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/shared/ui";
  *
  * The row renders a **translated** message assembled from a `type` and an
  * actor, never a string the server composed. That is what makes the same
- * notification readable in uz, ru and en, and it is why nothing here can
- * inject markup: there is no server-supplied string that reaches the DOM as
- * anything but text content.
+ * notification readable in uz, ru and en.
+ *
+ * A64-031.D added the one exception the backend always documented: a
+ * platform announcement carries text an operator wrote, because no compiled
+ * table can hold a sentence a human writes on the day they send it. It
+ * changes nothing about markup — stored text reaches the DOM as a **text
+ * child**, exactly as a translated sentence does, and there is no
+ * `dangerouslySetInnerHTML` on this path. See `model/render`.
  *
  * A `type` this build does not know renders the generic sentence rather than
  * a blank row or a key. A notification that arrives from a newer backend is
@@ -57,9 +62,8 @@ export function NotificationRow({
   // Both come from `model/render`, which is where the type-to-sentence and
   // type-to-avatar decisions live — A64-021.4 §20. The row renders what it
   // is handed and chooses nothing.
-  const { key, values } = notificationMessage(notification);
+  const rendered = notificationMessage(notification);
   const subject = notificationSubject(notification);
-  const message = t(key, values);
   // Relative in the text, absolute in the attributes — A64-025.10 §21.
   // A feed is read for recency, and "Sep 4, 2026, 1:40 PM" makes the reader
   // do the subtraction. The exact instant is still on the element, so it is
@@ -83,7 +87,38 @@ export function NotificationRow({
       </Avatar>
 
       <div className="min-w-0 flex-1">
-        <p className={notification.is_read ? "text-sm" : "text-sm font-medium"}>{message}</p>
+        {rendered.kind === "stored" ? (
+          // A64-031.D. An announcement is a *title and a body*, which is one
+          // line more than every other notification has — an operator writes
+          // a subject and then says the thing, and collapsing the two would
+          // throw away the half that carries the message.
+          //
+          // `lang` on the wrapper, not the page: the text is in the language
+          // it was written in, which need not be the one the interface is
+          // set to. Without it a screen reader reads Russian prose with the
+          // interface's pronunciation rules.
+          //
+          // Both are rendered as **text children**. React escapes them, so
+          // an operator cannot put markup on another player's screen even
+          // by accident — the same guarantee a translated sentence has.
+          <div lang={rendered.locale}>
+            <p className={notification.is_read ? "text-sm" : "text-sm font-medium"}>
+              {rendered.title}
+            </p>
+            {/* `whitespace-pre-line`, because a body's newlines are the
+                operator's paragraphing and the backend deliberately allows
+                them through — see the admin schema's control-character
+                filter, which strips everything in C0 *except* tab and
+                newline. */}
+            <p className="text-muted-foreground mt-1 text-sm whitespace-pre-line">
+              {rendered.body}
+            </p>
+          </div>
+        ) : (
+          <p className={notification.is_read ? "text-sm" : "text-sm font-medium"}>
+            {t(rendered.key, rendered.values)}
+          </p>
+        )}
         <p className="text-muted-foreground mt-0.5 text-xs">
           {/* `<time>` with a machine-readable `dateTime`, and human text
               inside it — §23, §28. The server's instant is authoritative;

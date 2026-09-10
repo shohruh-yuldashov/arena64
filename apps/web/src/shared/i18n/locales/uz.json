@@ -985,12 +985,14 @@
       "social": "Do'stlar va ijtimoiy",
       "game": "O'yinlar",
       "tournament": "Turnirlar",
+      "announcement": "E'lonlar",
       "system": "Hisob va xavfsizlik"
     },
     "categoryHints": {
       "social": "Do'stlik so'rovlari va siz o'ynaydigan odamlar.",
       "game": "Sizning navbatingiz, natijalar va da'vatlar.",
       "tournament": "Turlar, juftliklar va turnir jadvali.",
+      "announcement": "Arena64 jamoasidan yangiliklar va yangilanishlar.",
       "system": "Kirishlar, xavfsizlik va muhim xizmat xabarlari."
     },
     "channels": {

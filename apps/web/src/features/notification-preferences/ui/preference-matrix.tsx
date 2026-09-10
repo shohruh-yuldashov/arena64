@@ -18,9 +18,11 @@ import { Button, Spinner } from "@/shared/ui";
  *
  * ## Grouped by category, not rendered as a table
  *
- * A `<table>` of four rows by three columns reads well at 1200px and badly
- * at 360px, where a header cell and its checkbox end up on different
- * screens. Each category is its own `<fieldset>` with the channels inside
+ * A `<table>` of every category by every channel reads well at 1200px and
+ * badly at 360px, where a header cell and its checkbox end up on different
+ * screens. (It was "four rows by three columns" until A64-031.D, and the
+ * backend had served five categories since A64-027A — a count in a comment
+ * is a count nobody updates.) Each category is its own `<fieldset>` with the channels inside
  * it, which stacks naturally and — more importantly — gives a screen reader
  * the grouping for free: the legend is announced before every control it
  * contains, so "Email" is never heard without knowing email *of what*.
@@ -167,6 +169,34 @@ export function PreferenceMatrix({ preferences }: { preferences: NotificationPre
   );
 }
 
+/**
+ * Category copy, keyed exhaustively rather than interpolated.
+ *
+ * These were built as `` `…categories.${category}` as TranslationKey ``, and
+ * the cast is what let A64-027A's `announcement` category reach players as
+ * the raw key: the template literal is a `string`, so the assertion silenced
+ * the one check that would have caught the missing translation.
+ *
+ * `NotificationCategory` is generated from the backend enum, so a `Record`
+ * over it fails `npm run typecheck` the moment a category is added without
+ * copy — which is the guarantee the cast threw away.
+ */
+const CATEGORY_LABELS: Record<NotificationCategory, TranslationKey> = {
+  announcement: "notificationPreferences.categories.announcement",
+  game: "notificationPreferences.categories.game",
+  social: "notificationPreferences.categories.social",
+  system: "notificationPreferences.categories.system",
+  tournament: "notificationPreferences.categories.tournament",
+};
+
+const CATEGORY_HINTS: Record<NotificationCategory, TranslationKey> = {
+  announcement: "notificationPreferences.categoryHints.announcement",
+  game: "notificationPreferences.categoryHints.game",
+  social: "notificationPreferences.categoryHints.social",
+  system: "notificationPreferences.categoryHints.system",
+  tournament: "notificationPreferences.categoryHints.tournament",
+};
+
 function CategoryGroup({
   category,
   settings,
@@ -184,12 +214,8 @@ function CategoryGroup({
 
   return (
     <fieldset className="border-border bg-card rounded-xl border p-5">
-      <legend className="px-1 text-sm font-semibold">
-        {t(`notificationPreferences.categories.${category}` as TranslationKey)}
-      </legend>
-      <p className="text-muted-foreground text-xs">
-        {t(`notificationPreferences.categoryHints.${category}` as TranslationKey)}
-      </p>
+      <legend className="px-1 text-sm font-semibold">{t(CATEGORY_LABELS[category])}</legend>
+      <p className="text-muted-foreground text-xs">{t(CATEGORY_HINTS[category])}</p>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-3 sm:gap-6">
         {settings.map((setting) => (

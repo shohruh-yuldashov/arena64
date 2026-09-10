@@ -985,12 +985,14 @@
       "social": "Friends and social",
       "game": "Games",
       "tournament": "Tournaments",
+      "announcement": "Announcements",
       "system": "Account and security"
     },
     "categoryHints": {
       "social": "Friend requests and the people you play with.",
       "game": "Your turn, results and challenges.",
       "tournament": "Rounds, pairings and standings.",
+      "announcement": "News and updates from the Arena64 team.",
       "system": "Sign-ins, security and essential service notices."
     },
     "channels": {

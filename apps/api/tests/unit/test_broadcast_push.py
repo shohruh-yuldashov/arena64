@@ -35,10 +35,12 @@ send time is asserted in `test_notification_push.py`.
 
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
 
+from app.core.unit_of_work import UnitOfWork
 from app.modules.notifications.application.ports import (
     DeliveryRequest,
     DuePushDelivery,
@@ -197,8 +199,8 @@ class _Subscriptions:
                     id=uuid4(),
                     user_id=user_id,
                     endpoint=f"https://push.example/{user_id}",
-                    p256dh="p256dh-key",
-                    auth="auth-secret",
+                    p256dh=b"p256dh-key",
+                    auth=b"auth-secret",
                     created_at=NOW,
                     updated_at=NOW,
                     last_seen_at=NOW,
@@ -243,14 +245,14 @@ def _expander(
     expander = BroadcastExpander(
         broadcasts=_Broadcasts(broadcast),  # type: ignore[arg-type]
         notifications=notes,  # type: ignore[arg-type]
-        audience=_Audience(broadcast.recipients),  # type: ignore[arg-type]
+        audience=_Audience(broadcast.recipients),
         policy=policy or _Policy(),  # type: ignore[arg-type]
-        announcer=_Announcer(),  # type: ignore[arg-type]
+        announcer=_Announcer(),
         push_deliveries=pushes,  # type: ignore[arg-type]
         subscriptions=subscriptions or _Subscriptions(),  # type: ignore[arg-type]
         availability=availability,
-        clock=_Clock(),  # type: ignore[arg-type]
-        unit_of_work=_UnitOfWork(),  # type: ignore[arg-type]
+        clock=_Clock(),
+        unit_of_work=cast(UnitOfWork, _UnitOfWork()),
     )
     return expander, pushes, notes
 

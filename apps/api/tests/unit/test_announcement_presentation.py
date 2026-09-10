@@ -24,6 +24,7 @@ keeps them together.
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -38,6 +39,7 @@ from app.modules.notifications.domain.record import (
     NavigationTarget,
     NavigationTargetType,
     NotificationCategory,
+    NotificationPayload,
     NotificationRecord,
     NotificationType,
 )
@@ -55,13 +57,18 @@ class _Avatars:
         return None
 
 
-def _record(payload: object, *, type_: NotificationType, category: NotificationCategory):
+def _record(
+    payload: NotificationPayload,
+    *,
+    type_: NotificationType,
+    category: NotificationCategory,
+) -> NotificationRecord:
     return NotificationRecord(
         id=uuid4(),
         recipient_id=RECIPIENT,
         type=type_,
         category=category,
-        payload=payload,  # type: ignore[arg-type]
+        payload=payload,
         target=NavigationTarget(type=NavigationTargetType.HOME),
         source_event_id=uuid4(),
         created_at=NOW,
@@ -76,7 +83,7 @@ def _announcement(**overrides: str) -> NotificationRecord:
     }
     fields.update(overrides)
     return _record(
-        AnnouncementSummary(**fields),  # type: ignore[arg-type]
+        AnnouncementSummary(**fields),
         type_=NotificationType.PLATFORM_ANNOUNCEMENT,
         category=NotificationCategory.ANNOUNCEMENT,
     )
@@ -170,15 +177,20 @@ class TestTheChannelIsAClosedChoice:
         # §2.4. The one field that decides whether phones buzz cannot be
         # widened by a request — `email`, `sms` and anything else is a
         # validation error before the service is reached.
+        # Splatted rather than written inline: `sms` is invalid *by design*
+        # here, and a type checker that rejected it at the call site would
+        # be refusing to let this test express what it is testing.
+        invalid: dict[str, Any] = {
+            "title": "Maintenance",
+            "body": "Back at 04:00.",
+            "locale": "en",
+            "audience": BroadcastAudience.ALL_PLAYERS,
+            "channel": "sms",
+            "idempotency_key": "key-00000001",
+        }
+
         with pytest.raises(ValidationError):
-            BroadcastCreateRequest(
-                title="Maintenance",
-                body="Back at 04:00.",
-                locale="en",
-                audience=BroadcastAudience.ALL_PLAYERS,
-                channel="sms",  # type: ignore[arg-type]
-                idempotency_key="key-00000001",
-            )
+            BroadcastCreateRequest(**invalid)
 
 
 class TestTheWorkerAndTheBackendAgreeOnWhatIsPushed:

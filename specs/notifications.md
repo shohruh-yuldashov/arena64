@@ -945,8 +945,9 @@ category, the channel.
 
 ### 15.1 What is pushed
 
-`domain/push.py`'s `PUSH_CAPABLE_TYPES`: the same three tournament types the
-email channel sends.
+`domain/push.py`'s `PUSH_CAPABLE_TYPES`. It began as the three tournament
+types the email channel sends and has grown twice since; email's set has
+not, so the two are no longer the same list.
 
 | Pushed | Why |
 | --- | --- |
@@ -958,6 +959,7 @@ email channel sends.
 | `friend_request_accepted` | A64-021.6A. The moment two people can actually play |
 | `friend_challenge_received` | A64-022.4. Somebody is waiting, with a clock: the invitation expires in twenty-four hours |
 | `friend_challenge_accepted` | A64-022.4. A match now exists and both players must join it inside ten minutes |
+| `platform_announcement` | A64-031.D, ADR-007. The only member a **human** decides to send, per broadcast — see below |
 
 | Not pushed | Why |
 | --- | --- |
@@ -965,6 +967,27 @@ email channel sends.
 
 Push defaults to **off** for every category (`_default_for`: in-app on,
 everything else off). A channel that interrupts has to be asked for.
+
+#### The administrative type — A64-031.D
+
+`platform_announcement` is on the list for a different reason from every
+other member. The others are admitted because the platform judged the *type*
+worth interrupting for; this one is admitted because an operator with the
+role judged *this message* worth it, and nobody outside the console can
+reach it.
+
+Membership is necessary but not sufficient. `BroadcastChannel` decides per
+broadcast whether any push row is written at all, and it defaults to
+`IN_APP`, so an announcement is silent unless somebody asked otherwise. The
+push then carries **no authored text** — the service worker renders "Arena64
+— You have a new announcement." from its own table, exactly as it does for
+every other type, because an announcement can say something the reader would
+not choose to display on a lock screen. ADR-007 records why that was not
+relaxed for the one type whose text a human wrote.
+
+The preference is asked twice on this path: once by `BroadcastExpander`
+before a row is written, once by `PushDeliveryService` at send time. An
+administrator does not get a way around a player's own choice — §15.
 
 #### The friend types, and the concern that deferred them
 

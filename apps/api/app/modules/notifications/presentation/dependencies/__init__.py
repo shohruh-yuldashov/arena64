@@ -313,7 +313,13 @@ def build_broadcast_expander(
     The delivery policy has no switch here either. §15 requires that an
     administrator cannot reach a player who muted announcements, and the
     only way to guarantee that is for there to be no way to assemble an
-    expander that does not ask.
+    expander that does not ask. A64-031.D gave the expander a push channel
+    and did not weaken that: the push rows it writes are drained by
+    `PushDeliveryService`, which asks the same policy again at send time.
+
+    `availability` reaches the expander itself as well as its policy, for
+    the reason the writer's does — it is what stops a deployment with no
+    push provider queueing rows nothing will ever drain.
     """
     return BroadcastExpander(
         broadcasts=SqlAlchemyBroadcastRepository(session),
@@ -325,6 +331,9 @@ def build_broadcast_expander(
             )
         ),
         announcer=announcer if announcer is not None else NullNotificationAnnouncer(),
+        push_deliveries=SqlAlchemyPushDeliveryRepository(session),
+        subscriptions=SqlAlchemyPushSubscriptionRepository(session),
+        availability=availability,
         clock=clock,
         unit_of_work=SessionUnitOfWork(session),
     )

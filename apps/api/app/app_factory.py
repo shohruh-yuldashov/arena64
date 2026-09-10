@@ -1497,6 +1497,12 @@ def build_task_schedulers(
     # A64-027A §19. Unconditional, unlike the two above it: in-app delivery
     # has no provider to be missing, so a process that can serve the admin
     # API can always finish the broadcasts that API queues.
+    #
+    # A64-031.D added a push channel to a broadcast and did **not** make
+    # this conditional. An `IN_APP_AND_PUSH` broadcast still owes every
+    # recipient the durable row, so a process without a VAPID key must
+    # finish it rather than decline it; `channel_availability` below is what
+    # stops such a process queueing push rows it could not drain.
     handlers.append(
         NotificationBroadcastTask(
             session_factory=db.session_factory,
@@ -1510,6 +1516,11 @@ def build_task_schedulers(
             service_factory=lambda session: build_broadcast_expander(
                 session,
                 clock=clock,
+                # Without this the expander defaults to `IN_APP_ONLY` and
+                # an `IN_APP_AND_PUSH` broadcast silently delivers as if it
+                # were `IN_APP` — the administrator's choice accepted by
+                # the API and dropped by the worker.
+                availability=channel_availability,
             ),
         )
     )

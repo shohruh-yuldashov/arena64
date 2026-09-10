@@ -7,7 +7,7 @@
 | **Deciders** | Shohruh |
 | **Consulted** | — |
 | **Supersedes** | — |
-| **Superseded by** | — |
+| **Superseded by** | [ADR-007](./ADR-007-announcement-push-channel.md), **channel clause only** — "The channel is in-app only" no longer holds for push. Every other decision below stands, including the refusal of email. |
 | **Related** | `specs/admin.md` §7, `specs/notifications.md`, `app/modules/notifications/domain/broadcast.py`, `app/modules/notifications/domain/record.py` |
 
 ---

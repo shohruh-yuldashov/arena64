@@ -152,10 +152,14 @@ const NAVIGATION_REF = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 /**
  * The closed table — §12, §13.
  *
- * Five entries, matching `domain.push.PUSH_CAPABLE_TYPES` exactly. A type
- * the backend adds without an entry here is not broken: it renders the
- * generic notification and opens the list, which is `PRESENTATIONS`'s whole
+ * One entry per member of `domain.push.PUSH_CAPABLE_TYPES`. A type the
+ * backend adds without an entry here is not broken: it renders the generic
+ * notification and opens the list, which is `PRESENTATIONS`'s whole
  * degradation story.
+ *
+ * The count is deliberately not written here. It said "five" through two
+ * additions that made it eight, and a number nobody updates is worse than
+ * no number — the test beside this file asserts the correspondence instead.
  *
  * Every `path` comes from `NOTIFICATION_ROUTES`, the same constants the
  * in-app list resolves through — so a push whose text says "friend request"
@@ -221,6 +225,29 @@ const PRESENTATIONS: Readonly<Record<string, Presentation>> = {
     body: "Your game challenge was accepted.",
     path: NOTIFICATION_ROUTES.notifications,
     pathWithRef: (ref) => `/games/${ref}`,
+  },
+  // **A64-031.D.** The one type whose in-app row carries text a human wrote
+  // — and the one entry where that text is deliberately *not* repeated here.
+  //
+  // It would fit: the payload could carry the operator's title, and it would
+  // read far better on a lock screen than this does. It is refused for the
+  // reason this module exists (§12, approach B): an announcement can say
+  // "your account has been restricted", and server-composed prose on a lock
+  // screen is text the person did not choose to display in public. The
+  // generic sentence discloses that this person uses Arena64 and nothing
+  // more, and the announcement itself is one tap away behind their session.
+  //
+  // That also makes injection unreachable rather than filtered: no operator
+  // string travels in a push payload, so there is nothing here to escape.
+  //
+  // The destination is the notification list rather than the row's own
+  // target — an announcement's target is `home`, which `notificationHref`
+  // resolves to no link at all, because the announcement *is* the row. The
+  // list is where it can actually be read.
+  platform_announcement: {
+    title: "Arena64",
+    body: "You have a new announcement.",
+    path: NOTIFICATION_ROUTES.notifications,
   },
 };
 

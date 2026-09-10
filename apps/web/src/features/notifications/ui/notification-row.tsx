@@ -102,7 +102,26 @@ export function NotificationRow({
           // an operator cannot put markup on another player's screen even
           // by accident — the same guarantee a translated sentence has.
           <div lang={rendered.locale}>
-            <p className={notification.is_read ? "text-sm" : "text-sm font-medium"}>
+            {/* `break-words` on both, because this is the only text on the
+                row a human typed. Every other branch interpolates a
+                validated, short value — a username, a tournament name — and
+                wraps at spaces; a title is 120 characters of whatever an
+                operator pasted, and one unbroken token paints straight out
+                of the row.
+
+                It does not widen the element, which is why a rect or a
+                class-string assertion misses it: measured at 360px with a
+                120-character title, the page's own `scrollWidth` went to
+                5503px against a 400px viewport, and to 400px with this.
+
+                The same pair `profile-header` puts on a player's bio, for
+                the same reason. */}
+            <p
+              className={cn(
+                "break-words",
+                notification.is_read ? "text-sm" : "text-sm font-medium",
+              )}
+            >
               {rendered.title}
             </p>
             {/* `whitespace-pre-line`, because a body's newlines are the
@@ -110,7 +129,7 @@ export function NotificationRow({
                 them through — see the admin schema's control-character
                 filter, which strips everything in C0 *except* tab and
                 newline. */}
-            <p className="text-muted-foreground mt-1 text-sm whitespace-pre-line">
+            <p className="text-muted-foreground mt-1 text-sm break-words whitespace-pre-line">
               {rendered.body}
             </p>
           </div>

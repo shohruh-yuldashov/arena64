@@ -2142,6 +2142,40 @@ backend that adds a seventh type would otherwise silently render whichever
 branch matched its payload shape; switching on type falls through to the
 generic sentence, which is what §21.8's safe degradation means.
 
+### 21.9a The stored-text exception — A64-031.D
+
+One type does not fit the table above, and it is the backend's exception
+rather than the client's: `platform_announcement` carries `title` and `body`
+an operator wrote, because no table compiled into this build can hold a
+sentence a human writes on the day they send it. See ADR-006.
+
+`notificationMessage` therefore returns a **union**, not a key and values:
+
+| Form | Carries | Rendered as |
+| --- | --- | --- |
+| `translated` | a `TranslationKey` and its interpolation values | one line, `t(key, values)` |
+| `stored` | `title`, `body`, `locale` | two lines, marked with `lang` |
+
+A union rather than optional fields, because a row carrying both a key and
+stored text would be a row with two sentences and no rule for which wins.
+
+Three properties this must keep, and each is asserted in
+`features/notifications/announcement.test.tsx`:
+
+- **It is text, never markup.** Both strings reach the DOM as text children,
+  so React escapes them. There is no `dangerouslySetInnerHTML` on this path,
+  and the backend refuses control characters at its own boundary.
+- **`lang` is the authoring language**, which need not be the reader's —
+  without it a screen reader pronounces Russian prose with the interface's
+  rules (WCAG 3.1.2).
+- **A missing payload degrades to the generic sentence.** A type this build
+  knows, arriving without the key it promises, is malformed, and two empty
+  lines is a worse answer than a short one.
+
+The row is **not a link**: an announcement's target is `home`, which
+`notificationHref` resolves to nothing, and the announcement *is* the row —
+there is nowhere for a tap to go (§6).
+
 ### 21.10 Extended navigation — A64-021.4
 
 `notificationHref` gains three branches:
@@ -2361,7 +2395,8 @@ its default already resolved. Four independent facts per cell (`enabled`,
 them.
 
 Grouped by **category**, each in its own `<fieldset>` with a `<legend>`,
-rather than as a table. A 4×3 table reads well at 1200px and badly at 360px,
+rather than as a table. A table of every category by every channel reads
+well at 1200px and badly at 360px,
 where a header cell and its checkbox land on different screens; the fieldset
 also gives a screen reader the grouping for free, so "Email" is never heard
 without knowing email *of what*.

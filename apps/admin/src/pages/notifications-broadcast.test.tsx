@@ -228,7 +228,14 @@ it("keeps the composed text when a send fails", async () => {
 
 it("sends no link, image or markup field", async () => {
   // The open-redirect protection, from the client's side: the request body
-  // is exactly the four fields the domain accepts.
+  // is exactly the fields the domain accepts — pinned as a whole set rather
+  // than as a list of absences, so a `url`, `html`, `image` or `action_url`
+  // fails this the day somebody adds one.
+  //
+  // `channel` joined the set in A64-031.D. It is a closed enum on both
+  // sides and carries no destination, so it does not weaken what this
+  // guards; the assertion below is what makes that a decision somebody had
+  // to make deliberately.
   const stub = stubApi();
   const person = userEvent.setup();
   renderAt("/notifications?tab=send");
@@ -247,11 +254,89 @@ it("sends no link, image or markup field", async () => {
   expect(Object.keys(stub.posts[0]?.body ?? {}).sort()).toEqual([
     "audience",
     "body",
+    "channel",
     "idempotency_key",
     "locale",
     "recipients",
     "title",
   ]);
+});
+
+async function send(person: ReturnType<typeof userEvent.setup>) {
+  await person.click(screen.getByRole("button", { name: /Ko'rib chiqish|Проверить|Review/ }));
+  await person.click(
+    within(await screen.findByRole("dialog")).getByRole("button", {
+      name: /Yuborish|Отправить|^Send$/,
+    }),
+  );
+}
+
+/**
+ * The push channel — A64-031.D.
+ *
+ * The console could compose an announcement and had no way to send one as a
+ * push, which is what these two assert from the operator's side. The other
+ * half — that the request actually enqueues deliveries, and that a player
+ * who muted the category still receives nothing — is the backend's, in
+ * `tests/unit/test_broadcast_push.py`.
+ */
+it("sends no push unless the operator asked for one", async () => {
+  // The default matters more than the toggle: an operator who did not think
+  // about the channel must not interrupt anybody's evening.
+  const stub = stubApi();
+  const person = userEvent.setup();
+  renderAt("/notifications?tab=send");
+
+  await compose(person);
+  await send(person);
+  await waitFor(() => {
+    expect(stub.posts).toHaveLength(1);
+  });
+
+  expect((stub.posts[0]?.body as { channel?: string }).channel).toBe("in_app");
+});
+
+it("sends a push when the operator turns it on", async () => {
+  const stub = stubApi();
+  const person = userEvent.setup();
+  renderAt("/notifications?tab=send");
+
+  await compose(person);
+  const toggle = screen.getByRole("button", {
+    name: /Push bildirishnoma ham|push-уведомление|Also send a push/i,
+  });
+  expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await person.click(toggle);
+  expect(toggle).toHaveAttribute("aria-pressed", "true");
+
+  await send(person);
+  await waitFor(() => {
+    expect(stub.posts).toHaveLength(1);
+  });
+
+  expect((stub.posts[0]?.body as { channel?: string }).channel).toBe("in_app_and_push");
+});
+
+it("restates the chosen channel in the confirmation", async () => {
+  // §18: an administrator confirms what they are about to do. A dialog that
+  // said "In-app" while the request carried a push would be worse than one
+  // that said nothing.
+  stubApi();
+  const person = userEvent.setup();
+  renderAt("/notifications?tab=send");
+
+  await compose(person);
+  await person.click(
+    screen.getByRole("button", {
+      name: /Push bildirishnoma ham|push-уведомление|Also send a push/i,
+    }),
+  );
+  await person.click(screen.getByRole("button", { name: /Ko'rib chiqish|Проверить|Review/ }));
+
+  const dialog = await screen.findByRole("dialog");
+  expect(
+    within(dialog).getByText(/Ilova ichida va push|В приложении и push|In-app and push/),
+  ).toBeInTheDocument();
 });
 
 it("refuses a named audience that is not a list of ids", async () => {

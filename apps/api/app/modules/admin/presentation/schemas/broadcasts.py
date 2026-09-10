@@ -16,6 +16,11 @@ that arrives must be checked at it.
     audience shape  a named audience without recipients, or a platform-wide
                     one with them, is a contradiction rather than a default
 
+`channel` is a **closed enum**, so the one field that decides whether
+phones buzz cannot be widened by a request: an unknown value is refused by
+Pydantic before the service sees it, and the only two members both write the
+in-app row.
+
 There is deliberately **no** `html`, `markdown`, `url`, `image` or
 `action_url` field. §16 permits an action and an image only if the domain
 supports them, and it does not: `NavigationTargetType` is a closed set of
@@ -36,6 +41,7 @@ from app.modules.notifications.domain.broadcast import (
     MAX_TITLE_LENGTH,
     Broadcast,
     BroadcastAudience,
+    BroadcastChannel,
 )
 
 #: Everything in the C0 range except tab and newline, plus C1 and the
@@ -67,6 +73,14 @@ class BroadcastCreateRequest(BaseModel):
     locale: Annotated[str, Field(min_length=2, max_length=8)]
 
     audience: BroadcastAudience
+
+    #: Which channels to use — A64-031.D. Defaulted to the quieter one, so
+    #: a client that has not been updated cannot start sending pushes, and
+    #: an administrator who wants one has to have chosen it.
+    #:
+    #: A player who muted the `announcement` category, or the push channel,
+    #: still receives nothing: this is a request, not an override. §15.
+    channel: BroadcastChannel = BroadcastChannel.IN_APP
 
     recipients: Annotated[list[UUID], Field(max_length=MAX_NAMED_RECIPIENTS)] = []
 

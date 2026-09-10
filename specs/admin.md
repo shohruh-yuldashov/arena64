@@ -1768,14 +1768,15 @@ translated word and a dot that survives forced-colours mode.
 
 ## 10.6 Broadcasts
 
-See ADR-006 for why an announcement stores its text. The console side:
+See ADR-006 for why an announcement stores its text, and ADR-007 for why it
+may also push. The console side:
 
 | Property | Behaviour |
 | --- | --- |
 | Workflow | audience first, content second, confirmation restating both |
 | Audience | all eligible players, or up to 100 named ids |
-| Channel | in-app only. Email and push are deferred, not hidden |
-| Preview | one preview, for the one real channel (§17) |
+| Channel | in-app, or in-app **and** push — chosen per broadcast, defaulting to in-app. Email is deferred, not hidden (ADR-007) |
+| Preview | one preview, of the in-app row. A push shows a fixed sentence and never the authored text, so there is nothing of the operator's to preview (§17) |
 | Idempotency | one key per composition, reused across retries |
 | Failure | the dialog stays open with the text intact |
 | History | title, audience, status, delivered/audience, sent |
@@ -2224,10 +2225,13 @@ live API: `/login`, `/`, `/users`, `/users/{id}`, `/matches`,
 
 **No broadcast detail page.** The History row already renders every field
 the operator acts on. `GET /admin/broadcasts/{id}` adds only `locale` and
-`channel`, and `channel` is always in-app. The one thing a detail page could
-usefully add — that broadcast's own deliveries — is not reachable: the
-deliveries endpoint filters by recipient and failure, not by broadcast. A
-route that repeats its own row is a click that returns nothing.
+`channel`. `channel` became a real choice in ADR-007 and the History row
+does **not** yet show it — a known gap, and still not an argument for a
+detail page: the fix is a column beside the fields already there. The one
+thing a detail page could usefully add — that broadcast's own deliveries —
+is not reachable: the deliveries endpoint filters by recipient and failure,
+not by broadcast. A route that repeats its own row is a click that returns
+nothing.
 
 **Two feedback mechanisms, one rule.** The broadcast composer confirms with
 a toast; tournament actions and sanctions confirm inline. That is not an

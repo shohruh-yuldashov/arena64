@@ -86,16 +86,47 @@ class BroadcastAudience(StrEnum):
 class BroadcastChannel(StrEnum):
     """How it is delivered.
 
-    One member. Email and push both exist on this platform and neither is
-    offered here, which is a deliberate deferral rather than an oversight:
-    a broadcast over email is a different risk class — provider cost, sender
-    reputation, a bounce path, and an unsubscribe obligation that in-app
-    delivery discharges through the preference switch. §15 says to show only
-    the channels that exist; showing an email toggle this build would honour
-    badly is worse than showing none.
+    Two members, and both **include** the in-app row. That is not a
+    convention: on this platform a push is a pointer to a durable
+    notification — `PushPayload` carries an id and a type, and the service
+    worker renders a sentence and then opens the record — so a push without
+    a stored notification would be a buzz that leads nowhere. "Push instead
+    of in-app" is therefore not a state this domain can represent, which is
+    §2.4's rule applied to a channel.
+
+    Email is still not offered, and the deferral is still deliberate rather
+    than an oversight: a broadcast over email is a different risk class —
+    provider cost, sender reputation, a bounce path, and an unsubscribe
+    obligation that in-app delivery discharges through the preference
+    switch. §15 says to show only the channels that exist; showing an email
+    toggle this build would honour badly is worse than showing none.
     """
 
     IN_APP = "in_app"
+    """A durable notification and nothing more. The default, and what every
+    broadcast written before A64-031.D was."""
+
+    IN_APP_AND_PUSH = "in_app_and_push"
+    """The same row, plus a push to the recipient's registered browsers.
+
+    Named for what it does rather than `PUSH`, so that no reader has to
+    learn that "push" silently also means "in-app". Fifteen characters, and
+    the column is `String(16)` — see `infrastructure/models.py`.
+
+    A recipient who has muted the `announcement` category, or the push
+    channel, still receives nothing: this says what the administrator asked
+    for, not what any particular player gets. §15.
+    """
+
+    @property
+    def includes_push(self) -> bool:
+        """Whether this channel asks for a push beside the stored row.
+
+        A property rather than an `is IN_APP_AND_PUSH` at each call site:
+        a third channel that also pushes would otherwise have to find every
+        comparison, and one of them would be missed.
+        """
+        return self is BroadcastChannel.IN_APP_AND_PUSH
 
 
 class BroadcastStatus(StrEnum):

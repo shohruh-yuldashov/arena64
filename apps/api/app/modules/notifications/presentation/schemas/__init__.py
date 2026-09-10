@@ -46,6 +46,7 @@ from app.modules.notifications.application.read_models import (
 )
 from app.modules.notifications.domain.record import (
     ActorSummary,
+    AnnouncementSummary,
     ChallengeSummary,
     GameResultSummary,
     NotificationRecord,
@@ -212,16 +213,53 @@ class NotificationChallengeResponse(BaseResponseDTO):
     )
 
 
+class NotificationAnnouncementResponse(BaseResponseDTO):
+    """The administrative announcement a notification carries — A64-031.D.
+
+    The **one** payload on this platform whose text is stored rather than
+    translated, for the reason `AnnouncementSummary` gives: an operator
+    writes the sentence and no compiled table can hold it. Every other
+    notification sends facts and the client renders the sentence.
+
+    `title` and `body` are **plain text**. There is no `html`, no `markdown`
+    and no `url` here because there is none in the stored payload either —
+    a client renders them as text and must not parse them as anything else.
+
+    `locale` is the language the operator wrote in, which is not necessarily
+    the reader's: it is sent so a client can mark the text with `lang` and
+    let a screen reader pronounce it correctly, rather than announcing
+    Russian prose with Uzbek rules.
+    """
+
+    title: str = Field(
+        description="Plain text, as written by an operator. Never markup.",
+        examples=["Scheduled maintenance on Sunday"],
+    )
+    body: str = Field(
+        description="Plain text, as written by an operator. Never markup.",
+        examples=["The platform will be unavailable from 02:00 to 04:00 UTC."],
+    )
+    locale: str = Field(
+        description="The language the announcement was written in, for `lang`.",
+        examples=["en"],
+    )
+
+
 class NotificationResponse(BaseResponseDTO):
     """One durable notification.
 
-    ## Three optional subject keys, exactly one of which is present
+    ## One optional subject key per payload, exactly one of which is present
 
     A64-021.1 shipped with `actor` required and predicted this: *"the first
     type without an actor makes this optional and adds its own key beside
-    it."* A64-021.4 is that phase, and `actor`, `tournament` and `game` are
-    now three nullable keys — a social notification carries the first, a
-    tournament notification the second, a completed game the third.
+    it."* A64-021.4 is that phase, and the shape has grown one key per
+    payload since: `actor` for a social notification, `tournament` for a
+    tournament one, `game` for a completed game, `challenge` for a friend
+    challenge, and `announcement` for an administrative one.
+
+    The count is deliberately not stated here. It was written as "three"
+    and was wrong twice — once when `challenge` arrived and once when
+    `announcement` did — which is exactly the drift §2.5 warns about.
 
     A discriminated union on the wire was the alternative and was not taken.
     It would name the payload shape twice — once as `type`, once as the
@@ -247,6 +285,9 @@ class NotificationResponse(BaseResponseDTO):
     )
     challenge: NotificationChallengeResponse | None = Field(
         default=None, description="The friend challenge a challenge notification is about."
+    )
+    announcement: NotificationAnnouncementResponse | None = Field(
+        default=None, description="The announcement a platform notification carries."
     )
     target: NotificationTargetResponse
     created_at: datetime = Field(
@@ -324,6 +365,15 @@ class NotificationResponse(BaseResponseDTO):
                     match_id=payload.match_id,
                 )
                 if isinstance(payload, ChallengeSummary)
+                else None
+            ),
+            announcement=(
+                NotificationAnnouncementResponse(
+                    title=payload.title,
+                    body=payload.body,
+                    locale=payload.locale,
+                )
+                if isinstance(payload, AnnouncementSummary)
                 else None
             ),
             target=NotificationTargetResponse(type=record.target.type.value, ref=record.target.ref),
@@ -405,6 +455,7 @@ __all__ = [
     "InvalidCursor",
     "MarkAllReadResponse",
     "NotificationActorResponse",
+    "NotificationAnnouncementResponse",
     "NotificationChallengeResponse",
     "NotificationGameResponse",
     "NotificationPageResponse",

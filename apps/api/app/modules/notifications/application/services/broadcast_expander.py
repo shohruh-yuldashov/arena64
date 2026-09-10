@@ -29,9 +29,23 @@ Every recipient goes through `NotificationDeliveryPolicy` exactly as an
 event-driven notification does. §15: an administrator does not get a way
 around a player's own choice, and `ANNOUNCEMENT` is deliberately absent from
 `preference.LOCKED` so that the choice exists to be honoured.
+
+## The push half — A64-031.D
+
+A broadcast may also ask to interrupt, and `_push_enqueue` is that half. It
+writes delivery rows and contacts nothing; `PushDeliveryService` sends them
+later and asks the preference **again** at that point, so the two gates are
+independent and neither administrator nor operator can stand in for the
+player's own answer.
+
+The in-app row is written either way. A push on this platform carries an id
+and a type and the worker fetches the record behind the reader's session, so
+an announcement delivered as a push alone would be a buzz that leads nowhere
+— which is why `BroadcastChannel` has no member that skips this half.
 """
 
 import logging
+from collections.abc import Sequence
 from typing import Final
 from uuid import UUID, uuid4
 
@@ -42,15 +56,20 @@ from app.modules.notifications.application.ports import (
     NotificationAnnouncer,
     NotificationDeliveryPolicy,
     NotificationRepository,
+    PushDeliveryRepository,
+    PushSubscriptionRepository,
 )
 from app.modules.notifications.application.ports_broadcast import BroadcastRepository
+from app.modules.notifications.application.services.push_delivery_service import (
+    push_deliveries_for,
+)
 from app.modules.notifications.domain.broadcast import (
     Broadcast,
     BroadcastAudience,
     BroadcastStatus,
     notification_id_for,
 )
-from app.modules.notifications.domain.preference import DeliveryChannel
+from app.modules.notifications.domain.preference import ChannelAvailability, DeliveryChannel
 from app.modules.notifications.domain.record import (
     AnnouncementSummary,
     NavigationTarget,
@@ -81,6 +100,9 @@ class BroadcastExpander:
         audience: NotificationAudienceDirectory,
         policy: NotificationDeliveryPolicy,
         announcer: NotificationAnnouncer,
+        push_deliveries: PushDeliveryRepository,
+        subscriptions: PushSubscriptionRepository,
+        availability: ChannelAvailability,
         clock: Clock,
         unit_of_work: UnitOfWork,
     ) -> None:
@@ -89,6 +111,9 @@ class BroadcastExpander:
         self._audience = audience
         self._policy = policy
         self._announcer = announcer
+        self._push_deliveries = push_deliveries
+        self._subscriptions = subscriptions
+        self._availability = availability
         self._clock = clock
         self._unit_of_work = unit_of_work
 
@@ -185,6 +210,8 @@ class BroadcastExpander:
             if await self._notifications.append(record):
                 written.append(record)
 
+        await self._push_enqueue(broadcast, written)
+
         await self._broadcasts.record_progress(
             broadcast.id,
             cursor=recipients[-1],
@@ -208,6 +235,60 @@ class BroadcastExpander:
             },
         )
         return len(written)
+
+    async def _push_enqueue(
+        self, broadcast: Broadcast, written: Sequence[NotificationRecord]
+    ) -> None:
+        """The pushes this batch owes — A64-031.D.
+
+        Three gates, and each removes a different mistake:
+
+            the channel        an `IN_APP` broadcast enqueues nothing, so
+                               the administrator's choice is honoured before
+                               a single row is considered
+            availability       a deployment with no push provider writes no
+                               rows it could never drain — the same guard
+                               `DurableNotificationWriter` applies
+            what was written   only rows this batch actually inserted. A
+                               replayed batch inserts nothing and therefore
+                               owes nothing, which is what keeps the crash
+                               cheap: the pushes were enqueued the first
+                               time
+
+        **Inside the caller's transaction**, deliberately. `run_once` holds
+        the unit of work across this and `record_progress`, so the intent to
+        push is exactly as durable as the notification it describes and as
+        the cursor that will stop the batch being repeated. Enqueueing after
+        the commit would leave a window in which a crash produced rows
+        nobody would ever be pushed about.
+
+        No push service is contacted and no key is read here. This writes
+        rows saying "these browsers owe this a push"; `PushDeliveryService`
+        decides whether to send, against the recipient's preference and
+        their subscriptions as they are *then* (§14) — which is why an
+        administrator cannot push past somebody who muted the category.
+        """
+        if not broadcast.channel.includes_push or not written:
+            return
+        if not self._availability.can_deliver(DeliveryChannel.PUSH):
+            return
+
+        due = await push_deliveries_for(written, subscriptions=self._subscriptions)
+        if not due:
+            return
+
+        await self._push_deliveries.enqueue(due, at=self._clock.now())
+        logger.info(
+            "broadcast_push_enqueued",
+            extra={
+                # Counts and one id. Never a recipient, never a subscription
+                # — an endpoint is a credential, and this line is read in a
+                # console.
+                "broadcast_id": str(broadcast.id),
+                "notifications": len(written),
+                "deliveries": len(due),
+            },
+        )
 
     async def _count(self, broadcast: Broadcast) -> int:
         if broadcast.audience is BroadcastAudience.ALL_PLAYERS:

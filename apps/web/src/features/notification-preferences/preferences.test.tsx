@@ -39,7 +39,11 @@ const VIEWER = {
   is_verified: true,
 };
 
-const CATEGORIES = ["social", "game", "tournament", "system"] as const;
+// Every category the backend's `NotificationCategory` carries. A64-031.D
+// added `announcement` here: this list is what the three tests below render,
+// and while it omitted the category the screen shipped two raw translation
+// keys to players without a single test noticing.
+const CATEGORIES = ["social", "game", "tournament", "system", "announcement"] as const;
 
 /** The matrix the backend actually serves a player who has chosen nothing. */
 function defaultSettings() {
@@ -190,4 +194,25 @@ it("shows the refusal's own message and keeps the pending change", async () => {
   // The work is not thrown away: the count still stands, so the player can
   // fix the one offending switch rather than redo the whole screen.
   expect(screen.getByText(/1 unsaved/i)).toBeInTheDocument();
+});
+
+it("names every category in words, never as a translation key", async () => {
+  // The defect A64-031.D fixed: `announcement` reached players as
+  // `notificationPreferences.categories.announcement`, on screen, because
+  // the key was interpolated behind an `as TranslationKey` cast that
+  // silenced the one check that would have caught the missing copy.
+  //
+  // Asserted over the **whole screen** rather than for one category: a
+  // per-category assertion is exactly what was missing, and it would have
+  // been added for `announcement` and forgotten for the next one.
+  renderApp({ path: "/settings/notifications" });
+
+  // The copy is asserted first, so the negative assertion below cannot be
+  // satisfied by a screen that failed to render any categories at all.
+  expect(await screen.findByText("Announcements")).toBeInTheDocument();
+  expect(screen.getByText("News and updates from the Arena64 team.")).toBeInTheDocument();
+
+  // The whole document, deliberately: a raw key is a defect wherever it
+  // surfaces, and scoping this to one region is how the next one hides.
+  expect(document.body.textContent ?? "").not.toMatch(/notificationPreferences\./);
 });

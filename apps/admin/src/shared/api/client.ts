@@ -1074,6 +1074,20 @@ export async function fetchAnalyticsAcquisition(
  */
 export type BroadcastAudience = "all_players" | "specific_players";
 
+/**
+ * Which channels a broadcast uses — A64-031.D.
+ *
+ * Two, matching the backend's `BroadcastChannel` exactly, and **both write
+ * the in-app notification**: a push on this platform carries an id and a
+ * type, and the service worker fetches the record behind the reader's own
+ * session — so "push instead of in-app" is not a state the backend can
+ * represent. The choice is whether to interrupt as well, not where to send.
+ *
+ * Email is absent because the backend does not offer it. §15: show the
+ * channels that exist.
+ */
+export type BroadcastChannel = "in_app" | "in_app_and_push";
+
 export interface BroadcastView {
   id: string;
   title: string;
@@ -1107,6 +1121,11 @@ export interface BroadcastDraft {
   body: string;
   locale: string;
   audience: BroadcastAudience;
+  /**
+   * Omitted by nothing here, but optional on the wire: the backend defaults
+   * it to `in_app`, so an older console cannot start sending pushes.
+   */
+  channel: BroadcastChannel;
   recipients: string[];
   /**
    * Minted once per composition, client-side. Two submissions of one form

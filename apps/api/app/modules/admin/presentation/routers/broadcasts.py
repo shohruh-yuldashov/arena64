@@ -118,6 +118,7 @@ async def create_broadcast(
             body=request.body,
             locale=request.locale,
             audience=request.audience,
+            channel=request.channel,
             idempotency_key=request.idempotency_key,
             recipients=tuple(request.recipients),
         ),

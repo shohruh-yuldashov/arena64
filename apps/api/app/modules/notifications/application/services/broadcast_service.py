@@ -34,6 +34,13 @@ class BroadcastRequest:
     idempotency_key: str
     recipients: tuple[UUID, ...] = ()
 
+    channel: BroadcastChannel = BroadcastChannel.IN_APP
+    """Which channels the administrator asked for — A64-031.D.
+
+    Defaulted rather than required, and the default is the quieter one. A
+    caller that omits it sends no push, so the field cannot turn an existing
+    integration into one that buzzes phones."""
+
 
 class BroadcastService:
     def __init__(
@@ -76,7 +83,7 @@ class BroadcastService:
             body=request.body.strip(),
             locale=request.locale,
             audience=request.audience,
-            channel=BroadcastChannel.IN_APP,
+            channel=request.channel,
             status=BroadcastStatus.QUEUED,
             created_by=created_by,
             created_at=self._clock.now(),

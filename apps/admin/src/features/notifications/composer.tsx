@@ -69,6 +69,10 @@ export function BroadcastComposer({ onSent }: { onSent: (broadcast: BroadcastVie
   const [recipientsText, setRecipientsText] = useState("");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  // A64-031.D. Opt-in, and it stays opt-in across sends: `send` clears the
+  // content but deliberately not this, because an operator who is sending a
+  // run of related announcements chose a delivery posture, not a one-off.
+  const [alsoPush, setAlsoPush] = useState(false);
   const [key, setKey] = useState(mintKey);
 
   const [size, setSize] = useState<number | null>(null);
@@ -127,6 +131,7 @@ export function BroadcastComposer({ onSent }: { onSent: (broadcast: BroadcastVie
       body: body.trim(),
       locale,
       audience,
+      channel: alsoPush ? "in_app_and_push" : "in_app",
       recipients: audience === "specific_players" ? (recipients ?? []) : [],
       idempotency_key: key,
     });
@@ -152,7 +157,11 @@ export function BroadcastComposer({ onSent }: { onSent: (broadcast: BroadcastVie
       t(outcome.status === "refused" ? "broadcast.errorRefused" : "broadcast.errorUnavailable"),
     );
     notify(t("broadcast.errorToast"), "danger");
-  }, [audience, body, key, locale, notify, onSent, recipients, t, title]);
+  }, [alsoPush, audience, body, key, locale, notify, onSent, recipients, t, title]);
+
+  const channelLabel = alsoPush
+    ? t("broadcast.channelInAppAndPush")
+    : t("broadcast.channelInApp");
 
   const audienceLabel =
     audience === "all_players"
@@ -295,6 +304,35 @@ export function BroadcastComposer({ onSent }: { onSent: (broadcast: BroadcastVie
                   }}
                 />
               </div>
+
+              {/* A64-031.D. One card rather than a pair, because this is an
+                  *addition* to a delivery that always happens: every
+                  broadcast writes the in-app notification, and this decides
+                  whether it also interrupts. Two cards would imply a choice
+                  between them, which is not a state the backend can
+                  represent — see `BroadcastChannel`.
+
+                  The same `.choice` idiom as the audience above, so the two
+                  consequential decisions on this screen look alike. */}
+              <fieldset className="choices">
+                <legend className="field__label">{t("broadcast.channel")}</legend>
+                <button
+                  type="button"
+                  className="choice"
+                  aria-pressed={alsoPush}
+                  onClick={() => {
+                    setAlsoPush((on) => !on);
+                  }}
+                >
+                  <span className="choice__glyph">
+                    <Icon name="notifications" size={17} />
+                  </span>
+                  <span className="choice__text">
+                    <strong>{t("broadcast.channelPushLabel")}</strong>
+                    <span>{t("broadcast.channelPushHint")}</span>
+                  </span>
+                </button>
+              </fieldset>
             </div>
 
             <div className="dialog-actions">
@@ -319,7 +357,7 @@ export function BroadcastComposer({ onSent }: { onSent: (broadcast: BroadcastVie
             the platform should see the message before the button. */}
         <aside className="composer__aside">
           <Preview title={title} body={body} />
-          <DeliverySummary audienceLabel={audienceLabel} />
+          <DeliverySummary audienceLabel={audienceLabel} channelLabel={channelLabel} />
         </aside>
       </div>
 
@@ -344,7 +382,7 @@ export function BroadcastComposer({ onSent }: { onSent: (broadcast: BroadcastVie
           <dt>{t("broadcast.audience")}</dt>
           <dd>{audienceLabel}</dd>
           <dt>{t("broadcast.channel")}</dt>
-          <dd>{t("broadcast.channelInApp")}</dd>
+          <dd>{channelLabel}</dd>
           <dt>{t("broadcast.title")}</dt>
           <dd>{title}</dd>
           <dt>{t("broadcast.body")}</dt>
@@ -366,7 +404,13 @@ export function BroadcastComposer({ onSent }: { onSent: (broadcast: BroadcastVie
  * routine notice or a message to the whole platform, and an operator should
  * see them while they are writing rather than after they have finished.
  */
-function DeliverySummary({ audienceLabel }: { audienceLabel: string }) {
+function DeliverySummary({
+  audienceLabel,
+  channelLabel,
+}: {
+  audienceLabel: string;
+  channelLabel: string;
+}) {
   const { t } = useTranslation();
   return (
     <div className="summary-card">
@@ -375,7 +419,7 @@ function DeliverySummary({ audienceLabel }: { audienceLabel: string }) {
         <dt>{t("broadcast.audience")}</dt>
         <dd>{audienceLabel}</dd>
         <dt>{t("broadcast.channel")}</dt>
-        <dd>{t("broadcast.channelInApp")}</dd>
+        <dd>{channelLabel}</dd>
       </dl>
       {/* The preference rule, stated where the decision is made. §15: an
           administrator does not get a way around a player's own choice, and

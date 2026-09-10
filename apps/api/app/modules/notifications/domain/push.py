@@ -54,12 +54,15 @@ from app.modules.notifications.domain.record import NotificationType
 
 #: The notification types this platform sends as a push notification.
 #:
-#: Three, and the same three the email channel sends — which is not a
-#: coincidence and is not laziness. These are the notifications a player
-#: cannot see coming: a round is published while they are away from the
-#: tab, a registration is confirmed after they closed it, a tournament ends
-#: overnight. Everything else on this platform happens while they are
-#: looking at it.
+#: These are the notifications a player cannot see coming: a round is
+#: published while they are away from the tab, a registration is confirmed
+#: after they closed it, a tournament ends overnight, somebody is waiting on
+#: an answer, or an operator has something to say. Everything else on this
+#: platform happens while they are looking at it.
+#:
+#: The number is deliberately not written here. It said "three, and the same
+#: three the email channel sends" through two additions that made both
+#: halves false — the set has grown to eight and email's has not.
 PUSH_CAPABLE_TYPES: Final[frozenset[NotificationType]] = frozenset(
     {
         # The tournament three — A64-021.6. Notifications a player cannot
@@ -89,6 +92,21 @@ PUSH_CAPABLE_TYPES: Final[frozenset[NotificationType]] = frozenset(
         # the rate. A stranger cannot reach this type at all.
         NotificationType.FRIEND_CHALLENGE_RECEIVED,
         NotificationType.FRIEND_CHALLENGE_ACCEPTED,
+        # The administrative one — A64-031.D. It is the only member a
+        # *human* decides to send, per broadcast, and that is what earns it
+        # a place on a list whose whole argument is that a push is an
+        # interruption: the others are triggered by an event and admitted
+        # because the platform judges the type worth interrupting for, while
+        # this one is admitted because an operator with the role judged this
+        # message worth it. Nobody outside the console can reach it.
+        #
+        # Membership here is necessary but not sufficient. `BroadcastChannel`
+        # decides per broadcast whether any push row is written at all, so
+        # an `IN_APP` announcement enqueues nothing and this entry changes
+        # nothing for it. The set is re-read at send time
+        # (`push_delivery_service`), which is why the type must be here for
+        # the rows the expander writes to survive the worker.
+        NotificationType.PLATFORM_ANNOUNCEMENT,
     }
 )
 

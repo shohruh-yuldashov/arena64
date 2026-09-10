@@ -108,7 +108,19 @@ jobs:
     needs: changes
     if: needs.changes.outputs.api == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Raised from 20 in A64-031.D, on measurement rather than by feel: the
+    # last green run on `main` took **19m43s** against a 20-minute ceiling,
+    # so the job had seventeen seconds of headroom and was being failed by
+    # ordinary runner variance rather than by anything in the diff. The
+    # branch that hit it added 2.6 seconds of tests.
+    #
+    # This is a runaway-job guard, not a performance budget — the gate is
+    # "the suite passes", and a suite that legitimately needs twenty minutes
+    # should not be reported as a timeout. The real problem is that the
+    # contract suite is serial against one PostgreSQL and one Redis and has
+    # grown for eight checkpoints; making it parallel needs a new dependency
+    # and per-worker databases, which is its own piece of work.
+    timeout-minutes: 30
 
     # The real backing services, not stand-ins. `tests/contract/` skips when
     # either is unreachable (see its conftest), so without these the job would

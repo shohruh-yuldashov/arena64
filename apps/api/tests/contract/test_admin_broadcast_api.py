@@ -21,24 +21,20 @@ Skipped, not failed, when PostgreSQL is unreachable.
 """
 
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import select, update
+from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import SystemClock
-from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.admin.domain.audit import AuditAction
 from app.modules.admin.domain.roles import AdminRole
 from app.modules.admin.infrastructure.models import AuditEntryModel, RoleAssignmentModel
 from app.modules.notifications.application.services.broadcast_expander import BroadcastExpander
-from app.modules.notifications.application.services.preference_delivery_policy import (
-    PreferenceDeliveryPolicy,
-)
-from app.modules.notifications.domain.preference import IN_APP_ONLY
+from app.modules.notifications.domain.preference import ChannelAvailability, DeliveryChannel
 from app.modules.notifications.domain.record import (
     NotificationCategory,
     NotificationType,
@@ -48,21 +44,11 @@ from app.modules.notifications.infrastructure.models import (
     NotificationBroadcastModel,
     NotificationModel,
     NotificationPreferenceModel,
+    NotificationPushDeliveryModel,
+    PushSubscriptionModel,
 )
-from app.modules.notifications.infrastructure.repositories import (
-    SqlAlchemyNotificationRepository,
-)
-from app.modules.notifications.infrastructure.repositories.broadcast_repository import (
-    SqlAlchemyBroadcastRepository,
-)
-from app.modules.notifications.infrastructure.repositories.preference_repository import (
-    SqlAlchemyNotificationPreferenceRepository,
-)
-from app.modules.notifications.infrastructure.sinks import NullNotificationAnnouncer
+from app.modules.notifications.presentation.dependencies import build_broadcast_expander
 from app.modules.users.infrastructure.models import UserModel
-from app.modules.users.infrastructure.repositories.audience_directory import (
-    SqlAlchemyNotificationAudienceDirectory,
-)
 from tests.contract.contract_app import build_contract_app, contract_client
 from tests.contract.test_matchmaking_queue_api import register as register_account
 
@@ -134,6 +120,33 @@ async def make_eligible(session: AsyncSession, client: AsyncClient):  # type: ig
     return account
 
 
+async def subscribe(session: AsyncSession, user_id: UUID) -> UUID:
+    """One live browser for this account.
+
+    Written directly rather than through `POST /notifications/push`: this
+    file is about broadcasts, and depending on the push API's request shape
+    would make a change there fail here for no reason. The columns are the
+    contract that matters — `live_for_many` reads exactly these.
+    """
+    subscription_id = uuid4()
+    now = datetime.now(UTC)
+    await session.execute(
+        insert(PushSubscriptionModel).values(
+            id=subscription_id,
+            user_id=user_id,
+            endpoint=f"https://push.example/{subscription_id}",
+            p256dh=b"\x04" + b"k" * 64,
+            auth=b"a" * 16,
+            created_at=now,
+            updated_at=now,
+            last_seen_at=now,
+            revoked_at=None,
+        )
+    )
+    await session.commit()
+    return subscription_id
+
+
 def compose(**overrides: object) -> dict[str, object]:
     body: dict[str, object] = {
         "title": "Rejalashtirilgan texnik ishlar",
@@ -149,22 +162,35 @@ def compose(**overrides: object) -> dict[str, object]:
 def expander(session: AsyncSession) -> BroadcastExpander:
     """The worker, over the test's own session.
 
-    Assembled from the same parts the composition root uses, so a test that
-    passes here is a test of the wiring an operator gets — not of a
-    convenient double.
+    Built by **the composition root's own factory**, so a test that passes
+    here is a test of the wiring an operator gets — not of a convenient
+    double.
+
+    It used to assemble the parts by hand and claim the same thing, which
+    was true only until the constructor changed: A64-031.D added three
+    collaborators and this file was the one place that had to be edited to
+    say so. Calling the factory makes the claim structural.
+
+    Its defaults are the ones this file wants — a null announcer, because
+    there is no fleet here, and `IN_APP_ONLY`, because a contract test has
+    no push provider.
     """
-    return BroadcastExpander(
-        broadcasts=SqlAlchemyBroadcastRepository(session),
-        notifications=SqlAlchemyNotificationRepository(session),
-        audience=SqlAlchemyNotificationAudienceDirectory(session),
-        policy=PreferenceDeliveryPolicy(
-            preferences=SqlAlchemyNotificationPreferenceRepository(
-                session, availability=IN_APP_ONLY
-            )
-        ),
-        announcer=NullNotificationAnnouncer(),
+    return build_broadcast_expander(session, clock=SystemClock())
+
+
+def pushing_expander(session: AsyncSession) -> BroadcastExpander:
+    """The same worker, in a process that *can* push — A64-031.D.
+
+    The only difference is `availability`. A contract test has no VAPID key
+    and contacts no push service; what it can prove, and what a unit test
+    with a fake repository cannot, is that the delivery rows the expander
+    builds are rows `notification_push_delivery` actually accepts — written
+    inside the same transaction as the notifications they point at.
+    """
+    return build_broadcast_expander(
+        session,
         clock=SystemClock(),
-        unit_of_work=SessionUnitOfWork(session),
+        availability=ChannelAvailability.of(DeliveryChannel.IN_APP, DeliveryChannel.PUSH),
     )
 
 
@@ -315,6 +341,93 @@ class TestTheContentIsSafe:
             headers=admin.auth,
         )
         assert response.status_code == 422
+
+
+class TestPushDelivery:
+    """§19, ADR-007 — an announcement that asked to interrupt.
+
+    Against real PostgreSQL, because the claim a unit test cannot make is
+    that `notification_push_delivery` accepts what the expander builds. No
+    push service is contacted here and none can be: what is proved is that
+    the rows exist, that they point at the notifications written in the same
+    pass, and that an `in_app` broadcast writes none of them.
+    """
+
+    async def test_a_push_broadcast_enqueues_one_delivery_per_live_browser(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        admin = await make_admin(contract_session, client)
+        reader = await make_eligible(contract_session, client)
+        await subscribe(contract_session, reader.id)
+
+        await client.post(BASE, json=compose(channel="in_app_and_push"), headers=admin.auth)
+        await pushing_expander(contract_session).run_once()
+        await contract_session.commit()
+
+        deliveries = (
+            await contract_session.scalars(
+                select(NotificationPushDeliveryModel).where(
+                    NotificationPushDeliveryModel.recipient_id == reader.id
+                )
+            )
+        ).all()
+
+        assert len(deliveries) == 1
+        assert deliveries[0].notification_type == "platform_announcement"
+
+    async def test_the_delivery_points_at_the_notification_that_was_written(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        # The two rows are written in one transaction, so a delivery that
+        # named a notification which does not exist would be a push nothing
+        # could ever render.
+        admin = await make_admin(contract_session, client)
+        reader = await make_eligible(contract_session, client)
+        await subscribe(contract_session, reader.id)
+
+        await client.post(BASE, json=compose(channel="in_app_and_push"), headers=admin.auth)
+        await pushing_expander(contract_session).run_once()
+        await contract_session.commit()
+
+        notification = (
+            await contract_session.scalars(
+                select(NotificationModel).where(NotificationModel.recipient_id == reader.id)
+            )
+        ).one()
+        delivery = (
+            await contract_session.scalars(
+                select(NotificationPushDeliveryModel).where(
+                    NotificationPushDeliveryModel.recipient_id == reader.id
+                )
+            )
+        ).one()
+
+        assert delivery.notification_id == notification.id
+
+    async def test_an_in_app_broadcast_enqueues_nothing(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        # The default, through the whole stack: a subscribed reader, a
+        # process that can push, and still no interruption because nobody
+        # asked for one.
+        admin = await make_admin(contract_session, client)
+        reader = await make_eligible(contract_session, client)
+        await subscribe(contract_session, reader.id)
+
+        await client.post(BASE, json=compose(), headers=admin.auth)
+        await pushing_expander(contract_session).run_once()
+        await contract_session.commit()
+
+        deliveries = (await contract_session.scalars(select(NotificationPushDeliveryModel))).all()
+
+        assert deliveries == []
+        # ...and the announcement still arrived.
+        rows = (
+            await contract_session.scalars(
+                select(NotificationModel).where(NotificationModel.recipient_id == reader.id)
+            )
+        ).all()
+        assert len(rows) == 1
 
 
 class TestDelivery:

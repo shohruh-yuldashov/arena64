@@ -72,6 +72,7 @@ Proposed ──▶ Accepted ──▶ Superseded
 | [ADR-004](./ADR-004-quick-messages-not-free-text-chat.md)   | Arena64 has no free-text chat; in-match communication is a predefined catalogue   | Accepted | 2026-08-09 |
 | [ADR-005](./ADR-005-first-party-analytics-on-the-outbox.md) | Product analytics is first-party, on the existing outbox; no third-party provider | Accepted | 2026-09-05 |
 | [ADR-006](./ADR-006-administrative-broadcasts.md)           | Administrative broadcasts store their text and keep the closed destination set    | Accepted | 2026-09-05 |
+| [ADR-007](./ADR-007-announcement-push-channel.md)           | An announcement may also be delivered as a push, chosen per broadcast            | Accepted | 2026-09-10 |
 
 ## TODO
 

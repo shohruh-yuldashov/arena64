@@ -49,7 +49,7 @@ from app.modules.notifications.domain.push_delivery import (
     next_attempt_at,
     revokes_subscription,
 )
-from app.modules.notifications.domain.record import CATEGORY_OF
+from app.modules.notifications.domain.record import CATEGORY_OF, NotificationRecord
 from app.modules.notifications.domain.subscription import PushSubscription
 from app.platform.metrics import MetricsRecorder
 from app.platform.push import (
@@ -383,9 +383,62 @@ def _encode(payload: PushPayload) -> bytes:
     return json.dumps(payload.as_dict(), separators=(",", ":")).encode()
 
 
+async def push_deliveries_for(
+    records: Sequence[NotificationRecord],
+    *,
+    subscriptions: PushSubscriptionRepository,
+) -> list[DuePushDelivery]:
+    """One delivery row per (notification, live browser) — §9's fan-out.
+
+    The push twin of `email_delivery_service.deliveries_for`, and it lives
+    beside the worker that drains what it writes for the same reason that
+    one does: the enqueue rule and the send rule are one decision, and two
+    files would let them drift.
+
+    Filtered by type **before** the subscription read, so a batch of
+    notifications this platform does not push costs no query at all. As with
+    email, that is not the same check as the worker's: this one keeps rows
+    that could never be sent out of the table entirely, where `_attempt`'s
+    catches a type removed from the capable set after its rows were written.
+
+    The preference is deliberately **not** checked here. §14 requires it at
+    delivery time: a player who mutes push after a round is published must
+    not be pushed, and that only holds if the row exists and the send-time
+    check refuses it.
+
+    A recipient with no live browser produces no rows, so somebody who has
+    never enabled push costs one absent map key rather than a row that can
+    only ever be skipped.
+
+    Shared since A64-031.D. `DurableNotificationWriter` held this privately
+    until `BroadcastExpander` needed the same fan-out; copying it would have
+    been a second place for a rule about *what this platform pushes* to be
+    changed in one and forgotten in the other.
+    """
+    pushable = [record for record in records if supports_push(record.type)]
+    if not pushable:
+        return []
+
+    by_recipient = await subscriptions.live_for_many(
+        list({record.recipient_id for record in pushable})
+    )
+    return [
+        DuePushDelivery(
+            notification_id=record.id,
+            subscription_id=subscription.id,
+            recipient_id=record.recipient_id,
+            notification_type=record.type,
+            attempt_count=0,
+        )
+        for record in pushable
+        for subscription in by_recipient.get(record.recipient_id, ())
+    ]
+
+
 __all__ = [
     "NOTIFICATION_PUSH_DELIVERIES",
     "STALE_CLAIM_AFTER",
     "PushDeliveryPass",
     "PushDeliveryService",
+    "push_deliveries_for",
 ]

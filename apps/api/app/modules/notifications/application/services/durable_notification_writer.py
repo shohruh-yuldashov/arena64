@@ -73,7 +73,6 @@ from app.core.identifiers import generate_uuid7
 from app.core.unit_of_work import UnitOfWork
 from app.modules.notifications.application.ports import (
     DeliveryRequest,
-    DuePushDelivery,
     EmailDeliveryRepository,
     NotificationAnnouncer,
     NotificationDeliveryPolicy,
@@ -84,9 +83,11 @@ from app.modules.notifications.application.ports import (
 from app.modules.notifications.application.services.email_delivery_service import (
     deliveries_for,
 )
+from app.modules.notifications.application.services.push_delivery_service import (
+    push_deliveries_for,
+)
 from app.modules.notifications.domain.notification import NotificationKind, SocialNotification
 from app.modules.notifications.domain.preference import ChannelAvailability, DeliveryChannel
-from app.modules.notifications.domain.push import supports_push
 from app.modules.notifications.domain.record import (
     CATEGORY_OF,
     ActorSummary,
@@ -137,43 +138,6 @@ class DurableNotificationWriter:
         self._push_deliveries = push_deliveries
         self._subscriptions = subscriptions
         self._availability = availability
-
-    async def _push_deliveries_for(
-        self, stored: Sequence[NotificationRecord]
-    ) -> list[DuePushDelivery]:
-        """One delivery row per (notification, live browser) — §9's fan-out.
-
-        Filtered by type before the subscription read, so a batch of
-        notifications this platform does not push costs **no** query at all
-        — which is the common case, since three of six types are pushable.
-
-        Like its email twin, the preference is deliberately **not** checked
-        here. §14 requires it at delivery time: a player who mutes push
-        after a round is published must not be pushed, and that only holds
-        if the row exists and the send-time check refuses it.
-
-        A recipient with no live browser produces no rows, so somebody who
-        has never enabled push costs one absent map key rather than a row
-        that can only ever be skipped.
-        """
-        pushable = [record for record in stored if supports_push(record.type)]
-        if not pushable:
-            return []
-
-        by_recipient = await self._subscriptions.live_for_many(
-            list({record.recipient_id for record in pushable})
-        )
-        return [
-            DuePushDelivery(
-                notification_id=record.id,
-                subscription_id=subscription.id,
-                recipient_id=record.recipient_id,
-                notification_type=record.type,
-                attempt_count=0,
-            )
-            for record in pushable
-            for subscription in by_recipient.get(record.recipient_id, ())
-        ]
 
     async def deliver(self, notifications: list[SocialNotification]) -> None:
         """Stores a batch of **social** notifications — `NotificationSink`.
@@ -285,7 +249,8 @@ class DurableNotificationWriter:
             # and the subscriptions as they are *then* (§14).
             if stored and self._availability.can_deliver(DeliveryChannel.PUSH):
                 await self._push_deliveries.enqueue(
-                    await self._push_deliveries_for(stored), at=_queued_at(stored)
+                    await push_deliveries_for(stored, subscriptions=self._subscriptions),
+                    at=_queued_at(stored),
                 )
             await self._unit_of_work.commit()
 

@@ -166,3 +166,27 @@ it("renders the announcement as a non-navigable row", async () => {
   await within(list).findByText("Scheduled maintenance");
   expect(within(list).queryByRole("link")).not.toBeInTheDocument();
 });
+
+it("lets a long unbroken title wrap instead of widening the page", async () => {
+  // The row is the only surface carrying text a human typed: every other
+  // branch interpolates a validated, short value. A 120-character title —
+  // the backend's own bound — with no spaces paints straight out of the row
+  // *without widening the element*, so the page gains a horizontal scroll
+  // that nothing on the element itself reports.
+  //
+  // jsdom performs no layout, so this asserts the decision rather than the
+  // pixels. The pixels were measured in Chromium at a 360px row: 5503px of
+  // page scrollWidth against a 400px viewport without `break-words`, 400px
+  // with it. `profile-header` carries the same pair on a player's bio.
+  serve([
+    announcement({
+      announcement: { title: "A".repeat(120), body: "B".repeat(600), locale: "en" },
+    }),
+  ]);
+
+  renderApp({ path: "/notifications" });
+
+  const title = await screen.findByText("A".repeat(120));
+  expect(title.className).toContain("break-words");
+  expect(screen.getByText("B".repeat(600)).className).toContain("break-words");
+});

@@ -219,12 +219,29 @@ jobs:
       # is not a server without `server /data`. Declared as a service it
       # starts, prints its usage, exits, and fails its healthcheck, which is
       # exactly what it did the first time this was written.
+      #
+      # ## The image — A64-INFRA
+      #
+      # `minio/minio` and `minio/mc` were removed from Docker Hub (the
+      # repositories answer 404), which skipped every database-backed step
+      # below on every pull request. This is Chainguard's build of the same
+      # server, pulled anonymously and **pinned by digest** — the free tier
+      # publishes only `latest`, and an unpinned `latest` is a test run that
+      # changes underneath the code it tests. The digest is the multi-arch
+      # index (linux/amd64 and linux/arm64).
+      #
+      # What differs from the old image, verified rather than assumed: the
+      # entrypoint is `/usr/bin/minio` itself, so `server /data` is passed
+      # unchanged; it runs as UID 65532 rather than root, which is harmless
+      # here because `/data` is the image's own world-writable directory and
+      # no volume is mounted; and it ships `sh` and `mc`, which is why the
+      # bucket step below reuses this one pinned image instead of a second.
       - name: Start the object store
         run: |
           docker run -d --name minio --network host \
             -e MINIO_ROOT_USER=arena64 \
             -e MINIO_ROOT_PASSWORD=arena64-secret \
-            minio/minio:latest server /data
+            cgr.dev/chainguard/minio@sha256:ad134b2dd572ae0d989d6807c3e45516cc75a34883a8021db2ff04be5d1d496a server /data
           # Readiness, not a fixed sleep: a sleep is either too short on a
           # slow runner or wasted on a fast one.
           for _ in $(seq 1 30); do
@@ -245,7 +262,7 @@ jobs:
       - name: Create the media bucket
         run: |
           docker run --rm --network host \
-            --entrypoint sh minio/mc:latest -c "
+            --entrypoint sh cgr.dev/chainguard/minio@sha256:ad134b2dd572ae0d989d6807c3e45516cc75a34883a8021db2ff04be5d1d496a -c "
               mc alias set ci http://localhost:9000 arena64 arena64-secret &&
               mc mb --ignore-existing ci/arena64-media &&
               mc anonymous set download ci/arena64-media

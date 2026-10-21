@@ -8,6 +8,7 @@ import { useSession } from "@/features/auth/model/session-provider";
 import { registerSchema, type RegisterValues } from "@/features/auth/schemas";
 import { FormField, usePasswordHint } from "@/features/auth/ui/form-field";
 import { FormError } from "@/features/auth/ui/form-status";
+import { GoogleSignIn } from "@/features/auth/ui/google-sign-in";
 import { PasswordField } from "@/features/auth/ui/password-field";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { Button, Spinner } from "@/shared/ui";
@@ -100,6 +101,10 @@ export default function RegisterPage() {
         className="flex flex-col gap-4"
         noValidate
       >
+        {/* A64-031.E1. The same entry point as on `/login`: a Google
+            sign-in that finds no account asks for a username next. */}
+        <GoogleSignIn next={next} />
+
         <FormError messageKey={failure} />
 
         <FormField

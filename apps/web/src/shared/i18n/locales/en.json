@@ -81,6 +81,32 @@
       "successTitle": "Account created",
       "successBody": "We sent a confirmation link to your email. Some features stay limited until you open it."
     },
+    "google": {
+      "continue": "Continue with Google",
+      "redirecting": "Opening Google…",
+      "or": "or",
+      "pending": "Checking your Google sign-in…",
+      "expiredTitle": "Google sign-in",
+      "outcome": {
+        "cancelled": "Google sign-in was cancelled.",
+        "failed": "Google sign-in did not work. Try again.",
+        "expired": "That Google sign-in expired or was opened in another browser. Start again.",
+        "emailUnverified": "Google has not confirmed this email address, so it cannot be used to sign in here.",
+        "unavailable": "Google sign-in is not available right now.",
+        "accountRestricted": "This account is currently unavailable."
+      },
+      "account": {
+        "title": "Choose a username",
+        "subtitle": "You are signing up with {email}. Your username is how other players will see you.",
+        "submit": "Create account"
+      },
+      "link": {
+        "title": "Connect Google to your account",
+        "subtitle": "An Arena64 account already uses {email}. Enter its password once to connect Google to it.",
+        "submit": "Connect and sign in",
+        "cancel": "Back to sign in"
+      }
+    },
     "verifyEmail": {
       "title": "Confirm your email",
       "verifying": "Confirming…",
@@ -149,7 +175,9 @@
       "rate_limited": "Too many attempts. Try again shortly.",
       "permission_denied": "That is not allowed.",
       "network": "We could not reach the server. Check your connection.",
-      "unexpected": "Something went wrong. Try again."
+      "unexpected": "Something went wrong. Try again.",
+      "external_sign_in_expired": "This Google sign-in has expired. Start again from the sign-in page.",
+      "external_identity_already_linked": "This Google account is already connected to an Arena64 account."
     },
     "validation": {
       "emailRequired": "Enter your email address.",

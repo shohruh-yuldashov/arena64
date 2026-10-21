@@ -129,6 +129,19 @@ export const registerSchema = z
   });
 export type RegisterValues = z.infer<typeof registerSchema>;
 
+/**
+ * The two steps a Google sign-in can stop at — A64-031.E1. The username
+ * carries the registration rules unchanged; the password, like sign-in's,
+ * is not policy-checked, because it is an existing account's.
+ */
+export const googleAccountSchema = z.object({ username });
+export type GoogleAccountValues = z.infer<typeof googleAccountSchema>;
+
+export const connectGoogleSchema = z.object({
+  password: z.string().min(1, key("auth.validation.passwordRequired")),
+});
+export type ConnectGoogleValues = z.infer<typeof connectGoogleSchema>;
+
 export const forgotPasswordSchema = z.object({ email });
 export type ForgotPasswordValues = z.infer<typeof forgotPasswordSchema>;
 

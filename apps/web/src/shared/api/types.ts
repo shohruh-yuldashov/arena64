@@ -72,6 +72,10 @@ export type ErrorCode =
   // would say whether a token was ever real.
   | "invalid_verification_token"
   | "invalid_reset_token"
+  // Google sign-in — A64-031.E1. The verified identity this browser held is
+  // gone; or the Google account is already somebody's.
+  | "external_sign_in_expired"
+  | "external_identity_already_linked"
   // Social.
   | "duplicate_friend_request"
   | "opposite_friend_request_pending"

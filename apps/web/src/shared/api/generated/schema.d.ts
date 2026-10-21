@@ -1653,6 +1653,149 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/browser/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Which outside sign-in methods are offered
+         * @description `google` is `true` exactly when this deployment holds a Google
+         *     client — see `GoogleSignInSettings`. Unauthenticated and cache-safe:
+         *     it says nothing about anybody.
+         */
+        get: operations["sign_in_providers_api_v1_auth_browser_providers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/browser/google/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Begin signing in with Google
+         * @description Redirects the browser to Google's consent screen.
+         *
+         *     Sets the binding cookie on the way out; `state`, `nonce` and the PKCE
+         *     challenge travel in Google's URL. `next` is where to land afterwards —
+         *     an in-app path, checked again on this side (`safe_next_path`).
+         */
+        get: operations["google_start_api_v1_auth_browser_google_start_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/browser/google/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Google returns here
+         * @description Finishes the round trip and sends the browser into the app.
+         *
+         *     Signed in, it lands on `next` holding a refresh cookie. A verified
+         *     identity with no account lands on the username page; one whose address
+         *     an account already uses lands on the password page. Anything else
+         *     lands on `/login?google=<reason>`. The binding cookie is cleared on
+         *     every path — it was good for this one callback.
+         */
+        get: operations["google_callback_api_v1_auth_browser_google_callback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/browser/google/pending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What this browser's Google sign-in is waiting for
+         * @description `401 external_sign_in_expired` when there is nothing — the page
+         *     offers "Continue with Google" again.
+         */
+        get: operations["google_pending_api_v1_auth_browser_google_pending_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/browser/google/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create the account a Google sign-in is waiting for
+         * @description Creates the account — verified, linked, through `users`' own
+         *     creation path — and signs the browser in.
+         *
+         *     Counted by the same per-IP rule as `POST /auth/browser/register`, so
+         *     Google is not a second, unthrottled way to mint accounts. A taken
+         *     username is `409 username_already_exists` and leaves the sign-in
+         *     pending for another try.
+         */
+        post: operations["google_create_account_api_v1_auth_browser_google_account_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/browser/google/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect Google to the account that already uses its address
+         * @description Verifies the account's password, links Google, and signs in.
+         *
+         *     The explicit step ADR-008 requires: an address match alone never
+         *     links. A wrong password is the same `401 invalid_credentials` a sign-in
+         *     gives, under the same per-IP limit, and leaves the sign-in pending.
+         */
+        post: operations["google_link_api_v1_auth_browser_google_link_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/profiles/{username}": {
         parameters: {
             query?: never;
@@ -4629,6 +4772,11 @@ export interface components {
             data: components["schemas"]["NotificationPreferencesResponse"];
             meta: components["schemas"]["ResponseMeta"];
         };
+        /** ApiResponse[PendingGoogleSignInRead] */
+        ApiResponse_PendingGoogleSignInRead_: {
+            data: components["schemas"]["PendingGoogleSignInRead"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
         /** ApiResponse[PendingMatchResponse] */
         ApiResponse_PendingMatchResponse_: {
             data: components["schemas"]["PendingMatchResponse"];
@@ -4687,6 +4835,11 @@ export interface components {
         /** ApiResponse[RegistrationResponse] */
         ApiResponse_RegistrationResponse_: {
             data: components["schemas"]["RegistrationResponse"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        /** ApiResponse[SignInProviders] */
+        ApiResponse_SignInProviders_: {
+            data: components["schemas"]["SignInProviders"];
             meta: components["schemas"]["ResponseMeta"];
         };
         /** ApiResponse[StandingsResponse] */
@@ -5631,7 +5784,7 @@ export interface components {
          *     per module and stops being a useful thing to exhaustively switch over.
          * @enum {string}
          */
-        ErrorCode: "internal_error" | "validation_error" | "domain_error" | "authentication_failed" | "not_found" | "conflict" | "permission_denied" | "precondition_failed" | "rule_violation" | "rate_limited" | "unsupported_engine_version" | "invalid_cursor" | "session_rotation_conflict" | "tournament_not_found" | "registration_not_open" | "registration_deadline_passed" | "tournament_full" | "already_registered" | "registration_not_found" | "invalid_tournament_state" | "infrastructure_error" | "transient_infrastructure_error" | "permanent_infrastructure_error" | "username_already_exists" | "email_already_exists" | "duplicate_friend_request" | "opposite_friend_request_pending" | "invalid_username" | "invalid_email" | "weak_password" | "invalid_credentials" | "inactive_account" | "account_locked" | "authentication_required" | "invalid_token" | "expired_token" | "invalid_session" | "session_expired" | "invalid_verification_token" | "invalid_reset_token" | "avatar_too_large" | "queue_cooldown_active" | "unsupported_time_control" | "notification_preference_locked" | "notification_channel_unavailable" | "duplicate_preference_change" | "email_verification_code_invalid" | "email_verification_code_expired" | "email_verification_attempts_exceeded" | "email_verification_resend_too_soon" | "email_already_verified" | "email_verification_required" | "challenge_self_not_allowed" | "challenge_not_friends" | "challenge_already_pending" | "challenge_not_pending" | "challenge_expired" | "challenge_invalid_time_control";
+        ErrorCode: "internal_error" | "validation_error" | "domain_error" | "authentication_failed" | "not_found" | "conflict" | "permission_denied" | "precondition_failed" | "rule_violation" | "rate_limited" | "unsupported_engine_version" | "invalid_cursor" | "session_rotation_conflict" | "tournament_not_found" | "registration_not_open" | "registration_deadline_passed" | "tournament_full" | "already_registered" | "registration_not_found" | "invalid_tournament_state" | "infrastructure_error" | "transient_infrastructure_error" | "permanent_infrastructure_error" | "username_already_exists" | "email_already_exists" | "duplicate_friend_request" | "opposite_friend_request_pending" | "invalid_username" | "invalid_email" | "weak_password" | "invalid_credentials" | "inactive_account" | "account_locked" | "authentication_required" | "invalid_token" | "expired_token" | "invalid_session" | "session_expired" | "invalid_verification_token" | "invalid_reset_token" | "external_sign_in_expired" | "external_identity_already_linked" | "avatar_too_large" | "queue_cooldown_active" | "unsupported_time_control" | "notification_preference_locked" | "notification_channel_unavailable" | "duplicate_preference_change" | "email_verification_code_invalid" | "email_verification_code_expired" | "email_verification_attempts_exceeded" | "email_verification_resend_too_soon" | "email_already_verified" | "email_verification_required" | "challenge_self_not_allowed" | "challenge_not_friends" | "challenge_already_pending" | "challenge_not_pending" | "challenge_expired" | "challenge_invalid_time_control";
         /**
          * ErrorResponse
          * @description The only shape an Arena64 error takes on the wire: a safe message and
@@ -6060,6 +6213,44 @@ export interface components {
             /** Termination Breakdown */
             termination_breakdown: components["schemas"]["TerminationCount"][];
             meta: components["schemas"]["PeriodMeta"];
+        };
+        /**
+         * GoogleAccountRequest
+         * @description The `POST /auth/browser/google/account` body: what a Google identity
+         *     still needs to become an account. The address comes from Google and
+         *     there is no password, so neither is a field here.
+         * @example {
+         *       "preferred_language": "uz",
+         *       "timezone": "Asia/Tashkent",
+         *       "username": "player_one"
+         *     }
+         */
+        GoogleAccountRequest: {
+            /** Username */
+            username: string;
+            /** @default en */
+            preferred_language: components["schemas"]["Locale"];
+            /**
+             * Timezone
+             * @default UTC
+             */
+            timezone: string;
+        };
+        /**
+         * GoogleLinkRequest
+         * @description The `POST /auth/browser/google/link` body: the password of the
+         *     account the address belongs to. No identifier — the account was fixed
+         *     when Google returned, and is not the caller's to choose.
+         * @example {
+         *       "password": "CorrectHorse1!"
+         *     }
+         */
+        GoogleLinkRequest: {
+            /**
+             * Password
+             * Format: password
+             */
+            password: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -7047,6 +7238,21 @@ export interface components {
             games: components["schemas"]["GamesResponse"];
             engagement: components["schemas"]["EngagementResponse"];
             meta: components["schemas"]["PeriodMeta"];
+        };
+        /**
+         * PendingGoogleSignInRead
+         * @description The step this browser's verified Google identity is waiting for.
+         */
+        PendingGoogleSignInRead: {
+            /**
+             * Purpose
+             * @enum {string}
+             */
+            purpose: "create_account" | "link_account";
+            /** Email */
+            email: string;
+            /** Next */
+            next: string;
         };
         /**
          * PendingMatchResponse
@@ -8466,6 +8672,15 @@ export interface components {
              * Format: date-time
              */
             last_active_at: string;
+        };
+        /**
+         * SignInProviders
+         * @description Which outside sign-in methods this deployment offers. The sign-in
+         *     page shows a button for each `true`, and nothing for a `false`.
+         */
+        SignInProviders: {
+            /** Google */
+            google: boolean;
         };
         /**
          * SpeedClass
@@ -11246,6 +11461,262 @@ export interface operations {
             };
             /** @description A field failed validation. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    sign_in_providers_api_v1_auth_browser_providers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_SignInProviders_"];
+                };
+            };
+            /** @description Too many attempts. Try again later. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    google_start_api_v1_auth_browser_google_start_get: {
+        parameters: {
+            query?: {
+                next?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A field failed validation. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    google_callback_api_v1_auth_browser_google_callback_get: {
+        parameters: {
+            query?: {
+                state?: string | null;
+                code?: string | null;
+                error?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A field failed validation. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    google_pending_api_v1_auth_browser_google_pending_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_PendingGoogleSignInRead_"];
+                };
+            };
+            /** @description There is no Google sign-in in progress in this browser. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    google_create_account_api_v1_auth_browser_google_account_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoogleAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_BrowserSession_"];
+                };
+            };
+            /** @description There is no Google sign-in in progress in this browser. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The account may not sign in, or the request came from an unrecognised origin. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The username is taken, or the Google account is already connected. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A field failed validation. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many attempts. Try again later. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    google_link_api_v1_auth_browser_google_link_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoogleLinkRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_BrowserSession_"];
+                };
+            };
+            /** @description There is no Google sign-in in progress in this browser. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The account may not sign in, or the request came from an unrecognised origin. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The username is taken, or the Google account is already connected. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A field failed validation. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many attempts. Try again later. */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

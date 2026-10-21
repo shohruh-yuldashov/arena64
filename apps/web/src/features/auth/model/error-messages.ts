@@ -45,6 +45,8 @@ const CODE_MESSAGES: Partial<Record<ErrorCode, TranslationKey>> = {
   validation_error: "auth.errors.validation_error",
   rate_limited: "auth.errors.rate_limited",
   permission_denied: "auth.errors.permission_denied",
+  external_sign_in_expired: "auth.errors.external_sign_in_expired",
+  external_identity_already_linked: "auth.errors.external_identity_already_linked",
 };
 
 /** The translation key to show for a thrown value. Never throws. */

@@ -2,6 +2,7 @@ import type { BrowserSession } from "@/entities/session";
 import { api } from "@/shared/api";
 import { ApiError } from "@/shared/api/errors";
 import type { components } from "@/shared/api/generated/schema";
+import { env } from "@/shared/config/env";
 
 /**
  * Every call this feature makes, in one file.
@@ -108,4 +109,46 @@ export const REFRESH_PATH = `${BROWSER}/refresh`;
  * expired access token — the interceptor must not answer one with a
  * refresh. See `model/refresh-interceptor.ts`, A64-031.E3.
  */
-export const CREDENTIAL_PATHS: readonly string[] = [`${BROWSER}/login`];
+export const CREDENTIAL_PATHS: readonly string[] = [
+  `${BROWSER}/login`,
+  // A64-031.E1 — each answers `401` about a pending Google sign-in or the
+  // password that would link one, never about an access token.
+  `${BROWSER}/google/pending`,
+  `${BROWSER}/google/account`,
+  `${BROWSER}/google/link`,
+];
+
+// --- "Continue with Google" — A64-031.E1 -----------------------------------
+
+export type PendingGoogleSignIn = Schemas["PendingGoogleSignInRead"];
+
+/** Whether this deployment offers Google at all — the button's switch. */
+export function signInProviders(): Promise<Schemas["SignInProviders"]> {
+  return api.get<Schemas["SignInProviders"]>(`${BROWSER}/providers`);
+}
+
+/**
+ * Where the button sends the browser — a **navigation**, not a request.
+ *
+ * The API answers with a redirect to Google, and Google redirects back to
+ * the API, which redirects into the app with the session already in its
+ * cookie. Nothing in that chain is readable by this page, which is the
+ * point: no token or code ever passes through script.
+ */
+export function googleStartUrl(next: string): string {
+  return `${env.VITE_API_URL}${BROWSER}/google/start?${new URLSearchParams({ next }).toString()}`;
+}
+
+export function googlePending(): Promise<PendingGoogleSignIn> {
+  return api.get<PendingGoogleSignIn>(`${BROWSER}/google/pending`);
+}
+
+export function createGoogleAccount(
+  payload: Schemas["GoogleAccountRequest"],
+): Promise<BrowserSession> {
+  return api.post<BrowserSession>(`${BROWSER}/google/account`, payload);
+}
+
+export function linkGoogle(payload: Schemas["GoogleLinkRequest"]): Promise<BrowserSession> {
+  return api.post<BrowserSession>(`${BROWSER}/google/link`, payload);
+}

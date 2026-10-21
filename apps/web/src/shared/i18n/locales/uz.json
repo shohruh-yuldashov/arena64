@@ -81,6 +81,32 @@
       "successTitle": "Hisobingiz yaratildi",
       "successBody": "Pochtangizga tasdiqlash havolasi yubordik. Havolani ochmaguningizcha ba'zi imkoniyatlar cheklangan bo'ladi."
     },
+    "google": {
+      "continue": "Google orqali davom etish",
+      "redirecting": "Google ochilmoqda…",
+      "or": "yoki",
+      "pending": "Google orqali kirish tekshirilmoqda…",
+      "expiredTitle": "Google orqali kirish",
+      "outcome": {
+        "cancelled": "Google orqali kirish bekor qilindi.",
+        "failed": "Google orqali kirib bo'lmadi. Qayta urinib ko'ring.",
+        "expired": "Google orqali kirish muddati tugagan yoki boshqa brauzerda ochilgan. Qaytadan boshlang.",
+        "emailUnverified": "Google bu pochta manzilini tasdiqlamagan, shuning uchun u bilan bu yerga kirib bo'lmaydi.",
+        "unavailable": "Google orqali kirish hozircha mavjud emas.",
+        "accountRestricted": "Bu hisob hozircha mavjud emas."
+      },
+      "account": {
+        "title": "Foydalanuvchi nomini tanlang",
+        "subtitle": "Siz {email} bilan ro'yxatdan o'tmoqdasiz. Boshqa o'yinchilar sizni shu nom bilan ko'radi.",
+        "submit": "Hisob yaratish"
+      },
+      "link": {
+        "title": "Google'ni hisobingizga ulang",
+        "subtitle": "{email} manzilidan allaqachon Arena64 hisobi foydalanmoqda. Google'ni ulash uchun uning parolini bir marta kiriting.",
+        "submit": "Ulash va kirish",
+        "cancel": "Kirish sahifasiga qaytish"
+      }
+    },
     "verifyEmail": {
       "title": "Pochtani tasdiqlash",
       "verifying": "Tasdiqlanmoqda…",
@@ -149,7 +175,9 @@
       "rate_limited": "Juda ko'p urinish. Birozdan so'ng qayta urining.",
       "permission_denied": "Bu amalga ruxsat yo'q.",
       "network": "Serverga ulanib bo'lmadi. Internetni tekshiring.",
-      "unexpected": "Kutilmagan xatolik. Qayta urinib ko'ring."
+      "unexpected": "Kutilmagan xatolik. Qayta urinib ko'ring.",
+      "external_sign_in_expired": "Google orqali kirish muddati tugadi. Kirish sahifasidan qaytadan boshlang.",
+      "external_identity_already_linked": "Bu Google hisobi allaqachon Arena64 hisobiga ulangan."
     },
     "validation": {
       "emailRequired": "Pochta manzilini kiriting.",

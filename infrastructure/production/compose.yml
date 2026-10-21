@@ -142,15 +142,6 @@ x-api-env: &api-env
   VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
   VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
   VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:no-reply@${ARENA64_DOMAIN}}
-  # "Continue with Google" — A64-031.E1, ADR-008. **Optional**, on the same
-  # terms as the VAPID pair: unset, `GoogleSignInSettings` reads both as absent
-  # and the sign-in page offers no Google button; one without the other is
-  # refused at start. The redirect URI is not configured here — it is derived
-  # from PUBLIC_APP_URL above, and the Google console must list exactly that
-  # (docs/05-operations/google-sign-in.md). The secret reaches the API
-  # containers only — never a build argument or a VITE_ variable.
-  GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
-  GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
 
 # Everything the two API replicas share. Split from the image anchor so the
 # replicas differ in nothing but their name, their alias and their node id —
@@ -197,6 +188,20 @@ x-api-replica-env: &api-replica-env
   # receives no frames from anywhere else. A64-028.4 established that this
   # is one of the two tasks a leader election would break.
   GATEWAY_FORWARDING_ENABLED: "true"
+  # "Continue with Google" — A64-031.E1, ADR-008. Here and not in
+  # `x-api-env`, because only the replicas serve the Google routes: that
+  # block also reaches `migrate`, `worker` and `backup`, none of which uses
+  # these, and a credential belongs only where it is used.
+  #
+  # **Optional**, on the same terms as the VAPID pair: unset,
+  # `GoogleSignInSettings` reads both as absent and the sign-in page offers
+  # no Google button; one without the other is refused at start. The
+  # redirect URI is not configured here — it is derived from PUBLIC_APP_URL,
+  # and the Google console must list exactly that
+  # (docs/05-operations/google-sign-in.md). Never a build argument or a
+  # VITE_ variable.
+  GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+  GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
 
 
 # Log rotation — A64-028.7 §30, and it was missing.

@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from app.modules.auth.application.read_models import SessionDeviceSummary
+from app.modules.auth.domain.google_sign_in import GoogleIdentity, PendingSignIn, StartedSignIn
 from app.modules.auth.domain.password_reset import PasswordResetToken
 from app.modules.auth.domain.sessions import RevocationReason, UserSession
 from app.modules.auth.domain.tickets import RedeemedTicket
@@ -521,3 +522,64 @@ class WebSocketTicketStore(Protocol):
         anyone probing the ticket format.
         """
         ...
+
+
+class GoogleIdentityVerifier(Protocol):
+    """Google's half of the authorization-code flow — A64-031.E1.
+
+    The adapter owns everything provider-specific: endpoints, client
+    credentials, the redirect URI, and the ID token's signature and claims.
+    The service sees only a URL to send the browser to and, afterwards, an
+    identity that has already been verified — or `GoogleSignInRejected`.
+    """
+
+    def authorization_url(self, *, state: str, nonce: str, code_challenge: str) -> str:
+        """Where to send the browser. Carries `state`, `nonce` and the PKCE
+        challenge — never the verifier, which stays on the server."""
+        ...
+
+    async def verify(self, *, code: str, code_verifier: str, nonce: str) -> GoogleIdentity:
+        """Exchanges `code` and returns the identity its ID token asserts.
+
+        Raises `GoogleSignInRejected(FAILED)` for anything that does not
+        verify — an exchange Google refuses, a timeout, a bad signature, the
+        wrong issuer or audience, an expired token, a nonce that is not
+        ours. Never returns an identity it has not checked.
+        """
+        ...
+
+
+class ExternalSignInStore(Protocol):
+    """Where a Google sign-in waits between its requests — A64-031.E1.
+
+    Shared, not per-process: `start` and `callback` routinely land on
+    different API replicas. Every key is a SHA-256 digest of the value the
+    browser holds, so a read of the store yields nothing presentable.
+    """
+
+    async def save_started(
+        self, digest: bytes, started: StartedSignIn, *, ttl_seconds: int
+    ) -> None:
+        """Stores the value and its expiry in one write."""
+        ...
+
+    async def take_started(self, digest: bytes) -> StartedSignIn | None:
+        """Reads **and deletes**, atomically: a `state` is good for one
+        callback, and two concurrent callbacks with it resolve so that
+        exactly one receives the record. `None` for unknown, used and
+        expired alike."""
+        ...
+
+    async def save_pending(
+        self, digest: bytes, pending: PendingSignIn, *, ttl_seconds: int
+    ) -> None: ...
+
+    async def read_pending(self, digest: bytes) -> PendingSignIn | None:
+        """Reads without consuming: choosing a taken username or mistyping
+        a password must not cost the person their Google sign-in. Spending
+        it is `discard_pending`, after the step succeeds — and a second
+        success is refused by the database's unique constraints rather than
+        by this store."""
+        ...
+
+    async def discard_pending(self, digest: bytes) -> None: ...

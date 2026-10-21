@@ -38,7 +38,7 @@ from app.modules.users.application.commands import (
     UpdatePrivacySettings,
     UpdateUserProfile,
 )
-from app.modules.users.application.ports import UserRepository
+from app.modules.users.application.ports import ExternalIdentityRepository, UserRepository
 from app.modules.users.domain.entities import User
 from app.modules.users.domain.events import UserRegistered
 from app.modules.users.domain.exceptions import (
@@ -46,6 +46,7 @@ from app.modules.users.domain.exceptions import (
     UsernameAlreadyExists,
     UserNotFound,
 )
+from app.modules.users.domain.external_identity import ExternalIdentity
 from app.modules.users.domain.validators import validate_language
 from app.modules.users.domain.value_objects import (
     Bio,
@@ -77,10 +78,15 @@ class UserService:
         unit_of_work: UnitOfWork,
         clock: Clock,
         events: EventPublisher | None = None,
+        external_identities: ExternalIdentityRepository | None = None,
     ) -> None:
         self._users = users
         self._uow = unit_of_work
         self._clock = clock
+        # A64-031.E1. Optional on the same terms as `events`: only the
+        # Google sign-in graph reads or writes identities, and every other
+        # construction site would otherwise have to supply one.
+        self._identities = external_identities
         # A64-027.2 §11. Optional so that every construction site that
         # existed before this task keeps working — a service reached by an
         # operator command or a test fixture has nothing to publish into,
@@ -195,6 +201,66 @@ class UserService:
         no caller can tell which layer rejected it and none depends on the
         race.
         """
+        return await self._create(command, external_identity=None)
+
+    async def create_user_with_external_identity(
+        self, command: CreateUser, identity: ExternalIdentity
+    ) -> User:
+        """Creates a user and links `identity` to it, as one transaction —
+        A64-031.E1.
+
+        Atomic because the alternative is an account nobody can reach: the
+        user committed, the link failed, and the person's next sign-in
+        finds an address in use and no identity pointing at it. With both
+        in one transaction, the losing side of a race — two first sign-ins
+        for one Google account, on two API replicas — rolls back whole, on
+        `uq_user__email` or on `uq_external_identity__provider_subject`.
+
+        **The account is created verified.** The caller passes only an
+        address the provider has asserted ownership of (`email_verified`
+        in a signature-checked ID token); that is the same proof a
+        verification code supplies, from the party that delivers the mail.
+        """
+        return await self._create(command, external_identity=identity)
+
+    async def link_external_identity(self, user_id: UUID, identity: ExternalIdentity) -> None:
+        """Connects `identity` to an existing account — A64-031.E1.
+
+        Raises `UserNotFound` for an account that is gone and
+        `ExternalIdentityAlreadyLinked` when the identity already belongs to
+        an account, or this account already has one at the provider.
+        Deciding *whether* the person may link is the caller's: this only
+        records a decision `auth` has made with a password in hand.
+        """
+        identities = self._require_identities()
+        await self.get_user(user_id)
+        async with self._uow:
+            await identities.add(user_id, identity, created_at=self._clock.now())
+            await self._uow.commit()
+        logger.info(
+            "external_identity_linked",
+            extra={"user_id": str(user_id), "provider": identity.provider.value},
+        )
+
+    async def lookup_by_external_identity(self, identity: ExternalIdentity) -> User | None:
+        """The account `identity` signs in to, or `None` — absence is an
+        ordinary outcome, like `lookup_by_email`."""
+        user_id = await self._require_identities().user_id_for(identity)
+        return None if user_id is None else await self._users.get_by_id(user_id)
+
+    def _require_identities(self) -> ExternalIdentityRepository:
+        if self._identities is None:
+            # A wiring defect, not a runtime outcome: the Google graph
+            # always supplies one, and nothing else calls these methods.
+            raise RuntimeError("UserService was built without an external identity repository")
+        return self._identities
+
+    async def _create(
+        self, command: CreateUser, *, external_identity: ExternalIdentity | None
+    ) -> User:
+        # Resolved before any work, so a miswired graph fails before a row
+        # is written rather than after.
+        identities = None if external_identity is None else self._require_identities()
         username = Username(command.username)
         email = Email(command.email)
         timezone = Timezone(command.timezone)
@@ -214,9 +280,14 @@ class UserService:
             created_at=self._clock.now(),
             display_name=DisplayName(command.display_name) if command.display_name else None,
         )
+        if external_identity is not None:
+            # See `create_user_with_external_identity` on why this is proof.
+            user.mark_verified()
 
         async with self._uow:
             created = await self._users.create(user)
+            if identities is not None and external_identity is not None:
+                await identities.add(created.id, external_identity, created_at=created.created_at)
             # **Inside the transaction, before the commit** — AD-16. The
             # account and the fact that it exists are one write, so an
             # account cannot be created without the event and the event

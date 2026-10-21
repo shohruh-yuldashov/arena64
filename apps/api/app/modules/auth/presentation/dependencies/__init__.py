@@ -51,6 +51,7 @@ reaching for the container, not the root wiring modules together). The
 `RegistrationService` itself sees only `users.public.UserAccountCreator`.
 """
 
+from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends
@@ -58,13 +59,16 @@ from fastapi import Depends
 from app.api.deps import ClockDep, DbSessionDep, RedisPoolsDep, SettingsDep
 from app.api.outbox_deps import EventPublisherDep
 from app.api.restriction_deps import AccountRestrictionGateDep
+from app.config.settings import Settings
 from app.core.clock import Clock
+from app.core.constants import API_PREFIX, API_V1_PREFIX
 from app.database.unit_of_work import SessionUnitOfWork
 from app.modules.auth.application.ports import PasswordHasher
 from app.modules.auth.application.services import (
     AccessTokenService,
     AuthenticationService,
     EmailVerificationService,
+    GoogleSignInService,
     PasswordResetService,
     RefreshTokenService,
     RegistrationService,
@@ -73,7 +77,10 @@ from app.modules.auth.application.services import (
 from app.modules.auth.application.services.opaque_tokens import OpaqueTokenService
 from app.modules.auth.application.services.websocket_tickets import WebSocketTicketService
 from app.modules.auth.infrastructure import (
+    GoogleOidcVerifier,
+    GoogleSigningKeys,
     JwtTokenProvider,
+    RedisExternalSignInStore,
     RedisWebSocketTicketStore,
     SqlAlchemyPasswordResetTokenRepository,
     SqlAlchemySessionRepository,
@@ -97,13 +104,20 @@ from app.modules.users.application.services import UserService
 from app.modules.users.application.services.email_verification_writer import (
     EmailVerificationWriter,
 )
+from app.modules.users.application.services.external_identity_account_service import (
+    ExternalIdentityAccountService,
+)
 from app.modules.users.application.services.password_reset_writer import PasswordResetWriter
 from app.modules.users.application.services.user_account_service import UserAccountService
 from app.modules.users.application.services.user_credential_service import UserCredentialService
 from app.modules.users.application.services.user_profile_service import UserProfileService
-from app.modules.users.infrastructure.repositories import SqlAlchemyUserRepository
+from app.modules.users.infrastructure.repositories import (
+    SqlAlchemyExternalIdentityRepository,
+    SqlAlchemyUserRepository,
+)
 from app.modules.users.public import (
     EmailVerifier,
+    ExternalIdentityAccounts,
     PasswordResetter,
     UserAccountCreator,
     UserCredentialStore,
@@ -454,12 +468,93 @@ def get_password_reset_service(
 PasswordResetServiceDep = Annotated[PasswordResetService, Depends(get_password_reset_service)]
 
 
+# --- Google sign-in — A64-031.E1 ---------------------------------------------
+
+#: The route Google sends the browser back to, under this API's prefixes.
+#: `google_router.py` declares the same path; the redirect URI is built from
+#: this so the two cannot disagree, and Google compares it byte for byte.
+GOOGLE_CALLBACK_PATH = f"{API_PREFIX}{API_V1_PREFIX}/auth/browser/google/callback"
+
+
+def google_redirect_uri(settings: Settings) -> str:
+    """`PUBLIC_APP_URL` + the callback route — what the Google console must
+    list. Derived rather than configured; see `GoogleSignInSettings`."""
+    return f"{settings.app.public_url}{GOOGLE_CALLBACK_PATH}"
+
+
+@lru_cache(maxsize=1)
+def _google_signing_keys() -> GoogleSigningKeys:
+    """One key cache per process — public keys, identical on every replica,
+    so sharing them across requests is what the cache is for."""
+    return GoogleSigningKeys()
+
+
+def get_external_identity_accounts(
+    session: DbSessionDep, clock: ClockDep, events: EventPublisherDep
+) -> ExternalIdentityAccounts:
+    """`users`' side of the Google graph — the same assembly as
+    `get_user_account_creator`, with the identity repository on the same
+    session, so an account and its link commit together."""
+    users = UserService(
+        users=SqlAlchemyUserRepository(session),
+        unit_of_work=SessionUnitOfWork(session),
+        clock=clock,
+        events=events,
+        external_identities=SqlAlchemyExternalIdentityRepository(session),
+    )
+    return ExternalIdentityAccountService(users)
+
+
+ExternalIdentityAccountsDep = Annotated[
+    ExternalIdentityAccounts, Depends(get_external_identity_accounts)
+]
+
+
+def get_google_sign_in_service(
+    settings: SettingsDep,
+    pools: RedisPoolsDep,
+    accounts: ExternalIdentityAccountsDep,
+    credentials: UserCredentialStoreDep,
+    authentication: AuthenticationServiceDep,
+    password_hasher: PasswordHasherDep,
+) -> GoogleSignInService | None:
+    """The Google flow, or `None` on a tier with no Google client.
+
+    `None` rather than an exception, because "not configured" is a valid
+    state with a defined answer on every route — the start route sends the
+    browser back with `unavailable` — and an exception raised while
+    resolving a dependency would turn that into a 500.
+    """
+    google = settings.google_sign_in
+    if not google.is_configured:
+        return None
+    return GoogleSignInService(
+        verifier=GoogleOidcVerifier(
+            google, redirect_uri=google_redirect_uri(settings), keys=_google_signing_keys()
+        ),
+        # `cache`, beside WebSocket tickets — see `RedisExternalSignInStore`.
+        store=RedisExternalSignInStore(pools.cache),
+        accounts=accounts,
+        credentials=credentials,
+        authentication=authentication,
+        password_hasher=password_hasher,
+        tokens=OpaqueTokenService(),
+        state_ttl_seconds=google.state_ttl_seconds,
+        pending_ttl_seconds=google.pending_ttl_seconds,
+    )
+
+
+GoogleSignInServiceDep = Annotated[GoogleSignInService | None, Depends(get_google_sign_in_service)]
+
 __all__ = [
     "AccessTokenServiceDep",
     "AuthenticationServiceDep",
     "EmailProviderDep",
     "EmailVerificationServiceDep",
     "EmailVerifierDep",
+    "ExternalIdentityAccountsDep",
+    "GOOGLE_CALLBACK_PATH",
+    "GoogleSignInServiceDep",
     "Clock",
     "CurrentUser",
     "VerifiedUser",
@@ -482,6 +577,9 @@ __all__ = [
     "get_email_provider",
     "get_email_verification_service",
     "get_email_verifier",
+    "get_external_identity_accounts",
+    "get_google_sign_in_service",
+    "google_redirect_uri",
     "get_current_user",
     "get_current_user_optional",
     "get_password_hasher",

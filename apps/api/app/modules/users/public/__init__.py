@@ -23,6 +23,10 @@ What is published, and why only this much:
   `UserCredentialStore`  the equally narrow port `auth` uses to sign one in
   `UserProfileReader`    reads one account's own view by id (A64-011.5)
   `EmailVerifier`        marks an address verified (A64-011.6)
+  `ExternalIdentityAccounts`
+                         finds, creates and links accounts by an outside
+                         identity — Google's `sub` (A64-031.E1)
+  `IdentityProvider`     that port's provider names
   `EmailRecipientDirectory`
                          who may be **emailed**, and at what address
                          (A64-021.5). Read-only, batch, and eligibility is
@@ -136,6 +140,7 @@ from app.modules.users.domain.events import (
 )
 from app.modules.users.domain.exceptions import (
     EmailAlreadyExists,
+    ExternalIdentityAlreadyLinked,
     InvalidBio,
     InvalidCountryCode,
     InvalidDisplayName,
@@ -144,6 +149,7 @@ from app.modules.users.domain.exceptions import (
     UsernameAlreadyExists,
     UserNotFound,
 )
+from app.modules.users.domain.external_identity import IdentityProvider
 from app.modules.users.domain.preferences import (
     DEFAULT_ANIMATION_SPEED,
     DEFAULT_BOARD_THEME,
@@ -195,6 +201,7 @@ from app.modules.users.public.email_recipients import (
 from app.modules.users.public.ports import (
     AvatarStore,
     EmailVerifier,
+    ExternalIdentityAccounts,
     NewUserAccount,
     PasswordResetter,
     PreferencesEditor,
@@ -237,6 +244,9 @@ __all__ = [
     "EmailRecipient",
     "EmailRecipientDirectory",
     "EmailVerifier",
+    "ExternalIdentityAccounts",
+    "ExternalIdentityAlreadyLinked",
+    "IdentityProvider",
     "InvalidBio",
     "InvalidCountryCode",
     "InvalidDisplayName",

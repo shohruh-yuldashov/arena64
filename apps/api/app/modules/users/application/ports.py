@@ -11,11 +11,13 @@ Every method takes and returns **domain types** — `User`, `Username`,
 """
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from app.core.pagination import CursorPageInfo, CursorPageParams
 from app.modules.users.domain.entities import User
+from app.modules.users.domain.external_identity import ExternalIdentity
 from app.modules.users.domain.value_objects import Email, Username
 
 if TYPE_CHECKING:
@@ -182,4 +184,17 @@ class UserRepository(Protocol):
         a term the domain rules refuse and `InvalidSearchCursor` for a
         cursor that is malformed or belongs to a different term.
         """
+        ...
+
+
+class ExternalIdentityRepository(Protocol):
+    """`users.external_identity` — A64-031.E1. See the SQLAlchemy adapter."""
+
+    async def user_id_for(self, identity: ExternalIdentity) -> UUID | None:
+        """The account this identity signs in to, or `None`."""
+        ...
+
+    async def add(self, user_id: UUID, identity: ExternalIdentity, *, created_at: datetime) -> None:
+        """Records a link inside the caller's transaction. Raises
+        `ExternalIdentityAlreadyLinked` when either side is already taken."""
         ...

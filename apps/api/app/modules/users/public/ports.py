@@ -33,6 +33,7 @@ from uuid import UUID
 if TYPE_CHECKING:
     from app.modules.users.public.edits import PreferenceEdits, PrivacyEdits, ProfileEdits
 
+from app.modules.users.domain.external_identity import IdentityProvider
 from app.modules.users.domain.presence import DeviceType, LapsedPresence, Presence
 from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import (
@@ -209,6 +210,45 @@ class UserProfileReader(Protocol):
         identically for a known and an unknown address, and an exception
         is a branch. Matching is case-insensitive (AC-1).
         """
+        ...
+
+
+class ExternalIdentityAccounts(Protocol):
+    """Accounts reached through an outside identity provider — A64-031.E1.
+
+    The sixth narrow port, and narrow for the reason the other five are.
+    `auth` proves who somebody is at Google; `users` owns the account and
+    the link. Through this `auth` can find the account an identity signs in
+    to, create one already linked, or link an existing one — and nothing
+    else: it cannot list links, remove one, or read one by account.
+    """
+
+    async def find_credentials_by_external_identity(
+        self, provider: IdentityProvider, subject: str
+    ) -> UserCredentials | None:
+        """`None` when no account is linked to that identity — a return
+        value, as for every other sign-in lookup."""
+        ...
+
+    async def create_with_external_identity(
+        self, account: NewUserAccount, *, provider: IdentityProvider, subject: str
+    ) -> UserRead:
+        """Creates a **verified** account linked to the identity, as one
+        committed transaction. The caller must pass only an address the
+        provider has asserted ownership of.
+
+        Raises what `UserAccountCreator.create` raises, and
+        `ExternalIdentityAlreadyLinked` if the identity was linked first by
+        a concurrent request — in which case nothing was created.
+        """
+        ...
+
+    async def link_external_identity(
+        self, user_id: UUID, *, provider: IdentityProvider, subject: str
+    ) -> None:
+        """Links the identity to an existing account. Raises
+        `ExternalIdentityAlreadyLinked` if either side is taken, and
+        `UserNotFound` if the account is gone."""
         ...
 
 

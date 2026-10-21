@@ -124,7 +124,7 @@ from app.modules.users.public import (
 
 logger = logging.getLogger(__name__)
 
-_GENERIC_FAILURE_MESSAGE = "Invalid email, username or password."
+INVALID_CREDENTIALS_MESSAGE = "Invalid email, username or password."
 """One string for both causes. A message that varied — even in
 punctuation — would reintroduce, in the response body, exactly the
 distinction the timing work above removes from the clock."""
@@ -172,7 +172,7 @@ class AuthenticationService:
         if stored is None or not verified:
             # One branch, one exception, whichever half failed.
             logger.info("login_failed", extra={"reason": "invalid_credentials"})
-            raise InvalidCredentials(_GENERIC_FAILURE_MESSAGE)
+            raise InvalidCredentials(INVALID_CREDENTIALS_MESSAGE)
 
         # Before the account-status checks, not after — the two are
         # independent, and doing it here means the plaintext's lifetime
@@ -194,6 +194,19 @@ class AuthenticationService:
         # permanent record in a system with broader read access and
         # different retention than the database (services.md §8.5), and the
         # id joins back to everything else for anyone entitled to see it.
+        logger.info("login_succeeded", extra={"user_id": str(stored.account.id)})
+        return stored.account
+
+    async def admit(self, stored: UserCredentials) -> UserRead:
+        """Signs in an account whose ownership was proven some other way —
+        A64-031.E1, a verified Google identity linked to it.
+
+        No password, so no verification and no rehash: only step 6, the
+        same account-state checks a password sign-in passes, raising the
+        same `InactiveAccount`, `AccountLocked` and `AccountRestricted`.
+        A second sign-in method must never be a way around a sanction.
+        """
+        await self._ensure_usable(stored)
         logger.info("login_succeeded", extra={"user_id": str(stored.account.id)})
         return stored.account
 

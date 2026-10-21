@@ -16,6 +16,7 @@ hash is worth the extra lines.
 """
 
 from app.modules.users.domain.entities import User
+from app.modules.users.public.credentials import UserCredentials
 from app.modules.users.public.dtos import (
     AvatarReference,
     GameplayPreferencesView,
@@ -45,6 +46,19 @@ def to_user_read(user: User) -> UserRead:
         is_verified=user.is_verified,
         created_at=user.created_at,
         updated_at=user.updated_at,
+    )
+
+
+def to_user_credentials(user: User | None) -> UserCredentials | None:
+    """The sign-in view, or `None` for no account. One mapping for every
+    lookup — by address, handle or external identity — so no way of naming
+    an account gets a richer, or slower, answer than another."""
+    if user is None:
+        return None
+    return UserCredentials(
+        account=to_user_read(user),
+        password_hash=user.password_hash,
+        locked_until=user.locked_until,
     )
 
 

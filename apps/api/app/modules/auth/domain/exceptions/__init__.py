@@ -17,6 +17,7 @@ from app.core.exceptions import (
     TemporaryConflictError,
     ValidationError,
 )
+from app.modules.auth.domain.google_sign_in import SignInFailure
 
 
 class WeakPassword(ValidationError):
@@ -502,6 +503,29 @@ class InvalidResetToken(ValidationError):
     default_code: ClassVar[ErrorCode] = ErrorCode.INVALID_RESET_TOKEN
 
 
+class GoogleSignInRejected(AuthenticationFailed):
+    """A Google callback that signs nobody in — A64-031.E1.
+
+    Never rendered as JSON: the callback is a browser navigation, so the
+    route turns `failure` into a redirect back to the sign-in page. The
+    message is for the operator's log and carries no token, code or
+    address.
+    """
+
+    def __init__(self, failure: SignInFailure, message: str) -> None:
+        super().__init__(message)
+        self.failure = failure
+
+
+class ExternalSignInExpired(AuthenticationFailed):
+    """The verified Google identity this browser was holding is gone —
+    A64-031.E1. Used, timed out, or never issued; deliberately one answer
+    for all three, like `InvalidVerificationToken`. The client's move is to
+    start "Continue with Google" again."""
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.EXTERNAL_SIGN_IN_EXPIRED
+
+
 __all__ = [
     "AccountLocked",
     "AccountRestricted",
@@ -514,6 +538,8 @@ __all__ = [
     "AuthenticationRequired",
     "ExpiredRefreshToken",
     "ExpiredToken",
+    "ExternalSignInExpired",
+    "GoogleSignInRejected",
     "InactiveAccount",
     "InvalidCredentials",
     "InvalidRefreshToken",

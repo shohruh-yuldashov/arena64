@@ -47,6 +47,16 @@ class EmailAlreadyExists(ConflictError):
     default_code: ClassVar[ErrorCode] = ErrorCode.EMAIL_ALREADY_EXISTS
 
 
+class ExternalIdentityAlreadyLinked(ConflictError):
+    """A64-031.E1. The provider identity already belongs to an account, or
+    the account already has an identity at that provider — one person at
+    a provider is one account, and one account holds one identity per
+    provider. Raised from the database's unique constraints, so it is
+    correct under concurrency rather than merely checked beforehand."""
+
+    default_code: ClassVar[ErrorCode] = ErrorCode.EXTERNAL_IDENTITY_ALREADY_LINKED
+
+
 class InvalidUsername(ValidationError):
     """Shape, length, or reserved-name rule violated — see
     `domain/validators.py::validate_username`."""
@@ -139,6 +149,7 @@ class InvalidPreference(ValidationError):
 
 __all__ = [
     "EmailAlreadyExists",
+    "ExternalIdentityAlreadyLinked",
     "InvalidBio",
     "InvalidCountryCode",
     "InvalidDisplayName",

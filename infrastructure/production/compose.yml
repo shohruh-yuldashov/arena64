@@ -142,6 +142,15 @@ x-api-env: &api-env
   VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
   VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
   VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:no-reply@${ARENA64_DOMAIN}}
+  # "Continue with Google" — A64-031.E1, ADR-008. **Optional**, on the same
+  # terms as the VAPID pair: unset, `GoogleSignInSettings` reads both as absent
+  # and the sign-in page offers no Google button; one without the other is
+  # refused at start. The redirect URI is not configured here — it is derived
+  # from PUBLIC_APP_URL above, and the Google console must list exactly that
+  # (docs/05-operations/google-sign-in.md). The secret reaches the API
+  # containers only — never a build argument or a VITE_ variable.
+  GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+  GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
 
 # Everything the two API replicas share. Split from the image anchor so the
 # replicas differ in nothing but their name, their alias and their node id —

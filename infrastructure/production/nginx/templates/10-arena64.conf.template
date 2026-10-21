@@ -242,8 +242,9 @@ server {
         try_files $uri =404;
     }
 
-    # Private routes with fixed paths.
-    location ~ ^/(login|register|verify-email|forgot-password|reset-password|profile|challenges|search|play|notifications)$ {
+    # Private routes with fixed paths. `register/google` and `connect-google`
+    # are the two steps a Google sign-in can stop at — A64-031.E1.
+    location ~ ^/(login|register(/google)?|connect-google|verify-email|forgot-password|reset-password|profile|challenges|search|play|notifications)$ {
         include /etc/nginx/snippets/headers-app.conf;
         add_header X-Robots-Tag "noindex, nofollow" always;
         add_header Cache-Control "no-cache" always;

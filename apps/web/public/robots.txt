@@ -20,6 +20,7 @@ Disallow: /register
 Disallow: /verify-email
 Disallow: /forgot-password
 Disallow: /reset-password
+Disallow: /connect-google
 
 # Player profiles are **public to view and not for indexing**, decided in
 # A64-026.3. The privacy settings a player has today control *who sees

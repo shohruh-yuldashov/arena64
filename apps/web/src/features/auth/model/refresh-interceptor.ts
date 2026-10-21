@@ -1,6 +1,6 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from "axios";
 
-import { REFRESH_PATH } from "@/features/auth/api";
+import { CREDENTIAL_PATHS, REFRESH_PATH } from "@/features/auth/api";
 import type { SessionStore } from "@/features/auth/model/session-store";
 import { httpClient } from "@/shared/api/client";
 
@@ -29,6 +29,19 @@ import { httpClient } from "@/shared/api/client";
  * A `401` from `/auth/browser/refresh` means the cookie is gone. Retrying
  * it through this interceptor would refresh in order to refresh, forever.
  * `isRefreshCall` is checked first, before anything else.
+ *
+ * ## Why a sign-in is excluded too — A64-031.E3
+ *
+ * A `401` from `/auth/browser/login` is the answer to the credentials in
+ * its body, not to an access token, so there is nothing a refresh could
+ * repair. Treating it as an expiry used to refresh anyway: on the sign-in
+ * page there is usually no cookie, the refresh failed with
+ * `invalid_session`, and *that* error — not the login's
+ * `invalid_credentials` — reached the form as "your session is not
+ * valid". With a stale cookie present it was worse: the refresh succeeded
+ * and signed the browser into whichever account the cookie belonged to.
+ * `CREDENTIAL_PATHS` lists every endpoint whose `401` is about what was
+ * submitted.
  *
  * ## Why each request retries at most once
  *
@@ -97,7 +110,8 @@ export function installAuthInterceptors(
         error.response?.status !== 401 ||
         failed === undefined ||
         failed._retried === true ||
-        isRefreshCall(failed)
+        isRefreshCall(failed) ||
+        isCredentialCall(failed)
       ) {
         throw error;
       }
@@ -129,4 +143,10 @@ export function installAuthInterceptors(
 /** Whether this config is the refresh call. See the module docstring. */
 function isRefreshCall(config: AxiosError["config"] | InternalAxiosRequestConfig): boolean {
   return config?.url?.endsWith(REFRESH_PATH) ?? false;
+}
+
+/** Whether this config submits credentials. See the module docstring. */
+function isCredentialCall(config: InternalAxiosRequestConfig): boolean {
+  const path = config.url;
+  return path !== undefined && CREDENTIAL_PATHS.some((credential) => path.endsWith(credential));
 }

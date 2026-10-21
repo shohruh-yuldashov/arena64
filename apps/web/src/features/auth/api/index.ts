@@ -102,3 +102,10 @@ export function resetPassword(payload: Schemas["ResetPasswordRequest"]): Promise
 
 /** The path the interceptor must never refresh against — see `model/`. */
 export const REFRESH_PATH = `${BROWSER}/refresh`;
+
+/**
+ * Endpoints whose `401` rejects the submitted credentials rather than an
+ * expired access token — the interceptor must not answer one with a
+ * refresh. See `model/refresh-interceptor.ts`, A64-031.E3.
+ */
+export const CREDENTIAL_PATHS: readonly string[] = [`${BROWSER}/login`];

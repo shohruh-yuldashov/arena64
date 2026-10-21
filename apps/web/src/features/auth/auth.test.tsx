@@ -212,6 +212,161 @@ describe("the login form", () => {
   });
 });
 
+describe("a rejected sign-in — A64-031.E3", () => {
+  /**
+   * The defect: a `401 invalid_credentials` went through the refresh
+   * interceptor, which refreshed, and the refresh's own `invalid_session`
+   * is what the form displayed — "your session is not valid" for a mistyped
+   * password. Every case drives the real form through the real interceptor.
+   */
+  function rejectLoginWith(response: () => Response) {
+    let refreshes = 0;
+    mswServer.use(
+      http.post(REFRESH, () => {
+        refreshes += 1;
+        return noSession();
+      }),
+      http.post(LOGIN, response),
+    );
+    return { refreshes: () => refreshes };
+  }
+
+  async function submitLogin() {
+    const user = userEvent.setup();
+    renderApp({ path: "/login" });
+    await user.type(await screen.findByLabelText(/email|pochta|почта/i), "player@example.com");
+    await user.type(
+      screen.getByLabelText(/password|parol|пароль/i, { selector: "input" }),
+      "x",
+    );
+    await user.click(screen.getByRole("button", { name: /sign in|kirish|войти/i }));
+    return screen.findByRole("alert");
+  }
+
+  const invalidCredentials = () =>
+    HttpResponse.json(
+      {
+        code: "invalid_credentials",
+        message: "Invalid.",
+        request_id: null,
+        correlation_id: null,
+      },
+      { status: 401 },
+    );
+
+  it("says the credentials are wrong, never that the session is invalid", async () => {
+    rejectLoginWith(invalidCredentials);
+
+    const alert = await submitLogin();
+
+    expect(alert).toHaveTextContent(
+      /email or password is wrong|pochta yoki parol noto'g'ri|неверная почта или пароль/i,
+    );
+  });
+
+  it("does not answer the rejection with a refresh", async () => {
+    const calls = rejectLoginWith(invalidCredentials);
+
+    await submitLogin();
+
+    // One refresh — the page-load bootstrap — and none caused by the 401.
+    expect(calls.refreshes()).toBe(1);
+  });
+
+  it("does not sign in as whoever a leftover cookie belongs to", async () => {
+    // A live cookie for another account is exactly what made the old
+    // behaviour dangerous: the refresh succeeded. The bootstrap sees no
+    // session here, and nothing after the rejected sign-in may ask again.
+    let refreshes = 0;
+    mswServer.use(
+      http.post(REFRESH, () => {
+        refreshes += 1;
+        return refreshes === 1 ? noSession() : HttpResponse.json(sessionBody("cookie-token"));
+      }),
+      http.post(LOGIN, invalidCredentials),
+    );
+
+    await submitLogin();
+
+    expect(screen.queryByText("Player One")).not.toBeInTheDocument();
+  });
+
+  it("names a network failure as a network failure", async () => {
+    rejectLoginWith(() => HttpResponse.error());
+
+    const alert = await submitLogin();
+
+    expect(alert).toHaveTextContent(
+      /could not reach the server|serverga ulanib|связаться с сервером/i,
+    );
+  });
+
+  it("names a rate limit as a rate limit", async () => {
+    rejectLoginWith(() =>
+      HttpResponse.json(
+        { code: "rate_limited", message: "Slow.", request_id: null, correlation_id: null },
+        { status: 429 },
+      ),
+    );
+
+    const alert = await submitLogin();
+
+    expect(alert).toHaveTextContent(
+      /too many attempts|juda ko'p urinish|слишком много попыток/i,
+    );
+  });
+
+  it("gives a server error the generic message", async () => {
+    rejectLoginWith(() =>
+      HttpResponse.json(
+        { code: "internal_error", message: "Boom.", request_id: null, correlation_id: null },
+        { status: 500 },
+      ),
+    );
+
+    const alert = await submitLogin();
+
+    expect(alert).toHaveTextContent(
+      /something went wrong|kutilmagan xatolik|непредвиденная ошибка/i,
+    );
+  });
+});
+
+describe("an expired session — A64-031.E3", () => {
+  it("still recovers through one refresh, and ends the session when that fails", async () => {
+    // The exclusion above must not reach authenticated requests: their
+    // `401` is an expiry, and a dead refresh is what signs the user out.
+    let refreshes = 0;
+    mswServer.use(
+      http.post(REFRESH, () => {
+        refreshes += 1;
+        return refreshes === 1 ? HttpResponse.json(sessionBody("token-1")) : noSession();
+      }),
+      http.get(url("/api/v1/thing"), () =>
+        HttpResponse.json(
+          {
+            code: "expired_token",
+            message: "Expired.",
+            request_id: null,
+            correlation_id: null,
+          },
+          { status: 401 },
+        ),
+      ),
+    );
+    renderApp();
+    await screen.findByText("Player One");
+
+    await expect(api.get("/api/v1/thing")).rejects.toMatchObject({ code: "invalid_session" });
+
+    expect(refreshes).toBe(2);
+    const header = await screen.findByRole("banner");
+    expect(
+      await within(header).findByRole("link", { name: /sign in|kirish|войти/i }),
+    ).toBeVisible();
+  });
+});
+
 describe("sign-out", () => {
   it("clears the session and the private cache, and tells the other tabs", async () => {
     const user = userEvent.setup();

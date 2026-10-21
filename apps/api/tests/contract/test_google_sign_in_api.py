@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
+import pytest
 import pytest_asyncio
 from redis.asyncio import Redis
 from sqlalchemy import select
@@ -41,6 +42,7 @@ from app.modules.auth.presentation.dependencies import (
 )
 from app.modules.users.infrastructure.models import UserExternalIdentityModel, UserModel
 from tests.contract.contract_app import build_contract_app, contract_client
+from tests.contract.test_password_reset_api import RESET_URL, request_reset
 
 BROWSER = "/api/v1/auth/browser"
 START_URL = f"{BROWSER}/google/start"
@@ -289,6 +291,82 @@ class TestAnAddressAnAccountAlreadyUses:
         assert linked.status_code == 200, linked.text
         assert linked.json()["data"]["user"]["id"] == existing
         assert returned.headers["location"] == f"{APP}/play"
+
+
+class TestAPasswordlessGoogleAccount:
+    """ADR-008: a Google-created account has no password anybody knows, and
+    recovers the way every account does — through its address."""
+
+    async def test_no_password_signs_in_until_one_is_set(
+        self, client: httpx.AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        created = await _create_account(client)
+        first_session = client.cookies[REFRESH_COOKIE]
+        refused = await client.post(
+            f"{BROWSER}/login", json={"identifier": "new_comer", "password": PASSWORD}
+        )
+
+        token = await request_reset(client, caplog, "newcomer@gmail.com")
+        reset = await client.post(RESET_URL, json={"token": token, "password": PASSWORD})
+        client.cookies.clear()
+        by_password = await client.post(
+            f"{BROWSER}/login", json={"identifier": "new_comer", "password": PASSWORD}
+        )
+
+        assert (refused.status_code, refused.json()["code"]) == (401, "invalid_credentials")
+        assert reset.status_code == 204, reset.text
+        assert by_password.status_code == 200, by_password.text
+        assert by_password.json()["data"]["user"]["id"] == created.json()["data"]["user"]["id"]
+        # The reset revoked the session Google issued, as it revokes any.
+        client.cookies.set(REFRESH_COOKIE, first_session, path="/api/v1/auth/browser")
+        assert (await client.post(REFRESH_URL)).status_code == 401
+
+    async def test_google_still_signs_in_after_a_password_is_set(
+        self, client: httpx.AsyncClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        await _create_account(client)
+        token = await request_reset(client, caplog, "newcomer@gmail.com")
+        await client.post(RESET_URL, json={"token": token, "password": PASSWORD})
+        client.cookies.clear()
+
+        returned = await _round_trip(client)
+
+        assert returned.headers["location"] == f"{APP}/play"
+
+
+class TestAnAccountAlreadyLinkedToGoogle:
+    async def test_cannot_have_its_google_identity_replaced(
+        self,
+        client: httpx.AsyncClient,
+        google: _FakeGoogle,
+        contract_session: AsyncSession,
+    ) -> None:
+        """A second Google account whose address matches an already-linked
+        Arena64 account is refused even with the right password — the
+        first link stands, and nothing is swapped."""
+        registered = await client.post(
+            REGISTER_URL,
+            json={"username": "linked_one", "email": "linked@gmail.com", "password": PASSWORD},
+        )
+        assert registered.status_code == 201, registered.text
+        client.cookies.clear()
+        google.identity = _identity(email="linked@gmail.com", subject="first-google-sub")
+        await _round_trip(client)
+        assert (await client.post(LINK_URL, json={"password": PASSWORD})).status_code == 200
+        client.cookies.clear()
+
+        google.identity = _identity(email="linked@gmail.com", subject="second-google-sub")
+        called_back = await _round_trip(client)
+        refused = await client.post(LINK_URL, json={"password": PASSWORD})
+
+        assert called_back.headers["location"] == f"{APP}/connect-google"
+        assert (refused.status_code, refused.json()["code"]) == (
+            409,
+            "external_identity_already_linked",
+        )
+        assert REFRESH_COOKIE not in client.cookies
+        subjects = list(await contract_session.scalars(select(UserExternalIdentityModel.subject)))
+        assert subjects == ["first-google-sub"]
 
 
 class TestACallbackThatSignsNobodyIn:

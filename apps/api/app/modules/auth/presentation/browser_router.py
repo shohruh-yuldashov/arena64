@@ -184,7 +184,7 @@ async def browser_login(
     the refresh token is written to a cookie instead of the body.
     """
     account = await authentication.authenticate(
-        AuthenticateUser(email=payload.email, password=payload.password)
+        AuthenticateUser(identifier=payload.login_identifier, password=payload.password)
     )
     issued = await sessions.create_session(account.id, device=device)
     access = access_tokens.create_access_token(account)

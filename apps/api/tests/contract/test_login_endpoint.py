@@ -102,7 +102,7 @@ async def registered(registration: RegistrationService) -> str:
 
 
 def attempt(*, email: str = EMAIL, password: str = PASSWORD) -> AuthenticateUser:
-    return AuthenticateUser(email=email, password=SecretStr(password))
+    return AuthenticateUser(identifier=email, password=SecretStr(password))
 
 
 class TestAgainstWhatRegistrationActuallyWrote:
@@ -140,6 +140,28 @@ class TestAgainstWhatRegistrationActuallyWrote:
         that registration applied and the folding this lookup applies must
         be the same, and only real PostgreSQL can show that they are."""
         assert str((await service.authenticate(attempt(email=EMAIL.upper()))).id) == registered
+
+    async def test_a_username_authenticates_case_insensitively_in_postgres(
+        self, service: AuthenticationService, registered: str
+    ) -> None:
+        """A64-031.E2, on the `username_folded` column PostgreSQL computes —
+        the fold the lookup applies must be the one the database stored."""
+        authenticated = await service.authenticate(attempt(email="PLAYER_ONE"))
+
+        assert str(authenticated.id) == registered
+
+    async def test_an_unknown_username_is_rejected_identically(
+        self, service: AuthenticationService, registered: str
+    ) -> None:
+        with pytest.raises(InvalidCredentials) as unknown:
+            await service.authenticate(attempt(email="nobody_here"))
+        with pytest.raises(InvalidCredentials) as wrong:
+            await service.authenticate(attempt(email="player_one", password=WRONG_PASSWORD))
+
+        assert (unknown.value.code, unknown.value.message) == (
+            wrong.value.code,
+            wrong.value.message,
+        )
 
     async def test_the_returned_account_carries_no_hash(
         self, service: AuthenticationService, registered: str
@@ -309,6 +331,24 @@ class TestTimingAgainstRealStorage:
             f"address took {known:.1f}ms against {unknown:.1f}ms for an unknown "
             f"one ({difference:.0%} apart). Something on the row-mapping path "
             f"costs materially more for a hit than for a miss."
+        )
+
+    async def test_a_registered_username_costs_the_same_as_an_unknown_one(
+        self, service: AuthenticationService, registered: str
+    ) -> None:
+        """A64-031.E2. The handle lookup reads a different index and must
+        not reopen the gap the address lookup closed."""
+        await self._median_ms(service, email="player_one")
+        await self._median_ms(service, email="nobody_here")
+
+        known = await self._median_ms(service, email="player_one")
+        unknown = await self._median_ms(service, email="nobody_here")
+
+        difference = abs(known - unknown) / known
+        assert difference < 0.35, (
+            f"account enumeration by timing on usernames: a registered handle "
+            f"took {known:.1f}ms against {unknown:.1f}ms for an unknown one "
+            f"({difference:.0%} apart)."
         )
 
 

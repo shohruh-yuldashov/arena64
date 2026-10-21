@@ -55,6 +55,7 @@
   "auth": {
     "common": {
       "email": "Электронная почта",
+      "identifier": "Почта или имя пользователя",
       "password": "Пароль",
       "username": "Имя пользователя",
       "confirmPassword": "Подтвердите пароль",
@@ -129,7 +130,7 @@
       "missingToken": "Ссылка неполная. Скопируйте её из письма целиком."
     },
     "errors": {
-      "invalid_credentials": "Неверная почта или пароль.",
+      "invalid_credentials": "Неверная почта, имя пользователя или пароль.",
       "inactive_account": "Этот аккаунт неактивен.",
       "account_locked": "Аккаунт временно заблокирован. Попробуйте позже.",
       "authentication_required": "Войдите, чтобы продолжить.",
@@ -153,6 +154,8 @@
     "validation": {
       "emailRequired": "Введите адрес почты.",
       "emailInvalid": "Недопустимый адрес почты.",
+      "identifierRequired": "Введите почту или имя пользователя.",
+      "identifierTooLong": "Слишком длинно для почты или имени пользователя.",
       "passwordRequired": "Введите пароль.",
       "passwordTooShort": "Пароль не короче {min} символов.",
       "passwordTooLong": "Пароль не длиннее {max} символов.",

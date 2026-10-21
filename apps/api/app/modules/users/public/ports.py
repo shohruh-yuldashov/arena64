@@ -125,6 +125,18 @@ class UserCredentialStore(Protocol):
         """
         ...
 
+    async def find_credentials_by_username(self, username: str) -> UserCredentials | None:
+        """The same answer, found by handle — A64-031.E2.
+
+        `None` when no account has that username, for exactly the reason
+        `find_credentials_by_email` returns rather than raises. Matching is
+        case-insensitive (UP-1), on the folded form uniqueness is enforced
+        on. A string that is not a valid username raises `InvalidUsername`,
+        as a malformed address raises `InvalidEmail`; the caller decides
+        what that means for a sign-in.
+        """
+        ...
+
     async def replace_password_hash(
         self,
         user_id: UUID,

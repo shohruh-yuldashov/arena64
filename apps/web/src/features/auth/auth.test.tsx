@@ -260,7 +260,7 @@ describe("a rejected sign-in — A64-031.E3", () => {
     const alert = await submitLogin();
 
     expect(alert).toHaveTextContent(
-      /email or password is wrong|pochta yoki parol noto'g'ri|неверная почта или пароль/i,
+      /email, username or password is wrong|foydalanuvchi nomi yoki parol noto'g'ri|имя пользователя или пароль/i,
     );
   });
 
@@ -329,6 +329,47 @@ describe("a rejected sign-in — A64-031.E3", () => {
     expect(alert).toHaveTextContent(
       /something went wrong|kutilmagan xatolik|непредвиденная ошибка/i,
     );
+  });
+});
+
+describe("signing in with a username — A64-031.E2", () => {
+  it("sends whatever was typed as one identifier, untouched", async () => {
+    // The backend decides address-or-handle; the client folds nothing and
+    // shape-checks nothing, so a username reaches it exactly as typed.
+    const user = userEvent.setup();
+    let body: unknown = null;
+    mswServer.use(
+      http.post(REFRESH, () => noSession()),
+      http.post(LOGIN, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json(sessionBody("token-1"));
+      }),
+    );
+    renderApp({ path: "/login" });
+
+    await user.type(
+      await screen.findByLabelText(/email or username|foydalanuvchi nomi|имя пользователя/i),
+      "  Player_One ",
+    );
+    await user.type(
+      screen.getByLabelText(/password|parol|пароль/i, { selector: "input" }),
+      "CorrectHorse1!",
+    );
+    await user.click(screen.getByRole("button", { name: /sign in|kirish|войти/i }));
+
+    expect(await screen.findByText("Player One")).toBeVisible();
+    expect(body).toEqual({ identifier: "Player_One", password: "CorrectHorse1!" });
+  });
+
+  it("does not let the browser refuse a username as a malformed address", async () => {
+    renderApp({ path: "/login" });
+
+    const field = await screen.findByLabelText(
+      /email or username|foydalanuvchi nomi|имя пользователя/i,
+    );
+
+    expect(field).toHaveAttribute("type", "text");
+    expect(field).toHaveAttribute("autocomplete", "username");
   });
 });
 

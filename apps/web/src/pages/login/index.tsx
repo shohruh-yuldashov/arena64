@@ -46,7 +46,7 @@ export default function LoginPage() {
   } = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
     mode: "onTouched",
-    defaultValues: { email: "", password: "" },
+    defaultValues: { identifier: "", password: "" },
   });
 
   const onSubmit = handleSubmit(async (values) => {
@@ -84,13 +84,20 @@ export default function LoginPage() {
       >
         <FormError messageKey={failure} />
 
+        {/* `type="text"`, not `email`: a username has no `@`, and the
+            browser's own email check would refuse it before submit.
+            `autoComplete="username"` is the token password managers pair
+            with `current-password`, whichever kind is stored. */}
         <FormField
-          label={t("auth.common.email")}
-          type="email"
-          autoComplete="email"
+          label={t("auth.common.identifier")}
+          type="text"
+          autoComplete="username"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
           autoFocus
-          error={errors.email ? t(errors.email.message as TranslationKey) : undefined}
-          {...register("email")}
+          error={errors.identifier ? t(errors.identifier.message as TranslationKey) : undefined}
+          {...register("identifier")}
         />
 
         <PasswordField

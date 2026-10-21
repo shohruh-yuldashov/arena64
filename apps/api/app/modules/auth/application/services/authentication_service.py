@@ -9,9 +9,9 @@ token issuer needs.
 
 ## The flow
 
-    1. normalise the address           the same folding registration used,
-                                       or "A@B.com" never matches "a@b.com"
-    2. look up the credentials         `None` for an unknown address —
+    1. resolve the identifier          an address or a username, by one
+                                       rule — see "Email or username" below
+    2. look up the credentials         `None` for an unknown identifier —
                                        a return value, never an exception
     3. verify with Argon2id            against the real hash, or against a
                                        throwaway one if there is no account
@@ -59,6 +59,22 @@ rehashes it. Closing it would mean padding every login to the slowest
 verification the platform has ever configured — a permanent cost for a
 window that closes on its own.
 
+## Email or username — A64-031.E2
+
+A sign-in names its account either way, and the two cannot be confused:
+`users.domain.validators` allows a username only `[A-Za-z0-9_]`, so a
+username never contains `@` and every address must. An identifier with an
+`@` is therefore looked up as an address and one without it as a handle —
+there is no input both rules could claim, and no account a lookup could
+reach by the other's name.
+
+Both lookups are one probe on a unique index (`email`, `username_folded`)
+returning the same `UserCredentials`, so which kind was submitted changes
+neither the response nor the time it takes. Something that cannot be a
+valid instance of its kind — a malformed address, a reserved or
+mis-shaped handle — is no account, and takes the dummy-verification path
+like any other unknown identifier.
+
 ## Why `InactiveAccount` and `AccountLocked` are not an oracle
 
 The task specifies both "use a single exception: InvalidCredentials" and
@@ -98,14 +114,24 @@ from app.modules.auth.domain.exceptions import (
     InactiveAccount,
     InvalidCredentials,
 )
-from app.modules.users.public import InvalidEmail, UserCredentials, UserCredentialStore, UserRead
+from app.modules.users.public import (
+    InvalidEmail,
+    InvalidUsername,
+    UserCredentials,
+    UserCredentialStore,
+    UserRead,
+)
 
 logger = logging.getLogger(__name__)
 
-_GENERIC_FAILURE_MESSAGE = "Invalid email or password."
+_GENERIC_FAILURE_MESSAGE = "Invalid email, username or password."
 """One string for both causes. A message that varied — even in
 punctuation — would reintroduce, in the response body, exactly the
 distinction the timing work above removes from the clock."""
+
+
+_EMAIL_MARKER = "@"
+"""The character only an address may contain — see "Email or username"."""
 
 
 class AuthenticationService:
@@ -134,7 +160,7 @@ class AuthenticationService:
         """
         plaintext = command.password.get_secret_value()
 
-        stored = await self._find_credentials(command.email)
+        stored = await self._find_credentials(command.identifier)
 
         # The real hash when there is an account, an unguessable throwaway
         # when there is not. Either way one Argon2 verification runs — see
@@ -171,20 +197,19 @@ class AuthenticationService:
         logger.info("login_succeeded", extra={"user_id": str(stored.account.id)})
         return stored.account
 
-    async def _find_credentials(self, email: str) -> UserCredentials | None:
+    async def _find_credentials(self, identifier: str) -> UserCredentials | None:
+        """See "Email or username" in this module's docstring."""
         try:
-            return await self._credentials.find_credentials_by_email(email)
-        except InvalidEmail:
-            # A malformed address cannot belong to anyone — nothing that
-            # fails this check could ever have been registered. Returning
+            if _EMAIL_MARKER in identifier:
+                return await self._credentials.find_credentials_by_email(identifier)
+            return await self._credentials.find_credentials_by_username(identifier.strip())
+        except (InvalidEmail, InvalidUsername):
+            # A malformed identifier cannot belong to anyone — nothing that
+            # fails these checks could ever have been registered. Returning
             # `None` sends it down the dummy-verification path instead of
             # letting it escape as a 422, so that no caller can tell "not a
-            # valid address" from "wrong password" by the response *or* by
-            # how quickly it arrived.
-            #
-            # The HTTP schema still rejects malformed addresses earlier with
-            # a field-level 422, which is the right feedback for a form.
-            # This is the guard for every other caller.
+            # valid identifier" from "wrong password" by the response *or*
+            # by how quickly it arrived.
             return None
 
     async def _ensure_usable(self, stored: UserCredentials) -> None:

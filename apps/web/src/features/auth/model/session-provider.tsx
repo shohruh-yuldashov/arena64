@@ -55,7 +55,8 @@ import { reportError } from "@/shared/lib/report-error";
  */
 interface SessionContextValue {
   state: SessionState;
-  signIn: (credentials: { email: string; password: string }) => Promise<void>;
+  /** `identifier` is an email address or a username — A64-031.E2. */
+  signIn: (credentials: { identifier: string; password: string }) => Promise<void>;
   signUp: (payload: SignUpPayload) => Promise<void>;
   signOut: () => Promise<void>;
   signOutEverywhere: () => Promise<void>;
@@ -273,7 +274,7 @@ export function SessionProvider({
   useEffect(() => () => channel.close(), [channel]);
 
   const signIn = useCallback(
-    async (credentials: { email: string; password: string }) => {
+    async (credentials: { identifier: string; password: string }) => {
       const session = await authApi.login(credentials);
       store.set({
         status: "authenticated",

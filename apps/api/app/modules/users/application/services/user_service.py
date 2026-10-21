@@ -136,6 +136,16 @@ class UserService:
         """
         return await self._users.get_by_email(Email(email))
 
+    async def lookup_by_username(self, username: str) -> User | None:
+        """`lookup_by_email`'s twin for a handle — A64-031.E2.
+
+        Same reasoning, same shape: absence is an ordinary sign-in outcome,
+        so it is a return value. Case-insensitive through `Username.folded`
+        and the unique `username_folded` index, so this costs the same
+        indexed probe the email lookup does.
+        """
+        return await self._users.get_by_username(Username(username))
+
     async def list_users(
         self,
         params: CursorPageParams,

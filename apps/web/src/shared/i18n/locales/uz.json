@@ -55,6 +55,7 @@
   "auth": {
     "common": {
       "email": "Elektron pochta",
+      "identifier": "Pochta yoki foydalanuvchi nomi",
       "password": "Parol",
       "username": "Foydalanuvchi nomi",
       "confirmPassword": "Parolni tasdiqlang",
@@ -129,7 +130,7 @@
       "missingToken": "Havola to'liq emas. Pochtangizdagi havolani to'liq nusxalang."
     },
     "errors": {
-      "invalid_credentials": "Pochta yoki parol noto'g'ri.",
+      "invalid_credentials": "Pochta, foydalanuvchi nomi yoki parol noto'g'ri.",
       "inactive_account": "Bu hisob faol emas.",
       "account_locked": "Hisob vaqtincha bloklangan. Birozdan so'ng urinib ko'ring.",
       "authentication_required": "Davom etish uchun tizimga kiring.",
@@ -153,6 +154,8 @@
     "validation": {
       "emailRequired": "Pochta manzilini kiriting.",
       "emailInvalid": "Pochta manzili yaroqsiz.",
+      "identifierRequired": "Pochta yoki foydalanuvchi nomini kiriting.",
+      "identifierTooLong": "Pochta yoki foydalanuvchi nomi uchun juda uzun.",
       "passwordRequired": "Parolni kiriting.",
       "passwordTooShort": "Parol kamida {min} ta belgidan iborat bo'lsin.",
       "passwordTooLong": "Parol {max} ta belgidan oshmasin.",

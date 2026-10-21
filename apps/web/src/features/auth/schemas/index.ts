@@ -31,6 +31,8 @@ export const PASSWORD_MIN_LENGTH = 8;
 export const PASSWORD_MAX_LENGTH = 128;
 export const USERNAME_MIN_LENGTH = 3;
 export const USERNAME_MAX_LENGTH = 20;
+/** The longest address the backend stores, which covers every username. */
+export const IDENTIFIER_MAX_LENGTH = 254;
 
 /** `^[a-zA-Z0-9][a-zA-Z0-9_]*$` — `users.domain.validators._USERNAME_PATTERN`. */
 const USERNAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_]*$/;
@@ -80,8 +82,28 @@ const username = z
       .regex(USERNAME_PATTERN, key("auth.validation.usernameInvalid")),
   );
 
+/**
+ * An email address or a username — A64-031.E2.
+ *
+ * Trimmed and bounded, and **nothing else**: not lower-cased, because the
+ * backend folds both kinds itself, and not checked against either shape,
+ * because something that is neither a valid address nor a valid handle is
+ * simply an account that does not exist — the server's generic answer is
+ * the right one, and a client-side "invalid username" would hint at which
+ * kind it thought it was looking at.
+ */
+const identifier = z
+  .string()
+  .transform((value) => value.trim())
+  .pipe(
+    z
+      .string()
+      .min(1, key("auth.validation.identifierRequired"))
+      .max(IDENTIFIER_MAX_LENGTH, key("auth.validation.identifierTooLong")),
+  );
+
 export const loginSchema = z.object({
-  email,
+  identifier,
   // The sign-in field is deliberately **not** policy-checked: the policy
   // may have changed since the account was created, and refusing to submit
   // an existing password because it lacks a symbol would lock somebody out

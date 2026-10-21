@@ -6258,6 +6258,12 @@ export interface components {
          * LoginRequest
          * @description The `POST /auth/login` body.
          *
+         *     **`identifier` or `email`, exactly one** — A64-031.E2. `identifier`
+         *     takes an address or a username and is what the web client sends.
+         *     `email` is the original field and is still accepted, unchanged, so the
+         *     admin console, native clients and every existing caller keep working;
+         *     it remains address-only and keeps its field-level 422 below.
+         *
          *     `email` reuses `users`' `EmailField`, so the address is trimmed and
          *     folded by exactly the validator registration used — "  Alice@Example.COM "
          *     and "alice@example.com" are the same account, which they must be or
@@ -6276,13 +6282,15 @@ export interface components {
          *     `is_active` or `user_id` alongside its credentials is rejected rather
          *     than silently ignored.
          * @example {
-         *       "email": "player@example.com",
+         *       "identifier": "player@example.com",
          *       "password": "CorrectHorse1!"
          *     }
          */
         LoginRequest: {
+            /** Identifier */
+            identifier?: string | null;
             /** Email */
-            email: string;
+            email?: string | null;
             /**
              * Password
              * Format: password

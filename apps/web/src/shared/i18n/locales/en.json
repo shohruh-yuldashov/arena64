@@ -55,6 +55,7 @@
   "auth": {
     "common": {
       "email": "Email",
+      "identifier": "Email or username",
       "password": "Password",
       "username": "Username",
       "confirmPassword": "Confirm password",
@@ -129,7 +130,7 @@
       "missingToken": "The link is incomplete. Copy the whole link from your email."
     },
     "errors": {
-      "invalid_credentials": "That email or password is wrong.",
+      "invalid_credentials": "That email, username or password is wrong.",
       "inactive_account": "This account is not active.",
       "account_locked": "This account is temporarily locked. Try again later.",
       "authentication_required": "Sign in to continue.",
@@ -153,6 +154,8 @@
     "validation": {
       "emailRequired": "Enter your email address.",
       "emailInvalid": "That email address is not valid.",
+      "identifierRequired": "Enter your email or username.",
+      "identifierTooLong": "That is too long to be an email or a username.",
       "passwordRequired": "Enter your password.",
       "passwordTooShort": "At least {min} characters.",
       "passwordTooLong": "At most {max} characters.",

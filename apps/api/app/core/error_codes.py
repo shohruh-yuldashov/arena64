@@ -221,6 +221,24 @@ class ErrorCode(StrEnum):
     # *kind* is not that failure mode.
     INVALID_RESET_TOKEN = "invalid_reset_token"
 
+    # `auth` (A64-031.E1) — signing in with Google. Two, for two different
+    # client moves:
+    #
+    #   EXTERNAL_SIGN_IN_EXPIRED          the verified Google identity this
+    #                                     browser was holding is gone — used,
+    #                                     timed out, or never there. Start
+    #                                     "Continue with Google" again
+    #   EXTERNAL_IDENTITY_ALREADY_LINKED  the Google account already belongs
+    #                                     to an Arena64 account, or this
+    #                                     account already has a Google one.
+    #                                     Nothing to retry; sign in instead
+    #
+    # Neither says *which* account. The second is reachable only after
+    # proving ownership of the Google account, and naming the holder would
+    # still be more than that proof entitles anyone to.
+    EXTERNAL_SIGN_IN_EXPIRED = "external_sign_in_expired"
+    EXTERNAL_IDENTITY_ALREADY_LINKED = "external_identity_already_linked"
+
     # `avatars` (A64-012.2). **One** code, for the one avatar rejection a
     # client can act on without human choice: an oversized file can be
     # re-encoded and retried automatically, where "not a supported format"

@@ -45,9 +45,13 @@ class AuthenticateUser:
     by an error reporter, and it is the one carrying a password somebody
     typed *and got wrong*, which on the next attempt is very often the
     right one.
+
+    `identifier` is an email address or a username — A64-031.E2. Which one
+    is decided by `AuthenticationService`, not by the caller, so every
+    entry point resolves it by the same rule.
     """
 
-    email: str
+    identifier: str
     password: SecretStr
 
 

@@ -2,7 +2,7 @@
 
 > **Status:** Placeholder for the JSON surface — the **browser session** (A64-020.2) and **email verification** (A64-021.5H) halves are specified below
 > **Owner:** _Unassigned_
-> **Last updated:** 2026-08-07 — A64-021.5H, email verification codes
+> **Last updated:** 2026-10-22 — A64-031.E, username sign-in, Google sign-in, rejected sign-in errors
 > **Related:** [`frontend.md`](./frontend.md) §12, `templates/feature-spec.md`
 
 ## Description
@@ -595,3 +595,184 @@ means.
 `user_sessions` already carried `token_family`, `created_at`,
 `last_used_at`, `user_agent` and `ip_address`. Nothing in `alembic/`
 changed.
+
+---
+
+## Rejected sign-in errors — A64-031.E3
+
+> **Status:** Implemented
+> **Last updated:** 2026-10-22
+> **Owner:** Frontend
+
+A wrong password showed "Sessiya yaroqsiz. Qaytadan kiring." — *your session
+is not valid*. The API was right (`401 invalid_credentials`). The web client's
+refresh interceptor treated every `401` as an expired access token and
+refreshed. With no cookie the refresh failed with `invalid_session`, and that
+error replaced the sign-in's own. With a live cookie left behind from another
+account, it was worse: the refresh succeeded and signed the browser in as
+that account.
+
+**Rule:** a `401` from an endpoint that submits credentials concerns those
+credentials, never an access token, so it is never answered with a refresh.
+`CREDENTIAL_PATHS` (`apps/web/src/features/auth/api`) lists them:
+`/auth/browser/login`, and the three Google steps below.
+
+| Sign-in outcome | Message |
+| --- | --- |
+| Wrong password, unknown email, unknown username | One message: the email, username or password is wrong |
+| Expired authenticated session | Refreshed once; if that fails, the session ends |
+| Revoked refresh token | Unchanged: the session ends |
+| Network failure | "Could not reach the server" |
+| `429` | The existing rate-limit message |
+| `5xx` | The generic "something went wrong" |
+
+## Sign-in by username — A64-031.E2
+
+> **Status:** Implemented
+> **Last updated:** 2026-10-22
+> **Owner:** Backend
+
+`POST /auth/login` and `POST /auth/browser/login` accept **exactly one** of:
+
+| Field | Takes | Notes |
+| --- | --- | --- |
+| `identifier` | an address or a username | What the web client sends. Not shape-checked at the boundary: an identifier that cannot belong to anyone is the generic `401`, never a `422` |
+| `email` | an address | Unchanged and still accepted, so the admin console and existing clients keep working. Keeps its field-level `422` |
+
+**No ambiguity is possible.** A username is `[A-Za-z0-9_]` only, so it never
+contains `@`, and every address does. `AuthenticationService` looks an
+identifier containing `@` up as an address and anything else as a username.
+It never falls back from one lookup to the other.
+
+Both lookups probe a unique index (`email`, the computed `username_folded`),
+case-insensitively, and return the same shape. A miss of either kind still
+pays the dummy Argon2 verification, so the response and its timing are the
+same for an unknown username, an unknown address and a wrong password.
+`tests/contract/test_login_endpoint.py` measures that against real PostgreSQL.
+
+**Throttling.** The per-account rule now reads `identifier` before `email` and
+folds it (NFKC, lower-case), so case variants of one address share a bucket.
+Previously they did not. An account's address and its username are still two
+buckets, so the per-account allowance can at most double. The per-IP rule is
+unaffected.
+
+## Google sign-in — A64-031.E1
+
+> **Status:** Implemented — real-provider verification pending
+> **Last updated:** 2026-10-22
+> **Owner:** Backend
+> **Decision:** [ADR-008](../docs/07-decisions/ADR-008-google-sign-in.md)
+
+### The flow
+
+OpenID Connect authorization code with PKCE (`S256`) and a nonce, as a
+confidential web client.
+
+1. `GET /auth/browser/google/start?next=` mints `state`, a binding value, a
+   nonce and a PKCE verifier. It stores the `state` record in Redis, sets the
+   binding cookie, and returns `302` to Google.
+2. Google returns to `GET /auth/browser/google/callback?state&code`. The
+   `state` record is taken with `GETDEL`, and its binding must match the
+   cookie. The code is then exchanged with the verifier and the client
+   secret, and the ID token is verified:
+   - RS256 against Google's keys
+   - `iss` is Google
+   - `aud`/`azp` is this client
+   - `exp` and `iat`
+   - the nonce, compared in constant time
+3. The outcome is a redirect: into the app signed in, to a step page, or to
+   `/login?google=<reason>`.
+
+### What a verified identity reaches
+
+See ADR-008. In short: by `sub`, never by address. An address an Arena64
+account already uses waits for that account's password, at `/connect-google`.
+
+### Endpoints
+
+| Method and path | Auth | Rate limit | Answers |
+| --- | --- | --- | --- |
+| `GET /auth/browser/providers` | none | `providers_ip` 60/min | `{google: bool}` |
+| `GET /auth/browser/google/start` | none | `google_start_ip` 20/h, in the handler | `302` to Google, or to `/login?google=` |
+| `GET /auth/browser/google/callback` | binding cookie | `google_callback_ip` 30/h, in the handler | `302` into the app, a step page, or `/login?google=` |
+| `GET /auth/browser/google/pending` | pending cookie | none (a digest lookup) | `{purpose, email, next}` or `401 external_sign_in_expired` |
+| `POST /auth/browser/google/account` `{username, preferred_language, timezone}` | pending cookie + trusted origin | `register_ip`, shared with registration | `201 BrowserSession`, `409 username_already_exists`, `401 external_sign_in_expired` |
+| `POST /auth/browser/google/link` `{password}` | pending cookie + trusted origin | `login_ip`, shared with sign-in (see below) | `200 BrowserSession`, `401 invalid_credentials`, `409 external_identity_already_linked` |
+
+`?google=` reasons: `cancelled`, `failed`, `expired`, `email_unverified`,
+`unavailable`, `rate_limited`, `inactive_account`, `account_locked`,
+`account_restricted`.
+
+The start and callback limits are enforced in the handler so that a refusal
+is a redirect, not a JSON body on a navigation.
+
+`google/link` carries the sign-in guard, but its body names no account, so
+only the per-IP rule binds. The per-account rule has nothing to count. This
+is accepted: the endpoint answers only a browser holding a pending ticket
+for that one account, which takes signing in at Google as that account's
+address. Guessing passwords there is guessing your own.
+
+A `409 external_identity_already_linked` on `google/link` is ADR-008 R5: the
+account already has a different Google identity, and it is not replaced.
+
+### State, cookies and replicas
+
+| Value | Lives | TTL | Spent |
+| --- | --- | --- | --- |
+| `state` | URL to Google and back; Redis key `oidc:v1:state:<sha256>` | 10 min | `GETDEL` at the callback, before any other check |
+| binding | `arena64_google_state` cookie; its digest is in the state record | 10 min | cleared on every callback |
+| nonce, PKCE verifier | inside the state record only | 10 min | with it |
+| pending ticket | `arena64_google_pending` cookie; Redis `oidc:v1:pending:<sha256>` | 15 min | deleted after the step succeeds; kept on a taken username or a wrong password |
+
+Both cookies are `HttpOnly`, `SameSite=Lax` and `Path=/api/v1/auth/browser/google`.
+`Lax` is required here because the callback is a cross-site top-level `GET`.
+Redis is the `cache` role and is shared, so `api-1` and `api-2` serve either
+half of the flow.
+
+### Sessions
+
+Unchanged. A linked sign-in ends with `SessionService.create_session` and the
+refresh cookie on the callback's redirect. The two step endpoints return the
+same `BrowserSession` as `POST /auth/browser/login`. No token ever appears in
+a URL. Rotation, the device list, logout and logout-all behave as for any
+session.
+
+### New accounts
+
+- **Created through `users`' own creation path:** the username rules,
+  reserved names and uniqueness all apply.
+- **Created verified.** Google asserted `email_verified`.
+- **Linked in the same transaction**, under unique `(provider, subject)` and
+  `(user_id, provider)`.
+- **No password anyone knows.** The account gets the Argon2 hash of 256
+  discarded random bits; "forgot password" sets a real one.
+- **Not imported from Google:** the display name, avatar and country. The
+  person sets them in settings. Nothing is fetched from Google beyond the ID
+  token.
+
+### Configuration
+
+`GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` are both required,
+or neither. Google sign-in is off without them, and one without the other
+refuses to start. The redirect URI is derived as
+`PUBLIC_APP_URL/api/v1/auth/browser/google/callback`.
+`docs/05-operations/google-sign-in.md` has the console checklist.
+
+### Migration
+
+`f5444391dfec` adds `users.external_identity`. It is additive and its
+downgrade drops the table. See `database.md` §4.3.
+
+### Testing
+
+| Suite | Covers |
+| --- | --- |
+| `tests/unit/test_google_oidc.py` | Each ID-token check, against a locally generated RSA key and a mocked Google; no network |
+| `tests/unit/test_google_sign_in_service.py` | ADR-008's table, replay, binding, PKCE vector |
+| `tests/contract/test_external_identity_repository.py` | Atomic create-and-link, the constraints, a real two-connection race |
+| `tests/contract/test_external_sign_in_store.py` | `GETDEL` under ten concurrent takers, TTLs, digest keys |
+| `tests/contract/test_google_sign_in_api.py` | The whole flow over HTTP with only Google faked |
+| `apps/web/src/features/auth/google.test.tsx` | The button, `?google=`, the two step pages |
+
+Real Google is not contacted in CI.
+

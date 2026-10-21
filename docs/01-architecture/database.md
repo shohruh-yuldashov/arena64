@@ -389,6 +389,24 @@ account. Check: a `password` row has `secret_hash` and `hash_algorithm`; an `oau
 **Why `secret_hash` and never `password`:** a column named `password` will eventually be logged,
 exported, or displayed by someone who trusts the name. The name is a control.
 
+**As built — A64-031.E1, ADR-008.** `auth.credential` was never created: A64-010 put `email` and
+`password_hash` on `users.user`, which `users/infrastructure/models.py` records as a deviation.
+The `oauth` kind this table anticipated therefore lives beside that hash, as
+`users.external_identity`:
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | `uuid` | no | PK |
+| `user_id` | `uuid` | no | FK → `users.user`, `ON DELETE CASCADE` |
+| `provider` | `varchar(16)` | no | Check: `'google'` |
+| `subject` | `varchar(255)` | no | The provider's `sub` — never the address |
+| `created_at` | `timestamptz` | no | No `updated_at`: a link is never edited |
+
+Unique `(provider, subject)` — one external identity, one account — and unique `(user_id,
+provider)` — one Google identity per account, and the index the cascade probes. Kept in
+`users` rather than `auth` so that an account created through Google and its link commit in one
+transaction. Migration `f5444391dfec`.
+
 ### 4.4 `auth.session`
 
 | Column | Type | Null | Notes |

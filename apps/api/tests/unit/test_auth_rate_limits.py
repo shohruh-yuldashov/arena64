@@ -22,12 +22,22 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
 
+from app.api.deps import get_rate_limit_settings, get_rate_limiter
 from app.api.rate_limiting import RateLimit
 from app.app_factory import create_app
 from app.config.settings import RateLimitSettings
 from app.core.rate_limiting import RateLimitScope
+from app.modules.auth.presentation.dependencies import (
+    get_google_sign_in_service,
+    get_session_service,
+)
 from app.modules.auth.presentation.rate_limits import build_rules
+from app.modules.notifications.presentation.dependencies import (
+    get_presence_notification_service,
+)
+from tests.fakes.rate_limiter import DenyAllRateLimiter
 
 #: Every endpoint A64-011.8 lists, with the limits in force. Written out as
 #: data rather than derived from `build_rules`, which would make the test
@@ -80,7 +90,24 @@ EXPECTED: list[tuple[str, str, RateLimitScope, int, int]] = [
     ("/api/v1/auth/browser/login", "login_email", RateLimitScope.EMAIL, 10, 60 * 60),
     ("/api/v1/auth/browser/register", "register_ip", RateLimitScope.IP, 10, 60 * 60),
     ("/api/v1/auth/browser/refresh", "refresh_ip", RateLimitScope.IP, 30, 60),
+    # --- "Continue with Google", A64-031.E1 ---------------------------------
+    # The two steps after Google reuse the buckets of the actions they are:
+    # creating an account counts as a registration, and connecting one by
+    # password counts as a sign-in — so Google is not a way around either.
+    ("/api/v1/auth/browser/google/account", "register_ip", RateLimitScope.IP, 10, 60 * 60),
+    ("/api/v1/auth/browser/google/link", "login_ip", RateLimitScope.IP, 20, 15 * 60),
+    ("/api/v1/auth/browser/google/link", "login_email", RateLimitScope.EMAIL, 10, 60 * 60),
+    ("/api/v1/auth/browser/providers", "providers_ip", RateLimitScope.IP, 60, 60),
 ]
+
+#: Limited **inside the handler**, not by a route dependency: both are
+#: browser navigations, and a refusal must be a redirect to the sign-in
+#: page rather than a page of JSON. `guards_on` cannot see these, so
+#: `TestGoogleNavigationsAreLimited` asserts the behaviour instead.
+LIMITED_IN_HANDLER = {
+    "/api/v1/auth/browser/google/start",
+    "/api/v1/auth/browser/google/callback",
+}
 
 LIMITED_PATHS = sorted({path for path, *_ in EXPECTED})
 
@@ -205,10 +232,14 @@ class TestTheWalkerItself:
             "/api/v1/auth/ws-ticket",
             "/api/v1/auth/browser/sessions",
             "/api/v1/auth/browser/sessions/{session_id}",
+            # A64-031.E1. One Redis read keyed by the digest of a 256-bit
+            # cookie value: nothing to guess, nothing written, and the page
+            # that calls it is reached only from a Google callback.
+            "/api/v1/auth/browser/google/pending",
         }
         auth_paths = {path for path, _ in api_routes(app) if path.startswith("/api/v1/auth/")}
 
-        undecided = auth_paths - set(LIMITED_PATHS) - deliberately_unlimited
+        undecided = auth_paths - set(LIMITED_PATHS) - LIMITED_IN_HANDLER - deliberately_unlimited
         assert not undecided, f"these auth endpoints are neither limited nor listed: {undecided}"
 
 
@@ -228,9 +259,10 @@ class TestEveryListedEndpointIsGuarded:
     def test_the_route_documents_a_429(self, app: FastAPI, path: str) -> None:
         """A 429 a client has not been told to expect is one it retries
         immediately, in a loop."""
-        responses = app.openapi()["paths"][path]["post"]["responses"]
+        # Every method on the path — `providers` is the one limited `GET`.
+        operations = app.openapi()["paths"][path].values()
 
-        assert "429" in responses
+        assert all("429" in operation["responses"] for operation in operations)
 
 
 class TestTheSpecifiedLimits:
@@ -296,6 +328,9 @@ class TestRulesFollowConfiguration:
             "resend_verification",
             "resend_code",
             "refresh",
+            "providers",
+            "google_start",
+            "google_callback",
         }
 
     def test_no_endpoint_resolves_to_an_empty_rule_set(self) -> None:
@@ -345,3 +380,33 @@ class TestUnguardedEndpoints:
         ]
 
         assert found == []
+
+
+class TestGoogleNavigationsAreLimited:
+    """`LIMITED_IN_HANDLER`, asserted by behaviour: with every request
+    refused, both navigations send the browser back to the sign-in page
+    saying so, before anything else about the request is considered."""
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/api/v1/auth/browser/google/start",
+            "/api/v1/auth/browser/google/callback?state=s&code=c",
+        ],
+    )
+    def test_a_refusal_is_a_redirect_not_json(self, path: str) -> None:
+        app = create_app()
+        app.dependency_overrides[get_rate_limiter] = DenyAllRateLimiter
+        app.dependency_overrides[get_rate_limit_settings] = lambda: RateLimitSettings(enabled=True)
+        # `None` is "not configured": had the limit not been checked first,
+        # the redirect would say `unavailable` instead.
+        app.dependency_overrides[get_google_sign_in_service] = lambda: None
+        # Resolved before the handler runs, and never reached by a refusal;
+        # stood in for so the test needs no database.
+        app.dependency_overrides[get_session_service] = lambda: None
+        app.dependency_overrides[get_presence_notification_service] = lambda: None
+
+        response = TestClient(app).get(path, follow_redirects=False)
+
+        assert response.status_code == 302
+        assert response.headers["location"].endswith("/login?google=rate_limited")

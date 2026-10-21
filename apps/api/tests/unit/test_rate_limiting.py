@@ -301,6 +301,36 @@ class TestResolveSubjects:
 
         assert [subject.subject for subject in subjects] == ["player@example.com"]
 
+    async def test_binds_an_email_rule_to_a_username_identifier(self) -> None:
+        """A64-031.E2. A username sign-in names its account under
+        `identifier`; ignoring it would exempt username sign-ins from the
+        per-account rule."""
+        request = make_request(body=b'{"identifier": "Player_One", "password": "x"}')
+
+        subjects = await resolve_subjects(request, [EMAIL_RULE], settings=self.settings)
+
+        assert [subject.subject for subject in subjects] == ["player_one"]
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(b'{"email": "Player@Example.COM"}', id="email, mixed case"),
+            pytest.param(b'{"email": "  player@example.com "}', id="email, padded"),
+            pytest.param(b'{"identifier": "PLAYER@example.com"}', id="identifier, upper case"),
+            pytest.param(
+                b'{"identifier": null, "email": "player@example.com"}', id="null identifier"
+            ),
+        ],
+    )
+    async def test_one_account_is_one_bucket_however_it_is_spelled(self, body: bytes) -> None:
+        """Case variants of one address are one account (AC-1); counting
+        them apart multiplied the allowance by every capitalisation."""
+        request = make_request(body=body)
+
+        subjects = await resolve_subjects(request, [EMAIL_RULE], settings=self.settings)
+
+        assert [subject.subject for subject in subjects] == ["player@example.com"]
+
     async def test_binds_both_rules_on_login(self) -> None:
         request = make_request(body=b'{"email": "player@example.com"}', client=("203.0.113.7", 1))
 

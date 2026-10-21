@@ -15,9 +15,9 @@ rather than a policy: it stops a multi-megabyte body from being
 materialised and fed to a deliberately memory-hungry hash function.
 """
 
-from typing import Annotated
+from typing import Annotated, Self, cast
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, StringConstraints, model_validator
 
 from app.core.dto import BaseRequestDTO
 from app.modules.auth.domain.validators import PASSWORD_MAX_LENGTH
@@ -33,8 +33,25 @@ LoginPasswordField = Annotated[
 ]
 
 
+LoginIdentifierField = Annotated[
+    str,
+    # An address or a username — `AuthenticationService` decides which.
+    # Only bounded here: a form must not 422 on a shape that would merely
+    # fail to match, because that response would differ from a wrong
+    # password's. 254 is the longest address `users` stores, which also
+    # covers every username.
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=254),
+]
+
+
 class LoginRequest(BaseRequestDTO):
     """The `POST /auth/login` body.
+
+    **`identifier` or `email`, exactly one** — A64-031.E2. `identifier`
+    takes an address or a username and is what the web client sends.
+    `email` is the original field and is still accepted, unchanged, so the
+    admin console, native clients and every existing caller keep working;
+    it remains address-only and keeps its field-level 422 below.
 
     `email` reuses `users`' `EmailField`, so the address is trimmed and
     folded by exactly the validator registration used — "  Alice@Example.COM "
@@ -55,7 +72,8 @@ class LoginRequest(BaseRequestDTO):
     than silently ignored.
     """
 
-    email: EmailField
+    identifier: LoginIdentifierField | None = None
+    email: EmailField | None = None
     password: LoginPasswordField
 
     model_config = {
@@ -70,6 +88,22 @@ class LoginRequest(BaseRequestDTO):
             # working through the docs top to bottom can register with it
             # and then sign in with it. An example that registration would
             # reject is an example that teaches the wrong shape.
-            "examples": [{"email": "player@example.com", "password": "CorrectHorse1!"}]
+            "examples": [{"identifier": "player@example.com", "password": "CorrectHorse1!"}]
         },
     }
+
+    @model_validator(mode="after")
+    def _exactly_one_identifier(self) -> Self:
+        if (self.identifier is None) == (self.email is None):
+            raise ValueError("Send exactly one of `identifier` or `email`.")
+        return self
+
+    @property
+    def login_identifier(self) -> str:
+        """Whichever of the two was sent. The validator above guarantees
+        exactly one."""
+        if self.identifier is not None:
+            return self.identifier
+        # Safe: `_exactly_one_identifier` has already refused a body with
+        # neither, so `email` is set whenever `identifier` is not.
+        return cast(str, self.email)

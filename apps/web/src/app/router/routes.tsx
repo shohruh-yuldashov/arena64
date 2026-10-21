@@ -183,13 +183,27 @@ function verifyEmailSearch(search: Record<string, unknown>): {
   return { ...tokenSearch(search), ...nextSearch(search) };
 }
 
+/**
+ * `/login`'s search: `?next=`, and `?google=` — the reason a Google round
+ * trip came back without signing anybody in (A64-031.E1). A string here;
+ * `GoogleOutcomeNotice` renders only the reasons it knows.
+ */
+function loginSearch(search: Record<string, unknown>): { next?: string; google?: string } {
+  return {
+    ...nextSearch(search),
+    ...(typeof search.google === "string" ? { google: search.google } : {}),
+  };
+}
+
 const LoginPage = lazyRouteComponent(() => import("@/pages/login"));
 const RegisterPage = lazyRouteComponent(() => import("@/pages/register"));
+const GoogleAccountPage = lazyRouteComponent(() => import("@/pages/google-account"));
+const ConnectGooglePage = lazyRouteComponent(() => import("@/pages/connect-google"));
 
 export const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
-  validateSearch: nextSearch,
+  validateSearch: loginSearch,
   // Wrapped rather than guarded in `beforeLoad`: the session is a React
   // context, and `beforeLoad` runs before there is a React tree to read it
   // from. See `guards.tsx`.
@@ -215,6 +229,27 @@ export const registerRoute = createRoute({
       </RequireAnonymous>
     );
   },
+});
+
+/**
+ * The two pages a Google sign-in can stop at — A64-031.E1. Reached from the
+ * API's callback, never from a link in the app.
+ *
+ * **Not** behind `RequireAnonymous`: each page signs the person in and then
+ * goes to the destination its pending sign-in carries, which the guard
+ * cannot know — guarded, the two navigations would race. A visitor who is
+ * already signed in has no pending sign-in, and the page says so.
+ */
+export const googleAccountRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/register/google",
+  component: GoogleAccountPage,
+});
+
+export const connectGoogleRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/connect-google",
+  component: ConnectGooglePage,
 });
 
 /**
@@ -525,6 +560,8 @@ export const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
   registerRoute,
+  googleAccountRoute,
+  connectGoogleRoute,
   verifyEmailRoute,
   forgotPasswordRoute,
   resetPasswordRoute,

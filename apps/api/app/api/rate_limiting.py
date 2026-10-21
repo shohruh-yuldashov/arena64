@@ -58,6 +58,7 @@ numbers are published; the shape of the defence is not.
 """
 
 import logging
+import unicodedata
 from collections.abc import Callable, Sequence
 
 from fastapi import Request, Response
@@ -124,8 +125,8 @@ def client_ip(request: Request, *, trusted_proxy_count: int) -> str:
 
 
 async def _email_from_body(request: Request) -> str | None:
-    """The `email` field, read defensively from a body nothing has
-    validated yet.
+    """The account the body names — its `identifier`, else its `email` —
+    read defensively from a body nothing has validated yet.
 
     Every failure returns `None` rather than raising, and each one is an
     ordinary request rather than an anomaly: a malformed body, a body that
@@ -137,6 +138,21 @@ async def _email_from_body(request: Request) -> str | None:
     endpoint's own model parses the same bytes rather than reading a
     consumed stream. That caching is what makes reading the body here
     safe at all.
+
+    ## Why `identifier`, and why the value is folded — A64-031.E2
+
+    Sign-in accepts a username as well as an address, under `identifier`.
+    Reading only `email` would have let a username sign-in skip the
+    per-account rule entirely. And both kinds of name are
+    case-insensitive, so `Alice@x.com`, `ALICE@X.COM` and `alice@x.com`
+    are one account and must be one bucket — counting them separately
+    multiplied the allowance by every capitalisation an attacker cared to
+    type. The fold is the one `users` compares with: NFKC, then lower.
+
+    One gap is known and accepted: an account's address and its username
+    are two buckets, because pairing them would need a database read in
+    front of every throttled request. That doubles the per-account
+    allowance at most, and the per-IP rule is unaffected.
     """
     try:
         payload = await request.json()
@@ -146,8 +162,14 @@ async def _email_from_body(request: Request) -> str | None:
     if not isinstance(payload, dict):
         return None
 
-    email = payload.get("email")
-    return email if isinstance(email, str) and email.strip() else None
+    # The first *usable* one, not merely the first key present: a body of
+    # `{"identifier": null, "email": ...}` is a valid sign-in, and reading
+    # the null would drop the per-account rule for it.
+    for field in ("identifier", "email"):
+        named = payload.get(field)
+        if isinstance(named, str) and named.strip():
+            return unicodedata.normalize("NFKC", named.strip()).lower()
+    return None
 
 
 async def resolve_subjects(

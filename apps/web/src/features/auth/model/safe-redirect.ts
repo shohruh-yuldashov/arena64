@@ -35,6 +35,9 @@ const AUTH_PATHS = [
   "/verify-email",
   "/forgot-password",
   "/reset-password",
+  // The two pages a Google sign-in can stop at — A64-031.E1.
+  "/register/google",
+  "/connect-google",
 ];
 
 export const DEFAULT_REDIRECT = "/";

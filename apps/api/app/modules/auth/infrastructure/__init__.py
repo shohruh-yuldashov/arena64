@@ -9,6 +9,8 @@ session is `auth`'s own state — it is created, rotated and revoked by
 in `auth`'s own schema (database.md §3.1).
 """
 
+from app.modules.auth.infrastructure.external_sign_in_store import RedisExternalSignInStore
+from app.modules.auth.infrastructure.google_oidc import GoogleOidcVerifier, GoogleSigningKeys
 from app.modules.auth.infrastructure.jwt_token_provider import JwtTokenProvider
 from app.modules.auth.infrastructure.password_hasher import (
     Argon2idPasswordHasher,
@@ -23,7 +25,10 @@ from app.modules.auth.infrastructure.websocket_ticket_store import RedisWebSocke
 
 __all__ = [
     "Argon2idPasswordHasher",
+    "GoogleOidcVerifier",
+    "GoogleSigningKeys",
     "JwtTokenProvider",
+    "RedisExternalSignInStore",
     "RedisWebSocketTicketStore",
     "SqlAlchemyPasswordResetTokenRepository",
     "SqlAlchemySessionRepository",

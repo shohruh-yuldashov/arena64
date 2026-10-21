@@ -11,7 +11,7 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import type { SessionState } from "@/entities/session";
+import type { BrowserSession, SessionState } from "@/entities/session";
 import type { User } from "@/entities/user";
 import * as authApi from "@/features/auth/api";
 import { type AuthChannel, createAuthChannel } from "@/features/auth/model/auth-channel";
@@ -55,8 +55,17 @@ import { reportError } from "@/shared/lib/report-error";
  */
 interface SessionContextValue {
   state: SessionState;
-  signIn: (credentials: { email: string; password: string }) => Promise<void>;
+  /** `identifier` is an email address or a username — A64-031.E2. */
+  signIn: (credentials: { identifier: string; password: string }) => Promise<void>;
   signUp: (payload: SignUpPayload) => Promise<void>;
+  /**
+   * The two steps a Google sign-in can stop at — A64-031.E1. The verified
+   * identity is named by an `HttpOnly` cookie, so neither takes it: one
+   * supplies the username a new account needs, the other the password of
+   * the account whose address Google returned. Both end signed in.
+   */
+  createGoogleAccount: (payload: GoogleAccountPayload) => Promise<void>;
+  connectGoogle: (password: string) => Promise<void>;
   signOut: () => Promise<void>;
   signOutEverywhere: () => Promise<void>;
   /** Retries the bootstrap after an `unavailable` result. */
@@ -92,6 +101,12 @@ export interface SignUpPayload {
   email: string;
   username: string;
   password: string;
+  preferredLanguage: "uz" | "ru" | "en";
+}
+
+/** What the Google username step collects; the rest comes from Google. */
+export interface GoogleAccountPayload {
+  username: string;
   preferredLanguage: "uz" | "ru" | "en";
 }
 
@@ -273,7 +288,7 @@ export function SessionProvider({
   useEffect(() => () => channel.close(), [channel]);
 
   const signIn = useCallback(
-    async (credentials: { email: string; password: string }) => {
+    async (credentials: { identifier: string; password: string }) => {
       const session = await authApi.login(credentials);
       store.set({
         status: "authenticated",
@@ -302,6 +317,39 @@ export function SessionProvider({
       });
     },
     [store],
+  );
+
+  /** Holds a session the server just issued — the same state `signIn` sets. */
+  const adopt = useCallback(
+    (session: BrowserSession) => {
+      store.set({
+        status: "authenticated",
+        user: session.user,
+        accessToken: session.access_token,
+      });
+    },
+    [store],
+  );
+
+  const createGoogleAccount = useCallback(
+    async (payload: GoogleAccountPayload) => {
+      adopt(
+        await authApi.createGoogleAccount({
+          username: payload.username,
+          preferred_language: payload.preferredLanguage,
+          // As `signUp` does: the browser's own zone, `UTC` when it cannot say.
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+        }),
+      );
+    },
+    [adopt],
+  );
+
+  const connectGoogle = useCallback(
+    async (password: string) => {
+      adopt(await authApi.linkGoogle({ password }));
+    },
+    [adopt],
   );
 
   const signOut = useCallback(async () => {
@@ -369,12 +417,24 @@ export function SessionProvider({
       state,
       signIn,
       signUp,
+      createGoogleAccount,
+      connectGoogle,
       signOut,
       signOutEverywhere,
       retryBootstrap: () => void bootstrap(),
       applyUser,
     }),
-    [applyUser, bootstrap, signIn, signOut, signOutEverywhere, signUp, state],
+    [
+      applyUser,
+      bootstrap,
+      connectGoogle,
+      createGoogleAccount,
+      signIn,
+      signOut,
+      signOutEverywhere,
+      signUp,
+      state,
+    ],
   );
 
   return <SessionContext value={value}>{children}</SessionContext>;

@@ -9,8 +9,10 @@ token, so the forged request simply arrives unauthenticated.
 A **cookie** is attached by the browser, to any request the browser makes
 to that origin — including one an attacker's page caused. That is the whole
 of CSRF, and it applies to exactly the endpoints that authenticate by
-cookie: `refresh` and `logout`. Nothing else on this platform uses one, so
-nothing else is guarded here.
+cookie: `refresh` and `logout`, the device-list writes, and — since
+A64-031.E1 — the two Google steps that spend a pending sign-in
+(`google/account`, `google/link`). Nothing else on this platform uses one,
+so nothing else is guarded here.
 
 ## Two layers, because one is a promise made by somebody else
 

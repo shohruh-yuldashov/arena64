@@ -360,6 +360,61 @@ class TestRequestValidation:
         assert response.status_code == 422
 
 
+class TestIdentifierLogin:
+    """A64-031.E2 — `identifier` takes an address or a username; `email`
+    keeps working for every caller that already sends it."""
+
+    @pytest.mark.parametrize("identifier", [EMAIL, "player_one", "PLAYER_ONE"])
+    def test_an_address_or_a_username_signs_in(self, client: TestClient, identifier: str) -> None:
+        response = client.post(LOGIN_URL, json={"identifier": identifier, "password": PASSWORD})
+
+        assert response.status_code == 200
+
+    def test_a_wrong_password_for_a_username_is_the_generic_401(self, client: TestClient) -> None:
+        response = client.post(
+            LOGIN_URL, json={"identifier": "player_one", "password": WRONG_PASSWORD}
+        )
+
+        assert (response.status_code, response.json()["code"]) == (401, "invalid_credentials")
+
+    def test_an_unknown_username_is_byte_identical_to_a_wrong_password(
+        self, client: TestClient
+    ) -> None:
+        unknown = client.post(LOGIN_URL, json={"identifier": "nobody_here", "password": PASSWORD})
+        wrong = client.post(
+            LOGIN_URL, json={"identifier": "player_one", "password": WRONG_PASSWORD}
+        )
+
+        assert unknown.status_code == wrong.status_code
+        assert _without_request_ids(unknown.json()) == _without_request_ids(wrong.json())
+
+    def test_a_malformed_identifier_is_the_generic_401_not_a_422(self, client: TestClient) -> None:
+        """Unlike `email`, `identifier` is not shape-checked at the
+        boundary: a 422 here would answer differently from a wrong
+        password, and "is this a valid handle" is half of "does it
+        exist"."""
+        response = client.post(
+            LOGIN_URL, json={"identifier": "not an identifier", "password": PASSWORD}
+        )
+
+        assert (response.status_code, response.json()["code"]) == (401, "invalid_credentials")
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param({"password": PASSWORD}, id="neither"),
+            pytest.param(
+                {"identifier": "player_one", "email": EMAIL, "password": PASSWORD}, id="both"
+            ),
+            pytest.param({"identifier": "   ", "password": PASSWORD}, id="blank identifier"),
+        ],
+    )
+    def test_exactly_one_identifier_is_required(
+        self, client: TestClient, body: dict[str, str]
+    ) -> None:
+        assert client.post(LOGIN_URL, json=body).status_code == 422
+
+
 _PER_REQUEST_KEYS = {"request_id", "correlation_id"}
 
 

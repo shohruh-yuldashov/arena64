@@ -9,6 +9,7 @@ import { useSession } from "@/features/auth/model/session-provider";
 import { loginSchema, type LoginValues } from "@/features/auth/schemas";
 import { FormField } from "@/features/auth/ui/form-field";
 import { FormError } from "@/features/auth/ui/form-status";
+import { GoogleOutcomeNotice, GoogleSignIn } from "@/features/auth/ui/google-sign-in";
 import { PasswordField } from "@/features/auth/ui/password-field";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { Button, Spinner } from "@/shared/ui";
@@ -31,12 +32,18 @@ import { AuthShell } from "@/widgets/auth-shell";
  * `next` comes from the query string, which means it comes from whoever
  * built the link. `safeRedirect` decides where the user actually goes; see
  * that module on why an unvalidated `next` is a phishing primitive.
+ *
+ * ## Google — A64-031.E1
+ *
+ * "Continue with Google" sits above the form when the deployment offers
+ * it, and `?google=` is what a Google round trip came back to say when it
+ * signed nobody in. Both are additions; the form is unchanged.
  */
 export default function LoginPage() {
   const { t } = useTranslation();
   const { signIn } = useSession();
   const navigate = useNavigate();
-  const { next } = useSearch({ from: "/login" });
+  const { next, google } = useSearch({ from: "/login" });
   const [failure, setFailure] = useState<TranslationKey | null>(null);
 
   const {
@@ -46,7 +53,7 @@ export default function LoginPage() {
   } = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
     mode: "onTouched",
-    defaultValues: { email: "", password: "" },
+    defaultValues: { identifier: "", password: "" },
   });
 
   const onSubmit = handleSubmit(async (values) => {
@@ -82,15 +89,25 @@ export default function LoginPage() {
         className="flex flex-col gap-4"
         noValidate
       >
+        <GoogleOutcomeNotice outcome={google} />
+        <GoogleSignIn next={next} />
+
         <FormError messageKey={failure} />
 
+        {/* `type="text"`, not `email`: a username has no `@`, and the
+            browser's own email check would refuse it before submit.
+            `autoComplete="username"` is the token password managers pair
+            with `current-password`, whichever kind is stored. */}
         <FormField
-          label={t("auth.common.email")}
-          type="email"
-          autoComplete="email"
+          label={t("auth.common.identifier")}
+          type="text"
+          autoComplete="username"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
           autoFocus
-          error={errors.email ? t(errors.email.message as TranslationKey) : undefined}
-          {...register("email")}
+          error={errors.identifier ? t(errors.identifier.message as TranslationKey) : undefined}
+          {...register("identifier")}
         />
 
         <PasswordField

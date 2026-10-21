@@ -137,7 +137,9 @@ async def _median_seconds(service: AuthenticationService, *, email: str, passwor
     for _ in range(SAMPLES):
         started = time.perf_counter()
         with pytest.raises(InvalidCredentials):
-            await service.authenticate(AuthenticateUser(email=email, password=SecretStr(password)))
+            await service.authenticate(
+                AuthenticateUser(identifier=email, password=SecretStr(password))
+            )
         samples.append(time.perf_counter() - started)
     return statistics.median(samples)
 

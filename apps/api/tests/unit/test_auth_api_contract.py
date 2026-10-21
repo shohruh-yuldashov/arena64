@@ -247,4 +247,11 @@ class TestAppWiring:
             "/api/v1/auth/browser/refresh",
             "/api/v1/auth/browser/logout",
             "/api/v1/auth/browser/logout-all",
+            # "Continue with Google" — A64-031.E1, ADR-008.
+            "/api/v1/auth/browser/providers",
+            "/api/v1/auth/browser/google/start",
+            "/api/v1/auth/browser/google/callback",
+            "/api/v1/auth/browser/google/pending",
+            "/api/v1/auth/browser/google/account",
+            "/api/v1/auth/browser/google/link",
         }

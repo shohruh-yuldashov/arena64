@@ -39,6 +39,7 @@ from app.modules.admin.presentation.routers.tournaments import admin_tournaments
 from app.modules.admin.presentation.routers.users import admin_users_router
 from app.modules.analytics.presentation.router import analytics_router
 from app.modules.auth.presentation.browser_router import browser_auth_router
+from app.modules.auth.presentation.google_router import google_auth_router
 from app.modules.auth.presentation.router import auth_router
 from app.modules.avatars.presentation.router import avatar_router
 from app.modules.friends.presentation.router import blocks_router, friends_router
@@ -118,6 +119,10 @@ v1_router.include_router(auth_router)
 # surfaces — JSON for native clients, cookies for browsers — are separable
 # in the route table and in the OpenAPI document.
 v1_router.include_router(browser_auth_router)
+# A64-031.E1. Under the same `/auth/browser/` prefix — a Google sign-in ends
+# in the same browser session — but its own router, so the six routes and
+# the ADR that governs them read as one unit.
+v1_router.include_router(google_auth_router)
 v1_router.include_router(profiles_router)
 v1_router.include_router(my_profile_router)
 v1_router.include_router(avatar_router)

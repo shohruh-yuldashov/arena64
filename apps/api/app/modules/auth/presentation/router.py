@@ -288,7 +288,7 @@ async def login(
     presence can fail this request.
     """
     account = await authentication.authenticate(
-        AuthenticateUser(email=payload.email, password=payload.password)
+        AuthenticateUser(identifier=payload.login_identifier, password=payload.password)
     )
     issued_session = await sessions.create_session(account.id, device=device)
     access = access_tokens.create_access_token(account)

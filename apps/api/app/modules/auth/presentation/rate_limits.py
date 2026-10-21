@@ -140,6 +140,30 @@ def build_rules(settings: RateLimitSettings) -> dict[str, tuple[RateLimitRule, .
                 window=timedelta(seconds=settings.refresh_ip_window_seconds),
             ),
         ),
+        "google_start": (
+            RateLimitRule(
+                name="google_start_ip",
+                scope=RateLimitScope.IP,
+                limit=settings.google_start_ip_limit,
+                window=timedelta(seconds=settings.google_start_ip_window_seconds),
+            ),
+        ),
+        "providers": (
+            RateLimitRule(
+                name="providers_ip",
+                scope=RateLimitScope.IP,
+                limit=settings.providers_ip_limit,
+                window=timedelta(seconds=settings.providers_ip_window_seconds),
+            ),
+        ),
+        "google_callback": (
+            RateLimitRule(
+                name="google_callback_ip",
+                scope=RateLimitScope.IP,
+                limit=settings.google_callback_ip_limit,
+                window=timedelta(seconds=settings.google_callback_ip_window_seconds),
+            ),
+        ),
     }
 
 
@@ -173,3 +197,6 @@ RESET_PASSWORD_RATE_LIMIT = _guard("reset_password")
 RESEND_VERIFICATION_RATE_LIMIT = _guard("resend_verification")
 RESEND_CODE_RATE_LIMIT = _guard("resend_code")
 REFRESH_RATE_LIMIT = _guard("refresh")
+PROVIDERS_RATE_LIMIT = _guard("providers")
+GOOGLE_START_RATE_LIMIT = _guard("google_start")
+GOOGLE_CALLBACK_RATE_LIMIT = _guard("google_callback")

@@ -73,6 +73,12 @@ services:
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-no-reply@example.com}
       EMAIL_FROM_NAME: Arena64
+      # "Continue with Google" — A64-031.E1. Optional; unset means no button.
+      # Staging needs its **own** Google client (or its own redirect URI on a
+      # testing client): Google matches the redirect URI exactly, and it is
+      # derived from PUBLIC_APP_URL — see docs/05-operations/google-sign-in.md.
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
     expose:
       - "8000"
 

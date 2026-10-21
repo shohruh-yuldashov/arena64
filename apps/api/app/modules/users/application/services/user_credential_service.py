@@ -15,7 +15,7 @@ a mutable copy of state it has no business changing.
 
 from uuid import UUID
 
-from app.modules.users.application.mappers import to_user_read
+from app.modules.users.application.mappers import to_user_credentials
 from app.modules.users.application.services.user_service import UserService
 from app.modules.users.public.credentials import UserCredentials
 
@@ -25,17 +25,12 @@ class UserCredentialService:
         self._users = users
 
     async def find_credentials_by_email(self, email: str) -> UserCredentials | None:
-        user = await self._users.lookup_by_email(email)
-        if user is None:
-            # Returns, never raises — the port's docstring explains why
-            # this branch must be as cheap and as quiet as the other.
-            return None
+        # Returns, never raises — the port's docstring explains why the
+        # absent branch must be as cheap and as quiet as the other.
+        return to_user_credentials(await self._users.lookup_by_email(email))
 
-        return UserCredentials(
-            account=to_user_read(user),
-            password_hash=user.password_hash,
-            locked_until=user.locked_until,
-        )
+    async def find_credentials_by_username(self, username: str) -> UserCredentials | None:
+        return to_user_credentials(await self._users.lookup_by_username(username))
 
     async def replace_password_hash(
         self,

@@ -117,6 +117,9 @@ class _ExplodingCredentialStore:
     async def find_credentials_by_email(self, email: str) -> UserCredentials | None:
         return await self._inner.find_credentials_by_email(email)
 
+    async def find_credentials_by_username(self, username: str) -> UserCredentials | None:
+        return await self._inner.find_credentials_by_username(username)
+
     async def replace_password_hash(
         self, user_id: UUID, *, expected_hash: str, new_hash: str
     ) -> bool:
@@ -176,8 +179,8 @@ def service(credentials: UserCredentialService, hasher: _StubHasher) -> Authenti
     )
 
 
-def attempt(*, email: str = EMAIL, password: str = PASSWORD) -> AuthenticateUser:
-    return AuthenticateUser(email=email, password=SecretStr(password))
+def attempt(*, identifier: str = EMAIL, password: str = PASSWORD) -> AuthenticateUser:
+    return AuthenticateUser(identifier=identifier, password=SecretStr(password))
 
 
 class TestSuccessfulLogin:
@@ -217,7 +220,7 @@ class TestSuccessfulLogin:
         """AC-1's case-insensitive addresses, from the caller's side: a
         phone keyboard capitalises the first letter, and someone who
         registered as "player.one@…" must still be able to sign in."""
-        assert (await service.authenticate(attempt(email=submitted))).email == EMAIL
+        assert (await service.authenticate(attempt(identifier=submitted))).email == EMAIL
 
 
 class TestFailedLogin:
@@ -231,7 +234,7 @@ class TestFailedLogin:
         self, service: AuthenticationService
     ) -> None:
         with pytest.raises(InvalidCredentials):
-            await service.authenticate(attempt(email="nobody@example.com"))
+            await service.authenticate(attempt(identifier="nobody@example.com"))
 
     async def test_both_failures_are_indistinguishable(
         self, service: AuthenticationService
@@ -242,7 +245,7 @@ class TestFailedLogin:
         `test_authentication_timing.py` covers it.
         """
         with pytest.raises(InvalidCredentials) as unknown:
-            await service.authenticate(attempt(email="nobody@example.com"))
+            await service.authenticate(attempt(identifier="nobody@example.com"))
         with pytest.raises(InvalidCredentials) as wrong:
             await service.authenticate(attempt(password=WRONG_PASSWORD))
 
@@ -277,7 +280,7 @@ class TestFailedLogin:
         would leave this list empty.
         """
         with pytest.raises(InvalidCredentials):
-            await service.authenticate(attempt(email="nobody@example.com"))
+            await service.authenticate(attempt(identifier="nobody@example.com"))
 
         assert hasher.verified == [await hasher.dummy_hash()]
 
@@ -307,7 +310,79 @@ class TestFailedLogin:
         form; every other caller must not be able to tell "not a valid
         address" from "wrong password"."""
         with pytest.raises(InvalidCredentials):
-            await service.authenticate(attempt(email=malformed))
+            await service.authenticate(attempt(identifier=malformed))
+
+
+class TestUsernameLogin:
+    """A64-031.E2 — a username names the same account an address does,
+    with the same failure behaviour."""
+
+    async def test_a_username_signs_in(self, service: AuthenticationService) -> None:
+        authenticated = await service.authenticate(attempt(identifier="player_one"))
+
+        assert authenticated.username == "player_one"
+
+    @pytest.mark.parametrize("spelling", ["PLAYER_ONE", "Player_One", "  player_one  "])
+    async def test_a_username_is_matched_case_insensitively(
+        self, service: AuthenticationService, spelling: str
+    ) -> None:
+        authenticated = await service.authenticate(attempt(identifier=spelling))
+
+        assert authenticated.email == EMAIL
+
+    async def test_the_address_and_the_username_reach_one_account(
+        self, service: AuthenticationService
+    ) -> None:
+        by_email = await service.authenticate(attempt(identifier=EMAIL))
+        by_username = await service.authenticate(attempt(identifier="player_one"))
+
+        assert by_email.id == by_username.id
+
+    async def test_a_wrong_password_for_a_username_is_invalid_credentials(
+        self, service: AuthenticationService
+    ) -> None:
+        with pytest.raises(InvalidCredentials):
+            await service.authenticate(attempt(identifier="player_one", password=WRONG_PASSWORD))
+
+    async def test_an_unknown_username_is_indistinguishable_from_a_wrong_password(
+        self, service: AuthenticationService
+    ) -> None:
+        with pytest.raises(InvalidCredentials) as unknown:
+            await service.authenticate(attempt(identifier="nobody_here"))
+        with pytest.raises(InvalidCredentials) as wrong:
+            await service.authenticate(attempt(identifier="player_one", password=WRONG_PASSWORD))
+
+        assert (unknown.value.code, unknown.value.message) == (
+            wrong.value.code,
+            wrong.value.message,
+        )
+
+    @pytest.mark.parametrize(
+        "identifier",
+        [
+            pytest.param("nobody_here", id="unknown username"),
+            pytest.param("admin", id="reserved username"),
+            pytest.param("no spaces allowed", id="malformed username"),
+        ],
+    )
+    async def test_an_unknown_username_still_costs_a_verification(
+        self, service: AuthenticationService, hasher: _StubHasher, identifier: str
+    ) -> None:
+        """The enumeration guard holds for handles exactly as for
+        addresses: no early return on any path that finds nobody."""
+        with pytest.raises(InvalidCredentials):
+            await service.authenticate(attempt(identifier=identifier))
+
+        assert hasher.verified == [await hasher.dummy_hash()]
+
+    async def test_an_identifier_with_an_at_sign_is_never_read_as_a_username(
+        self, repository: FakeUserRepository, service: AuthenticationService
+    ) -> None:
+        """No username can contain `@`, so an identifier that does is an
+        address — and an address that matches nobody does not fall back
+        to a handle lookup that might match someone."""
+        with pytest.raises(InvalidCredentials):
+            await service.authenticate(attempt(identifier="player_one@nowhere.example"))
 
 
 class TestInactiveAccount:
@@ -333,7 +408,7 @@ class TestInactiveAccount:
 
     async def test_an_unknown_address_is_unaffected(self, service: AuthenticationService) -> None:
         with pytest.raises(InvalidCredentials):
-            await service.authenticate(attempt(email="nobody@example.com"))
+            await service.authenticate(attempt(identifier="nobody@example.com"))
 
 
 class TestLockedAccount:
@@ -488,7 +563,7 @@ class TestLogging:
         "scenario",
         [
             pytest.param({"password": WRONG_PASSWORD}, id="wrong-password"),
-            pytest.param({"email": "nobody@example.com"}, id="unknown-email"),
+            pytest.param({"identifier": "nobody@example.com"}, id="unknown-email"),
             pytest.param({}, id="success"),
         ],
     )
@@ -512,7 +587,7 @@ class TestLogging:
         system with broader read access than the database (services.md
         §8.5)."""
         with caplog.at_level(logging.DEBUG), pytest.raises(InvalidCredentials):
-            await service.authenticate(attempt(email="somebody@example.com"))
+            await service.authenticate(attempt(identifier="somebody@example.com"))
 
         assert "somebody@example.com" not in caplog.text
 

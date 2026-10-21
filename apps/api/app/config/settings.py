@@ -1578,6 +1578,25 @@ class RateLimitSettings(
     password_reset_ip_limit: int = Field(default=10, ge=1)
     password_reset_window_seconds: int = Field(default=60 * 60, ge=1)
 
+    # --- GET /auth/browser/google/start and /callback — A64-031.E1 ---------
+    # Chosen, not specified, and per IP because neither request names an
+    # account. `start` writes a Redis record per call, so it is the one an
+    # attacker could use to fill the `cache` role; twenty an hour is several
+    # abandoned attempts' worth for a real person. `callback` performs an
+    # outbound exchange with Google per call — it is bounded on the same
+    # terms, a little looser because a real sign-in costs one of each.
+    # Account creation and linking that follow are counted by the existing
+    # `register` and `login` rules, so Google is not a way around either.
+    google_start_ip_limit: int = Field(default=20, ge=1)
+    google_start_ip_window_seconds: int = Field(default=60 * 60, ge=1)
+    google_callback_ip_limit: int = Field(default=30, ge=1)
+    google_callback_ip_window_seconds: int = Field(default=60 * 60, ge=1)
+    # `GET /auth/browser/providers` is read by every sign-in page view, so
+    # its limit is a flood guard and nothing tighter — a minute's worth of a
+    # busy NAT reloading the page.
+    providers_ip_limit: int = Field(default=60, ge=1)
+    providers_ip_window_seconds: int = Field(default=60, ge=1)
+
     # --- PATCH /profile/privacy ---------------------------------------------
     # **A64-012.4 required this endpoint to be rate limited and specified no
     # figure**, so the number is chosen rather than given.
@@ -3233,6 +3252,94 @@ class BrowserSessionSettings(SectionSettings):
         return not (environment.is_local or environment.is_test)
 
 
+class GoogleSignInSettings(SectionSettings):
+    """`google_sign_in` — "Continue with Google", A64-031.E1.
+
+    ## The client pair is the switch
+
+    There is no `GOOGLE_SIGN_IN_ENABLED`, for the reason `PushSettings` has
+    no `PUSH_ENABLED`: a process holding a client id and secret can run the
+    flow and one that does not cannot, and a boolean beside them would be a
+    second answer that can disagree. `GET /auth/browser/providers` reports
+    exactly this, and the sign-in page shows the button only when it is
+    true — so an unconfigured tier offers nothing rather than a button that
+    fails.
+
+    ## Absent is allowed; half is not
+
+    Both, or neither. A tier with one of the two set intended to enable
+    Google and got it wrong, and would otherwise start cleanly and send
+    every player into a flow Google refuses at the token exchange.
+
+    ## Why there is no redirect URI setting
+
+    It is derived: `PUBLIC_APP_URL` + the callback route. A configurable URI
+    is a second place to name the origin, and the one that drifts sends a
+    staging authorisation code to production — or production's to nowhere.
+    Google compares it byte for byte with what the console registers, so
+    the derived value is what the console must list; see
+    `docs/05-operations/google-sign-in.md`.
+
+    Generate the pair in the Google Cloud console — it cannot be generated
+    here, and nothing in this repository ever holds a real one.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="GOOGLE_OAUTH_", frozen=True, extra="forbid")
+
+    client_id: str | None = None
+    """The OAuth client id — `GOOGLE_OAUTH_CLIENT_ID`. **Not a secret**: it
+    appears in every authorisation URL a browser is sent to."""
+
+    client_secret: SecretStr | None = None
+    """The OAuth client secret — `GOOGLE_OAUTH_CLIENT_SECRET`. Server-side
+    only: it authenticates this platform at Google's token endpoint, and
+    anybody holding it can redeem authorisation codes issued to this
+    client. `SecretStr` so no repr, log line or traceback can print it."""
+
+    state_ttl_seconds: int = Field(default=10 * 60, ge=60, le=30 * 60)
+    """How long a started sign-in may take to come back from Google.
+
+    Ten minutes covers choosing an account, a second factor and a consent
+    screen; it is the window in which a stolen `state` could be replayed,
+    and the state is single-use regardless."""
+
+    pending_ttl_seconds: int = Field(default=15 * 60, ge=60, le=60 * 60)
+    """How long a verified Google identity waits for its next step —
+    choosing a username, or entering the password of the account it is
+    being connected to."""
+
+    http_timeout_seconds: float = Field(default=10.0, ge=1.0, le=30.0)
+    """Per request to Google's token and key endpoints. Bounded because the
+    callback holds a player's browser on a blank page while it runs."""
+
+    @field_validator("client_id", "client_secret", mode="before")
+    @classmethod
+    def _empty_is_absent(cls, value: object) -> object:
+        """`GOOGLE_OAUTH_CLIENT_ID=` means "not configured" — the Compose
+        behaviour `PushSettings._empty_is_absent` documents: an unset host
+        variable reaches the container as the empty string."""
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @model_validator(mode="after")
+    def _the_pair_is_whole_or_absent(self) -> "GoogleSignInSettings":
+        if (self.client_id is None) == (self.client_secret is None):
+            return self
+        missing, present = (
+            ("GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_CLIENT_ID")
+            if self.client_secret is None
+            else ("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET")
+        )
+        # Names only — one of the two is a credential.
+        raise ValueError(
+            f"{present} is set but {missing} is not. Google sign-in needs both; "
+            "set both, or neither to leave it off."
+        )
+
+    @property
+    def is_configured(self) -> bool:
+        return self.client_id is not None and self.client_secret is not None
+
+
 class GatewaySettings(SectionSettings):
     """`gateway` — the realtime WebSocket transport (A64-016.1, AD-09).
 
@@ -3690,6 +3797,10 @@ class Settings(BaseModel):
     notification_retention: NotificationRetentionSettings = Field(
         default_factory=NotificationRetentionSettings
     )
+    #: Defaulted like `analytics`: unset is a valid, complete configuration
+    #: (Google sign-in off), so no construction site should have to know
+    #: about it. `get_settings` still passes the dotenv layer — A64-031.E1.
+    google_sign_in: GoogleSignInSettings = Field(default_factory=GoogleSignInSettings)
 
     @model_validator(mode="after")
     def _resolve_email_links(self) -> "Settings":
@@ -4008,4 +4119,5 @@ def get_settings() -> Settings:
         # variable a local `.env.local` cannot set is the same class of
         # untruth this task was opened to fix.
         analytics=AnalyticsSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
+        google_sign_in=GoogleSignInSettings(_env_file=env_file),  # pyright: ignore[reportCallIssue]
     )

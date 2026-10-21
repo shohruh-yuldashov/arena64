@@ -120,6 +120,30 @@ def _search_normalise(expression: Any) -> Any:
     return func.users.search_normalise(expression, type_=Text)
 
 
+def violated_constraint(error: IntegrityError) -> str | None:
+    """Digs the violated constraint's name out of the exception chain.
+
+    Not simply `error.orig.constraint_name`: SQLAlchemy's asyncpg
+    dialect wraps the driver's exception in its *own* `IntegrityError`
+    before setting `.orig`, so the attribute lives one level further
+    down on `error.orig.__cause__` — verified against asyncpg rather
+    than assumed, because the obvious spelling silently returns `None`
+    and every violation would then fall through as an unmapped defect.
+
+    Walks the chain rather than hardcoding two levels, so a driver or
+    SQLAlchemy version that nests differently keeps working.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = error.orig
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        name = getattr(current, "constraint_name", None)
+        if isinstance(name, str) and name:
+            return name
+        current = current.__cause__
+    return None
+
+
 class SqlAlchemyUserRepository:
     """Constructed per use case with the active unit of work's session
     (repositories.md §5.1) — never holds a session longer than that."""
@@ -240,30 +264,6 @@ class SqlAlchemyUserRepository:
 
     # --- error translation --------------------------------------------------
 
-    @staticmethod
-    def _constraint_name(error: IntegrityError) -> str | None:
-        """Digs the violated constraint's name out of the exception chain.
-
-        Not simply `error.orig.constraint_name`: SQLAlchemy's asyncpg
-        dialect wraps the driver's exception in its *own* `IntegrityError`
-        before setting `.orig`, so the attribute lives one level further
-        down on `error.orig.__cause__` — verified against asyncpg rather
-        than assumed, because the obvious spelling silently returns `None`
-        and every violation would then fall through as an unmapped defect.
-
-        Walks the chain rather than hardcoding two levels, so a driver or
-        SQLAlchemy version that nests differently keeps working.
-        """
-        seen: set[int] = set()
-        current: BaseException | None = error.orig
-        while current is not None and id(current) not in seen:
-            seen.add(id(current))
-            name = getattr(current, "constraint_name", None)
-            if isinstance(name, str) and name:
-                return name
-            current = current.__cause__
-        return None
-
     @classmethod
     def _translate_integrity_error(cls, error: IntegrityError) -> Exception:
         """Turns a unique-constraint violation into the matching domain
@@ -273,7 +273,7 @@ class SqlAlchemyUserRepository:
         than by matching on the exception's message text, which is
         localised and version-dependent.
         """
-        constraint = cls._constraint_name(error)
+        constraint = violated_constraint(error)
         exception_type = _CONSTRAINT_ERRORS.get(constraint or "")
 
         if exception_type is UsernameAlreadyExists:

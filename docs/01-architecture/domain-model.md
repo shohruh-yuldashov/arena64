@@ -1476,7 +1476,7 @@ the decision is explicit rather than emergent.
 | --- | --- | --- | --- |
 | `RatingPeriod` | Q-3 (rating algorithm) | Matches are assigned to periods and rated in batches | Ratings apply incrementally on completion; the entity does not exist |
 | `MfaFactor` | Q-21 (account security posture) | Part of the `Account` aggregate | Account security is password + email recovery only |
-| `IdentityProviderLink` | Q-22 (social sign-in) | An additional `Credential` kind | Password only |
+| `IdentityProviderLink` | Q-22 (social sign-in) — **yes**, ADR-008 | `users.external_identity`, beside the password it complements | — |
 | `GuestSession` | Q-13 (anonymous play) | An unauthenticated, unrated, non-persistent player context | Registration is required to play at all |
 | `HandleReservation` | Q-8 (handle policy) | Reserved and cooldown handles are entities | UP-3 is enforced by retaining `HandleAssignment` history |
 | `PlayerTitle` / `Badge` | Q-12 | Awarded display markers, distinct from achievements | Achievements cover it |
@@ -1631,7 +1631,7 @@ guess at any of them. Ordered by how much damage a wrong assumption does.
 | **Q-19** | **Are correspondence time controls (days per move) in scope at launch?** | AD-18's revisit clause fires: "in-flight" would mean weeks, and live match state cannot stay in Redis | This is the one product answer that would change the **architecture**, not just the model |
 | **Q-20** | **Spectator delay policy — which matches are delayed, and by how much?** | AD-10's policy knob | Currently a knob with no documented setting |
 | **Q-21** | **Account security posture — is MFA offered, and is it required for accounts holding a high rating or a moderator role?** | Optional `MfaFactor` inside `Account` | A top-of-leaderboard account is a target, and its compromise damages other players' records |
-| **Q-22** | **Is sign-in via an external identity provider offered?** | Optional `IdentityProviderLink` as a `Credential` kind | Changes what "one account per person" can be enforced against, and what recovery means |
+| **Q-22** | **Is sign-in via an external identity provider offered?** — *Answered 2026-10-22: yes, Google, by `sub`, never linked on an address — [ADR-008](../07-decisions/ADR-008-google-sign-in.md)* | `IdentityProviderLink`, stored as `users.external_identity` (`database.md` §4.3) | One external identity reaches one account, enforced by unique constraints; recovery stays address-based |
 
 ---
 

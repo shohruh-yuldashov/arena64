@@ -11,6 +11,12 @@ from app.modules.auth.application.services.email_verification_service import (
     EmailVerificationService,
     IssuedVerificationToken,
 )
+from app.modules.auth.application.services.google_sign_in_service import (
+    AwaitingStep,
+    BegunSignIn,
+    GoogleSignInService,
+    SignedIn,
+)
 from app.modules.auth.application.services.opaque_tokens import OpaqueTokenService
 from app.modules.auth.application.services.password_reset_service import (
     IssuedResetToken,
@@ -28,6 +34,9 @@ __all__ = [
     "BEARER_SCHEME",
     "AccessTokenService",
     "AuthenticationService",
+    "AwaitingStep",
+    "BegunSignIn",
+    "GoogleSignInService",
     "EmailVerificationService",
     "IssuedVerificationToken",
     "OpaqueTokenService",
@@ -38,5 +47,6 @@ __all__ = [
     "RefreshTokenService",
     "RegistrationService",
     "SessionService",
+    "SignedIn",
     "TokenValidator",
 ]

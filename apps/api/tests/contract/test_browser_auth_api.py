@@ -93,6 +93,22 @@ class TestBrowserSession:
         # second cookie would be a second thing to expire and revoke.
         assert body["access_token"] not in cookie
 
+    async def test_a_username_signs_the_browser_in_like_an_address(
+        self, client: AsyncClient
+    ) -> None:
+        """A64-031.E2 — same session, same cookie, same account."""
+        credentials = await _register(client, "browserhandle")
+        client.cookies.clear()
+
+        signed_in = await client.post(
+            LOGIN_URL,
+            json={"identifier": "PlayerBrowserHandle", "password": credentials["password"]},
+        )
+
+        assert signed_in.status_code == 200, signed_in.text
+        assert signed_in.json()["data"]["user"]["email"] == credentials["email"]
+        assert COOKIE_NAME in client.cookies
+
     async def test_refresh_rotates_the_cookie_and_refuses_an_unrecognised_origin(
         self, contract_session: AsyncSession
     ) -> None:

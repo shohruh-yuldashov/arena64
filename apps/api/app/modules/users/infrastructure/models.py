@@ -46,9 +46,11 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Computed,
+    ForeignKey,
     Index,
     Integer,
     String,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import ENUM as PgEnum
@@ -59,6 +61,7 @@ from app.core.enums import Locale
 from app.database.base import Base
 from app.database.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 from app.database.types import UtcDateTime
+from app.modules.users.domain.external_identity import SUBJECT_MAX_LENGTH, IdentityProvider
 from app.modules.users.domain.privacy import (
     DEFAULT_ACTIVITY,
     DEFAULT_LAST_SEEN,
@@ -409,3 +412,51 @@ class UserModel(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         # Never includes email or password_hash — a repr lands in logs and
         # tracebacks, and services.md §8.5 keeps personal data out of both.
         return f"<UserModel id={self.id!r} username={self.username!r}>"
+
+
+#: The providers the check constraint admits, spelled from the enum so the
+#: two cannot drift; a new provider is a migration that widens it.
+_PROVIDERS = ", ".join(f"'{provider.value}'" for provider in IdentityProvider)
+
+
+class UserExternalIdentityModel(Base, UUIDPrimaryKeyMixin):
+    """`users.external_identity` — an account's identity at a provider,
+    A64-031.E1. See `domain/external_identity.py` on why it is here.
+
+    **Two unique constraints, and they are the whole invariant.**
+    `(provider, subject)`: one Google account reaches at most one Arena64
+    account. `(user_id, provider)`: an Arena64 account holds at most one
+    Google account. Both are enforced by PostgreSQL rather than by a
+    check-then-insert, because two callbacks for the same first sign-in
+    arriving at `api-1` and `api-2` together is exactly the race a pre-check
+    loses (BE-06).
+
+    `created_at` only, no `updated_at`: a link is made and, with its
+    account, removed — never edited. `CASCADE` because an identity that
+    outlives its account would sign somebody into nothing.
+    """
+
+    __tablename__ = "external_identity"
+    __table_args__ = (
+        UniqueConstraint("provider", "subject", name="uq_external_identity__provider_subject"),
+        UniqueConstraint("user_id", "provider", name="uq_external_identity__user_provider"),
+        CheckConstraint(f"provider IN ({_PROVIDERS})", name="provider_known"),
+        CheckConstraint(
+            f"char_length(subject) BETWEEN 1 AND {SUBJECT_MAX_LENGTH}", name="subject_length"
+        ),
+        {"schema": USERS_SCHEMA},
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{USERS_SCHEMA}.user.id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(16), nullable=False)
+    subject: Mapped[str] = mapped_column(String(SUBJECT_MAX_LENGTH), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+    id: Mapped[uuid.UUID]
+
+    def __repr__(self) -> str:
+        # The subject is a stable personal identifier at Google; it stays
+        # out of reprs for the reason the address does.
+        return f"<UserExternalIdentityModel id={self.id!r} provider={self.provider!r}>"

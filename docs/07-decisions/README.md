@@ -73,7 +73,7 @@ Proposed ──▶ Accepted ──▶ Superseded
 | [ADR-005](./ADR-005-first-party-analytics-on-the-outbox.md) | Product analytics is first-party, on the existing outbox; no third-party provider | Accepted | 2026-09-05 |
 | [ADR-006](./ADR-006-administrative-broadcasts.md)           | Administrative broadcasts store their text and keep the closed destination set    | Accepted | 2026-09-05 |
 | [ADR-007](./ADR-007-announcement-push-channel.md)           | An announcement may also be delivered as a push, chosen per broadcast            | Accepted | 2026-09-10 |
-| [ADR-008](./ADR-008-google-sign-in.md)                      | Google sign-in is OIDC by `sub`, and an address match never links an account     | Proposed | 2026-10-22 |
+| [ADR-008](./ADR-008-google-sign-in.md)                      | Google sign-in is OIDC by `sub`, and an address match never links an account     | Accepted | 2026-10-22 |
 
 ## TODO
 

@@ -2,8 +2,8 @@
 
 | Field | Value |
 | --- | --- |
-| **Status** | Proposed |
-| **Date** | 2026-10-22 |
+| **Status** | Accepted |
+| **Date** | 2026-10-22 — proposed and accepted the same day, on review of PR #193 |
 | **Deciders** | Shohruh |
 | **Consulted** | — |
 | **Supersedes** | — |
@@ -57,6 +57,23 @@ Specifically, once a callback has verified the ID token:
 The link is stored in `users.external_identity`, with unique `(provider, subject)` and
 unique `(user_id, provider)`. In-between state is kept in Redis, under the SHA-256 of
 what the browser holds in `HttpOnly` cookies. Sessions are the existing ones.
+
+### Requirements the acceptance attached
+
+Accepted by Shohruh on 2026-10-22 with these requirements. Each is binding, and each names
+the test that holds it:
+
+| # | Requirement | Held by |
+| --- | --- | --- |
+| R1 | Never link an existing Arena64 account on a matching Google email alone | `test_google_sign_in_service.py::TestAnUnlinkedIdentity::test_whose_address_an_account_uses_is_never_linked_on_the_address`; `test_google_sign_in_api.py::TestAnAddressAnAccountAlreadyUses` |
+| R2 | Linking to an existing password-based account requires a successful password confirmation | `TestLinkingAnExistingAccount` (unit); `test_a_wrong_password_links_nothing` / `test_the_right_password_links_and_signs_in_to_that_account` (HTTP) |
+| R3 | Google's `sub` is the stable external identity | `users.external_identity (provider, subject)`; `TestAnAlreadyLinkedIdentity::test_is_found_by_subject_even_after_the_address_changed` |
+| R4 | A Google identity already associated with another account is never linked to a second one | `uq_external_identity__provider_subject`; `test_external_identity_repository.py::TestLinking::test_an_identity_reaches_one_account`, `TestTwoFirstSignInsAtOnce` |
+| R5 | An account's existing Google identity is never replaced unintentionally | `uq_external_identity__user_provider`; `TestAnAccountAlreadyLinkedToGoogle::test_cannot_have_its_google_identity_replaced` (HTTP: `409`, first link intact) |
+| R6 | OAuth linking state is browser-bound, single-use and replay-resistant | Binding cookie + `GETDEL`; `TestTheCallbackItself`, `test_a_replayed_state_is_expired`, `test_a_state_carried_to_another_browser_is_expired`, `test_two_racing_callbacks_get_one_state` |
+| R7 | Password setup and reset for a Google-created, passwordless account is safe | The ordinary reset path, unchanged: link to the address on file only, active accounts only, policy-checked, single-use, revokes every session. `TestAPasswordlessGoogleAccount` |
+
+A change that would break any of these needs a new ADR, not an edit to this one.
 
 ## Options Considered
 
@@ -162,7 +179,7 @@ across modules, it would be two commits and a possible account nobody can reach.
 
 ## Follow-Up Actions
 
-- [ ] Real-provider verification on staging with a test Google client — Shohruh, before enabling in production
+- [ ] Real-provider verification on staging with a test Google client (`docs/05-operations/google-sign-in.md` §4) — Shohruh, before enabling in production
 - [ ] Decide whether "Connect Google" / "Disconnect Google" belong in account settings — Shohruh
 
 ## Revisit Criteria

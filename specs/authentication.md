@@ -697,7 +697,7 @@ account already uses waits for that account's password, at `/connect-google`.
 | `GET /auth/browser/google/callback` | binding cookie | `google_callback_ip` 30/h, in the handler | `302` into the app, a step page, or `/login?google=` |
 | `GET /auth/browser/google/pending` | pending cookie | none (a digest lookup) | `{purpose, email, next}` or `401 external_sign_in_expired` |
 | `POST /auth/browser/google/account` `{username, preferred_language, timezone}` | pending cookie + trusted origin | `register_ip`, shared with registration | `201 BrowserSession`, `409 username_already_exists`, `401 external_sign_in_expired` |
-| `POST /auth/browser/google/link` `{password}` | pending cookie + trusted origin | `login_*`, shared with sign-in | `200 BrowserSession`, `401 invalid_credentials`, `409 external_identity_already_linked` |
+| `POST /auth/browser/google/link` `{password}` | pending cookie + trusted origin | `login_ip`, shared with sign-in (see below) | `200 BrowserSession`, `401 invalid_credentials`, `409 external_identity_already_linked` |
 
 `?google=` reasons: `cancelled`, `failed`, `expired`, `email_unverified`,
 `unavailable`, `rate_limited`, `inactive_account`, `account_locked`,
@@ -705,6 +705,15 @@ account already uses waits for that account's password, at `/connect-google`.
 
 The start and callback limits are enforced in the handler so that a refusal
 is a redirect, not a JSON body on a navigation.
+
+`google/link` carries the sign-in guard, but its body names no account, so
+only the per-IP rule binds. The per-account rule has nothing to count. This
+is accepted: the endpoint answers only a browser holding a pending ticket
+for that one account, which takes signing in at Google as that account's
+address. Guessing passwords there is guessing your own.
+
+A `409 external_identity_already_linked` on `google/link` is ADR-008 R5: the
+account already has a different Google identity, and it is not replaced.
 
 ### State, cookies and replicas
 

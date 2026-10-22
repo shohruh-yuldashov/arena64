@@ -153,6 +153,26 @@ class PushSubscriptionService:
             await self._unit_of_work.commit()
         return removed
 
+    async def owns(self, user_id: UUID, *, endpoint: str) -> bool:
+        """Whether the calling browser's subscription is this account's own —
+        A64-031.E6.
+
+        Asked by a browser when an account becomes signed in on it. A push
+        subscription belongs to the browser profile and outlives sessions:
+        if the account it was registered to stopped being signed in here
+        without a sign-out — an expired session, a closed browser — the next
+        person to sign in would otherwise go on receiving that account's
+        notifications. A `False` tells the browser to unsubscribe itself.
+
+        **Answers nothing about anybody else.** `False` is the same for an
+        endpoint nobody holds, one that is revoked, and one another account
+        holds — the question is "is this mine", never "whose is this". And it
+        changes nothing: the other account's row is not this caller's to
+        touch, and does not need touching — once the browser unsubscribes,
+        that row answers `410` on its next delivery and is revoked (§17).
+        """
+        return await self._subscriptions.is_live_for(endpoint, user_id=user_id)
+
     async def status(self, user_id: UUID) -> PushStatus:
         """What the settings screen needs — §20.
 

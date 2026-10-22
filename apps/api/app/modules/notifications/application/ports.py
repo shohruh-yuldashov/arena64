@@ -285,11 +285,13 @@ class DuePushDelivery:
 class PushSubscriptionRepository(Protocol):
     """Storage for browsers that asked to be notified — A64-021.6 §2, §3, §9.
 
-    **No method takes an endpoint from a caller as a lookup key.** An
-    endpoint is a bearer capability, and a repository that could be asked
-    "who owns this endpoint" is one call away from an enumeration surface.
-    `register` takes one because the browser that issued it is submitting
-    it; nothing reads by one.
+    **Nothing looks an endpoint up on its own.** An endpoint is a bearer
+    capability, and a repository that could be asked "who owns this
+    endpoint" is one call away from an enumeration surface. `register` takes
+    one because the browser that issued it is submitting it. The only other
+    methods that take one — `revoke_by_endpoint` and `is_live_for` — also
+    take the caller's own id and match both in one predicate, so they can
+    answer "is this mine" and never "whose is this".
     """
 
     async def register(self, subscription: PushSubscription) -> PushSubscription:
@@ -305,6 +307,12 @@ class PushSubscriptionRepository(Protocol):
         concurrently produce one row rather than a race whose loser gets a
         unique-violation.
         """
+        ...
+
+    async def is_live_for(self, endpoint: str, *, user_id: UUID) -> bool:
+        """Whether `endpoint` is a live subscription of `user_id` —
+        A64-031.E6. `False` alike for unknown, revoked and another
+        account's; see the class docstring."""
         ...
 
     async def live_for(self, user_id: UUID) -> list[PushSubscription]:

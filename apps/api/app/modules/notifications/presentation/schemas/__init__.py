@@ -59,6 +59,8 @@ from app.modules.notifications.presentation.schemas.preferences import (
     UpdateNotificationPreferencesRequest,
 )
 from app.modules.notifications.presentation.schemas.push import (
+    CheckPushSubscriptionRequest,
+    PushOwnershipResponse,
     PushStatusResponse,
     PushSubscriptionResponse,
     RegisterPushSubscriptionRequest,
@@ -452,6 +454,7 @@ class MarkAllReadResponse(BaseResponseDTO):
 
 
 __all__ = [
+    "CheckPushSubscriptionRequest",
     "InvalidCursor",
     "MarkAllReadResponse",
     "NotificationActorResponse",
@@ -465,6 +468,7 @@ __all__ = [
     "NotificationTournamentResponse",
     "PreferenceChangeRequest",
     "PreferenceSettingResponse",
+    "PushOwnershipResponse",
     "PushStatusResponse",
     "PushSubscriptionResponse",
     "RegisterPushSubscriptionRequest",

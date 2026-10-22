@@ -83,6 +83,7 @@ REGISTER_URL = "/api/v1/auth/register"
 LOGIN_URL = "/api/v1/auth/login"
 SUBSCRIBE_URL = "/api/v1/notifications/push/subscriptions"
 REMOVE_URL = "/api/v1/notifications/push/subscriptions/remove"
+OWNERSHIP_URL = "/api/v1/notifications/push/subscriptions/ownership"
 STATUS_URL = "/api/v1/notifications/push/status"
 PREFERENCES_URL = "/api/v1/notifications/preferences"
 FRIEND_REQUESTS_URL = "/api/v1/friends/requests"
@@ -640,6 +641,99 @@ class TestAccountSwitch:
 
         assert answered.status_code == 204
         assert len(await live_subscription_ids(contract_session, owner["id"])) == 1
+
+
+class TestOwnership:
+    """A64-031.E6: the question a browser asks when an account signs in.
+
+    A subscription outlives the session that registered it, so a browser
+    whose previous account's session simply expired still holds that
+    account's endpoint. The answer has to be enough to stop those pushes and
+    nothing more — it must not say whose the endpoint is, and asking must
+    change nothing.
+    """
+
+    async def test_an_account_owns_the_browser_it_registered(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        account = await register(client, contract_session)
+        mine = subscription()
+        await client.post(SUBSCRIBE_URL, json=mine, headers=auth(account))
+
+        answered = await client.post(
+            OWNERSHIP_URL, json={"endpoint": mine["endpoint"]}, headers=auth(account)
+        )
+
+        assert answered.status_code == 200, answered.text
+        assert answered.json()["data"] == {"owned": True}
+
+    async def test_unknown_revoked_and_somebody_elses_answer_identically(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """The enumeration test. If another account's endpoint answered in
+        any way unlike an endpoint nobody holds — a status, a field, a
+        message — the endpoint would become the oracle that `.../remove`
+        is careful never to be."""
+        owner = await register(client, contract_session)
+        asker = await register(client, contract_session)
+        theirs = subscription()
+        withdrawn = subscription()
+        await client.post(SUBSCRIBE_URL, json=theirs, headers=auth(owner))
+        await client.post(SUBSCRIBE_URL, json=withdrawn, headers=auth(asker))
+        await client.post(REMOVE_URL, json={"endpoint": withdrawn["endpoint"]}, headers=auth(asker))
+
+        answers = [
+            await client.post(OWNERSHIP_URL, json={"endpoint": endpoint}, headers=auth(asker))
+            for endpoint in (
+                theirs["endpoint"],
+                withdrawn["endpoint"],
+                subscription()["endpoint"],
+            )
+        ]
+
+        # `meta` carries this request's ids and differs on every response.
+        assert {(answer.status_code, answer.text.split(',"meta"')[0]) for answer in answers} == {
+            (200, '{"data":{"owned":false}')
+        }
+
+    async def test_asking_about_somebody_elses_endpoint_leaves_it_theirs(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """Read-only means read-only. Removing or re-binding the row would
+        let one account switch off another's device by naming its endpoint;
+        it is retired instead by the push service's `410`, once the browser
+        holding it unsubscribes."""
+        owner = await register(client, contract_session)
+        asker = await register(client, contract_session)
+        theirs = subscription()
+        await client.post(SUBSCRIBE_URL, json=theirs, headers=auth(owner))
+        before = await live_subscription_ids(contract_session, owner["id"])
+
+        await client.post(OWNERSHIP_URL, json={"endpoint": theirs["endpoint"]}, headers=auth(asker))
+
+        assert await live_subscription_ids(contract_session, owner["id"]) == before
+
+    async def test_an_unverified_account_may_still_ask(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """Unlike registering, asking is how a browser *stops* receiving
+        pushes, and that must not wait on an email being confirmed."""
+        account = await register(client, contract_session)
+        await contract_session.execute(
+            text("UPDATE users.user SET is_verified = false WHERE id = :id"),
+            {"id": account["id"]},
+        )
+
+        answered = await client.post(
+            OWNERSHIP_URL, json={"endpoint": subscription()["endpoint"]}, headers=auth(account)
+        )
+
+        assert answered.status_code == 200, answered.text
+
+    async def test_asking_requires_a_session(self, client: AsyncClient) -> None:
+        answered = await client.post(OWNERSHIP_URL, json={"endpoint": subscription()["endpoint"]})
+
+        assert answered.status_code == 401
 
 
 class TestAvailability:

@@ -3,6 +3,7 @@ import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthBroadcast, AuthChannel } from "@/features/auth/model/auth-channel";
+import { anonymousId } from "@/shared/analytics";
 import { api } from "@/shared/api";
 import { httpClient } from "@/shared/api/client";
 import { env } from "@/shared/config/env";
@@ -198,6 +199,24 @@ describe("a refresh that answers for another account", () => {
       expect(sockets).toEqual([`ticket-for-${ALICE.id}`, `ticket-for-${BOB.id}`]),
     );
     expect(tickets).toEqual([ALICE.id, BOB.id]);
+  });
+});
+
+describe("the analytics identity", () => {
+  it("is replaced when another account takes the tab, and kept by a refresh", async () => {
+    // A new visitor id for whoever uses this browser next, as on sign-out:
+    // keeping it would join the second account's visit to the first's.
+    await aliceWithCache();
+    const before = anonymousId();
+    expired.add(`token-${ALICE.id}-1`);
+    await api.get("/private");
+    expect(anonymousId()).toBe(before);
+
+    cookie = BOB;
+    expired.add(`token-${ALICE.id}-2`);
+    await api.get("/private").catch(() => undefined);
+
+    await vi.waitFor(() => expect(anonymousId()).not.toBe(before));
   });
 });
 

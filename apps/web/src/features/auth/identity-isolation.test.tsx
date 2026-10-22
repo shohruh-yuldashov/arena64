@@ -3,6 +3,7 @@ import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthBroadcast, AuthChannel } from "@/features/auth/model/auth-channel";
+import { exclusively } from "@/features/notification-push/model/exclusive";
 import { anonymousId } from "@/shared/analytics";
 import { api } from "@/shared/api";
 import { httpClient } from "@/shared/api/client";
@@ -340,10 +341,11 @@ describe("this browser's push subscription", () => {
   beforeEach(() => {
     push.unsubscribed = 0;
     push.removals = 0;
-    const subscription = {
+    let subscription: { endpoint: string; unsubscribe: () => Promise<boolean> } | null = {
       endpoint: "https://push.example/endpoint-of-this-browser",
       unsubscribe: () => {
         push.unsubscribed += 1;
+        subscription = null;
         return Promise.resolve(true);
       },
     };
@@ -370,6 +372,12 @@ describe("this browser's push subscription", () => {
         push.removals += 1;
         return new HttpResponse(null, { status: 204 });
       }),
+      // Registered to Alice — A64-031.E6 asks on every sign-in.
+      http.post(url("/notifications/push/subscriptions/ownership"), ({ request }) => {
+        const owner = ownerOf(request);
+        if (owner === null) return expiredToken();
+        return HttpResponse.json(envelope({ owned: owner === ALICE.id }));
+      }),
     );
   });
 
@@ -388,6 +396,19 @@ describe("this browser's push subscription", () => {
 
     await vi.waitFor(() => expect(push.unsubscribed).toBe(1));
     expect(push.removals).toBe(0);
+  });
+
+  it("is released once, not again by the new account's own check", async () => {
+    // A64-031.E6: Bob's sign-in asks about the subscription too. Both go
+    // through one lock, so the check finds it already gone instead of
+    // racing the release to unsubscribe it a second time.
+    await aliceWithCache();
+
+    await anotherTabSignsInAsBob().catch(() => undefined);
+    await screen.findByText("Bob");
+    await exclusively(() => Promise.resolve());
+
+    expect(push.unsubscribed).toBe(1);
   });
 
   it("is left alone by an ordinary refresh", async () => {

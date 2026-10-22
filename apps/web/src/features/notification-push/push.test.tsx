@@ -198,6 +198,11 @@ function api({ available = true, deviceCount = 0, pushEnabled = false } = {}) {
       removed.push(await request.json());
       return new HttpResponse(null, { status: 204 });
     }),
+    // The subscription this browser holds is this account's — what
+    // `ownership.test.tsx` varies, this file takes as given.
+    http.post(url("/notifications/push/subscriptions/ownership"), () =>
+      HttpResponse.json(envelope({ owned: true })),
+    ),
   );
 
   return { patched, registered, removed };

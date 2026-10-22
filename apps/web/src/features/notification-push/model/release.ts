@@ -51,6 +51,10 @@ import { disablePush } from "./subscription";
  * push service stops delivering at once, and the stored row answers `410`
  * on its next delivery and is revoked by the worker (§17). The new account
  * is not enrolled — it enables push itself if it wants it.
+ *
+ * Both handlers need a tab to see the session end. When none did — a
+ * session that expired, a browser closed — `ownership.ts` catches the
+ * subscription at the next sign-in instead (A64-031.E6).
  */
 export function registerPushSessionRelease(): () => void {
   const releaseOnSignOut = onSessionEnding(async () => {

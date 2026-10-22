@@ -105,10 +105,9 @@ export function usePushSection(preferenceEnabled: boolean): PushSection {
       const key = status.data?.vapid_public_key;
       if (!key) throw new Error("push is unavailable");
 
-      const result = await enablePush(key);
+      const result = await enablePush(key, registerPushSubscription);
       if (!result.ok) return result.reason;
 
-      await registerPushSubscription(result.keys);
       // **Last**, and only once the subscription is stored — see above.
       await updateNotificationPreferences(
         PUSHABLE_CATEGORIES.map((category) => ({ category, channel: "push", enabled: true })),

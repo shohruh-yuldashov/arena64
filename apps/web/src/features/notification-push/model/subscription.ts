@@ -1,5 +1,7 @@
 import { isPushSupported, pushCapabilities } from "@/shared/pwa";
 
+import { exclusively } from "./exclusive";
+
 /**
  * Talking to the browser's Push API — A64-021.6 §7, §8, §21, §22.
  *
@@ -181,12 +183,18 @@ export type EnableResult =
   | { readonly ok: false; readonly reason: EnableFailure };
 
 /**
- * The browser half of enabling push — §21, steps 1 to 3.
+ * Enabling push up to the stored subscription — §21, steps 1 to 4.
  *
- * Support, then permission, then subscribe. The **caller** sends the result
- * to the backend and only then turns the preference on, which is §21's
- * ordering and matters: a preference enabled before a subscription exists
- * is a person told push is on with nowhere for it to arrive.
+ * Support, then permission, then subscribe, then `store` — the caller's
+ * call to the backend. The caller turns the preference on only after this
+ * returns, which is §21's ordering and matters: a preference enabled before
+ * a subscription exists is a person told push is on with nowhere for it to
+ * arrive.
+ *
+ * Subscribing and storing happen under one lock (`exclusive.ts`), so an
+ * ownership check can never see the subscription between the two and
+ * remove it as nobody's. Permission is asked **before** the lock is taken:
+ * the prompt belongs to the click, and must not wait behind another tab.
  *
  * Returns a result rather than throwing, because none of these are
  * exceptional — an unsupported browser and a declined prompt are ordinary
@@ -201,7 +209,10 @@ export type EnableResult =
  * old one is discarded and a fresh one requested — the only recovery
  * available, and it is invisible to the person.
  */
-export async function enablePush(vapidPublicKey: string): Promise<EnableResult> {
+export async function enablePush(
+  vapidPublicKey: string,
+  store: (keys: SubscriptionKeys) => Promise<unknown>,
+): Promise<EnableResult> {
   if (!isPushSupported(pushCapabilities())) {
     return { ok: false, reason: "unsupported" };
   }
@@ -212,6 +223,14 @@ export async function enablePush(vapidPublicKey: string): Promise<EnableResult> 
     return { ok: false, reason: "denied" };
   }
 
+  return exclusively(async () => {
+    const result = await subscribeThisBrowser(vapidPublicKey);
+    if (result.ok) await store(result.keys);
+    return result;
+  });
+}
+
+async function subscribeThisBrowser(vapidPublicKey: string): Promise<EnableResult> {
   const registration = await activeRegistration();
   if (!registration) {
     // No worker, so there is nothing to subscribe through. Reported rather
@@ -239,7 +258,7 @@ export async function enablePush(vapidPublicKey: string): Promise<EnableResult> 
     return { ok: false, reason: "subscribe-failed" };
   } catch {
     // Most often the VAPID key changed under an existing subscription. Drop
-    // it and try once more — see the docstring.
+    // it and try once more — see `enablePush`.
     return retryWithFreshSubscription(vapidPublicKey);
   }
 }
@@ -275,11 +294,17 @@ async function retryWithFreshSubscription(vapidPublicKey: string): Promise<Enabl
  *
  * Returns `null` when there was nothing to remove, which is not a failure:
  * "this browser is not subscribed" is the state the caller wanted.
+ *
+ * Under the lock every change to the subscription takes (`exclusive.ts`),
+ * so a sign-out or an account switch that races an ownership check reads
+ * the subscription after the other has finished with it, not alongside.
  */
-export async function disablePush(): Promise<string | null> {
-  const subscription = await currentSubscription();
-  if (!subscription) return null;
-  const { endpoint } = subscription;
-  await subscription.unsubscribe();
-  return endpoint;
+export function disablePush(): Promise<string | null> {
+  return exclusively(async () => {
+    const subscription = await currentSubscription();
+    if (!subscription) return null;
+    const { endpoint } = subscription;
+    await subscription.unsubscribe();
+    return endpoint;
+  });
 }

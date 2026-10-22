@@ -105,6 +105,15 @@ export class RealtimeClient {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   /** Set by `stop()`. Nothing reconnects while it stands. */
   private stopped = true;
+  /**
+   * Bumped by every `start` and `stop` — A64-031.E5. `stopped` alone cannot
+   * tell a connect that began before a `stop()`/`start()` pair from one that
+   * began after it: both see `stopped === false` once the second `start`
+   * has run. When the signed-in account changes, that pair is exactly what
+   * happens, and the older connect is still waiting on a ticket minted for
+   * the *previous* account. Its generation is how it knows to give up.
+   */
+  private generation = 0;
 
   private readonly frameListeners = new Set<FrameListener>();
   private readonly statusListeners = new Set<StatusListener>();
@@ -123,6 +132,7 @@ export class RealtimeClient {
    */
   start(): void {
     if (!this.stopped) return;
+    this.generation += 1;
     this.stopped = false;
     this.attempt = 0;
     void this.connect();
@@ -136,6 +146,7 @@ export class RealtimeClient {
    * longer exists. `closed`, not `fatal`: nothing is wrong.
    */
   stop(): void {
+    this.generation += 1;
     this.stopped = true;
     this.clearTimers();
     this.requests.rejectAll(new RealtimeError("disconnected", "The session ended."));
@@ -204,6 +215,7 @@ export class RealtimeClient {
 
   private async connect(): Promise<void> {
     if (this.stopped) return;
+    const generation = this.generation;
 
     if (typeof navigator !== "undefined" && navigator.onLine === false) {
       // §6: pause rather than back off against a machine with no network.
@@ -224,11 +236,16 @@ export class RealtimeClient {
       // refresh interceptor has already tried to fix. Retrying is still
       // right — the session may come back — and `fatal` is reserved for the
       // gateway refusing a ticket it was given.
+      // A failure that belongs to a superseded connect schedules nothing:
+      // the current one has its own retry policy.
+      if (generation !== this.generation) return;
       this.scheduleRetry(error);
       return;
     }
 
-    if (this.stopped) return;
+    // Stopped, or stopped and started again since this connect began —
+    // the ticket in hand was minted for a session that is no longer ours.
+    if (this.stopped || generation !== this.generation) return;
     this.setStatus("connecting");
     this.openSocket(ticket);
   }

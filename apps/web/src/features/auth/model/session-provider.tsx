@@ -1,6 +1,7 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { type QueryKey, useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
+  Fragment,
   type ReactNode,
   use,
   useCallback,
@@ -113,6 +114,31 @@ export interface GoogleAccountPayload {
 const SessionContext = createContext<SessionContextValue | null>(null);
 
 /**
+ * Cached queries that are the same for every viewer and say nothing about
+ * anybody — kept when the signed-in account changes. Everything else is
+ * treated as account-scoped, which is the safe default: a query wrongly
+ * left off this list costs one refetch, one wrongly put on it can show one
+ * person's data to another.
+ */
+const VIEWER_INDEPENDENT_QUERIES: readonly (readonly string[])[] = [
+  ["reference"],
+  ["auth", "providers"],
+];
+
+function isViewerIndependent(queryKey: QueryKey): boolean {
+  return VIEWER_INDEPENDENT_QUERIES.some((prefix) =>
+    prefix.every((part, index) => queryKey[index] === part),
+  );
+}
+
+/** Who a session state names: an id, `null` for nobody, `undefined` if not yet known. */
+function identityOf(state: SessionState): string | null | undefined {
+  if (state.status === "authenticated") return state.user.id;
+  if (state.status === "anonymous") return null;
+  return undefined;
+}
+
+/**
  * What must be torn down when a session ends, beyond this module's own
  * state — the WebSocket, principally.
  *
@@ -193,6 +219,10 @@ export function SessionProvider({
   const [channel] = useState(() => injectedChannel ?? createAuthChannel());
   const queryClient = useQueryClient();
   const bootstrapped = useRef(false);
+  /** Whose data the cache, the socket and the mounted tree currently hold. */
+  const cacheOwner = useRef<string | null | undefined>(undefined);
+  /** Bumped when one account replaces another, to remount everything below. */
+  const [identityEpoch, setIdentityEpoch] = useState(0);
 
   const state = useSyncExternalStore(store.subscribe, store.getState, store.getState);
 
@@ -255,6 +285,63 @@ export function SessionProvider({
       store.set({ status: "unavailable" });
     }
   }, [store]);
+
+  /**
+   * The one place an identity change is acted on — A64-031.E5.
+   *
+   * The refresh cookie is shared by every tab, so this tab can become a
+   * different account without its own sign-out: a sign-in in another tab
+   * replaces the cookie, and this tab's next refresh answers for whoever
+   * that was. Nothing that called `store.set` would have cleared anything —
+   * so the decision is made here, on every state the store takes, rather
+   * than in each of the seven places that set one.
+   *
+   * Subscribed directly to the store, not read in render: the store notifies
+   * synchronously, so the cache is purged before React renders a single
+   * frame as the new account.
+   *
+   *   unknown → anyone          the first answer; only recorded — before it
+   *                             nothing was fetched as anybody
+   *   nobody → B                drop what was fetched without an account —
+   *                             viewer-relative answers ("not friends") are
+   *                             wrong for B
+   *   A → nobody                drop A's data (`clearLocalSession` also
+   *                             tears down the socket and rotates analytics)
+   *   A → B                     all of that, and remount everything below,
+   *                             so no component keeps A's state and the
+   *                             realtime connection reopens as B
+   *   A → A                     nothing — an ordinary refresh
+   *
+   * Queries are cancelled before they are removed, so a request still in
+   * flight cannot land in the cleared cache. The interceptor refuses the
+   * rest — see `_sentAs` in `refresh-interceptor.ts`.
+   */
+  useEffect(
+    () =>
+      store.subscribe((next) => {
+        const identity = identityOf(next);
+        if (identity === undefined || identity === cacheOwner.current) return;
+        const previous = cacheOwner.current;
+        cacheOwner.current = identity;
+        // The first answer only records whose cache this is: before it,
+        // requests carry no token and protected pages wait, so nothing in
+        // the cache was fetched as anybody.
+        if (previous === undefined) return;
+
+        const accountScoped = {
+          predicate: (query: { queryKey: QueryKey }) => !isViewerIndependent(query.queryKey),
+        };
+        void queryClient.cancelQueries(accountScoped);
+        queryClient.removeQueries(accountScoped);
+
+        if (typeof previous === "string" && identity !== null) {
+          rotateAnonymousId();
+          runCleanups();
+          setIdentityEpoch((epoch) => epoch + 1);
+        }
+      }),
+    [queryClient, store],
+  );
 
   // --- one bootstrap, one interceptor pair, one subscription -------------
   useEffect(() => {
@@ -407,6 +494,10 @@ export function SessionProvider({
       // arrived after a sign-out must not resurrect one.
       const current = store.getState();
       if (current.status !== "authenticated") return;
+      // Nor may it swap one account for another: this applies an update
+      // *to* the signed-in account, and an answer about anybody else is
+      // stale by definition — A64-031.E5.
+      if (current.user.id !== user.id) return;
       store.set({ ...current, user });
     },
     [store],
@@ -437,7 +528,13 @@ export function SessionProvider({
     ],
   );
 
-  return <SessionContext value={value}>{children}</SessionContext>;
+  // Keyed by the identity epoch: when one account replaces another, every
+  // page, form and provider below is mounted afresh for the new account.
+  return (
+    <SessionContext value={value}>
+      <Fragment key={identityEpoch}>{children}</Fragment>
+    </SessionContext>
+  );
 }
 
 /** Throws outside the provider — see `useTheme` on why not a silent default. */

@@ -2,6 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { useSession } from "@/features/auth/model/session-provider";
+import { AccountEmail } from "@/features/auth/ui/account-email";
 import { FormError } from "@/features/auth/ui/form-status";
 import { profileErrorKey } from "@/features/profile/model/error-messages";
 import { SessionList } from "@/features/sessions";
@@ -16,6 +17,7 @@ import {
   DialogTitle,
   DialogTrigger,
   SettingCard,
+  SettingGroup,
   SettingRow,
   Spinner,
 } from "@/shared/ui";
@@ -77,64 +79,73 @@ export default function SettingsSessionsPage() {
 
   return (
     <SettingsShell
-      title={t("profile.sessions.title")}
-      description={t("profile.sessions.subtitle")}
+      title={t("profile.account.pageTitle")}
+      description={t("profile.account.pageSubtitle")}
     >
-      <div className="flex flex-col gap-4">
-        <FormError messageKey={failure} />
+      <div className="flex flex-col gap-8">
+        {/* A64-031.E. First, because "which address is this account?" is
+            the question people came here without finding an answer to. */}
+        <AccountEmail />
 
-        <SessionList />
+        <SettingGroup
+          title={t("profile.sessions.title")}
+          description={t("profile.sessions.subtitle")}
+        >
+          <FormError messageKey={failure} />
 
-        <SettingCard>
-          <SettingRow
-            label={t("profile.sessions.signOutAll")}
-            description={t("profile.sessions.signOutAllHint")}
-            control={
-              <Dialog open={open} onOpenChange={setOpen}>
-                <DialogTrigger asChild>
-                  {/* Ghost with destructive text, not a red slab — the same
+          <SessionList />
+
+          <SettingCard>
+            <SettingRow
+              label={t("profile.sessions.signOutAll")}
+              description={t("profile.sessions.signOutAllHint")}
+              control={
+                <Dialog open={open} onOpenChange={setOpen}>
+                  <DialogTrigger asChild>
+                    {/* Ghost with destructive text, not a red slab — the same
                       weight §18.8 gives blocking a player and removing a
                       photo. This was the only control on the page and was
                       drawn as the loudest thing in the product; a page whose
                       single action shouts reads as a warning rather than as
                       a setting. The dialog behind it is what actually
                       guards the act. */}
-                  <Button
-                    variant="ghost"
-                    className="text-destructive hover:bg-destructive/10 hover:text-destructive min-h-11 w-full"
-                  >
-                    {t("profile.sessions.signOutAll")}
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>{t("profile.sessions.confirmTitle")}</DialogTitle>
-                    <DialogDescription>{t("profile.sessions.confirmBody")}</DialogDescription>
-                  </DialogHeader>
-                  <div className="flex flex-wrap justify-end gap-2">
-                    <DialogClose asChild>
-                      <Button variant="ghost" className="min-h-11">
-                        {t("profile.sessions.cancel")}
-                      </Button>
-                    </DialogClose>
                     <Button
-                      variant="destructive"
-                      className="min-h-11"
-                      disabled={pending}
-                      onClick={() => void onConfirm()}
+                      variant="ghost"
+                      className="text-destructive hover:bg-destructive/10 hover:text-destructive min-h-11 w-full"
                     >
-                      {pending ? (
-                        <Spinner label={t("profile.sessions.confirm")} />
-                      ) : (
-                        t("profile.sessions.confirm")
-                      )}
+                      {t("profile.sessions.signOutAll")}
                     </Button>
-                  </div>
-                </DialogContent>
-              </Dialog>
-            }
-          />
-        </SettingCard>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>{t("profile.sessions.confirmTitle")}</DialogTitle>
+                      <DialogDescription>{t("profile.sessions.confirmBody")}</DialogDescription>
+                    </DialogHeader>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <DialogClose asChild>
+                        <Button variant="ghost" className="min-h-11">
+                          {t("profile.sessions.cancel")}
+                        </Button>
+                      </DialogClose>
+                      <Button
+                        variant="destructive"
+                        className="min-h-11"
+                        disabled={pending}
+                        onClick={() => void onConfirm()}
+                      >
+                        {pending ? (
+                          <Spinner label={t("profile.sessions.confirm")} />
+                        ) : (
+                          t("profile.sessions.confirm")
+                        )}
+                      </Button>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              }
+            />
+          </SettingCard>
+        </SettingGroup>
       </div>
     </SettingsShell>
   );

@@ -82,15 +82,16 @@ class TestTheOperatorReadersCannotIdentifyAnybody:
     def test_the_subscription_port_never_reads_by_an_endpoint_a_caller_supplies(self) -> None:
         """§19, asserted where it can be.
 
-        An endpoint is a bearer capability. Exactly one method takes one as
-        a parameter, and it is owner-scoped and a *write*:
-        `revoke_by_endpoint`, which serves "this browser is signing out".
+        An endpoint is a bearer capability. Two methods take one as a
+        parameter, and both are owner-scoped: `revoke_by_endpoint`, which
+        serves "this browser is signing out", and `is_live_for` (A64-031.E6),
+        which serves "is this browser's subscription mine".
 
         `register` is not in this set, and that surprised the audit in a good
         way: it takes a whole `PushSubscription` the caller built, so there
         is no method anywhere on the port with the shape
-        `something(endpoint) -> answer`. A read keyed on an endpoint would
-        answer "does this belong to an account" for any string somebody
+        `something(endpoint) -> answer`. A read keyed on an endpoint alone
+        would answer "does this belong to an account" for any string somebody
         tried, and the port cannot express one.
         """
         takers = {
@@ -99,4 +100,27 @@ class TestTheOperatorReadersCannotIdentifyAnybody:
             if not name.startswith("_") and "endpoint" in inspect.signature(member).parameters
         }
 
-        assert takers == {"revoke_by_endpoint"}
+        assert takers == {"revoke_by_endpoint", "is_live_for"}
+
+    def test_every_endpoint_taker_is_scoped_to_the_callers_own_account(self) -> None:
+        """What keeps the two methods above from being an enumeration oracle
+        — A64-031.E6.
+
+        Each also takes the caller's id, keyword-only and without a default,
+        so neither can be called with an endpoint alone: the most either can
+        answer is "is this mine", never "whose is this". A third endpoint
+        taker would have to meet this too, or fail here.
+        """
+        unscoped = {
+            name
+            for name, member in inspect.getmembers(PushSubscriptionRepository, inspect.isfunction)
+            if not name.startswith("_")
+            and "endpoint" in (parameters := inspect.signature(member).parameters)
+            and not (
+                "user_id" in parameters
+                and parameters["user_id"].kind is inspect.Parameter.KEYWORD_ONLY
+                and parameters["user_id"].default is inspect.Parameter.empty
+            )
+        }
+
+        assert unscoped == set()

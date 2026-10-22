@@ -1,6 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthBroadcast, AuthChannel } from "@/features/auth/model/auth-channel";
 import { api } from "@/shared/api";
@@ -306,6 +306,78 @@ describe("arriving at an account from none", () => {
       expect(queryClient.getQueryData(["profile", "public", "carol"])).toBeUndefined(),
     );
     expect(queryClient.getQueryData(["auth", "providers"])).toEqual({ google: true });
+  });
+});
+
+describe("this browser's push subscription", () => {
+  /**
+   * A subscription belongs to the browser profile and was registered to the
+   * first account. When the tab becomes another account without a sign-out,
+   * it is unsubscribed in the browser — and the server is not asked to
+   * remove the row, which the new account does not own and could not.
+   */
+  const push = { unsubscribed: 0, removals: 0 };
+
+  beforeEach(() => {
+    push.unsubscribed = 0;
+    push.removals = 0;
+    const subscription = {
+      endpoint: "https://push.example/endpoint-of-this-browser",
+      unsubscribe: () => {
+        push.unsubscribed += 1;
+        return Promise.resolve(true);
+      },
+    };
+    const pushManager = { getSubscription: () => Promise.resolve(subscription) };
+    Object.defineProperty(navigator, "serviceWorker", {
+      configurable: true,
+      value: {
+        ready: Promise.resolve({ pushManager }),
+        getRegistration: () => Promise.resolve({ pushManager }),
+      },
+    });
+    Object.defineProperty(globalThis, "PushManager", {
+      configurable: true,
+      writable: true,
+      value: function PushManagerStub() {},
+    });
+    Object.defineProperty(globalThis, "Notification", {
+      configurable: true,
+      writable: true,
+      value: { permission: "granted", requestPermission: () => Promise.resolve("granted") },
+    });
+    mswServer.use(
+      http.post(url("/notifications/push/subscriptions/remove"), () => {
+        push.removals += 1;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+  });
+
+  afterEach(() => {
+    // Only what this block defined — `vi.unstubAllGlobals()` would also
+    // remove the `matchMedia` stub the shared setup installs.
+    Reflect.deleteProperty(globalThis, "Notification");
+    Reflect.deleteProperty(globalThis, "PushManager");
+    Reflect.deleteProperty(navigator, "serviceWorker");
+  });
+
+  it("is unsubscribed when another account replaces this one", async () => {
+    await aliceWithCache();
+
+    await anotherTabSignsInAsBob().catch(() => undefined);
+
+    await vi.waitFor(() => expect(push.unsubscribed).toBe(1));
+    expect(push.removals).toBe(0);
+  });
+
+  it("is left alone by an ordinary refresh", async () => {
+    await aliceWithCache();
+    expired.add(`token-${ALICE.id}-1`);
+
+    await api.get("/private");
+
+    expect(push.unsubscribed).toBe(0);
   });
 });
 

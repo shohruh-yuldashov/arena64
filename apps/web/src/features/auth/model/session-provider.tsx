@@ -206,6 +206,38 @@ async function runReleases(): Promise<void> {
   }
 }
 
+/**
+ * What must be let go when this tab's account is **replaced** by another
+ * without a sign-out — A64-031.E5.
+ *
+ * A third extension point, and narrower than the other two. `onSessionEnding`
+ * runs while the old session still works, before a sign-out; here there was
+ * no sign-out and the old session is already gone from this tab — so a
+ * handler can act on the browser and nothing else. The push subscription is
+ * why: it belongs to the browser profile, it was registered to the previous
+ * account, and the one thing that can still be done about it without that
+ * account's credentials is to unsubscribe it in the browser.
+ *
+ * Best effort and never awaited by the switch: the cache, the socket and the
+ * remount happen regardless of what a handler does.
+ */
+const replacements = new Set<() => Promise<void>>();
+
+export function onAccountReplaced(handler: () => Promise<void>): () => void {
+  replacements.add(handler);
+  return () => {
+    replacements.delete(handler);
+  };
+}
+
+function runReplacements(): void {
+  for (const handler of replacements) {
+    handler().catch((error: unknown) => {
+      reportError(error, { scope: "account-replaced" });
+    });
+  }
+}
+
 export function SessionProvider({
   children,
   store: injectedStore,
@@ -309,7 +341,8 @@ export function SessionProvider({
    *                             tears down the socket and rotates analytics)
    *   A → B                     all of that, and remount everything below,
    *                             so no component keeps A's state and the
-   *                             realtime connection reopens as B
+   *                             realtime connection reopens as B; and tell
+   *                             `onAccountReplaced` handlers (push)
    *   A → A                     nothing — an ordinary refresh
    *
    * Queries are cancelled before they are removed, so a request still in
@@ -337,6 +370,7 @@ export function SessionProvider({
         if (typeof previous === "string" && identity !== null) {
           rotateAnonymousId();
           runCleanups();
+          runReplacements();
           setIdentityEpoch((epoch) => epoch + 1);
         }
       }),

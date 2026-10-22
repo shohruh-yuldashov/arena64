@@ -11,6 +11,7 @@ import {
 import { pushKeys } from "@/features/notification-push/api/keys";
 import { isPushSupported, pushCapabilities } from "@/shared/pwa";
 
+import { onOwnershipRelease } from "./ownership";
 import { type PushState, pushStateOf } from "./state";
 import {
   currentSubscription,
@@ -99,6 +100,10 @@ export function usePushSection(preferenceEnabled: boolean): PushSection {
   useEffect(() => {
     void refreshSubscription();
   }, [refreshSubscription]);
+
+  // The ownership check can let this browser's subscription go after the
+  // read above — A64-031.E6, `ownership.ts`.
+  useEffect(() => onOwnershipRelease(() => void refreshSubscription()), [refreshSubscription]);
 
   const enable = useMutation({
     mutationFn: async () => {

@@ -59,7 +59,25 @@ export async function reconcilePushOwnership(isCurrent: () => boolean): Promise<
     if (!(await subscription.unsubscribe())) {
       throw new Error("The browser refused to release a push subscription.");
     }
+    for (const listener of releaseListeners) listener();
   });
+}
+
+/**
+ * Who must hear that the check let the subscription go — the push settings
+ * section, when it is mounted.
+ *
+ * It reads the browser once, on mount, and a page loaded straight onto it
+ * reads before the check has answered: without this it would go on saying
+ * push is on here, offering "turn off" instead of the enable that recovers.
+ */
+const releaseListeners = new Set<() => void>();
+
+export function onOwnershipRelease(listener: () => void): () => void {
+  releaseListeners.add(listener);
+  return () => {
+    releaseListeners.delete(listener);
+  };
 }
 
 /** Whether the endpoint is the signed-in account's, or `null` if nobody asked any more. */

@@ -2606,7 +2606,12 @@ whether this browser's subscription is that account's, and unsubscribes it
 if not or if the question fails (A64-031.E6, `specs/notifications.md`
 §15.3). A browser with no subscription makes no request. Every change to the
 subscription — enable, disable, both releases and the check — runs under one
-lock, so a check cannot land between subscribing and storing.
+lock, so a check cannot land between subscribing and storing. A response
+sent as an account that is no longer signed in is cancelled by the session
+interceptor, so a late answer about one account never releases the next
+account's subscription. A mounted push settings section re-reads the browser
+when the check releases, so it shows "not subscribed here" and offers enable
+rather than a stale "turn off".
 
 ### 23.6 Nothing is remembered
 

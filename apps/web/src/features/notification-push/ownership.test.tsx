@@ -367,3 +367,98 @@ describe("a check racing an enable", () => {
     expect(browser.unsubscribed).toBe(0);
   });
 });
+
+describe("the push settings section", () => {
+  it("shows a released subscription as off here, with the way to enable it again", async () => {
+    // Loaded straight onto the page: the section reads the browser while the
+    // check is still deciding, and must not go on claiming push is on here
+    // once the check lets the subscription go.
+    const browser = installBrowserPush({ subscribed: true });
+    cookie = BOB;
+    mswServer.use(
+      http.get(url("/notifications/preferences"), () =>
+        HttpResponse.json(
+          envelope({
+            settings: [
+              {
+                category: "tournament",
+                channel: "push",
+                enabled: true,
+                editable: true,
+                locked_reason: null,
+              },
+            ],
+          }),
+        ),
+      ),
+      http.get(url("/notifications/push/status"), () =>
+        HttpResponse.json(
+          envelope({ available: true, vapid_public_key: VAPID_PUBLIC, device_count: 0 }),
+        ),
+      ),
+    );
+
+    let answer: () => void = () => undefined;
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    mswServer.use(
+      http.post(url("/notifications/push/subscriptions/ownership"), async () => {
+        await answered;
+        return HttpResponse.json(envelope({ owned: false }));
+      }),
+    );
+
+    renderApp({ path: "/settings/notifications" });
+    // The section has read the browser — still subscribed — before the
+    // answer arrives: the order a slow network produces.
+    expect(await screen.findByRole("button", { name: /turn off here/i })).toBeVisible();
+    answer();
+    await vi.waitFor(() => expect(browser.unsubscribed).toBe(1));
+
+    expect(
+      await screen.findByRole("button", { name: /enable push notifications/i }),
+    ).toBeVisible();
+  });
+});
+
+describe("an answer about an account that is no longer signed in", () => {
+  it("cannot release the subscription of the account signed in now", async () => {
+    // Alice's check is in flight about a subscription that is Bob's. Her
+    // session ends without a sign-out and Bob signs in; then her "not
+    // yours" lands. It answered for Alice, so it must not cost Bob his.
+    const browser = installBrowserPush({ subscribed: true });
+    rows.set(ENDPOINT, BOB.id);
+    let answerAlice: () => void = () => undefined;
+    const aliceMayHearBack = new Promise<void>((resolve) => {
+      answerAlice = resolve;
+    });
+    mswServer.use(
+      http.post(url("/notifications/push/subscriptions/ownership"), async ({ request }) => {
+        server.asked += 1;
+        const owner = ownerOf(request);
+        if (owner === ALICE.id) await aliceMayHearBack;
+        return HttpResponse.json(envelope({ owned: rows.get(ENDPOINT) === owner }));
+      }),
+    );
+    const person = userEvent.setup();
+    const { router } = renderApp({ path: "/" });
+    await vi.waitFor(() => expect(server.asked).toBe(1));
+
+    cookie = null;
+    expired.add(`token-${ALICE.id}-1`);
+    await api.get("/private").catch(() => undefined);
+    await router.navigate({ to: "/login" });
+    const submit = await screen.findByRole("button", { name: /sign in/i });
+    const form = within(submit.closest("form") as HTMLElement);
+    await person.type(form.getByLabelText(/email/i, { selector: "input" }), "bob");
+    await person.type(form.getByLabelText(/password/i, { selector: "input" }), "x");
+    await person.click(submit);
+    await screen.findByText("Bob");
+    answerAlice();
+    await vi.waitFor(() => expect(server.asked).toBe(2));
+    await settled();
+
+    expect(browser.unsubscribed).toBe(0);
+  });
+});

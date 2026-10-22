@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { api } from "@/shared/api";
 import { env } from "@/shared/config/env";
 import { mswServer } from "@/shared/test/msw/server";
 import { renderApp } from "@/shared/test/render";
@@ -147,6 +148,44 @@ describe("the sign-in address", () => {
     );
 
     expect(await screen.findByText("player.one@example.com")).toBeVisible();
+  });
+
+  it("never shows the previous account's address after the session changes account", async () => {
+    // The browser's refresh cookie is shared by every tab. A Google sign-in
+    // completed in another tab overwrites it, and this tab's next refresh
+    // then answers for a different account without any sign-out — so the
+    // cache is not cleared. The card must not keep the first account's
+    // address on screen under the second.
+    const OTHER = {
+      ...ACCOUNT,
+      id: "019fb9ea-0a0c-7cec-9c5f-402727c31b77",
+      email: "other@example.com",
+    };
+    let current = ACCOUNT;
+    mswServer.use(
+      http.post(url("/auth/browser/refresh"), () =>
+        HttpResponse.json(envelope({ access_token: `token-${current.id}`, user: current })),
+      ),
+      http.get(url("/auth/browser/sessions"), () => HttpResponse.json(envelope([]))),
+      http.get(url("/auth/me"), () => HttpResponse.json(envelope(current))),
+      http.get(url("/thing"), ({ request }) =>
+        request.headers.get("Authorization") === `Bearer token-${OTHER.id}`
+          ? HttpResponse.json(envelope({ ok: true }))
+          : HttpResponse.json(
+              { code: "expired_token", message: "x", request_id: null, correlation_id: null },
+              { status: 401 },
+            ),
+      ),
+    );
+    renderApp({ path: "/settings/sessions" });
+    expect(await screen.findByText("player.one@example.com")).toBeVisible();
+
+    // The cookie now belongs to OTHER; an expired token makes this tab refresh.
+    current = OTHER;
+    await api.get("/thing");
+
+    expect(await screen.findByText("other@example.com")).toBeVisible();
+    expect(screen.queryByText("player.one@example.com")).not.toBeInTheDocument();
   });
 
   it("is reached from settings as the account page", async () => {

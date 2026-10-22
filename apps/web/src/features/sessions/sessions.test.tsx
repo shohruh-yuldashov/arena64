@@ -69,6 +69,10 @@ function signedIn(): void {
     http.post(url("/auth/browser/refresh"), () =>
       HttpResponse.json(envelope({ access_token: "token-1", user: VIEWER })),
     ),
+    // A64-031.E: the page also shows the account's sign-in address, read
+    // from `/auth/me`. Answered here so these device tests are about
+    // devices — `account-email.test.tsx` covers that card.
+    http.get(url("/auth/me"), () => HttpResponse.json(envelope(VIEWER))),
   );
 }
 

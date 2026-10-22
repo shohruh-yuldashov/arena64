@@ -25,7 +25,9 @@ const LINKS = [
   { to: "/settings/preferences", key: "profile.nav.preferences" },
   { to: "/settings/privacy", key: "profile.nav.privacy" },
   { to: "/settings/notifications", key: "profile.nav.notifications" },
-  { to: "/settings/sessions", key: "profile.nav.sessions" },
+  // "Account and sessions" since A64-031.E: the page also shows the
+  // sign-in address, and a link named only "Sessions" hid it.
+  { to: "/settings/sessions", key: "profile.nav.account" },
 ] as const;
 
 export function SettingsShell({

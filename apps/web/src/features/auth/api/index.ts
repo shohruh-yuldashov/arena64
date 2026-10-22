@@ -67,6 +67,18 @@ export function logoutEverywhere(): Promise<void> {
   return api.post<void>(`${BROWSER}/logout-all`);
 }
 
+/**
+ * The signed-in account as the server holds it — `GET /auth/me`.
+ *
+ * **Self-only by construction**: the API answers for the access token's
+ * `sub` and takes no identifier, so there is no way to ask it about anyone
+ * else. That is why it is the one read in this app allowed to show an email
+ * address.
+ */
+export function getMe(): Promise<UserRead> {
+  return api.get<UserRead>("/auth/me");
+}
+
 export function verifyEmail(payload: Schemas["VerifyEmailRequest"]): Promise<unknown> {
   return api.post(`/auth/email/verify`, payload);
 }

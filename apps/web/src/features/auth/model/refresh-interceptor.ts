@@ -1,4 +1,9 @@
-import axios, { type AxiosError, type InternalAxiosRequestConfig } from "axios";
+import axios, {
+  type AxiosError,
+  type AxiosResponse,
+  CanceledError,
+  type InternalAxiosRequestConfig,
+} from "axios";
 
 import { CREDENTIAL_PATHS, REFRESH_PATH } from "@/features/auth/api";
 import type { SessionStore } from "@/features/auth/model/session-store";
@@ -48,11 +53,35 @@ import { httpClient } from "@/shared/api/client";
  * `_retried` is stamped on the config. Without it, a request that still
  * `401`s after a successful refresh — a genuinely forbidden resource, a
  * revoked account — loops until the browser gives up.
+ *
+ * ## A response belongs to the account that asked — A64-031.E5
+ *
+ * The refresh cookie is shared by every tab, so a sign-in in another tab can
+ * make this tab's next refresh answer for a **different** account. Two
+ * things must not survive that switch:
+ *
+ * - **A response to the previous account.** Every request sent while signed
+ *   in is stamped with the account it was sent as (`_sentAs`). If it comes
+ *   back after the tab has become somebody else — or nobody — it is turned
+ *   into a cancellation, so no `onSuccess`, no `setQueryData` and no
+ *   component state can apply one account's data to another. "Canceled" is
+ *   the existing kind for a superseded request: it is not reported and not
+ *   retried.
+ * - **A retry under the new account.** A `401` that is answered by a
+ *   refresh naming a different account is not re-sent: an action somebody
+ *   took as one account must not be replayed as another. It is cancelled
+ *   the same way.
+ *
+ * Only signed-in requests are stamped. An anonymous request reads nothing
+ * private, and the session provider clears what it cached when an account
+ * arrives.
  */
 declare module "axios" {
   export interface InternalAxiosRequestConfig {
     /** Set by this interceptor. One retry per request, ever. */
     _retried?: boolean;
+    /** The account this request was first sent as — see the module docstring. */
+    _sentAs?: string;
   }
 }
 
@@ -89,6 +118,12 @@ export function installAuthInterceptors(
 
   const requestId = httpClient.interceptors.request.use(
     (config: InternalAxiosRequestConfig) => {
+      // Stamped once, on the first send: a retry keeps the account the
+      // request was originally made for.
+      const session = store.getState();
+      if (config._sentAs === undefined && session.status === "authenticated") {
+        config._sentAs = session.user.id;
+      }
       const token = store.getAccessToken();
       // Read at send time, never captured at registration: the token
       // rotates and a closed-over copy is the divergence this design
@@ -101,7 +136,10 @@ export function installAuthInterceptors(
   );
 
   const responseId = httpClient.interceptors.response.use(
-    (response) => response,
+    (response: AxiosResponse) => {
+      if (isSuperseded(response.config)) throw superseded();
+      return response;
+    },
     async (error: unknown) => {
       if (!axios.isAxiosError(error)) throw error;
 
@@ -129,10 +167,21 @@ export function installAuthInterceptors(
         throw refreshFailure;
       }
 
+      // The refresh may have answered for somebody else. An action taken as
+      // one account is never replayed as another.
+      if (isSuperseded(failed)) throw superseded();
+
       failed.headers.set("Authorization", `Bearer ${token}`);
       return httpClient.request(failed);
     },
   );
+
+  /** Whether this request was sent as an account the tab no longer holds. */
+  function isSuperseded(config: InternalAxiosRequestConfig): boolean {
+    if (config._sentAs === undefined) return false;
+    const session = store.getState();
+    return session.status !== "authenticated" || session.user.id !== config._sentAs;
+  }
 
   return () => {
     httpClient.interceptors.request.eject(requestId);
@@ -149,4 +198,9 @@ function isRefreshCall(config: AxiosError["config"] | InternalAxiosRequestConfig
 function isCredentialCall(config: InternalAxiosRequestConfig): boolean {
   const path = config.url;
   return path !== undefined && CREDENTIAL_PATHS.some((credential) => path.endsWith(credential));
+}
+
+/** A cancellation, which is what a response to a superseded account is. */
+function superseded(): CanceledError<unknown> {
+  return new CanceledError("The signed-in account changed while this request was in flight.");
 }

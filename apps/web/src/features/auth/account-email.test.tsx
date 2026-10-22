@@ -180,9 +180,11 @@ describe("the sign-in address", () => {
     renderApp({ path: "/settings/sessions" });
     expect(await screen.findByText("player.one@example.com")).toBeVisible();
 
-    // The cookie now belongs to OTHER; an expired token makes this tab refresh.
+    // The cookie now belongs to OTHER; an expired token makes this tab
+    // refresh. The request was made as the first account, so it is not
+    // replayed as the second (A64-031.E5) — it is cancelled.
     current = OTHER;
-    await api.get("/thing");
+    await expect(api.get("/thing")).rejects.toMatchObject({ kind: "canceled" });
 
     expect(await screen.findByText("other@example.com")).toBeVisible();
     expect(screen.queryByText("player.one@example.com")).not.toBeInTheDocument();

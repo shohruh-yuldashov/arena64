@@ -1,4 +1,4 @@
-import { onSessionEnding } from "@/features/auth/model/session-provider";
+import { onAccountReplaced, onSessionEnding } from "@/features/auth/model/session-provider";
 import { removePushSubscription } from "@/features/notification-push/api";
 
 import { disablePush } from "./subscription";
@@ -37,10 +37,31 @@ import { disablePush } from "./subscription";
  * The recovery is automatic — the browser is already unsubscribed, so the
  * stored row answers `410` on its next delivery and is revoked by the
  * worker (§17).
+ *
+ * ## When the account is replaced without a sign-out — A64-031.E5
+ *
+ * The refresh cookie is shared by every tab, so a tab can become another
+ * account with no sign-out here — and then neither half above runs. The
+ * subscription stays bound to the previous account, and its notifications
+ * keep arriving on a browser somebody else is now using.
+ *
+ * Only the browser half can be done then. The previous account's session is
+ * gone from this tab, and the server rightly refuses to let the *new* one
+ * remove a row it does not own. Unsubscribing in the browser is enough: the
+ * push service stops delivering at once, and the stored row answers `410`
+ * on its next delivery and is revoked by the worker (§17). The new account
+ * is not enrolled — it enables push itself if it wants it.
  */
 export function registerPushSessionRelease(): () => void {
-  return onSessionEnding(async () => {
+  const releaseOnSignOut = onSessionEnding(async () => {
     const endpoint = await disablePush();
     if (endpoint) await removePushSubscription(endpoint);
   });
+  const releaseOnReplacement = onAccountReplaced(async () => {
+    await disablePush();
+  });
+  return () => {
+    releaseOnSignOut();
+    releaseOnReplacement();
+  };
 }

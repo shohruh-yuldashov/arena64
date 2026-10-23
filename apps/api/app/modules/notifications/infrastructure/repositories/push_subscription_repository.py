@@ -27,7 +27,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, exists, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -168,6 +168,26 @@ class SqlAlchemyPushSubscriptionRepository:
             ),
         )
         return bool(result.rowcount)
+
+    async def is_live_for(self, endpoint: str, *, user_id: uuid.UUID) -> bool:
+        """Whether this endpoint is a live subscription **of this account** —
+        A64-031.E6.
+
+        The read twin of `revoke_by_endpoint`, scoped the same way: the
+        endpoint and the caller's id are matched in one predicate, so the
+        answer is `False` alike for an endpoint nobody holds, one that is
+        revoked, and one another account holds. There is no way to ask who
+        that other account is. One probe on `uq_push_subscription__endpoint`,
+        the same cost whichever of the three it is.
+        """
+        statement = select(
+            exists().where(
+                PushSubscriptionModel.endpoint == endpoint,
+                PushSubscriptionModel.user_id == user_id,
+                PushSubscriptionModel.revoked_at.is_(None),
+            )
+        )
+        return bool(await self._session.scalar(statement))
 
     async def revoke_by_endpoint(self, endpoint: str, *, user_id: uuid.UUID, at: datetime) -> bool:
         """Revokes the caller's own subscription for one endpoint.

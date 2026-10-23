@@ -3882,6 +3882,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notifications/push/subscriptions/ownership": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Whether this browser's push subscription is the caller's own
+         * @description Answers one question for the browser that sent it — A64-031.E6.
+         *
+         *     A push subscription belongs to the browser profile and outlives every
+         *     session, so when an account becomes signed in, the browser asks whether
+         *     the subscription it holds is that account's. `owned: false` tells it to
+         *     unsubscribe itself: otherwise it would go on receiving the notifications
+         *     of whichever account registered it, after that account stopped being
+         *     signed in here without a sign-out.
+         *
+         *     **Read-only, and it answers nothing about anybody else.** `false` is the
+         *     same for an endpoint nobody holds, one that is revoked, and one another
+         *     account holds; there is no way to learn who. Nothing is removed or
+         *     re-bound — another account's row is not this caller's to touch, and it
+         *     is retired by the push service's `410` once the browser unsubscribes.
+         *
+         *     `POST` with a body for the reason `.../remove` uses one: the endpoint is
+         *     a bearer capability and must not travel in a URL. No rate limit, like
+         *     `GET /push/status`: it is one indexed read, scoped to the caller's own
+         *     rows, that can neither write nor enumerate. `CurrentUser`, like remove:
+         *     a person whose verification lapsed must still be able to stop another
+         *     account's notifications reaching them.
+         */
+        post: operations["check_push_subscription_api_v1_notifications_push_subscriptions_ownership_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/notifications/push/status": {
         parameters: {
             query?: never;
@@ -4812,6 +4852,11 @@ export interface components {
             data: components["schemas"]["PublicUserResponse"];
             meta: components["schemas"]["ResponseMeta"];
         };
+        /** ApiResponse[PushOwnershipResponse] */
+        ApiResponse_PushOwnershipResponse_: {
+            data: components["schemas"]["PushOwnershipResponse"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
         /** ApiResponse[PushStatusResponse] */
         ApiResponse_PushStatusResponse_: {
             data: components["schemas"]["PushStatusResponse"];
@@ -5538,6 +5583,18 @@ export interface components {
          * @enum {string}
          */
         ChallengeStatus: "pending" | "accepted" | "declined" | "cancelled" | "expired";
+        /**
+         * CheckPushSubscriptionRequest
+         * @description The `POST /push/subscriptions/ownership` body — A64-031.E6.
+         *
+         *     The endpoint, in a body for the reason `RemovePushSubscriptionRequest`
+         *     gives: it is a bearer capability, and a path or query string lands in
+         *     access logs.
+         */
+        CheckPushSubscriptionRequest: {
+            /** Endpoint */
+            endpoint: string;
+        };
         /**
          * ClientEventRequest
          * @description One behavioural event as a browser offers it.
@@ -7957,6 +8014,20 @@ export interface components {
              * @example null
              */
             thumbnail_url: string | null;
+        };
+        /**
+         * PushOwnershipResponse
+         * @description Whether the browser's subscription is the caller's own.
+         *
+         *     One boolean, and `false` says nothing about why — see
+         *     `PushSubscriptionService.owns`.
+         */
+        PushOwnershipResponse: {
+            /**
+             * Owned
+             * @example true
+             */
+            owned: boolean;
         };
         /**
          * PushStatusResponse
@@ -14401,6 +14472,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    check_push_subscription_api_v1_notifications_push_subscriptions_ownership_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckPushSubscriptionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_PushOwnershipResponse_"];
+                };
             };
             /** @description Validation Error */
             422: {

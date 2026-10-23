@@ -11,6 +11,7 @@ import {
 import { pushKeys } from "@/features/notification-push/api/keys";
 import { isPushSupported, pushCapabilities } from "@/shared/pwa";
 
+import { onOwnershipRelease } from "./ownership";
 import { type PushState, pushStateOf } from "./state";
 import {
   currentSubscription,
@@ -100,15 +101,18 @@ export function usePushSection(preferenceEnabled: boolean): PushSection {
     void refreshSubscription();
   }, [refreshSubscription]);
 
+  // The ownership check can let this browser's subscription go after the
+  // read above — A64-031.E6, `ownership.ts`.
+  useEffect(() => onOwnershipRelease(() => void refreshSubscription()), [refreshSubscription]);
+
   const enable = useMutation({
     mutationFn: async () => {
       const key = status.data?.vapid_public_key;
       if (!key) throw new Error("push is unavailable");
 
-      const result = await enablePush(key);
+      const result = await enablePush(key, registerPushSubscription);
       if (!result.ok) return result.reason;
 
-      await registerPushSubscription(result.keys);
       // **Last**, and only once the subscription is stored — see above.
       await updateNotificationPreferences(
         PUSHABLE_CATEGORIES.map((category) => ({ category, channel: "push", enabled: true })),

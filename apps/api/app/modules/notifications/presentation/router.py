@@ -64,9 +64,11 @@ from app.modules.notifications.presentation.rate_limits import (
     enforce_push_subscription_limit,
 )
 from app.modules.notifications.presentation.schemas import (
+    CheckPushSubscriptionRequest,
     MarkAllReadResponse,
     NotificationPageResponse,
     NotificationPreferencesResponse,
+    PushOwnershipResponse,
     PushStatusResponse,
     PushSubscriptionResponse,
     RegisterPushSubscriptionRequest,
@@ -332,6 +334,43 @@ async def remove_push_subscription(
     gate.
     """
     await push.remove(user.id, endpoint=body.endpoint)
+
+
+@notifications_router.post(
+    "/push/subscriptions/ownership",
+    response_model=ApiResponse[PushOwnershipResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Whether this browser's push subscription is the caller's own",
+)
+async def check_push_subscription(
+    user: CurrentUser,
+    push: PushSubscriptionServiceDep,
+    body: CheckPushSubscriptionRequest,
+) -> ApiResponse[PushOwnershipResponse]:
+    """Answers one question for the browser that sent it — A64-031.E6.
+
+    A push subscription belongs to the browser profile and outlives every
+    session, so when an account becomes signed in, the browser asks whether
+    the subscription it holds is that account's. `owned: false` tells it to
+    unsubscribe itself: otherwise it would go on receiving the notifications
+    of whichever account registered it, after that account stopped being
+    signed in here without a sign-out.
+
+    **Read-only, and it answers nothing about anybody else.** `false` is the
+    same for an endpoint nobody holds, one that is revoked, and one another
+    account holds; there is no way to learn who. Nothing is removed or
+    re-bound — another account's row is not this caller's to touch, and it
+    is retired by the push service's `410` once the browser unsubscribes.
+
+    `POST` with a body for the reason `.../remove` uses one: the endpoint is
+    a bearer capability and must not travel in a URL. No rate limit, like
+    `GET /push/status`: it is one indexed read, scoped to the caller's own
+    rows, that can neither write nor enumerate. `CurrentUser`, like remove:
+    a person whose verification lapsed must still be able to stop another
+    account's notifications reaching them.
+    """
+    owned = await push.owns(user.id, endpoint=body.endpoint)
+    return build_response(PushOwnershipResponse(owned=owned))
 
 
 @notifications_router.get(

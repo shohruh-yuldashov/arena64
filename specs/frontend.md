@@ -2596,6 +2596,23 @@ the worker revokes it.
 `features/auth` does not import `features/notification-push`. The seam is
 the whole point.
 
+When a tab sees another account replace its own without a sign-out
+(A64-031.E5), `onAccountReplaced` unsubscribes the browser — the previous
+account's session is gone, so the row is left for the `410` to retire.
+
+When no tab saw the session end at all — it expired, or the browser was
+closed — `PushReleaseProvider` asks the backend, once per signed-in account,
+whether this browser's subscription is that account's, and unsubscribes it
+if not or if the question fails (A64-031.E6, `specs/notifications.md`
+§15.3). A browser with no subscription makes no request. Every change to the
+subscription — enable, disable, both releases and the check — runs under one
+lock, so a check cannot land between subscribing and storing. A response
+sent as an account that is no longer signed in is cancelled by the session
+interceptor, so a late answer about one account never releases the next
+account's subscription. A mounted push settings section re-reads the browser
+when the check releases, so it shows "not subscribed here" and offers enable
+rather than a stale "turn off".
+
 ### 23.6 Nothing is remembered
 
 No `localStorage`, no module cache, no "we think we are subscribed" flag.

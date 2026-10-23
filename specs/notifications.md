@@ -920,9 +920,9 @@ a subject, a body, or a provider's response — and a provider exception is
 | Logs and metrics carry no address | The metric's two labels are closed enumerations; the log lines carry a type, an outcome and counts. A provider exception is logged **without** `exc_info`, because its message can contain an address |
 | The delivery table is not exposed | No route reads it. The operator command returns counts by status and cannot name a recipient |
 | A caller cannot subscribe another account | The account comes from the session; there is no `user_id` field, and `extra="forbid"` makes supplying one a `422` |
-| A push endpoint cannot be enumerated | No method reads by an endpoint a caller supplies except the owner-scoped removal, which answers identically for an endpoint that is not theirs and one already gone |
+| A push endpoint cannot be enumerated | No method reads by an endpoint a caller supplies except two owner-scoped ones: the removal, which answers identically for an endpoint that is not theirs and one already gone, and the ownership check (A64-031.E6), whose `false` is identical for an endpoint nobody holds, one revoked and one another account holds |
 | A subscription is never returned to a client | Registration answers an id. The endpoint and both keys appear in no response, no log and no metric |
-| A previous account cannot be pushed on a shared browser | Two independent mechanisms: the endpoint upsert re-binds ownership atomically, and signing out unsubscribes the browser and revokes the row before the session ends |
+| A previous account cannot be pushed on a shared browser | Three independent mechanisms: the endpoint upsert re-binds ownership atomically; signing out unsubscribes the browser and revokes the row before the session ends; and every sign-in asks whether the browser's subscription is the new account's, unsubscribing it if not (A64-031.E6, §15.3) |
 | A push payload carries nothing private | Two identifiers. The text is a closed table compiled into the service worker; no body, name, address or token travels |
 | A push cannot navigate anywhere | Every destination is a literal path in that same table. No branch concatenates a payload value into a URL, and the worker refuses anything that does not resolve to its own origin |
 | The VAPID signing key is server-side only | `SecretStr` read at the composition root. Never a `VITE_` variable, never in a response, never logged. The **public** half is served, because a browser cannot subscribe without it |
@@ -1066,6 +1066,29 @@ unsubscribes this browser and revokes the row, through `onSessionEnding`,
 **before** the session is revoked (the removal needs it). Both halves are
 required: the upsert alone leaves A's subscription live until B opts in, and
 the sign-out alone leaves it live if A never signs out.
+
+A64-031.E6 closes that last case — A never signs out because the session
+expired or the browser was closed, so no tab saw it end. Whenever an account
+becomes signed in, the browser asks
+`POST /notifications/push/subscriptions/ownership` whether the subscription
+it holds is that account's, and unsubscribes **in the browser** if the
+answer is no:
+
+    A enables push; A's session expires, or the browser is closed
+    B signs in on the same browser
+    → the check answers "not yours", the browser unsubscribes,
+      and A's row answers 410 on its next delivery and is revoked (§17)
+
+| Decision | Why |
+| --- | --- |
+| The server decides, the browser stores nothing | A `localStorage` marker naming the subscriber would be the page's claim about itself — stale the moment the row is re-bound or revoked, and absent for every subscription made before it existed. §8's "nothing is authoritative" already applies to the browser side |
+| The check is read-only | Removing or re-binding the row would let one account switch off another's device by naming its endpoint. The browser unsubscribing is enough: the push service stops at once, and the `410` retires the row |
+| `false` says nothing about anybody else | Identical for unknown, revoked and another account's endpoints — the removal's anti-enumeration rule, applied to a read |
+| Fail closed | A failed check unsubscribes too. A missed notification on the owner's own browser is recovered by enabling push again; another account's on somebody else's screen is not. The only exception is a request cancelled because the account changed mid-flight, when the new account asks its own question |
+| One change to the subscription at a time | Enabling is subscribe-then-store; a check landing between the two would see "not yours" and unsubscribe the device being enabled. Enable, disable, both releases and the check share one Web Lock across tabs, queued within the tab where the API is missing (`apps/web/src/features/notification-push/model/exclusive.ts`) |
+
+A browser holding no subscription makes no request, and a token refresh for
+the same account does not repeat the check.
 
 ### 15.4 Delivery
 
@@ -1212,13 +1235,16 @@ Backoff is the email channel's, identical rather than a second schedule
 | `POST /notifications/push/subscriptions` | `VerifiedUser` | `push_subscription_user`, 60/hour |
 | `POST /notifications/push/subscriptions/remove` | `CurrentUser` | the same bucket |
 | `GET /notifications/push/status` | `CurrentUser` | none — one indexed read of the caller's own rows |
+| `POST /notifications/push/subscriptions/ownership` | `CurrentUser` | none — the same: one indexed read, scoped to the caller, that cannot write or enumerate |
 
 Registration requires a **verified** address (§24, aligning with
 A64-021.5H): an unverified throwaway account could otherwise accumulate
 endpoints this platform POSTs to on a schedule. Removal deliberately does
 **not** — it is the path a sign-out takes, and a person whose verification
 lapsed must still be able to stop their devices being pushed to. Removing a
-capability is never the operation to gate.
+capability is never the operation to gate. The ownership check (§15.3) is
+`CurrentUser` for the same reason: it is how a browser stops receiving
+another account's pushes.
 
 `POST .../remove` rather than `DELETE`, because the endpoint has to travel
 and both `DELETE` shapes are worse places to put a bearer capability: a URL

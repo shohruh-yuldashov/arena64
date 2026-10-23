@@ -112,6 +112,29 @@ class RemovePushSubscriptionRequest(BaseModel):
     endpoint: Annotated[str, Field(min_length=1, max_length=MAX_ENDPOINT_LENGTH)]
 
 
+class CheckPushSubscriptionRequest(BaseModel):
+    """The `POST /push/subscriptions/ownership` body — A64-031.E6.
+
+    The endpoint, in a body for the reason `RemovePushSubscriptionRequest`
+    gives: it is a bearer capability, and a path or query string lands in
+    access logs.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    endpoint: Annotated[str, Field(min_length=1, max_length=MAX_ENDPOINT_LENGTH)]
+
+
+class PushOwnershipResponse(BaseResponseDTO):
+    """Whether the browser's subscription is the caller's own.
+
+    One boolean, and `false` says nothing about why — see
+    `PushSubscriptionService.owns`.
+    """
+
+    owned: Annotated[bool, Field(examples=[True])]
+
+
 class PushSubscriptionResponse(BaseResponseDTO):
     """What registering answers.
 
@@ -171,6 +194,8 @@ class PushStatusResponse(BaseResponseDTO):
 
 
 __all__ = [
+    "CheckPushSubscriptionRequest",
+    "PushOwnershipResponse",
     "PushStatusResponse",
     "PushSubscriptionResponse",
     "RegisterPushSubscriptionRequest",

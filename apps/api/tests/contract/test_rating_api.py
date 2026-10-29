@@ -368,3 +368,40 @@ class TestRatingHistory:
             "points": [],
             "has_earlier": False,
         }
+
+
+class TestPeakRating:
+    """`peak` on `/ratings/me` — A64-033.
+
+    The stored high, not a recomputation: after a win and then a loss the
+    peak is the rating the win reached, above where the loss left it.
+    """
+
+    async def test_the_peak_is_the_stored_high_and_absent_for_an_unplayed_class(
+        self, contract_session: AsyncSession, client: AsyncClient
+    ) -> None:
+        player = await register_account(client, contract_session)
+        blitz = RatingKey(variant=ProductVariant.RUSSIAN_8X8, speed_class=SpeedClass.BLITZ)
+        rating = PlayerRating(
+            player_id=player.id,
+            key=blitz,
+            rating=Glicko2Rating(1500.0, 200.0, 0.06),
+            games_played=0,
+            last_rated_at=None,
+        )
+        repository = SqlAlchemyPlayerRatingRepository(contract_session)
+        for index, score in enumerate([MatchOutcomeScore.win(), MatchOutcomeScore.loss()]):
+            rating, adjustment = rating.applied(
+                opponent=Glicko2Rating(1500.0, 200.0, 0.06),
+                score=score,
+                match_id=_player(820_000 + index),
+                at=NOW + timedelta(hours=index),
+            )
+            await repository.save(rating, adjustment)
+        await contract_session.commit()
+
+        response = await client.get("/api/v1/ratings/me", headers=player.auth)
+
+        by_class = {row["speed_class"]: row for row in response.json()["data"]["ratings"]}
+        assert by_class["blitz"]["peak"] > by_class["blitz"]["rating"]
+        assert by_class["rapid"]["peak"] is None

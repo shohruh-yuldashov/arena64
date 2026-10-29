@@ -280,6 +280,7 @@ def _to_snapshot(row: PlayerRatingModel) -> RatingSnapshot:
         volatility=row.rating_volatility,
         games_played=row.games_played,
         is_provisional=_to_domain(row).is_provisional,
+        peak=row.peak_value,
     )
 
 

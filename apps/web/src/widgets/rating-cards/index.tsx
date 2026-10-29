@@ -77,6 +77,19 @@ export function RatingCards({ ratings }: { ratings: PlayerRating[] }) {
                           locale,
                         )}`}
                     </span>
+                    {/* The stored high for this class — A64-033. `rating`
+                        keeps it on every rated match; A64-032 removed the
+                        statistics' "Highest rating", which nothing wrote and
+                        so read 1500 for everybody. Shown only when the
+                        server sends one, never derived from the figure
+                        above. */}
+                    {rating.peak != null && (
+                      <span className="text-muted-foreground text-xs">
+                        {t("profile.ratings.peak", {
+                          rating: formatNumber(Math.round(rating.peak), locale),
+                        })}
+                      </span>
+                    )}
                   </CardContent>
                 </Card>
               </li>

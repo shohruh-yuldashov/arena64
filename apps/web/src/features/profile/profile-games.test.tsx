@@ -398,3 +398,61 @@ describe("statistics", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("each class's highest rating — A64-033", () => {
+  function withRatings(ratings: Record<string, unknown>[]) {
+    signedIn();
+    mswServer.use(
+      http.get(url("/profile/me"), () =>
+        HttpResponse.json(
+          envelope({
+            id: ME_ID,
+            username: "me",
+            display_name: "Me",
+            bio: null,
+            country: null,
+            avatar_url: null,
+            thumbnail_url: null,
+            joined_at: "2026-01-15T10:00:00Z",
+            is_online: true,
+            last_seen: null,
+            statistics: STATISTICS,
+          }),
+        ),
+      ),
+      http.get(url("/ratings/me"), () =>
+        HttpResponse.json(envelope({ player_id: ME_ID, ratings })),
+      ),
+      http.get(url(`/players/${ME_ID}/matches`), () =>
+        HttpResponse.json(envelope({ entries: [], next_cursor: null })),
+      ),
+      http.get(url("/ratings/me/history"), () =>
+        HttpResponse.json(
+          envelope({
+            variant: "russian_8x8",
+            speed_class: "blitz",
+            points: [],
+            has_earlier: false,
+          }),
+        ),
+      ),
+    );
+  }
+
+  it("shows the stored high on the class's card", async () => {
+    withRatings([{ ...rating("blitz", 30, 1612.6), peak: 1650.4 }]);
+    renderApp({ path: "/profile" });
+
+    const ratingsSection = await screen.findByRole("region", { name: "Ratings" });
+    expect(await within(ratingsSection).findByText("Highest: 1,650")).toBeInTheDocument();
+  });
+
+  it("says nothing about a high the server does not have", async () => {
+    withRatings([{ ...rating("blitz", 30, 1612.6), peak: null }]);
+    renderApp({ path: "/profile" });
+
+    const ratingsSection = await screen.findByRole("region", { name: "Ratings" });
+    await within(ratingsSection).findByText("1,613");
+    expect(within(ratingsSection).queryByText(/Highest/)).toBeNull();
+  });
+});

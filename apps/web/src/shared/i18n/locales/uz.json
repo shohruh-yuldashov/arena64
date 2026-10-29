@@ -239,6 +239,7 @@
       "provisional": "Dastlabki",
       "games": "{count} o'yin",
       "deviation": "Aniqlik oralig'i",
+      "peak": "Eng yuqori: {rating}",
       "unrated": "Hali reyting yo'q",
       "classic": "Klassik",
       "rapid": "Tezkor",

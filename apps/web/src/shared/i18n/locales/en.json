@@ -239,6 +239,7 @@
       "provisional": "Provisional",
       "games": "{count} games",
       "deviation": "Confidence range",
+      "peak": "Highest: {rating}",
       "unrated": "Not rated yet",
       "classic": "Classical",
       "rapid": "Rapid",

@@ -130,9 +130,14 @@ class MatchRatingChangeResponse(BaseModel):
 class MatchHistoryEntryResponse(BaseModel):
     """One finished match, as a list renders it.
 
-    `opponent_id` is present only when the viewer played — it is the field
-    that makes a personal history readable, and it is meaningless when a
-    stranger reads somebody else's record.
+    `opponent_id` and `opponent` are read from the seat of the player whose
+    history this is — A64-032. They were the *viewer's* opponent, which made
+    a personal history readable and left every row of somebody else's
+    record with no opponent at all, so a profile listing a player's recent
+    games could only say "unknown" down the column. Both seat ids were
+    already on the row and the names come from the same privacy-gated
+    profile read, so reading from the owner's seat discloses nothing new;
+    for a player reading their own history the two seats are the same.
     """
 
     match_id: UUID
@@ -149,7 +154,8 @@ class MatchHistoryEntryResponse(BaseModel):
     light_player_id: UUID
     dark_player_id: UUID
     opponent_id: UUID | None = Field(
-        default=None, description="The other player, when the viewer is a participant."
+        default=None,
+        description="The other player, from the seat of the player whose history this is.",
     )
 
     outcome: str | None
@@ -160,9 +166,9 @@ class MatchHistoryEntryResponse(BaseModel):
     opponent: ReplaySeatResponse | None = Field(
         default=None,
         description=(
-            "The other player's public identity, when the viewer is a participant. "
-            "Composed from `users`' privacy-gated read; `null` for a deactivated "
-            "account or when the viewer did not play."
+            "The other player's public identity, from the seat of the player whose "
+            "history this is. Composed from `users`' privacy-gated read; `null` for a "
+            "deactivated account."
         ),
     )
 
@@ -190,11 +196,11 @@ class MatchHistoryEntryResponse(BaseModel):
         cls,
         entry: MatchHistoryEntry,
         *,
-        viewer_id: UUID,
+        player_id: UUID,
         profiles: Mapping[UUID, PublicUserProfile] | None = None,
         ratings: Mapping[UUID, RatingChange] | None = None,
     ) -> "MatchHistoryEntryResponse":
-        opponent = _opponent_of(entry, viewer_id)
+        opponent = _opponent_of(entry, player_id)
         seen = profiles or {}
         change = (ratings or {}).get(entry.match_id)
         return cls(
@@ -269,14 +275,14 @@ class MatchHistoryResponse(BaseModel):
         cls,
         page: MatchHistoryPage,
         *,
-        viewer_id: UUID,
+        player_id: UUID,
         profiles: Mapping[UUID, PublicUserProfile] | None = None,
         ratings: Mapping[UUID, RatingChange] | None = None,
     ) -> "MatchHistoryResponse":
         return cls(
             entries=[
                 MatchHistoryEntryResponse.of(
-                    entry, viewer_id=viewer_id, profiles=profiles, ratings=ratings
+                    entry, player_id=player_id, profiles=profiles, ratings=ratings
                 )
                 for entry in page.entries
             ],
@@ -295,20 +301,19 @@ class MatchHistoryResponse(BaseModel):
         return [entry.match_id for entry in page.entries if entry.rated]
 
     @staticmethod
-    def opponents_in(page: MatchHistoryPage, *, viewer_id: UUID) -> list[UUID]:
+    def opponents_in(page: MatchHistoryPage, *, player_id: UUID) -> list[UUID]:
         """Every opponent on this page, deduplicated — A64-020.5F §17.
 
         Here rather than in the route so the composition and the rendering
-        agree on *which* ids matter: `_opponent_of` decides that a stranger
-        reading somebody else's record has no "opponent" at all, and a route
-        collecting both seats would fetch profiles the response then
-        discards.
+        agree on *which* ids matter: `_opponent_of` reads from the history
+        owner's seat, and a route collecting both seats would fetch the
+        owner's own profile, which the response then discards.
 
         Deduplicated because a history page is very often the same two
         players — one batched lookup of two ids rather than twenty.
         """
         wanted = {
-            found for entry in page.entries if (found := _opponent_of(entry, viewer_id)) is not None
+            found for entry in page.entries if (found := _opponent_of(entry, player_id)) is not None
         }
         return sorted(wanted)
 
@@ -415,10 +420,10 @@ class MatchReplayResponse(BaseModel):
         )
 
 
-def _opponent_of(entry: MatchHistoryEntry, viewer_id: UUID) -> UUID | None:
-    if viewer_id == entry.light_player_id:
+def _opponent_of(entry: MatchHistoryEntry, player_id: UUID) -> UUID | None:
+    if player_id == entry.light_player_id:
         return entry.dark_player_id
-    if viewer_id == entry.dark_player_id:
+    if player_id == entry.dark_player_id:
         return entry.light_player_id
     return None
 

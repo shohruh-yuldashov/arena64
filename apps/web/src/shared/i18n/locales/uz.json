@@ -228,9 +228,9 @@
       "losses": "Mag'lubiyatlar",
       "draws": "Duranglar",
       "winRate": "G'alaba ulushi",
+      "winRateHint": "G'alaba ulushi — g'alabalar o'ynalgan o'yinlar soniga bo'lingani, shuning uchun duranglar ham o'yin hisoblanadi.",
       "noGames": "Hali o'yin yo'q",
       "bestWinStreak": "Eng uzun g'alaba seriyasi",
-      "highestRating": "Eng yuqori reyting",
       "hidden": "Statistika yashirilgan"
     },
     "ratings": {
@@ -239,6 +239,7 @@
       "provisional": "Dastlabki",
       "games": "{count} o'yin",
       "deviation": "Aniqlik oralig'i",
+      "peak": "Eng yuqori: {rating}",
       "unrated": "Hali reyting yo'q",
       "classic": "Klassik",
       "rapid": "Tezkor",
@@ -255,20 +256,47 @@
       "error": "Turnirlar tarixini yuklab bo'lmadi.",
       "loadingLabel": "Turnirlar tarixi yuklanmoqda…"
     },
+    "recentGames": {
+      "title": "So'nggi o'yinlar",
+      "viewAll": "Barcha o'yinlar",
+      "loadingLabel": "So'nggi o'yinlar yuklanmoqda…",
+      "error": "So'nggi o'yinlarni yuklab bo'lmadi.",
+      "empty": "Hali tugagan o'yinlar yo'q"
+    },
+    "ratingProgress": {
+      "title": "Reyting o'zgarishi",
+      "speedClass": "Vaqt nazorati",
+      "none": "Hali reytingli o'yinlar yo'q",
+      "loadingLabel": "Reyting o'zgarishi yuklanmoqda…",
+      "error": "Reyting o'zgarishini yuklab bo'lmadi.",
+      "start": "Ko'rsatilgan birinchi o'yindan oldin",
+      "chartLabel": "{speed} reytingi: {from} → {to}, reytingli o'yinlar: {games} ta",
+      "lastGames": "So'nggi {games} ta reytingli o'yin",
+      "allGames": "Barcha {games} ta reytingli o'yin",
+      "showTable": "Jadval ko'rinishida",
+      "colDate": "Sana",
+      "colRating": "Reyting",
+      "colChange": "O'zgarish"
+    },
     "edit": {
       "title": "Profilni tahrirlash",
       "subtitle": "Bu ma'lumotlar ommaviy profilingizda ko'rinadi.",
       "displayName": "Ko'rsatiladigan ism",
       "bio": "O'zingiz haqingizda",
-      "country": "Mamlakat kodi",
-      "countryHint": "Ikki harfli kod, masalan UZ",
+      "country": "Mamlakat",
+      "countryHint": "Ommaviy profilingizda bayrog'i bilan ko'rsatiladi. Interfeys tiliga ta'sir qilmaydi.",
+      "countryNone": "Tanlanmagan",
+      "countrySearch": "Mamlakatni qidirish",
+      "countryRemove": "Mamlakatni olib tashlash",
+      "countryNoMatch": "«{query}» bo'yicha mamlakat topilmadi",
+      "countryUnknown": "«{code}» — noma'lum mamlakat kodi. Ro'yxatdan mamlakat tanlang yoki uni olib tashlang.",
       "bioHint": "Ko'pi bilan {max} ta belgi",
       "save": "Saqlash",
       "saved": "Saqlandi",
       "noChanges": "O'zgarish yo'q",
       "displayNameTooLong": "Ko'pi bilan {max} ta belgi",
       "bioTooLong": "Ko'pi bilan {max} ta belgi",
-      "countryInvalid": "Ikki harfli mamlakat kodi kiriting"
+      "countryInvalid": "Ro'yxatdan mamlakat tanlang"
     },
     "avatar": {
       "title": "Rasm",
@@ -382,7 +410,7 @@
       "notFoundTitle": "O'yinchi topilmadi",
       "notFoundBody": "Bunday foydalanuvchi nomi mavjud emas yoki o'zgartirilgan.",
       "backHome": "Bosh sahifaga",
-      "signedInOnly": "Bu o'yinchining reytingi va turnirlarini ko'rish uchun kiring"
+      "signedInOnly": "Bu o'yinchining reytingi, so'nggi o'yinlari va turnirlarini ko'rish uchun kiring"
     },
     "errors": {
       "not_found": "Topilmadi.",
@@ -769,6 +797,7 @@
     "versus": "{opponent} bilan",
     "unknownOpponent": "Noma'lum o'yinchi",
     "replayOf": "{opponent} bilan o'yinni takrorlash",
+    "ratingChange": "Reyting {change}, hozir {rating}",
     "loadMore": "Yana yuklash",
     "loadingMore": "Yuklanmoqda…",
     "end": "Barcha o'yinlar shu.",
@@ -944,6 +973,40 @@
     "unknownPlayer": "Noma'lum o'yinchi",
     "listError": "Turnirlarni yuklab bo'lmadi.",
     "deadlineOpenRelative": "Ro'yxat {when} yopiladi"
+  },
+  "leaderboard": {
+    "nav": "Peshqadamlar",
+    "title": "Peshqadamlar jadvali",
+    "subtitle": "Har bir vaqt nazoratida eng yuqori reytingli o'yinchilar — butun dunyo yoki mamlakat bo'yicha.",
+    "speedClass": "Vaqt nazorati",
+    "country": "Mamlakat",
+    "allCountries": "Barcha mamlakatlar",
+    "rank": "O'rin",
+    "player": "O'yinchi",
+    "games": "O'yinlar",
+    "gamesCount": "{count} ta o'yin",
+    "rating": "Reyting",
+    "you": "Siz",
+    "caption": "Peshqadamlar jadvali ({speed}) — {country}",
+    "loading": "Peshqadamlar jadvali yuklanmoqda…",
+    "error": "Peshqadamlar jadvalini yuklab bo'lmadi.",
+    "empty": "Bu vaqt nazoratida hali hech kim reytingda yo'q",
+    "emptyCountry": "{country}: bu vaqt nazoratida hali hech kim reytingda yo'q",
+    "emptyHint": "Bu yerga reytingli o'yinlar orqali chiqiladi. Mamlakat jadvaliga faqat profilida shu mamlakatni ko'rsatgan o'yinchilar kiradi.",
+    "searching": "Jadvalning pastroq qismidan qidirilmoqda…",
+    "end": "Bu jadvaldagi barcha o'yinchilar shu.",
+    "standing": {
+      "title": "Sizning o'rningiz",
+      "ranked": "{rank}-o'rin",
+      "beyond": "O'rinlar hisoblanadigan chegaradan pastda",
+      "notListed": "Siz bu jadvalda yo'qsiz",
+      "notListedCountry": "Siz bu jadvalda yo'qsiz — profilingizda {country} ko'rsatilmagan",
+      "unrated": "Hali {speed} reytingi yo'q",
+      "play": "Reytingli o'yin o'ynash"
+    },
+    "loadMore": "Yana yuklash",
+    "loadingMore": "Yuklanmoqda…",
+    "provisional": "Dastlabki"
   },
   "pwa": {
     "region": "Ilova bildirishnomalari",

@@ -70,6 +70,14 @@ class RatingSnapshot:
     """PR-6's mark, computed by `rating` rather than by each consumer — see
     this module's docstring on why the threshold does not travel."""
 
+    peak: float | None = None
+    """The highest value this rating has held — A64-033.
+
+    `PlayerRating` keeps it on every applied match, and two check
+    constraints hold it at or above the present value. `None` for a key
+    never played, which is a real answer rather than a gap: there is no
+    peak before a first rating."""
+
     @classmethod
     def unrated(cls) -> "RatingSnapshot":
         """What a player who has never played this key rates at.

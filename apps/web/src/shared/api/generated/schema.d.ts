@@ -3287,6 +3287,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ratings/me/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your own rating over time
+         * @description The caller's rated matches in one key, oldest first — A64-032.
+         *
+         *     **Yours only, and only through the token.** There is no `player_id`
+         *     anywhere on this route. A rating's current value is public; what each
+         *     match did to it is served elsewhere only to the player it happened to
+         *     (`GET /players/{id}/matches` gives the change on your own history and
+         *     `null` on anybody else's), and this route keeps that boundary rather
+         *     than widening it.
+         *
+         *     Every point is a stored adjustment — nothing is interpolated, smoothed
+         *     or reconstructed. A key never played is an empty list, not a `404`.
+         */
+        get: operations["my_rating_history_api_v1_ratings_me_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/players/{player_id}/ratings": {
         parameters: {
             query?: never;
@@ -3363,6 +3393,46 @@ export interface paths {
          *     everybody, a *ranking* only for those who have one stored.
          */
         get: operations["leaderboard_around_api_v1_leaderboard_around__player_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leaderboard/players": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The leaderboard, with players' public names
+         * @description Eligible players, best first, ranked among themselves.
+         */
+        get: operations["leaderboard_players_api_v1_leaderboard_players_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leaderboard/players/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your own place on the leaderboard
+         * @description The caller's place — the player comes from the token, never the request.
+         */
+        get: operations["my_leaderboard_standing_api_v1_leaderboard_players_me_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4772,9 +4842,19 @@ export interface components {
             data: components["schemas"]["LeaderboardNeighbourhoodResponse"];
             meta: components["schemas"]["ResponseMeta"];
         };
+        /** ApiResponse[LeaderboardPlayersResponse] */
+        ApiResponse_LeaderboardPlayersResponse_: {
+            data: components["schemas"]["LeaderboardPlayersResponse"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
         /** ApiResponse[LeaderboardResponse] */
         ApiResponse_LeaderboardResponse_: {
             data: components["schemas"]["LeaderboardResponse"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        /** ApiResponse[LeaderboardStandingResponse] */
+        ApiResponse_LeaderboardStandingResponse_: {
+            data: components["schemas"]["LeaderboardStandingResponse"];
             meta: components["schemas"]["ResponseMeta"];
         };
         /** ApiResponse[LivenessResponse] */
@@ -4870,6 +4950,11 @@ export interface components {
         /** ApiResponse[QueueTicketResponse] */
         ApiResponse_QueueTicketResponse_: {
             data: components["schemas"]["QueueTicketResponse"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        /** ApiResponse[RatingHistoryResponse] */
+        ApiResponse_RatingHistoryResponse_: {
+            data: components["schemas"]["RatingHistoryResponse"];
             meta: components["schemas"]["ResponseMeta"];
         };
         /** ApiResponse[ReadinessResponse] */
@@ -6426,6 +6511,53 @@ export interface components {
              */
             below: components["schemas"]["LeaderboardEntryResponse"][];
         };
+        /** LeaderboardPlayerResponse */
+        LeaderboardPlayerResponse: {
+            /**
+             * Rank
+             * @description Position among the players this ladder shows. Unique.
+             */
+            rank: number;
+            /**
+             * Player Id
+             * Format: uuid
+             */
+            player_id: string;
+            /** Username */
+            username: string;
+            /** Display Name */
+            display_name: string | null;
+            /**
+             * Country
+             * @description ISO 3166-1 alpha-2, or `null` when unset **or hidden by its owner**.
+             */
+            country: string | null;
+            /** Rating */
+            rating: number;
+            /** Games Played */
+            games_played: number;
+            /** Is Provisional */
+            is_provisional: boolean;
+        };
+        /** LeaderboardPlayersResponse */
+        LeaderboardPlayersResponse: {
+            /** Variant */
+            variant: string;
+            /** Speed Class */
+            speed_class: string;
+            /**
+             * Country
+             * @description The filter applied; `null` for the global ladder.
+             */
+            country: string | null;
+            /** Players */
+            players: components["schemas"]["LeaderboardPlayerResponse"][];
+            /**
+             * Next Cursor
+             * @description Opaque. `null` once the ladder is exhausted. A page shorter than `limit` that still carries a cursor stopped at the scan budget: more players may follow.
+             */
+            next_cursor?: string | null;
+        };
         /**
          * LeaderboardResponse
          * @description One page of one key's ladder, best first.
@@ -6442,6 +6574,28 @@ export interface components {
              * @description Opaque; send it back unread for the next page.
              */
             next_cursor?: string | null;
+        };
+        /**
+         * LeaderboardStandingResponse
+         * @description The caller's own place. Only ever about the caller.
+         */
+        LeaderboardStandingResponse: {
+            /** Variant */
+            variant: string;
+            /** Speed Class */
+            speed_class: string;
+            /** Country */
+            country: string | null;
+            /** @description `ranked`: at `rank`. `beyond`: on this ladder, further down than an exact rank is counted. `not_listed`: rated, but not shown on this ladder. `unrated`: no rating in this speed class. */
+            status: components["schemas"]["StandingStatus"];
+            /** Rank */
+            rank: number | null;
+            /** Rating */
+            rating: number | null;
+            /** Games Played */
+            games_played: number | null;
+            /** Is Provisional */
+            is_provisional: boolean | null;
         };
         /** LivenessResponse */
         LivenessResponse: {
@@ -6564,9 +6718,14 @@ export interface components {
          * MatchHistoryEntryResponse
          * @description One finished match, as a list renders it.
          *
-         *     `opponent_id` is present only when the viewer played — it is the field
-         *     that makes a personal history readable, and it is meaningless when a
-         *     stranger reads somebody else's record.
+         *     `opponent_id` and `opponent` are read from the seat of the player whose
+         *     history this is — A64-032. They were the *viewer's* opponent, which made
+         *     a personal history readable and left every row of somebody else's
+         *     record with no opponent at all, so a profile listing a player's recent
+         *     games could only say "unknown" down the column. Both seat ids were
+         *     already on the row and the names come from the same privacy-gated
+         *     profile read, so reading from the owner's seat discloses nothing new;
+         *     for a player reading their own history the two seats are the same.
          */
         MatchHistoryEntryResponse: {
             /**
@@ -6600,7 +6759,7 @@ export interface components {
             dark_player_id: string;
             /**
              * Opponent Id
-             * @description The other player, when the viewer is a participant.
+             * @description The other player, from the seat of the player whose history this is.
              */
             opponent_id?: string | null;
             /** Outcome */
@@ -6611,7 +6770,7 @@ export interface components {
             winner: string | null;
             /** Ply Number */
             ply_number: number;
-            /** @description The other player's public identity, when the viewer is a participant. Composed from `users`' privacy-gated read; `null` for a deactivated account or when the viewer did not play. */
+            /** @description The other player's public identity, from the seat of the player whose history this is. Composed from `users`' privacy-gated read; `null` for a deactivated account. */
             opponent?: components["schemas"]["ReplaySeatResponse"] | null;
             /** @description How much time each side had. `null` for an untimed match. */
             time_control?: components["schemas"]["ReplayTimeControlResponse"] | null;
@@ -8156,6 +8315,46 @@ export interface components {
          * @enum {string}
          */
         QueueType: "ranked" | "casual";
+        /** RatingHistoryPointResponse */
+        RatingHistoryPointResponse: {
+            /**
+             * Match Id
+             * Format: uuid
+             */
+            match_id: string;
+            /**
+             * At
+             * Format: date-time
+             * @description When the adjustment was applied.
+             */
+            at: string;
+            /** Before */
+            before: number;
+            /** After */
+            after: number;
+            /**
+             * Delta
+             * @description `after - before`, computed once, on the server.
+             */
+            delta: number;
+        };
+        /**
+         * RatingHistoryResponse
+         * @description One key's adjustments, oldest first, capped at the most recent `limit`.
+         */
+        RatingHistoryResponse: {
+            /** Variant */
+            variant: string;
+            /** Speed Class */
+            speed_class: string;
+            /** Points */
+            points: components["schemas"]["RatingHistoryPointResponse"][];
+            /**
+             * Has Earlier
+             * @description Older adjustments exist beyond the limit, so the first point is not the first game.
+             */
+            has_earlier: boolean;
+        };
         /**
          * RatingsResponse
          * @description Every rating category a public profile reports.
@@ -8804,6 +9003,11 @@ export interface components {
             eliminated_by_player_id?: string | null;
         };
         /**
+         * StandingStatus
+         * @enum {string}
+         */
+        StandingStatus: "ranked" | "beyond" | "not_listed" | "unrated";
+        /**
          * StandingsResponse
          * @description A completed tournament's placement, in published order.
          *
@@ -8879,13 +9083,13 @@ export interface components {
             win_rate: number;
             /**
              * Current Rating
-             * @description The player's headline rating. **Read it together with the `ratings` block**, which reports the same player per speed category and marks a provisional rating as provisional; this single number carries no such marker yet because nothing computes it. Both start at 1500 for a player who has never played.
+             * @description **Not yet computed — use the `ratings` block instead.** Intended as the player's headline rating, but nothing writes it (`specs/statistics.md` §6, §8), so it reads 1500 for everybody. The `ratings` block reports the real rating per speed category and marks a provisional one as provisional.
              * @example 1500
              */
             current_rating: number;
             /**
              * Highest Rating
-             * @description The highest rating this player has ever held. Never below `current_rating`. Equal to it for a player who has never played.
+             * @description **Not yet computed — do not display it.** Intended as the highest rating this player has ever held, but nothing writes it: it is `rating`'s fact and no projection carries it here yet (`specs/statistics.md` §6, §8), so it reads 1500 for everybody. The real per-speed-class peak is kept by `rating` and is not yet published. Never below `current_rating`.
              * @example 1500
              */
             highest_rating: number;
@@ -9420,6 +9624,11 @@ export interface components {
              * @description Fewer rated games than the threshold. Shown, never hidden.
              */
             is_provisional: boolean;
+            /**
+             * Peak
+             * @description The highest this rating has been, as stored on every rated match. `null` for a speed class never played.
+             */
+            peak?: number | null;
         };
     };
     responses: never;
@@ -13782,6 +13991,42 @@ export interface operations {
             };
         };
     };
+    my_rating_history_api_v1_ratings_me_history_get: {
+        parameters: {
+            query?: {
+                /** @description Which rule set. */
+                variant?: components["schemas"]["ProductVariant"];
+                /** @description Which speed class. */
+                speed_class?: components["schemas"]["SpeedClass"];
+                /** @description Most recent points to return. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_RatingHistoryResponse_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     player_ratings_api_v1_players__player_id__ratings_get: {
         parameters: {
             query?: {
@@ -13888,6 +14133,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    leaderboard_players_api_v1_leaderboard_players_get: {
+        parameters: {
+            query?: {
+                /** @description Which rule set. */
+                variant?: components["schemas"]["ProductVariant"];
+                /** @description Which speed class. */
+                speed_class?: components["schemas"]["SpeedClass"];
+                /** @description ISO 3166-1 alpha-2. Omit for the global ladder. */
+                country?: string | null;
+                /** @description An opaque cursor. */
+                after?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_LeaderboardPlayersResponse_"];
+                };
+            };
+            /** @description The pagination cursor is not valid */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    my_leaderboard_standing_api_v1_leaderboard_players_me_get: {
+        parameters: {
+            query?: {
+                /** @description Which rule set. */
+                variant?: components["schemas"]["ProductVariant"];
+                /** @description Which speed class. */
+                speed_class?: components["schemas"]["SpeedClass"];
+                /** @description ISO 3166-1 alpha-2. Omit for the global ladder. */
+                country?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_LeaderboardStandingResponse_"];
                 };
             };
             /** @description Validation Error */

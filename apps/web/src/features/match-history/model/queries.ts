@@ -1,4 +1,4 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { isAuthenticated } from "@/entities/session";
 import { useSession } from "@/features/auth/model/session-provider";
@@ -54,6 +54,28 @@ export function useMatchHistory(playerId: string | null) {
     // true. What *can* change is that a new match joined the front of the
     // list — which a focus refetch would catch, and which the game's own
     // completion already invalidates (§25).
+    staleTime: 30_000,
+  });
+}
+
+/** How many matches a profile lists — A64-032. The rest is `/games/history`. */
+export const RECENT_MATCHES = 5;
+
+/**
+ * A player's last few finished matches, for a profile — A64-032.
+ *
+ * One page and no cursor: a profile shows a glimpse, and walking the whole
+ * record is the history page's job. Rated matches are public and casual
+ * ones reach only a participant; the server decides which, so nothing here
+ * filters.
+ */
+export function useRecentMatches(playerId: string | undefined) {
+  const { state } = useSession();
+
+  return useQuery({
+    queryKey: matchHistoryKeys.recent(playerId ?? "none"),
+    queryFn: () => readMatchHistory(playerId as string, { limit: RECENT_MATCHES }),
+    enabled: isAuthenticated(state) && playerId !== undefined,
     staleTime: 30_000,
   });
 }

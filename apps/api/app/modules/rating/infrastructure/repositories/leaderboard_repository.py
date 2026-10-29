@@ -59,6 +59,20 @@ DEFAULT_SPAN: Final = 5
 MAX_SPAN: Final = 25
 
 
+#: A frozen rating is not ranked — A64-033, resolving SPEC-LEADERBOARD OQ-3.
+#:
+#: A freeze is the fair-play hold (SPEC-RATING §13): the rating is under
+#: investigation. Publishing a position for it would put a disputed number
+#: on a public ladder, and taking it down later says more than never showing
+#: it. Conservative, and flagged for product review. Nothing sets the flag
+#: yet, so this decides the policy before it can matter.
+#:
+#: In every statement — the page, the player's own row, the count that is
+#: their rank and both neighbour scans — so a page and a rank cannot
+#: disagree about who is on the ladder.
+_ON_THE_LADDER = PlayerRatingModel.is_frozen.is_(False)
+
+
 class SqlAlchemyLeaderboardReader:
     """`LeaderboardReader` over one session."""
 
@@ -80,6 +94,7 @@ class SqlAlchemyLeaderboardReader:
             .where(
                 PlayerRatingModel.variant == key.variant,
                 PlayerRatingModel.speed_class == key.speed_class,
+                _ON_THE_LADDER,
             )
             .order_by(
                 PlayerRatingModel.rating_value.desc(),
@@ -149,6 +164,7 @@ class SqlAlchemyLeaderboardReader:
                 PlayerRatingModel.player_id == player_id,
                 PlayerRatingModel.variant == key.variant,
                 PlayerRatingModel.speed_class == key.speed_class,
+                _ON_THE_LADDER,
             )
         )
         if own is None:
@@ -164,6 +180,7 @@ class SqlAlchemyLeaderboardReader:
             .where(
                 PlayerRatingModel.variant == key.variant,
                 PlayerRatingModel.speed_class == key.speed_class,
+                _ON_THE_LADDER,
                 _sorts_above(entry),
             )
         )
@@ -174,6 +191,7 @@ class SqlAlchemyLeaderboardReader:
                 .where(
                     PlayerRatingModel.variant == key.variant,
                     PlayerRatingModel.speed_class == key.speed_class,
+                    _ON_THE_LADDER,
                     _sorts_below(entry),
                 )
                 .order_by(
@@ -190,6 +208,7 @@ class SqlAlchemyLeaderboardReader:
                 .where(
                     PlayerRatingModel.variant == key.variant,
                     PlayerRatingModel.speed_class == key.speed_class,
+                    _ON_THE_LADDER,
                     _sorts_above(entry),
                 )
                 # **Ascending**, so `LIMIT` takes the rows *nearest* this

@@ -47,6 +47,7 @@ from app.modules.game.presentation.router import history_router, replay_router
 from app.modules.matchmaking.presentation.challenge_router import challenges_router
 from app.modules.matchmaking.presentation.router import matchmaking_router
 from app.modules.notifications.presentation.router import notifications_router
+from app.modules.profiles.presentation.leaderboard_router import leaderboard_players_router
 from app.modules.profiles.presentation.router import profiles_router
 from app.modules.profiles.presentation.search_router import user_search_router
 from app.modules.profiles.presentation.self_router import my_profile_router
@@ -150,6 +151,10 @@ v1_router.include_router(replay_router)
 # no path a caller can send matches two of these.
 v1_router.include_router(ratings_router)
 v1_router.include_router(leaderboard_router)
+# A64-033 — the same ladder, composed with players' public names.
+# `/leaderboard/players[/me]` and `/leaderboard/around/{id}` differ in their
+# second segment, so neither can swallow the other whatever the order.
+v1_router.include_router(leaderboard_players_router)
 
 # A64-019.6. Two prefixes, and registration order is immaterial for both:
 # `/tournaments/{id}`, `/tournaments/{id}/bracket` and

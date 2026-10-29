@@ -14,12 +14,14 @@ Skipped, not failed, when PostgreSQL is unreachable.
 from datetime import UTC, datetime
 from uuid import UUID
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.game.public import ProductVariant
 from app.modules.rating.domain.glicko2 import Glicko2Rating, MatchOutcomeScore
 from app.modules.rating.domain.keys import RatingKey, SpeedClass
 from app.modules.rating.domain.player_rating import PROVISIONAL_GAMES_THRESHOLD, PlayerRating
+from app.modules.rating.infrastructure.models import PlayerRatingModel
 from app.modules.rating.infrastructure.repositories.leaderboard_repository import (
     SqlAlchemyLeaderboardReader,
 )
@@ -213,3 +215,32 @@ class TestProjectionConsistency:
         await repository.save(promoted, adjustment)
 
         assert (await reader.page(KEY)).entries[0].player_id == _player(2)
+
+
+class TestFrozenRatings:
+    async def test_a_frozen_rating_has_no_place_on_the_ladder(
+        self, contract_session: AsyncSession
+    ) -> None:
+        """A64-033 — SPEC-LEADERBOARD OQ-3, resolved conservatively.
+
+        A frozen rating is under investigation. It is absent from a page,
+        it has no position of its own, and it does not push anybody else
+        down: the rank below it is computed as if it were not there.
+        """
+        frozen, below = _player(1), _player(2)
+        await _store(contract_session, frozen, rating=1900.0)
+        await _store(contract_session, below, rating=1800.0)
+        await contract_session.execute(
+            update(PlayerRatingModel)
+            .where(PlayerRatingModel.player_id == frozen)
+            .values(is_frozen=True)
+        )
+        reader = SqlAlchemyLeaderboardReader(contract_session)
+
+        page = await reader.page(KEY)
+        assert [entry.player_id for entry in page.entries] == [below]
+        assert await reader.around(frozen, key=KEY) is None
+        neighbourhood = await reader.around(below, key=KEY)
+        assert neighbourhood is not None
+        assert neighbourhood.rank == 1
+        assert neighbourhood.above == []

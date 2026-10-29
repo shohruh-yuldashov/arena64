@@ -6,7 +6,7 @@
 | **Status** | Approved |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-05 |
+| **Last updated** | 2026-10-29 — A64-033, names, countries and your place (§9) |
 | **Related ADRs** | [`ADR-001`](../docs/07-decisions/ADR-001-glicko2-incremental.md) |
 | **Related specs** | [`rating.md`](./rating.md) |
 
@@ -21,7 +21,8 @@ paginated by cursor, and read directly from `rating.player_rating`.
 
 | In | Out |
 | --- | --- |
-| One global ladder per key | Regional ladders |
+| One global ladder per key | Seasonal and friends-scoped ladders |
+| Country ladders, composed — §9 (A64-033) | |
 | Cursor pagination | Seasonal ladders and resets |
 | Provisional players, marked | A minimum-games threshold |
 | Read-only access | Any write, rebuild or invalidation surface |
@@ -153,6 +154,88 @@ per `around` whatever the span.
 
 | # | Question | Blocked work |
 | --- | --- | --- |
-| OQ-1 | Are regional or friends-scoped ladders wanted? (`domain-model.md` Q-18) | Any scope beyond global |
+| OQ-1 | ~~Are regional or friends-scoped ladders wanted?~~ **Country ladders shipped in A64-033 (§9).** Friends-scoped ladders remain open (`domain-model.md` Q-18) | Friends-scoped ladders |
 | OQ-2 | Do seasons reset standings? | Seasonal ladders — `specs/rating.md` OQ-3 |
-| OQ-3 | Should a frozen rating appear on the ladder? | Today it does; whether a player under investigation should be publicly ranked is a product call |
+| OQ-3 | ~~Should a frozen rating appear on the ladder?~~ **Decided 2026-10-29: no** — a freeze is PR-5's integrity hold (§9.2) | — |
+| OQ-4 | ~~Should a suspended account be hidden from public ladders?~~ **Decided 2026-10-29: yes** (§9.2) | — |
+
+---
+
+## 9. Names, countries and your place — A64-033
+
+§7 leaves "who are these people" to whoever renders the ladder. A64-033 renders it, in `profiles`
+— the module whose one job is what a stranger may see about a player — without changing §3–§7.
+
+| Route | Answers |
+| --- | --- |
+| `GET /api/v1/leaderboard/players` | One key's ladder with each player's handle, display name and **visible** country, ranked. `speed_class`, optional `country` (ISO 3166-1 alpha-2, either case), `after`, `limit` (default 50, max 100) |
+| `GET /api/v1/leaderboard/players/me` | The caller's own place under the same filter. The player comes from the token |
+
+`/leaderboard` and `/leaderboard/around/{id}` (§7.2) are unchanged and remain the raw ladder.
+
+### 9.1 Who is on a ladder
+
+| Rule | Source | Decision |
+| --- | --- | --- |
+| Has a rating row in the key | `rating` | Existing (§5). Unrated players are not on a ladder |
+| Provisional | `rating` | **Ranked and marked**, unchanged (§5) |
+| Rating not frozen | `rating` | **Excluded** — §9.2 |
+| Account has a public face | `users.find_public_profiles` | Deactivated and erased accounts are absent from that read by construction, so they are not ranked |
+| Not restricted now | `admin.RestrictedAccounts` | **Excluded** — §9.2 |
+| Country ladder: the *visible* country matches | `users`' public view | `users` publishes a hidden country as `null`, so a player who hides theirs — or never set one — is on the global ladder and on **no** country's. A filter cannot reveal what its owner hid |
+| Inactive for a long time | — | Stays ranked. Glicko-2 widens an absent player's deviation instead (SPEC-RATING §7.4), which already moves them down among equal ratings (§3) |
+
+Ties are §3's total order, unchanged: rating, then deviation, then player id. Ranks are positions
+among the players shown, so they are unique and close up around anybody excluded.
+
+Choosing a country selects a ladder and nothing else: it is a query parameter, never stored, and
+unrelated to the player's own country or the interface language.
+
+### 9.2 Two exclusions, decided by product on 2026-10-29
+
+A64-033 implemented both conservatively and flagged them; the product decision confirmed both.
+
+| Policy | Decision | What it rests on |
+| --- | --- | --- |
+| Suspended accounts (OQ-4) | **Excluded** from public ladders | "Restricted" in `admin.RestrictedAccounts` means an effective sanction, and `SanctionKind` has one member, `SUSPENDED`, so the two are the same set |
+| Frozen ratings (OQ-3) | **Excluded** from every ladder statement — page, own row, rank count, neighbours | The product rule is "exclude when the freeze is an anti-abuse or integrity restriction". `is_frozen` has exactly one meaning, PR-5 (`domain-model.md` §11.1): *"rating a player's wins while investigating whether those wins were assisted defeats the investigation"* — an integrity hold, set only by the future `fairplay` module. So every freeze is that case and nothing was redefined. If a second kind of freeze is ever introduced, this rule must be revisited with it |
+
+Each is enforced in one place: `rating`'s ladder query for frozen ratings, `LeaderboardService._shown` for suspensions.
+
+### 9.3 Cost, and why there is still no cache
+
+BR-4 forbids joining `rating`'s table to `users`' or `admin`'s. So the ladder is read in its own
+index order (§3) in chunks of up to 200 rows, and each chunk is checked with **two batched
+reads** — one query each, never one per row.
+
+| Read | Statements |
+| --- | --- |
+| A global page | 3 (one chunk: ladder, profiles, restrictions) |
+| A country page | 3 per chunk, at most 5 chunks: a request examines at most **1,000 ladder rows** and, if its page is not full, returns what it found with a cursor to continue |
+| Your place | `around` (4) + up to 5 chunks, only if `around` puts you within 1,000 rows of the top |
+
+No request scans a whole ladder. Measured on 50,000 rows in one key: a page is an index scan on
+`ix_player_rating__standings` reading exactly the rows returned, 0.18 ms at the top and the same
+after a deep cursor.
+
+**Ranks are not counted.** The opaque cursor carries how many players the walk has ranked, so the
+next page numbers on — exact for any walk from the top, which is the only way a keyset ladder is
+entered, and free.
+
+**Your place is exact within the budget.** Further down it is reported as `beyond` with the
+player's own rating, rather than a count over every eligible row above them on every request.
+
+**Still no cache** (§6). A rating update is visible on the next read; there is nothing to
+invalidate. §6.1's escalation is unchanged and gains one entry: if country ladders over a large
+platform make the budget bite, the next step is a per-country sorted set
+(`lb:v1:<variant>:<speed_class>:<country>`) fed by `rating.updated` **and** by `users`'
+country and privacy changes — a projection with two sources, which is exactly why it is not
+built before a measurement asks for it.
+
+### 9.4 The peak
+
+`rating.player_rating.peak_value` — maintained on every applied match since the first rating
+migration and held at or above the present value by two check constraints — is published as
+`peak` on every row of `/ratings/me` and `/players/{id}/ratings`, `null` for a class never
+played. The profile shows it per class. It replaces nothing on the ladder: §3 orders by the
+present rating.

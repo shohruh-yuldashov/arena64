@@ -29,7 +29,7 @@ from fastapi import Depends
 
 from app.api.deps import DbSessionDep
 from app.modules.admin.infrastructure.repositories import SqlAlchemySanctionRepository
-from app.modules.admin.public import AccountRestrictionGate
+from app.modules.admin.public import AccountRestrictionGate, RestrictedAccounts
 
 
 def get_account_restriction_gate(session: DbSessionDep) -> AccountRestrictionGate:
@@ -44,4 +44,18 @@ def get_account_restriction_gate(session: DbSessionDep) -> AccountRestrictionGat
 
 AccountRestrictionGateDep = Annotated[AccountRestrictionGate, Depends(get_account_restriction_gate)]
 
-__all__ = ["AccountRestrictionGateDep", "get_account_restriction_gate"]
+
+def get_restricted_accounts(session: DbSessionDep) -> RestrictedAccounts:
+    """The batch form, for a listing — A64-033. Here for the same reason
+    as the gate: `profiles` may not name `admin`'s adapter."""
+    return SqlAlchemySanctionRepository(session)
+
+
+RestrictedAccountsDep = Annotated[RestrictedAccounts, Depends(get_restricted_accounts)]
+
+__all__ = [
+    "AccountRestrictionGateDep",
+    "RestrictedAccountsDep",
+    "get_account_restriction_gate",
+    "get_restricted_accounts",
+]

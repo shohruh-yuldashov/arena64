@@ -25,6 +25,8 @@ export const profileKeys = {
   /** The signed-in account. */
   me: () => [...profileKeys.all, "me"] as const,
   myRatings: () => [...profileKeys.all, "me", "ratings"] as const,
+  myRatingHistory: (speedClass: string) =>
+    [...profileKeys.all, "me", "rating-history", speedClass] as const,
   preferences: () => [...profileKeys.all, "me", "preferences"] as const,
   privacy: () => [...profileKeys.all, "me", "privacy"] as const,
 

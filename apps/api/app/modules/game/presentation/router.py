@@ -103,7 +103,10 @@ async def player_match_history(
     #
     # Deduplicated first: a history page is very often the same two players,
     # so this is usually a lookup of one or two ids rather than twenty.
-    opponents = MatchHistoryResponse.opponents_in(page, viewer_id=user.id)
+    # From the owner's seat, not the viewer's — A64-032. On a profile the
+    # viewer is usually somebody else, and "the viewer's opponent" in a
+    # match they did not play is nobody.
+    opponents = MatchHistoryResponse.opponents_in(page, player_id=player_id)
     profiles = await players.find_public_profiles(opponents) if opponents else {}
 
     # **What each rated match did to *your* rating** — A64-023 §1, §4.
@@ -123,7 +126,7 @@ async def player_match_history(
     ratings = await rating_changes.changes_for(user.id, rated) if rated else {}
 
     return build_response(
-        MatchHistoryResponse.of(page, viewer_id=user.id, profiles=profiles, ratings=ratings)
+        MatchHistoryResponse.of(page, player_id=player_id, profiles=profiles, ratings=ratings)
     )
 
 

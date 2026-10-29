@@ -396,6 +396,7 @@ this surface that could *request* an adjustment: a rating moves in response to
 | --- | --- |
 | `GET /api/v1/ratings/me` | Every speed class for the authenticated caller, in `SpeedClass` order |
 | `GET /api/v1/players/{player_id}/ratings` | The same summary for anybody |
+| `GET /api/v1/ratings/me/history` | **A64-032.** The caller's own adjustments in one key — `speed_class`, `limit` (default 50, max 200) — oldest first, with `has_earlier`. Self-only: there is no player parameter, matching the rule that what a match did to a rating is told only to the player it happened to. One range read on `ix_rating_adjustment__player_history`; no migration |
 
 **Every key, always.** A class the player has never played is present and marked provisional with
 zero games, because `RatingSnapshot.unrated()` is what §7.5 answers for an absent row. Omitting
@@ -403,7 +404,9 @@ them would push "has this player played blitz?" onto every client, and a client 
 would render a missing rating as a rating of zero. One query serves all of them —
 `ratings_across` exists precisely so a page showing several classes is not one query per class.
 
-**`value`, `deviation`, `games_played` and `is_provisional` are published; `volatility` is not.**
+**`value`, `deviation`, `games_played`, `is_provisional` and — since A64-033 — `peak` are
+published; `volatility` is not.** `peak` is the stored `peak_value`, `null` for a class never
+played ([`leaderboard.md`](./leaderboard.md) §9.4).
 It is an input to the next calculation rather than a fact about the player, and publishing it
 would invite a client to render a number whose scale is an implementation detail of §7.2.
 

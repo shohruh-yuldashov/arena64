@@ -224,6 +224,34 @@ class SqlAlchemySanctionRepository:
             )
         )
 
+    # --- `admin.public.RestrictedAccounts` ----------------------------------
+
+    async def restricted_among(
+        self, player_ids: Sequence[UUID], *, at: datetime
+    ) -> frozenset[UUID]:
+        """`effective_for`'s predicate over a page of ids — A64-033.
+
+        The same four conditions, so "restricted" means the same thing to a
+        listing as it does to the credential boundary, and the same partial
+        index serves it: `player_id IN (...)` probes
+        `ix_sanction__player_expiry` once per id.
+        """
+        wanted = list(dict.fromkeys(player_ids))
+        if not wanted:
+            return frozenset()
+
+        rows = await self._session.scalars(
+            select(SanctionModel.player_id)
+            .where(
+                SanctionModel.player_id.in_(wanted),
+                SanctionModel.lifted_at.is_(None),
+                SanctionModel.starts_at <= at,
+                (SanctionModel.expires_at.is_(None)) | (SanctionModel.expires_at > at),
+            )
+            .distinct()
+        )
+        return frozenset(rows.all())
+
 
 def _case_to_domain(row: ModerationCaseModel) -> ModerationCase:
     return ModerationCase(

@@ -11,7 +11,7 @@ are a `404` and which are a normal answer.
 Skipped, not failed, when PostgreSQL is unreachable.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest_asyncio
@@ -278,3 +278,130 @@ class TestNeighbourhood:
 
         assert response.status_code == 404, response.text
         assert response.json()["code"] == "not_found"
+
+
+class TestRatingHistory:
+    """`GET /ratings/me/history` against real adjustments — A64-032.
+
+    Written the way the rating consumer writes them, one applied match at a
+    time, so the rows are the ones production has rather than hand-built
+    inserts that could satisfy the query and nothing else.
+    """
+
+    async def _play(
+        self,
+        session: AsyncSession,
+        player_id: UUID,
+        *,
+        key: RatingKey,
+        results: list[MatchOutcomeScore],
+        first_match: int,
+    ) -> None:
+        rating = PlayerRating(
+            player_id=player_id,
+            key=key,
+            rating=Glicko2Rating(1500.0, 200.0, 0.06),
+            games_played=0,
+            last_rated_at=None,
+        )
+        repository = SqlAlchemyPlayerRatingRepository(session)
+        for index, score in enumerate(results):
+            rating, adjustment = rating.applied(
+                opponent=Glicko2Rating(1500.0, 200.0, 0.06),
+                score=score,
+                match_id=_player(first_match + index),
+                at=NOW + timedelta(hours=index),
+            )
+            await repository.save(rating, adjustment)
+
+    async def test_it_keeps_the_most_recent_points_oldest_first_in_one_key(
+        self, contract_session: AsyncSession, client: AsyncClient
+    ) -> None:
+        player = await register_account(client, contract_session)
+        blitz = RatingKey(variant=ProductVariant.RUSSIAN_8X8, speed_class=SpeedClass.BLITZ)
+        await self._play(
+            contract_session,
+            player.id,
+            key=blitz,
+            results=[MatchOutcomeScore.win(), MatchOutcomeScore.loss(), MatchOutcomeScore.win()],
+            first_match=800_000,
+        )
+        # Another key's games must never join this line.
+        await self._play(
+            contract_session,
+            player.id,
+            key=KEY,
+            results=[MatchOutcomeScore.win()],
+            first_match=810_000,
+        )
+        await contract_session.commit()
+
+        response = await client.get(
+            "/api/v1/ratings/me/history",
+            params={"speed_class": "blitz", "limit": 2},
+            headers=player.auth,
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()["data"]
+        assert body["has_earlier"] is True
+        assert [point["match_id"] for point in body["points"]] == [
+            str(_player(800_001)),
+            str(_player(800_002)),
+        ]
+        # Each point continues from the one before it: nothing interpolated.
+        first, second = body["points"]
+        assert second["before"] == first["after"]
+        assert all(p["delta"] == p["after"] - p["before"] for p in body["points"])
+
+    async def test_a_player_with_no_rated_games_gets_an_empty_line(
+        self, contract_session: AsyncSession, client: AsyncClient
+    ) -> None:
+        player = await register_account(client, contract_session)
+
+        response = await client.get("/api/v1/ratings/me/history", headers=player.auth)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["data"] == {
+            "variant": "russian_8x8",
+            "speed_class": "classical",
+            "points": [],
+            "has_earlier": False,
+        }
+
+
+class TestPeakRating:
+    """`peak` on `/ratings/me` — A64-033.
+
+    The stored high, not a recomputation: after a win and then a loss the
+    peak is the rating the win reached, above where the loss left it.
+    """
+
+    async def test_the_peak_is_the_stored_high_and_absent_for_an_unplayed_class(
+        self, contract_session: AsyncSession, client: AsyncClient
+    ) -> None:
+        player = await register_account(client, contract_session)
+        blitz = RatingKey(variant=ProductVariant.RUSSIAN_8X8, speed_class=SpeedClass.BLITZ)
+        rating = PlayerRating(
+            player_id=player.id,
+            key=blitz,
+            rating=Glicko2Rating(1500.0, 200.0, 0.06),
+            games_played=0,
+            last_rated_at=None,
+        )
+        repository = SqlAlchemyPlayerRatingRepository(contract_session)
+        for index, score in enumerate([MatchOutcomeScore.win(), MatchOutcomeScore.loss()]):
+            rating, adjustment = rating.applied(
+                opponent=Glicko2Rating(1500.0, 200.0, 0.06),
+                score=score,
+                match_id=_player(820_000 + index),
+                at=NOW + timedelta(hours=index),
+            )
+            await repository.save(rating, adjustment)
+        await contract_session.commit()
+
+        response = await client.get("/api/v1/ratings/me", headers=player.auth)
+
+        by_class = {row["speed_class"]: row for row in response.json()["data"]["ratings"]}
+        assert by_class["blitz"]["peak"] > by_class["blitz"]["rating"]
+        assert by_class["rapid"]["peak"] is None

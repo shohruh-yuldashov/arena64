@@ -36,6 +36,13 @@ class RatingResponse(BaseModel):
     is_provisional: bool = Field(
         description="Fewer rated games than the threshold. Shown, never hidden."
     )
+    peak: float | None = Field(
+        default=None,
+        description=(
+            "The highest this rating has been, as stored on every rated match. "
+            "`null` for a speed class never played."
+        ),
+    )
 
     @classmethod
     def of(cls, key: RatingKey, snapshot: RatingSnapshot) -> "RatingResponse":
@@ -46,6 +53,7 @@ class RatingResponse(BaseModel):
             deviation=snapshot.deviation,
             games_played=snapshot.games_played,
             is_provisional=snapshot.is_provisional,
+            peak=snapshot.peak,
         )
 
 

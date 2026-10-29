@@ -8,8 +8,8 @@ import { formatNumber, formatPercent } from "@/shared/lib/format";
  * A player's match record.
  *
  * **Nothing is computed here.** `games_played`, `wins`, `losses`, `draws`,
- * `win_rate`, `current_rating`, `highest_rating` and the two streaks all
- * come from `statistics`, which owns them. A second implementation of "win
+ * `win_rate` and the two streaks all come from `statistics`, which owns
+ * them. A second implementation of "win
  * rate" in the client is a second answer to the same question, and the two
  * disagree the first time a draw is counted differently.
  *
@@ -22,8 +22,21 @@ import { formatNumber, formatPercent } from "@/shared/lib/format";
  * to read all seven to find out that six of them are subordinate to one.
  * Games, win rate and best streak are what a record *is*, so they are set
  * large; wins, losses and draws are the decomposition of the first of
- * those, so they are drawn as one proportional bar with its own legend; and
- * the highest rating is a footnote, so it is set as one.
+ * those, so they are drawn as one proportional bar with its own legend.
+ *
+ * ## No "highest rating" — A64-032
+ *
+ * This set `statistics.highest_rating` as a footnote, and nothing computes
+ * that field: it is `rating`'s fact and no projection writes it
+ * (`specs/statistics.md` §6), so every profile said "Highest rating 1500".
+ * It is gone rather than relabelled. The ratings shown beside this panel
+ * come from `rating` itself.
+ *
+ * ## What the win rate counts
+ *
+ * `wins / games played`, with draws in the denominator — the server's
+ * definition, stated under the bar so a player with many draws is not left
+ * wondering why the figure is lower than their losses suggest.
  *
  * The bar is decoration over numbers that are already written out beside
  * it — hence `aria-hidden`. It is never the only place a figure appears,
@@ -144,12 +157,9 @@ export function StatisticsPanel({ statistics }: { statistics: ProfileStatistics 
             </>
           )}
 
-          <dl className="text-muted-foreground border-border flex gap-2 border-t pt-3 text-xs">
-            <dt>{t("profile.stats.highestRating")}</dt>
-            <dd className="text-foreground font-medium tabular-nums">
-              {formatNumber(statistics.highest_rating, locale)}
-            </dd>
-          </dl>
+          {decided > 0 && (
+            <p className="text-muted-foreground text-xs">{t("profile.stats.winRateHint")}</p>
+          )}
         </div>
       </div>
     </section>

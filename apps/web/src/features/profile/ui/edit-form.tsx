@@ -1,13 +1,15 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useState } from "react";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { z } from "zod";
 
+import { toCountryCode } from "@/entities/country";
 import type { MyProfile } from "@/entities/profile";
 import { FormField } from "@/features/auth/ui/form-field";
 import { FormError, FormStatus } from "@/features/auth/ui/form-status";
 import { profileErrorKey } from "@/features/profile/model/error-messages";
 import { useUpdateProfile } from "@/features/profile/model/queries";
+import { CountrySelect } from "@/features/profile/ui/country-select";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { useHoldAppUpdate } from "@/shared/pwa";
 import { Button, Spinner } from "@/shared/ui";
@@ -33,6 +35,15 @@ import { Button, Spinner } from "@/shared/ui";
  * for it. On submit, an emptied field is sent as `null` rather than `""` —
  * they are different values to the server, and `""` would store a bio that
  * is present and blank.
+ *
+ * ## Country — A64-031.F
+ *
+ * Chosen from a list rather than typed, so the only values the picker can
+ * produce are `""` and codes the API accepts. The schema still checks,
+ * because the starting value is whatever the server holds: a code stored
+ * before A64-012.3 began rejecting private-use ones (`XX`) loads as-is,
+ * says so under the field, and blocks the save until it is replaced or
+ * removed — sending it back would only earn a `422`.
  */
 const DISPLAY_NAME_MAX = 50;
 const BIO_MAX = 500;
@@ -42,9 +53,10 @@ const schema = z.object({
   bio: z.string().trim().max(BIO_MAX, "profile.edit.bioTooLong"),
   country: z
     .string()
-    .trim()
-    .toUpperCase()
-    .refine((value) => value === "" || /^[A-Z]{2}$/.test(value), "profile.edit.countryInvalid"),
+    .refine(
+      (value) => value === "" || toCountryCode(value) !== null,
+      "profile.edit.countryInvalid",
+    ),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -60,6 +72,7 @@ export function ProfileEditForm({ profile }: { profile: MyProfile }) {
 
   const {
     register,
+    control,
     handleSubmit,
     reset,
     formState: { errors, isDirty, isSubmitting },
@@ -141,13 +154,23 @@ export function ProfileEditForm({ profile }: { profile: MyProfile }) {
         )}
       </div>
 
-      <FormField
-        label={t("profile.edit.country")}
-        autoComplete="country"
-        maxLength={2}
-        description={t("profile.edit.countryHint")}
-        error={message(errors.country?.message)}
-        {...register("country")}
+      <Controller
+        control={control}
+        name="country"
+        render={({ field }) => (
+          <CountrySelect
+            label={t("profile.edit.country")}
+            value={field.value}
+            onChange={field.onChange}
+            onBlur={field.onBlur}
+            description={
+              field.value !== "" && toCountryCode(field.value) === null
+                ? t("profile.edit.countryUnknown", { code: field.value })
+                : t("profile.edit.countryHint")
+            }
+            error={message(errors.country?.message)}
+          />
+        )}
       />
 
       <Button type="submit" className="min-h-11 self-start" disabled={!isDirty || isSubmitting}>

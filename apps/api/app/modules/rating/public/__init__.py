@@ -6,6 +6,7 @@
     RatingReader                  the one question this module answers publicly
     RatingChange                  what one match did to one player's rating
     MatchRatingAdjustmentReader   that, for a page of matches, in one query
+    RatingHistoryReader           one player's adjustments in one key, over time
 
 Everything else is private and is held so by the `import-linter` contract
 `rating-internals-are-private`: no module may reach `rating.domain`,
@@ -32,6 +33,11 @@ boundary that needs it.
 
 from app.modules.rating.domain.keys import DEFAULT_SPEED_CLASS, RatingKey, SpeedClass
 from app.modules.rating.public.adjustments import MatchRatingAdjustmentReader, RatingChange
+from app.modules.rating.public.history import (
+    RatingHistory,
+    RatingHistoryPoint,
+    RatingHistoryReader,
+)
 from app.modules.rating.public.leaderboard import (
     LeaderboardCursor,
     LeaderboardEntry,
@@ -48,6 +54,9 @@ __all__ = [
     "LeaderboardPage",
     "LeaderboardReader",
     "RatingChange",
+    "RatingHistory",
+    "RatingHistoryPoint",
+    "RatingHistoryReader",
     "RatingKey",
     "RatingReader",
     "RatingSnapshot",

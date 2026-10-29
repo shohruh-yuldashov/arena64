@@ -228,9 +228,9 @@
       "losses": "Losses",
       "draws": "Draws",
       "winRate": "Win rate",
+      "winRateHint": "Win rate is wins divided by games played, so draws count as games.",
       "noGames": "No games yet",
       "bestWinStreak": "Best win streak",
-      "highestRating": "Highest rating",
       "hidden": "Statistics are hidden"
     },
     "ratings": {
@@ -239,6 +239,7 @@
       "provisional": "Provisional",
       "games": "{count} games",
       "deviation": "Confidence range",
+      "peak": "Highest: {rating}",
       "unrated": "Not rated yet",
       "classic": "Classical",
       "rapid": "Rapid",
@@ -255,20 +256,47 @@
       "error": "Tournament history could not be loaded.",
       "loadingLabel": "Loading tournament history…"
     },
+    "recentGames": {
+      "title": "Recent games",
+      "viewAll": "All games",
+      "loadingLabel": "Loading recent games…",
+      "error": "Recent games could not be loaded.",
+      "empty": "No finished games yet"
+    },
+    "ratingProgress": {
+      "title": "Rating progress",
+      "speedClass": "Speed class",
+      "none": "No rated games yet",
+      "loadingLabel": "Loading rating progress…",
+      "error": "Rating progress could not be loaded.",
+      "start": "Before the first game shown",
+      "chartLabel": "{speed} rating from {from} to {to}; rated games: {games}",
+      "lastGames": "Last {games} rated games",
+      "allGames": "Rated games: {games}",
+      "showTable": "Show as a table",
+      "colDate": "Date",
+      "colRating": "Rating",
+      "colChange": "Change"
+    },
     "edit": {
       "title": "Edit profile",
       "subtitle": "This is what other players see on your public profile.",
       "displayName": "Display name",
       "bio": "About you",
-      "country": "Country code",
-      "countryHint": "Two letters, for example UZ",
+      "country": "Country",
+      "countryHint": "Shown with its flag on your public profile. It does not change the interface language.",
+      "countryNone": "Not set",
+      "countrySearch": "Search countries",
+      "countryRemove": "Remove country",
+      "countryNoMatch": "No country matches “{query}”",
+      "countryUnknown": "“{code}” is not a country we recognise. Choose one from the list, or remove it.",
       "bioHint": "At most {max} characters",
       "save": "Save",
       "saved": "Saved",
       "noChanges": "Nothing changed",
       "displayNameTooLong": "At most {max} characters",
       "bioTooLong": "At most {max} characters",
-      "countryInvalid": "Enter a two-letter country code"
+      "countryInvalid": "Choose a country from the list"
     },
     "avatar": {
       "title": "Photo",
@@ -382,7 +410,7 @@
       "notFoundTitle": "Player not found",
       "notFoundBody": "There is no such username, or it has changed.",
       "backHome": "Back home",
-      "signedInOnly": "Sign in to see this player's ratings and tournaments"
+      "signedInOnly": "Sign in to see this player's ratings, recent games and tournaments"
     },
     "errors": {
       "not_found": "Not found.",
@@ -769,6 +797,7 @@
     "versus": "vs {opponent}",
     "unknownOpponent": "Unknown player",
     "replayOf": "Replay the match against {opponent}",
+    "ratingChange": "Rating {change}, now {rating}",
     "loadMore": "Load more",
     "loadingMore": "Loading…",
     "end": "That is every match.",
@@ -944,6 +973,40 @@
     "unknownPlayer": "Unknown player",
     "listError": "Tournaments could not be loaded.",
     "deadlineOpenRelative": "Entries close {when}"
+  },
+  "leaderboard": {
+    "nav": "Leaderboard",
+    "title": "Leaderboard",
+    "subtitle": "The highest-rated players in each speed class, worldwide or by country.",
+    "speedClass": "Speed class",
+    "country": "Country",
+    "allCountries": "All countries",
+    "rank": "Rank",
+    "player": "Player",
+    "games": "Games",
+    "gamesCount": "Games: {count}",
+    "rating": "Rating",
+    "you": "You",
+    "caption": "{speed} leaderboard — {country}",
+    "loading": "Loading the leaderboard…",
+    "error": "The leaderboard could not be loaded.",
+    "empty": "Nobody is ranked in this speed class yet",
+    "emptyCountry": "Nobody from {country} is ranked in this speed class yet",
+    "emptyHint": "Rated games put players here. A country ladder counts only players who show that country on their profile.",
+    "searching": "Looking further down the ladder…",
+    "end": "That is everyone on this ladder.",
+    "standing": {
+      "title": "Your position",
+      "ranked": "#{rank}",
+      "beyond": "Further down than ranks are counted",
+      "notListed": "Not listed on this ladder",
+      "notListedCountry": "Not on this ladder — your profile doesn't show {country}",
+      "unrated": "No {speed} rating yet",
+      "play": "Play a rated game"
+    },
+    "loadMore": "Load more",
+    "loadingMore": "Loading…",
+    "provisional": "Provisional"
   },
   "pwa": {
     "region": "Application notices",

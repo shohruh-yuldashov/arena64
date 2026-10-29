@@ -11,6 +11,7 @@ import { useTranslation } from "@/shared/i18n";
 import { Button } from "@/shared/ui";
 import { ProfileHeader } from "@/widgets/profile-header";
 import { RatingCards } from "@/widgets/rating-cards";
+import { RecentGames } from "@/widgets/recent-games";
 import { StatisticsPanel } from "@/widgets/statistics-panel";
 import { TournamentHistory } from "@/widgets/tournament-history";
 
@@ -143,8 +144,16 @@ export default function PublicProfilePage() {
           One stated absence instead, in the dashed frame this page already
           uses for hidden statistics. Saying what is missing and what would
           show it is the honest version of a spinner that never stops. */}
+      {/* A64-032. The last few games, read from this player's seat — "Won"
+          is theirs, and so is the opponent. Rated games are public and the
+          server decides which casual ones a viewer may see; there is no
+          rating change here, because only the player it happened to is
+          told what a game did to their rating. */}
       {isAuthenticated(session) ? (
-        <TournamentHistory playerId={profile.data?.id} />
+        <>
+          <RecentGames playerId={profile.data?.id} />
+          <TournamentHistory playerId={profile.data?.id} />
+        </>
       ) : (
         <p className="border-border text-muted-foreground rounded-xl border border-dashed px-5 py-4 text-sm">
           {t("profile.public.signedInOnly")}

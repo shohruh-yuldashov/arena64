@@ -301,3 +301,26 @@ class TestTheEffectiveStateRead:
         assert restriction.until == NOW + timedelta(days=7)
         # And nothing else travels: the DTO has one field.
         assert set(vars(type(restriction))["__slots__"]) == {"until"}
+
+    async def test_a_page_of_accounts_reports_only_those_restricted_now(
+        self,
+        sanctions: SqlAlchemySanctionRepository,
+        cases: SqlAlchemyModerationCaseRepository,
+    ) -> None:
+        """A64-033 — `RestrictedAccounts`, the leaderboard's batch read.
+
+        The same predicate as the gate: an expired restriction no longer
+        counts, and an id nobody restricted is simply absent.
+        """
+        restricted, expired, clean, admin = (generate_uuid7() for _ in range(4))
+        first = await cases.add(_case(restricted, admin))
+        await sanctions.add(_sanction(restricted, first.id, expires_at=None))
+        second = await cases.add(_case(expired, admin))
+        await sanctions.add(_sanction(expired, second.id, expires_at=NOW + timedelta(hours=1)))
+
+        # Asked after the timed restriction has run out.
+        later = NOW + timedelta(hours=2)
+        found = await sanctions.restricted_among([restricted, expired, clean], at=later)
+
+        assert found == frozenset({restricted})
+        assert await sanctions.restricted_among([], at=NOW) == frozenset()

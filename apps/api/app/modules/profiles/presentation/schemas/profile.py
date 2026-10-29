@@ -159,19 +159,22 @@ class StatisticsResponse(BaseResponseDTO):
     )
     current_rating: int = Field(
         description=(
-            "The player's headline rating. **Read it together with the "
-            "`ratings` block**, which reports the same player per speed "
-            "category and marks a provisional rating as provisional; this "
-            "single number carries no such marker yet because nothing "
-            "computes it. Both start at 1500 for a player who has never "
-            "played."
+            "**Not yet computed — use the `ratings` block instead.** Intended "
+            "as the player's headline rating, but nothing writes it "
+            "(`specs/statistics.md` §6, §8), so it reads 1500 for everybody. "
+            "The `ratings` block reports the real rating per speed category "
+            "and marks a provisional one as provisional."
         ),
         examples=[1500],
     )
     highest_rating: int = Field(
         description=(
-            "The highest rating this player has ever held. Never below "
-            "`current_rating`. Equal to it for a player who has never played."
+            "**Not yet computed — do not display it.** Intended as the highest "
+            "rating this player has ever held, but nothing writes it: it is "
+            "`rating`'s fact and no projection carries it here yet "
+            "(`specs/statistics.md` §6, §8), so it reads 1500 for everybody. "
+            "The real per-speed-class peak is kept by `rating` and is not yet "
+            "published. Never below `current_rating`."
         ),
         examples=[1500],
     )

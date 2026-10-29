@@ -3401,6 +3401,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/leaderboard/players": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The leaderboard, with players' public names
+         * @description Eligible players, best first, ranked among themselves.
+         */
+        get: operations["leaderboard_players_api_v1_leaderboard_players_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leaderboard/players/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your own place on the leaderboard
+         * @description The caller's place — the player comes from the token, never the request.
+         */
+        get: operations["my_leaderboard_standing_api_v1_leaderboard_players_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tournaments": {
         parameters: {
             query?: never;
@@ -4802,9 +4842,19 @@ export interface components {
             data: components["schemas"]["LeaderboardNeighbourhoodResponse"];
             meta: components["schemas"]["ResponseMeta"];
         };
+        /** ApiResponse[LeaderboardPlayersResponse] */
+        ApiResponse_LeaderboardPlayersResponse_: {
+            data: components["schemas"]["LeaderboardPlayersResponse"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
         /** ApiResponse[LeaderboardResponse] */
         ApiResponse_LeaderboardResponse_: {
             data: components["schemas"]["LeaderboardResponse"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        /** ApiResponse[LeaderboardStandingResponse] */
+        ApiResponse_LeaderboardStandingResponse_: {
+            data: components["schemas"]["LeaderboardStandingResponse"];
             meta: components["schemas"]["ResponseMeta"];
         };
         /** ApiResponse[LivenessResponse] */
@@ -6461,6 +6511,53 @@ export interface components {
              */
             below: components["schemas"]["LeaderboardEntryResponse"][];
         };
+        /** LeaderboardPlayerResponse */
+        LeaderboardPlayerResponse: {
+            /**
+             * Rank
+             * @description Position among the players this ladder shows. Unique.
+             */
+            rank: number;
+            /**
+             * Player Id
+             * Format: uuid
+             */
+            player_id: string;
+            /** Username */
+            username: string;
+            /** Display Name */
+            display_name: string | null;
+            /**
+             * Country
+             * @description ISO 3166-1 alpha-2, or `null` when unset **or hidden by its owner**.
+             */
+            country: string | null;
+            /** Rating */
+            rating: number;
+            /** Games Played */
+            games_played: number;
+            /** Is Provisional */
+            is_provisional: boolean;
+        };
+        /** LeaderboardPlayersResponse */
+        LeaderboardPlayersResponse: {
+            /** Variant */
+            variant: string;
+            /** Speed Class */
+            speed_class: string;
+            /**
+             * Country
+             * @description The filter applied; `null` for the global ladder.
+             */
+            country: string | null;
+            /** Players */
+            players: components["schemas"]["LeaderboardPlayerResponse"][];
+            /**
+             * Next Cursor
+             * @description Opaque. `null` once the ladder is exhausted. A page shorter than `limit` that still carries a cursor stopped at the scan budget: more players may follow.
+             */
+            next_cursor?: string | null;
+        };
         /**
          * LeaderboardResponse
          * @description One page of one key's ladder, best first.
@@ -6477,6 +6574,28 @@ export interface components {
              * @description Opaque; send it back unread for the next page.
              */
             next_cursor?: string | null;
+        };
+        /**
+         * LeaderboardStandingResponse
+         * @description The caller's own place. Only ever about the caller.
+         */
+        LeaderboardStandingResponse: {
+            /** Variant */
+            variant: string;
+            /** Speed Class */
+            speed_class: string;
+            /** Country */
+            country: string | null;
+            /** @description `ranked`: at `rank`. `beyond`: on this ladder, further down than an exact rank is counted. `not_listed`: rated, but not shown on this ladder. `unrated`: no rating in this speed class. */
+            status: components["schemas"]["StandingStatus"];
+            /** Rank */
+            rank: number | null;
+            /** Rating */
+            rating: number | null;
+            /** Games Played */
+            games_played: number | null;
+            /** Is Provisional */
+            is_provisional: boolean | null;
         };
         /** LivenessResponse */
         LivenessResponse: {
@@ -8884,6 +9003,11 @@ export interface components {
             eliminated_by_player_id?: string | null;
         };
         /**
+         * StandingStatus
+         * @enum {string}
+         */
+        StandingStatus: "ranked" | "beyond" | "not_listed" | "unrated";
+        /**
          * StandingsResponse
          * @description A completed tournament's placement, in published order.
          *
@@ -9500,6 +9624,11 @@ export interface components {
              * @description Fewer rated games than the threshold. Shown, never hidden.
              */
             is_provisional: boolean;
+            /**
+             * Peak
+             * @description The highest this rating has been, as stored on every rated match. `null` for a speed class never played.
+             */
+            peak?: number | null;
         };
     };
     responses: never;
@@ -14004,6 +14133,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    leaderboard_players_api_v1_leaderboard_players_get: {
+        parameters: {
+            query?: {
+                /** @description Which rule set. */
+                variant?: components["schemas"]["ProductVariant"];
+                /** @description Which speed class. */
+                speed_class?: components["schemas"]["SpeedClass"];
+                /** @description ISO 3166-1 alpha-2. Omit for the global ladder. */
+                country?: string | null;
+                /** @description An opaque cursor. */
+                after?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_LeaderboardPlayersResponse_"];
+                };
+            };
+            /** @description The pagination cursor is not valid */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    my_leaderboard_standing_api_v1_leaderboard_players_me_get: {
+        parameters: {
+            query?: {
+                /** @description Which rule set. */
+                variant?: components["schemas"]["ProductVariant"];
+                /** @description Which speed class. */
+                speed_class?: components["schemas"]["SpeedClass"];
+                /** @description ISO 3166-1 alpha-2. Omit for the global ladder. */
+                country?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_LeaderboardStandingResponse_"];
                 };
             };
             /** @description Validation Error */

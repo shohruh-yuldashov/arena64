@@ -86,6 +86,11 @@ export const NAV_SECTIONS: readonly NavSection[] = [
     routeIds: ["/tournaments", "/tournaments/$tournamentId"],
   },
   {
+    to: "/leaderboard",
+    label: "leaderboard.nav",
+    routeIds: ["/leaderboard"],
+  },
+  {
     to: "/friends",
     label: "social.nav.friends",
     routeIds: [

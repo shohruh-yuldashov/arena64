@@ -973,6 +973,40 @@
     "listError": "Turnirlarni yuklab bo'lmadi.",
     "deadlineOpenRelative": "Ro'yxat {when} yopiladi"
   },
+  "leaderboard": {
+    "nav": "Peshqadamlar",
+    "title": "Peshqadamlar jadvali",
+    "subtitle": "Har bir vaqt nazoratida eng yuqori reytingli o'yinchilar — butun dunyo yoki mamlakat bo'yicha.",
+    "speedClass": "Vaqt nazorati",
+    "country": "Mamlakat",
+    "allCountries": "Barcha mamlakatlar",
+    "rank": "O'rin",
+    "player": "O'yinchi",
+    "games": "O'yinlar",
+    "gamesCount": "{count} ta o'yin",
+    "rating": "Reyting",
+    "you": "Siz",
+    "caption": "Peshqadamlar jadvali ({speed}) — {country}",
+    "loading": "Peshqadamlar jadvali yuklanmoqda…",
+    "error": "Peshqadamlar jadvalini yuklab bo'lmadi.",
+    "empty": "Bu vaqt nazoratida hali hech kim reytingda yo'q",
+    "emptyCountry": "{country} dan bu vaqt nazoratida hali hech kim reytingda yo'q",
+    "emptyHint": "Bu yerga reytingli o'yinlar orqali chiqiladi. Mamlakat jadvaliga faqat profilida shu mamlakatni ko'rsatgan o'yinchilar kiradi.",
+    "searching": "Jadvalning pastroq qismidan qidirilmoqda…",
+    "end": "Bu jadvaldagi barcha o'yinchilar shu.",
+    "standing": {
+      "title": "Sizning o'rningiz",
+      "ranked": "{rank}-o'rin",
+      "beyond": "O'rinlar hisoblanadigan chegaradan pastda",
+      "notListed": "Siz bu jadvalda yo'qsiz",
+      "notListedCountry": "Siz bu jadvalda yo'qsiz — profilingizda {country} ko'rsatilmagan",
+      "unrated": "Hali {speed} reytingi yo'q",
+      "play": "Reytingli o'yin o'ynash"
+    },
+    "loadMore": "Yana yuklash",
+    "loadingMore": "Yuklanmoqda…",
+    "provisional": "Dastlabki"
+  },
   "pwa": {
     "region": "Ilova bildirishnomalari",
     "install": {

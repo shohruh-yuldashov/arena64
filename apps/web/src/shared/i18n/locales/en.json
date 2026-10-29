@@ -973,6 +973,40 @@
     "listError": "Tournaments could not be loaded.",
     "deadlineOpenRelative": "Entries close {when}"
   },
+  "leaderboard": {
+    "nav": "Leaderboard",
+    "title": "Leaderboard",
+    "subtitle": "The highest-rated players in each speed class, worldwide or by country.",
+    "speedClass": "Speed class",
+    "country": "Country",
+    "allCountries": "All countries",
+    "rank": "Rank",
+    "player": "Player",
+    "games": "Games",
+    "gamesCount": "{count} games",
+    "rating": "Rating",
+    "you": "You",
+    "caption": "{speed} leaderboard — {country}",
+    "loading": "Loading the leaderboard…",
+    "error": "The leaderboard could not be loaded.",
+    "empty": "Nobody is ranked in this speed class yet",
+    "emptyCountry": "Nobody from {country} is ranked in this speed class yet",
+    "emptyHint": "Rated games put players here. A country ladder counts only players who show that country on their profile.",
+    "searching": "Looking further down the ladder…",
+    "end": "That is everyone on this ladder.",
+    "standing": {
+      "title": "Your position",
+      "ranked": "#{rank}",
+      "beyond": "Further down than ranks are counted",
+      "notListed": "Not listed on this ladder",
+      "notListedCountry": "Not on this ladder — your profile doesn't show {country}",
+      "unrated": "No {speed} rating yet",
+      "play": "Play a rated game"
+    },
+    "loadMore": "Load more",
+    "loadingMore": "Loading…",
+    "provisional": "Provisional"
+  },
   "pwa": {
     "region": "Application notices",
     "install": {

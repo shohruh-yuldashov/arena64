@@ -8,8 +8,13 @@ import {
 
 import { RequireAnonymous, RequireAuth, RequireVerifiedEmail } from "@/app/router/guards";
 import { RouteError } from "@/app/router/route-error";
+import { toCountryCode } from "@/entities/country";
 import { isAuthenticated } from "@/entities/session";
 import { useSession } from "@/features/auth/model/session-provider";
+import {
+  isLeaderboardSpeedClass,
+  type LeaderboardSpeedClass,
+} from "@/features/leaderboard/model/queries";
 import NotFoundPage from "@/pages/not-found";
 import { Spinner } from "@/shared/ui";
 import { AppShell } from "@/widgets/app-shell";
@@ -556,6 +561,39 @@ export const tournamentRoute = createRoute({
   component: lazyRouteComponent(() => import("@/pages/tournament")),
 });
 
+/**
+ * `/leaderboard` — A64-033.
+ *
+ * **Protected**, following the backend as `/tournaments` does: both
+ * leaderboard reads take `CurrentUser`, because a rating is public to every
+ * player rather than to the internet.
+ *
+ * `?speed=` and `?country=` are validated here, where a URL somebody else
+ * wrote becomes typed — and **again in the page**, because the root route
+ * passes the raw query through and this output is merged over it, so a
+ * value dropped here is still present on the page's `search`. Either way an
+ * unknown class or a code that is not a country is never sent: the page
+ * falls back to its defaults instead of asking for a ladder the server
+ * would refuse.
+ */
+function leaderboardSearch(search: Record<string, unknown>): {
+  speed?: LeaderboardSpeedClass;
+  country?: string;
+} {
+  const country = typeof search.country === "string" ? toCountryCode(search.country) : null;
+  return {
+    ...(isLeaderboardSpeedClass(search.speed) ? { speed: search.speed } : {}),
+    ...(country !== null ? { country } : {}),
+  };
+}
+
+export const leaderboardRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/leaderboard",
+  validateSearch: leaderboardSearch,
+  component: protectedPage(() => import("@/pages/leaderboard")),
+});
+
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
@@ -586,5 +624,6 @@ export const routeTree = rootRoute.addChildren([
   replayRoute,
   tournamentsRoute,
   tournamentRoute,
+  leaderboardRoute,
   notificationsRoute,
 ]);

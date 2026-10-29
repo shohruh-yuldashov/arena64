@@ -198,7 +198,14 @@ describe("the mobile navigation", () => {
     const destinations = within(nav)
       .getAllByRole("link")
       .map((link) => link.getAttribute("href"));
-    expect(destinations).toEqual(["/play", "/tournaments", "/friends", "/games/history"]);
+    expect(destinations).toEqual([
+      "/play",
+      "/tournaments",
+      // A64-033.
+      "/leaderboard",
+      "/friends",
+      "/games/history",
+    ]);
 
     // A panel still open over the page the player just asked for is the
     // commonest defect in this pattern.

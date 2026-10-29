@@ -228,9 +228,9 @@
       "losses": "Mag'lubiyatlar",
       "draws": "Duranglar",
       "winRate": "G'alaba ulushi",
+      "winRateHint": "G'alaba ulushi — g'alabalar o'ynalgan o'yinlar soniga bo'lingani, shuning uchun duranglar ham o'yin hisoblanadi.",
       "noGames": "Hali o'yin yo'q",
       "bestWinStreak": "Eng uzun g'alaba seriyasi",
-      "highestRating": "Eng yuqori reyting",
       "hidden": "Statistika yashirilgan"
     },
     "ratings": {
@@ -254,6 +254,28 @@
       "loading": "Yuklanmoqda…",
       "error": "Turnirlar tarixini yuklab bo'lmadi.",
       "loadingLabel": "Turnirlar tarixi yuklanmoqda…"
+    },
+    "recentGames": {
+      "title": "So'nggi o'yinlar",
+      "viewAll": "Barcha o'yinlar",
+      "loadingLabel": "So'nggi o'yinlar yuklanmoqda…",
+      "error": "So'nggi o'yinlarni yuklab bo'lmadi.",
+      "empty": "Hali tugagan o'yinlar yo'q"
+    },
+    "ratingProgress": {
+      "title": "Reyting o'zgarishi",
+      "speedClass": "Vaqt nazorati",
+      "none": "Hali reytingli o'yinlar yo'q",
+      "loadingLabel": "Reyting o'zgarishi yuklanmoqda…",
+      "error": "Reyting o'zgarishini yuklab bo'lmadi.",
+      "start": "Ko'rsatilgan birinchi o'yindan oldin",
+      "chartLabel": "{speed} reytingi {games} ta reytingli o'yinda: {from} dan {to} gacha",
+      "lastGames": "So'nggi {games} ta reytingli o'yin",
+      "allGames": "Barcha {games} ta reytingli o'yin",
+      "showTable": "Jadval ko'rinishida",
+      "colDate": "Sana",
+      "colRating": "Reyting",
+      "colChange": "O'zgarish"
     },
     "edit": {
       "title": "Profilni tahrirlash",
@@ -387,7 +409,7 @@
       "notFoundTitle": "O'yinchi topilmadi",
       "notFoundBody": "Bunday foydalanuvchi nomi mavjud emas yoki o'zgartirilgan.",
       "backHome": "Bosh sahifaga",
-      "signedInOnly": "Bu o'yinchining reytingi va turnirlarini ko'rish uchun kiring"
+      "signedInOnly": "Bu o'yinchining reytingi, so'nggi o'yinlari va turnirlarini ko'rish uchun kiring"
     },
     "errors": {
       "not_found": "Topilmadi.",
@@ -774,6 +796,7 @@
     "versus": "{opponent} bilan",
     "unknownOpponent": "Noma'lum o'yinchi",
     "replayOf": "{opponent} bilan o'yinni takrorlash",
+    "ratingChange": "Reyting {change}, hozir {rating}",
     "loadMore": "Yana yuklash",
     "loadingMore": "Yuklanmoqda…",
     "end": "Barcha o'yinlar shu.",

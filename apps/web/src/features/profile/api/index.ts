@@ -22,6 +22,7 @@ import type { components } from "@/shared/api/generated/schema";
  * nothing here knows a token exists.
  */
 type PlayerRatings = components["schemas"]["PlayerRatingsResponse"];
+export type RatingHistory = components["schemas"]["RatingHistoryResponse"];
 
 export function getMyProfile(): Promise<MyProfile> {
   return api.get<MyProfile>("/profile/me");
@@ -41,6 +42,16 @@ export function getMyRatings(): Promise<PlayerRatings> {
 
 export function getPlayerRatings(playerId: string): Promise<PlayerRatings> {
   return api.get<PlayerRatings>(`/players/${playerId}/ratings`);
+}
+
+/**
+ * The caller's own rating in one speed class, over their most recent rated
+ * games — A64-032. There is no form of this for another player: the server
+ * takes the player from the token.
+ */
+export function getMyRatingHistory(speedClass: string, limit: number): Promise<RatingHistory> {
+  const query = new URLSearchParams({ speed_class: speedClass, limit: String(limit) });
+  return api.get<RatingHistory>(`/ratings/me/history?${query.toString()}`);
 }
 
 export function getTournamentHistory(

@@ -86,6 +86,25 @@ export function usePublicProfile(username: string, enabled: boolean) {
  * **public** profile, which is reachable with no account: see
  * `useTournamentHistory` below for what that `401` then set in motion.
  */
+/** How many rated games the progression chart draws — A64-032. */
+export const RATING_HISTORY_POINTS = 50;
+
+/**
+ * The signed-in player's rating over their recent rated games in one speed
+ * class — A64-032. Under `me`, so it is cleared with the rest of the
+ * account's data when the session changes hands.
+ */
+export function useMyRatingHistory(speedClass: string | null) {
+  const { state } = useSession();
+
+  return useQuery({
+    queryKey: profileKeys.myRatingHistory(speedClass ?? "none"),
+    queryFn: () => profileApi.getMyRatingHistory(speedClass as string, RATING_HISTORY_POINTS),
+    enabled: speedClass !== null && isAuthenticated(state),
+    staleTime: 60_000,
+  });
+}
+
 export function usePlayerRatings(playerId: string | undefined) {
   const { state } = useSession();
 

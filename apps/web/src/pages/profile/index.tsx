@@ -6,6 +6,8 @@ import { useTranslation } from "@/shared/i18n";
 import { Button } from "@/shared/ui";
 import { ProfileHeader } from "@/widgets/profile-header";
 import { RatingCards } from "@/widgets/rating-cards";
+import { RatingProgress } from "@/widgets/rating-progress";
+import { RecentGames } from "@/widgets/recent-games";
 import { StatisticsPanel } from "@/widgets/statistics-panel";
 import { TournamentHistory } from "@/widgets/tournament-history";
 
@@ -16,6 +18,8 @@ import { TournamentHistory } from "@/widgets/tournament-history";
  *
  *     /profile/me                    identity, bio, statistics
  *     /ratings/me                    every rating category
+ *     /ratings/me/history            one category's line — A64-032
+ *     /players/{id}/matches?limit=5  the last few games — A64-032
  *     /players/{id}/tournaments      history, one page at a time
  *
  * `MyProfileResponse` carries statistics but **not** ratings — that
@@ -84,6 +88,22 @@ export default function ProfilePage() {
       </QueryState>
 
       {ratings.data !== undefined && <RatingCards ratings={ratings.data.ratings} />}
+
+      {/* A64-032. Own profile only: the line is what each game did to
+       *your* rating, which the server tells nobody else. */}
+      {ratings.data !== undefined && <RatingProgress ratings={ratings.data.ratings} />}
+
+      <RecentGames
+        playerId={profile.data?.id}
+        action={
+          <Link
+            to="/games/history"
+            className="text-primary focus-visible:ring-ring rounded-sm text-sm font-medium underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:outline-none"
+          >
+            {t("profile.recentGames.viewAll")}
+          </Link>
+        }
+      />
 
       <TournamentHistory playerId={profile.data?.id} />
     </div>

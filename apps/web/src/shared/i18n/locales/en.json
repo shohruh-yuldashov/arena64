@@ -228,9 +228,9 @@
       "losses": "Losses",
       "draws": "Draws",
       "winRate": "Win rate",
+      "winRateHint": "Win rate is wins divided by games played, so draws count as games.",
       "noGames": "No games yet",
       "bestWinStreak": "Best win streak",
-      "highestRating": "Highest rating",
       "hidden": "Statistics are hidden"
     },
     "ratings": {
@@ -254,6 +254,28 @@
       "loading": "Loading…",
       "error": "Tournament history could not be loaded.",
       "loadingLabel": "Loading tournament history…"
+    },
+    "recentGames": {
+      "title": "Recent games",
+      "viewAll": "All games",
+      "loadingLabel": "Loading recent games…",
+      "error": "Recent games could not be loaded.",
+      "empty": "No finished games yet"
+    },
+    "ratingProgress": {
+      "title": "Rating progress",
+      "speedClass": "Speed class",
+      "none": "No rated games yet",
+      "loadingLabel": "Loading rating progress…",
+      "error": "Rating progress could not be loaded.",
+      "start": "Before the first game shown",
+      "chartLabel": "{speed} rating over {games} rated games, from {from} to {to}",
+      "lastGames": "Last {games} rated games",
+      "allGames": "All {games} rated games",
+      "showTable": "Show as a table",
+      "colDate": "Date",
+      "colRating": "Rating",
+      "colChange": "Change"
     },
     "edit": {
       "title": "Edit profile",
@@ -387,7 +409,7 @@
       "notFoundTitle": "Player not found",
       "notFoundBody": "There is no such username, or it has changed.",
       "backHome": "Back home",
-      "signedInOnly": "Sign in to see this player's ratings and tournaments"
+      "signedInOnly": "Sign in to see this player's ratings, recent games and tournaments"
     },
     "errors": {
       "not_found": "Not found.",
@@ -774,6 +796,7 @@
     "versus": "vs {opponent}",
     "unknownOpponent": "Unknown player",
     "replayOf": "Replay the match against {opponent}",
+    "ratingChange": "Rating {change}, now {rating}",
     "loadMore": "Load more",
     "loadingMore": "Loading…",
     "end": "That is every match.",

@@ -4,7 +4,12 @@ import { formatMillis, speedClassKey } from "@/entities/time-control";
 import type { MatchHistoryEntry } from "@/features/match-history/api";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
-import { formatDateTime, formatRelativeTime } from "@/shared/lib/format";
+import {
+  formatDateTime,
+  formatNumber,
+  formatRatingChange,
+  formatRelativeTime,
+} from "@/shared/lib/format";
 import { speedAccent } from "@/shared/lib/speed-accent";
 import { Avatar, AvatarFallback, AvatarImage } from "@/shared/ui";
 
@@ -22,21 +27,36 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/shared/ui";
  * because a reader who cannot distinguish the colours must still be able to
  * read the row — and because a row that communicates only by colour tells a
  * screen reader nothing at all.
+ *
+ * ## Whose seat — A64-032
+ *
+ * `playerId` is the player whose record this row belongs to, which on a
+ * profile is the profile's owner rather than whoever is reading it. "Won"
+ * and "Lost" are said from that seat, and the server names the opponent
+ * from it too.
+ *
+ * ## The rating change, when there is one
+ *
+ * Shown only when the server sent it: it does so for a player reading
+ * their own record, and only once the rating consumer has applied the
+ * match. A casual match, somebody else's record and a match not yet
+ * applied all render nothing — never a `0`, which would claim the match
+ * left the rating where it was.
  */
 
-/** Which side the viewer played, from the two seat ids. */
-function seatOf(entry: MatchHistoryEntry, viewerId: string): "light" | "dark" | null {
-  if (entry.light_player_id === viewerId) return "light";
-  if (entry.dark_player_id === viewerId) return "dark";
+/** Which side the record's owner played, from the two seat ids. */
+function seatOf(entry: MatchHistoryEntry, playerId: string): "light" | "dark" | null {
+  if (entry.light_player_id === playerId) return "light";
+  if (entry.dark_player_id === playerId) return "dark";
   return null;
 }
 
 /**
- * The result from this viewer's seat.
+ * The result from the record owner's seat.
  *
- * `null` for a match the viewer did not play — a rated game somebody else's
- * history surfaced — where "you won" would be a lie and the outcome is
- * still worth showing as light's or dark's.
+ * `null` seat only if the row is not the owner's match at all, where "won"
+ * would be a lie and the outcome is still worth showing as light's or
+ * dark's.
  */
 function resultKey(entry: MatchHistoryEntry, seat: "light" | "dark" | null): TranslationKey {
   if (entry.outcome === "draw") return "history.result.draw";
@@ -73,10 +93,10 @@ function reasonKey(reason: string | null): TranslationKey {
   return (reason !== null ? known[reason] : undefined) ?? "game.reason.unknown";
 }
 
-export function MatchRow({ entry, viewerId }: { entry: MatchHistoryEntry; viewerId: string }) {
+export function MatchRow({ entry, playerId }: { entry: MatchHistoryEntry; playerId: string }) {
   const { t, locale } = useTranslation();
 
-  const seat = seatOf(entry, viewerId);
+  const seat = seatOf(entry, playerId);
   const result = resultKey(entry, seat);
   const won = result === "history.result.won";
   const lost = result === "history.result.lost";
@@ -175,6 +195,10 @@ export function MatchRow({ entry, viewerId }: { entry: MatchHistoryEntry; viewer
           </span>
         </div>
 
+        {entry.rating != null && (
+          <RatingDelta delta={entry.rating.delta} after={entry.rating.after} />
+        )}
+
         {/* Relative, with the instant on the element — A64-025.10 §21. A
             history is scanned for "when", and `9/4/26` is a date somebody
             has to decode. */}
@@ -187,5 +211,32 @@ export function MatchRow({ entry, viewerId }: { entry: MatchHistoryEntry; viewer
         </time>
       </div>
     </li>
+  );
+}
+
+/**
+ * The change, with the rating it left behind for a screen reader.
+ *
+ * The sign is the signal and the colour accelerates it, never the reverse
+ * (WCAG 1.4.1).
+ */
+function RatingDelta({ delta, after }: { delta: number; after: number }) {
+  const { t, locale } = useTranslation();
+  const figure = formatRatingChange(delta, locale);
+
+  return (
+    <span
+      className={cn(
+        "shrink-0 text-xs font-semibold tabular-nums",
+        delta > 0 && "text-success",
+        delta < 0 && "text-destructive",
+        delta === 0 && "text-muted-foreground",
+      )}
+    >
+      <span aria-hidden="true">{figure}</span>
+      <span className="sr-only">
+        {t("history.ratingChange", { change: figure, rating: formatNumber(after, locale) })}
+      </span>
+    </span>
   );
 }

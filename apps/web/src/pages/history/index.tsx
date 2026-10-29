@@ -84,7 +84,7 @@ export default function HistoryPage() {
               className="border-border bg-card divide-border flex flex-col divide-y overflow-hidden rounded-xl border"
             >
               {entries.map((entry) => (
-                <MatchRow key={entry.match_id} entry={entry} viewerId={viewerId} />
+                <MatchRow key={entry.match_id} entry={entry} playerId={viewerId} />
               ))}
             </ol>
 

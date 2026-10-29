@@ -93,6 +93,18 @@ export function formatNumber(value: number, locale: string): string {
 }
 
 /**
+ * A rating change: `+13`, `−8`, `±0` — A64-032.
+ *
+ * Always signed, because the sign is the meaning. A true minus (U+2212)
+ * rather than a hyphen, so a column of changes lines up and a screen reader
+ * says "minus"; `±` for no change, so a zero never reads as a gain.
+ */
+export function formatRatingChange(delta: number, locale: string): string {
+  const sign = delta > 0 ? "+" : delta < 0 ? "\u2212" : "\u00b1";
+  return `${sign}${formatNumber(Math.abs(delta), locale)}`;
+}
+
+/**
  * "Bullet, Blitz and Rapid" — a list, joined the way the locale joins one.
  *
  * `join(", ")` is a Latin-script assumption: the separator, the spacing and

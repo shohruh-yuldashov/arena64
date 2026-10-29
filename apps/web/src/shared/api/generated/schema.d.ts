@@ -3287,6 +3287,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ratings/me/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your own rating over time
+         * @description The caller's rated matches in one key, oldest first — A64-032.
+         *
+         *     **Yours only, and only through the token.** There is no `player_id`
+         *     anywhere on this route. A rating's current value is public; what each
+         *     match did to it is served elsewhere only to the player it happened to
+         *     (`GET /players/{id}/matches` gives the change on your own history and
+         *     `null` on anybody else's), and this route keeps that boundary rather
+         *     than widening it.
+         *
+         *     Every point is a stored adjustment — nothing is interpolated, smoothed
+         *     or reconstructed. A key never played is an empty list, not a `404`.
+         */
+        get: operations["my_rating_history_api_v1_ratings_me_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/players/{player_id}/ratings": {
         parameters: {
             query?: never;
@@ -4870,6 +4900,11 @@ export interface components {
         /** ApiResponse[QueueTicketResponse] */
         ApiResponse_QueueTicketResponse_: {
             data: components["schemas"]["QueueTicketResponse"];
+            meta: components["schemas"]["ResponseMeta"];
+        };
+        /** ApiResponse[RatingHistoryResponse] */
+        ApiResponse_RatingHistoryResponse_: {
+            data: components["schemas"]["RatingHistoryResponse"];
             meta: components["schemas"]["ResponseMeta"];
         };
         /** ApiResponse[ReadinessResponse] */
@@ -6564,9 +6599,14 @@ export interface components {
          * MatchHistoryEntryResponse
          * @description One finished match, as a list renders it.
          *
-         *     `opponent_id` is present only when the viewer played — it is the field
-         *     that makes a personal history readable, and it is meaningless when a
-         *     stranger reads somebody else's record.
+         *     `opponent_id` and `opponent` are read from the seat of the player whose
+         *     history this is — A64-032. They were the *viewer's* opponent, which made
+         *     a personal history readable and left every row of somebody else's
+         *     record with no opponent at all, so a profile listing a player's recent
+         *     games could only say "unknown" down the column. Both seat ids were
+         *     already on the row and the names come from the same privacy-gated
+         *     profile read, so reading from the owner's seat discloses nothing new;
+         *     for a player reading their own history the two seats are the same.
          */
         MatchHistoryEntryResponse: {
             /**
@@ -6600,7 +6640,7 @@ export interface components {
             dark_player_id: string;
             /**
              * Opponent Id
-             * @description The other player, when the viewer is a participant.
+             * @description The other player, from the seat of the player whose history this is.
              */
             opponent_id?: string | null;
             /** Outcome */
@@ -6611,7 +6651,7 @@ export interface components {
             winner: string | null;
             /** Ply Number */
             ply_number: number;
-            /** @description The other player's public identity, when the viewer is a participant. Composed from `users`' privacy-gated read; `null` for a deactivated account or when the viewer did not play. */
+            /** @description The other player's public identity, from the seat of the player whose history this is. Composed from `users`' privacy-gated read; `null` for a deactivated account. */
             opponent?: components["schemas"]["ReplaySeatResponse"] | null;
             /** @description How much time each side had. `null` for an untimed match. */
             time_control?: components["schemas"]["ReplayTimeControlResponse"] | null;
@@ -8156,6 +8196,46 @@ export interface components {
          * @enum {string}
          */
         QueueType: "ranked" | "casual";
+        /** RatingHistoryPointResponse */
+        RatingHistoryPointResponse: {
+            /**
+             * Match Id
+             * Format: uuid
+             */
+            match_id: string;
+            /**
+             * At
+             * Format: date-time
+             * @description When the adjustment was applied.
+             */
+            at: string;
+            /** Before */
+            before: number;
+            /** After */
+            after: number;
+            /**
+             * Delta
+             * @description `after - before`, computed once, on the server.
+             */
+            delta: number;
+        };
+        /**
+         * RatingHistoryResponse
+         * @description One key's adjustments, oldest first, capped at the most recent `limit`.
+         */
+        RatingHistoryResponse: {
+            /** Variant */
+            variant: string;
+            /** Speed Class */
+            speed_class: string;
+            /** Points */
+            points: components["schemas"]["RatingHistoryPointResponse"][];
+            /**
+             * Has Earlier
+             * @description Older adjustments exist beyond the limit, so the first point is not the first game.
+             */
+            has_earlier: boolean;
+        };
         /**
          * RatingsResponse
          * @description Every rating category a public profile reports.
@@ -8879,13 +8959,13 @@ export interface components {
             win_rate: number;
             /**
              * Current Rating
-             * @description The player's headline rating. **Read it together with the `ratings` block**, which reports the same player per speed category and marks a provisional rating as provisional; this single number carries no such marker yet because nothing computes it. Both start at 1500 for a player who has never played.
+             * @description **Not yet computed — use the `ratings` block instead.** Intended as the player's headline rating, but nothing writes it (`specs/statistics.md` §6, §8), so it reads 1500 for everybody. The `ratings` block reports the real rating per speed category and marks a provisional one as provisional.
              * @example 1500
              */
             current_rating: number;
             /**
              * Highest Rating
-             * @description The highest rating this player has ever held. Never below `current_rating`. Equal to it for a player who has never played.
+             * @description **Not yet computed — do not display it.** Intended as the highest rating this player has ever held, but nothing writes it: it is `rating`'s fact and no projection carries it here yet (`specs/statistics.md` §6, §8), so it reads 1500 for everybody. The real per-speed-class peak is kept by `rating` and is not yet published. Never below `current_rating`.
              * @example 1500
              */
             highest_rating: number;
@@ -13769,6 +13849,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiResponse_PlayerRatingsResponse_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_rating_history_api_v1_ratings_me_history_get: {
+        parameters: {
+            query?: {
+                /** @description Which rule set. */
+                variant?: components["schemas"]["ProductVariant"];
+                /** @description Which speed class. */
+                speed_class?: components["schemas"]["SpeedClass"];
+                /** @description Most recent points to return. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_RatingHistoryResponse_"];
                 };
             };
             /** @description Validation Error */

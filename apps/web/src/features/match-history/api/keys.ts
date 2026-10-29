@@ -13,4 +13,7 @@
 export const matchHistoryKeys = {
   root: ["game", "match-history"] as const,
   player: (playerId: string) => ["game", "match-history", playerId] as const,
+  // Under the player's key, so anything that invalidates their history
+  // invalidates the short list a profile shows too.
+  recent: (playerId: string) => ["game", "match-history", playerId, "recent"] as const,
 };

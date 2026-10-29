@@ -61,6 +61,7 @@ from app.api.deps import (
     RedisPoolsDep,
     StatisticsSettingsDep,
 )
+from app.api.restriction_deps import RestrictedAccountsDep
 from app.config.settings import Settings
 from app.core.clock import Clock
 from app.database.redis import RedisPools
@@ -87,6 +88,7 @@ from app.modules.profiles.application.ports import (
     ViewerRelationshipProvider,
 )
 from app.modules.profiles.application.services import ProfileService
+from app.modules.profiles.application.services.leaderboard_service import LeaderboardService
 from app.modules.profiles.application.services.profile_composer import PublicProfileComposer
 from app.modules.profiles.application.services.profile_directory_service import (
     ProfileDirectoryService,
@@ -104,6 +106,9 @@ from app.modules.profiles.infrastructure import (
     SocialRelationshipStateProvider,
 )
 from app.modules.profiles.infrastructure.rating_compatibility import PublishedRatingProvider
+from app.modules.rating.infrastructure.repositories.leaderboard_repository import (
+    SqlAlchemyLeaderboardReader,
+)
 from app.modules.rating.infrastructure.repositories.player_rating_repository import (
     SqlAlchemyRatingReader,
 )
@@ -249,6 +254,30 @@ def get_rating_provider(session: DbSessionDep) -> RatingProvider:
 
 
 RatingProviderDep = Annotated[RatingProvider, Depends(get_rating_provider)]
+
+
+def get_leaderboard_service(
+    session: DbSessionDep,
+    clock: ClockDep,
+    profiles: PublicProfileReaderDep,
+    restrictions: RestrictedAccountsDep,
+) -> LeaderboardService:
+    """The ladder with names on it — A64-033.
+
+    Every collaborator is a read: `rating`'s ladder typed as its published
+    port, `users`' public profiles, and `admin`'s restriction membership.
+    Nothing here can move a rating, read an email or see why somebody was
+    restricted.
+    """
+    return LeaderboardService(
+        ladder=SqlAlchemyLeaderboardReader(session),
+        profiles=profiles,
+        restrictions=restrictions,
+        clock=clock,
+    )
+
+
+LeaderboardServiceDep = Annotated[LeaderboardService, Depends(get_leaderboard_service)]
 
 
 def get_statistics_provider(

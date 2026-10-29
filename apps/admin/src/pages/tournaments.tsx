@@ -197,7 +197,7 @@ export function TournamentsPage() {
 
       {pages.state === "ready" && pages.rows.length > 0 && (
         <>
-          <DataTable caption={t("tournaments.title")} minWidth="50rem">
+          <DataTable caption={t("tournaments.title")} minWidth="50rem" narrow="cards">
             <thead>
               <tr>
                 <th scope="col">{t("tournaments.colName")}</th>
@@ -269,6 +269,7 @@ export function TournamentsPage() {
             hasPrevious={pages.hasPrevious}
             hasNext={pages.hasNext}
             busy={pages.busy}
+            failed={pages.failed}
             onPrevious={pages.previous}
             onNext={pages.next}
           />

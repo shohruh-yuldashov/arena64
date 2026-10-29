@@ -457,8 +457,12 @@ h4 {
 }
 
 /* On a phone the rail is a sheet, off-canvas until asked for. Its contents
-   stay in the DOM so navigation is reachable by keyboard and by a screen
-   reader in the order the markup states. */
+   stay in the DOM so the reading order is the markup's at every width.
+
+   Closed, it is also `visibility: hidden` — A64-031.G. Off-canvas alone
+   left its eleven controls in the tab order, focused where nobody could see
+   them. The visibility change waits out the slide on the way out and is
+   immediate on the way in, so the sheet animates in both directions. */
 @media (max-width: 63.99rem) {
   .sidebar {
     position: fixed;
@@ -466,12 +470,17 @@ h4 {
     z-index: 40;
     inline-size: min(18.5rem, 88vw);
     transform: translateX(-101%);
-    transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+    visibility: hidden;
+    transition:
+      transform 0.2s cubic-bezier(0.32, 0.72, 0, 1),
+      visibility 0s linear 0.2s;
     box-shadow: var(--shadow-raised);
   }
 
   .sidebar[data-open="true"] {
     transform: none;
+    visibility: visible;
+    transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1);
   }
 }
 
@@ -1660,7 +1669,17 @@ h4 {
   color: var(--muted);
 }
 
-.users-cards {
+/* Two lists with one look — A64-031.G.
+ *
+ * `.users-cards` is the narrow twin of a table and hides itself on a wide
+ * screen. `.card-list` is the only rendering of its rows and never hides:
+ * the tournament page used the twin for its entrants and its bracket, so on
+ * every screen 48rem or wider both sections were a heading over nothing.
+ *
+ * A card is a column. Its fields are separate facts, and laid inline they
+ * ran together — "Player 0player0@example.test". */
+.users-cards,
+.card-list {
   list-style: none;
   margin: 0 0 1.25rem;
   padding: 0;
@@ -1668,7 +1687,16 @@ h4 {
   gap: 0.75rem;
 }
 
-.users-cards li {
+.card-list {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
+}
+
+.users-cards li,
+.card-list li {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -1677,7 +1705,8 @@ h4 {
 }
 
 @media (max-width: 47.99rem) {
-  .users-table {
+  .users-table,
+  .table-scroll--wide {
     display: none;
   }
 }

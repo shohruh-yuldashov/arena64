@@ -45,6 +45,10 @@ export function MatchDetailPage() {
 
   const [match, setMatch] = useState<AdminMatchDetail | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  // Bumped by "Try again": the same abortable read, asked once more —
+  // A64-031.G. Before, a detail page that failed to load had no way out
+  // but a browser reload, unlike every listing beside it.
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -59,7 +63,7 @@ export function MatchDetailPage() {
       setState("error");
     });
     return () => controller.abort();
-  }, [matchId]);
+  }, [matchId, attempt]);
 
   const vocab = useVocab();
 
@@ -82,7 +86,14 @@ export function MatchDetailPage() {
       </p>
 
       {state === "loading" && <LoadingSkeleton rows={4} label={t("matches.loading")} />}
-      {state === "error" && <ErrorState title={t("matches.error")} />}
+      {state === "error" && (
+        <ErrorState
+          title={t("matches.error")}
+          onRetry={() => {
+            setAttempt((count) => count + 1);
+          }}
+        />
+      )}
 
       {state === "ready" && match !== null && (
         <>

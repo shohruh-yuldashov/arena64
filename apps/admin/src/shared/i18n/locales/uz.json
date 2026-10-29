@@ -264,6 +264,7 @@
   "login": {
     "email": "Elektron pochta",
     "invalid": "Bu ma'lumotlar qabul qilinmadi.",
+    "missing": "Elektron pochta va parolni kiriting.",
     "password": "Parol",
     "rateLimited": "Urinishlar juda ko'p. Biroz kutib, qayta urinib ko'ring.",
     "refused": "Bu hisob bu yerga kira olmaydi.",
@@ -475,6 +476,7 @@
     "unread": "O'qilmagan"
   },
   "pagination": {
+    "failed": "Sahifani yuklab bo'lmadi. Avvalgi sahifa ko'rsatilmoqda — qayta urinib ko'ring.",
     "label": "Sahifalash",
     "loading": "Yuklanmoqda…",
     "next": "Keyingi →",
@@ -548,6 +550,7 @@
     "colEntrants": "Ishtirokchilar",
     "colFormat": "Format",
     "colName": "Turnir",
+    "colPlayer": "O'yinchi",
     "colStart": "Boshlangan",
     "colStatus": "Holat",
     "colVariant": "Variant",
@@ -637,6 +640,11 @@
     "viewModeration": "Barcha cheklovlar"
   },
   "vocab": {
+    "advancementReason": {
+      "adjudication": "Qaror — yuqori seed",
+      "bye": "O'yinsiz o'tish",
+      "played": "O'yinda g'alaba"
+    },
     "auditOutcome": {
       "failed": "Rad etildi",
       "succeeded": "Bajarildi"
@@ -649,6 +657,12 @@
     },
     "entrantStatus": {
       "registered": "Ro'yxatda",
+      "withdrawn": "Chiqib ketgan"
+    },
+    "finalStatus": {
+      "champion": "Chempion",
+      "eliminated": "Turnirdan chiqdi",
+      "runner_up": "Ikkinchi o'rin",
       "withdrawn": "Chiqib ketgan"
     },
     "matchMode": {
@@ -683,6 +697,12 @@
       "draw": "Durang",
       "none": "Natijasiz",
       "win": "G'alaba"
+    },
+    "roundStatus": {
+      "completed": "Tugallandi",
+      "in_progress": "Davom etmoqda",
+      "pending": "Hali e'lon qilinmagan",
+      "published": "E'lon qilingan"
     },
     "sanctionCategory": {
       "abuse": "Suiiste'mol",

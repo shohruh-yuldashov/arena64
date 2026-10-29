@@ -18,20 +18,32 @@ import type { ReactNode } from "react";
  * §30 permits the internal scroll deliberately: a dense operational table
  * folded into cards loses the column alignment that makes a hundred rows
  * scannable, which is the entire reason it is a table.
+ *
+ * ## A table with a card twin steps aside on a phone — A64-031.G
+ *
+ * Five listings render their rows twice, as this table and as a card list
+ * below 48rem, and only the old `.users-table` class knew to hide itself
+ * there. When those pages moved onto this wrapper the rule stopped
+ * matching, and a phone showed every row twice: a scrolling table, then the
+ * same rows as cards. `narrow="cards"` says so at the call site rather than
+ * in a selector that has to guess which sibling follows.
  */
 export function DataTable({
   caption,
   children,
   minWidth,
+  narrow = "scroll",
 }: {
   /** Names the table for a screen reader. Visually hidden. */
   caption: string;
   children: ReactNode;
   /** Where the table starts scrolling instead of compressing. */
   minWidth?: string;
+  /** Below 48rem: scroll, or give way to the card list the page renders. */
+  narrow?: "scroll" | "cards";
 }) {
   return (
-    <div className="table-scroll">
+    <div className={narrow === "cards" ? "table-scroll table-scroll--wide" : "table-scroll"}>
       <table
         className="data-table"
         style={minWidth === undefined ? undefined : { minInlineSize: minWidth }}

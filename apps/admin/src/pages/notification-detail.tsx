@@ -13,8 +13,8 @@ import {
 } from "@/shared/api/client";
 import { useVocab } from "@/features/vocabulary";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
-import { ErrorNotice } from "@/shared/ui/error-notice";
 import { ConfirmDialog } from "@/shared/ui/confirm-dialog";
+import { ErrorState, LoadingSkeleton } from "@/shared/ui/states";
 
 /**
  * One notification and every device it was owed to — A64-024.7 §19.
@@ -45,6 +45,10 @@ export function NotificationDetailPage() {
 
   const [detail, setDetail] = useState<AdminNotificationDetail | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  // Bumped by "Try again": the same abortable read, asked once more —
+  // A64-031.G. Before, a detail page that failed to load had no way out
+  // but a browser reload, unlike every listing beside it.
+  const [attempt, setAttempt] = useState(0);
   const [pending, setPending] = useState<AdminPushDeliveryView | null>(null);
   const [busy, setBusy] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
@@ -65,7 +69,7 @@ export function NotificationDetailPage() {
     });
 
     return () => controller.abort();
-  }, [notificationId]);
+  }, [notificationId, attempt]);
 
   /**
    * Folds the server's answer back into the page.
@@ -125,8 +129,15 @@ export function NotificationDetailPage() {
         <Link to="/notifications">{t("notifications.back")}</Link>
       </p>
 
-      {state === "loading" && <p role="status">{t("notifications.loading")}</p>}
-      {state === "error" && <ErrorNotice message={t("notifications.error")} />}
+      {state === "loading" && <LoadingSkeleton rows={4} label={t("notifications.loading")} />}
+      {state === "error" && (
+        <ErrorState
+          title={t("notifications.error")}
+          onRetry={() => {
+            setAttempt((count) => count + 1);
+          }}
+        />
+      )}
 
       {state === "ready" && detail !== null && (
         <>

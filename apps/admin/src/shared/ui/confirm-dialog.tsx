@@ -32,12 +32,20 @@ import { useTranslation } from "@/shared/i18n";
  * reason field for a restriction. An operator who opens the dialog by
  * accident and presses `Escape` cancels; one who presses `Enter` with an
  * empty required field is stopped by the browser's own validation.
+ *
+ * ## The confirm button's colour is the action's, not the dialog's
+ *
+ * `danger` is the default because most of what this console confirms takes
+ * something away. Creating a tournament and restoring an account do not,
+ * and painting them red taught an operator that red means "a dialog" rather
+ * than "this cannot be taken back" — A64-031.G.
  */
 export function ConfirmDialog({
   open,
   title,
   description,
   confirmLabel,
+  tone = "danger",
   busy,
   error,
   onConfirm,
@@ -48,6 +56,7 @@ export function ConfirmDialog({
   title: string;
   description: string;
   confirmLabel: string;
+  tone?: "danger" | "primary";
   busy: boolean;
   error: string | null;
   onConfirm: () => void;
@@ -109,7 +118,7 @@ export function ConfirmDialog({
           </button>
           {/* Named for what it does, not "OK" — §27: a destructive action
               must say which action it is. */}
-          <button type="submit" className="action danger" disabled={busy}>
+          <button type="submit" className={`action ${tone}`} disabled={busy}>
             {busy ? t("moderation.working") : confirmLabel}
           </button>
         </p>

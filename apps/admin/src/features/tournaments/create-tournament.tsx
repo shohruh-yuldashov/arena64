@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { useVocab } from "@/features/vocabulary";
 import { type AdminTournamentAction, createTournament } from "@/shared/api/client";
 import { useTranslation } from "@/shared/i18n";
 import { ConfirmDialog } from "@/shared/ui/confirm-dialog";
@@ -40,6 +41,7 @@ export function CreateTournament({
   onCreated: (created: AdminTournamentAction) => void;
 }) {
   const { t } = useTranslation();
+  const vocab = useVocab();
 
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -103,6 +105,7 @@ export function CreateTournament({
         title={t("tournamentActions.createTitle")}
         description={t("tournamentActions.deadlineHint")}
         confirmLabel={t("tournamentActions.createSubmit")}
+        tone="primary"
         busy={busy}
         error={error}
         onCancel={close}
@@ -128,7 +131,7 @@ export function CreateTournament({
           >
             {VARIANTS.map((value) => (
               <option key={value} value={value}>
-                {value}
+                {vocab("variant", value)}
               </option>
             ))}
           </select>
@@ -143,7 +146,7 @@ export function CreateTournament({
           >
             {SPEEDS.map((value) => (
               <option key={value} value={value}>
-                {value}
+                {vocab("speedClass", value)}
               </option>
             ))}
           </select>

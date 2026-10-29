@@ -37,6 +37,10 @@ export function UserDetailPage() {
 
   const [user, setUser] = useState<AdminUserDetail | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  // Bumped by "Try again": the same abortable read, asked once more —
+  // A64-031.G. Before, a detail page that failed to load had no way out
+  // but a browser reload, unlike every listing beside it.
+  const [attempt, setAttempt] = useState(0);
   const [notice, setNotice] = useState<TranslationKey | null>(null);
 
   /**
@@ -76,7 +80,7 @@ export function UserDetailPage() {
     });
 
     return () => controller.abort();
-  }, [userId]);
+  }, [userId, attempt]);
 
   const restriction = user?.moderation.restriction ?? null;
 
@@ -92,7 +96,14 @@ export function UserDetailPage() {
       </p>
 
       {state === "loading" && <LoadingSkeleton rows={4} label={t("users.loading")} />}
-      {state === "error" && <ErrorState title={t("users.error")} />}
+      {state === "error" && (
+        <ErrorState
+          title={t("users.error")}
+          onRetry={() => {
+            setAttempt((count) => count + 1);
+          }}
+        />
+      )}
 
       {state === "ready" && user !== null && (
         <>

@@ -194,7 +194,7 @@ export function MatchesPage() {
 
       {pages.state === "ready" && pages.rows.length > 0 && (
         <>
-          <DataTable caption={t("matches.title")} minWidth="52rem">
+          <DataTable caption={t("matches.title")} minWidth="52rem" narrow="cards">
             <thead>
               <tr>
                 <th scope="col">{t("matches.colPlayers")}</th>
@@ -269,6 +269,7 @@ export function MatchesPage() {
             hasPrevious={pages.hasPrevious}
             hasNext={pages.hasNext}
             busy={pages.busy}
+            failed={pages.failed}
             onPrevious={pages.previous}
             onNext={pages.next}
           />

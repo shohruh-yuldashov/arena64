@@ -298,6 +298,7 @@ export function NotificationsPage() {
                 hasPrevious={pages.hasPrevious}
                 hasNext={pages.hasNext}
                 busy={pages.busy}
+                failed={pages.failed}
                 onPrevious={pages.previous}
                 onNext={pages.next}
               />

@@ -2251,12 +2251,74 @@ errors.
   stylesheet; it was found by measuring the rendered box in a real browser.
   The suite guards behaviour, not paint.
 - **Two browser tabs can still race a token rotation** — §14.1.
-- Detail pages use `ErrorNotice` where listings use `ErrorState`; both are
-  accessible and honest, and the difference is not visible to an operator
-  who is not comparing source.
+- ~~Detail pages use `ErrorNotice` where listings use `ErrorState`~~ —
+  closed by A64-031.G (§15.2): every detail page now loads with
+  `LoadingSkeleton` and fails with `ErrorState`, with a retry.
 
 ## 14.7 What A64-027A.5 did not do
 
 - No backend change. `git diff` against A64-027A.4 for `apps/api` is empty.
 - No new dependency.
 - No new page, route, control, metric or field.
+
+---
+
+# 15. Admin UX polish — A64-031.G
+
+The last checkpoint of A64-031 (beta feedback and product polish). Not a
+redesign: every console route was **used** — in a real browser, at 390,
+800 and 1280px, by keyboard, with a failing API — and what follows is
+what that found that §14's reading did not. Audited 2026-10-29.
+
+## 15.1 Defects found
+
+| # | Sev | Surface | Defect |
+| --- | --- | --- | --- |
+| 1 | P1 | `/tournaments/{id}` | Entrants and the bracket rendered nothing at ≥48rem; rounds and standings rendered nothing below it. Each used one half of the `.users-cards` / `.users-table` responsive pair, which hides itself at one breakpoint |
+| 2 | P1 | `/users`, `/matches`, `/tournaments`, `/moderation`, `/audit` | Below 48rem every row rendered twice — table, then cards. The hide rule matched `.users-table`, and these tables became `DataTable` in A64-027A.3 |
+| 3 | P1 | shell, below 64rem | The closed sheet was only off-canvas: eleven invisible tab stops before the menu button. Opened, the first Tab left the sheet for the page under the scrim |
+| 4 | P1 | every listing | A failed Next/Previous was silent — the button re-enabled and nothing changed |
+| 5 | P1 | whole console | `<html lang>` stayed `en` while the console rendered in Uzbek or Russian (WCAG 3.1.1) |
+| 6 | P2 | every listing | "Try again" over a failed first load showed nothing while it ran and nothing when it failed again |
+| 7 | P2 | detail pages | No retry after a failed load (§14.6) |
+| 8 | P2 | `/tournaments/{id}` | Round status, final status and advancement reason printed as enums; the standings' player column was headed "Tournament" |
+| 9 | P2 | create tournament | Variant and speed options printed as enums |
+| 10 | P2 | `ConfirmDialog` | Every confirm button was red — Create tournament and Restore access included |
+| 11 | P2 | mobile card lists | A card's fields ran together inline — "Player 0player0@example.test" |
+| 12 | P2 | broadcast composer | The recipient field's hint and error were not its description; a screen reader heard "invalid" and not why |
+| 13 | P2 | `/login` | An empty submit reached the server, and its `422` read as "Could not reach the server" |
+| 14 | P2 | session gate | The retry on an unreachable session was labelled "Back to the dashboard" |
+| 15 | P3 | `/tournaments/{id}` | The Actions panel's content sat outside `panel__body`, flush to the frame |
+
+## 15.2 What changed
+
+| Defect | Change |
+| --- | --- |
+| 1, 11 | `.card-list`: the card look with no breakpoint to hide behind, and a card is a column. Rounds and standings are `DataTable`s |
+| 2 | `DataTable narrow="cards"` — said at the call site, not inferred by a sibling selector. §12.4's strategy is unchanged: a table with a card twin gives way below 48rem; one without scrolls |
+| 3 | Closed sheet is `visibility: hidden`; open, focus moves in and the workspace is `inert`; closing returns focus to the menu button; widening past 64rem closes it |
+| 4, 6 | `useCursorPages` reports `failed`; `Pagination` renders it as an alert; `reload` over a failed load is a load |
+| 5 | `I18nProvider` sets `lang` from the locale, however it was chosen |
+| 7 | User, match, tournament and notification detail: `LoadingSkeleton`, `ErrorState` with retry |
+| 8, 9 | `vocab.roundStatus`, `vocab.finalStatus`, `vocab.advancementReason`; `tournaments.colPlayer` |
+| 10 | `ConfirmDialog tone` — `danger` by default, `primary` where nothing is taken away. Start tournament and Send broadcast stay red |
+| 12 | `aria-describedby` on the recipient field |
+| 13 | Checked before the request: `login.missing` |
+| 14 | `state.retry` |
+
+Eleven tests in `apps/admin/src/pages/console-polish.test.tsx`, each
+failing before the change. Defects 1, 2, 3 (the closed sheet) and 11 are
+paint: §14.6 still holds, and they were measured before and after in a
+real browser rather than asserted under jsdom.
+
+## 15.3 What A64-031.G did not do
+
+- No backend change, no new dependency, no new route, permission or field.
+- **No language switcher.** `setLocale` exists and nothing calls it, so
+  the language is the stored preference or the browser's. Adding the
+  control is a product decision about where it lives, not a defect fix.
+- **A missing record reads as a failure.** The client maps `404` to
+  `unavailable`, so an unknown id shows "could not load" with a retry that
+  cannot succeed. Distinguishing them widens `Outcome` for every reader.
+- The new `uz` and `ru` strings were written without a native reviewer.
+

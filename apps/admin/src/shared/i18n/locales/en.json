@@ -264,6 +264,7 @@
   "login": {
     "email": "Email",
     "invalid": "Those credentials were not accepted.",
+    "missing": "Enter your email and password.",
     "password": "Password",
     "rateLimited": "Too many attempts. Wait a moment and try again.",
     "refused": "This account may not sign in here.",
@@ -475,6 +476,7 @@
     "unread": "Unread"
   },
   "pagination": {
+    "failed": "Could not load that page. The rows shown are still the previous page — try again.",
     "label": "Pagination",
     "loading": "Loading…",
     "next": "Next →",
@@ -548,6 +550,7 @@
     "colEntrants": "Entrants",
     "colFormat": "Format",
     "colName": "Tournament",
+    "colPlayer": "Player",
     "colStart": "Started",
     "colStatus": "Status",
     "colVariant": "Variant",
@@ -637,6 +640,11 @@
     "viewModeration": "All restrictions"
   },
   "vocab": {
+    "advancementReason": {
+      "adjudication": "Adjudicated — higher seed",
+      "bye": "Bye",
+      "played": "Won the game"
+    },
     "auditOutcome": {
       "failed": "Refused",
       "succeeded": "Succeeded"
@@ -649,6 +657,12 @@
     },
     "entrantStatus": {
       "registered": "Registered",
+      "withdrawn": "Withdrawn"
+    },
+    "finalStatus": {
+      "champion": "Champion",
+      "eliminated": "Eliminated",
+      "runner_up": "Runner-up",
       "withdrawn": "Withdrawn"
     },
     "matchMode": {
@@ -683,6 +697,12 @@
       "draw": "Draw",
       "none": "No result",
       "win": "Win"
+    },
+    "roundStatus": {
+      "completed": "Completed",
+      "in_progress": "In progress",
+      "pending": "Not yet published",
+      "published": "Published"
     },
     "sanctionCategory": {
       "abuse": "Abuse",

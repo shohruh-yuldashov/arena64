@@ -204,8 +204,11 @@ function ProtectedLayout() {
     return (
       <main className="gate">
         <p role="alert">{t("auth.failed")}</p>
+        {/* It asks again; it does not go anywhere — A64-031.G. The label
+            said "Back to the dashboard", which is where the operator
+            already was. */}
         <button type="button" className="action" onClick={resolve}>
-          {t("route.backToDashboard")}
+          {t("state.retry")}
         </button>
       </main>
     );
@@ -257,6 +260,18 @@ function ProtectedLayout() {
  * button's own accessible name keep every destination announceable. The
  * state is deliberately not persisted — it is a momentary "give me more
  * width for this table", not a setting.
+ *
+ * ## The sheet is modal while it is open — A64-031.G
+ *
+ * Closed, it is `visibility: hidden` as well as off-canvas, so its eleven
+ * controls leave the tab order; before, a keyboard operator on a tablet
+ * tabbed through eleven invisible stops before reaching the menu button.
+ * Open, focus moves into it and the workspace behind is `inert` — the sheet
+ * precedes the toolbar in the markup, so the first Tab after opening it
+ * otherwise landed in the page under the scrim. Closing hands focus back to
+ * the menu button, and widening past the breakpoint closes it, because a
+ * column has no scrim to dismiss and an inert workspace beside it would be
+ * a console that ignores every click.
  */
 function ConsoleShell({
   identity,
@@ -275,6 +290,9 @@ function ConsoleShell({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [rail, setRail] = useState(false);
   const current = sectionFor(pathname);
+  const sheet = useRef<HTMLElement>(null);
+  const menuToggle = useRef<HTMLButtonElement>(null);
+  const wasOpen = useRef(false);
 
   // A navigation closes the sheet. Without this, following a link on a
   // phone leaves the destination hidden behind the menu that opened it.
@@ -293,9 +311,36 @@ function ConsoleShell({
     };
   }, [drawerOpen]);
 
+  useEffect(() => {
+    if (drawerOpen) {
+      sheet.current?.querySelector<HTMLElement>("nav a")?.focus();
+    } else if (wasOpen.current) {
+      // Focus was in the sheet or on the scrim, and both have just become
+      // unreachable. The control that opened it is where to continue from.
+      const focused = document.activeElement;
+      if (focused === document.body || sheet.current?.contains(focused)) {
+        menuToggle.current?.focus();
+      }
+    }
+    wasOpen.current = drawerOpen;
+  }, [drawerOpen]);
+
+  useEffect(() => {
+    // Absent in jsdom, and the sheet cannot be open there anyway.
+    if (typeof window.matchMedia !== "function") return;
+    const wide = window.matchMedia("(min-width: 64rem)");
+    const onChange = () => {
+      if (wide.matches) setDrawerOpen(false);
+    };
+    wide.addEventListener("change", onChange);
+    return () => {
+      wide.removeEventListener("change", onChange);
+    };
+  }, []);
+
   return (
     <div className="shell" data-rail={rail ? "true" : undefined}>
-      <aside className="sidebar" data-open={drawerOpen ? "true" : undefined}>
+      <aside ref={sheet} className="sidebar" data-open={drawerOpen ? "true" : undefined}>
         <Link className="sidebar__brand" to="/">
           {/* The platform's own mark. A64-027A.1 drew an "A64" monogram
               here — a third brand treatment beside the wordmark and the
@@ -360,9 +405,10 @@ function ConsoleShell({
         />
       )}
 
-      <div className="workspace">
+      <div className="workspace" inert={drawerOpen}>
         <header className="topbar">
           <button
+            ref={menuToggle}
             type="button"
             className="action subtle icon-only menu-toggle"
             aria-label={t("shell.openMenu")}

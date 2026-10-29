@@ -264,6 +264,7 @@
   "login": {
     "email": "Электронная почта",
     "invalid": "Эти данные не приняты.",
+    "missing": "Введите электронную почту и пароль.",
     "password": "Пароль",
     "rateLimited": "Слишком много попыток. Подождите и попробуйте снова.",
     "refused": "Этот аккаунт не может войти здесь.",
@@ -475,6 +476,7 @@
     "unread": "Не прочитано"
   },
   "pagination": {
+    "failed": "Не удалось загрузить страницу. Показана прежняя страница — попробуйте ещё раз.",
     "label": "Постраничная навигация",
     "loading": "Загрузка…",
     "next": "Вперёд →",
@@ -548,6 +550,7 @@
     "colEntrants": "Участники",
     "colFormat": "Формат",
     "colName": "Турнир",
+    "colPlayer": "Игрок",
     "colStart": "Начало",
     "colStatus": "Статус",
     "colVariant": "Вариант",
@@ -637,6 +640,11 @@
     "viewModeration": "Все ограничения"
   },
   "vocab": {
+    "advancementReason": {
+      "adjudication": "Решение — выше посев",
+      "bye": "Проход без игры",
+      "played": "Победа в партии"
+    },
     "auditOutcome": {
       "failed": "Отклонено",
       "succeeded": "Выполнено"
@@ -649,6 +657,12 @@
     },
     "entrantStatus": {
       "registered": "Зарегистрирован",
+      "withdrawn": "Снялся"
+    },
+    "finalStatus": {
+      "champion": "Чемпион",
+      "eliminated": "Выбыл",
+      "runner_up": "Второе место",
       "withdrawn": "Снялся"
     },
     "matchMode": {
@@ -683,6 +697,12 @@
       "draw": "Ничья",
       "none": "Без результата",
       "win": "Победа"
+    },
+    "roundStatus": {
+      "completed": "Завершён",
+      "in_progress": "Идёт",
+      "pending": "Не опубликован",
+      "published": "Опубликован"
     },
     "sanctionCategory": {
       "abuse": "Злоупотребление",

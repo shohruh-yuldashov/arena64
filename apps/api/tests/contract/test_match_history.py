@@ -310,9 +310,8 @@ class TestTheApiIsReachable:
     ) -> None:
         """§3 and §4 — the same casual match, read by somebody who played it.
 
-        `opponent_id` is populated only for a participant: it makes a
-        personal history readable and is meaningless when a stranger reads
-        somebody else's record.
+        `opponent_id` is the other seat from the history owner's side, which
+        for a player reading their own history is their opponent.
         """
         player = await register(client, contract_session)
         await _finished(
@@ -331,6 +330,35 @@ class TestTheApiIsReachable:
         assert [entry["match_id"] for entry in entries] == [str(_id(410))]
         assert entries[0]["opponent_id"] == str(_id(9))
         assert entries[0]["rated"] is False
+
+    async def test_a_stranger_reading_a_history_sees_the_owners_opponent(
+        self, client: AsyncClient, contract_session: AsyncSession
+    ) -> None:
+        """A64-032 — the row reads from the owner's seat, not the viewer's.
+
+        A profile lists a player's recent games for whoever is looking. Read
+        from the viewer's seat, every row of somebody else's record named no
+        opponent at all. The rating change stays the owner's alone.
+        """
+        stranger = await register(client, contract_session)
+        owner = _id(720)
+        await _finished(
+            contract_session,
+            match_id=_id(420),
+            light=_id(9),
+            dark=owner,
+            created_at=NOW,
+            rated=True,
+        )
+        await contract_session.commit()
+
+        response = await client.get(f"/api/v1/players/{owner}/matches", headers=stranger.auth)
+
+        assert response.status_code == 200, response.text
+        [entry] = response.json()["data"]["entries"]
+        assert entry["opponent_id"] == str(_id(9))
+        assert entry["opponent"]["player_id"] == str(_id(9))
+        assert entry["rating"] is None
 
     async def test_a_hidden_match_and_an_unknown_match_are_indistinguishable(
         self, client: AsyncClient, contract_session: AsyncSession

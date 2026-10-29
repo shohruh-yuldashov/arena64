@@ -260,15 +260,20 @@
       "subtitle": "Bu ma'lumotlar ommaviy profilingizda ko'rinadi.",
       "displayName": "Ko'rsatiladigan ism",
       "bio": "O'zingiz haqingizda",
-      "country": "Mamlakat kodi",
-      "countryHint": "Ikki harfli kod, masalan UZ",
+      "country": "Mamlakat",
+      "countryHint": "Ommaviy profilingizda bayrog'i bilan ko'rsatiladi. Interfeys tiliga ta'sir qilmaydi.",
+      "countryNone": "Tanlanmagan",
+      "countrySearch": "Mamlakatni qidirish",
+      "countryRemove": "Mamlakatni olib tashlash",
+      "countryNoMatch": "«{query}» bo'yicha mamlakat topilmadi",
+      "countryUnknown": "«{code}» — noma'lum mamlakat kodi. Ro'yxatdan mamlakat tanlang yoki uni olib tashlang.",
       "bioHint": "Ko'pi bilan {max} ta belgi",
       "save": "Saqlash",
       "saved": "Saqlandi",
       "noChanges": "O'zgarish yo'q",
       "displayNameTooLong": "Ko'pi bilan {max} ta belgi",
       "bioTooLong": "Ko'pi bilan {max} ta belgi",
-      "countryInvalid": "Ikki harfli mamlakat kodi kiriting"
+      "countryInvalid": "Ro'yxatdan mamlakat tanlang"
     },
     "avatar": {
       "title": "Rasm",

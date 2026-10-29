@@ -1,3 +1,4 @@
+import { countryFlag, countryName, toCountryCode } from "@/entities/country";
 import type { MyProfile, PlayerRating, PublicProfile } from "@/entities/profile";
 import { avatarSrc, initialsOf, nameOf, primaryRating } from "@/entities/profile";
 import { speedClassKey } from "@/entities/time-control";
@@ -33,6 +34,11 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/shared/ui";
  *
  * That is why the props are optional rather than nullable-with-defaults:
  * the type mirrors the contract, so "hidden" is unrepresentable as "false".
+ *
+ * A country is shown as its flag and its name in the reader's language —
+ * A64-031.F. A stored code that is not on the list (see `toCountryCode`)
+ * is shown as the letters that arrived, without a flag, rather than
+ * dropped or guessed at.
  *
  * `ratings` is optional for the same kind of reason, but a different one:
  * both pages load them in a **second** request, so the band renders without
@@ -146,7 +152,9 @@ export function ProfileHeader({
 
         {country !== null && country !== undefined && (
           <li>
-            {t("profile.header.country")}: {country}
+            {/* The word is for screen readers; sighted readers have the flag. */}
+            <span className="sr-only">{t("profile.header.country")}: </span>
+            <CountryText value={country} locale={locale} />
           </li>
         )}
 
@@ -161,5 +169,16 @@ export function ProfileHeader({
 
       {children}
     </header>
+  );
+}
+
+function CountryText({ value, locale }: { value: string; locale: string }) {
+  const code = toCountryCode(value);
+  if (code === null) return <>{value}</>;
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span aria-hidden="true">{countryFlag(code)}</span>
+      {countryName(code, locale)}
+    </span>
   );
 }

@@ -6,7 +6,7 @@
 | **Status** | Approved through A64-021.4 — foundation, authentication, profile, social, game, tournaments, PWA, notifications and their event coverage |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-08-07 — A64-022.6, expiry reconciliation and the global match handoff |
+| **Last updated** | 2026-10-23 — A64-031.F, the country picker (§13.11) |
 | **Related ADRs** | [`ADR-002`](../docs/07-decisions/ADR-002-frontend-spa.md) |
 | **Related specs** | [`rating.md`](./rating.md), [`leaderboard.md`](./leaderboard.md), [`tournament.md`](./tournament.md), [`product-experience.md`](./product-experience.md) — the UX/design counterpart to this document |
 | **Related** | `docs/01-architecture/architecture.md` §5, `docs/04-frontend/` |
@@ -715,6 +715,27 @@ it — but pluralisation, and nothing on these pages needs a plural.
 vertical sidebar at 360 px would take a third of the width for four links. Profile sections
 stack in one column and become a grid from `sm`. Interactive controls are `min-h-11` (44 px).
 Long display names and bios use `break-words`, so nothing forces a horizontal scroll.
+
+### 13.11 Country — A64-031.F
+
+The profile form chooses a country from a searchable list instead of taking a typed
+two-letter code. The contract is unchanged: `PATCH /profile` still receives an ISO 3166-1
+alpha-2 code or `null`, and no backend change was made.
+
+| Concern | Rule |
+| --- | --- |
+| The list | `entities/country` holds a copy of the backend's `ISO_3166_1_ALPHA_2` (`apps/api/app/modules/users/domain/validators.py`). `country.test.ts` reads the Python set and fails if the two differ |
+| Names | `Intl.DisplayNames` in the interface locale, sorted with `Intl.Collator`. No translation table and no country-data dependency |
+| Flags | The code written as Unicode regional-indicator letters, `aria-hidden`. Windows draws two letters; the name beside the flag carries the meaning either way |
+| Search | Matches the name in **any** of `uz`, `ru`, `en`, plus the exact code, with case, accents and punctuation ignored. Ranked exact code, then prefix, then substring |
+| Picker | A Radix dialog pinned to the top below `sm`, so the phone keyboard does not cover the results. The search box is a WAI-ARIA combobox: focus stays in the input, the arrow keys move `aria-activedescendant`, Enter chooses, Escape closes |
+| No country | `""` in the form, `null` on the wire. "Remove country" is the first option while one is set |
+| Legacy value | A stored code outside the list (A64-012.1 accepted private-use codes such as `XX`) is shown as its letters, with no flag. The form explains it and blocks saving until it is replaced or removed, because the API would answer `422` |
+| Public profile | Flag plus name in the **reader's** locale; "Country:" is `sr-only` |
+
+**Country is not language.** Nothing infers a country from the interface locale, the
+browser, or the network, and choosing a country never changes the interface language. The
+locale decides only how a chosen country is named.
 
 ## 14. Social — A64-020.4
 

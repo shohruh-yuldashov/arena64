@@ -260,15 +260,20 @@
       "subtitle": "This is what other players see on your public profile.",
       "displayName": "Display name",
       "bio": "About you",
-      "country": "Country code",
-      "countryHint": "Two letters, for example UZ",
+      "country": "Country",
+      "countryHint": "Shown with its flag on your public profile. It does not change the interface language.",
+      "countryNone": "Not set",
+      "countrySearch": "Search countries",
+      "countryRemove": "Remove country",
+      "countryNoMatch": "No country matches “{query}”",
+      "countryUnknown": "“{code}” is not a country we recognise. Choose one from the list, or remove it.",
       "bioHint": "At most {max} characters",
       "save": "Save",
       "saved": "Saved",
       "noChanges": "Nothing changed",
       "displayNameTooLong": "At most {max} characters",
       "bioTooLong": "At most {max} characters",
-      "countryInvalid": "Enter a two-letter country code"
+      "countryInvalid": "Choose a country from the list"
     },
     "avatar": {
       "title": "Photo",

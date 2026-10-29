@@ -2,7 +2,7 @@
 
 > **Status:** Placeholder for the backend contract — the **client** is specified in [`frontend.md`](./frontend.md) §13 (A64-020.3)
 > **Owner:** _Unassigned_
-> **Last updated:** 2026-08-05 — A64-020.3, profile UI
+> **Last updated:** 2026-10-23 — A64-031.F, country picker
 > **Related:** [`frontend.md`](./frontend.md) §13, `templates/feature-spec.md`
 
 ## Description
@@ -34,3 +34,4 @@ file:
 | The self and public profiles are **separate caches**, so a privacy-filtered page can never read unfiltered data | §13.1 |
 | The client **never predicts** privacy filtering — an omitted field is rendered as absent, never as `false` | §13.4 |
 | A device list is **deferred**: `SessionService.list_user_sessions` has no HTTP endpoint, so `/settings/sessions` offers only "sign out everywhere" | §13.8, OQ-8 |
+| Country is **chosen from the backend's own list**, named by `Intl`, and never inferred from the interface language (A64-031.F) | §13.11 |

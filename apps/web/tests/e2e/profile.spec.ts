@@ -71,7 +71,11 @@ test("a player edits their profile and sees it on their public page", async ({
   const editedName = `Edited ${Date.now()}`;
   await page.getByLabel(/display name/i).fill(editedName);
   await page.getByLabel(/about you/i).fill("Playing since 2026.");
-  await page.getByLabel(/country code/i).fill("UZ");
+  // Chosen from the picker, not typed — A64-031.F.
+  await page.getByRole("button", { name: /^country\b/i }).click();
+  await page.getByRole("combobox", { name: /search countries/i }).fill("uzbek");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: /^country uzbekistan$/i })).toBeVisible();
   await expect(save).toBeEnabled();
   await save.click();
 
@@ -88,6 +92,7 @@ test("a player edits their profile and sees it on their public page", async ({
   await page.goto(`/players/${username}`);
   await expect(page.getByRole("heading", { level: 1, name: editedName })).toBeVisible();
   await expect(page.getByText("Playing since 2026.")).toBeVisible();
+  await expect(page.getByText("Uzbekistan")).toBeVisible();
   await expect(page.getByText(`@${username}`)).toBeVisible();
 
   // The public surface must never carry the account's email — the schema
